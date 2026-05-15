@@ -90,6 +90,30 @@ internal static class NodeTypeCompilationHelpers
         // satisfy HasUsableBuild.
         var ownStream = workspace.GetMeshNodeStream();
         var kicked = 0;
+
+        // Diagnostic: surface the case where the per-NodeType hub's own
+        // MeshNode arrives with a Content shape that is NOT a typed
+        // NodeTypeDefinition — almost always a JsonElement that
+        // MeshNodeTypeSource.ResolveJsonElementContent failed to resolve
+        // (NodeTypeDefinition not in the workspace TypeRegistry, $type
+        // discriminator missing, or AddMeshDataSource overlay never ran).
+        // Without this log, the kickoff filter below stays silently false
+        // and compilation never starts — which is exactly the prod symptom
+        // for Systemorph/EventCalendar / Systemorph/Post (every per-instance
+        // hub of those NodeTypes then 30 s-times-out at activation). Take(1)
+        // bounds the noise to one line per hub.
+        var diagSub = ownStream
+            .Where(node => node?.Content is not null and not NodeTypeDefinition)
+            .Take(1)
+            .Subscribe(
+                node => logger?.LogWarning(
+                    "Compile kickoff: own MeshNode for {HubPath} has Content type '{ContentType}' (not NodeTypeDefinition) — kickoff filter will not match. " +
+                    "Either NodeTypeDefinition is missing from this hub's TypeRegistry (check AddMeshDataSource(s => s.WithContentType<NodeTypeDefinition>()) overlay) " +
+                    "or persistence stored Content without a $type discriminator (MeshNodeTypeSource.ResolveJsonElementContent left it as JsonElement).",
+                    hub.Address.Path, node?.Content?.GetType().FullName ?? "(null)"),
+                _ => { /* upstream errors surfaced by kickoff own-stream handler */ });
+        hub.RegisterForDisposal(diagSub);
+
         var kickoffSub = ownStream
             .Where(node => node?.Content is NodeTypeDefinition)
             .Take(1)
@@ -99,14 +123,14 @@ internal static class NodeTypeCompilationHelpers
                     if (node?.Content is not NodeTypeDefinition def) return;
                     if (HasUsableBuild(node, def))
                     {
-                        logger?.LogDebug(
+                        logger?.LogInformation(
                             "Compile kickoff: skip {HubPath} — Ok + compiled assembly present ({Assembly})",
                             hub.Address.Path, node.AssemblyLocation);
                         return;
                     }
                     if (System.Threading.Interlocked.CompareExchange(ref kicked, 1, 0) != 0) return;
 
-                    logger?.LogDebug(
+                    logger?.LogInformation(
                         "Compile kickoff: flipping Pending for {HubPath} (status={Status}, assemblyPresent={Present})",
                         hub.Address.Path, def.CompilationStatus,
                         !string.IsNullOrEmpty(node.AssemblyLocation)
@@ -137,7 +161,7 @@ internal static class NodeTypeCompilationHelpers
             .Subscribe(
                 pendingNode =>
                 {
-                    logger?.LogDebug("Compile watcher: saw Pending for {HubPath} — dispatching compile", hubPath);
+                    logger?.LogInformation("Compile watcher: saw Pending for {HubPath} — dispatching compile", hubPath);
                     if (System.Threading.Interlocked.CompareExchange(ref triggered, 1, 0) != 0)
                         return;
                     try
@@ -354,7 +378,7 @@ internal static class NodeTypeCompilationHelpers
 
                         if (outcome.Error is null && !string.IsNullOrEmpty(outcome.Result?.AssemblyLocation))
                         {
-                            logger?.LogDebug("Compile success for {HubPath} → {Assembly}",
+                            logger?.LogInformation("Compile success for {HubPath} → {Assembly}",
                                 hubPath, outcome.Result!.AssemblyLocation);
                             return curr with
                             {
@@ -383,7 +407,7 @@ internal static class NodeTypeCompilationHelpers
                             ?? (outcome.Result?.Log?.Errors() is { Count: > 0 } errs
                                 ? string.Join("; ", errs.Select(m => m.Message))
                                 : "Compilation produced no assembly");
-                        logger?.LogDebug("Compile failure for {HubPath}: {Error}", hubPath, errorSummary);
+                        logger?.LogWarning("Compile failure for {HubPath}: {Error}", hubPath, errorSummary);
                         return curr with
                         {
                             Content = def with

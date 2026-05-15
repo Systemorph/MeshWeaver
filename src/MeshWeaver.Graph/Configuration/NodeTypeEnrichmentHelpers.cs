@@ -27,6 +27,24 @@ namespace MeshWeaver.Graph.Configuration;
 /// </summary>
 internal static class NodeTypeEnrichmentHelpers
 {
+    /// <summary>
+    /// Slow-path budget. The slow path waits for the per-NodeType compile
+    /// stream to emit a settled state (Ok / Error / non-NodeTypeDefinition
+    /// content). On timeout we fall back to
+    /// <see cref="WithCompilationErrorOverlay"/> so the per-instance hub still
+    /// activates — with an error-overlay HubConfiguration so the operator
+    /// sees the diagnostic instead of a dead grain.
+    ///
+    /// <para>The slow path itself nests another remote-stream subscribe (the
+    /// per-NodeType hub's MeshNode stream behind <c>INodeTypeStreamCache</c>),
+    /// which in turn drives that hub's own activation chain. 30 s leaves
+    /// budget for the chained SubscribeRequest to land its Initial frame
+    /// before the overlay fallback kicks in. The double-enrichment that
+    /// stacked TWO 30 s windows on the same activation is fixed at the
+    /// EnrichWithNodeType fast-path (re-entry on a node that already carries
+    /// HubConfiguration short-circuits to the cached result) — see
+    /// <c>NodeTypeEnrichmentDoubleCallTest</c>.</para>
+    /// </summary>
     private static readonly TimeSpan SlowPathTimeout = TimeSpan.FromSeconds(30);
 
     public static IObservable<MeshNode> EnrichWithNodeType(
@@ -36,7 +54,22 @@ internal static class NodeTypeEnrichmentHelpers
         MeshNode node,
         ILogger? logger = null)
     {
-        if (node.HubConfiguration != null && node.AssemblyLocation != null)
+        // Re-enrichment short-circuit. Activation calls this method twice on the
+        // same node — once via MeshCatalog.GetNodeForRouting → ConfigResolver,
+        // and once via MessageHubGrain.OnActivateAsync's
+        // ResolveHubConfigurationObservable. Once HubConfiguration is set
+        // (either by a successful slow-path resolve or by
+        // WithCompilationErrorOverlay), running the slow path again can't
+        // change the answer inside the same 30 s window — the NodeType stream
+        // hasn't been touched. Without this short-circuit the second call
+        // stacks another SlowPathTimeout on top of the first (the
+        // WithCompilationErrorOverlay output has HubConfiguration set but
+        // AssemblyLocation null, so a fast-path that required both never
+        // matched). Result: 60 s+ activation, missed
+        // MessageHubGrain.DeliverMessage WaitAsync(30 s), every per-instance
+        // hub of an un-settled NodeType unreachable. Repro:
+        // NodeTypeEnrichmentDoubleCallTest.
+        if (node.HubConfiguration != null)
             return Observable.Return(node);
 
         var nodeType = node.NodeType;
@@ -109,11 +142,26 @@ internal static class NodeTypeEnrichmentHelpers
                 typeNode, node, nodeType, meshConfiguration, compilationService, logger))
             .Catch<MeshNode, Exception>(ex =>
             {
-                logger?.LogDebug(ex,
-                    "EnrichWithNodeType slow path for '{NodeType}' faulted — applying compilation-error overlay",
-                    nodeType);
+                // Surface at Warning. The previous Debug level hid the prod
+                // root cause behind the operator-visible "compilation error"
+                // overlay: every per-instance hub of an unsettled NodeType
+                // logged nothing while clients saw "no Overview". Warning
+                // makes the cause visible in App Insights at production
+                // log levels.
+                logger?.LogWarning(ex,
+                    "EnrichWithNodeType slow path for '{NodeType}' faulted ({ExceptionType}) — applying compilation-error overlay for '{InstancePath}'",
+                    nodeType, ex.GetType().Name, node.Path);
+                // Build a user-actionable message — TimeoutException's bare
+                // "The operation has timed out." gives the operator nothing
+                // to act on. Tell them which NodeType, which budget, and
+                // where to look.
+                var userMessage = ex is TimeoutException
+                    ? $"NodeType '{nodeType}' compile did not settle within {SlowPathTimeout.TotalSeconds:0}s.\n"
+                      + $"Instance '{node.Path}' is rendering this fallback. Check the NodeType's source code, "
+                      + $"its Code nodes' compilation diagnostics, or trigger a fresh release."
+                    : $"NodeType '{nodeType}' enrichment failed for instance '{node.Path}': {ex.Message}";
                 return Observable.Return(
-                    WithCompilationErrorOverlay(node, nodeType, ex.Message, meshConfiguration));
+                    WithCompilationErrorOverlay(node, nodeType, userMessage, meshConfiguration));
             });
     }
 
@@ -169,9 +217,15 @@ internal static class NodeTypeEnrichmentHelpers
                 })
                 .Catch<MeshNode, Exception>(ex =>
                 {
-                    logger?.LogDebug(ex,
-                        "EnrichWithNodeType: HubConfiguration reflection for '{NodeType}' faulted",
-                        nodeType);
+                    // Surface at Warning. Reflection over the compiled
+                    // assembly failing means HubConfiguration extraction
+                    // gave up — the per-instance hub will activate but
+                    // without the dynamic config, so users see "no Overview"
+                    // (or the wrong layout) with no log clue at production
+                    // log levels until this was promoted from Debug.
+                    logger?.LogWarning(ex,
+                        "EnrichWithNodeType: HubConfiguration reflection for '{NodeType}' faulted ({ExceptionType}) — instance '{InstancePath}' falls back to default config",
+                        nodeType, ex.GetType().Name, node.Path);
                     return Observable.Return(ApplyEntry(
                         node, typeNode.AssemblyLocation!, hubConfig: null,
                         nodeType, meshConfiguration));

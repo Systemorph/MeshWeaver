@@ -462,11 +462,26 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         if (!registry.TryGetType(typeName, out var typeDef) || typeDef?.Type == null)
         {
             if (!typeName.Contains('.'))
+            {
+                // Silent return previously hid the "TypeRegistry doesn't know
+                // this type" failure. Promote to Warning so the operator sees
+                // it in App Insights — the consequence is the same as the
+                // prod compile-never-fires symptom: hub kickoffs that filter
+                // on `Content is T` will never match.
+                _logger?.LogWarning(
+                    "MeshNodeTypeSource: Content $type='{TypeName}' not in TypeRegistry for {Path} — Content stays as JsonElement; downstream filters on the typed shape will not match.",
+                    typeName, node.Path);
                 return node;
+            }
 
             var shortName = typeName.Split('.').Last();
             if (!registry.TryGetType(shortName, out typeDef) || typeDef?.Type == null)
+            {
+                _logger?.LogWarning(
+                    "MeshNodeTypeSource: Content $type='{TypeName}' (short '{ShortName}') not in TypeRegistry for {Path} — Content stays as JsonElement; downstream filters on the typed shape will not match.",
+                    typeName, shortName, node.Path);
                 return node;
+            }
         }
 
         try
@@ -482,7 +497,9 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         }
         catch (Exception ex)
         {
-            _logger?.LogDebug(ex, "MeshNodeTypeSource: Failed to resolve JsonElement content for {Path}", node.Path);
+            _logger?.LogWarning(ex,
+                "MeshNodeTypeSource: Failed to deserialize Content $type='{TypeName}' for {Path} — kept as JsonElement.",
+                typeName, node.Path);
         }
 
         return node;

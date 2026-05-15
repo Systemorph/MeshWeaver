@@ -44,6 +44,32 @@ internal sealed class MeshCatalog(
     /// Application code MUST NOT call this — use <c>hub.GetMeshNode(path)</c> /
     /// <c>workspace.GetRemoteStream&lt;MeshNode, MeshNodeReference&gt;</c> instead.
     /// See <c>Doc/Architecture/CqrsAndContentAccess.md</c>.
+    ///
+    /// <para><b>Single query, no per-segment <c>Persistence.Read</c>.</b> The
+    /// lookup goes through <see cref="IMeshQueryCore.ObserveQuery"/> so the
+    /// fan-out (storage adapters + <c>StaticNodeQueryProvider</c>) is the
+    /// single boss of "find a MeshNode by path" — partition is extracted from
+    /// the path's first segment and pushed down to the storage adapter as one
+    /// Postgres <c>SELECT</c>. <c>Persistence.Read</c> outside
+    /// <c>AddMeshDataSource</c> is forbidden because it bypasses the query
+    /// layer's provider fan-out / dedup / projection contract.</para>
+    ///
+    /// <para><see cref="GetNodeForRoutingTimeout"/> protects routing from a
+    /// stalled provider — <see cref="MeshQuery.MergeProviderObservables"/>
+    /// waits for every provider's Initial frame before emitting the merged
+    /// Initial, so a single non-emitting provider would otherwise hang every
+    /// routing decision. On timeout we treat the lookup as "no node found"
+    /// and let <see cref="RoutingServiceBase"/> route a NotFound rather than
+    /// holding the message hostage.</para>
+    ///
+    /// <para>Calls <see cref="INodeConfigurationResolver.ResolveConfiguration"/>
+    /// so the routing layer (and the Orleans <c>MessageHubGrain</c> source
+    /// stream) sees a node already enriched with HubConfiguration. The
+    /// downstream activation site re-runs <see cref="IMeshNodeHubFactory.ResolveHubConfiguration"/>
+    /// for the DefaultNodeHubConfiguration overlay; the second pass is
+    /// short-circuited by the <see cref="NodeTypeEnrichmentHelpers.EnrichWithNodeType"/>
+    /// fast-path on <c>node.HubConfiguration != null</c> — see
+    /// <c>NodeTypeEnrichmentDoubleCallTest</c>.</para>
     /// </summary>
     internal IObservable<MeshNode?> GetNodeForRouting(Address address)
     {
@@ -57,11 +83,21 @@ internal sealed class MeshCatalog(
             return Observable.Return<MeshNode?>(node);
         }
 
-        return Persistence.Read(addressKey, hub.JsonSerializerOptions)
-            .Select(persistenceNode =>
-                persistenceNode ?? staticNodeProviders
-                    .SelectMany(p => p.GetStaticNodes())
-                    .FirstOrDefault(n => string.Equals(n.Path, addressKey, StringComparison.OrdinalIgnoreCase)))
+        return ((IMeshQueryCore)meshQuery)
+            .ObserveQuery<MeshNode>(
+                MeshQueryRequest.FromQuery($"path:{addressKey}"),
+                hub.JsonSerializerOptions)
+            .Where(c => c.ChangeType == QueryChangeType.Initial)
+            .Take(1)
+            .Timeout(GetNodeForRoutingTimeout)
+            .Catch<QueryResultChange<MeshNode>, TimeoutException>(_ =>
+            {
+                logger?.LogWarning(
+                    "[GetNodeForRouting] query timed out after {Timeout}s for path={Path} — returning no-node so routing posts NotFound",
+                    GetNodeForRoutingTimeout.TotalSeconds, addressKey);
+                return Observable.Return(new QueryResultChange<MeshNode> { Items = [] });
+            })
+            .Select(c => (MeshNode?)c.Items.FirstOrDefault())
             .SelectMany<MeshNode?, MeshNode?>(persistenceNode =>
             {
                 if (persistenceNode == null) return Observable.Return<MeshNode?>(null);
@@ -70,6 +106,19 @@ internal sealed class MeshCatalog(
                     .Select(n => (MeshNode?)n);
             });
     }
+
+    /// <summary>
+    /// Cap on the routing-layer node lookup. The query goes through
+    /// <see cref="IMeshQueryCore.ObserveQuery"/> which waits for every
+    /// provider's Initial emission before firing the merged Initial — a
+    /// single stalled provider (RoutingMeshQueryProvider partition fan-out
+    /// blocked, AccessService context not ready, etc.) would otherwise hang
+    /// every routing decision past the framework's 30 s SubscribeRequest
+    /// budget. 5 s leaves comfortable headroom over a healthy
+    /// <c>SELECT path FROM mesh_nodes WHERE path = $1</c> while bounding the
+    /// blast radius of any provider that loses its initial frame.
+    /// </summary>
+    private static readonly TimeSpan GetNodeForRoutingTimeout = TimeSpan.FromSeconds(5);
 
     // Internal HubNodePersistence helper — used by HandleCreateNodeRequest pipeline.
     private HubNodePersistence NodePersistence => new(hub, this);
