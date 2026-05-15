@@ -1,11 +1,13 @@
 using System.Collections.Concurrent;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading.Channels;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.Reactive;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -68,101 +70,99 @@ public class MeshQuery : IMeshQueryCore
         return combined;
     }
 
-    public async IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
+    public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
         string basePath,
         string prefix,
         int limit = 10,
-        [EnumeratorCancellation] CancellationToken ct = default)
+        CancellationToken ct = default)
     {
-        var all = new ConcurrentBag<QuerySuggestion>();
-        var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
-        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<MeshQuery>();
         var matched = SelectMatchingProviders(NamespacesForBasePath(basePath));
-
-        await Task.WhenAll(matched.Select(async provider =>
-        {
-            try
-            {
-                await foreach (var suggestion in provider.AutocompleteAsync(basePath, prefix, Options, limit, ct))
-                {
-                    // Skip satellite nodes — they have /_Prefix/ segments in their path
-                    if (IsSatellitePath(suggestion.Path))
-                        continue;
-                    if (seen.TryAdd(suggestion.Path, 0))
-                        all.Add(suggestion);
-                }
-            }
-            catch (OperationCanceledException) { /* expected on cancel */ }
-            catch (Exception ex)
-            {
-                logger?.LogDebug(ex, "{Provider} autocomplete failed", provider.GetType().Name);
-            }
-        }));
-
-        foreach (var suggestion in all
-            .OrderByDescending(s => s.Score)
-            .ThenBy(s => s.Path.Length)
-            .ThenBy(s => s.Name)
-            .Take(limit))
-        {
-            yield return suggestion;
-        }
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<MeshQuery>();
+        return MergeAutocompleteStreams(
+            matched.Select(p => p.AutocompleteAsync(basePath, prefix, Options, limit, ct)),
+            limit,
+            applyBoost: null,
+            logger,
+            ct);
     }
 
-    public async IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
+    public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
         string basePath,
         string prefix,
         AutocompleteMode mode,
         int limit = 10,
         string? contextPath = null,
         string? context = null,
-        [EnumeratorCancellation] CancellationToken ct = default)
+        CancellationToken ct = default)
     {
-        var all = new ConcurrentBag<QuerySuggestion>();
-        var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
-        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<MeshQuery>();
         var matched = SelectMatchingProviders(NamespacesForBasePath(basePath));
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<MeshQuery>();
+        Func<QuerySuggestion, QuerySuggestion>? boost = string.IsNullOrEmpty(contextPath)
+            ? null
+            : s => ApplyProximityBoost(s, contextPath, prefix);
+        return MergeAutocompleteStreams(
+            matched.Select(p => p.AutocompleteAsync(basePath, prefix, Options, mode, limit, contextPath, context, ct)),
+            limit,
+            applyBoost: boost,
+            logger,
+            ct);
+    }
 
-        await Task.WhenAll(matched.Select(async provider =>
+    /// <summary>
+    /// Reactive autocomplete fan-out — every per-provider <see cref="IAsyncEnumerable{QuerySuggestion}"/>
+    /// is bridged to <see cref="IObservable{QuerySuggestion}"/> via
+    /// <see cref="ObservableTopNExtensions.ToObservableSequence{T}(IAsyncEnumerable{T})"/>,
+    /// merged with <see cref="Observable.Merge{TSource}(IEnumerable{IObservable{TSource}})"/>,
+    /// path-deduped + satellite-filtered, and finally folded into a single sorted
+    /// snapshot via Subscribe-driven state. NO <c>await</c> in the body — the only
+    /// await lives in <see cref="ObservableTopNExtensions.ToAsyncEnumerableSequence{T}(IObservable{T}, CancellationToken)"/>,
+    /// the canonical bridge from observable to async-enumerable on the public surface.
+    /// </summary>
+    private static IAsyncEnumerable<QuerySuggestion> MergeAutocompleteStreams(
+        IEnumerable<IAsyncEnumerable<QuerySuggestion>> sources,
+        int limit,
+        Func<QuerySuggestion, QuerySuggestion>? applyBoost,
+        Microsoft.Extensions.Logging.ILogger? logger,
+        CancellationToken ct)
+    {
+        var streams = sources.Select(s => s.ToObservableSequence()).ToList();
+        var merged = streams.Count switch
         {
-            try
-            {
-                await foreach (var suggestion in provider.AutocompleteAsync(basePath, prefix, Options, mode, limit, contextPath, context, ct))
-                {
-                    // Skip satellite nodes — they have /_Prefix/ segments in their path
-                    if (IsSatellitePath(suggestion.Path))
-                        continue;
-                    if (seen.TryAdd(suggestion.Path, 0))
-                    {
-                        // Apply proximity boost based on contextPath
-                        var boosted = ApplyProximityBoost(suggestion, contextPath, prefix);
-                        all.Add(boosted);
-                    }
-                }
-            }
-            catch (OperationCanceledException) { /* expected on cancel */ }
-            catch (Exception ex)
-            {
-                logger?.LogDebug(ex, "{Provider} autocomplete failed", provider.GetType().Name);
-            }
-        }));
-
-        IEnumerable<QuerySuggestion> ordered = mode switch
-        {
-            AutocompleteMode.RelevanceFirst => all
-                .OrderByDescending(s => s.Score)
-                .ThenBy(s => s.Path.Length)
-                .ThenBy(s => s.Name),
-            _ => all
-                .OrderByDescending(s => s.Score)
-                .ThenBy(s => s.Path.Length)
-                .ThenBy(s => s.Name)
+            0 => Observable.Empty<QuerySuggestion>(),
+            1 => streams[0],
+            _ => Observable.Merge(streams),
         };
 
-        foreach (var suggestion in ordered.Take(limit))
+        // Single fold: dedup by path + satellite filter + optional boost into a
+        // ConcurrentBag/Dictionary (already thread-safe — Merge can OnNext from
+        // any provider thread). On OnCompleted the bag is sorted + clipped to
+        // limit; the snapshot is replayed as OnNext events to the downstream
+        // observable, which then bridges back to IAsyncEnumerable.
+        return Observable.Create<QuerySuggestion>((Func<IObserver<QuerySuggestion>, IDisposable>)(observer =>
         {
-            yield return suggestion;
-        }
+            var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
+            var bag = new ConcurrentBag<QuerySuggestion>();
+            return merged.Subscribe(
+                s =>
+                {
+                    if (IsSatellitePath(s.Path)) return;
+                    if (string.IsNullOrEmpty(s.Path) || !seen.TryAdd(s.Path, 0)) return;
+                    bag.Add(applyBoost is null ? s : applyBoost(s));
+                },
+                ex => logger?.LogDebug(ex, "MeshQuery autocomplete merge faulted"),
+                () =>
+                {
+                    foreach (var x in bag
+                        .OrderByDescending(s => s.Score)
+                        .ThenBy(s => s.Path.Length)
+                        .ThenBy(s => s.Name)
+                        .Take(limit))
+                    {
+                        observer.OnNext(x);
+                    }
+                    observer.OnCompleted();
+                });
+        })).ToAsyncEnumerableSequence(ct);
     }
 
     /// <summary>
@@ -523,12 +523,20 @@ public class MeshQuery : IMeshQueryCore
         return true;
     }
 
-    public async Task<T?> SelectAsync<T>(string path, string property, CancellationToken ct = default)
+    public Task<T?> SelectAsync<T>(string path, string property, CancellationToken ct = default)
     {
         var matched = SelectMatchingProviders(NamespacesForBasePath(path));
-        var results = await Task.WhenAll(
-            matched.Select(p => p.SelectAsync<T>(path, property, Options, ct)));
-        return results.FirstOrDefault(r => r != null);
+        // Merge each provider's Task<T?> via Observable.FromAsync, take the first
+        // non-null. No Task.WhenAll, no captured-scheduler awaits — the public
+        // Task surface is built from the observable's first non-null emission via
+        // FirstOrDefaultAsync (the framework primitive that bridges IObservable
+        // → Task without forcing ConfigureAwait gymnastics on caller code).
+        return matched
+            .Select(p => Observable.FromAsync(token => p.SelectAsync<T>(path, property, Options, token)))
+            .Merge()
+            .Where(r => r is not null)
+            .FirstOrDefaultAsync()
+            .ToTask(ct);
     }
 
 }
