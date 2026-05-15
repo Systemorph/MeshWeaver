@@ -77,8 +77,9 @@ public class MeshQuery : IMeshQueryCore
         var all = new ConcurrentBag<QuerySuggestion>();
         var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<MeshQuery>();
+        var matched = SelectMatchingProviders(NamespacesForBasePath(basePath));
 
-        await Task.WhenAll(providers.Select(async provider =>
+        await Task.WhenAll(matched.Select(async provider =>
         {
             try
             {
@@ -120,8 +121,9 @@ public class MeshQuery : IMeshQueryCore
         var all = new ConcurrentBag<QuerySuggestion>();
         var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<MeshQuery>();
+        var matched = SelectMatchingProviders(NamespacesForBasePath(basePath));
 
-        await Task.WhenAll(providers.Select(async provider =>
+        await Task.WhenAll(matched.Select(async provider =>
         {
             try
             {
@@ -254,9 +256,12 @@ public class MeshQuery : IMeshQueryCore
     }
 
     public IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request)
-        => MergeProviderObservables(
-            providers.Select(p => p.ObserveQuery<T>(request, Options)).ToList(),
+    {
+        var matched = SelectMatchingProviders(NamespacesForRequest(request));
+        return MergeProviderObservables(
+            matched.Select(p => p.ObserveQuery<T>(request, Options)).ToList(),
             request);
+    }
 
     /// <summary>
     /// Unsecured fan-out — same merge as the secured surface, but each
@@ -269,11 +274,64 @@ public class MeshQuery : IMeshQueryCore
     IObservable<QueryResultChange<T>> IMeshQueryCore.ObserveQuery<T>(
         MeshQueryRequest request,
         JsonSerializerOptions options)
-        => MergeProviderObservables(
-            providers.Select(p => p is IMeshQueryCore core
+    {
+        var matched = SelectMatchingProviders(NamespacesForRequest(request));
+        return MergeProviderObservables(
+            matched.Select(p => p is IMeshQueryCore core
                 ? core.ObserveQuery<T>(request, options)
                 : p.ObserveQuery<T>(request, options)).ToList(),
             request);
+    }
+
+    /// <summary>
+    /// Centralised provider gating — every fan-out in this class
+    /// (<see cref="ObserveQuery{T}(MeshQueryRequest)"/>, the
+    /// <see cref="IMeshQueryCore"/> surface, both <see cref="AutocompleteAsync(string, string, int, CancellationToken)"/>
+    /// overloads, <see cref="SelectAsync{T}"/>) MUST go through this so a
+    /// scoped query only subscribes / awaits providers that actually own
+    /// (or claim) the partition. For a single-node-by-path lookup this
+    /// typically resolves to ONE provider; the merge then waits on exactly
+    /// that provider's Initial frame, so a stalled or irrelevant provider
+    /// can't hold the merge hostage. Unscoped queries (no <c>namespace:</c>
+    /// condition and no <c>path:</c> filter) fan to every provider — the
+    /// <see cref="IMeshQueryProvider.Matches"/> contract documents this.
+    /// </summary>
+    private IReadOnlyList<IMeshQueryProvider> SelectMatchingProviders(IReadOnlyList<string> namespaces)
+        => namespaces.Count == 0
+            ? providers
+            : providers.Where(p => p.Matches(namespaces)).ToList();
+
+    /// <summary>
+    /// Computes the namespace candidates for a <see cref="MeshQueryRequest"/>
+    /// using its first effective query. Multi-query unions still subscribe
+    /// every provider that matches ANY query's namespaces because the
+    /// providers themselves handle each query independently — the catalog /
+    /// per-instance fan-outs use a single query.
+    /// </summary>
+    private static IReadOnlyList<string> NamespacesForRequest(MeshQueryRequest request)
+    {
+        var firstQuery = request.EffectiveQueries.FirstOrDefault();
+        if (string.IsNullOrEmpty(firstQuery))
+            return Array.Empty<string>();
+        var parsed = new QueryParser().Parse(firstQuery);
+        return MergeQueryNamespaces(parsed);
+    }
+
+    /// <summary>
+    /// Computes the namespace candidates for an autocomplete-style call
+    /// (basePath + prefix). The aggregator extracts the first segment of
+    /// basePath as the partition candidate; an empty basePath is unscoped
+    /// (every provider participates).
+    /// </summary>
+    private static IReadOnlyList<string> NamespacesForBasePath(string? basePath)
+    {
+        if (string.IsNullOrEmpty(basePath))
+            return Array.Empty<string>();
+        var firstSegment = basePath.TrimStart('/').Split('/', 2)[0];
+        return string.IsNullOrEmpty(firstSegment)
+            ? Array.Empty<string>()
+            : new[] { firstSegment };
+    }
 
     private IObservable<QueryResultChange<T>> MergeProviderObservables<T>(
         List<IObservable<QueryResultChange<T>>> observables,
@@ -467,8 +525,9 @@ public class MeshQuery : IMeshQueryCore
 
     public async Task<T?> SelectAsync<T>(string path, string property, CancellationToken ct = default)
     {
+        var matched = SelectMatchingProviders(NamespacesForBasePath(path));
         var results = await Task.WhenAll(
-            providers.Select(p => p.SelectAsync<T>(path, property, Options, ct)));
+            matched.Select(p => p.SelectAsync<T>(path, property, Options, ct)));
         return results.FirstOrDefault(r => r != null);
     }
 
