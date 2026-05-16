@@ -100,6 +100,21 @@ internal static class NodeTypeCompilationHelpers
                 node =>
                 {
                     if (node?.Content is not NodeTypeDefinition def) return;
+                    // Static NodeTypes (registered via IStaticNodeProvider with
+                    // their HubConfiguration delegate set directly) carry a
+                    // NodeTypeDefinition payload for shape/icon/description metadata
+                    // but have NO source code to compile — the framework ships their
+                    // assembly. Skip kickoff: trying to fire a compile would create
+                    // an activity log at "{nodeType}/_Activity/compile..." which
+                    // PersistenceService can't route (no IPartitionStorageProvider
+                    // matches a NodeType namespace).
+                    if (node.HubConfiguration is not null)
+                    {
+                        logger?.LogInformation(
+                            "Compile kickoff: skip {HubPath} — static NodeType (HubConfiguration set, no source)",
+                            hub.Address.Path);
+                        return;
+                    }
                     if (HasUsableBuild(node, def))
                     {
                         logger?.LogInformation(
@@ -135,7 +150,11 @@ internal static class NodeTypeCompilationHelpers
         var hubPath = hub.Address.Path;
         var watcherSub = ownStream
             .Where(node => node?.Content is NodeTypeDefinition def
-                && def.CompilationStatus == CompilationStatus.Pending)
+                && def.CompilationStatus == CompilationStatus.Pending
+                // Static NodeTypes ship their assembly with the framework; even
+                // if something else managed to flip them Pending, we don't have
+                // source code to compile. Guard symmetric with the kickoff.
+                && node.HubConfiguration is null)
             .Subscribe(
                 pendingNode =>
                 {

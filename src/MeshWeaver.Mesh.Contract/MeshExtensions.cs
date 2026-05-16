@@ -1855,10 +1855,12 @@ public static class MeshExtensions
     }
 
     /// <summary>
-    /// Sync handler for MoveNodeRequest — implements Move as Copy(IncludeSatellites=true) +
-    /// DeleteNode(IncludeSatellites=true). The handler orchestrates the two service calls;
-    /// the actual copy logic lives in <see cref="HandleCopyNodeRequest"/>.
-    /// Response is posted from the mesh hub (the source hub may be deleted at this point).
+    /// Sync handler for MoveNodeRequest — Copy subtree to target, then reactively delete
+    /// every source path. Composition is pure <see cref="IObservable{T}"/> end-to-end:
+    /// <c>CopyNode</c> → <c>ObserveQuery</c> (source subtree paths) → <c>storage.Delete</c>
+    /// per path, with change notifications fired so the query catalog refreshes.
+    /// No <c>await</c>, no recursive <c>DeleteNodeRequest</c> orchestration. Mirror shape
+    /// of <see cref="HandleCopyNodeRequest"/>.
     /// </summary>
     private static IMessageDelivery HandleMoveNodeRequest(
         IMessageHub hub,
@@ -1867,20 +1869,50 @@ public static class MeshExtensions
         var logger = hub.ServiceProvider.GetRequiredService<ILogger<IMeshCatalog>>();
         var moveRequest = request.Message;
         var meshService = hub.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Services.IMeshService>();
+        var storage = hub.ServiceProvider.GetRequiredService<IStorageAdapter>();
+        var changeNotifier = hub.ServiceProvider.GetService<IDataChangeNotifier>();
+        var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
         var sourcePath = moveRequest.SourcePath;
         var targetPath = moveRequest.TargetPath;
 
-        // Move = Copy (with satellites + descendants) → Delete source (with satellites).
+        // Move = Copy (with satellites + descendants) → reactive delete of every source path.
         // Delete only fires after Copy succeeds (SelectMany short-circuits on copy error).
         meshService.CopyNode(sourcePath, targetPath, includeDescendants: true, includeSatellites: true)
             .SelectMany(copied =>
-                meshService.DeleteNode(sourcePath)
-                    .Select(_ => copied))
+                meshService.ObserveQuery<object>(MeshQueryRequest.FromQuery(
+                        $"path:{sourcePath} scope:subtree select:path"))
+                    .Take(1)
+                    .Timeout(TimeSpan.FromSeconds(15))
+                    .SelectMany(change =>
+                    {
+                        var paths = change.Items
+                            .OfType<IDictionary<string, object?>>()
+                            .Select(d => d.TryGetValue("path", out var v) ? v as string : null)
+                            .Where(p => !string.IsNullOrEmpty(p))
+                            .Select(p => p!)
+                            .ToImmutableList();
+
+                        if (paths.IsEmpty)
+                            return Observable.Return(copied);
+
+                        // Bottom-up delete (longest path first) so parent storage entries
+                        // are removed only after their descendants. Each delete is its own
+                        // observable; Merge runs them concurrently, ToList awaits all.
+                        return paths
+                            .OrderByDescending(p => p.Length)
+                            .ToObservable()
+                            .SelectMany(p => storage.Delete(p)
+                                .Do(_ =>
+                                {
+                                    changeNotifier?.NotifyChange(DataChangeNotification.Deleted(p, null));
+                                    changeFeed?.Publish(MeshChangeEvent.Deleted(p));
+                                }))
+                            .ToList()
+                            .Select(_ => copied);
+                    }))
             .Subscribe(
                 movedNode =>
                 {
-                    var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
-                    changeFeed?.Publish(MeshChangeEvent.Deleted(sourcePath));
                     changeFeed?.Publish(MeshChangeEvent.Created(movedNode));
                     hub.Post(MoveNodeResponse.Ok(movedNode), o => o.ResponseFor(request));
                     logger.LogInformation("Node moved {Source} -> {Target}", sourcePath, targetPath);
