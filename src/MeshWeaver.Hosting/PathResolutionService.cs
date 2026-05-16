@@ -1,61 +1,89 @@
 using System.Collections.Concurrent;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
-using Microsoft.Extensions.Caching.Memory;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Primitives;
 
 namespace MeshWeaver.Hosting;
 
 /// <summary>
-/// Resolves URL paths to hub addresses with an internally managed cache.
-/// Subscribes to <see cref="IMeshChangeFeed"/> to invalidate cache entries
-/// on create/delete — this is an implementation detail, not exposed in the API.
+/// Resolves URL paths to hub addresses with one PG query per path and a
+/// <see cref="System.Reactive.Linq.Observable.Replay{T}(IObservable{T}, int)"/>
+/// (1).<see cref="System.Reactive.Linq.Observable.RefCount{T}(System.Reactive.Subjects.IConnectableObservable{T})"/>
+/// cache per path so concurrent subscribers share a single resolution stream.
 ///
-/// <para>
-/// <b>Live reactive resolution</b>. <see cref="ResolvePath"/> returns an
-/// observable that emits the current resolution AND re-emits whenever the
-/// underlying catalog state changes such that the resolution might differ
-/// (any <see cref="MeshChangeKind.Created"/> or <see cref="MeshChangeKind.Deleted"/>).
-/// Subscribers stay live — no polling, no retry timers. Once a previously-
-/// missing node lands in the catalog, the next emission is non-null and the
-/// subscriber's logic fires immediately. Replaces the old "resolve once,
-/// retry on a Timer" pattern in NavigationService that had to swallow stale
-/// retries via a separate <c>_currentPath</c> snapshot check.
-/// </para>
+/// <para><b>Source of truth</b>: <see cref="IStorageAdapter.ResolvePath"/> —
+/// one round-trip per resolve, longest-prefix match across primary + satellite
+/// tables (see <c>PathResolutionTests</c>). The pre-existing 4-step walk
+/// (catalog STEP1..STEP4) is replaced by:
+/// <list type="number">
+///   <item>Configuration match — sync, in-memory.</item>
+///   <item>Storage adapter ResolvePath — one query.</item>
+///   <item>Static-node-provider exact-path fallback — sync, in-memory.</item>
+///   <item>Partition-root fallback — sync, in-memory, via
+///     <see cref="IPartitionStorageProvider.Matches"/>. Lets <c>/rbuergi</c>
+///     resolve when the user's partition has no MeshNode at the bare path
+///     (content lives in satellites).</item>
+/// </list></para>
 ///
-/// <para>
-/// In Orleans: register as singleton on each silo. Each silo maintains its
-/// own cache. Cross-silo invalidation happens via Orleans streams →
-/// local IMeshChangeFeed.
-/// </para>
+/// <para><b>Cache</b>: <c>ConcurrentDictionary&lt;path, Observable&gt;</c>
+/// where each entry is <c>BuildLiveStream(path).Replay(1).RefCount()</c>.
+/// Hot while any subscriber; auto-evicts on idle. Created/Deleted
+/// notifications remove the cached entry (next subscriber re-resolves with
+/// the new state) AND broadcast on <c>_catalogChanges</c> so existing
+/// subscribers re-emit immediately.</para>
+///
+/// <para><b>Always up-to-date</b>: the change-feed pipe is authoritative.
+/// New subscribers see the cached last value via Replay(1); the catalogChanges
+/// Subject drives re-resolves on every relevant Created/Deleted. For
+/// long-lived subscribers this is invisible; for one-shot <c>.Take(1)</c>
+/// reads there's a small staleness window only if the change event hasn't
+/// landed yet.</para>
 /// </summary>
 internal class PathResolutionService : IPathResolver, IDisposable
 {
-    private readonly MeshCatalog _catalog;
-    private readonly IMemoryCache _cache = new MemoryCache(new MemoryCacheOptions());
-    private readonly ConcurrentDictionary<string, CancellationTokenSource> _pathTokens = new();
+    private readonly IMessageHub _hub;
+    private readonly IStorageAdapter _storageAdapter;
+    private readonly MeshConfiguration _configuration;
+    private readonly IStaticNodeProvider[] _staticNodeProviders;
+    private readonly IPartitionStorageProvider[] _partitionStorageProviders;
     private readonly IDisposable? _createSub;
     private readonly IDisposable? _deleteSub;
     private readonly ILogger<PathResolutionService>? _logger;
-    // Fan-out for catalog change notifications. Every Created/Deleted event the
-    // change feed delivers gets pushed onto this subject; ResolvePath's
-    // observable composes against it so subscribers re-resolve automatically.
+
+    /// <summary>
+    /// Live-shared resolution streams keyed by path. Each entry is a hot
+    /// <c>Replay(1).RefCount()</c> observable — first subscriber kicks off
+    /// the initial resolve; subsequent subscribers get the cached value
+    /// instantly AND any re-emits driven by catalog changes.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, IObservable<AddressResolution?>> _streams =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    // Fan-out for catalog change notifications. OnCreated / OnDeleted push
+    // the event onto this subject; every active resolution stream watches it
+    // filtered by MightAffect.
     private readonly Subject<MeshChangeEvent> _catalogChanges = new();
 
     public PathResolutionService(
-        MeshCatalog catalog,
+        IMessageHub hub,
+        IStorageAdapter storageAdapter,
+        MeshConfiguration configuration,
+        IEnumerable<IStaticNodeProvider> staticNodeProviders,
+        IEnumerable<IPartitionStorageProvider> partitionStorageProviders,
         IMeshChangeFeed? changeFeed = null,
         ILogger<PathResolutionService>? logger = null)
     {
-        _catalog = catalog;
+        _hub = hub;
+        _storageAdapter = storageAdapter;
+        _configuration = configuration;
+        _staticNodeProviders = staticNodeProviders.ToArray();
+        _partitionStorageProviders = partitionStorageProviders.ToArray();
         _logger = logger;
 
-        // Subscribe internally — cache invalidation is our concern, nobody else's.
-        // The handlers also push the change onto _catalogChanges so live
-        // ResolvePath observers re-evaluate.
         _createSub = changeFeed?.Subscribe(OnCreated, MeshChangeKind.Created);
         _deleteSub = changeFeed?.Subscribe(OnDeleted, MeshChangeKind.Deleted);
     }
@@ -65,48 +93,117 @@ internal class PathResolutionService : IPathResolver, IDisposable
         if (string.IsNullOrEmpty(path))
             return Observable.Return<AddressResolution?>(null);
 
-        path = path.TrimStart('/');
-        if (string.IsNullOrEmpty(path))
+        var normalized = path.TrimStart('/');
+        if (string.IsNullOrEmpty(normalized))
             return Observable.Return<AddressResolution?>(null);
 
-        // Live stream: initial emission + re-emit whenever a relevant catalog
-        // change arrives. Filter the change stream to events that could affect
-        // this path (the path itself or any prefix/descendant of it). Initial
-        // tick via StartWith(Unit) so we always get one emission even with no
-        // upstream changes. DistinctUntilChanged collapses redundant re-emits
-        // when several unrelated events arrive in succession.
-        return _catalogChanges
-            .Where(e => MightAffect(path, e.Path))
-            .Select(_ => System.Reactive.Unit.Default)
-            .StartWith(System.Reactive.Unit.Default)
-            .SelectMany(_ => ResolveOnce(path))
-            .DistinctUntilChanged(AddressResolutionEquality.Instance);
+        return _streams.GetOrAdd(normalized, BuildCachedStream);
     }
 
+    private IObservable<AddressResolution?> BuildCachedStream(string path) =>
+        BuildLiveStream(path)
+            .Replay(1)
+            .RefCount();
+
+    private IObservable<AddressResolution?> BuildLiveStream(string path) =>
+        _catalogChanges
+            .Where(e => MightAffect(path, e.Path))
+            .Select(_ => Unit.Default)
+            .StartWith(Unit.Default)
+            .SelectMany(_ => ResolveOnce(path))
+            .DistinctUntilChanged(AddressResolutionEquality.Instance);
+
+    /// <summary>
+    /// One-shot resolution: configuration → storage → static → partition root.
+    /// Each step is short-circuit; the storage step is the only DB round-trip.
+    /// </summary>
     private IObservable<AddressResolution?> ResolveOnce(string path)
     {
-        var cacheKey = $"resolve:{path}";
-        if (_cache.TryGetValue(cacheKey, out var cached) && cached is AddressResolution resolution)
-            return Observable.Return<AddressResolution?>(resolution);
+        var segments = path.Split('/');
 
-        // Delegate to MeshCatalog — IObservable end-to-end; FromAsync only at the
-        // DB-leaf hits inside MeshCatalog.ResolvePathCore.
-        return _catalog.ResolvePathCore(path)
-            .Do(result =>
+        // 1. Configuration match — pure in-memory, no I/O.
+        var configMatch = _configuration.Nodes.Values
+            .Where(node => !node.IsSatelliteType)
+            .Select(node => (Node: node, Score: ScoreMatch(node, segments)))
+            .Where(m => m.Score > 0)
+            .OrderByDescending(m => m.Score)
+            .FirstOrDefault();
+        if (configMatch.Node != null)
+            return Observable.Return<AddressResolution?>(
+                BuildResolution(configMatch.Node.Path, segments, MatchedSegments(configMatch.Node.Path)));
+
+        // 2. Storage adapter — one PG query covering primary + satellites.
+        return _storageAdapter.ResolvePath(path, _hub.JsonSerializerOptions)
+            .Select<(MeshNode? Node, int MatchedSegments), AddressResolution?>(result =>
             {
-                if (result != null)
-                    CacheResolution(path, result);
+                if (result.Node != null)
+                    return BuildResolution(result.Node.Path, segments, result.MatchedSegments);
+
+                // 3. Static-node-provider exact-path fallback.
+                var staticHit = ProbeStaticNodes(segments);
+                if (staticHit is { } sh && sh.Node is not null)
+                    return BuildResolution(sh.Node.Path, segments, sh.Depth);
+
+                // 4. Partition-root fallback — when the first segment maps
+                //    to a registered partition but no MeshNode exists at
+                //    that exact path (e.g. user partition `rbuergi` with
+                //    content only in satellites). Returns the bare partition
+                //    name as the address; the remainder is everything after.
+                if (segments.Length >= 1 && IsRegisteredPartition(segments[0]))
+                    return BuildResolution(segments[0], segments, matchedSegments: 1);
+
+                _logger?.LogDebug("[RESOLVE] {Path} → NULL (no match across all steps)", path);
+                return null;
             });
     }
 
+    private (MeshNode? Node, int Depth)? ProbeStaticNodes(string[] segments)
+    {
+        if (_staticNodeProviders.Length == 0)
+            return null;
+        var staticNodes = _staticNodeProviders
+            .SelectMany(p => p.GetStaticNodes())
+            .ToArray();
+        for (int depth = segments.Length; depth >= 1; depth--)
+        {
+            var testPath = string.Join("/", segments.Take(depth));
+            var staticNode = staticNodes.FirstOrDefault(n =>
+                string.Equals(n.Path, testPath, StringComparison.OrdinalIgnoreCase));
+            if (staticNode != null)
+                return (staticNode, depth);
+        }
+        return null;
+    }
+
+    private bool IsRegisteredPartition(string firstSegment) =>
+        _partitionStorageProviders.Any(p => p.Matches(firstSegment));
+
+    private static int ScoreMatch(MeshNode node, string[] segments)
+    {
+        var nodeSegments = node.Path.Split('/');
+        if (nodeSegments.Length > segments.Length) return 0;
+        for (int i = 0; i < nodeSegments.Length; i++)
+            if (!string.Equals(nodeSegments[i], segments[i], StringComparison.OrdinalIgnoreCase))
+                return 0;
+        return nodeSegments.Length;
+    }
+
+    private static int MatchedSegments(string matchedPath) =>
+        string.IsNullOrEmpty(matchedPath) ? 0 : matchedPath.Split('/').Length;
+
+    private static AddressResolution BuildResolution(string matchedPath, string[] requestedSegments, int matchedSegments)
+    {
+        var remainder = matchedSegments < requestedSegments.Length
+            ? string.Join("/", requestedSegments.Skip(matchedSegments))
+            : null;
+        return new AddressResolution(matchedPath, remainder);
+    }
+
     /// <summary>
-    /// True when a catalog change at <paramref name="changedPath"/> could plausibly
-    /// affect the resolution of <paramref name="resolvingPath"/> — they're equal,
-    /// changedPath is a prefix of resolvingPath (a parent appearing/disappearing
-    /// changes the closest-ancestor match), or resolvingPath is a prefix of
-    /// changedPath (a deeper node appearing under our resolution target may
-    /// change the matched leaf). Conservative — false negatives would silently
-    /// stall live consumers; false positives just re-resolve harmlessly.
+    /// True when a catalog change at <paramref name="changedPath"/> could
+    /// plausibly affect the resolution of <paramref name="resolvingPath"/>:
+    /// equal, ancestor, or descendant. Conservative — false negatives stall
+    /// live consumers; false positives just re-resolve harmlessly.
     /// </summary>
     private static bool MightAffect(string resolvingPath, string changedPath)
     {
@@ -136,8 +233,7 @@ internal class PathResolutionService : IPathResolver, IDisposable
     {
         var path = e.Path.TrimStart('/');
         _logger?.LogDebug("PathResolution cache: Created {Path}", path);
-        InvalidateSubtree(path);
-        CacheResolution(path, new AddressResolution(path, null));
+        EvictAffected(path);
         _catalogChanges.OnNext(e);
     }
 
@@ -145,33 +241,24 @@ internal class PathResolutionService : IPathResolver, IDisposable
     {
         var path = e.Path.TrimStart('/');
         _logger?.LogDebug("PathResolution cache: Deleted {Path}", path);
-        InvalidateSubtree(path);
+        EvictAffected(path);
         _catalogChanges.OnNext(e);
     }
 
-    private void InvalidateSubtree(string path)
+    /// <summary>
+    /// Removes cached streams whose resolution could be affected by a change
+    /// at <paramref name="changedPath"/>. The next subscriber to such a path
+    /// gets a fresh stream — and any existing subscribers re-emit through
+    /// the <see cref="_catalogChanges"/> Subject (Replay(1).RefCount keeps
+    /// them connected). Same MightAffect predicate as the live filter.
+    /// </summary>
+    private void EvictAffected(string changedPath)
     {
-        foreach (var key in _pathTokens.Keys)
+        foreach (var key in _streams.Keys)
         {
-            if (key.Equals(path, StringComparison.OrdinalIgnoreCase)
-                || key.StartsWith(path + "/", StringComparison.OrdinalIgnoreCase))
-            {
-                if (_pathTokens.TryRemove(key, out var cts))
-                {
-                    cts.Cancel();
-                    cts.Dispose();
-                }
-            }
+            if (MightAffect(key, changedPath))
+                _streams.TryRemove(key, out _);
         }
-    }
-
-    private void CacheResolution(string path, AddressResolution resolution)
-    {
-        var cts = _pathTokens.GetOrAdd(path, _ => new CancellationTokenSource());
-        var options = new MemoryCacheEntryOptions()
-            .SetSlidingExpiration(TimeSpan.FromMinutes(5))
-            .AddExpirationToken(new CancellationChangeToken(cts.Token));
-        _cache.Set($"resolve:{path}", resolution, options);
     }
 
     public void Dispose()
@@ -180,11 +267,6 @@ internal class PathResolutionService : IPathResolver, IDisposable
         _deleteSub?.Dispose();
         _catalogChanges.OnCompleted();
         _catalogChanges.Dispose();
-        _cache.Dispose();
-        foreach (var cts in _pathTokens.Values)
-        {
-            cts.Cancel();
-            cts.Dispose();
-        }
+        _streams.Clear();
     }
 }
