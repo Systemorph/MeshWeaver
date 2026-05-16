@@ -698,30 +698,50 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 continue;
 
             var name = node.Name ?? node.Id ?? node.Path ?? "";
-            var nameLower = name;
-            var pathLower = node.Path ?? "";
+            var path = node.Path ?? "";
 
-            // Calculate match score based on prefix match (check both name and path)
+            // Calculate match score based on prefix match (check both name and path).
+            // Every comparison flows through StringComparison.OrdinalIgnoreCase —
+            // no lowercased copies, no per-char ToLowerInvariant.
             double score = 0;
 
-            // Name matches (higher priority)
-            if (nameLower.StartsWith(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
+            if (string.IsNullOrEmpty(normalizedPrefix))
             {
-                score = 100 - (nameLower.Length - normalizedPrefix.Length); // Exact prefix match, shorter is better
+                // Empty prefix = list-all-children at basePath. Every node
+                // would match via the StartsWith("") branch below; the
+                // name-length term then favors children whose Name happens
+                // to be shorter than the parent's (e.g. "LaunchEvent"
+                // < "TaskFlow Product Launch"), pushing grandchildren above
+                // their parents in the ordered result. Bypass the name
+                // scoring and rank purely by depth so parents are always
+                // visited before descendants (repro:
+                // AutocompleteMultiSourceTest.ShorterPathsWin_ParentBeforeGrandchild).
+                score = 100 - (path.Count(c => c == '/') * 10);
             }
-            else if (nameLower.Contains(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
+            // Name matches (higher priority)
+            else if (name.StartsWith(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
             {
-                score = 50 - (nameLower.IndexOf(normalizedPrefix, StringComparison.OrdinalIgnoreCase)); // Contains match
+                score = 100 - (name.Length - normalizedPrefix.Length); // Exact prefix match, shorter is better
+            }
+            else if (name.Contains(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                score = 50 - (name.IndexOf(normalizedPrefix, StringComparison.OrdinalIgnoreCase)); // Contains match
             }
             // Path matches (lower priority than name)
-            else if (pathLower.Contains(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
+            else if (path.Contains(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
             {
-                score = 30 - (pathLower.IndexOf(normalizedPrefix, StringComparison.OrdinalIgnoreCase) * 0.1); // Path contains match
+                score = 30 - (path.IndexOf(normalizedPrefix, StringComparison.OrdinalIgnoreCase) * 0.1); // Path contains match
             }
-            else if (FuzzyMatch(nameLower, normalizedPrefix))
+            else if (FuzzyMatch(name, normalizedPrefix))
             {
                 score = 25; // Fuzzy match on name
             }
+
+            // Path-depth penalty for non-empty prefixes too: every additional
+            // segment subtracts 1 so a parent's name match beats a deeper
+            // descendant's name match of equal strength.
+            if (!string.IsNullOrEmpty(normalizedPrefix))
+                score -= path.Count(c => c == '/');
 
             score += PathProximity.ComputeBoost(contextPath, node.Path);
 
@@ -758,20 +778,46 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         }
     }
 
+    /// <summary>
+    /// Loose-but-bounded fuzzy match: every character of <paramref name="prefix"/>
+    /// must appear in <paramref name="text"/> in order AND within a window of
+    /// <c>max(prefix.Length + 2, prefix.Length * 2)</c> characters of the first
+    /// matched position. Bounding the window prevents "Sys" from matching
+    /// "AsiaRe Profitability Analysis" (which legitimately contains s-y-s in
+    /// order across 30 characters spanning unrelated words — caller's filter
+    /// then can't reject it, repro:
+    /// <c>UnifiedReferenceAutocompleteProviderTest.Provider_AtPartialPrefix_OnlyReturnsMatchingNodes</c>).
+    /// The window keeps deliberate intra-word typo-tolerance ("Systmorph" → "Systemorph",
+    /// "AmricansIns" → "AmericasIns") while rejecting scattered-letter coincidences.
+    /// </summary>
     private static bool FuzzyMatch(string text, string prefix)
     {
         if (string.IsNullOrEmpty(prefix))
             return true;
 
+        // Minimum 3-char prefix to enable fuzzy — single-char "fuzzy" matches
+        // anything and is just noise.
+        if (prefix.Length < 3)
+            return false;
+
+        var window = Math.Max(prefix.Length + 2, prefix.Length * 2);
         int prefixIndex = 0;
-        foreach (var c in text)
+        int firstMatchIndex = -1;
+        for (int i = 0; i < text.Length; i++)
         {
-            if (char.ToLowerInvariant(c) == char.ToLowerInvariant(prefix[prefixIndex]))
-            {
-                prefixIndex++;
-                if (prefixIndex >= prefix.Length)
-                    return true;
-            }
+            // Substring compare with explicit OrdinalIgnoreCase instead of
+            // lowercasing both sides — canonical case-insensitive comparison
+            // on 1-char windows, no string allocations.
+            if (string.Compare(text, i, prefix, prefixIndex, 1,
+                    StringComparison.OrdinalIgnoreCase) != 0)
+                continue;
+            if (firstMatchIndex < 0)
+                firstMatchIndex = i;
+            else if (i - firstMatchIndex >= window)
+                return false; // window blown — not a real match
+            prefixIndex++;
+            if (prefixIndex >= prefix.Length)
+                return true;
         }
         return false;
     }

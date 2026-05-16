@@ -343,7 +343,21 @@ public class MeshQuery : IMeshQueryCore
             return Observable.Empty<QueryResultChange<T>>();
 
         if (observables.Count == 1)
-            return observables[0];
+        {
+            // Single provider — still funnel Initial through ClipMergedInitial
+            // so request.Skip / request.Limit are applied. The provider itself
+            // yields up to (Skip + Limit) items as a load cap (see
+            // StorageAdapterMeshQueryProvider.QueryAsync) and defers the
+            // final paging to the merge layer; bypassing ClipMergedInitial
+            // here returned all (Skip + Limit) items instead of the trimmed
+            // Limit window (repro:
+            // HierarchicalBrowsingTests.QueryAsync_Generic_WithPaging_ReturnsPagedResults
+            // — 10 items created, Skip=3 Limit=3, got 6 = Skip+Limit instead
+            // of the expected 3).
+            return observables[0].Select(change => change.ChangeType == QueryChangeType.Initial
+                ? ClipMergedInitial<T>(change.Items.ToList(), change, change.Query!, request)
+                : change);
+        }
 
         return Observable.Create<QueryResultChange<T>>(observer =>
         {
