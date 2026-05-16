@@ -2,6 +2,8 @@ using System.Collections.Concurrent;
 using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
+using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using MeshWeaver.Mesh;
@@ -39,7 +41,18 @@ internal class RoutingPersistenceServiceCore : IStorageAdapter
     private readonly ConcurrentDictionary<string, IStorageAdapter> _adapters = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, IMeshQueryProvider> _queryProviders = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, IVersionQuery> _versionQueries = new(StringComparer.OrdinalIgnoreCase);
-    private readonly SemaphoreSlim _provisionLock = new(1, 1);
+
+    // Reactive single-flight gates — replace the prior SemaphoreSlim that
+    // covered BOTH global init and per-segment provisioning. Lazy<> with
+    // ExecutionAndPublication ensures the value factory runs exactly once;
+    // the AsyncSubject returned caches the eventual completion so every
+    // late subscriber gets the result immediately. No await, no Task in the
+    // hot path — boundary Tasks (factory.CreateStoreAsync, factory.
+    // InitializeDefaultPartitionsAsync) stay wrapped in Observable.FromAsync
+    // per Doc/Architecture/AsynchronousCalls.md.
+    private Lazy<IObservable<Unit>>? _initObservable;
+    private readonly ConcurrentDictionary<string, Lazy<IObservable<IStorageAdapter>>> _provisionInFlight =
+        new(StringComparer.OrdinalIgnoreCase);
     private volatile bool _initialized;
 
     // Fires (key, provider) on EVERY query-provider registration — constructor
@@ -79,6 +92,12 @@ internal class RoutingPersistenceServiceCore : IStorageAdapter
         _changeNotifier = changeNotifier;
         _staticNodeProviders = staticNodeProviders ?? [];
         _partitionStorageProviders = partitionStorageProviders ?? [];
+
+        // Lazy ensures the AsyncSubject pipeline (drives Initialize()) is
+        // built exactly once even under concurrent EnsureInitialized() calls.
+        _initObservable = new Lazy<IObservable<Unit>>(
+            BuildInitObservable,
+            LazyThreadSafetyMode.ExecutionAndPublication);
 
         // Eager registration for IPartitionStorageProvider rules with a fixed
         // PartitionDefinition.Namespace (single-namespace rules like EmbeddedResource).
@@ -167,22 +186,43 @@ internal class RoutingPersistenceServiceCore : IStorageAdapter
     }
 
     /// <summary>
-    /// Ensures partitions have been discovered at least once.
+    /// Reactive init gate — single-flight via <see cref="Lazy{T}"/>. Every
+    /// downstream observable (<see cref="Read"/>, <see cref="Exists"/>,
+    /// <see cref="ListChildPaths"/>) flat-maps through here so the first
+    /// caller drives <see cref="Initialize"/> and concurrent callers
+    /// subscribe to the same AsyncSubject.
     /// </summary>
-    public async Task EnsureInitializedAsync(CancellationToken ct = default)
+    internal IObservable<Unit> EnsureInitialized() =>
+        _initialized
+            ? Observable.Return(Unit.Default)
+            : _initObservable!.Value;
+
+    /// <summary>
+    /// Task adapter for boundary callers (Aspire bootstrap, tests). Internal
+    /// code MUST use the observable form to stay inside the reactive surface.
+    /// </summary>
+    public Task EnsureInitializedAsync(CancellationToken ct = default) =>
+        EnsureInitialized().ToTask(ct);
+
+    private IObservable<Unit> BuildInitObservable()
     {
-        if (_initialized) return;
-        await _provisionLock.WaitAsync(ct);
-        try
-        {
-            if (_initialized) return;
-            await InitializeAsync(ct);
-            _initialized = true;
-        }
-        finally
-        {
-            _provisionLock.Release();
-        }
+        var subject = new AsyncSubject<Unit>();
+        Initialize().Subscribe(
+            _ => { },
+            ex =>
+            {
+                // Allow a retry — wipe the Lazy so the next caller rebuilds.
+                _initObservable = new Lazy<IObservable<Unit>>(
+                    BuildInitObservable, LazyThreadSafetyMode.ExecutionAndPublication);
+                subject.OnError(ex);
+            },
+            () =>
+            {
+                _initialized = true;
+                subject.OnNext(Unit.Default);
+                subject.OnCompleted();
+            });
+        return subject;
     }
 
     internal IObservable<(string Key, IMeshQueryProvider Provider)> DiscoverNewProviders(CancellationToken ct = default)
@@ -209,6 +249,12 @@ internal class RoutingPersistenceServiceCore : IStorageAdapter
             .Select(t => t!.Value);
     }
 
+    /// <summary>
+    /// async-IAsyncEnumerable adapter kept ONLY because external callers
+    /// (<c>RoutingMeshQueryProvider</c>, <c>UserAccessiblePartitionsCache</c>)
+    /// drive partition discovery via <c>await foreach</c>. Internal init uses
+    /// <see cref="DiscoverNewProviders"/> directly.
+    /// </summary>
     internal async IAsyncEnumerable<(string Key, IMeshQueryProvider Provider)> DiscoverNewProvidersAsync(
         [EnumeratorCancellation] CancellationToken ct)
     {
@@ -225,98 +271,151 @@ internal class RoutingPersistenceServiceCore : IStorageAdapter
         }
     }
 
+    /// <summary>
+    /// Reactive per-segment single-flight: dedup concurrent provisioning of
+    /// the same partition key. Lazy ensures the value factory runs once even
+    /// under contention; AsyncSubject (via Replay(1).RefCount()) caches the
+    /// terminal value so late subscribers don't re-trigger the factory call.
+    /// </summary>
     private IObservable<IStorageAdapter> GetOrCreateAdapter(string firstSegment) =>
         Observable.Defer(() =>
-            _adapters.TryGetValue(firstSegment, out var existing)
-                ? Observable.Return(existing)
-                : Observable.FromAsync(ct => GetOrCreateAdapterAsync(firstSegment, ct), Scheduler.Default));
-
-    private async Task<IStorageAdapter> GetOrCreateAdapterAsync(string firstSegment, CancellationToken ct)
-    {
-        if (_adapters.TryGetValue(firstSegment, out var existing)) return existing;
-
-        await _provisionLock.WaitAsync(ct);
-        try
         {
-            if (_adapters.TryGetValue(firstSegment, out existing)) return existing;
+            if (_adapters.TryGetValue(firstSegment, out var existing))
+                return Observable.Return(existing);
 
+            var lazy = _provisionInFlight.GetOrAdd(firstSegment, key =>
+                new Lazy<IObservable<IStorageAdapter>>(
+                    () => ProvisionAdapter(key)
+                        .Do(_ => _provisionInFlight.TryRemove(key, out Lazy<IObservable<IStorageAdapter>>? _))
+                        .Catch<IStorageAdapter, Exception>(ex =>
+                        {
+                            _provisionInFlight.TryRemove(key, out Lazy<IObservable<IStorageAdapter>>? _);
+                            return Observable.Throw<IStorageAdapter>(ex);
+                        })
+                        .Replay(1)
+                        .RefCount(),
+                    LazyThreadSafetyMode.ExecutionAndPublication));
+            return lazy.Value;
+        });
+
+    private IObservable<IStorageAdapter> ProvisionAdapter(string firstSegment) =>
+        Observable.Defer(() =>
+        {
+            // Re-check after winning the single-flight slot.
+            if (_adapters.TryGetValue(firstSegment, out var existing))
+                return Observable.Return(existing);
+
+            // Try IPartitionStorageProvider rules first (wildcard / pattern).
             foreach (var provider in _partitionStorageProviders)
             {
                 if (!provider.Matches(firstSegment)) continue;
                 _adapters[firstSegment] = provider.Adapter;
                 RegisterQueryProvider(firstSegment,
-                    new Query.StorageAdapterMeshQueryProvider(persistence: provider.Adapter, changeNotifier: _changeNotifier));
-                return provider.Adapter;
+                    new Query.StorageAdapterMeshQueryProvider(
+                        persistence: provider.Adapter, changeNotifier: _changeNotifier));
+                return Observable.Return(provider.Adapter);
             }
 
-            var partition = await _factory.CreateStoreAsync(firstSegment, ct);
-            _adapters[firstSegment] = partition.StorageAdapter!;
-            var queryProvider = partition.QueryProvider
-                ?? new Query.StorageAdapterMeshQueryProvider(persistence: partition.StorageAdapter!, changeNotifier: _changeNotifier);
-            RegisterQueryProvider(firstSegment, queryProvider);
-            if (partition.VersionQuery != null)
-                _versionQueries[firstSegment] = partition.VersionQuery;
-            return partition.StorageAdapter!;
-        }
-        finally
-        {
-            _provisionLock.Release();
-        }
-    }
+            // Fall through to factory.CreateStoreAsync (boundary Task → FromAsync).
+            return Observable
+                .FromAsync(ct => _factory.CreateStoreAsync(firstSegment, ct), Scheduler.Default)
+                .Select(partition =>
+                {
+                    _adapters[firstSegment] = partition.StorageAdapter!;
+                    var queryProvider = partition.QueryProvider
+                        ?? new Query.StorageAdapterMeshQueryProvider(
+                            persistence: partition.StorageAdapter!, changeNotifier: _changeNotifier);
+                    RegisterQueryProvider(firstSegment, queryProvider);
+                    if (partition.VersionQuery != null)
+                        _versionQueries[firstSegment] = partition.VersionQuery;
+                    return partition.StorageAdapter!;
+                });
+        });
 
-    public async Task InitializeAsync(CancellationToken ct = default)
-    {
-        foreach (var provider in _partitionStorageProviders)
+    /// <summary>
+    /// Reactive init: registers eager partition providers, initialises
+    /// defaults, drains <see cref="DiscoverNewProviders"/>, then registers
+    /// static-data adapters for static partitions. Composed via
+    /// <c>SelectMany</c>; the only awaits are at the IPartitionedStoreFactory
+    /// boundary (<see cref="Observable.FromAsync{T}(Func{Task{T}})"/>).
+    /// </summary>
+    public IObservable<Unit> Initialize() =>
+        Observable.Defer(() =>
         {
-            var ns = provider.PartitionDefinition?.Namespace;
-            if (string.IsNullOrEmpty(ns)) continue;
-            if (_adapters.ContainsKey(ns)) continue;
-
-            if (_adapters.TryAdd(ns, provider.Adapter))
+            foreach (var provider in _partitionStorageProviders)
             {
-                RegisterQueryProvider(ns,
-                    new Query.StorageAdapterMeshQueryProvider(persistence: provider.Adapter, changeNotifier: _changeNotifier));
+                var ns = provider.PartitionDefinition?.Namespace;
+                if (string.IsNullOrEmpty(ns)) continue;
+                if (_adapters.ContainsKey(ns)) continue;
+
+                if (_adapters.TryAdd(ns, provider.Adapter))
+                {
+                    RegisterQueryProvider(ns,
+                        new Query.StorageAdapterMeshQueryProvider(
+                            persistence: provider.Adapter, changeNotifier: _changeNotifier));
+                }
             }
-        }
 
-        var allStaticNodes = _staticNodeProviders
-            .SelectMany(p => p.GetStaticNodes())
-            .ToList();
+            var allStaticNodes = _staticNodeProviders
+                .SelectMany(p => p.GetStaticNodes())
+                .ToList();
 
-        var allPartitionDefs = allStaticNodes
-            .Select(n => n.Content)
-            .OfType<PartitionDefinition>()
-            .ToList();
+            var allPartitionDefs = allStaticNodes
+                .Select(n => n.Content)
+                .OfType<PartitionDefinition>()
+                .ToList();
 
-        var writableDefs = allPartitionDefs
-            .Where(d => !string.Equals(d.DataSource, "static", StringComparison.OrdinalIgnoreCase))
-            .ToList();
-        if (writableDefs.Count > 0)
-            await _factory.InitializeDefaultPartitionsAsync(writableDefs, ct);
+            var writableDefs = allPartitionDefs
+                .Where(d => !string.Equals(d.DataSource, "static", StringComparison.OrdinalIgnoreCase))
+                .ToList();
 
-        await foreach (var (_, _) in DiscoverNewProvidersAsync(ct))
-        { }
+            var initDefaults = writableDefs.Count > 0
+                ? Observable.FromAsync(
+                    ct => _factory.InitializeDefaultPartitionsAsync(writableDefs, ct),
+                    Scheduler.Default)
+                : Observable.Return(Unit.Default);
 
-        foreach (var def in allPartitionDefs)
-        {
-            if (!string.Equals(def.DataSource, "static", StringComparison.OrdinalIgnoreCase))
-                continue;
-            if (string.IsNullOrEmpty(def.Namespace)) continue;
-            if (_adapters.ContainsKey(def.Namespace)) continue;
+            // DiscoverNewProviders terminates once it has emitted every newly-
+            // provisioned partition; .LastOrDefaultAsync waits for OnCompleted
+            // and projects to a terminal Unit. Falls back to default if the
+            // stream completes with zero emissions (no new partitions found).
+            return initDefaults
+                .SelectMany(_ => DiscoverNewProviders(CancellationToken.None)
+                    .LastOrDefaultAsync()
+                    .Select(_ => Unit.Default)
+                    .DefaultIfEmpty(Unit.Default))
+                .Select(_ =>
+                {
+                    foreach (var def in allPartitionDefs)
+                    {
+                        if (!string.Equals(def.DataSource, "static", StringComparison.OrdinalIgnoreCase))
+                            continue;
+                        if (string.IsNullOrEmpty(def.Namespace)) continue;
+                        if (_adapters.ContainsKey(def.Namespace)) continue;
 
-            var nodesInPartition = allStaticNodes
-                .Where(n => string.Equals(
-                    PathPartition.GetFirstSegment(n.Path),
-                    def.Namespace,
-                    StringComparison.OrdinalIgnoreCase));
-            var staticAdapter = new StaticNodeStorageAdapter(nodesInPartition);
-            if (_adapters.TryAdd(def.Namespace, staticAdapter))
-            {
-                RegisterQueryProvider(def.Namespace,
-                    new Query.StorageAdapterMeshQueryProvider(persistence: staticAdapter, changeNotifier: _changeNotifier));
-            }
-        }
-    }
+                        var nodesInPartition = allStaticNodes
+                            .Where(n => string.Equals(
+                                PathPartition.GetFirstSegment(n.Path),
+                                def.Namespace,
+                                StringComparison.OrdinalIgnoreCase));
+                        var staticAdapter = new StaticNodeStorageAdapter(nodesInPartition);
+                        if (_adapters.TryAdd(def.Namespace, staticAdapter))
+                        {
+                            RegisterQueryProvider(def.Namespace,
+                                new Query.StorageAdapterMeshQueryProvider(
+                                    persistence: staticAdapter, changeNotifier: _changeNotifier));
+                        }
+                    }
+                    return Unit.Default;
+                });
+        });
+
+    /// <summary>
+    /// Task adapter for boundary callers (tests). Internal init paths use
+    /// <see cref="Initialize"/> directly.
+    /// </summary>
+    public Task InitializeAsync(CancellationToken ct = default) =>
+        Initialize().ToTask(ct);
 
     private static string NormalizePath(string? path) => path?.Trim('/') ?? "";
 
@@ -324,7 +423,7 @@ internal class RoutingPersistenceServiceCore : IStorageAdapter
 
     /// <inheritdoc />
     public IObservable<MeshNode?> Read(string path, System.Text.Json.JsonSerializerOptions options)
-        => Observable.FromAsync(ct => EnsureInitializedAsync(ct), Scheduler.Default)
+        => EnsureInitialized()
             .SelectMany(_ => TryGetAdapter(path)?.Read(path, options) ?? Observable.Return<MeshNode?>(null));
 
     /// <inheritdoc />
@@ -337,7 +436,7 @@ internal class RoutingPersistenceServiceCore : IStorageAdapter
 
     /// <inheritdoc />
     public IObservable<bool> Exists(string path)
-        => Observable.FromAsync(ct => EnsureInitializedAsync(ct), Scheduler.Default)
+        => EnsureInitialized()
             .SelectMany(_ => TryGetAdapter(path)?.Exists(path) ?? Observable.Return(false));
 
     /// <inheritdoc />
@@ -357,7 +456,7 @@ internal class RoutingPersistenceServiceCore : IStorageAdapter
         // root and the entire mesh-wide query returns nothing.
         if (string.IsNullOrEmpty(parentPath))
         {
-            return Observable.FromAsync(ct => EnsureInitializedAsync(ct), Scheduler.Default)
+            return EnsureInitialized()
                 .Select(_ =>
                 {
                     var nodes = _adapters.Keys.ToList();
@@ -365,7 +464,7 @@ internal class RoutingPersistenceServiceCore : IStorageAdapter
                 });
         }
 
-        return Observable.FromAsync(ct => EnsureInitializedAsync(ct), Scheduler.Default)
+        return EnsureInitialized()
             .SelectMany(_ => TryGetAdapter(parentPath)?.ListChildPaths(parentPath)
                 ?? Observable.Return<(IEnumerable<string>, IEnumerable<string>)>(([], [])));
     }
