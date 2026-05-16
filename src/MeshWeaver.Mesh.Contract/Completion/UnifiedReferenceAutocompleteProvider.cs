@@ -19,7 +19,7 @@ namespace MeshWeaver.Mesh.Completion;
 /// - "@" suggests top-level nodes globally (absolute paths)
 /// </summary>
 internal class UnifiedReferenceAutocompleteProvider(
-    IMeshCatalog? meshCatalog,
+    MeshConfiguration? meshConfig,
     IMeshService? meshQuery,
     INavigationService? navigationContext,
     IMessageHub hub,
@@ -374,10 +374,10 @@ internal class UnifiedReferenceAutocompleteProvider(
             }
         }
 
-        // Type definitions from mesh catalog configuration
-        if (meshCatalog != null)
+        // Type definitions from mesh configuration
+        if (meshConfig != null)
         {
-            var topLevelNodes = meshCatalog.Configuration.Nodes.Values
+            var topLevelNodes = meshConfig.Nodes.Values
                 .Where(n => n.Segments.Count == 1)
                 .Where(n => string.IsNullOrEmpty(prefix) ||
                            n.Path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))

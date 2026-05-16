@@ -6,6 +6,7 @@ using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.Hosting.Persistence.Query;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Orleans.Streams;
@@ -18,8 +19,8 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 {
 
     private ModulesAssemblyLoadContext? loadContext;
-    private readonly INodeTypeStreamCache streamCache =
-        meshHub.ServiceProvider.GetRequiredService<INodeTypeStreamCache>();
+    private readonly IMeshNodeStreamCache streamCache =
+        meshHub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
 
     /// <summary>
     /// Hub-readiness signal. <see cref="OnActivateAsync"/> returns immediately
@@ -85,12 +86,18 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         }
         else
         {
-            logger.LogInformation("[ACTIVATE] Grain {StreamId}: no static node with HubConfig, reading from catalog", streamId);
-            var catalog = meshHub.ServiceProvider.GetService<MeshCatalog>();
-            sourceStream = catalog != null
-                ? catalog.GetNodeForRouting(address)
-                    .Where(n => n != null)
-                    .Select(n => n!)
+            logger.LogInformation("[ACTIVATE] Grain {StreamId}: no static node with HubConfig, reading from path resolver", streamId);
+            // Read the matched MeshNode from IPathResolver's cached stream —
+            // AddressResolution.Node carries the same node the routing layer
+            // sees, no second query. streamCache.GetStream(addressPath) would
+            // SubscribeRequest → RoutingGrain → this same grain → await
+            // _hubReady → deadlock; the resolver reads directly from
+            // storage / static providers and skips that loop.
+            var pathResolver = meshHub.ServiceProvider.GetService<IPathResolver>();
+            sourceStream = pathResolver != null
+                ? pathResolver.ResolvePath(addressPath)
+                    .Where(r => r is { Node: not null })
+                    .Select(r => r!.Node!)
                 : streamCache.GetStream(addressPath);
         }
 

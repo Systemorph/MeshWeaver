@@ -607,20 +607,23 @@ public static class PersistenceExtensions
     }
 
     /// <summary>
-    /// Registers the MeshCatalog and its public interfaces (IMeshCatalog, IPathResolver).
+    /// Registers <see cref="IPathResolver"/> + the shared mesh-node stream cache.
+    /// (Old name <c>AddMeshCatalog</c> retained for back-compat; the MeshCatalog
+    /// class itself is gone — path resolution lives in PathResolutionService now.)
     /// </summary>
     public static IServiceCollection AddMeshCatalog(this IServiceCollection services)
     {
         services.TryAddSingleton<IMeshChangeFeed, InProcessMeshChangeFeed>();
-        services.TryAddSingleton<MeshCatalog>();
-        services.TryAddSingleton<IMeshCatalog>(sp => sp.GetRequiredService<MeshCatalog>());
-        // PathResolutionService owns the cache + subscribes to IMeshChangeFeed internally
+        // PathResolutionService owns the per-path Replay(1).RefCount() cache
+        // and subscribes to IMeshChangeFeed internally.
         services.TryAddSingleton<PathResolutionService>();
         services.TryAddSingleton<IPathResolver>(sp => sp.GetRequiredService<PathResolutionService>());
-        // Replay-RefCount cache for NodeType MeshNode streams. Routing reads
-        // it to wait for compile readiness; grain activations read it for the
-        // assembly path. See ~/.claude/plans/splendid-sauteeing-garden.md.
-        services.TryAddSingleton<INodeTypeStreamCache, NodeTypeStreamCache>();
+        // Replay-AutoConnect cache for MeshNode streams. Routing reads it for
+        // compile readiness; grain activations read it for the assembly path;
+        // path-resolution lookups share the same handle so a single live
+        // upstream subscription per path serves every consumer.
+        services.TryAddSingleton<MeshNodeStreamCache>();
+        services.TryAddSingleton<IMeshNodeStreamCache>(sp => sp.GetRequiredService<MeshNodeStreamCache>());
         return services;
     }
 }

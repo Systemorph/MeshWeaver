@@ -4,6 +4,7 @@ using MeshWeaver.Messaging;
 
 [assembly: InternalsVisibleTo("MeshWeaver.Connection.Orleans")]
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Monolith")]
+[assembly: InternalsVisibleTo("MeshWeaver.Hosting.Orleans")]
 
 namespace MeshWeaver.Mesh;
 

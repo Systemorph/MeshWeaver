@@ -14,8 +14,6 @@ namespace MeshWeaver.Hosting
         protected readonly ITypeRegistry TypeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
         protected readonly IMessageHub Mesh = hub;
         protected readonly IPathResolver PathResolver = hub.ServiceProvider.GetRequiredService<IPathResolver>();
-        private readonly IMeshQueryCore _meshQuery = hub.ServiceProvider.GetRequiredService<IMeshQueryCore>();
-        private readonly MeshConfiguration _meshConfiguration = hub.ServiceProvider.GetRequiredService<MeshConfiguration>();
 
         public IObservable<IMessageDelivery> DeliverMessage(IMessageDelivery delivery)
         {
@@ -114,42 +112,18 @@ namespace MeshWeaver.Hosting
 
                     var resolved = new Address(resolution.Prefix.Split('/'));
 
-                    // Get node — routing-layer call. NOT a hub round-trip (would recurse).
-                    // Inline: configuration match first, else IMeshQueryCore.ObserveQuery
-                    // for `path:X` (one query). Application code uses hub.GetMeshNode.
-                    // See Doc/Architecture/CqrsAndContentAccess.md.
-                    return GetNodeForRouting(resolved)
-                        .SelectMany(node =>
-                        {
-                            var routeLogger = Mesh.ServiceProvider.GetService<ILogger<RoutingServiceBase>>();
-                            routeLogger?.LogDebug("RouteMessage: {MessageType} to {Address} (original={OriginalAddress}). Resolution={Resolution}, Node={NodeFound}, NodeType={NodeType}, HubConfig={HasHubConfig}",
-                                delivery.Message.GetType().Name, resolved, originalAddress,
-                                resolution?.Prefix, node != null, node?.NodeType, node?.HubConfiguration != null);
-                            return RouteImpl(delivery, node, resolved);
-                        });
+                    // The matched MeshNode is carried on AddressResolution.Node — same
+                    // cached observable PathResolver populated. NO second query: a
+                    // separate path:X round-trip used to fire here, which doubled
+                    // routing latency and duplicated the cache key set. The cache is
+                    // the single source of truth.
+                    var node = resolution.Node;
+                    var routeLogger = Mesh.ServiceProvider.GetService<ILogger<RoutingServiceBase>>();
+                    routeLogger?.LogDebug("RouteMessage: {MessageType} to {Address} (original={OriginalAddress}). Resolution={Resolution}, Node={NodeFound}, NodeType={NodeType}, HubConfig={HasHubConfig}",
+                        delivery.Message.GetType().Name, resolved, originalAddress,
+                        resolution.Prefix, node != null, node?.NodeType, node?.HubConfiguration != null);
+                    return RouteImpl(delivery, node, resolved);
                 });
-        }
-
-        /// <summary>
-        /// Inlined routing-layer node lookup: configuration node match first
-        /// (sync, in-memory), else <c>IMeshQueryCore.ObserveQuery(path:X)</c>
-        /// — one query, fan-out across registered providers. Replaces the
-        /// old <c>MeshCatalog.GetNodeForRouting</c> shim.
-        /// </summary>
-        private IObservable<MeshNode?> GetNodeForRouting(Address address)
-        {
-            var addressKey = address.Path;
-
-            if (_meshConfiguration.Nodes.TryGetValue(addressKey, out var configNode))
-                return Observable.Return<MeshNode?>(configNode);
-
-            return _meshQuery
-                .ObserveQuery<MeshNode>(
-                    MeshQueryRequest.FromQuery($"path:{addressKey}"),
-                    Mesh.JsonSerializerOptions)
-                .Where(c => c.ChangeType == QueryChangeType.Initial)
-                .Take(1)
-                .Select(c => (MeshNode?)c.Items.FirstOrDefault());
         }
 
         private IMessageDelivery PostNotFound(IMessageDelivery delivery, Address originalAddress, AddressResolution? resolution)

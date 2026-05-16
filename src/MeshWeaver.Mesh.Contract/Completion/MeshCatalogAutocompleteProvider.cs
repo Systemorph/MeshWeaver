@@ -12,25 +12,25 @@ namespace MeshWeaver.Mesh.Completion;
 /// </summary>
 public class MeshCatalogAutocompleteProvider : IAutocompleteProvider
 {
-    private readonly IMeshCatalog? meshCatalog;
+    private readonly MeshConfiguration? meshConfig;
     private const int PrefixCategoryPriority = 1800;
 
     /// <inheritdoc cref="MeshCatalogAutocompleteProvider"/>
     public MeshCatalogAutocompleteProvider(IServiceProvider serviceProvider)
     {
-        meshCatalog = serviceProvider.GetService<IMeshCatalog>();
+        meshConfig = serviceProvider.GetService<MeshConfiguration>();
     }
 
     /// <inheritdoc />
     public IObservable<AutocompleteItem> GetItems(string query, string? contextPath = null)
     {
-        // Pure in-memory enumeration of registered mesh catalog nodes + reserved prefixes.
+        // Pure in-memory enumeration of registered mesh configuration nodes + reserved prefixes.
         var yielded = new HashSet<string>();
         var items = new List<AutocompleteItem>();
 
-        if (meshCatalog != null)
+        if (meshConfig != null)
         {
-            var topLevelNodes = meshCatalog.Configuration.Nodes.Values
+            var topLevelNodes = meshConfig.Nodes.Values
                 .Where(n => n.Segments.Count == 1)
                 .OrderBy(n => n.Order ?? int.MaxValue)
                 .ThenBy(n => n.Name);

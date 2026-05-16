@@ -116,6 +116,9 @@ internal class PathResolutionService : IPathResolver, IDisposable
     /// <summary>
     /// One-shot resolution: configuration → storage → static → partition root.
     /// Each step is short-circuit; the storage step is the only DB round-trip.
+    /// The matched <see cref="MeshNode"/> is carried back on
+    /// <see cref="AddressResolution.Node"/> so routing can share this cached
+    /// observable instead of issuing a second <c>path:X</c> query.
     /// </summary>
     private IObservable<AddressResolution?> ResolveOnce(string path)
     {
@@ -130,27 +133,30 @@ internal class PathResolutionService : IPathResolver, IDisposable
             .FirstOrDefault();
         if (configMatch.Node != null)
             return Observable.Return<AddressResolution?>(
-                BuildResolution(configMatch.Node.Path, segments, MatchedSegments(configMatch.Node.Path)));
+                BuildResolution(configMatch.Node.Path, segments, MatchedSegments(configMatch.Node.Path),
+                    matchedNode: configMatch.Node));
 
         // 2. Storage adapter — one PG query covering primary + satellites.
         return _storageAdapter.ResolvePath(path, _hub.JsonSerializerOptions)
             .Select<(MeshNode? Node, int MatchedSegments), AddressResolution?>(result =>
             {
                 if (result.Node != null)
-                    return BuildResolution(result.Node.Path, segments, result.MatchedSegments);
+                    return BuildResolution(result.Node.Path, segments, result.MatchedSegments, matchedNode: result.Node);
 
                 // 3. Static-node-provider exact-path fallback.
                 var staticHit = ProbeStaticNodes(segments);
                 if (staticHit is { } sh && sh.Node is not null)
-                    return BuildResolution(sh.Node.Path, segments, sh.Depth);
+                    return BuildResolution(sh.Node.Path, segments, sh.Depth, matchedNode: sh.Node);
 
                 // 4. Partition-root fallback — when the first segment maps
                 //    to a registered partition but no MeshNode exists at
                 //    that exact path (e.g. user partition `rbuergi` with
                 //    content only in satellites). Returns the bare partition
                 //    name as the address; the remainder is everything after.
+                //    Node is null — no concrete MeshNode exists; the routing
+                //    layer surfaces this as a virtual partition root.
                 if (segments.Length >= 1 && IsRegisteredPartition(segments[0]))
-                    return BuildResolution(segments[0], segments, matchedSegments: 1);
+                    return BuildResolution(segments[0], segments, matchedSegments: 1, matchedNode: null);
 
                 _logger?.LogDebug("[RESOLVE] {Path} → NULL (no match across all steps)", path);
                 return null;
@@ -191,12 +197,12 @@ internal class PathResolutionService : IPathResolver, IDisposable
     private static int MatchedSegments(string matchedPath) =>
         string.IsNullOrEmpty(matchedPath) ? 0 : matchedPath.Split('/').Length;
 
-    private static AddressResolution BuildResolution(string matchedPath, string[] requestedSegments, int matchedSegments)
+    private static AddressResolution BuildResolution(string matchedPath, string[] requestedSegments, int matchedSegments, MeshNode? matchedNode)
     {
         var remainder = matchedSegments < requestedSegments.Length
             ? string.Join("/", requestedSegments.Skip(matchedSegments))
             : null;
-        return new AddressResolution(matchedPath, remainder);
+        return new AddressResolution(matchedPath, remainder, matchedNode);
     }
 
     /// <summary>
@@ -215,6 +221,13 @@ internal class PathResolutionService : IPathResolver, IDisposable
         return false;
     }
 
+    /// <summary>
+    /// Resolution-equality for <see cref="DistinctUntilChanged"/>. Path-shape
+    /// (Prefix + Remainder) is the cache key; the Node is metadata that can
+    /// change without altering the route (e.g. a Name/Description edit on the
+    /// matched node would otherwise spam re-emissions through the routing
+    /// pipeline).
+    /// </summary>
     private sealed class AddressResolutionEquality : IEqualityComparer<AddressResolution?>
     {
         public static readonly AddressResolutionEquality Instance = new();
