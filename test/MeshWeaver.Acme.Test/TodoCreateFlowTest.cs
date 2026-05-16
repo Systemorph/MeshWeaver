@@ -212,10 +212,13 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
                 reference);
 
             Output.WriteLine("Waiting for Edit area to render (transient auto-confirmed)...");
+            // 30 s budget: cold-cache dynamic NodeType compile + per-instance
+            // hub activation + Edit-area composition exceed 10 s on slow CI
+            // runners. The outer [Fact(Timeout = 60000)] still bounds the test.
             var control = await stream
                 .GetControlStream(reference.Area!)
                 .Where(c => c is StackControl)
-                .Timeout(TimeSpan.FromSeconds(10))
+                .Timeout(TimeSpan.FromSeconds(30))
                 .FirstAsync();
 
             Output.WriteLine($"Received control: {control?.GetType().Name}");
@@ -267,7 +270,10 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             Output.WriteLine("Transient node created successfully");
 
             var nodeAddress = new Address(nodePath);
-            using var pingCts = new CancellationTokenSource(3.Seconds());
+            // 30 s Ping budget — a cold-cache dynamic NodeType compile takes
+            // longer than the original 3 s on slow CI runners. Outer
+            // [Fact(Timeout = 60000)] still bounds the whole test.
+            using var pingCts = new CancellationTokenSource(30.Seconds());
             await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask(pingCts.Token);
             Output.WriteLine("Ping succeeded");
 
@@ -278,11 +284,13 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
                 nodeAddress,
                 reference);
 
-            // First check what controls arrive (any type, not just StackControl)
+            // First check what controls arrive (any type, not just StackControl).
+            // 20 s budget — Create-area composition runs synchronously after
+            // hub activation; bumped from 5 s for CI runner headroom.
             var anyControl = await stream
                 .GetControlStream(reference.Area!)
                 .Where(c => c != null)
-                .Timeout(TimeSpan.FromSeconds(5))
+                .Timeout(TimeSpan.FromSeconds(20))
                 .FirstOrDefaultAsync();
 
             Output.WriteLine($"First control received: {anyControl?.GetType().Name ?? "null"}");

@@ -261,6 +261,13 @@ public static class PostgreSqlExtensions
             return new PostgreSqlChangeListener(baseDataSource, notifier, listenerLogger);
         });
         services.AddHostedService<PostgreSqlChangeListenerHostedService>();
+        // Start the Admin/Partition/* subscription so the provider's
+        // _partitions dictionary is populated from MeshNodes at runtime.
+        // Without this, writes to any path fault with
+        // "no IPartitionStorageProvider matches" (Matches() requires the
+        // first segment in _partitions). See
+        // PostgreSqlPartitionSubscriptionHostedService.
+        services.AddHostedService<PostgreSqlPartitionSubscriptionHostedService>();
 
         services.AddPartitionedCoreAndWrapperServices();
 
@@ -325,6 +332,11 @@ public static class PostgreSqlExtensions
             new PostgreSqlCrossSchemaQueryProvider(
                 sp.GetRequiredService<NpgsqlDataSource>(),
                 sp.GetService<ILoggerFactory>()?.CreateLogger<PostgreSqlCrossSchemaQueryProvider>()));
+
+        // Start the Admin/Partition/* subscription so writes can route — see
+        // the longer comment on the same registration in the connection-string
+        // overload above.
+        services.AddHostedService<PostgreSqlPartitionSubscriptionHostedService>();
 
         services.AddPartitionedCoreAndWrapperServices();
 
