@@ -368,17 +368,23 @@ public static class PersistenceExtensions
         this IServiceCollection services,
         CosmosClient cosmosClient,
         string databaseName,
-        int throughput = 400)
+        string nodesContainerName = "nodes",
+        string partitionsContainerName = "partitions")
     {
         services.AddSingleton<IDataChangeNotifier, DataChangeNotifier>();
 
-        services.AddSingleton<IPartitionedStoreFactory>(sp =>
-            new CosmosPartitionedStoreFactory(
-                cosmosClient,
-                databaseName,
-                sp.GetService<IDataChangeNotifier>(),
-                sp.GetService<MeshConfiguration>(),
-                throughput));
+        // Single shared CosmosStorageAdapter wired as a wildcard
+        // IPartitionStorageProvider. The previous factory model created
+        // per-partition container pairs at runtime — that lifecycle moved
+        // out of the persistence layer; if multi-container layouts are
+        // needed, provision them via a separate migration / Aspire setup
+        // and supply the container names here.
+        var database = cosmosClient.GetDatabase(databaseName);
+        var nodesContainer = database.GetContainer(nodesContainerName);
+        var partitionsContainer = database.GetContainer(partitionsContainerName);
+        var adapter = new CosmosStorageAdapter(nodesContainer, partitionsContainer);
+        services.AddSingleton(adapter);
+        services.AddSingleton<IPartitionStorageProvider>(new CosmosPartitionStorageProvider(adapter));
 
         services.AddPartitionedCoreAndWrapperServices();
 

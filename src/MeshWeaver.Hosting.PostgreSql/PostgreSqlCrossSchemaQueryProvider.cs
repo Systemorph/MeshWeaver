@@ -15,32 +15,67 @@ namespace MeshWeaver.Hosting.PostgreSql;
 public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
 {
     private readonly NpgsqlDataSource _dataSource;
-    private readonly PostgreSqlPartitionedStoreFactory _factory;
     private readonly PostgreSqlSqlGenerator _sqlGenerator = new();
     private readonly ILogger? _logger;
 
     public PostgreSqlCrossSchemaQueryProvider(
         NpgsqlDataSource dataSource,
-        PostgreSqlPartitionedStoreFactory factory,
         ILogger<PostgreSqlCrossSchemaQueryProvider>? logger = null)
     {
         _dataSource = dataSource;
-        _factory = factory;
         _logger = logger;
     }
 
     /// <summary>
-    /// Syncs the searchable_schemas table from discovered partitions.
-    /// Called at startup after partition discovery.
+    /// Schemas excluded from partition discovery — internal / system schemas
+    /// that don't hold user content. Kept in sync with the now-deleted
+    /// <c>PostgreSqlPartitionedStoreFactory.ExcludedSchemas</c>.
+    /// </summary>
+    private static readonly HashSet<string> ExcludedSchemas = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "admin", "portal", "kernel",
+        "_access", "_address_", "_graph", "_settings", "_tracking", "_thread", "_source", "_test",
+        "source", "test",
+        "login", "markdown", "onboarding", "welcome", "settings", "storage",
+        "p", "path", "mesh", "thread", "agent", "partition", "organization", "vuser",
+        "public", "information_schema", "pg_catalog", "pg_toast"
+    };
+
+    /// <summary>
+    /// Syncs the searchable_schemas table by querying information_schema for
+    /// schemas that contain a <c>mesh_nodes</c> table. Same SQL the legacy
+    /// factory's <c>DiscoverPartitionsAsync</c> ran; inlined here so this
+    /// class is self-contained — no <see cref="PostgreSqlPartitionedStoreFactory"/>
+    /// dependency.
     /// </summary>
     public async Task SyncSearchableSchemasAsync(CancellationToken ct = default)
     {
-        var schemas = await _factory.DiscoverPartitionsAsync(ct);
+        var schemas = new List<string>();
+        await using (var discoverCmd = _dataSource.CreateCommand("""
+            SELECT schema_name
+            FROM information_schema.schemata s
+            WHERE EXISTS (
+                SELECT 1 FROM information_schema.tables t
+                WHERE t.table_schema = s.schema_name
+                  AND t.table_name = 'mesh_nodes'
+            )
+            AND s.schema_name NOT IN ('public', 'information_schema', 'pg_catalog', 'pg_toast')
+            AND s.schema_name NOT LIKE '%\_versions' ESCAPE '\'
+            ORDER BY s.schema_name
+            """))
+        {
+            await using var reader = await discoverCmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                var schema = reader.GetString(0);
+                if (!ExcludedSchemas.Contains(schema))
+                    schemas.Add(schema);
+            }
+        }
 
-        // Replace contents of searchable_schemas
         await using var cmd = _dataSource.CreateCommand(
             "DELETE FROM public.searchable_schemas; " +
-            string.Join(" ", schemas.Select((s, i) =>
+            string.Join(" ", schemas.Select(s =>
                 $"INSERT INTO public.searchable_schemas (schema_name) VALUES ('{s.Replace("'", "''")}') ON CONFLICT DO NOTHING;")));
         await cmd.ExecuteNonQueryAsync(ct);
     }

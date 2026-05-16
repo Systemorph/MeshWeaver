@@ -233,16 +233,18 @@ public static class PostgreSqlExtensions
 
         services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
 
-        services.AddSingleton<IPartitionedStoreFactory>(sp =>
-            new PostgreSqlPartitionedStoreFactory(
+        services.AddSingleton<PostgreSqlPartitionStorageProvider>(sp =>
+            new PostgreSqlPartitionStorageProvider(
                 baseDataSource,
                 connectionString,
                 opts,
-                sp.GetService<IDataChangeNotifier>(),
+                partitions: null,
                 sp.GetService<IEmbeddingProvider>(),
-                sp.GetService<AccessService>(),
-                sp.GetService<MeshConfiguration>()?.NodeTypePermissions,
-                configureDataSource));
+                configureDataSource,
+                contexts: null,
+                sp.GetService<ILogger<PostgreSqlPartitionStorageProvider>>()));
+        services.AddSingleton<IPartitionStorageProvider>(sp =>
+            sp.GetRequiredService<PostgreSqlPartitionStorageProvider>());
 
         services.AddSingleton<IPartitionAccessProvider>(
             new PostgreSqlPartitionAccessProvider(baseDataSource));
@@ -281,17 +283,13 @@ public static class PostgreSqlExtensions
     {
         services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
 
-        services.AddSingleton<IPartitionedStoreFactory>(sp =>
+        services.AddSingleton<PostgreSqlPartitionStorageProvider>(sp =>
         {
             var baseDataSource = sp.GetRequiredService<NpgsqlDataSource>();
-            // Resolve connection string from IConfiguration (Aspire-injected) rather than
-            // NpgsqlDataSource.ConnectionString which strips the password (PersistSecurityInfo=false).
             var config = sp.GetService<IConfiguration>();
             var connectionString = config?.GetConnectionString("memex")
                                    ?? baseDataSource.ConnectionString;
 
-            // Ensure username from the Aspire-configured data source is included
-            // (Azure PostgreSQL AAD auth requires the managed identity name as username)
             var baseCsb = new NpgsqlConnectionStringBuilder(baseDataSource.ConnectionString);
             if (!string.IsNullOrEmpty(baseCsb.Username))
             {
@@ -305,29 +303,28 @@ public static class PostgreSqlExtensions
             var opts = new PostgreSqlStorageOptions { ConnectionString = connectionString };
             configure?.Invoke(opts);
 
-            return new PostgreSqlPartitionedStoreFactory(
+            return new PostgreSqlPartitionStorageProvider(
                 baseDataSource,
                 connectionString,
                 opts,
-                sp.GetService<IDataChangeNotifier>(),
+                partitions: null,
                 sp.GetService<IEmbeddingProvider>(),
-                sp.GetService<AccessService>(),
-                sp.GetService<MeshConfiguration>()?.NodeTypePermissions,
-                configureDataSource);
+                configureDataSource,
+                contexts: null,
+                sp.GetService<ILogger<PostgreSqlPartitionStorageProvider>>());
         });
+        services.AddSingleton<IPartitionStorageProvider>(sp =>
+            sp.GetRequiredService<PostgreSqlPartitionStorageProvider>());
 
         services.AddSingleton<IPartitionAccessProvider>(sp =>
             new PostgreSqlPartitionAccessProvider(sp.GetRequiredService<NpgsqlDataSource>()));
 
-        // Register cross-schema query provider — uses stored procedure for single-query fan-out
+        // Cross-schema query provider — uses stored procedure for single-query fan-out.
+        // Self-contained discovery via information_schema; no provider/factory dependency.
         services.AddSingleton<ICrossSchemaQueryProvider>(sp =>
-        {
-            var factory = sp.GetRequiredService<IPartitionedStoreFactory>() as PostgreSqlPartitionedStoreFactory
-                ?? throw new InvalidOperationException("Cross-schema queries require PostgreSqlPartitionedStoreFactory");
-            return new PostgreSqlCrossSchemaQueryProvider(
-                sp.GetRequiredService<NpgsqlDataSource>(), factory,
-                sp.GetService<ILoggerFactory>()?.CreateLogger<PostgreSqlCrossSchemaQueryProvider>());
-        });
+            new PostgreSqlCrossSchemaQueryProvider(
+                sp.GetRequiredService<NpgsqlDataSource>(),
+                sp.GetService<ILoggerFactory>()?.CreateLogger<PostgreSqlCrossSchemaQueryProvider>()));
 
         services.AddPartitionedCoreAndWrapperServices();
 

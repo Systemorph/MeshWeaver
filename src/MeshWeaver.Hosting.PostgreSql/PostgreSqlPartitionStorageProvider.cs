@@ -78,6 +78,8 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
                 PartitionContexts.Autocomplete,
                 PartitionContexts.Browse);
 
+        _adapter = new PostgreSqlPathRoutingAdapter(this);
+
         if (partitions != null)
             foreach (var def in partitions)
                 RegisterPartition(def);
@@ -257,10 +259,34 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     // single static property. (Cosmos / SQL discovery uses the same shape.)
 
     /// <inheritdoc/>
-    public IStorageAdapter Adapter => throw new InvalidOperationException(
-        "PostgreSqlPartitionStorageProvider has no single shared adapter — use "
-        + "CreateAdapterForTable(def, table). The Adapter property is retained on "
-        + "IPartitionStorageProvider for legacy static-provider compatibility only.");
+    /// <remarks>
+    /// Path-routing facade: every storage operation looks at the path's first
+    /// segment, resolves the registered <see cref="PartitionDefinition"/>, and
+    /// delegates to a per-schema <see cref="PostgreSqlStorageAdapter"/> bound
+    /// to the shared <see cref="NpgsqlDataSource"/>. The per-schema adapters
+    /// are cached on first use; <see cref="EnsureSchemaAsync"/> must have run
+    /// (via <see cref="SubscribeToWorkspace"/> or a prior bootstrap) before
+    /// the first read/write so the schema + tables exist.
+    /// </remarks>
+    public IStorageAdapter Adapter => _adapter;
+    private readonly PostgreSqlPathRoutingAdapter _adapter;
+
+    /// <summary>
+    /// Per-schema adapter cache used by <see cref="Adapter"/>. Each entry
+    /// reuses the shared base <see cref="NpgsqlDataSource"/> with a
+    /// <see cref="PartitionDefinition"/> scoped to the schema; per-table
+    /// routing happens inside <see cref="PostgreSqlStorageAdapter"/> via
+    /// <see cref="PartitionDefinition.ResolveTable"/>.
+    /// </summary>
+    internal IStorageAdapter ResolveAdapterForSchema(string firstSegment)
+    {
+        var def = ResolveDefinition(firstSegment);
+        if (def == null)
+            throw new InvalidOperationException(
+                $"PostgreSqlPartitionStorageProvider: no PartitionDefinition for segment '{firstSegment}'. "
+                + "SubscribeToWorkspace's Admin/Partition stream must have registered it before first access.");
+        return new PostgreSqlStorageAdapter(_baseDataSource, _embeddingProvider, def);
+    }
 
     private static string? GetFirstSegment(string? path)
     {

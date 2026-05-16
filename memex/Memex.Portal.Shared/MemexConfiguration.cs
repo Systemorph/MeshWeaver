@@ -312,10 +312,11 @@ public static class MemexConfiguration
 
             return (TBuilder)builder
                 // Configure persistence from Graph:Storage section.
-                // Skip if IPartitionedStoreFactory already registered (e.g., PostgreSQL from Program.cs)
+                // Skip if any IPartitionStorageProvider was already registered upstream
+                // (e.g., AddPartitionedPostgreSqlPersistence in Memex.Portal.Distributed/Program.cs).
                 .ConfigureServices(services =>
                 {
-                    if (services.Any(sd => sd.ServiceType == typeof(IPartitionedStoreFactory)))
+                    if (services.Any(sd => sd.ServiceType == typeof(IPartitionStorageProvider)))
                         return services;
 
                     return usePartitioned
