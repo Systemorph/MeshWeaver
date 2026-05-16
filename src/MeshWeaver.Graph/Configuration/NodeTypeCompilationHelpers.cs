@@ -136,11 +136,18 @@ internal static class NodeTypeCompilationHelpers
                         "Compile kickoff: flipping Pending for {HubPath} (status={Status}, assemblyPresent={Present})",
                         hub.Address.Path, def.CompilationStatus,
                         !string.IsNullOrEmpty(def.LatestAssemblyPath));
+                    // Re-kick if the persisted Status is Compiling. Reaching the
+                    // kickoff at all means the hub freshly activated — any
+                    // "in-flight" compile from a prior process instance is dead.
+                    // Without the re-kick, a previous crash that left Compiling
+                    // baked into JSON traps EVERY future activation: kickoff's
+                    // guard sees Compiling, returns curr unchanged, no Pending
+                    // emission, watcher never fires, slow path times out at
+                    // SlowPathTimeout. Pending is still gated (idempotent).
                     workspace.GetMeshNodeStream().Update(curr =>
                         curr.Content is NodeTypeDefinition d
                             && !HasUsableBuild(curr, d)
                             && d.CompilationStatus != CompilationStatus.Pending
-                            && d.CompilationStatus != CompilationStatus.Compiling
                             ? curr with
                             {
                                 Content = d with { CompilationStatus = CompilationStatus.Pending }
@@ -237,22 +244,28 @@ internal static class NodeTypeCompilationHelpers
                                 // overlay — the deadlock surfaced as
                                 // AsiaRe_Overview_ShouldRender taking 30 s+
                                 // on cold-start runs.
+                                logger?.LogInformation(
+                                    "[COMPILE-TRACE] Compile watcher: starting activity for {HubPath}",
+                                    hubPath);
                                 var activityEmitted = false;
                                 NodeTypeCompilationActivity.Start(hub, hubPath, logger!)
                                     .Subscribe(
                                         activityPath =>
                                         {
                                             activityEmitted = true;
+                                            logger?.LogInformation(
+                                                "[COMPILE-TRACE] Compile watcher: activity created at {ActivityPath} for {HubPath} — posting RunCompileRequest",
+                                                activityPath, hubPath);
                                             hub.Post(new RunCompileRequest(hubPath),
                                                 o => o.WithTarget(new Address(activityPath)));
                                         },
                                         ex => logger?.LogWarning(ex,
-                                            "Compile watcher: activity start faulted for {HubPath}", hubPath),
+                                            "[COMPILE-TRACE] Compile watcher: activity start faulted for {HubPath}", hubPath),
                                         () =>
                                         {
                                             if (activityEmitted) return;
-                                            logger?.LogDebug(
-                                                "Compile watcher: activity start emitted empty for {HubPath} — running compile inline",
+                                            logger?.LogWarning(
+                                                "[COMPILE-TRACE] Compile watcher: activity start emitted EMPTY for {HubPath} — running compile inline (deadlock-fallback)",
                                                 hubPath);
                                             RunCompile(workspace, hub, compilationService, pendingNode!, request: null);
                                         });
