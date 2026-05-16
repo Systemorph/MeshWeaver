@@ -890,6 +890,14 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             // (27 / 34 QUIESCE_TIMEOUTs measured on Hosting.Monolith.Test). Cap
             // their drain budget tight — the rest of the suite runs ~50 s faster.
             .WithQuiesceTimeout(TestQuiesceTimeout)
+            // Bump RequestTimeout to 60s — the framework default is 30s, which
+            // a cold-cache NodeType compile on a slow CI runner can blow past
+            // (e.g. FutuRe activation: ~17 s local, 35–40 s on GitHub-hosted
+            // runners). The corresponding [Fact(Timeout = ...)] cap is what
+            // bounds a genuinely hung test; longer RequestTimeout just stops
+            // legitimate-but-slow activations from looking like missing-target
+            // delivery failures.
+            .WithRequestTimeout(TimeSpan.FromSeconds(60))
             .WithInitialization(h => h.RegisterForDisposal(routingService.RegisterStream(h)));
     }
 
