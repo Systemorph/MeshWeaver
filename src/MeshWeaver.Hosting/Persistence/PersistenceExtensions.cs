@@ -237,6 +237,7 @@ public static class PersistenceExtensions
     {
         services.TryAddSingleton<IStorageAdapter>(sp =>
             new InMemoryStorageAdapter(sp.GetService<ILogger<InMemoryStorageAdapter>>()));
+        RegisterDefaultAssemblyStore(services);
         return services.AddCoreAndWrapperServices();
     }
 
@@ -268,6 +269,7 @@ public static class PersistenceExtensions
             new InMemoryStorageAdapter(sp.GetService<ILoggerFactory>()?.CreateLogger<InMemoryStorageAdapter>()));
         services.AddSingleton<IPartitionStorageProvider>(sp =>
             new InMemoryPartitionStorageProvider(sp.GetRequiredService<InMemoryStorageAdapter>()));
+        RegisterDefaultAssemblyStore(services);
         return services.AddPartitionedCoreAndWrapperServices();
     }
 
@@ -289,7 +291,29 @@ public static class PersistenceExtensions
     public static IServiceCollection AddInMemoryPersistence(this IServiceCollection services, IStorageAdapter adapter)
     {
         services.AddSingleton(adapter);
+        RegisterDefaultAssemblyStore(services);
         return services.AddCoreAndWrapperServices();
+    }
+
+    /// <summary>
+    /// Default IAssemblyStore: per-process temp-dir FileSystem store. TryAddSingleton
+    /// so callers that wire an explicit store (production: AddBlobAssemblyStore;
+    /// dev monolith / test base: AddFileSystemAssemblyStore) still win. Without
+    /// this fallback, dynamic NodeType compiles run with NullAssemblyStore — the
+    /// compile produces a DLL but UploadToStoreIfNeeded silently skips, the
+    /// NodeTypeDefinition write-back stamps Status=Ok with null
+    /// LatestAssembly{Collection,Path}, and slow-path enrichment stalls every
+    /// per-instance hub waiting for assembly fields that never arrive (repro:
+    /// MeshNodeVersionSyncTest after AddInMemoryPersistence override that
+    /// skipped the base class's AddFileSystemAssemblyStore call).
+    /// </summary>
+    private static void RegisterDefaultAssemblyStore(IServiceCollection services)
+    {
+        services.TryAddSingleton<IAssemblyStore>(sp =>
+            new MeshWeaver.Graph.Configuration.FileSystemAssemblyStore(
+                System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+                    $"MeshWeaver-AssemblyStore-pid{System.Environment.ProcessId}"),
+                sp.GetRequiredService<ILogger<MeshWeaver.Graph.Configuration.FileSystemAssemblyStore>>()));
     }
 
     /// <summary>
@@ -411,22 +435,9 @@ public static class PersistenceExtensions
         services.AddSingleton(fsAdapter);
         services.AddSingleton<IPartitionStorageProvider>(new FileSystemPartitionStorageProvider(fsAdapter));
 
-        // Default IAssemblyStore: a per-process temp-dir FileSystem store rooted
-        // alongside the persistence baseDirectory. TryAddSingleton so callers that
-        // wire an explicit store (production: AddBlobAssemblyStore; dev monolith:
-        // AddFileSystemAssemblyStore in Program.cs; MonolithMeshTestBase) still win.
-        // Without this fallback, dynamic NodeType compiles produce a DLL on disk
-        // but never publish (Collection, ContentPath) to the NodeTypeDefinition —
-        // the slow-path enrichment then sees Status=Ok + null assembly fields and
-        // stalls every per-instance hub. Tests that override ConfigureMesh and
-        // skip the base's AddFileSystemAssemblyStore call were the trip-wire.
-        // Production is unaffected — it uses Postgres persistence and the
-        // file-system path is skipped (see MemexConfiguration's guard at line 319).
-        services.TryAddSingleton<IAssemblyStore>(sp =>
-            new MeshWeaver.Graph.Configuration.FileSystemAssemblyStore(
-                System.IO.Path.Combine(System.IO.Path.GetTempPath(),
-                    $"MeshWeaver-AssemblyStore-pid{System.Environment.ProcessId}"),
-                sp.GetRequiredService<ILogger<MeshWeaver.Graph.Configuration.FileSystemAssemblyStore>>()));
+        // Default IAssemblyStore so dynamic NodeType compiles can persist their
+        // bytes cross-silo; see RegisterDefaultAssemblyStore for the rationale.
+        RegisterDefaultAssemblyStore(services);
 
         return services.AddPartitionedCoreAndWrapperServices();
     }
