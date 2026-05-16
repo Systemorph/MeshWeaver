@@ -262,6 +262,73 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         return (node, matchedSegments);
     }
 
+    /// <summary>
+    /// Resolves the closest-matching MeshNode for <paramref name="fullPath"/>
+    /// across the partition's primary <c>mesh_nodes</c> table AND every
+    /// satellite table named in <see cref="PartitionDefinition.TableMappings"/>
+    /// in a SINGLE round-trip. The UNION emits the longest-path match across
+    /// all tables; the outer ORDER BY picks the deepest one. Old multi-step
+    /// resolver took up to 1+N+N queries — this replaces it with one.
+    /// Contract: <c>PathResolutionTests</c>.
+    /// </summary>
+    public IObservable<(MeshNode? Node, int MatchedSegments)> ResolvePath(
+        string fullPath, JsonSerializerOptions options)
+        => Observable.FromAsync(ct => ResolvePathAsyncCore(fullPath, options, ct));
+
+    private async Task<(MeshNode? Node, int MatchedSegments)> ResolvePathAsyncCore(
+        string fullPath, JsonSerializerOptions options, CancellationToken ct)
+    {
+        var normalizedPath = NormalizePath(fullPath);
+        if (string.IsNullOrEmpty(normalizedPath))
+            return (null, 0);
+
+        // Build the set of tables to query: primary + every distinct
+        // satellite table named in TableMappings (case-insensitive dedup —
+        // multiple suffixes can map to the same table, e.g. _Comment /
+        // _Approval / _Tracking all → annotations).
+        var tables = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "mesh_nodes" };
+        if (_partitionDefinition?.TableMappings is { } mappings)
+            foreach (var t in mappings.Values)
+                if (!string.IsNullOrEmpty(t))
+                    tables.Add(t);
+
+        // Single CTE-based query: each UNION-ALL branch selects from one
+        // table; the outer ORDER BY + LIMIT picks the deepest path-prefix
+        // match across all tables. The path-prefix predicate is identical
+        // per branch; Postgres' planner can use the path index on each
+        // table. One round-trip regardless of satellite table count.
+        var unionBranches = new List<string>(tables.Count);
+        foreach (var t in tables)
+        {
+            var qualified = string.IsNullOrEmpty(_schemaName)
+                ? $"\"{t}\""
+                : $"\"{_schemaName}\".\"{t}\"";
+            unionBranches.Add(
+                $"SELECT id, namespace, name, node_type, category, icon, display_order, " +
+                $"last_modified, version, state, content, desired_id, main_node " +
+                $"FROM {qualified} " +
+                $"WHERE $1 = path OR $1 LIKE path || '/%'");
+        }
+        var sql =
+            "WITH candidates AS (\n" +
+            string.Join("\n UNION ALL\n", unionBranches) +
+            "\n) " +
+            "SELECT * FROM candidates " +
+            "ORDER BY LENGTH(CASE WHEN namespace = '' THEN id ELSE namespace || '/' || id END) DESC " +
+            "LIMIT 1";
+
+        await using var cmd = _dataSource.CreateCommand(sql);
+        cmd.Parameters.AddWithValue(normalizedPath);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+            return (null, 0);
+
+        var node = ReadMeshNode(reader, options);
+        var matchedSegments = node.Path.Split('/').Length;
+        return (node, matchedSegments);
+    }
+
     #region Partition Storage
 
     public IObservable<object> GetPartitionObjects(
