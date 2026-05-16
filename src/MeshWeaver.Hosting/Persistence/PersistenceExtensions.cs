@@ -469,6 +469,13 @@ public static class PersistenceExtensions
         builder.ConfigureServices(services =>
         {
             services.AddSingleton(new PartitionInclusion(partitionName));
+            // Also surface every PartitionInclusion as a discoverable
+            // Admin/Partition/{name} Partition MeshNode via a static provider.
+            // TryAddEnumerable so a host calling IncludePartition multiple times
+            // registers the provider once; the provider itself enumerates all
+            // PartitionInclusion singletons resolved from DI.
+            services.TryAddEnumerable(
+                ServiceDescriptor.Singleton<IStaticNodeProvider, IncludedPartitionStaticProvider>());
             return services;
         });
         return builder;
