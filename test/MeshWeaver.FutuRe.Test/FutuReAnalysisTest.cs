@@ -177,10 +177,17 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             address, reference);
 
         Output.WriteLine("Waiting for AmericasIns Overview control...");
+        // Wait for the FULL render (Areas.Count >= 2). The CombineLatest in
+        // BusinessUnit Overview emits a placeholder StackControl with one
+        // NamedArea + spinner before the per-area children resolve; without
+        // the .Count predicate the test races the placeholder on CI and
+        // fast-fails while the full render arrives a beat later. Same shape
+        // as EuropeRe_Overview_ShouldRender above. 50 s budget covers the
+        // first-activation compile on slow CI agents.
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .FirstAsync(x => x is not null);
+            .Timeout(TimeSpan.FromSeconds(50))
+            .FirstAsync(x => x is StackControl s && s.Areas.Count >= 2);
 
         Output.WriteLine($"Received control: {control?.GetType().Name}");
         control.Should().NotBeNull("Overview area should render for AmericasIns business unit");
@@ -211,10 +218,14 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             address, reference);
 
         Output.WriteLine("Waiting for AsiaRe Overview control...");
+        // Wait for the FULL render (Areas.Count >= 2) — same pattern as
+        // EuropeRe / AmericasIns above; the placeholder StackControl with
+        // a spinner arrives first and the per-area children land a beat
+        // later. 50 s budget covers the first-activation compile.
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .FirstAsync(x => x is not null);
+            .Timeout(TimeSpan.FromSeconds(50))
+            .FirstAsync(x => x is StackControl s && s.Areas.Count >= 2);
 
         Output.WriteLine($"Received control: {control?.GetType().Name}");
         control.Should().NotBeNull("Overview area should render for AsiaRe business unit");
