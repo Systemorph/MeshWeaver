@@ -40,6 +40,7 @@ public partial class MarkdownFileParser : IFileFormatParser
 
         MarkdownFrontMatter? frontMatter = null;
         string? rawYaml = null;
+        var yamlDeserializerThrew = false;
         if (yamlBlock != null)
         {
             rawYaml = yamlBlock.Lines.ToString();
@@ -50,6 +51,7 @@ public partial class MarkdownFileParser : IFileFormatParser
             }
             catch
             {
+                yamlDeserializerThrew = true;
                 // If YAML parsing fails, fall through to the regex-based extractor
                 // below — defensive against environment-specific YamlDotNet quirks
                 // (line endings, encoding, type-coercion edge cases) that would
@@ -57,22 +59,18 @@ public partial class MarkdownFileParser : IFileFormatParser
             }
         }
 
-        // Defensive frontmatter extractor: ONLY fires when Markdig failed to
-        // detect the YamlFrontMatterBlock (rawYaml is null) AND the leading
-        // ---…--- still contains parseable Key: Value lines. This catches
-        // the CI-Linux case where Markdig's YamlFrontMatterBlock detection
-        // silently fails on a file that starts with a valid
-        // `---\nName: …\n---` block (repro:
-        // MarkdownNodeIntegrationTest.CollaborativeEditing_NodeExists_InMeshWeaverNamespace).
-        //
-        // The fallback is INTENTIONALLY skipped when Markdig DID find a YAML
-        // block (rawYaml is set) — at that point YamlDotNet is the source of
-        // truth, including its decision to throw on malformed input. A regex
-        // fallback there would happily extract "Name: [invalid yaml" as a
-        // bare token and override the test's expected null-default
-        // (Parse_WithMalformedYaml_UsesDefaults).
-        var defensiveSearchScope = rawYaml is null
-            ? ExtractLeadingFrontmatter(content)
+        // Defensive frontmatter extractor: fires when (a) Markdig failed to
+        // detect the YamlFrontMatterBlock (rawYaml is null) — the CI-Linux
+        // case where Markdig silently misses a valid `---\nName: …\n---`
+        // block — OR (b) Markdig found the block but YamlDotNet threw on
+        // it (encoding / line-ending quirks). In both cases we fall back to
+        // a regex over the raw `---…---` region, but with a value-shape
+        // gate that rejects YAML sequence/mapping starters (`[`, `{`) so
+        // the <c>Parse_WithMalformedYaml_UsesDefaults</c> repro
+        // (<c>Name: [invalid yaml</c>) still hits id-fallback.
+        var needsDefensiveExtractor = rawYaml is null || yamlDeserializerThrew;
+        var defensiveSearchScope = needsDefensiveExtractor
+            ? (rawYaml ?? ExtractLeadingFrontmatter(content))
             : null;
         if (!string.IsNullOrEmpty(defensiveSearchScope))
         {
@@ -83,9 +81,14 @@ public partial class MarkdownFileParser : IFileFormatParser
                     $@"^\s*{System.Text.RegularExpressions.Regex.Escape(fieldName)}\s*:\s*(?<value>[^\r\n#]+?)\s*$",
                     System.Text.RegularExpressions.RegexOptions.Multiline
                     | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                return match.Success
-                    ? match.Groups["value"].Value.Trim().Trim('"', '\'')
-                    : null;
+                if (!match.Success) return null;
+                var raw = match.Groups["value"].Value.Trim();
+                // Reject YAML sequence/mapping starters — these indicate the
+                // value is structured (and probably malformed since YamlDotNet
+                // either threw or skipped the field). Single scalar values
+                // never legitimately start with `[` or `{` in our frontmatter.
+                if (raw.Length > 0 && (raw[0] == '[' || raw[0] == '{')) return null;
+                return raw.Trim('"', '\'');
             }
 
             if (string.IsNullOrEmpty(frontMatter?.NodeType))

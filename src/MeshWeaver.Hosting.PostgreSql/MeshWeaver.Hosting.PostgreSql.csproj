@@ -13,4 +13,8 @@
     <ProjectReference Include="..\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="MeshWeaver.Hosting.PostgreSql.Test" />
+  </ItemGroup>
+
 </Project>

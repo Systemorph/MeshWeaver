@@ -499,10 +499,12 @@ public class MeshOperations
         // Fire the GetDataRequest and receive the response via RegisterCallback.
         // Observable.Create wraps the post/register pair so the caller can compose it
         // into the Get pipeline without ever awaiting — the callback completes the
-        // observable from a non-hub thread.
+        // observable from a non-hub thread. The outer Timeout enforces an upper
+        // bound on the response wait so missing hubs (e.g. a UCR path whose
+        // address segment doesn't have a running per-node hub) surface as an
+        // "Error: …" string instead of hanging the whole Get pipeline.
         return Observable.Create<string?>(observer =>
         {
-            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             try
             {
                 var delivery = hub.Post(
@@ -544,8 +546,11 @@ public class MeshOperations
                 observer.OnError(ex);
             }
 
-            return () => cts.Dispose();
-        });
+            return () => { };
+        })
+        .Timeout(TimeSpan.FromSeconds(10))
+        .Catch((TimeoutException _) =>
+            Observable.Return<string?>($"Error: Timeout resolving '{remainder}' at {addressPart}"));
     }
 
     public IObservable<string> Search(string query, string? basePath = null)

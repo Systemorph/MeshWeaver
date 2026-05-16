@@ -36,6 +36,10 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _schemasInitialized =
         new(StringComparer.OrdinalIgnoreCase);
+    // Per-schema init Task cache so concurrent first-touch racers join the
+    // same in-flight CREATE SCHEMA / CREATE TABLE round instead of stampeding.
+    private readonly ConcurrentDictionary<string, Task> _schemaInitTasks =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly ILogger<PostgreSqlPartitionStorageProvider>? _logger;
     private IDisposable? _partitionSubscription;
 
@@ -138,6 +142,15 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
         return _partitionSubscription;
     }
 
+    /// <summary>
+    /// Internal entrypoint for callers that pre-register a partition before
+    /// the workspace stream emits it (e.g.
+    /// <see cref="PostgreSqlPartitionSubscriptionHostedService"/>'s static-provider
+    /// seeding pass). Idempotent.
+    /// </summary>
+    internal Task EnsureSchemaForPartitionAsync(PartitionDefinition def, CancellationToken ct)
+        => EnsureSchemaAsync(def, ct);
+
     private async Task<PartitionDefinition> EnsureSchemaAsync(
         PartitionDefinition def, CancellationToken ct)
     {
@@ -175,11 +188,22 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
         };
         await PostgreSqlSchemaInitializer.InitializeAsync(ddlDs, schemaOptions, ct);
 
-        // Satellite tables if any.
+        // Satellite tables: union of the partition's TableMappings (sub-namespace
+        // satellites like {ns}/_Access → access) and the partition's own
+        // primary table when it's NOT the default mesh_nodes (global-satellite
+        // shape: _Access → system_access.access — the satellite IS the
+        // partition, no further within-partition routing).
+        var satelliteTables = new HashSet<string>(StringComparer.Ordinal);
         if (def.TableMappings is { Count: > 0 })
+            foreach (var t in def.TableMappings.Values)
+                if (!string.IsNullOrEmpty(t)) satelliteTables.Add(t);
+        if (!string.IsNullOrEmpty(def.Table) &&
+            !string.Equals(def.Table, "mesh_nodes", StringComparison.Ordinal))
+            satelliteTables.Add(def.Table);
+        if (satelliteTables.Count > 0)
         {
             await PostgreSqlSchemaInitializer.CreateSatelliteTablesAsync(
-                ddlDs, schemaOptions, def.TableMappings.Values, ct);
+                ddlDs, schemaOptions, satelliteTables, ct);
         }
 
         _schemasInitialized.TryAdd(schema, 0);
@@ -219,25 +243,44 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     }
 
     /// <inheritdoc/>
-    public bool Matches(string fullPath)
-    {
-        var firstSegment = GetFirstSegment(fullPath);
-        return firstSegment != null && _partitions.ContainsKey(firstSegment);
-    }
+    /// <remarks>
+    /// Permissive — matches any non-empty first segment, mirroring
+    /// <see cref="MeshWeaver.Hosting.Persistence.FileSystemPartitionStorageProvider"/>
+    /// and <see cref="MeshWeaver.Hosting.Persistence.InMemoryPartitionStorageProvider"/>.
+    /// Unknown partitions are lazy-created with default settings on
+    /// <see cref="ResolveDefinition"/> so writes to a newly-created org /
+    /// scope succeed before the workspace's <c>Admin/Partition</c> stream
+    /// has caught up. The first write triggers a synchronous CREATE SCHEMA /
+    /// CREATE TABLE in <see cref="ResolveAdapterForSchema"/>.
+    /// </remarks>
+    public bool Matches(string fullPath) =>
+        !string.IsNullOrWhiteSpace(GetFirstSegment(fullPath));
 
     /// <inheritdoc/>
     public PartitionDefinition? ResolveDefinition(string fullPath)
     {
         var firstSegment = GetFirstSegment(fullPath);
         if (firstSegment == null) return null;
-        _partitions.TryGetValue(firstSegment, out var def);
-        return def;
+        return _partitions.GetOrAdd(firstSegment, ns => new PartitionDefinition
+        {
+            Namespace = ns,
+            DataSource = "default",
+            Schema = ns.ToLowerInvariant(),
+            Table = "mesh_nodes",
+            TableMappings = PartitionDefinition.StandardTableMappings,
+            Versioned = true,
+        });
     }
 
     /// <inheritdoc/>
     public IStorageAdapter CreateAdapterForTable(PartitionDefinition def, string table)
     {
         var schema = !string.IsNullOrEmpty(def.Schema) ? def.Schema : def.Namespace;
+
+        // First-touch schema init for lazy-created partitions (the
+        // ResolveDefinition fallback path). Idempotent — already-initialized
+        // schemas hit the _schemasInitialized fast path inside EnsureSchemaAsync.
+        EnsureSchemaForPartitionSync(def);
 
         // Per-(schema, table) NpgsqlDataSource: SearchPath scopes to this
         // partition's schema, MaxPoolSize=1 because the hub's actor scheduler
@@ -296,7 +339,24 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
             throw new InvalidOperationException(
                 $"PostgreSqlPartitionStorageProvider: no PartitionDefinition for segment '{firstSegment}'. "
                 + "SubscribeToWorkspace's Admin/Partition stream must have registered it before first access.");
+        EnsureSchemaForPartitionSync(def);
         return new PostgreSqlStorageAdapter(_baseDataSource, _embeddingProvider, def);
+    }
+
+    /// <summary>
+    /// Synchronously waits for the schema's first-touch init to complete.
+    /// Idempotent — already-initialized schemas return immediately via the
+    /// <see cref="_schemasInitialized"/> fast path.
+    /// </summary>
+    private void EnsureSchemaForPartitionSync(PartitionDefinition def)
+    {
+        var schema = !string.IsNullOrEmpty(def.Schema) ? def.Schema : def.Namespace;
+        if (string.IsNullOrEmpty(schema)) return;
+        if (_schemasInitialized.ContainsKey(schema)) return;
+
+        var task = _schemaInitTasks.GetOrAdd(schema,
+            _ => EnsureSchemaAsync(def, CancellationToken.None));
+        task.GetAwaiter().GetResult();
     }
 
     private static string? GetFirstSegment(string? path)

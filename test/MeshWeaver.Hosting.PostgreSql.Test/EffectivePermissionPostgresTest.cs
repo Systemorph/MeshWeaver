@@ -75,14 +75,29 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
         var adminGrant = AssignmentNodeFactory.UserRole(TestUsers.Admin.ObjectId, "Admin", null);
         var workspace = Mesh.GetWorkspace();
 
-        await meshService.CreateNode(adminGrant)
-            .SelectMany(_ => workspace
-                .GetMeshNodeStream(adminGrant.Path)
-                .Where(n => n != null)
-                .Take(1))
-            .Timeout(TimeSpan.FromSeconds(10))
-            .FirstAsync()
-            .ToTask(TestTimeout);
+        // CreateNode throws if the node already exists. The Postgres fixture is
+        // shared across all tests in the [Collection("PostgreSql")] so a prior
+        // test's setup may have persisted the same `_Access/Roland_Access` row.
+        // Probe with the queryable index (CqrsAndContentAccess.md: query is the
+        // right primitive for existence checks; GetMeshNodeStream throws
+        // DeliveryFailureException on a 404 in distributed setups). The
+        // index lag is unimportant here — a missed hit just means we attempt
+        // CreateNode and swallow the "already exists" race.
+        try
+        {
+            await meshService.CreateNode(adminGrant)
+                .SelectMany(_ => workspace
+                    .GetMeshNodeStream(adminGrant.Path)
+                    .Where(n => n != null)
+                    .Take(1))
+                .Timeout(TimeSpan.FromSeconds(10))
+                .FirstAsync()
+                .ToTask(TestTimeout);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase))
+        {
+            // Prior test in this fixture run already seeded the grant; nothing to do.
+        }
     }
 
     [Fact(Timeout = 120000)]

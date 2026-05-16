@@ -224,12 +224,38 @@ internal static class NodeTypeCompilationHelpers
                                     return;
                                 }
 
+                                // Track whether activity Start emitted an
+                                // OnNext. If it completes without emitting
+                                // (Empty — happens when CreateNode swallows an
+                                // exception via the Catch in
+                                // NodeTypeCompilationActivity.Start), fall back
+                                // to inline RunCompile so the watcher doesn't
+                                // strand the NodeType in Compiling forever.
+                                // Without this fallback, EnrichWithNodeType's
+                                // slow path waits the full SlowPathTimeout
+                                // before applying the compilation-error
+                                // overlay — the deadlock surfaced as
+                                // AsiaRe_Overview_ShouldRender taking 30 s+
+                                // on cold-start runs.
+                                var activityEmitted = false;
                                 NodeTypeCompilationActivity.Start(hub, hubPath, logger!)
                                     .Subscribe(
-                                        activityPath => hub.Post(new RunCompileRequest(hubPath),
-                                            o => o.WithTarget(new Address(activityPath))),
+                                        activityPath =>
+                                        {
+                                            activityEmitted = true;
+                                            hub.Post(new RunCompileRequest(hubPath),
+                                                o => o.WithTarget(new Address(activityPath)));
+                                        },
                                         ex => logger?.LogWarning(ex,
-                                            "Compile watcher: activity start faulted for {HubPath}", hubPath));
+                                            "Compile watcher: activity start faulted for {HubPath}", hubPath),
+                                        () =>
+                                        {
+                                            if (activityEmitted) return;
+                                            logger?.LogDebug(
+                                                "Compile watcher: activity start emitted empty for {HubPath} — running compile inline",
+                                                hubPath);
+                                            RunCompile(workspace, hub, compilationService, pendingNode!, request: null);
+                                        });
                             },
                             ex => logger?.LogWarning(ex,
                                 "Compile watcher: Pending→Compiling transition faulted for {HubPath}", hubPath));
