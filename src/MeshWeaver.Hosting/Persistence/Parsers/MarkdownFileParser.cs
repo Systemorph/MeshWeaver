@@ -57,21 +57,23 @@ public partial class MarkdownFileParser : IFileFormatParser
             }
         }
 
-        // Defensive frontmatter extractor: if structured YAML deserialization
-        // didn't fill in standard fields (Markdig didn't recognize the block,
-        // parser threw, returned null, or the property simply wasn't bound),
-        // pull each field out with a flat regex. Strictly additive — only
-        // fills fields that are null/empty, never overrides a successful
-        // parse. Catches the CI-Linux case where Markdig's
-        // YamlFrontMatterBlock detection silently fails on a file that
-        // starts with a valid `---\nName: …\n---` block (repro:
-        // MarkdownNodeIntegrationTest.CollaborativeEditing_NodeExists_InMeshWeaverNamespace
-        // — the frontmatter sets `Name: Collaborative Editing` but CI sees
-        // Name fall back to the id "CollaborativeEditing").
+        // Defensive frontmatter extractor: ONLY fires when Markdig failed to
+        // detect the YamlFrontMatterBlock (rawYaml is null) AND the leading
+        // ---…--- still contains parseable Key: Value lines. This catches
+        // the CI-Linux case where Markdig's YamlFrontMatterBlock detection
+        // silently fails on a file that starts with a valid
+        // `---\nName: …\n---` block (repro:
+        // MarkdownNodeIntegrationTest.CollaborativeEditing_NodeExists_InMeshWeaverNamespace).
         //
-        // Search the raw YAML if Markdig found one, else search the leading
-        // frontmatter section of the file (between the first two `---` markers).
-        var defensiveSearchScope = rawYaml ?? ExtractLeadingFrontmatter(content);
+        // The fallback is INTENTIONALLY skipped when Markdig DID find a YAML
+        // block (rawYaml is set) — at that point YamlDotNet is the source of
+        // truth, including its decision to throw on malformed input. A regex
+        // fallback there would happily extract "Name: [invalid yaml" as a
+        // bare token and override the test's expected null-default
+        // (Parse_WithMalformedYaml_UsesDefaults).
+        var defensiveSearchScope = rawYaml is null
+            ? ExtractLeadingFrontmatter(content)
+            : null;
         if (!string.IsNullOrEmpty(defensiveSearchScope))
         {
             string? RegexField(string fieldName)
