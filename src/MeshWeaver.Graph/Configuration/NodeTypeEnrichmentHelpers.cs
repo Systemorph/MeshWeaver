@@ -126,25 +126,65 @@ internal static class NodeTypeEnrichmentHelpers
         // creating the instance — otherwise the activation reads a pre-write
         // snapshot. See CodeEditRecompileTest for the canonical wait shape
         // (Mesh.GetWorkspace().GetMeshNodeStream(path).Where(...).Take(1)).
-        return meshHub.GetWorkspace().GetMeshNodeStream(nodeType)
-            // Settled compile (Ok/Error) OR an already-configured node
-            // (HubConfiguration + LatestAssemblyPath pre-populated — static
-            // provider, or a built-in that ships its assembly) OR the
-            // NodeType path resolves to something that is NOT a
-            // NodeTypeDefinition at all — a plain node (or a node mis-used
-            // as a type path). The latter is a terminal state: there is
-            // nothing to compile and nothing to wait for, so match it here
-            // and let ApplyStreamResult fall through to the default config
-            // instead of stranding the wait for the full SlowPathTimeout.
+        var typeStream = meshHub.GetWorkspace().GetMeshNodeStream(nodeType);
+
+        // Self-heal: stale `Status=Ok + null LatestAssembly{Collection,Path}`
+        // is on-disk JSON written before the AssemblyLocation→AssemblyStore
+        // refactor — Status looks settled but there's nothing to resolve via
+        // IAssemblyStore, so activation strands with an error overlay. Flip
+        // CompilationStatus = Pending once on first observation; the
+        // compile-watcher on the per-NodeType hub picks it up, recompiles,
+        // and emits a fresh Status=Ok WITH the new fields populated.
+        // The Where below is now strict on those fields, so the slow-path
+        // Take(1) keeps waiting until the healed emission arrives.
+        var healSub = typeStream
+            .Where(t => t?.Content is NodeTypeDefinition stale
+                && stale.CompilationStatus == CompilationStatus.Ok
+                && (string.IsNullOrEmpty(stale.LatestAssemblyCollection)
+                    || string.IsNullOrEmpty(stale.LatestAssemblyPath))
+                // Static-provider NodeTypes legitimately have null fields
+                // here — their HubConfiguration is delegate-only, never
+                // backed by a stored assembly. The static fast-path above
+                // already handled them; only get here for dynamic types.
+                && t.HubConfiguration is null)
+            .Take(1)
+            .SelectMany(_ => typeStream.Update(curr =>
+                curr.Content is NodeTypeDefinition d
+                && d.CompilationStatus == CompilationStatus.Ok
+                && (string.IsNullOrEmpty(d.LatestAssemblyCollection)
+                    || string.IsNullOrEmpty(d.LatestAssemblyPath))
+                    ? curr with
+                    {
+                        Content = d with { CompilationStatus = CompilationStatus.Pending }
+                    }
+                    : curr))
+            .Subscribe(
+                _ => logger?.LogInformation(
+                    "EnrichWithNodeType: self-healed stale Status=Ok with null assembly for {NodeType} — flipped to Pending to trigger recompile",
+                    nodeType),
+                ex => logger?.LogWarning(ex,
+                    "EnrichWithNodeType: self-heal Pending flip for {NodeType} faulted",
+                    nodeType));
+
+        return typeStream
+            // Settled compile: Status=Ok MUST carry valid assembly fields
+            // (the strict check is what the self-heal above relies on —
+            // a stale Ok with null fields keeps the slow-path waiting until
+            // the healed Pending → Ok cycle completes). Other terminal
+            // states: HubConfiguration pre-populated (static provider),
+            // Status=Error, or content that isn't a NodeTypeDefinition at all.
             .Where(typeNode => (typeNode.HubConfiguration != null
                                 && typeNode.Content is NodeTypeDefinition hcDef
                                 && !string.IsNullOrEmpty(hcDef.LatestAssemblyPath))
                 || (typeNode.Content is NodeTypeDefinition def
-                    && (def.CompilationStatus == CompilationStatus.Ok
+                    && ((def.CompilationStatus == CompilationStatus.Ok
+                            && !string.IsNullOrEmpty(def.LatestAssemblyCollection)
+                            && !string.IsNullOrEmpty(def.LatestAssemblyPath))
                         || def.CompilationStatus == CompilationStatus.Error))
                 || typeNode.Content is not NodeTypeDefinition)
             .Take(1)
             .Timeout(SlowPathTimeout)
+            .Finally(healSub.Dispose)
             .SelectMany(typeNode => ApplyStreamResult(
                 typeNode, node, nodeType, meshConfiguration, compilationService, meshHub, logger))
             .Catch<MeshNode, Exception>(ex =>

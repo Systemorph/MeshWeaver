@@ -100,15 +100,23 @@ internal static class NodeTypeCompilationHelpers
                 node =>
                 {
                     if (node?.Content is not NodeTypeDefinition def) return;
-                    // Static NodeTypes (registered via IStaticNodeProvider with
-                    // their HubConfiguration delegate set directly) carry a
-                    // NodeTypeDefinition payload for shape/icon/description metadata
-                    // but have NO source code to compile — the framework ships their
-                    // assembly. Skip kickoff: trying to fire a compile would create
-                    // an activity log at "{nodeType}/_Activity/compile..." which
-                    // PersistenceService can't route (no IPartitionStorageProvider
-                    // matches a NodeType namespace).
-                    if (node.HubConfiguration is not null)
+                    // Truly-static NodeTypes (registered via IStaticNodeProvider
+                    // with their HubConfiguration delegate set directly) carry a
+                    // NodeTypeDefinition for metadata but have NO source code to
+                    // compile — the framework ships their assembly. Skip kickoff
+                    // only when the in-memory HubConfiguration delegate is set
+                    // AND the definition has no source code (Configuration /
+                    // HubConfiguration / Sources all empty). A dynamic NodeType
+                    // whose source string compiled into a delegate at registration
+                    // STILL needs a real assembly emitted to the IAssemblyStore so
+                    // cross-silo activation can resolve it — only the local hub
+                    // has the delegate; remote silos see HubConfiguration=null
+                    // after serialisation and must reflect on the stored DLL.
+                    var hasSource =
+                        !string.IsNullOrWhiteSpace(def.Configuration)
+                        || !string.IsNullOrWhiteSpace(def.HubConfiguration)
+                        || (def.Sources is { Count: > 0 });
+                    if (node.HubConfiguration is not null && !hasSource)
                     {
                         logger?.LogInformation(
                             "Compile kickoff: skip {HubPath} — static NodeType (HubConfiguration set, no source)",
@@ -151,10 +159,16 @@ internal static class NodeTypeCompilationHelpers
         var watcherSub = ownStream
             .Where(node => node?.Content is NodeTypeDefinition def
                 && def.CompilationStatus == CompilationStatus.Pending
-                // Static NodeTypes ship their assembly with the framework; even
-                // if something else managed to flip them Pending, we don't have
-                // source code to compile. Guard symmetric with the kickoff.
-                && node.HubConfiguration is null)
+                // Truly-static NodeTypes (HubConfiguration delegate set AND no
+                // source code) ship their assembly with the framework — even if
+                // something flips them Pending, there's nothing to compile.
+                // Symmetric with the kickoff: a dynamic NodeType whose source
+                // string compiled into a delegate at registration still needs a
+                // real assembly emit, so allow Pending through when source exists.
+                && !(node.HubConfiguration is not null
+                    && string.IsNullOrWhiteSpace(def.Configuration)
+                    && string.IsNullOrWhiteSpace(def.HubConfiguration)
+                    && (def.Sources is null || def.Sources.Count == 0)))
             .Subscribe(
                 pendingNode =>
                 {

@@ -389,6 +389,21 @@ public static class PersistenceExtensions
     {
         services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
 
+        // In-memory routing for Release MeshNodes that the compile watcher
+        // emits at {nodeTypePath}/Release/{version}. Registered BEFORE the
+        // wildcard FileSystem provider so PersistenceService's first-match-wins
+        // iteration picks it for any path containing a /Release/ segment.
+        // Rationale: Release nodes are regenerated on every successful compile
+        // — persisting them to disk only litters file-system partition
+        // directories with per-compile snapshots that go stale across
+        // path-format changes (e.g. the _Release → Release rename).
+        services.AddSingleton<IPartitionStorageProvider>(sp =>
+            new InMemoryPartitionStorageProvider(
+                adapter: new InMemoryStorageAdapter(
+                    sp.GetService<ILoggerFactory>()?.CreateLogger<InMemoryStorageAdapter>()),
+                matches: ContainsReleaseSegment,
+                name: "InMemory:Release"));
+
         // One shared FileSystemStorageAdapter + wildcard provider — handles every
         // first-segment partition rooted at baseDirectory. No factory, no per-segment
         // store provisioning.
@@ -398,6 +413,22 @@ public static class PersistenceExtensions
 
         return services.AddPartitionedCoreAndWrapperServices();
     }
+
+    /// <summary>
+    /// Matches a path that contains <c>Release</c> as a whole path segment —
+    /// the shape <see cref="MeshDataSourceExtensions"/>'s
+    /// <c>TryCreateReleaseNode</c> emits at <c>{nodeTypePath}/Release/{version}</c>.
+    /// Anchored at start, after a <c>/</c>, and bounded by <c>/</c> or end-of-string
+    /// so partition names that merely start with "Release" don't accidentally
+    /// match.
+    /// </summary>
+    private static readonly System.Text.RegularExpressions.Regex _releaseSegmentRegex =
+        new(@"(^|/)Release(/|$)",
+            System.Text.RegularExpressions.RegexOptions.Compiled
+            | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    private static bool ContainsReleaseSegment(string fullPath)
+        => !string.IsNullOrWhiteSpace(fullPath) && _releaseSegmentRegex.IsMatch(fullPath);
 
     /// <summary>
     /// Includes a specific partition by name in selective partitioned persistence.
