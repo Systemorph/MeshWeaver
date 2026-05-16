@@ -36,6 +36,10 @@ internal static class NodeTypeCompileActivityHandler
         var parentPath = request.Message.ParentNodeTypePath;
         var activityPath = activityHub.Address.Path;
 
+        logger?.LogInformation(
+            "[COMPILE-TRACE] NodeTypeCompileActivityHandler.Handle entered: parent={ParentPath} activity={ActivityPath}",
+            parentPath, activityPath);
+
         var compilationService = activityHub.ServiceProvider.GetService<IMeshNodeCompilationService>();
         if (compilationService is null)
         {

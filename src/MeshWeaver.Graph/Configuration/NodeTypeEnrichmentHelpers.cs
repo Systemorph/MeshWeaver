@@ -214,6 +214,13 @@ internal static class NodeTypeEnrichmentHelpers
                     nodeType));
 
         return typeStream
+            .Do(typeNode => logger?.LogInformation(
+                "[COMPILE-TRACE] Slow-path typeStream emission for {NodeType} (instance={InstancePath}): HubConfig={HasHub} Status={Status} Coll={Coll} Path={Path}",
+                nodeType, node.Path,
+                typeNode?.HubConfiguration is not null,
+                (typeNode?.Content as NodeTypeDefinition)?.CompilationStatus,
+                (typeNode?.Content as NodeTypeDefinition)?.LatestAssemblyCollection ?? "(null)",
+                (typeNode?.Content as NodeTypeDefinition)?.LatestAssemblyPath ?? "(null)"))
             // Settled compile: Status=Ok MUST carry valid assembly fields
             // (the strict check is what the self-heal above relies on —
             // a stale Ok with null fields keeps the slow-path waiting until

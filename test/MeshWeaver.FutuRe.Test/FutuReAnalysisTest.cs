@@ -22,8 +22,10 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Messaging;
 using MeshWeaver.Hosting.Security;
+using MeshWeaver.Fixture;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 using System.Reactive.Threading.Tasks;
@@ -84,6 +86,16 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
                     o.EnableDiskCache = true;
                 });
                 services.AddSingleton<IConfiguration>(configuration);
+                // Pipe Information+ framework logs to the xunit output helper
+                // so compile-pipeline diagnostics (NodeTypeCompilation /
+                // EnrichWithNodeType / NodeTypeCompileActivityHandler) show
+                // up in the test report. Without this only Warning+ surfaces,
+                // and the chain that stalls in AsiaRe_Overview_ShouldRender
+                // sits entirely at Information level.
+                services.AddLogging(b => b
+                    .SetMinimumLevel(LogLevel.Information)
+                    .AddFilter("MeshWeaver", LogLevel.Information)
+                    .AddXUnitLogger(new TestOutputHelperAccessor { OutputHelper = Output }));
                 return services;
             })
             .AddGraph()
