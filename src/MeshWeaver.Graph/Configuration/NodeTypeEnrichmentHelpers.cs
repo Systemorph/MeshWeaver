@@ -212,6 +212,16 @@ internal static class NodeTypeEnrichmentHelpers
             });
     }
 
+    /// <summary>
+    /// Bounded recursion on the per-NodeType compile self-heal loop. The hot
+    /// path triggers ONE Pending flip when the persisted assembly reference
+    /// doesn't resolve through <see cref="IAssemblyStore"/>; if the recompile
+    /// also misses, we stop bouncing and fall back to default config (or the
+    /// error overlay) so a compile that is genuinely broken doesn't trap
+    /// every activation in a Pending → Compiling → Ok → still-missing cycle.
+    /// </summary>
+    private const int MaxRecompileAttempts = 1;
+
     private static IObservable<MeshNode> ApplyStreamResult(
         MeshNode typeNode,
         MeshNode node,
@@ -219,7 +229,8 @@ internal static class NodeTypeEnrichmentHelpers
         MeshConfiguration meshConfiguration,
         IMeshNodeCompilationService? compilationService,
         IMessageHub meshHub,
-        ILogger? logger)
+        ILogger? logger,
+        int recompileAttempts = 0)
     {
         var def = typeNode.Content as NodeTypeDefinition;
         // DIAGNOSTIC: trace what activation reads
@@ -288,13 +299,31 @@ internal static class NodeTypeEnrichmentHelpers
                         {
                             if (string.IsNullOrEmpty(localPath))
                             {
-                                logger?.LogWarning(
-                                    "EnrichWithNodeType: pinned release {ReleasePath} bytes not found in store (collection={Coll}, version={Version})",
-                                    requestedReleasePath, release.AssemblyCollection, releaseVersion);
-                                return Observable.Return(
-                                    WithCompilationErrorOverlay(node, nodeType,
-                                        $"Pinned release '{requestedReleasePath}' assembly not found in store.",
-                                        meshConfiguration));
+                                // Pinned release's assembly is missing — same
+                                // root-cause envelope as the hot path above
+                                // (cold store, force-deleted blob, polluted
+                                // seed). Recompile the parent NodeType so a
+                                // fresh assembly lands; on retry, if the user
+                                // still has RequestedReleasePath set, we'll
+                                // resolve THAT release's denormalised
+                                // (Collection, ContentPath, Version) — if the
+                                // store still misses, fall back to the error
+                                // overlay so the operator sees a real
+                                // diagnostic instead of a silent default.
+                                if (recompileAttempts >= MaxRecompileAttempts)
+                                {
+                                    logger?.LogWarning(
+                                        "EnrichWithNodeType: pinned release {ReleasePath} bytes still not found in store after {Attempts} recompile attempt(s) (collection={Coll}, version={Version})",
+                                        requestedReleasePath, recompileAttempts, release.AssemblyCollection, releaseVersion);
+                                    return Observable.Return(
+                                        WithCompilationErrorOverlay(node, nodeType,
+                                            $"Pinned release '{requestedReleasePath}' assembly not found in store.",
+                                            meshConfiguration));
+                                }
+                                return TriggerRecompileAndRetry(
+                                    node, nodeType, meshConfiguration, compilationService, meshHub,
+                                    logger, recompileAttempts,
+                                    reason: $"pinned release '{requestedReleasePath}' bytes missing from store (collection={release.AssemblyCollection}, version={releaseVersion})");
                             }
                             return compilationService.GetConfigurationsFromExistingAssembly(localPath!, nodeType)
                                 .Take(1)
@@ -339,12 +368,28 @@ internal static class NodeTypeEnrichmentHelpers
                 {
                     if (string.IsNullOrEmpty(localPath))
                     {
-                        logger?.LogWarning(
-                            "EnrichWithNodeType: latest assembly for {NodeType} not found in store (collection={Coll}, version={Version}) — falling back to default config",
-                            nodeType, def.LatestAssemblyCollection, compileVersion);
-                        return Observable.Return(ApplyEntry(
-                            node, localAssemblyPath: null, hubConfig: null,
-                            nodeType, meshConfiguration));
+                        // Persisted Status=Ok with assembly fields, but the
+                        // IAssemblyStore doesn't have the bytes. Causes range
+                        // from a wiped per-process FileSystemAssemblyStore
+                        // (cold dev process, OS temp-dir cleanup), to a
+                        // polluted seed JSON (a previous run baked Status=Ok
+                        // into the file before the assembly was uploaded), to
+                        // a blob-store object that was force-deleted. Don't
+                        // strand the activation with default config — trigger
+                        // a fresh compile and pick up the new terminal state.
+                        if (recompileAttempts >= MaxRecompileAttempts)
+                        {
+                            logger?.LogWarning(
+                                "EnrichWithNodeType: latest assembly for {NodeType} still not found in store after {Attempts} recompile attempt(s) (collection={Coll}, version={Version}) — falling back to default config",
+                                nodeType, recompileAttempts, def.LatestAssemblyCollection, compileVersion);
+                            return Observable.Return(ApplyEntry(
+                                node, localAssemblyPath: null, hubConfig: null,
+                                nodeType, meshConfiguration));
+                        }
+                        return TriggerRecompileAndRetry(
+                            node, nodeType, meshConfiguration, compilationService, meshHub,
+                            logger, recompileAttempts,
+                            reason: $"latest assembly for '{nodeType}' missing from store (collection={def.LatestAssemblyCollection}, version={compileVersion})");
                     }
                     if (compilationService is null)
                         return Observable.Return(ApplyEntry(
@@ -382,6 +427,66 @@ internal static class NodeTypeEnrichmentHelpers
         var error = def.CompilationError ?? "Compilation failed";
         return Observable.Return(
             WithCompilationErrorOverlay(node, nodeType, error, meshConfiguration));
+    }
+
+    /// <summary>
+    /// Self-heal entrypoint for "persisted Status=Ok but assembly is missing":
+    /// flips <see cref="NodeTypeDefinition.CompilationStatus"/> to
+    /// <see cref="CompilationStatus.Pending"/> on the per-NodeType MeshNode,
+    /// waits for the watcher to drive the recompile back to a terminal state
+    /// (Ok with valid fields, or Error), then recurses
+    /// <see cref="ApplyStreamResult"/> on the new state with
+    /// <paramref name="recompileAttempts"/> incremented so the retry is
+    /// bounded by <see cref="MaxRecompileAttempts"/>.
+    ///
+    /// <para>The Pending flip is conditional: only writes when the current
+    /// Status is still Ok. If the per-NodeType hub has already been kicked
+    /// (Pending / Compiling) by another caller, we just wait for the
+    /// terminal state — no duplicate kick, no race against the watcher's
+    /// Pending → Compiling transition.</para>
+    /// </summary>
+    private static IObservable<MeshNode> TriggerRecompileAndRetry(
+        MeshNode node,
+        string nodeType,
+        MeshConfiguration meshConfiguration,
+        IMeshNodeCompilationService? compilationService,
+        IMessageHub meshHub,
+        ILogger? logger,
+        int recompileAttempts,
+        string reason)
+    {
+        logger?.LogInformation(
+            "EnrichWithNodeType: self-heal recompile #{Attempt} for {NodeType} — {Reason}",
+            recompileAttempts + 1, nodeType, reason);
+
+        var typeStream = meshHub.GetWorkspace().GetMeshNodeStream(nodeType);
+        return typeStream
+            .Update(curr =>
+            {
+                if (curr.Content is NodeTypeDefinition cdef
+                    && cdef.CompilationStatus == CompilationStatus.Ok)
+                    return curr with
+                    {
+                        Content = cdef with { CompilationStatus = CompilationStatus.Pending }
+                    };
+                return curr;
+            })
+            .Take(1)
+            .SelectMany(_ => typeStream
+                .Where(typeNode => (typeNode.HubConfiguration != null
+                                    && typeNode.Content is NodeTypeDefinition hcDef
+                                    && !string.IsNullOrEmpty(hcDef.LatestAssemblyPath))
+                    || (typeNode.Content is NodeTypeDefinition d
+                        && ((d.CompilationStatus == CompilationStatus.Ok
+                                && !string.IsNullOrEmpty(d.LatestAssemblyCollection)
+                                && !string.IsNullOrEmpty(d.LatestAssemblyPath))
+                            || d.CompilationStatus == CompilationStatus.Error))
+                    || typeNode.Content is not NodeTypeDefinition)
+                .Take(1)
+                .Timeout(SlowPathTimeout)
+                .SelectMany(newTypeNode => ApplyStreamResult(
+                    newTypeNode, node, nodeType, meshConfiguration,
+                    compilationService, meshHub, logger, recompileAttempts + 1)));
     }
 
     /// <summary>
