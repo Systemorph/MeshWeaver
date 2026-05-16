@@ -411,6 +411,23 @@ public static class PersistenceExtensions
         services.AddSingleton(fsAdapter);
         services.AddSingleton<IPartitionStorageProvider>(new FileSystemPartitionStorageProvider(fsAdapter));
 
+        // Default IAssemblyStore: a per-process temp-dir FileSystem store rooted
+        // alongside the persistence baseDirectory. TryAddSingleton so callers that
+        // wire an explicit store (production: AddBlobAssemblyStore; dev monolith:
+        // AddFileSystemAssemblyStore in Program.cs; MonolithMeshTestBase) still win.
+        // Without this fallback, dynamic NodeType compiles produce a DLL on disk
+        // but never publish (Collection, ContentPath) to the NodeTypeDefinition —
+        // the slow-path enrichment then sees Status=Ok + null assembly fields and
+        // stalls every per-instance hub. Tests that override ConfigureMesh and
+        // skip the base's AddFileSystemAssemblyStore call were the trip-wire.
+        // Production is unaffected — it uses Postgres persistence and the
+        // file-system path is skipped (see MemexConfiguration's guard at line 319).
+        services.TryAddSingleton<IAssemblyStore>(sp =>
+            new MeshWeaver.Graph.Configuration.FileSystemAssemblyStore(
+                System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+                    $"MeshWeaver-AssemblyStore-pid{System.Environment.ProcessId}"),
+                sp.GetRequiredService<ILogger<MeshWeaver.Graph.Configuration.FileSystemAssemblyStore>>()));
+
         return services.AddPartitionedCoreAndWrapperServices();
     }
 

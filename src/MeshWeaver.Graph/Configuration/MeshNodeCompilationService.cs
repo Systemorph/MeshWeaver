@@ -572,7 +572,17 @@ internal class MeshNodeCompilationService(
         if (result.NodeTypeConfigurations.Count == 0)
             return Observable.Return(result);
         if (_assemblyStore is NullAssemblyStore)
+        {
+            // A null store is a misconfiguration in any non-trivial host. Log once
+            // per compile so the operator notices — silent skip strands cross-silo
+            // activation with Status=Ok + null assembly fields.
+            logger.LogWarning(
+                "Compile for {NodePath} produced an assembly but IAssemblyStore is NullAssemblyStore — " +
+                "downstream cross-silo activation will see Status=Ok with null LatestAssembly fields. " +
+                "Register a real IAssemblyStore (AddBlobAssemblyStore / AddFileSystemAssemblyStore).",
+                node.Path);
             return Observable.Return(result);
+        }
 
         byte[] dll;
         byte[]? pdb = null;
