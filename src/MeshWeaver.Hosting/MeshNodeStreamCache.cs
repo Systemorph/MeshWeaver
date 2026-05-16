@@ -9,11 +9,13 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.Hosting;
 
 /// <summary>
-/// Default <see cref="INodeTypeStreamCache"/> — a pure per-path stream cache.
-/// Holds ONE shared <see cref="MeshNodeStreamHandle"/> per path in a concurrent
-/// dictionary. Every consumer — the routing path, every per-instance hub of
-/// that NodeType, <c>NodeTypeEnrichmentHelpers</c>, and compile-activity hubs
-/// writing terminal state — goes through that ONE handle. Reads
+/// Default <see cref="IMeshNodeStreamCache"/> (and the back-compat
+/// <see cref="IMeshNodeStreamCache"/> alias) — a pure per-path stream cache
+/// over <c>workspace.GetMeshNodeStream(path)</c>. Holds ONE shared
+/// <see cref="MeshNodeStreamHandle"/> per path in a concurrent dictionary.
+/// Every consumer — the routing path, every per-instance hub of a NodeType,
+/// <c>NodeTypeEnrichmentHelpers</c>, compile-activity hubs writing terminal
+/// state, path-resolution lookups — goes through that ONE handle. Reads
 /// (<see cref="GetStream"/>) and writes (<see cref="Update"/>) share the same
 /// underlying stream, so an update is always visible to every reader.
 ///
@@ -35,17 +37,17 @@ namespace MeshWeaver.Hosting;
 /// (<c>NodeTypeCompilationHelpers.InstallCompileWatcher</c>) flips
 /// <c>CompilationStatus = Pending</c> on its OWN stream and runs Roslyn.</para>
 /// </summary>
-internal sealed class NodeTypeStreamCache : INodeTypeStreamCache
+internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
 {
     /// <summary>One cache entry: the updatable handle plus the shared,
     /// replay-cached read view over it.</summary>
     private sealed record Entry(MeshNodeStreamHandle Handle, IObservable<MeshNode> Shared);
 
     private readonly IMessageHub meshHub;
-    private readonly ILogger<NodeTypeStreamCache> logger;
+    private readonly ILogger<MeshNodeStreamCache> logger;
     private readonly ConcurrentDictionary<string, Entry> _streams = new();
 
-    public NodeTypeStreamCache(IMessageHub meshHub, ILogger<NodeTypeStreamCache> logger)
+    public MeshNodeStreamCache(IMessageHub meshHub, ILogger<MeshNodeStreamCache> logger)
     {
         this.meshHub = meshHub;
         this.logger = logger;
@@ -54,7 +56,7 @@ internal sealed class NodeTypeStreamCache : INodeTypeStreamCache
     private Entry GetEntry(string path) =>
         _streams.GetOrAdd(path, p =>
         {
-            logger.LogDebug("NodeTypeStreamCache: opening shared stream for {Path}", p);
+            logger.LogDebug("MeshNodeStreamCache: opening shared stream for {Path}", p);
             var handle = meshHub.GetWorkspace().GetMeshNodeStream(p);
             // Replay(1).AutoConnect(1): the upstream subscription opens once
             // on the FIRST subscriber and stays live for the entire process

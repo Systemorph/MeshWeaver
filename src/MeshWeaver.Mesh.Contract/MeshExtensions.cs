@@ -172,14 +172,14 @@ public static class MeshExtensions
         IMessageHub hub,
         IMessageDelivery<CreateNodeRequest> request)
     {
-        var logger = hub.ServiceProvider.GetRequiredService<ILogger<IMeshCatalog>>();
-        var catalog = hub.ServiceProvider.GetService<IMeshCatalog>();
+        var logger = hub.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("MeshWeaver.Mesh.CreateNode");
+        var meshConfig = hub.ServiceProvider.GetService<MeshConfiguration>();
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
 
-        if (catalog == null)
+        if (meshConfig == null)
         {
             hub.Post(
-                CreateNodeResponse.Fail("IMeshCatalog not available", NodeCreationRejectionReason.Unknown),
+                CreateNodeResponse.Fail("MeshConfiguration not available", NodeCreationRejectionReason.Unknown),
                 o => o.ResponseFor(request));
             return request.Processed();
         }
@@ -238,7 +238,7 @@ public static class MeshExtensions
         existingObs
             .Select(existing =>
             {
-                if (existing == null && catalog.Configuration.Nodes.TryGetValue(node.Path, out var configNode))
+                if (existing == null && meshConfig.Nodes.TryGetValue(node.Path, out var configNode))
                     return configNode;
                 return existing;
             })
@@ -274,7 +274,7 @@ public static class MeshExtensions
                 // 1b. Auto-set MainNode for satellite types before validation.
                 if (!string.IsNullOrEmpty(node.NodeType)
                     && !string.IsNullOrEmpty(node.Namespace)
-                    && catalog.Configuration.IsSatelliteNodeType(node.NodeType)
+                    && meshConfig.IsSatelliteNodeType(node.NodeType)
                     && node.MainNode == node.Path)
                 {
                     node = node with { MainNode = node.Namespace };
@@ -307,7 +307,7 @@ public static class MeshExtensions
                         {
                             typeExistsObs = Observable.Return(true);
                         }
-                        else if (catalog.Configuration.Nodes.ContainsKey(node.NodeType))
+                        else if (meshConfig.Nodes.ContainsKey(node.NodeType))
                         {
                             typeExistsObs = Observable.Return(true);
                         }
@@ -1324,7 +1324,7 @@ public static class MeshExtensions
 
         var capturedRequest = updateRequest;
         var updatedNode = updateRequest.Node;
-        var meshConfig = hub.ServiceProvider.GetService<IMeshCatalog>()?.Configuration;
+        var meshConfig = hub.ServiceProvider.GetService<MeshConfiguration>();
         var workspace = hub.GetWorkspace();
 
         logger.LogDebug("[UpdateNode] start hub={Hub}, target={Target}, sender={Sender}, deliveryId={DeliveryId}",
@@ -1679,7 +1679,7 @@ public static class MeshExtensions
         IMessageHub hub,
         IMessageDelivery<CreateOrUpdateNodeRequest> request)
     {
-        var logger = hub.ServiceProvider.GetRequiredService<ILogger<IMeshCatalog>>();
+        var logger = hub.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("MeshWeaver.Mesh.Services.IMeshCatalog");
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         var startedAt = DateTime.UtcNow;
         var inboundRequest = request.Message;
@@ -1866,7 +1866,7 @@ public static class MeshExtensions
         IMessageHub hub,
         IMessageDelivery<MoveNodeRequest> request)
     {
-        var logger = hub.ServiceProvider.GetRequiredService<ILogger<IMeshCatalog>>();
+        var logger = hub.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("MeshWeaver.Mesh.Services.IMeshCatalog");
         var moveRequest = request.Message;
         var meshService = hub.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Services.IMeshService>();
         var storage = hub.ServiceProvider.GetRequiredService<IStorageAdapter>();
@@ -1942,7 +1942,7 @@ public static class MeshExtensions
         IMessageHub hub,
         IMessageDelivery<CopyNodeRequest> request)
     {
-        var logger = hub.ServiceProvider.GetRequiredService<ILogger<IMeshCatalog>>();
+        var logger = hub.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("MeshWeaver.Mesh.Services.IMeshCatalog");
         var copyRequest = request.Message;
         var meshService = hub.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Services.IMeshService>();
         var sourcePath = copyRequest.SourcePath;

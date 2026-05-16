@@ -56,16 +56,16 @@ internal static class NodeTypeCompileActivityHandler
             o => o.ResponseFor(request));
 
         // The parent NodeType MeshNode is reached ONLY through the shared
-        // INodeTypeStreamCache — never an ad-hoc activityWorkspace.GetRemoteStream.
+        // IMeshNodeStreamCache — never an ad-hoc activityWorkspace.GetRemoteStream.
         // An ad-hoc remote stream from the activity hub is a separate instance;
         // its updates are "lost" — never seen by the readers of the cached
         // stream (NodeTypeEnrichmentHelpers, every per-instance hub). Reads AND
         // writes both go through the one cached handle so the terminal compile
         // state actually lands and propagates.
-        var streamCache = activityHub.ServiceProvider.GetService<INodeTypeStreamCache>();
+        var streamCache = activityHub.ServiceProvider.GetService<IMeshNodeStreamCache>();
         if (streamCache is null)
         {
-            logger?.LogWarning("[NTCA] INodeTypeStreamCache not registered — cannot compile {ParentPath}", parentPath);
+            logger?.LogWarning("[NTCA] IMeshNodeStreamCache not registered — cannot compile {ParentPath}", parentPath);
             return request.Processed();
         }
 
@@ -243,7 +243,7 @@ internal static class NodeTypeCompileActivityHandler
 
     /// <summary>
     /// Helper: apply a <see cref="NodeTypeDefinition"/> transformation to the
-    /// parent MeshNode through the shared <see cref="INodeTypeStreamCache"/> —
+    /// parent MeshNode through the shared <see cref="IMeshNodeStreamCache"/> —
     /// the ONE cached handle every reader of the parent stream shares, so the
     /// write actually lands and propagates (an ad-hoc remote stream would be a
     /// lost separate instance). When <paramref name="compiledVersion"/> is
@@ -252,7 +252,7 @@ internal static class NodeTypeCompileActivityHandler
     /// key, so activation's later <c>TryGetAssemblyPath</c> finds the bytes.
     /// </summary>
     private static void WriteToParent(
-        INodeTypeStreamCache streamCache,
+        IMeshNodeStreamCache streamCache,
         string parentPath,
         Func<NodeTypeDefinition, NodeTypeDefinition> transform,
         ILogger? logger,
