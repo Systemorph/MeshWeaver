@@ -147,4 +147,22 @@ public interface IPartitionStorageProvider
             PartitionContexts.Create,
             PartitionContexts.Autocomplete,
             PartitionContexts.Browse);
+
+    /// <summary>
+    /// Native <see cref="IMeshQueryProvider"/> for this partition's data.
+    /// Cross-partition query fan-out (<c>RoutingMeshQueryProvider</c>)
+    /// iterates providers and asks each for its query layer.
+    /// <para>Returning <c>null</c> tells the routing layer "no native query
+    /// support" — the fan-out will skip this provider rather than wrap
+    /// <see cref="Adapter"/> in a generic adapter-based query provider.
+    /// Implementations with a real query layer (Postgres push-down, static
+    /// node provider) return their concrete provider.</para>
+    /// </summary>
+    IMeshQueryProvider? QueryProvider => null;
+
+    /// <summary>
+    /// Optional <see cref="IVersionQuery"/> for the partition. Returning
+    /// <c>null</c> means this partition doesn't track per-node versions.
+    /// </summary>
+    IVersionQuery? VersionQuery => null;
 }
