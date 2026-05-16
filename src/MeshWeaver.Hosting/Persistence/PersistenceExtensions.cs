@@ -262,7 +262,12 @@ public static class PersistenceExtensions
     public static IServiceCollection AddPartitionedInMemoryPersistence(this IServiceCollection services)
     {
         services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
-        services.AddSingleton<IPartitionedStoreFactory, InMemoryPartitionedStoreFactory>();
+        // One shared in-memory adapter + provider — InMemoryPartitionStorageProvider
+        // is a wildcard catch-all that handles every first-segment partition.
+        services.AddSingleton<InMemoryStorageAdapter>(sp =>
+            new InMemoryStorageAdapter(sp.GetService<ILoggerFactory>()?.CreateLogger<InMemoryStorageAdapter>()));
+        services.AddSingleton<IPartitionStorageProvider>(sp =>
+            new InMemoryPartitionStorageProvider(sp.GetRequiredService<InMemoryStorageAdapter>()));
         return services.AddPartitionedCoreAndWrapperServices();
     }
 
@@ -328,35 +333,9 @@ public static class PersistenceExtensions
     /// <summary>
     /// Adds cached partitioned file system persistence that pre-loads all files into memory.
     /// </summary>
-    public static TBuilder AddCachedPartitionedFileSystemPersistence<TBuilder>(
-        this TBuilder builder,
-        string baseDirectory,
-        Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null)
-        where TBuilder : MeshBuilder
-    {
-        builder.ConfigureServices(services =>
-        {
-            services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
-            services.TryAddSingleton<IStorageAdapter>(new CachingStorageAdapter(baseDirectory, writeOptionsModifier));
-
-            services.AddSingleton<IPartitionedStoreFactory>(sp =>
-            {
-                var inclusions = sp.GetServices<PartitionInclusion>().ToList();
-                var filter = inclusions.Count > 0
-                    ? new PartitionFilter(inclusions.Select(i => i.Name))
-                    : null;
-
-                return new CachingPartitionedStoreFactory(
-                    baseDirectory,
-                    writeOptionsModifier,
-                    sp.GetService<IDataChangeNotifier>(),
-                    filter);
-            });
-
-            return services.AddPartitionedCoreAndWrapperServices();
-        });
-        return builder.RegisterMeshQueryCoreOnMeshHub();
-    }
+    // AddCachedPartitionedFileSystemPersistence deleted — no consumers in
+    // src/, test/, samples/, or memex/. CachingStorageAdapter survives for
+    // AddCachedFileSystemPersistence (single-partition fixture path).
 
     /// <summary>
     /// Adds a custom storage adapter with in-memory persistence service.
@@ -410,23 +389,12 @@ public static class PersistenceExtensions
     {
         services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
 
-        // Register IStorageAdapter for cross-partition scanning (e.g. activity log feed)
-        services.TryAddSingleton<IStorageAdapter>(new FileSystemStorageAdapter(baseDirectory, writeOptionsModifier));
-
-        services.AddSingleton<IPartitionedStoreFactory>(sp =>
-        {
-            // Collect all partition inclusions registered via IncludePartition()
-            var inclusions = sp.GetServices<PartitionInclusion>().ToList();
-            var filter = inclusions.Count > 0
-                ? new PartitionFilter(inclusions.Select(i => i.Name))
-                : null;
-
-            return new FileSystemPartitionedStoreFactory(
-                baseDirectory,
-                writeOptionsModifier,
-                sp.GetService<IDataChangeNotifier>(),
-                filter);
-        });
+        // One shared FileSystemStorageAdapter + wildcard provider — handles every
+        // first-segment partition rooted at baseDirectory. No factory, no per-segment
+        // store provisioning.
+        var fsAdapter = new FileSystemStorageAdapter(baseDirectory, writeOptionsModifier);
+        services.AddSingleton(fsAdapter);
+        services.AddSingleton<IPartitionStorageProvider>(new FileSystemPartitionStorageProvider(fsAdapter));
 
         return services.AddPartitionedCoreAndWrapperServices();
     }
