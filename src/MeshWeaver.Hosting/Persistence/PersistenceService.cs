@@ -63,11 +63,41 @@ public sealed class PersistenceService : IStorageAdapter
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)>
         ListChildPaths(string? parentPath)
         => string.IsNullOrEmpty(parentPath)
-            ? Observable.Throw<(IEnumerable<string>, IEnumerable<string>)>(
-                new NotSupportedException(
-                    "Root-level listing is a query concern; use IMeshQueryCore, not IStorageAdapter."))
+            ? AggregateRootListings()
             : Resolve(parentPath)?.ListChildPaths(parentPath)
                 ?? Observable.Return<(IEnumerable<string>, IEnumerable<string>)>(([], []));
+
+    /// <summary>
+    /// Root-level listing fan-out: each <see cref="IPartitionStorageProvider"/>
+    /// knows its own top-level entries (file-system directories, in-memory
+    /// partition keys, …). Iterate every provider, ask its adapter for
+    /// <c>ListChildPaths(null)</c>, and union the results. Per-provider
+    /// failures (e.g. a Postgres routing adapter that refuses root listing
+    /// by design) are swallowed so one backend can't blank the whole walk —
+    /// every other provider's roots still flow through.
+    ///
+    /// <para>Without this, <see cref="Query.StorageAdapterMeshQueryProvider"/>'s
+    /// <c>WalkLevel(null)</c> ends up with zero discoverable top-level
+    /// partitions and autocomplete / scope:subtree queries return empty
+    /// (repro: <c>AutocompleteIconTests.Autocomplete_ReturnsIconForACME</c>).</para>
+    /// </summary>
+    private IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)>
+        AggregateRootListings()
+        => _providers
+            .ToObservable()
+            .SelectMany(p => p.Adapter.ListChildPaths(null)
+                .Catch<(IEnumerable<string>, IEnumerable<string>), Exception>(_ =>
+                    Observable.Return<(IEnumerable<string>, IEnumerable<string>)>(([], []))))
+            .Aggregate(
+                seed: (Nodes: new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+                       Dirs: new HashSet<string>(StringComparer.OrdinalIgnoreCase)),
+                accumulator: (acc, level) =>
+                {
+                    foreach (var n in level.Item1 ?? Enumerable.Empty<string>()) acc.Nodes.Add(n);
+                    foreach (var d in level.Item2 ?? Enumerable.Empty<string>()) acc.Dirs.Add(d);
+                    return acc;
+                })
+            .Select(acc => ((IEnumerable<string>)acc.Nodes, (IEnumerable<string>)acc.Dirs));
 
     public IObservable<IEnumerable<string>> ListPartitionSubPaths(string nodePath)
         => Resolve(nodePath)?.ListPartitionSubPaths(nodePath)
