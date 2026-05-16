@@ -446,6 +446,12 @@ public static class MeshDataSourceExtensions
                 // hint and lies as soon as the Release is read from a remote silo.
                 AssemblyCollection = result.Collection,
                 AssemblyContentPath = result.ContentPath,
+                // Integer version key the IAssemblyStore.Put used. Pinned-release
+                // activation calls TryGetAssemblyPath(NodeTypePath, AssemblyStoreVersion)
+                // and would otherwise have to parse it back from the display-format
+                // `Version` string (yyyyMMddHHmmss-hash), which doesn't preserve
+                // the underlying integer.
+                AssemblyStoreVersion = result.Version,
                 Status = "Succeeded",
                 CompilationActivityPath = activityPath
             };

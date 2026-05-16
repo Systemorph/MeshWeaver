@@ -239,7 +239,9 @@ internal static class NodeTypeEnrichmentHelpers
                                 $"Pinned release '{requestedReleasePath}' for '{nodeType}' could not be resolved.",
                                 meshConfiguration));
                     }
-                    var releaseVersion = TryParseReleaseVersion(release.Version);
+                    // Use the persisted integer version the IAssemblyStore.Put used,
+                    // not a parse of the display Version string.
+                    var releaseVersion = release.AssemblyStoreVersion ?? 0;
                     return ResolveAssembly(
                             meshHub, release.AssemblyCollection, release.NodeTypePath, releaseVersion)
                         .SelectMany(localPath =>

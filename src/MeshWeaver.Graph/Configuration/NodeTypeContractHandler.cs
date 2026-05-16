@@ -95,7 +95,9 @@ internal static class NodeTypeContractHandler
                                     null,
                                     $"Pinned release '{requestedReleasePath}' for '{hubPath}' could not be resolved."));
                             }
-                            var releaseVersion = TryParseReleaseVersion(release.Version);
+                            // Use the persisted integer version the IAssemblyStore.Put
+                            // used, not a parse of the display Version string.
+                            var releaseVersion = release.AssemblyStoreVersion ?? 0;
                             return ResolveAssembly(hub, release.AssemblyCollection, release.NodeTypePath, releaseVersion)
                                 .SelectMany(localPath =>
                                 {

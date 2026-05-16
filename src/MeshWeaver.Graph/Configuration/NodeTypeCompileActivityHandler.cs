@@ -91,11 +91,31 @@ internal static class NodeTypeCompileActivityHandler
                     $"Read NodeType MeshNode snapshot (version={pendingNode.Version}). Invoking Roslyn…",
                     logger!);
 
-                return compilationService.CompileAndGetConfigurations(pendingNode, sourcesOverride: null)
-                    .Take(1)
-                    .Select(result => new CompileOutcome(result, null, pendingNode))
-                    .Catch<CompileOutcome, Exception>(ex =>
-                        Observable.Return(new CompileOutcome(null, ex, pendingNode)));
+                // 🚨 Fetch sources via UNCACHED IMeshService.ObserveQuery, not via
+                // the compiler's cached SyncedQuery. The cached query's Replay(1)
+                // can return the pre-update V1 snapshot when this compile fires
+                // immediately after a source edit (the upstream change event has
+                // been emitted but the SyncedQuery's gate hasn't propagated it
+                // through the Replay buffer yet). Compiling V1 source under a V2
+                // version key uploads V1 bytes to v(V2-version).dll → instance2
+                // activates against V1 layout → MARKER_V1 instead of MARKER_V2.
+                // Repro: CodeEditRecompileTest.CodeEdit_ExplicitRelease_IsUpToDate_RecompilesOnSourceChange.
+                var meshService = activityHub.ServiceProvider.GetService<IMeshService>();
+                var sourcesObservable = meshService is null
+                    ? Observable.Return((IReadOnlyList<MeshNode>?)null)
+                    : meshService.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                            $"namespace:{parentPath}/Source scope:subtree nodeType:Code"))
+                        .Take(1)
+                        .Select(r => (IReadOnlyList<MeshNode>?)r.Items.ToList())
+                        .Catch<IReadOnlyList<MeshNode>?, Exception>(_ =>
+                            Observable.Return((IReadOnlyList<MeshNode>?)null));
+
+                return sourcesObservable.SelectMany(fresh =>
+                    compilationService.CompileAndGetConfigurations(pendingNode, sourcesOverride: fresh)
+                        .Take(1)
+                        .Select(result => new CompileOutcome(result, null, pendingNode))
+                        .Catch<CompileOutcome, Exception>(ex =>
+                            Observable.Return(new CompileOutcome(null, ex, pendingNode))));
             })
             .Subscribe(
                 outcome =>
