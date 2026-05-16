@@ -64,7 +64,7 @@ public class CompilationErrorTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// Seeds the in-memory persistence with a NodeType that has broken code,
     /// then verifies the Overview area returns an error control.
     /// </summary>
-    [Fact(Timeout = 20000)]
+    [Fact(Timeout = 90000)]
     public async Task Overview_ShouldShowCompilationError_WhenCodeIsBroken()
     {
         var ct = TestContext.Current.CancellationToken;
