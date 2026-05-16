@@ -104,18 +104,57 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
     public async Task CreateOrganization_HasPermission_ReturnsAdmin()
     {
         // 1) OrganizationNodeType is installed via ConfigureMesh above
+        const string orgId = "Systemorph";
 
-        // 2) Create Organization "Systemorph"
-        var orgNode = MeshNode.FromPath("Systemorph") with
+        // 2) Register the Admin/Partition/Systemorph MeshNode FIRST. The
+        //    Postgres partition provider routes by partition-table state
+        //    (see PartitionRoutingTests) — Matches returns false for
+        //    unknown first segments. OrganizationNodeType.GetAdditionalNodes
+        //    yields the partition AFTER the org create, but the main
+        //    `Systemorph` write itself is what fails-to-route without a
+        //    pre-existing partition. In prod, the Organization-create flow
+        //    needs to provision the partition before the main node — this
+        //    test pre-arranges the partition to exercise just the
+        //    Organization handler's grant logic.
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var pgProvider = Mesh.ServiceProvider.GetRequiredService<PostgreSqlPartitionStorageProvider>();
+        var partitionDef = new PartitionDefinition
         {
-            Name = "Systemorph",
+            Namespace = orgId,
+            DataSource = "default",
+            Schema = orgId.ToLowerInvariant(),
+            Table = "mesh_nodes",
+            TableMappings = PartitionDefinition.StandardTableMappings,
+            Versioned = true,
+        };
+        var partitionNode = new MeshNode(orgId, "Admin/Partition")
+        {
+            NodeType = "Partition",
+            Name = orgId,
+            State = MeshNodeState.Active,
+            Content = partitionDef
+        };
+        // Register directly with the provider so Matches returns true
+        // immediately — the SubscribeToWorkspace pipeline's CREATE SCHEMA
+        // step is async and races the org create otherwise. Also persist
+        // the Admin/Partition MeshNode so subsequent reads via the workspace
+        // see the partition's catalog entry.
+        await pgProvider.EnsureSchemaForPartitionAsync(partitionDef, default);
+        pgProvider.RegisterPartition(partitionDef);
+        await meshService.CreateNode(partitionNode)
+            .FirstAsync()
+            .ToTask(TestTimeout);
+
+        // 3) Create Organization "Systemorph"
+        var orgNode = MeshNode.FromPath(orgId) with
+        {
+            Name = orgId,
             NodeType = OrganizationNodeType.NodeType,
-            Content = new Organization { Name = "Systemorph" }
+            Content = new Organization { Name = orgId }
         };
         await NodeFactory.CreateNode(orgNode);
 
-        // 3) Ask ISecurityService.HasPermission for this node
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        // 4) Ask ISecurityService.HasPermission for this node
         var permissions = await Mesh.GetPermissionAsync(
             "Systemorph", TestUsers.Admin.ObjectId, TestTimeout);
 
@@ -164,6 +203,34 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
             accessService.SetCircuitContext(TestUsers.Admin);
 
             var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+
+            // Same routing prep as CreateOrganization_HasPermission_ReturnsAdmin:
+            // register the scope's partition directly with the provider so
+            // Matches({scope}/…) returns true before the AccessAssignment write,
+            // then persist the Admin/Partition catalog entry. The PG provider
+            // is strict — Matches reflects partition-table state, not a
+            // wildcard (pinned by PartitionRoutingTests).
+            var pgProvider = Mesh.ServiceProvider.GetRequiredService<PostgreSqlPartitionStorageProvider>();
+            var partitionDef = new PartitionDefinition
+            {
+                Namespace = scope,
+                DataSource = "default",
+                Schema = scope.ToLowerInvariant(),
+                Table = "mesh_nodes",
+                TableMappings = PartitionDefinition.StandardTableMappings,
+                Versioned = true,
+            };
+            await pgProvider.EnsureSchemaForPartitionAsync(partitionDef, default);
+            pgProvider.RegisterPartition(partitionDef);
+            var partitionNode = new MeshNode(scope, "Admin/Partition")
+            {
+                NodeType = "Partition",
+                Name = scope,
+                State = MeshNodeState.Active,
+                Content = partitionDef
+            };
+            await meshService.CreateNode(partitionNode).FirstAsync().ToTask(TestTimeout);
+
             var assignment = AssignmentNodeFactory.UserRole(userId, "Admin", scope);
             await meshService.CreateNode(assignment).FirstAsync().ToTask(TestTimeout);
 

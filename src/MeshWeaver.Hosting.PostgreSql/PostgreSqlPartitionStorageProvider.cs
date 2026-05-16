@@ -244,32 +244,27 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
 
     /// <inheritdoc/>
     /// <remarks>
-    /// Permissive — matches any non-empty first segment, mirroring
-    /// <see cref="MeshWeaver.Hosting.Persistence.FileSystemPartitionStorageProvider"/>
-    /// and <see cref="MeshWeaver.Hosting.Persistence.InMemoryPartitionStorageProvider"/>.
-    /// Unknown partitions are lazy-created with default settings on
-    /// <see cref="ResolveDefinition"/> so writes to a newly-created org /
-    /// scope succeed before the workspace's <c>Admin/Partition</c> stream
-    /// has caught up. The first write triggers a synchronous CREATE SCHEMA /
-    /// CREATE TABLE in <see cref="ResolveAdapterForSchema"/>.
+    /// Strict — matches only if a <see cref="PartitionDefinition"/> for the
+    /// first segment has been registered (via the hosted-service static-seed
+    /// pass, the <c>Admin/Partition/*</c> workspace stream, schema-discovery,
+    /// or an explicit <see cref="RegisterPartition"/> call). Unknown first
+    /// segments return false — routing must come from partition-table state,
+    /// not a wildcard. Tests pinning this contract live in
+    /// <c>PartitionRoutingTests</c>.
     /// </remarks>
-    public bool Matches(string fullPath) =>
-        !string.IsNullOrWhiteSpace(GetFirstSegment(fullPath));
+    public bool Matches(string fullPath)
+    {
+        var firstSegment = GetFirstSegment(fullPath);
+        return firstSegment != null && _partitions.ContainsKey(firstSegment);
+    }
 
     /// <inheritdoc/>
     public PartitionDefinition? ResolveDefinition(string fullPath)
     {
         var firstSegment = GetFirstSegment(fullPath);
         if (firstSegment == null) return null;
-        return _partitions.GetOrAdd(firstSegment, ns => new PartitionDefinition
-        {
-            Namespace = ns,
-            DataSource = "default",
-            Schema = ns.ToLowerInvariant(),
-            Table = "mesh_nodes",
-            TableMappings = PartitionDefinition.StandardTableMappings,
-            Versioned = true,
-        });
+        _partitions.TryGetValue(firstSegment, out var def);
+        return def;
     }
 
     /// <inheritdoc/>
