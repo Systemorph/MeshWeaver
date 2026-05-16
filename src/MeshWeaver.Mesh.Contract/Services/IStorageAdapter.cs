@@ -48,6 +48,29 @@ public interface IStorageAdapter
         => System.Reactive.Linq.Observable.Return<(MeshNode?, int)>((null, 0));
 
     /// <summary>
+    /// Resolves the closest-matching MeshNode for <paramref name="fullPath"/>
+    /// across EVERY table in the partition's schema (primary <c>mesh_nodes</c>
+    /// plus each satellite table named in
+    /// <see cref="PartitionDefinition.TableMappings"/>) in a SINGLE round-trip
+    /// to the underlying store. Returns the deepest path-prefix match across
+    /// all tables; if no row matches, returns <c>(null, 0)</c>.
+    ///
+    /// <para>The caller (path-resolution layer) is responsible for the
+    /// out-of-band fallbacks: configuration nodes, partition-root virtual
+    /// node, static-provider nodes. Those are pure in-memory and don't
+    /// belong in storage.</para>
+    ///
+    /// <para>Default implementation delegates to
+    /// <see cref="FindBestPrefixMatch"/> — sufficient for backends with a
+    /// single physical table per partition (FileSystem, InMemory). Postgres
+    /// overrides this with a UNION across primary + satellites so the same
+    /// one-query contract holds when satellites carry the deepest match.</para>
+    /// </summary>
+    IObservable<(MeshNode? Node, int MatchedSegments)> ResolvePath(
+        string fullPath, JsonSerializerOptions options)
+        => FindBestPrefixMatch(fullPath, options);
+
+    /// <summary>
     /// Lists partition sub-paths for a node (subdirectories that contain partition data,
     /// not child nodes). E.g. "Source", "layoutAreas".
     /// </summary>
