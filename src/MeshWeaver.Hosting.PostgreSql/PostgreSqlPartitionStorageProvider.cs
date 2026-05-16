@@ -39,6 +39,17 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     private readonly ILogger<PostgreSqlPartitionStorageProvider>? _logger;
     private IDisposable? _partitionSubscription;
 
+    /// <summary>
+    /// Internal access to the shared base <see cref="NpgsqlDataSource"/> so
+    /// the host service that drives schema discovery can issue an
+    /// <c>information_schema.tables</c> query against the same Postgres
+    /// instance without re-resolving DI (the connection-string overload of
+    /// <c>AddPartitionedPostgreSqlPersistence</c> doesn't register the
+    /// data source as a DI singleton — it builds one locally and closes
+    /// over it).
+    /// </summary>
+    internal NpgsqlDataSource BaseDataSource => _baseDataSource;
+
     /// <inheritdoc/>
     public string Name => "Postgres";
 
