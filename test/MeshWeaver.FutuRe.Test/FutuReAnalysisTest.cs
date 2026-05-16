@@ -43,6 +43,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     // all [Fact]s. Local: ~5m → ~1m on this project alone.
     protected override bool ShareMeshAcrossTests => true;
 
+
     // Per-session cache directory keyed on Guid.NewGuid so a stale DLL pinned by a
     // prior test process's AssemblyLoadContext (or a newer framework DLL invalidating
     // the timestamp check) can't break compilation. The default bin/.mesh-cache and
@@ -102,9 +103,21 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             });
     }
 
+    /// <summary>
+    /// FutuRe BusinessUnit / Local- &amp; GroupAnalysis NodeTypes are compiled
+    /// dynamically on first activation. The cold compile of the BusinessUnit
+    /// NodeType regularly takes 45–55 s on slow GitHub-hosted runners (and
+    /// the single-test local repro hits the same wall when AmericasIns
+    /// hasn't already warmed the cache). The default 60 s
+    /// <see cref="MonolithMeshTestBase.ConfigureClient"/> RequestTimeout
+    /// caps the Ping at exactly that boundary, so we extend it to 120 s
+    /// in this fixture only — the per-[Fact(Timeout=…)] cap still bounds
+    /// a genuinely hung activation.
+    /// </summary>
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
     {
         return base.ConfigureClient(configuration)
+            .WithRequestTimeout(TimeSpan.FromSeconds(120))
             .AddLayoutClient();
     }
 
@@ -201,7 +214,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Verifies that the AsiaRe business unit renders its Overview area
     /// with actual content (not just an error control).
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 120000)]
     public async Task AsiaRe_Overview_ShouldRender()
     {
         var client = GetClient();
@@ -221,10 +234,14 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Wait for the FULL render (Areas.Count >= 2) — same pattern as
         // EuropeRe / AmericasIns above; the placeholder StackControl with
         // a spinner arrives first and the per-area children land a beat
-        // later. 50 s budget covers the first-activation compile.
+        // later. 100 s budget covers the first-activation compile when
+        // AsiaRe is the FIRST FutuRe BU compiled in this fixture (CI runs
+        // tests alphabetically so AmericasIns warms the cache, but the
+        // single-filter local repro and isolated CI shards both hit the
+        // cold compile here and time out at 60 s).
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Timeout(TimeSpan.FromSeconds(50))
+            .Timeout(TimeSpan.FromSeconds(100))
             .FirstAsync(x => x is StackControl s && s.Areas.Count >= 2);
 
         Output.WriteLine($"Received control: {control?.GetType().Name}");
