@@ -27,7 +27,6 @@ namespace MeshWeaver.Hosting.Completion;
 internal sealed class ChatCompletionOrchestrator(
     IMeshService meshService,
     IMessageHub hub,
-    UserAccessiblePartitionsCache partitionsCache,
     ILogger<ChatCompletionOrchestrator>? logger = null)
     : IChatCompletionOrchestrator
 {
@@ -76,34 +75,41 @@ internal sealed class ChatCompletionOrchestrator(
     #region PartitionList & PartitionDrillDown
 
     /// <summary>
-    /// Lists partitions for <c>@/</c> or <c>@/&lt;filter&gt;</c>. Reads directly from
-    /// <see cref="UserAccessiblePartitionsCache"/> — pre-warmed, RLS-filtered, immutable
-    /// snapshot — so the result is instant after the first warm-up. NO fan-out into
-    /// partition contents: that only happens once the user types the second slash
-    /// (<see cref="CompletionMode.PartitionDrillDown"/>), which routes directly to
-    /// the chosen partition.
+    /// Lists partitions for <c>@/</c> or <c>@/&lt;filter&gt;</c>. Backed by a
+    /// regular <see cref="IMeshService.QueryAsync"/> against
+    /// <c>namespace:Admin/Partition</c> — each backend's <see cref="IMeshQueryProvider"/>
+    /// answers from its own source of truth: Postgres queries
+    /// <c>public.partitions</c>, in-memory / embedded / static return their
+    /// in-process partition lists. No global enumeration, no centralized
+    /// "load all partitions" cache.
     /// </summary>
     private IObservable<CompletionBatch> ProducePartitionList(string filter)
     {
-        return partitionsCache.Partitions
-            .Take(1)  // current snapshot from the ReplaySubject; instant if warm
-            .Select(map =>
+        var request = new MeshQueryRequest
+        {
+            Query = "namespace:Admin/Partition nodeType:Partition",
+            Limit = 100
+        };
+        return meshService.ObserveQuery<MeshNode>(request)
+            .Take(1)
+            .Select(change =>
             {
-                var matches = map.Keys
-                    .Where(k => MatchesPartitionFilter(k, filter))
-                    .OrderBy(k => k, StringComparer.OrdinalIgnoreCase)
-                    .Select(k => new AutocompleteItem(
-                        Label: k,
-                        InsertText: $"@/{k}/",
+                var matches = change.Items
+                    .Select(n => n.Path?.Split('/').LastOrDefault())
+                    .Where(seg => !string.IsNullOrEmpty(seg) && MatchesPartitionFilter(seg!, filter))
+                    .OrderBy(seg => seg, StringComparer.OrdinalIgnoreCase)
+                    .Select(seg => new AutocompleteItem(
+                        Label: seg!,
+                        InsertText: $"@/{seg}/",
                         Description: "Partition",
                         Category: "Partitions",
                         Priority: PartitionListPriority,
                         Kind: AutocompleteKind.Other,
-                        Path: k))
+                        Path: seg!))
                     .ToArray();
-                return matches;
+                return (IReadOnlyList<AutocompleteItem>)matches;
             })
-            .Where(items => items.Length > 0)
+            .Where(items => items.Count > 0)
             .Select(items => new CompletionBatch("Partitions", PartitionListPriority, items))
             .Timeout(ProducerInactivityTimeout)
             .Catch<CompletionBatch, Exception>(ex =>

@@ -456,65 +456,32 @@ public static class PersistenceExtensions
     {
         services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
 
-        // Register the routing persistence core
-        services.AddSingleton<RoutingPersistenceServiceCore>(sp =>
-            new RoutingPersistenceServiceCore(
-                sp.GetRequiredService<IPartitionedStoreFactory>(),
-                sp.GetService<IDataChangeNotifier>(),
-                sp.GetServices<IStaticNodeProvider>(),
-                sp.GetServices<IPartitionStorageProvider>()));
-        // RoutingPersistenceServiceCore is also the IStorageAdapter for
-        // partition-routing reads/writes — registered as singleton so
-        // hub handlers, NodeTypeService, MeshCatalog, etc. all get the
-        // path-aware router.
+        // PersistenceService bundles all IPartitionStorageProvider adapters.
+        // Pure delegation by path — no cache, no init, no factory wrapper.
         services.AddSingleton<IStorageAdapter>(sp =>
-            sp.GetRequiredService<RoutingPersistenceServiceCore>());
+            new PersistenceService(sp.GetServices<IPartitionStorageProvider>()));
 
-        // Register the routing query provider.
-        // Partition-level access control is enforced in SQL (public.partition_access),
-        // not in the routing layer.
-        services.AddSingleton<IMeshQueryProvider>(sp =>
-        {
-            var crossSchema = sp.GetService<ICrossSchemaQueryProvider>();
-            var logger = sp.GetService<ILoggerFactory>()?.CreateLogger<RoutingMeshQueryProvider>();
-            logger?.LogInformation("[STARTUP] RoutingMeshQueryProvider: CrossSchemaProvider={HasCrossSchema}",
-                crossSchema != null);
-            return new RoutingMeshQueryProvider(
-                sp.GetRequiredService<RoutingPersistenceServiceCore>(),
-                sp.GetService<MeshConfiguration>(),
-                crossSchema,
-                sp.GetService<AccessService>(),
-                sp.GetService<IDataChangeNotifier>(),
-                logger);
-        });
+        // Default adapter-backed query provider for backends without a native
+        // query layer. Each backend that has a native query (Postgres, Cosmos)
+        // registers its own IMeshQueryProvider separately; MeshQuery aggregates
+        // every IMeshQueryProvider singleton via sp.GetServices<>().
+        services.TryAddSingleton<StorageAdapterMeshQueryProvider>();
+        services.TryAddSingleton<IMeshQueryProvider>(sp =>
+            sp.GetRequiredService<StorageAdapterMeshQueryProvider>());
 
-        // IMeshQueryCore — unsecured query surface used by SyncedQueryMeshNodes.
-        // Singleton MeshQuery is the SINGLE boss for fan-out: across every
-        // IMeshQueryProvider (RoutingMeshQueryProvider for partitions +
-        // StaticNodeQueryProvider for built-in catalogs). MeshQuery dispatches
-        // each provider's IMeshQueryCore surface where available (so per-result
-        // validators are bypassed) and falls through to the regular ObserveQuery
-        // for providers without an IMeshQueryCore (e.g. StaticNodeQueryProvider,
-        // which has no security to bypass anyway).
-        //
-        // hub: null is OK here — the IMeshQueryCore surface receives options
+        // IMeshQueryCore — one boss for unsecured fan-out across every registered
+        // IMeshQueryProvider. Hub null is OK; the unsecured surface takes options
         // explicitly and doesn't read hub.JsonSerializerOptions.
         services.TryAddSingleton<IMeshQueryCore>(sp =>
             new MeshQuery(sp.GetServices<IMeshQueryProvider>(), hub: null!));
 
-        // Register the routing version query
-        services.AddSingleton<IVersionQuery>(sp =>
-        {
-            var routingCore = sp.GetRequiredService<RoutingPersistenceServiceCore>();
-            var routingVersionQuery = new RoutingVersionQuery();
-            foreach (var (partition, vq) in routingCore.VersionQueries)
-                routingVersionQuery.Register(partition, vq);
-            return routingVersionQuery;
-        });
+        // Versioning is per-backend. Default no-op; PostgreSQL / FileSystem
+        // can override with their own IVersionQuery registration.
+        services.TryAddSingleton<IVersionQuery>(sp => new NoOpVersionQuery());
 
         DecorateStorageAdapterWithVersionWriting(services);
 
-        // Always add static node provider
+        // Static-node query provider for built-in catalogs (Agent, Model, Role).
         services.AddSingleton<IMeshQueryProvider>(sp =>
         {
             var providers = sp.GetServices<IStaticNodeProvider>();
@@ -527,34 +494,20 @@ public static class PersistenceExtensions
         });
 
         // Surface AddMeshNodes seed (held in MeshConfiguration.Nodes) as an
-        // IStaticNodeProvider. Without this bridge the seed nodes are invisible
-        // to the partition routing core's static-node fan-in — historically they
-        // lived in InMemoryPersistenceService._nodes, which the no-cache rewrite
-        // dropped. See MeshConfigurationStaticNodeProvider.cs.
+        // IStaticNodeProvider so the seed is visible to the static-node fan-in.
         services.AddSingleton<IStaticNodeProvider, MeshConfigurationStaticNodeProvider>();
 
-        // Register MeshCatalog and its interfaces
         services.AddMeshCatalog();
-
-        // Import/Export services (scoped — need IMessageHub for JsonSerializerOptions)
 
         services.AddScoped<IMeshService>(sp =>
             new MeshService(
                 sp.GetServices<IMeshQueryProvider>(),
                 sp.GetRequiredService<IMessageHub>()));
-        // Per-user accessible-partitions cache — pre-warmed in the constructor so
-        // typing `@/` in chat is instant after the first emission. Scoped: each
-        // circuit gets its own cache keyed to that user's RLS-filtered partitions.
-        services.TryAddScoped<UserAccessiblePartitionsCache>(sp =>
-            new UserAccessiblePartitionsCache(
-                sp.GetRequiredService<RoutingPersistenceServiceCore>(),
-                sp.GetService<ICrossSchemaQueryProvider>(),
-                sp.GetService<ILogger<UserAccessiblePartitionsCache>>()));
+
         services.TryAddScoped<IChatCompletionOrchestrator>(sp =>
             new ChatCompletionOrchestrator(
                 sp.GetRequiredService<IMeshService>(),
                 sp.GetRequiredService<IMessageHub>(),
-                sp.GetRequiredService<UserAccessiblePartitionsCache>(),
                 sp.GetService<ILogger<ChatCompletionOrchestrator>>()));
 
         return services;
@@ -610,16 +563,10 @@ public static class PersistenceExtensions
             new MeshService(
                 sp.GetServices<IMeshQueryProvider>(),
                 sp.GetRequiredService<IMessageHub>()));
-        services.TryAddScoped<UserAccessiblePartitionsCache>(sp =>
-            new UserAccessiblePartitionsCache(
-                sp.GetRequiredService<RoutingPersistenceServiceCore>(),
-                sp.GetService<ICrossSchemaQueryProvider>(),
-                sp.GetService<ILogger<UserAccessiblePartitionsCache>>()));
         services.TryAddScoped<IChatCompletionOrchestrator>(sp =>
             new ChatCompletionOrchestrator(
                 sp.GetRequiredService<IMeshService>(),
                 sp.GetRequiredService<IMessageHub>(),
-                sp.GetRequiredService<UserAccessiblePartitionsCache>(),
                 sp.GetService<ILogger<ChatCompletionOrchestrator>>()));
 
         return services;
