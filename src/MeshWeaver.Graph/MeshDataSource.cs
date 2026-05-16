@@ -591,29 +591,18 @@ public static class MeshDataSourceExtensions
                     // WorkspaceCacheEvictionTest.AfterRecreate. Push the new entity
                     // through our own MeshNodeStream so the InstanceCollection
                     // refreshes; subsequent SubscribeRequests serve the live state.
-                    var notifLog = hub.ServiceProvider.GetService<ILogger<MeshDataSource>>();
-                    if (notification.Entity is MeshNode newNode)
+                    if (notification.Entity is not MeshNode newNode)
+                        return;
+                    cache.IsDeleted = false;
+                    try
                     {
-                        cache.IsDeleted = false;
-                        notifLog?.LogDebug("[OwnNotif] {Path} reseed from external {Kind} entity.Name={Name}",
-                            ownPath, notification.Kind, newNode.Name);
-                        try
-                        {
-                            hub.GetWorkspace().GetMeshNodeStream()
-                                .Update(_ => newNode)
-                                .Subscribe(
-                                    _ => notifLog?.LogDebug("[OwnNotif] {Path} reseed Update OnNext", ownPath),
-                                    ex => notifLog?.LogWarning(ex, "[OwnNotif] {Path} reseed Update FAILED", ownPath));
-                        }
-                        catch (Exception ex)
-                        {
-                            notifLog?.LogWarning(ex, "[OwnNotif] {Path} reseed Update threw synchronously", ownPath);
-                        }
+                        hub.GetWorkspace().GetMeshNodeStream()
+                            .Update(_ => newNode)
+                            .Subscribe(_ => { }, _ => { });
                     }
-                    else
+                    catch
                     {
-                        notifLog?.LogDebug("[OwnNotif] {Path} got {Kind} but Entity is not a MeshNode (type={EntityType})",
-                            ownPath, notification.Kind, notification.Entity?.GetType().Name ?? "null");
+                        /* workspace has no MeshNodeReference reducer */
                     }
                     return;
             }
