@@ -754,13 +754,25 @@ public static class MeshDataSourceExtensions
         // namespace; that's the canonical "compile finished" signal.
         hub.Post(new CreateReleaseResponse(true),
             o => o.ResponseFor(request));
+        // Status-guarded flip: NodeTypeDefinition.CompilationStatus is the
+        // single source of truth for "is a compile requested or in flight".
+        // If status is already Pending (queued) or Compiling (running), the
+        // caller's request collapses into that pending/in-flight cycle — we do
+        // NOT re-flip Pending, which would cause the watcher to fire a SECOND
+        // activity that races the first into the parent's terminal write.
+        // The status field itself is the lock; no in-memory single-flight
+        // needed.
         workspace.GetMeshNodeStream().Update(curr =>
-            curr.Content is NodeTypeDefinition def
-                ? curr with
+            {
+                if (curr.Content is not NodeTypeDefinition def) return curr;
+                if (def.CompilationStatus == CompilationStatus.Pending
+                    || def.CompilationStatus == CompilationStatus.Compiling)
+                    return curr;
+                return curr with
                 {
                     Content = def with { CompilationStatus = CompilationStatus.Pending }
-                }
-                : curr)
+                };
+            })
             .Subscribe(
                 _ => { },
                 ex => logger?.LogWarning(ex,

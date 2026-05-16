@@ -160,6 +160,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         var v2Release = await WaitForNewReleaseAsync(NodeTypePath, knownReleases: [v1Release], ct);
         v2Release.Should().NotBe(v1Release, "second release must be distinct");
         Output.WriteLine($"=== V2 release at {v2Release} ===");
+        Output.WriteLine("=== STEP 8: awaiting mesh-hub view of V2 release ===");
 
         // 8. Create a fresh instance and verify it serves V2.
         //
@@ -180,18 +181,21 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
                 && def.LatestReleasePath == v2Release
                 && def.CompilationStatus == CompilationStatus.Ok,
             ct);
+        Output.WriteLine("=== STEP 8: mesh-hub view caught up; creating instance2 ===");
 
         await NodeFactory.CreateNode(new MeshNode("instance2", $"{TestPartition}/CodeEditType")
         {
             Name = "Instance 2",
             NodeType = NodeTypePath,
         });
+        Output.WriteLine("=== STEP 8: instance2 created; reading V2 overview ===");
         // Wait for the V2 marker explicitly: the per-instance hub may render a stale
         // (V1) snapshot first while the new release's HubConfiguration is still
         // propagating, then re-render once V2 is wired. Plain ReadOverviewAsync
         // takes the first HtmlControl emission and would race that pre-V2 tick.
         var v2Html = await ReadOverviewMatchingAsync(Instance2Path,
             html => html.Contains("MARKER_V2"), ct);
+        Output.WriteLine("=== STEP 8: V2 overview read; asserting ===");
         v2Html.Should().Contain("MARKER_V2", "V2 release must be served after recompile");
         v2Html.Should().NotContain("MARKER_V1", "stale V1 assembly must not be reused");
     }

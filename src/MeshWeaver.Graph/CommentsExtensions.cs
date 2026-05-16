@@ -274,49 +274,29 @@ public static class CommentsView
     public static IObservable<UiControl?> Comments(LayoutAreaHost host, RenderingContext _)
     {
         var nodePath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
         var currentUser = accessService?.Context?.Name ?? "";
 
         var permissionsStream = PermissionHelper.GetEffectivePermissions(host.Hub, nodePath);
 
-        // Reactive comment list via mesh query
+        // Reactive comment list via synced query — path-keyed dedup, all-Initial
+        // gating, hub-level delete fast-path. Full snapshot per emission; just
+        // rebuild the projection.
         var commentsDataId = $"pageComments_{nodePath.Replace("/", "_")}";
         host.UpdateData(commentsDataId, Array.Empty<LayoutAreaControl>());
 
-        if (meshQuery != null)
-        {
-            meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                    $"namespace:{nodePath}/{CommentsExtensions.CommentPartition} nodeType:{CommentNodeType.NodeType}"))
-                .Scan(new List<MeshNode>(), (list, change) =>
-                {
-                    if (change.ChangeType == QueryChangeType.Initial || change.ChangeType == QueryChangeType.Reset)
-                        return change.Items.ToList();
-                    foreach (var item in change.Items)
-                    {
-                        if (change.ChangeType == QueryChangeType.Added)
-                            list.Add(item);
-                        else if (change.ChangeType == QueryChangeType.Removed)
-                            list.RemoveAll(n => n.Path == item.Path);
-                        else if (change.ChangeType == QueryChangeType.Updated)
-                        {
-                            list.RemoveAll(n => n.Path == item.Path);
-                            list.Add(item);
-                        }
-                    }
-                    return list;
-                })
-                .Subscribe(list =>
-                {
-                    // Show all comments (both range and page-level)
-                    var commentControls = list
-                        .Where(n => n.Content is Comment)
-                        .OrderByDescending(n => ((Comment)n.Content!).CreatedAt)
-                        .Select(n => Controls.LayoutArea(n.Path, CommentLayoutAreas.OverviewArea))
-                        .ToArray();
-                    host.UpdateData(commentsDataId, commentControls);
-                });
-        }
+        host.Workspace.GetQuery(
+                $"comments:{nodePath}",
+                $"namespace:{nodePath}/{CommentsExtensions.CommentPartition} nodeType:{CommentNodeType.NodeType}")
+            .Subscribe(snapshot =>
+            {
+                var commentControls = snapshot
+                    .Where(n => n.Content is Comment)
+                    .OrderByDescending(n => ((Comment)n.Content!).CreatedAt)
+                    .Select(n => Controls.LayoutArea(n.Path, CommentLayoutAreas.OverviewArea))
+                    .ToArray();
+                host.UpdateData(commentsDataId, commentControls);
+            });
 
         // Combine permissions with comment data to build the view
         return permissionsStream.Select(perms =>
