@@ -57,35 +57,78 @@ public partial class MarkdownFileParser : IFileFormatParser
             }
         }
 
-        // Defensive NodeType extractor: if structured YAML deserialization didn't
-        // fill in NodeType (Markdig didn't recognize the block, parser threw,
-        // returned null, or the property simply wasn't bound), pull it out of
-        // the file content with a flat regex. Strictly additive — only runs
-        // when frontMatter is null or missing NodeType, never overrides a
-        // successful parse. Catches the CI-Linux case where Markdig's
-        // YamlFrontMatterBlock detection silently fails on the sample
-        // `samples/Graph/Data/ACME/index.md` even though the file starts with
-        // a valid `---\nNodeType: Organization\n---` block.
-        if (string.IsNullOrEmpty(frontMatter?.NodeType))
+        // Defensive frontmatter extractor: if structured YAML deserialization
+        // didn't fill in standard fields (Markdig didn't recognize the block,
+        // parser threw, returned null, or the property simply wasn't bound),
+        // pull each field out with a flat regex. Strictly additive — only
+        // fills fields that are null/empty, never overrides a successful
+        // parse. Catches the CI-Linux case where Markdig's
+        // YamlFrontMatterBlock detection silently fails on a file that
+        // starts with a valid `---\nName: …\n---` block (repro:
+        // MarkdownNodeIntegrationTest.CollaborativeEditing_NodeExists_InMeshWeaverNamespace
+        // — the frontmatter sets `Name: Collaborative Editing` but CI sees
+        // Name fall back to the id "CollaborativeEditing").
+        //
+        // Search the raw YAML if Markdig found one, else search the leading
+        // frontmatter section of the file (between the first two `---` markers).
+        var defensiveSearchScope = rawYaml ?? ExtractLeadingFrontmatter(content);
+        if (!string.IsNullOrEmpty(defensiveSearchScope))
         {
-            // Search the raw YAML if Markdig found one, else search the leading
-            // frontmatter section of the file (between the first two `---` markers).
-            var searchScope = rawYaml ?? ExtractLeadingFrontmatter(content);
-            if (!string.IsNullOrEmpty(searchScope))
+            string? RegexField(string fieldName)
             {
                 var match = System.Text.RegularExpressions.Regex.Match(
-                    searchScope,
-                    @"^\s*NodeType\s*:\s*(?<value>[^\r\n#]+?)\s*$",
+                    defensiveSearchScope,
+                    $@"^\s*{System.Text.RegularExpressions.Regex.Escape(fieldName)}\s*:\s*(?<value>[^\r\n#]+?)\s*$",
                     System.Text.RegularExpressions.RegexOptions.Multiline
                     | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                if (match.Success)
+                return match.Success
+                    ? match.Groups["value"].Value.Trim().Trim('"', '\'')
+                    : null;
+            }
+
+            if (string.IsNullOrEmpty(frontMatter?.NodeType))
+            {
+                var v = RegexField("NodeType");
+                if (!string.IsNullOrEmpty(v))
                 {
-                    var nodeTypeValue = match.Groups["value"].Value.Trim().Trim('"', '\'');
-                    if (!string.IsNullOrEmpty(nodeTypeValue))
-                    {
-                        frontMatter ??= new MarkdownFrontMatter();
-                        frontMatter.NodeType = nodeTypeValue;
-                    }
+                    frontMatter ??= new MarkdownFrontMatter();
+                    frontMatter.NodeType = v;
+                }
+            }
+            if (string.IsNullOrEmpty(frontMatter?.Name))
+            {
+                var v = RegexField("Name") ?? RegexField("Title");
+                if (!string.IsNullOrEmpty(v))
+                {
+                    frontMatter ??= new MarkdownFrontMatter();
+                    frontMatter.Name = v;
+                }
+            }
+            if (string.IsNullOrEmpty(frontMatter?.Category))
+            {
+                var v = RegexField("Category");
+                if (!string.IsNullOrEmpty(v))
+                {
+                    frontMatter ??= new MarkdownFrontMatter();
+                    frontMatter.Category = v;
+                }
+            }
+            if (string.IsNullOrEmpty(frontMatter?.Icon))
+            {
+                var v = RegexField("Icon") ?? RegexField("Thumbnail");
+                if (!string.IsNullOrEmpty(v))
+                {
+                    frontMatter ??= new MarkdownFrontMatter();
+                    frontMatter.Icon = v;
+                }
+            }
+            if (string.IsNullOrEmpty(frontMatter?.State))
+            {
+                var v = RegexField("State");
+                if (!string.IsNullOrEmpty(v))
+                {
+                    frontMatter ??= new MarkdownFrontMatter();
+                    frontMatter.State = v;
                 }
             }
         }
