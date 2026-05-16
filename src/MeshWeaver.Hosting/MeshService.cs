@@ -22,9 +22,9 @@ internal sealed class MeshService(
 
     /// <summary>
     /// The mesh hub address where CRUD handlers (CreateNode, UpdateNode, DeleteNode) are registered.
-    /// Resolved from MeshCatalog if available, otherwise falls back to the root hub.
+    /// This is the address of the injected <see cref="IMessageHub"/> — the mesh root.
     /// </summary>
-    private Address MeshAddress => hub.ServiceProvider.GetService<MeshCatalog>()?.MeshAddress ?? hub.Address;
+    private Address MeshAddress => hub.Address;
 
     private AccessContext? CaptureContext()
     {

@@ -75,70 +75,8 @@ internal sealed class MeshCatalog(
             .Select(c => (MeshNode?)c.Items.FirstOrDefault());
     }
 
-    // Internal HubNodePersistence helper — used by HandleCreateNodeRequest pipeline.
-    private HubNodePersistence NodePersistence => new(hub, this);
-
-
-    /// <summary>
-    /// Creates a new node in Transient state without confirming it.
-    /// Returns an observable emitting the saved node, or OnError on failure.
-    /// Subscribe to drive — do not await.
-    /// </summary>
-    internal IObservable<MeshNode> CreateTransientNode(MeshNode node)
-    {
-        if (!string.IsNullOrEmpty(node.NodeType) && !Configuration.Nodes.ContainsKey(node.NodeType))
-            return Observable.Throw<MeshNode>(
-                new InvalidOperationException($"NodeType '{node.NodeType}' is not registered"));
-
-        if (!ValidatePath(node))
-            return Observable.Throw<MeshNode>(
-                new InvalidOperationException($"Invalid path structure for node: {node.Path}"));
-
-        var transientNode = node with { State = MeshNodeState.Transient };
-
-        // Auto-set MainNode for satellite types: point to parent node, not self
-        if (!string.IsNullOrEmpty(transientNode.NodeType)
-            && !string.IsNullOrEmpty(transientNode.Namespace)
-            && Configuration.IsSatelliteNodeType(transientNode.NodeType)
-            && transientNode.MainNode == transientNode.Path)
-        {
-            transientNode = transientNode with { MainNode = transientNode.Namespace };
-        }
-
-        // Persist the RAW transient node — HubConfiguration is a non-serialisable
-        // delegate that the persistence layer drops anyway, and enrichment lives
-        // exclusively at the hub-instantiation site. Calling ConfigResolver here
-        // would re-enter the routing layer (workspace.GetMeshNodeStream →
-        // SubscribeRequest → routing → catalog) for an enrichment whose result
-        // is then thrown away by the storage adapter.
-        return Persistence.Write(transientNode, hub.JsonSerializerOptions)
-            .Do(saved => logger?.LogInformation("Created transient node at path {Path}", saved.Path));
-    }
-
-    private static bool ValidatePath(MeshNode node)
-    {
-        // Path validation rules:
-        // 1. Id cannot be empty
-        if (string.IsNullOrWhiteSpace(node.Id))
-            return false;
-
-        // 2. Id cannot contain invalid characters
-        if (node.Id.Contains("..") || node.Id.StartsWith('/') || node.Id.EndsWith('/'))
-            return false;
-
-        // 3. Namespace segments should be valid
-        if (!string.IsNullOrEmpty(node.Namespace))
-        {
-            var segments = node.Namespace.Split('/');
-            foreach (var segment in segments)
-            {
-                if (string.IsNullOrWhiteSpace(segment))
-                    return false;
-            }
-        }
-
-        return true;
-    }
+    // CreateTransientNode + ValidatePath moved to MeshService.CreateTransient and
+    // HubNodePersistence.CreateTransient. NodePersistence helper deleted (unused).
 
     /// <summary>
     /// Path-cache invalidation hook. Currently a no-op because MeshCatalog holds no cache;

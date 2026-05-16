@@ -14,11 +14,10 @@ namespace MeshWeaver.Hosting;
 /// Identity is captured eagerly from AccessService and stamped on each delivery.
 /// </summary>
 internal sealed class HubNodePersistence(
-    IMessageHub hub,
-    MeshCatalog catalog)
+    IMessageHub hub)
 {
     private PostOptions ConfigurePost(PostOptions o)
-        => o.WithTarget(catalog.MeshAddress);
+        => o.WithTarget(hub.Address);
 
     private AccessContext? CaptureContext()
     {
@@ -93,6 +92,18 @@ internal sealed class HubNodePersistence(
             });
     }
 
+    /// <summary>
+    /// Persists a node in <see cref="MeshNodeState.Transient"/> via the
+    /// storage adapter directly — the CreateNodeRequest pipeline would force
+    /// the node to <c>Active</c>. This is the only CRUD path that bypasses
+    /// hub messaging, mirroring <see cref="MeshService.CreateTransient"/>.
+    /// </summary>
     public IObservable<MeshNode> CreateTransient(MeshNode node)
-        => catalog.CreateTransientNode(node);
+    {
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        if (persistence is null)
+            return CreateNode(node);
+        var transient = node with { State = MeshNodeState.Transient };
+        return persistence.Write(transient, hub.JsonSerializerOptions);
+    }
 }
