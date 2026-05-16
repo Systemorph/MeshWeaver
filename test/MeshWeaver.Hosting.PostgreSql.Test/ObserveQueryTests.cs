@@ -153,26 +153,43 @@ public class ObserveQueryTests : IAsyncLifetime
     [Fact]
     public async Task ObserveQuery_IgnoresChangesOutsideScope()
     {
-        // Arrange
+        // Arrange: write an in-scope node, then subscribe.
         await WriteNode("Story1", "ACME/Project", "Story");
 
-        var changes = new List<QueryResultChange<MeshNode>>();
+        var initialChanges = new List<QueryResultChange<MeshNode>>();
+        var outOfScopeChanges = new List<QueryResultChange<MeshNode>>();
         var request = MeshQueryRequest.FromQuery("namespace:ACME/Project");
+        var stream = _query.ObserveQuery<MeshNode>(request, _options);
 
-        using var sub = _query.ObserveQuery<MeshNode>(request, _options)
-            .Subscribe(c => changes.Add(c));
+        // Subscribe TWICE on the same stream:
+        //   (a) capture the Initial emission for the in-scope sanity check
+        //   (b) filter to emissions actually carrying a Contoso/Team item —
+        //       the assertion target. Counting raw emissions (the old shape)
+        //       trips on pg_notify duplicate `Updated` events for in-scope
+        //       nodes (Story1 update echoes) that are unrelated to whether
+        //       Contoso/Team writes reach this subscription.
+        using var initialSub = stream
+            .Where(c => c.ChangeType == QueryChangeType.Initial)
+            .Subscribe(c => initialChanges.Add(c));
+        using var outOfScopeSub = stream
+            .Where(c => c.Items.Any(i =>
+                i.Namespace?.StartsWith("Contoso", StringComparison.OrdinalIgnoreCase) == true))
+            .Subscribe(c => outOfScopeChanges.Add(c));
 
-        await WaitForChanges(changes, 1); // Initial
+        await WaitForChanges(initialChanges, 1);
 
-        // Act: add a node outside the query scope
+        // Act: add a node outside the query scope.
         await WriteNode("Bob", "Contoso/Team", "Person");
 
-        // Wait a bit and verify no additional changes were emitted
+        // Wait long enough for any cross-scope notification to be delivered.
         await Task.Delay(1000, TestContext.Current.CancellationToken);
 
-        // Assert: should still only have the initial emission
-        changes.Should().HaveCount(1);
-        changes[0].ChangeType.Should().Be(QueryChangeType.Initial);
+        // Assert: the in-scope Initial fired exactly once, and no emission
+        // carried a Contoso/Team item — that's the actual scope-filter claim.
+        initialChanges.Should().ContainSingle();
+        initialChanges[0].Items.Should().ContainSingle(n => n.Id == "Story1");
+        outOfScopeChanges.Should().BeEmpty(
+            "Contoso/Team writes must not reach an ACME/Project subscription");
     }
 
     [Fact]
