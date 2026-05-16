@@ -1,4 +1,4 @@
-using MeshWeaver.Graph.Security;
+﻿using MeshWeaver.Graph.Security;
 using MeshWeaver.Kernel;
 using MeshWeaver.Kernel.Hub;
 using MeshWeaver.Mesh;
@@ -26,7 +26,7 @@ public static class KernelNodeType
             // Register kernel message types at mesh level so JSON deserialization
             // works wherever a kernel-handler hub lives (Activity hub, markdown
             // view sub-hub, future hosts). The legacy
-            // `RouteAddressToHostedHub("kernel", …)` rule is gone — kernel work
+            // `RouteAddressToHostedHub("kernel", â€¦)` rule is gone â€” kernel work
             // runs inside the Activity MeshNode hub, addressed via its node path.
             .ConfigureHub(AddKernelTypes)
             .ConfigureServices(services =>
@@ -77,7 +77,6 @@ public static class KernelNodeType
         Name = "Kernel Session",
         IsSatelliteType = true,
         ExcludeFromContext = new HashSet<string> { "search", "create" },
-        AssemblyLocation = typeof(KernelNodeType).Assembly.Location,
         HubConfiguration = config => config
             .AddKernelHandlers()
     };

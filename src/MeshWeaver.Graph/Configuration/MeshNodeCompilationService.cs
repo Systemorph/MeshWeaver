@@ -29,9 +29,11 @@ internal class MeshNodeCompilationService(
     IOptions<CompilationCacheOptions> cacheOptions,
     IMessageHub hub,
     INuGetAssemblyResolver nugetResolver,
-    ILogger<MeshNodeCompilationService> logger)
+    ILogger<MeshNodeCompilationService> logger,
+    IAssemblyStore? assemblyStore = null)
     : IMeshNodeCompilationService
 {
+    private readonly IAssemblyStore _assemblyStore = assemblyStore ?? NullAssemblyStore.Instance;
     private readonly CompilationCacheOptions _cacheOptions = cacheOptions.Value ?? new CompilationCacheOptions();
     private JsonSerializerOptions JsonOptions => hub.JsonSerializerOptions;
     private readonly DynamicMeshNodeAttributeGenerator _attributeGenerator = new();
@@ -538,27 +540,87 @@ internal class MeshNodeCompilationService(
             var ntDef = node.Content as NodeTypeDefinition;
             var selfPath = ntDef != null ? node.Path : node.NodeType ?? node.Path;
             return DiscoverSourceVersionSnapshot(ntDef, selfPath ?? "", sourcesOverride)
-                .Select(snapshot => CompileResultFromAssembly(node, assemblyLocation, log, snapshot));
+                .Select(snapshot => CompileResultFromAssembly(node, assemblyLocation, log, snapshot))
+                .SelectMany(result => UploadToStoreIfNeeded(result, node));
         });
 
-    /// <inheritdoc />
-    public IObservable<NodeCompilationResult?> GetConfigurationsFromExistingAssembly(MeshNode node)
+    /// <summary>
+    /// After a successful Roslyn compile, push the bytes through <see cref="IAssemblyStore"/>
+    /// so cross-silo readers can hydrate the same compile output without recompiling.
+    /// Stamps the returned <see cref="AssemblyStoreLocation"/> onto a new
+    /// <see cref="NodeCompilationResult"/>; the watcher then denormalises Collection +
+    /// ContentPath onto <c>NodeTypeDefinition.LatestAssembly{Collection,Path}</c>.
+    /// <para>
+    /// Upload failures don't fail the compile — the local assembly is still usable in
+    /// the producing silo, only cross-silo activation needs the store. We log and pass
+    /// the un-stamped result through so the compile completes and a fresh Release
+    /// MeshNode still gets written.
+    /// </para>
+    /// <para>
+    /// Memory-mode compiles (<c>memory://...</c>) skip the upload — there are no bytes
+    /// on disk to read, and the in-memory ALC the cache service holds is per-process by
+    /// design. Memory mode is reserved for unit-test fast paths; production silos run
+    /// disk-cache mode where this upload always happens.
+    /// </para>
+    /// </summary>
+    private IObservable<NodeCompilationResult?> UploadToStoreIfNeeded(NodeCompilationResult? result, MeshNode node)
     {
-        var assemblyLocation = node.AssemblyLocation;
-        if (string.IsNullOrEmpty(assemblyLocation))
+        if (result is null
+            || string.IsNullOrEmpty(result.AssemblyLocation)
+            || result.AssemblyLocation.StartsWith("memory://", StringComparison.Ordinal))
+            return Observable.Return(result);
+        if (result.NodeTypeConfigurations.Count == 0)
+            return Observable.Return(result);
+        if (_assemblyStore is NullAssemblyStore)
+            return Observable.Return(result);
+
+        byte[] dll;
+        byte[]? pdb = null;
+        try
+        {
+            dll = File.ReadAllBytes(result.AssemblyLocation);
+            var pdbPath = Path.ChangeExtension(result.AssemblyLocation, ".pdb");
+            if (File.Exists(pdbPath))
+                pdb = File.ReadAllBytes(pdbPath);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "AssemblyStore upload skipped for {NodePath}: could not read bytes from {Path}",
+                node.Path, result.AssemblyLocation);
+            return Observable.Return(result);
+        }
+
+        var version = node.Version > 0 ? node.Version : 1;
+        return _assemblyStore.PutWithLocation(node.Path, version, dll, pdb)
+            .Select(loc => (NodeCompilationResult?)(result with
+            {
+                Collection = string.IsNullOrEmpty(loc.Collection) ? null : loc.Collection,
+                ContentPath = string.IsNullOrEmpty(loc.ContentPath) ? null : loc.ContentPath,
+                Version = version
+            }))
+            .Catch<NodeCompilationResult?, Exception>(ex =>
+            {
+                logger.LogWarning(ex,
+                    "AssemblyStore upload failed for {NodePath}@v{Version}; compile still succeeded locally",
+                    node.Path, version);
+                return Observable.Return(result);
+            });
+    }
+
+    /// <inheritdoc />
+    public IObservable<NodeCompilationResult?> GetConfigurationsFromExistingAssembly(string localPath, string nodeTypePath)
+    {
+        if (string.IsNullOrEmpty(localPath))
             return Observable.Return((NodeCompilationResult?)null);
 
-        var log = new ActivityLog(ActivityCategory.Compilation) { HubPath = node.Path };
-
-        // No source-version snapshot here — this path is taken on the instance hub's
-        // GetCompilationPathRequest hot path, where DiscoverSourceVersionSnapshot's
-        // SyncedQuery enumeration has timed out under load (see CodeEditRecompileTest
-        // failures). The snapshot only matters for HandleCreateRelease's
-        // "is up to date?" check; once the assembly exists, the instance hub just
-        // needs the HubConfiguration to render. Pass empty so the result still has
-        // a non-null CompiledSources dict for downstream consumers.
+        // Synthesise a minimal MeshNode for CompileResultFromAssembly's ALC bookkeeping.
+        // The Path is what determines the cache key — the rest of the node is irrelevant
+        // for this path because we're not running Roslyn.
+        var stubNode = new MeshNode(MeshNode.FromPath(nodeTypePath).Id, MeshNode.FromPath(nodeTypePath).Namespace);
+        var log = new ActivityLog(ActivityCategory.Compilation) { HubPath = nodeTypePath };
         return Observable.Return<NodeCompilationResult?>(
-            CompileResultFromAssembly(node, assemblyLocation, log,
+            CompileResultFromAssembly(stubNode, localPath, log,
                 ImmutableDictionary<string, long>.Empty));
     }
 

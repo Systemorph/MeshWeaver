@@ -70,83 +70,85 @@ internal static class NodeTypeContractHandler
                 }
 
                 // Pinned release: resolve the explicitly requested Release MeshNode
-                // and load configs from its AssemblyPath instead of the latest. Lets
-                // production hosts pin a specific historical release while authors
-                // keep iterating in the dev loop. See
-                // NodeTypeDefinition.RequestedReleasePath.
-                //
-                // Release nodes are satellites (IsSatelliteType=true) — there is no
-                // per-node hub, so cross-hub routing via hub.GetMeshNode(...) returns
-                // null fast (DeliveryFailure NotFound). The release IS in
-                // persistence, owned by this NodeType hub's partition, so go to
-                // IStorageAdapter directly. Sanctioned because the Release nodes
-                // satellite has no live hub to read from.
+                // and load configs from its assembly bytes instead of the latest.
+                // Read the Release node via workspace.GetMeshNodeStream(releasePath)
+                // — auto-dispatches own/local/remote — then hydrate the assembly
+                // through IAssemblyStore.TryGetAssemblyPath. Symmetric with
+                // NodeTypeEnrichmentHelpers' pinned-release branch.
                 if (!string.IsNullOrEmpty(def.RequestedReleasePath))
                 {
                     var requestedReleasePath = def.RequestedReleasePath!;
                     logger?.LogDebug(
                         "GetCompilationPathRequest at {HubPath}: resolving pinned release {ReleasePath}.",
                         hubPath, requestedReleasePath);
-                    var storage = hub.ServiceProvider.GetService<IStorageAdapter>();
-                    if (storage is null)
-                    {
-                        logger?.LogWarning(
-                            "GetCompilationPathRequest at {HubPath}: no IStorageAdapter — cannot resolve pinned release {ReleasePath}.",
-                            hubPath, requestedReleasePath);
-                        return Observable.Return<GetCompilationPathResponse?>(Fail(
-                            null,
-                            $"Pinned release '{requestedReleasePath}' for '{hubPath}' could not be resolved."));
-                    }
-                    return storage.Read(requestedReleasePath, hub.JsonSerializerOptions)
+                    return hub.GetWorkspace().GetMeshNodeStream(requestedReleasePath)
+                        .Take(1)
                         .SelectMany(releaseNode =>
                         {
-                            if (releaseNode?.Content is NodeTypeRelease release
-                                && !string.IsNullOrEmpty(release.AssemblyPath)
-                                && File.Exists(release.AssemblyPath))
+                            if (releaseNode?.Content is not NodeTypeRelease release)
                             {
-                                logger?.LogDebug(
-                                    "GetCompilationPathRequest at {HubPath}: pinned release {ReleasePath} → {AssemblyPath}.",
-                                    hubPath, requestedReleasePath, release.AssemblyPath);
-                                var pinnedNode = node with { AssemblyLocation = release.AssemblyPath };
-                                return compilationService.GetConfigurationsFromExistingAssembly(pinnedNode)
-                                    .Select(result => BuildResponse(hubPath, pinnedNode, result));
+                                logger?.LogWarning(
+                                    "GetCompilationPathRequest at {HubPath}: pinned release {ReleasePath} could not be resolved (releaseNode={ReleaseNode}).",
+                                    hubPath, requestedReleasePath,
+                                    releaseNode == null ? "null" : releaseNode.Content?.GetType().Name ?? "no-content");
+                                return Observable.Return<GetCompilationPathResponse?>(Fail(
+                                    null,
+                                    $"Pinned release '{requestedReleasePath}' for '{hubPath}' could not be resolved."));
                             }
-                            logger?.LogWarning(
-                                "GetCompilationPathRequest at {HubPath}: pinned release {ReleasePath} could not be resolved (releaseNode={ReleaseNode}, asmPath={AsmPath}).",
-                                hubPath, requestedReleasePath,
-                                releaseNode == null ? "null" : releaseNode.Content?.GetType().Name ?? "no-content",
-                                (releaseNode?.Content as NodeTypeRelease)?.AssemblyPath ?? "<none>");
-                            return Observable.Return<GetCompilationPathResponse?>(Fail(
-                                null,
-                                $"Pinned release '{requestedReleasePath}' for '{hubPath}' could not be resolved."));
+                            var releaseVersion = TryParseReleaseVersion(release.Version);
+                            return ResolveAssembly(hub, release.AssemblyCollection, release.NodeTypePath, releaseVersion)
+                                .SelectMany(localPath =>
+                                {
+                                    if (string.IsNullOrEmpty(localPath))
+                                    {
+                                        logger?.LogWarning(
+                                            "GetCompilationPathRequest at {HubPath}: pinned release {ReleasePath} bytes not found in store (collection={Coll}, version={Version}).",
+                                            hubPath, requestedReleasePath, release.AssemblyCollection, releaseVersion);
+                                        return Observable.Return<GetCompilationPathResponse?>(Fail(
+                                            null,
+                                            $"Pinned release '{requestedReleasePath}' assembly not found in store."));
+                                    }
+                                    logger?.LogDebug(
+                                        "GetCompilationPathRequest at {HubPath}: pinned release {ReleasePath} → {LocalPath}.",
+                                        hubPath, requestedReleasePath, localPath);
+                                    return compilationService.GetConfigurationsFromExistingAssembly(localPath!, hubPath)
+                                        .Select(result => BuildResponseFromLocal(
+                                            hubPath, node, localPath!, release.AssemblyCollection,
+                                            release.AssemblyContentPath, result));
+                                });
                         });
                 }
 
-                // Short-circuit: if a real release has been published, load from
-                // its assembly. Gating on LatestReleasePath (not just
-                // AssemblyLocation) is essential — for a freshly-created dynamic
-                // NodeType, NodeTypeService.EnrichWithNodeType propagates the
-                // STATIC "NodeType" type's framework DLL (MeshWeaver.Graph.dll)
-                // onto the fresh node's AssemblyLocation via its fast-path
-                // ApplyEntry. Short-circuiting on that path opens
-                // MeshWeaver.Graph.dll, finds no MeshNodeProvider for this hub's
-                // path, and silently returns Success=true with no configs — the
-                // bug behind CompileFailsWhenSourceCodeIsInvalid + the rest of
-                // the compile cluster reporting "Success expected false but is
-                // true". A populated LatestReleasePath means StartCompile (or
-                // the initial publish) actually emitted an assembly for this
-                // NodeType; only then is AssemblyLocation a real release DLL.
+                // Short-circuit: if a settled compile is published (status=Ok +
+                // LatestAssembly{Collection,Path} set), hydrate via IAssemblyStore.
+                // Gating on LatestReleasePath OR the cross-silo durable assembly
+                // fields ensures we don't load the framework DLL by mistake (the
+                // pre-Stage-0 failure mode behind CompileFailsWhenSourceCodeIsInvalid).
                 var hasPublishedRelease = !string.IsNullOrEmpty(def.LatestReleasePath);
                 if (hasPublishedRelease
-                    && !string.IsNullOrEmpty(node.AssemblyLocation)
-                    && (node.AssemblyLocation.StartsWith("memory://", StringComparison.Ordinal)
-                        || File.Exists(node.AssemblyLocation)))
+                    && !string.IsNullOrEmpty(def.LatestAssemblyCollection)
+                    && !string.IsNullOrEmpty(def.LatestAssemblyPath))
                 {
-                    logger?.LogDebug(
-                        "GetCompilationPathRequest at {HubPath}: using existing assembly at {AssemblyLocation}.",
-                        hubPath, node.AssemblyLocation);
-                    return compilationService.GetConfigurationsFromExistingAssembly(node)
-                        .Select(result => BuildResponse(hubPath, node, result));
+                    var compileVersion = def.LastCompiledVersion ?? node.Version;
+                    return ResolveAssembly(hub, def.LatestAssemblyCollection, node.Path, compileVersion)
+                        .SelectMany(localPath =>
+                        {
+                            if (string.IsNullOrEmpty(localPath))
+                            {
+                                logger?.LogDebug(
+                                    "GetCompilationPathRequest at {HubPath}: latest assembly not in store (collection={Coll}, version={Version}) — falling back to fresh compile.",
+                                    hubPath, def.LatestAssemblyCollection, compileVersion);
+                                return compilationService.CompileAndGetConfigurations(node)
+                                    .Select(result => BuildResponse(hubPath, node, result));
+                            }
+                            logger?.LogDebug(
+                                "GetCompilationPathRequest at {HubPath}: using existing assembly at {LocalPath}.",
+                                hubPath, localPath);
+                            return compilationService.GetConfigurationsFromExistingAssembly(localPath!, hubPath)
+                                .Select(result => BuildResponseFromLocal(
+                                    hubPath, node, localPath!, def.LatestAssemblyCollection,
+                                    def.LatestAssemblyPath, result));
+                        });
                 }
 
                 return compilationService.CompileAndGetConfigurations(node)
@@ -174,9 +176,17 @@ internal static class NodeTypeContractHandler
                                 {
                                     CompilationStatus = CompilationStatus.Ok,
                                     CompilationError = null,
-                                    LastCompileSucceededAt = DateTimeOffset.UtcNow
-                                },
-                                AssemblyLocation = response.AssemblyLocation
+                                    LastCompileSucceededAt = DateTimeOffset.UtcNow,
+                                    // Cross-silo durable assembly reference from the
+                                    // response (set by CompileAndGetConfigurations'
+                                    // IAssemblyStore upload, or by the
+                                    // BuildResponseFromLocal short-circuit). Falls back
+                                    // to the previous values when the producer did not
+                                    // populate them (Null store).
+                                    LatestAssemblyCollection = response.Collection ?? def.LatestAssemblyCollection,
+                                    LatestAssemblyPath = response.ContentPath ?? def.LatestAssemblyPath,
+                                    LastCompiledVersion = curr.Version
+                                }
                             };
                         return curr with
                         {
@@ -246,11 +256,61 @@ internal static class NodeTypeContractHandler
         return new GetCompilationPathResponse(
             Success: true,
             AssemblyLocation: result.AssemblyLocation,
-            Collection: null,
+            Collection: result.Collection,
+            Version: (result.Version ?? node.Version).ToString(),
+            Error: null,
+            HubConfiguration: matchingConfig?.HubConfiguration,
+            Log: result.Log)
+        {
+            ContentPath = result.ContentPath
+        };
+    }
+
+    /// <summary>
+    /// Variant of <see cref="BuildResponse"/> for the pinned-release /
+    /// latest-compile short-circuit paths: the caller already resolved the
+    /// local DLL path via <see cref="IAssemblyStore"/>, so we don't have a
+    /// fresh <see cref="NodeCompilationResult"/> shape with Collection/ContentPath
+    /// — those come from the persisted reference fields on the Release /
+    /// NodeTypeDefinition. The local path is what <c>MessageHubGrain</c> still
+    /// needs to <c>Assembly.LoadFrom</c> during Stage 1.
+    /// </summary>
+    private static GetCompilationPathResponse BuildResponseFromLocal(
+        string hubPath,
+        MeshNode node,
+        string localPath,
+        string? collection,
+        string? contentPath,
+        NodeCompilationResult? result)
+    {
+        if (result == null)
+            return Fail(null, $"Compilation pipeline returned no result for '{hubPath}'.");
+
+        var status = result.Log?.Status ?? ActivityStatus.Succeeded;
+        if (status == ActivityStatus.Failed)
+        {
+            var errors = result.Log?.Errors() ?? [];
+            var summary = errors.Count > 0
+                ? string.Join("; ", errors.Select(m => m.Message))
+                : $"Compilation faulted for '{hubPath}'.";
+            return Fail(null, summary, result.Log);
+        }
+
+        var matchingConfig = result.NodeTypeConfigurations
+            .FirstOrDefault(c => string.Equals(c.NodeType, hubPath, StringComparison.OrdinalIgnoreCase))
+            ?? result.NodeTypeConfigurations.FirstOrDefault();
+
+        return new GetCompilationPathResponse(
+            Success: true,
+            AssemblyLocation: localPath,
+            Collection: collection,
             Version: node.Version.ToString(),
             Error: null,
             HubConfiguration: matchingConfig?.HubConfiguration,
-            Log: result.Log);
+            Log: result.Log)
+        {
+            ContentPath = contentPath
+        };
     }
 
     private static GetCompilationPathResponse Fail(string? version, string error, ActivityLog? log = null) =>
@@ -261,4 +321,33 @@ internal static class NodeTypeContractHandler
             Error: error,
             HubConfiguration: null,
             Log: log);
+
+    /// <summary>
+    /// Dispatches an <see cref="IAssemblyStore"/> lookup. Sentinel collection
+    /// <c>"framework"</c> routes to <see cref="FrameworkAssemblyStore"/>; any
+    /// other value routes to the registered <see cref="IAssemblyStore"/>.
+    /// </summary>
+    private static IObservable<string?> ResolveAssembly(
+        IMessageHub hub, string? collection, string nodeTypePath, long version)
+    {
+        if (string.IsNullOrEmpty(collection)) return Observable.Return<string?>(null);
+        var store = string.Equals(collection, FrameworkAssemblyStore.CollectionName, StringComparison.Ordinal)
+            ? (IAssemblyStore)FrameworkAssemblyStore.Instance
+            : hub.ServiceProvider.GetService<IAssemblyStore>() ?? NullAssemblyStore.Instance;
+        return store.TryGetAssemblyPath(nodeTypePath, version);
+    }
+
+    /// <summary>
+    /// Parses the leading <c>yyyyMMddHHmmss</c> timestamp from a Release version
+    /// (<c>{yyyyMMddHHmmss}-{8hash}</c>) into a long usable as the store version
+    /// key. Returns 0 when the version string does not match — store miss
+    /// falls through to the fail path.
+    /// </summary>
+    private static long TryParseReleaseVersion(string? version)
+    {
+        if (string.IsNullOrEmpty(version)) return 0;
+        var dash = version.IndexOf('-');
+        var head = dash > 0 ? version[..dash] : version;
+        return long.TryParse(head, out var v) ? v : 0;
+    }
 }

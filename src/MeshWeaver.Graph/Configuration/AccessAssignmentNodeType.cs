@@ -1,4 +1,4 @@
-using MeshWeaver.Data;
+﻿using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 
@@ -34,7 +34,6 @@ public static class AccessAssignmentNodeType
         Icon = "/static/NodeTypeIcons/shield.svg",
         IsSatelliteType = true,
         ExcludeFromContext = new HashSet<string> { "search", "create" },
-        AssemblyLocation = typeof(AccessAssignmentNodeType).Assembly.Location,
         HubConfiguration = config => config
             .AddAccessAssignmentViews()
             .AddMeshDataSource(source => source

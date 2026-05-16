@@ -1,4 +1,4 @@
-using MeshWeaver.Data;
+﻿using MeshWeaver.Data;
 using MeshWeaver.Markdown.Collaboration;
 using MeshWeaver.Mesh;
 using Mesh = MeshWeaver.Mesh;
@@ -61,7 +61,6 @@ public static class CommentNodeType
         Icon = "/static/NodeTypeIcons/comment.svg",
         IsSatelliteType = true,
         ExcludeFromContext = new HashSet<string> { "search", "create" },
-        AssemblyLocation = typeof(CommentNodeType).Assembly.Location,
         HubConfiguration = config => config
             .AddCommentNodeViews()
             .AddMeshDataSource(source => source.WithContentType<Comment>())

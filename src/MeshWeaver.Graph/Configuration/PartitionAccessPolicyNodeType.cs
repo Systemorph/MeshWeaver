@@ -1,4 +1,4 @@
-using MeshWeaver.Data;
+﻿using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 
@@ -33,7 +33,6 @@ public static class PartitionAccessPolicyNodeType
         Name = "Partition Access Policy",
         Icon = "/static/NodeTypeIcons/shield.svg",
         ExcludeFromContext = new HashSet<string> { "search", "create" },
-        AssemblyLocation = typeof(PartitionAccessPolicyNodeType).Assembly.Location,
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<PartitionAccessPolicy>())

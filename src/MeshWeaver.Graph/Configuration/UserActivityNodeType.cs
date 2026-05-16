@@ -1,4 +1,4 @@
-using MeshWeaver.Data;
+﻿using MeshWeaver.Data;
 using MeshWeaver.Graph.Security;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
@@ -36,7 +36,6 @@ public static class UserActivityNodeType
         Name = "User Activity",
         IsSatelliteType = true,
         ExcludeFromContext = new HashSet<string> { "search", "create" },
-        AssemblyLocation = typeof(UserActivityNodeType).Assembly.Location,
         HubConfiguration = config => config
             .AddMeshDataSource(source => source.WithContentType<UserActivityRecord>())
     };

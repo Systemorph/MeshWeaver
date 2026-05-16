@@ -24,7 +24,12 @@ public record GetCompilationPathRequest(string? Version = null)
 /// Response to <see cref="GetCompilationPathRequest"/>.
 /// </summary>
 /// <param name="Success">True iff the NodeType could be resolved AND the assembly is available.</param>
-/// <param name="AssemblyLocation">Absolute path to the compiled DLL for the requested version. Null if Success is false.</param>
+/// <param name="AssemblyLocation">
+/// Process-local path to the compiled DLL. Valid in the producing silo only.
+/// Cross-silo consumers must use <paramref name="Collection"/> + the
+/// <c>ContentPath</c> property to fetch the same bytes via <c>IAssemblyStore</c>.
+/// Scheduled for removal once every consumer reads from the store.
+/// </param>
 /// <param name="Collection">Content-collection name where the artifact lives, if any. Null for static-provider types.</param>
 /// <param name="Version">The resolved version (echoed so the consumer's cache key matches what was actually compiled).</param>
 /// <param name="Error">Error message when <paramref name="Success"/> is false.</param>
@@ -32,8 +37,8 @@ public record GetCompilationPathRequest(string? Version = null)
 /// In-process delegate to configure the per-node hub for instances of this type.
 /// <b>Not serializable</b> — marked <see cref="JsonIgnoreAttribute"/> because Func
 /// values cannot cross silo boundaries. In-process consumers receive the live
-/// delegate; cross-silo consumers receive <c>null</c> and must reflect on
-/// <paramref name="AssemblyLocation"/> to recover it.
+/// delegate; cross-silo consumers receive <c>null</c> and must hydrate from the
+/// <paramref name="Collection"/> + <c>ContentPath</c> reference.
 /// </param>
 /// <param name="Log">
 /// Activity log of the compilation attempt — every executed source query, every
@@ -48,4 +53,15 @@ public record GetCompilationPathResponse(
     string? Version,
     string? Error,
     [property: JsonIgnore] Func<MessageHubConfiguration, MessageHubConfiguration>? HubConfiguration,
-    ActivityLog? Log = null);
+    ActivityLog? Log = null)
+{
+    /// <summary>
+    /// Path inside <see cref="Collection"/> where the compiled assembly's bytes
+    /// live. Together with <see cref="Collection"/> forms the cross-silo durable
+    /// reference. Producer sets it from the assembly-store upload's content-path;
+    /// consumers fetch via <c>IAssemblyStore.TryGetAssemblyPath</c> (the store key
+    /// is <c>(nodeTypePath, version)</c>, but ContentPath is the canonical
+    /// denormalised reference visible on the response).
+    /// </summary>
+    public string? ContentPath { get; init; }
+}

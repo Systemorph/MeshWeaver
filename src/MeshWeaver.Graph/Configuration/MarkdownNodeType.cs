@@ -1,4 +1,4 @@
-using MeshWeaver.ContentCollections;
+﻿using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
@@ -45,7 +45,6 @@ public static class MarkdownNodeType
     {
         Name = "Markdown",
         Icon = "/static/NodeTypeIcons/document.svg",
-        AssemblyLocation = typeof(MarkdownNodeType).Assembly.Location,
         HubConfiguration = config => config
             .AddMarkdownViews()
             .AddMeshDataSource(s => s.WithContentType<MarkdownContent>())

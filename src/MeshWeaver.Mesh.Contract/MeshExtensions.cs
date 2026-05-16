@@ -1472,20 +1472,18 @@ public static class MeshExtensions
                         // round-trip as null over the sync wire (workspace remote
                         // reads / writes serialise to JSON), so an UpdateNode whose
                         // input came from a FindNodeAsync (or any remote read) would
-                        // otherwise wipe the live transient state. AssemblyLocation
-                        // is the load-bearing case: a compile sets it on the OWN
-                        // hub via workspace.GetMeshNodeStream().Update(...), and a
-                        // subsequent metadata-only UpdateNode (e.g. setting
-                        // RequestedReleasePath) was clobbering it back to null —
-                        // every fresh instance hub then fell through to the
-                        // recompile path with the previous release's static
-                        // AssemblyLocation, surfacing as the V1↔V2 mismatch in
-                        // CodeEditRecompileTest.NodeType_RequestedReleasePath_*.
+                        // otherwise wipe the live transient state. HubConfiguration
+                        // (a Func delegate) is the canonical case. AssemblyLocation
+                        // used to need the same treatment, but the cross-silo
+                        // durable reference now lives on NodeTypeDefinition's
+                        // LatestAssemblyCollection + LatestAssemblyPath (persisted
+                        // as JSON, no round-trip wipe); enrichment hydrates the
+                        // local path from IAssemblyStore on each activation, so
+                        // dropping the per-update merge is safe.
                         var nodeToSave = updatedNode with
                         {
                             State = updatedNode.State != default ? updatedNode.State : existingNode.State,
                             HubConfiguration = existingNode.HubConfiguration,
-                            AssemblyLocation = updatedNode.AssemblyLocation ?? existingNode.AssemblyLocation,
                             GlobalServiceConfigurations = updatedNode.GlobalServiceConfigurations is { Count: > 0 } gsc
                                 ? gsc
                                 : existingNode.GlobalServiceConfigurations,

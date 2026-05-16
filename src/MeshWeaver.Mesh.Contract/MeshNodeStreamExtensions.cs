@@ -1,4 +1,4 @@
-using System.Reactive.Disposables;
+﻿using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
@@ -15,7 +15,7 @@ namespace MeshWeaver.Mesh;
 /// it, a warning is logged via <see cref="ILoggerFactory"/> resolved from the
 /// supplied <see cref="IServiceProvider"/>. This catches the cold-observable bug
 /// where a caller invokes a side-effect-on-subscribe API (e.g.
-/// <c>workspace.GetMeshNodeStream().Update(...)</c>) without subscribing — the
+/// <c>workspace.GetMeshNodeStream().Update(...)</c>) without subscribing â€” the
 /// side effect silently never runs and the caller has no compile-time signal.
 /// </summary>
 internal sealed class RequireSubscribeObservable<T> : IObservable<T>
@@ -46,12 +46,12 @@ internal sealed class RequireSubscribeObservable<T> : IObservable<T>
             var logger = _services.GetService<ILoggerFactory>()
                 ?.CreateLogger("MeshWeaver.Mesh.RequireSubscribe");
             logger?.LogWarning(
-                "Fire-and-forget callsite detected: '{What}' returned a cold IObservable that was never subscribed — the side effect did NOT run. Add .Subscribe(_ => {{ }}, ex => logger.LogWarning(ex, ...)) at the callsite. See Doc/Architecture/AsynchronousCalls.md → 'Subscribe is mandatory'.",
+                "Fire-and-forget callsite detected: '{What}' returned a cold IObservable that was never subscribed â€” the side effect did NOT run. Add .Subscribe(_ => {{ }}, ex => logger.LogWarning(ex, ...)) at the callsite. See Doc/Architecture/AsynchronousCalls.md â†’ 'Subscribe is mandatory'.",
                 _what);
         }
         catch
         {
-            // Finalizer must never throw — service provider may already be disposed.
+            // Finalizer must never throw â€” service provider may already be disposed.
         }
     }
 }
@@ -62,7 +62,7 @@ internal sealed class RequireSubscribeObservable<T> : IObservable<T>
 /// path matching the workspace's hub address it also targets own; otherwise it
 /// targets the remote per-node hub via <c>workspace.GetRemoteStream&lt;MeshNode, MeshNodeReference&gt;</c>.
 /// Implements <see cref="IObservable{MeshNode}"/> so existing <c>.Where</c>/<c>.Select</c>
-/// read consumers keep working unchanged. Writers call <see cref="Update"/> — which
+/// read consumers keep working unchanged. Writers call <see cref="Update"/> â€” which
 /// returns an <see cref="IObservable{MeshNode}"/> that the caller MUST Subscribe to.
 /// The Update side effect runs on Subscribe; errors flow to <c>OnError</c>. No
 /// fire-and-forget at any callsite.
@@ -87,7 +87,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
         if (IsOwn)
             return _workspace.GetStream(new MeshNodeReference())
                 ?? throw new InvalidOperationException(
-                    "MeshNode stream is not available — the workspace has no MeshNodeReference reducer.");
+                    "MeshNode stream is not available â€” the workspace has no MeshNodeReference reducer.");
         return _workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
             new Address(_path!), new MeshNodeReference());
     }
@@ -112,7 +112,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     /// <summary>
     /// Applies <paramref name="update"/> to the targeted MeshNode and returns an
     /// <see cref="IObservable{MeshNode}"/> that emits the post-update node on the first
-    /// emission past the pre-update snapshot. <b>Caller MUST Subscribe</b> — the cold
+    /// emission past the pre-update snapshot. <b>Caller MUST Subscribe</b> â€” the cold
     /// observable's side effect runs on Subscribe, errors flow to <c>OnError</c>.
     /// <list type="bullet">
     ///   <item><description><b>Own</b> (no path or path == hub address): writes through
@@ -135,7 +135,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
         {
             var refStream = _workspace.GetStream(new MeshNodeReference())
                 ?? throw new InvalidOperationException(
-                    "MeshNode stream is not available — the workspace has no MeshNodeReference reducer.");
+                    "MeshNode stream is not available â€” the workspace has no MeshNodeReference reducer.");
 
             var dataSource = _workspace.DataContext.GetDataSourceForType(typeof(MeshNode));
             if (dataSource == null)
@@ -164,11 +164,11 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             // Resolve the target Path: an explicit _path wins, otherwise default to the
             // workspace's own hub path. The InstanceCollection holds the OWN MeshNode
             // alongside any satellite nodes the data source has loaded (e.g. NodeType
-            // hubs accumulate _Release/* satellites after each compile). Looking up by
+            // hubs accumulate Release/* satellites after each compile). Looking up by
             // terminal-segment Id alone is non-deterministic when multiple instances
             // share the same Id; match on the full Path so the OWN node is always
             // resolved correctly. When neither path is available, fall back to
-            // FirstOrDefault — only legacy single-instance shapes hit this branch.
+            // FirstOrDefault â€” only legacy single-instance shapes hit this branch.
             var targetPath = _path ?? _workspace.Hub.Address.Path;
 
             try
@@ -193,7 +193,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                     // Framework-driven Version: stamp the owning hub's monotonic
                     // logical clock so subscribers can distinguish a real change
                     // from a routing-stream echo. Lambdas no longer have to
-                    // remember to bump — the framework owns the clock.
+                    // remember to bump â€” the framework owns the clock.
                     updated = updated with { Version = _workspace.Hub.Version };
                     var newStore = store.Update(nameof(MeshNode), c => c.Update(updated.Id, updated));
                     return dsStream.ApplyChanges(new EntityStoreAndUpdates(newStore,
@@ -223,12 +223,12 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                 new Address(_path!), new MeshNodeReference());
 
             // Wait for the per-node hub's initial SubscribeResponse before
-            // issuing the Update — racing the Update against the handshake
+            // issuing the Update â€” racing the Update against the handshake
             // delivers a null current to the lambda and propagates the
             // cryptic "node not in persistence" error. The proper shape is:
             //
             //   1. Subscribe to the remote stream.
-            //   2. Wait for first non-null state (initial frame from owner) — this
+            //   2. Wait for first non-null state (initial frame from owner) â€” this
             //      is the moment ISynchronizationStream<MeshNode>.Current
             //      transitions from null to the persisted node value.
             //   3. Issue Update at that point; the handler then sees a
@@ -238,7 +238,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             //
             // A 30s outer timeout bounds the wait so a missing per-node hub
             // (NodeType has no HubConfiguration / routing doesn't resolve)
-            // throws a TimeoutException with the path embedded — proper
+            // throws a TimeoutException with the path embedded â€” proper
             // diagnostic, no silent null.
             long? baseline = null;
             bool updateIssued = false;
@@ -251,7 +251,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                         diagLogger?.LogDebug(
                             "[UpdateRemote] CHANGE-PRE-UPDATE hub={Hub} target={Path} version={Version} valueNull={ValueNull}",
                             _workspace.Hub.Address, _path, change.Version, change.Value is null);
-                        // Wait for first non-null initial state — that's
+                        // Wait for first non-null initial state â€” that's
                         // when the per-node hub has delivered the persisted
                         // node value via SubscribeResponse and SetCurrent
                         // has populated Current.
@@ -270,7 +270,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             // past baseline carries the post-update node back to the subscriber above.
                             //
                             // No-op handling: when update(current).Equals(current), SyncStream's
-                            // SetCurrent short-circuits (no OnNext) — we'd hang forever waiting for
+                            // SetCurrent short-circuits (no OnNext) â€” we'd hang forever waiting for
                             // a post-update emission that never fires. Detect that here, emit the
                             // unchanged node back synchronously, and return null so SetCurrent
                             // skips cleanly.
@@ -281,18 +281,18 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                     // Defensive: by construction this shouldn't fire (we waited
                                     // for non-null state above), but a race could in principle
                                     // wipe Current between the SubscribeResponse and this
-                                    // continuation. Surface a precise diagnostic — never silent.
+                                    // continuation. Surface a precise diagnostic â€” never silent.
                                     throw new InvalidOperationException(
                                         $"Race: Current became null between SubscribeResponse and Update for '{_path}'. " +
                                         "The synchronization stream's Current was non-null when Update was issued, but " +
-                                        "the handler observed null — likely a concurrent dispose or a reset event. " +
+                                        "the handler observed null â€” likely a concurrent dispose or a reset event. " +
                                         "Re-issue the Update or investigate why the stream was reset mid-write.");
                                 }
                                 var updated = update(current);
                                 if (Equals(updated, current))
                                 {
                                     diagLogger?.LogDebug(
-                                        "[UpdateRemote] NO-OP hub={Hub} target={Path} — lambda returned unchanged value; completing inline",
+                                        "[UpdateRemote] NO-OP hub={Hub} target={Path} â€” lambda returned unchanged value; completing inline",
                                         _workspace.Hub.Address, _path);
                                     observer.OnNext(current);
                                     observer.OnCompleted();
@@ -310,7 +310,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                 // and the patch never reaches the owner (symptom: remote
                                 // RequestedStatus patches silently lost). Keep ChangeType
                                 // Full / ChangedBy null so no other consumer's behaviour
-                                // shifts — only the missing payload is added.
+                                // shifts â€” only the missing payload is added.
                                 return new ChangeItem<MeshNode>(
                                     updated,
                                     /* ChangedBy */ null,
@@ -328,12 +328,12 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                         return;
                     }
 
-                    // Update was issued — the next non-null emission carries the
+                    // Update was issued â€” the next non-null emission carries the
                     // post-update value back from the per-node hub. We don't
                     // compare versions because the initial state arrives via the
                     // synced stream (mesh hub's version counter) while the post-
                     // update emission carries the per-node hub's OWN version
-                    // counter — incomparable sequences. The "updateIssued" flag
+                    // counter â€” incomparable sequences. The "updateIssued" flag
                     // is the gate; any non-null emission after it represents the
                     // applied update.
                     diagLogger?.LogDebug(
@@ -361,7 +361,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                     {
                         observer.OnError(new TimeoutException(
                             $"Update aborted: no initial state arrived for '{_path}' within 30s. " +
-                            "Likely causes — (1) RLS silently rejected the prior CreateNode (check the response's " +
+                            "Likely causes â€” (1) RLS silently rejected the prior CreateNode (check the response's " +
                             "Success/Error fields, not just the awaited result), (2) the path is misspelled / points " +
                             "at a namespace no NodeType claims, (3) the node was deleted between create and update, or " +
                             "(4) the per-node hub activated but its MeshDataSource didn't load the node from persistence " +
@@ -393,9 +393,9 @@ public static class MeshNodeStreamExtensions
     /// <para>
     /// The returned <see cref="MeshNodeStreamHandle"/> implements
     /// <see cref="IObservable{MeshNode}"/> so all existing read consumers (Where/Select
-    /// chains) keep working. Writers call <c>.Update(update)</c> on the same handle —
+    /// chains) keep working. Writers call <c>.Update(update)</c> on the same handle â€”
     /// returns <c>IObservable&lt;MeshNode&gt;</c> that callers MUST Subscribe to. No
-    /// fire-and-forget; subscribe with <c>(_ =&gt; …, ex =&gt; logger.LogWarning(ex, …))</c>.
+    /// fire-and-forget; subscribe with <c>(_ =&gt; â€¦, ex =&gt; logger.LogWarning(ex, â€¦))</c>.
     /// </para>
     /// </summary>
     public static MeshNodeStreamHandle GetMeshNodeStream(this IWorkspace workspace)
@@ -404,15 +404,15 @@ public static class MeshNodeStreamExtensions
     /// <summary>
     /// Reactive handle to a MeshNode at <paramref name="path"/>. Path-aware:
     /// <list type="number">
-    ///   <item><description><b>Own hub</b> — when <paramref name="path"/> matches the
+    ///   <item><description><b>Own hub</b> â€” when <paramref name="path"/> matches the
     ///     workspace's hub address: handle reads/writes via the local
     ///     <see cref="MeshNodeReference"/> reducer + data source primary stream.</description></item>
-    ///   <item><description><b>Remote</b> — subscribes to and writes through the owning
+    ///   <item><description><b>Remote</b> â€” subscribes to and writes through the owning
     ///     per-node hub via <c>workspace.GetRemoteStream&lt;MeshNode, MeshNodeReference&gt;</c>.</description></item>
     /// </list>
     /// Callers Subscribe (read) or call <c>.Update(update).Subscribe(...)</c> (write).
     /// If the node does not exist at <paramref name="path"/>, the per-node hub never
-    /// activates and the remote subscription does not emit — bound reads with
+    /// activates and the remote subscription does not emit â€” bound reads with
     /// <c>.Take(1).Timeout(...)</c> and treat absence as "not found".
     /// </summary>
     public static MeshNodeStreamHandle GetMeshNodeStream(this IWorkspace workspace, string path)
@@ -420,15 +420,15 @@ public static class MeshNodeStreamExtensions
 
     /// <summary>
     /// Forwarder that delegates to <see cref="MeshNodeStreamHandle.Update"/>. Returns
-    /// <see cref="IObservable{MeshNode}"/>; CALLERS MUST SUBSCRIBE — the cold observable's
+    /// <see cref="IObservable{MeshNode}"/>; CALLERS MUST SUBSCRIBE â€” the cold observable's
     /// side effect runs on Subscribe, errors flow to <c>OnError</c>.
     /// <para>
-    /// Prefer <c>workspace.GetMeshNodeStream().Update(update)</c> at new callsites — uniform
+    /// Prefer <c>workspace.GetMeshNodeStream().Update(update)</c> at new callsites â€” uniform
     /// read/write API on a single handle. This forwarder is kept so the existing 30+
     /// callsites can migrate incrementally.
     /// </para>
     /// </summary>
-    [Obsolete("Use workspace.GetMeshNodeStream(path?).Update(update).Subscribe(...) — uniform read/write API; callers must subscribe so writes can't be silently dropped.")]
+    [Obsolete("Use workspace.GetMeshNodeStream(path?).Update(update).Subscribe(...) â€” uniform read/write API; callers must subscribe so writes can't be silently dropped.")]
     public static IObservable<MeshNode> UpdateMeshNode(this IWorkspace workspace,
         Func<MeshNode, MeshNode> update,
         string? nodePath = null)
@@ -439,13 +439,13 @@ public static class MeshNodeStreamExtensions
     /// <summary>
     /// One-shot read of the <see cref="MeshNode"/> at <paramref name="path"/> via
     /// the owning per-node hub's <see cref="MeshNodeReference"/> reducer. Posts a
-    /// <see cref="GetDataRequest"/> + registers a callback — true request/response,
+    /// <see cref="GetDataRequest"/> + registers a callback â€” true request/response,
     /// no <c>SubscribeRequest</c>, no lingering subscription. Use this instead of
     /// <c>workspace.GetMeshNodeStream(path).Take(1)</c> for handlers / helpers /
     /// click actions that just need the current value once.
     ///
     /// <para>
-    /// Emits <c>null</c> on timeout, on routing failure (the node does not exist —
+    /// Emits <c>null</c> on timeout, on routing failure (the node does not exist â€”
     /// routing returns DeliveryFailure with NotFound; routing NEVER falls back to
     /// an ancestor, so a returned non-null node is always the requested path), or
     /// when the response carries no data. Failures during deserialisation also fall
@@ -455,7 +455,7 @@ public static class MeshNodeStreamExtensions
     ///
     /// <para>
     /// For a <b>live</b> single-node subscription that re-emits on every change,
-    /// use <see cref="GetMeshNodeStream(IWorkspace, string)"/> instead — and stay
+    /// use <see cref="GetMeshNodeStream(IWorkspace, string)"/> instead â€” and stay
     /// subscribed (no <c>.Take(1)</c>). See <c>Doc/Architecture/AsynchronousCalls.md</c>.
     /// </para>
     /// </summary>
@@ -466,7 +466,7 @@ public static class MeshNodeStreamExtensions
             var cts = new CancellationTokenSource(timeout ?? TimeSpan.FromSeconds(10));
             var emitted = 0;
             // Inner hub.Observe subscription tracker. Captured so the returned
-            // disposable can tear it down — without this, the outer CTS-timeout
+            // disposable can tear it down â€” without this, the outer CTS-timeout
             // path emits null and the outer observer disposes, but the inner
             // Subscribe keeps the hub-level callback registered, surfacing as
             // a "pending callback at dispose" Quiescing-watchdog failure.
@@ -507,7 +507,7 @@ public static class MeshNodeStreamExtensions
                                 }
                                 else
                                 {
-                                    // Unexpected response — node not found / no handler.
+                                    // Unexpected response â€” node not found / no handler.
                                     EmitOnce(null);
                                 }
                             }

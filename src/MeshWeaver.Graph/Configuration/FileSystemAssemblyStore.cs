@@ -35,6 +35,17 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
     }
 
     public IObservable<string> Put(string nodeTypePath, long version, byte[] assemblyBytes, byte[]? pdbBytes)
+        => PutWithLocation(nodeTypePath, version, assemblyBytes, pdbBytes)
+            .Select(loc => loc.LocalPath);
+
+    /// <summary>
+    /// Sentinel collection name returned by <see cref="PutWithLocation"/> on this store —
+    /// "local" denotes "the bytes live in the local filesystem cache only; cross-silo
+    /// readers must recompile rather than rely on this reference."
+    /// </summary>
+    public const string FileSystemCollectionName = "local";
+
+    public IObservable<AssemblyStoreLocation> PutWithLocation(string nodeTypePath, long version, byte[] assemblyBytes, byte[]? pdbBytes)
     {
         var dllPath = GetDllPath(nodeTypePath, version);
         var pdbPath = Path.ChangeExtension(dllPath, ".pdb");
@@ -47,7 +58,8 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
             File.WriteAllBytes(pdbPath, pdbBytes);
         logger.LogInformation(
             "Cached assembly at {DllPath} ({Bytes} bytes)", dllPath, assemblyBytes.Length);
-        return Observable.Return(dllPath);
+        var relativeContentPath = Path.GetRelativePath(rootDirectory, dllPath).Replace('\\', '/');
+        return Observable.Return(new AssemblyStoreLocation(dllPath, FileSystemCollectionName, relativeContentPath));
     }
 
     private string GetDllPath(string nodeTypePath, long version) =>

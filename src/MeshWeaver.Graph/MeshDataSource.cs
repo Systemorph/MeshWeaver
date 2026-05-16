@@ -376,7 +376,7 @@ public static class MeshDataSourceExtensions
 
     /// <summary>
     /// Best-effort: write a <c>Release</c> MeshNode at
-    /// <c>{nodeTypePath}/_Release/{version}</c> capturing the compiled assembly
+    /// <c>{nodeTypePath}/Release/{version}</c> capturing the compiled assembly
     /// path + the markdown release notes from the NodeType's
     /// <c>NodeTypeDefinition.ReleaseNotes</c> field. Returns the new release
     /// path on success, or <c>null</c> if the create couldn't be dispatched
@@ -408,18 +408,23 @@ public static class MeshDataSourceExtensions
             var notes = (pendingNode.Content as NodeTypeDefinition)?.ReleaseNotes;
 
             // Auto-stamp version: {yyyyMMddHHmmss}-{8charContentHash}. Sortable
-            // chronologically + unique per content. Using sha256-truncated of
-            // the assembly location keeps it stable for the same compile
-            // output. Future improvement: surface a user-supplied version on
-            // the click handler and prefer that when set.
-            var hashSrc = result.AssemblyLocation ?? Guid.NewGuid().ToString();
+            // chronologically + unique per content. Hash from the cross-silo
+            // durable reference (Collection/ContentPath) so the version is
+            // stable across silos — different replicas compiling the same
+            // version produce the same release version string. Falls back to
+            // the process-local AssemblyLocation when the producer hasn't
+            // populated the store fields yet (Null store path), and finally
+            // to a fresh GUID so the version is never null.
+            var hashSrc = (!string.IsNullOrEmpty(result.Collection) && !string.IsNullOrEmpty(result.ContentPath))
+                ? $"{result.Collection}/{result.ContentPath}"
+                : result.AssemblyLocation ?? Guid.NewGuid().ToString();
             using var sha = System.Security.Cryptography.SHA256.Create();
             var hash = Convert.ToBase64String(
                 sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(hashSrc)))
                 .Replace('+', '-').Replace('/', '_').TrimEnd('=')[..8];
             var version = $"{DateTime.UtcNow:yyyyMMddHHmmss}-{hash}";
 
-            var releaseNamespace = $"{nodeTypePath}/_Release";
+            var releaseNamespace = $"{nodeTypePath}/Release";
             var releasePath = $"{releaseNamespace}/{version}";
 
             var release = new NodeTypeRelease
@@ -435,6 +440,12 @@ public static class MeshDataSourceExtensions
                     .GetName().Version?.ToString() ?? "0.0.0",
                 CreatedAt = DateTimeOffset.UtcNow,
                 AssemblyPath = result.AssemblyLocation,
+                // Cross-silo durable assembly reference — denormalised from the
+                // IAssemblyStore upload that produced this compile. Other silos
+                // hydrate via these fields; AssemblyPath above is a local-process
+                // hint and lies as soon as the Release is read from a remote silo.
+                AssemblyCollection = result.Collection,
+                AssemblyContentPath = result.ContentPath,
                 Status = "Succeeded",
                 CompilationActivityPath = activityPath
             };
@@ -595,8 +606,9 @@ public static class MeshDataSourceExtensions
 
         // Read own MeshNode from the workspace (live, no extra storage hop). The
         // per-NodeType hub itself is the schema authority — its own NodeTypeDefinition
-        // carries AssemblyLocation; recover the HubConfiguration delegate by
-        // reflecting against the cached DLL (no Roslyn re-run).
+        // carries LatestAssemblyCollection + LatestAssemblyPath; resolve through
+        // IAssemblyStore to the local DLL and recover the HubConfiguration delegate
+        // by reflecting against the cached assembly (no Roslyn re-run).
         hub.GetWorkspace().GetMeshNodeStream()
             .Where(node => node?.Content is NodeTypeDefinition
                 || (node is not null && string.Equals(node.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal)))
@@ -604,29 +616,43 @@ public static class MeshDataSourceExtensions
             .Timeout(TimeSpan.FromSeconds(10))
             .SelectMany(node =>
             {
-                if (string.IsNullOrEmpty(node?.AssemblyLocation))
+                if (node?.Content is not NodeTypeDefinition def
+                    || string.IsNullOrEmpty(def.LatestAssemblyCollection)
+                    || string.IsNullOrEmpty(def.LatestAssemblyPath))
                     return Observable.Empty<GetDataResponse>();
 
-                return compilationService.GetConfigurationsFromExistingAssembly(node!)
-                    .Take(1)
-                    .SelectMany(result =>
+                var version = def.LastCompiledVersion ?? node.Version;
+                var store = string.Equals(def.LatestAssemblyCollection, FrameworkAssemblyStore.CollectionName, StringComparison.Ordinal)
+                    ? (IAssemblyStore)FrameworkAssemblyStore.Instance
+                    : hub.ServiceProvider.GetService<IAssemblyStore>() ?? NullAssemblyStore.Instance;
+
+                return store.TryGetAssemblyPath(node.Path, version)
+                    .SelectMany(localPath =>
                     {
-                        var matching = result?.NodeTypeConfigurations
-                            .FirstOrDefault(c => string.Equals(c.NodeType, hubPath, StringComparison.OrdinalIgnoreCase))
-                            ?? result?.NodeTypeConfigurations.FirstOrDefault();
-                        if (matching?.HubConfiguration == null)
+                        if (string.IsNullOrEmpty(localPath))
                             return Observable.Empty<GetDataResponse>();
 
-                        var dummyAddress = new Address($"$schema-probe/{Guid.NewGuid():N}");
-                        var subHub = hub.GetHostedHub(dummyAddress, c =>
-                            matching.HubConfiguration(c.AddData()));
-
-                        var schemaDelivery = subHub.Post(new GetDataRequest(new SchemaReference()))!;
-                        return subHub.Observe(schemaDelivery)
-                            .Select(d => d.Message)
-                            .OfType<GetDataResponse>()
+                        return compilationService.GetConfigurationsFromExistingAssembly(localPath!, hubPath)
                             .Take(1)
-                            .Finally(subHub.Dispose);
+                            .SelectMany(result =>
+                            {
+                                var matching = result?.NodeTypeConfigurations
+                                    .FirstOrDefault(c => string.Equals(c.NodeType, hubPath, StringComparison.OrdinalIgnoreCase))
+                                    ?? result?.NodeTypeConfigurations.FirstOrDefault();
+                                if (matching?.HubConfiguration == null)
+                                    return Observable.Empty<GetDataResponse>();
+
+                                var dummyAddress = new Address($"$schema-probe/{Guid.NewGuid():N}");
+                                var subHub = hub.GetHostedHub(dummyAddress, c =>
+                                    matching.HubConfiguration(c.AddData()));
+
+                                var schemaDelivery = subHub.Post(new GetDataRequest(new SchemaReference()))!;
+                                return subHub.Observe(schemaDelivery)
+                                    .Select(d => d.Message)
+                                    .OfType<GetDataResponse>()
+                                    .Take(1)
+                                    .Finally(subHub.Dispose);
+                            });
                     });
             })
             .Subscribe(
@@ -724,7 +750,7 @@ public static class MeshDataSourceExtensions
             ?.CreateLogger("MeshWeaver.Graph.HandleCreateRelease");
         // Ack first — the watcher's compile is async and the requester
         // shouldn't be blocked on Roslyn. Subscribers waiting for the Release
-        // MeshNode use ObserveQuery / GetMeshNodeStream on the _Release
+        // MeshNode use ObserveQuery / GetMeshNodeStream on the Release
         // namespace; that's the canonical "compile finished" signal.
         hub.Post(new CreateReleaseResponse(true),
             o => o.ResponseFor(request));

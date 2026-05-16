@@ -1,4 +1,4 @@
-using MeshWeaver.Application.Styles;
+﻿using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
@@ -8,8 +8,8 @@ namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
 /// Registers <c>Release</c> as a first-class NodeType. Release MeshNodes live
-/// at <c>{nodeTypePath}/_Release/{version}</c> and carry a
-/// <see cref="NodeTypeRelease"/> content payload — the compiled assembly path,
+/// at <c>{nodeTypePath}/Release/{version}</c> and carry a
+/// <see cref="NodeTypeRelease"/> content payload â€” the compiled assembly path,
 /// the markdown release notes, the source-input snapshot, and a link to the
 /// compile activity that produced them.
 ///
@@ -35,9 +35,7 @@ public static class ReleaseNodeType
     {
         Name = "Release",
         NodeType = MeshNode.NodeTypePath,   // this MeshNode IS a NodeType definition
-        IsSatelliteType = true,             // release nodes are satellites of their parent NodeType
         Icon = "/static/NodeTypeIcons/box.svg",
-        AssemblyLocation = typeof(ReleaseNodeType).Assembly.Location,
         ExcludeFromContext = new HashSet<string> { "create" }, // no UI create — only the compile watcher writes these
         Content = new NodeTypeDefinition
         {

@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -10,10 +10,10 @@ namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
 /// Represents a compiled release of a NodeType. Lives on disk as a MeshNode
-/// of type <c>Release</c> at <c>{nodeTypePath}/_Release/{version}</c>;
+/// of type <c>Release</c> at <c>{nodeTypePath}/Release/{version}</c>;
 /// immutable once committed.
 ///
-/// <para>Releases are first-class durable artefacts — the GUI's Create-Release
+/// <para>Releases are first-class durable artefacts â€” the GUI's Create-Release
 /// button triggers a compile activity, and on success the watcher writes a
 /// new Release MeshNode with the compiled <see cref="AssemblyPath"/> + the
 /// markdown <see cref="Notes"/> the user authored. Old releases stay on disk
@@ -50,7 +50,7 @@ public record NodeTypeRelease
     public string? Version { get; init; }
 
     /// <summary>
-    /// Author-written release notes — free-form markdown body shown at the top
+    /// Author-written release notes â€” free-form markdown body shown at the top
     /// of the Release detail view and in the release-history list. Sourced from
     /// <c>NodeTypeDefinition.ReleaseNotes</c> at compile time and copied here
     /// so the release is a self-contained snapshot (later edits to the
@@ -86,11 +86,38 @@ public record NodeTypeRelease
     /// <summary>
     /// Filesystem path of the compiled DLL for this release (set when the
     /// compile activity terminated <c>Succeeded</c>; null on failure).
-    /// Stable per <c>(NodeTypePath, Version)</c> — overwriting in place is
+    /// Stable per <c>(NodeTypePath, Version)</c> â€” overwriting in place is
     /// safe; deleting other versions' DLLs is forbidden because their ALCs
     /// may still be holding the file handles for live instances.
+    /// <para>
+    /// ðŸš¨ Local-process hint only â€” not cross-silo durable. For cross-silo
+    /// activation, use <see cref="AssemblyCollection"/> + <see cref="AssemblyContentPath"/>:
+    /// every silo fetches the bytes from the same content-collection blob, no
+    /// shared filesystem required.
+    /// </para>
     /// </summary>
     public string? AssemblyPath { get; init; }
+
+    /// <summary>
+    /// Content-collection name where this release's compiled assembly bytes
+    /// live (e.g. <c>"nodetype-cache"</c>). Pair with <see cref="AssemblyContentPath"/>
+    /// to fetch via <c>IContentCollection</c>. Set by the compile watcher
+    /// after uploading the assembly to the blob container.
+    /// <para>
+    /// This is the cross-silo durable assembly reference: every silo (Aspire
+    /// replica, Orleans grain host, monolith) sees the same blob and can
+    /// hydrate its local ALC on demand. <see cref="AssemblyPath"/> is the
+    /// process-local cache path the producing silo wrote; remote silos
+    /// download into their own cache via this content-collection reference.
+    /// </para>
+    /// </summary>
+    public string? AssemblyCollection { get; init; }
+
+    /// <summary>
+    /// Path inside <see cref="AssemblyCollection"/> where this release's
+    /// compiled assembly bytes live (e.g. <c>"TestData/PinType/v2-abc123.dll"</c>).
+    /// </summary>
+    public string? AssemblyContentPath { get; init; }
 
     /// <summary>
     /// Path to the corresponding <c>.pdb</c> file, when emitted alongside the
@@ -108,7 +135,7 @@ public record NodeTypeRelease
 
     /// <summary>
     /// Path to the <c>NodeTypeCompilation</c> activity that produced this
-    /// release — link to the live message log + diagnostics. Set even on
+    /// release â€” link to the live message log + diagnostics. Set even on
     /// failed releases so triagers can drill into the Roslyn output.
     /// </summary>
     public string? CompilationActivityPath { get; init; }

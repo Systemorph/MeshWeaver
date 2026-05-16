@@ -1,19 +1,19 @@
----
+﻿---
 Name: NodeType Release Redesign
 Category: Documentation
-Description: Design for first-class Release MeshNodes — replaces the implicit edit-then-invalidate-cache compile flow with explicit, timestamped, version-pinned Release nodes that own their own ALCs and DLLs on disk.
+Description: Design for first-class Release MeshNodes â€” replaces the implicit edit-then-invalidate-cache compile flow with explicit, timestamped, version-pinned Release nodes that own their own ALCs and DLLs on disk.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
 ---
 
-# NodeType Release Redesign — design proposal
+# NodeType Release Redesign â€” design proposal
 
 ## Why this exists
 
 The current NodeType compile flow is implicit and process-local:
 
-- User edits a `NodeType` or its `Source/` children → the change-feed fires
-  `NodeTypeService.InvalidateCache(nodeTypePath)` → in-memory dicts get cleared
-  → next access compiles → assembly loaded into a process-local `AssemblyLoadContext`.
+- User edits a `NodeType` or its `Source/` children â†’ the change-feed fires
+  `NodeTypeService.InvalidateCache(nodeTypePath)` â†’ in-memory dicts get cleared
+  â†’ next access compiles â†’ assembly loaded into a process-local `AssemblyLoadContext`.
 - "Refresh" relies on `AssemblyLoadContext.Unload()` + `GC.Collect()` releasing the
   file lock so `File.Delete` on the cached `.dll` succeeds. On Windows this is
   flaky: release-based ALCs are keyed by `release.Path` in `_loadContexts`, but
@@ -22,7 +22,7 @@ The current NodeType compile flow is implicit and process-local:
   ([CodeEditRecompileTest stays `[Skip]`-ed because of this](../../test/MeshWeaver.Hosting.Monolith.Test/CodeEditRecompileTest.cs)).
 - The user has no observable signal of "is this version compiling / did it
   succeed / what's the diagnostic output." Diagnostics are read on demand
-  through `GetCompilationError(nodeTypePath)` — a polled, in-memory dict.
+  through `GetCompilationError(nodeTypePath)` â€” a polled, in-memory dict.
 - Old assemblies are deleted on the way to a new compile; if the new compile
   fails we have nothing to fall back to.
 
@@ -33,7 +33,7 @@ The redesign treats releases as first-class, observable, versioned entities.
 ```mermaid
 graph LR
     A[User edits NodeType / Sources] --> B[Click 'Create Release']
-    B --> C[Release MeshNode created<br/>at NodeType/_Release/v123]
+    B --> C[Release MeshNode created<br/>at NodeType/Release/v123]
     C --> D[NodeTypeCompilation Activity<br/>fires automatically]
     D -->|Succeeded| E[Release.Status = Succeeded<br/>AssemblyPath set<br/>DLL persisted at version-stable path]
     D -->|Failed| F[Release.Status = Failed<br/>diagnostics on Activity.Messages<br/>no AssemblyPath]
@@ -42,7 +42,7 @@ graph LR
 ```
 
 Each Release is a `MeshNode` of type `Release` at
-`{nodeTypePath}/_Release/{version}`. Versions are user-supplied or auto-stamped
+`{nodeTypePath}/Release/{version}`. Versions are user-supplied or auto-stamped
 (timestamp + short hash). A Release owns its own `.dll` on disk; the disk
 path is stable per `(nodeTypePath, version)`. Releases accumulate; old ones
 stay around as history.
@@ -66,7 +66,7 @@ public sealed record Release : ActivityLog("NodeTypeRelease")
     public string? Version { get; init; }
 
     /// <summary>
-    /// Release notes — markdown body the author writes to describe the
+    /// Release notes â€” markdown body the author writes to describe the
     /// release. Surfaces in the UI release history list and at the top of
     /// the Release detail view.
     /// </summary>
@@ -92,18 +92,18 @@ public sealed record Release : ActivityLog("NodeTypeRelease")
     public string? PdbPath { get; init; }
 
     // Inherited from ActivityLog:
-    //   Status            — Pending → Compiling → Succeeded / Failed
-    //   RequestedStatus   — control plane (e.g. set to Cancelled to abort)
-    //   Messages          — Roslyn diagnostics during compile
-    //   Start, End        — when compile started / finished
-    //   ReturnValue       — JsonElement of the AssemblyPath (also set above)
+    //   Status            â€” Pending â†’ Compiling â†’ Succeeded / Failed
+    //   RequestedStatus   â€” control plane (e.g. set to Cancelled to abort)
+    //   Messages          â€” Roslyn diagnostics during compile
+    //   Start, End        â€” when compile started / finished
+    //   ReturnValue       â€” JsonElement of the AssemblyPath (also set above)
 }
 ```
 
 `Release` derives from `ActivityLog` so the existing
-[Activity Control Plane](ActivityControlPlane) machinery — observable
+[Activity Control Plane](ActivityControlPlane) machinery â€” observable
 progress via `workspace.GetMeshNodeStream(releasePath)`, cancellation via
-`RequestedStatus = Cancelled`, message streaming — works for free.
+`RequestedStatus = Cancelled`, message streaming â€” works for free.
 
 ## Lifecycle
 
@@ -124,7 +124,7 @@ Handler at the mesh hub:
 1. Reads the current `NodeTypeDefinition` + `Source/` content of `NodeTypePath`.
 2. Computes `ContentHash` over inputs.
 3. Creates a `Release` MeshNode at
-   `{NodeTypePath}/_Release/{Version ?? autostamp()}` with `Status = Compiling`.
+   `{NodeTypePath}/Release/{Version ?? autostamp()}` with `Status = Compiling`.
 4. Posts back `CreateReleaseResponse` with the release path immediately
    (just-start; matches `ScriptDispatch.StartScript` pattern).
 5. The Release's hub fires the compile asynchronously.
@@ -179,7 +179,7 @@ public NodeTypeConfiguration? GetCachedConfiguration(string nodeTypePath) =>
 ```csharp
 private IObservable<Release?> GetActiveReleaseStream(string nodeTypePath) =>
     meshService.ObserveQuery<MeshNode>(
-            MeshQueryRequest.FromQuery($"namespace:{nodeTypePath}/_Release nodeType:Release"))
+            MeshQueryRequest.FromQuery($"namespace:{nodeTypePath}/Release nodeType:Release"))
         .Select(change => change.Items
             .Select(n => n.Content as Release)
             .Where(r => r is { Status: ActivityStatus.Succeeded, AssemblyPath: not null })
@@ -199,27 +199,27 @@ a fix in a new release.
   `release.Path` (already does this, but loads from a version-stable folder
   rather than a hash-stable one).
 - DLL path: `{cacheDir}/{nodeTypePath-sanitized}/{version}/Release.dll`.
-  Same path forever for the same `(NodeTypePath, Version)` pair —
+  Same path forever for the same `(NodeTypePath, Version)` pair â€”
   re-running a compile against an existing version overwrites in place but
   never deletes a different version's DLL.
 - **Switching active release** (a new Release becomes the latest Succeeded):
   the previous release's ALC stays in `_loadContexts` until it's explicitly
   unloaded. `NodeTypeService` calls `cacheService.UnloadContext(prevRelease.Path)`
-  when the active release advances. The DLL on disk is **kept** — only the
+  when the active release advances. The DLL on disk is **kept** â€” only the
   ALC is disposed. New per-node hub activations bind to the new release's
   ALC; existing per-node hubs stay on the previous ALC until they're recycled.
-- `InvalidateCache(nodeTypePath)` is **deleted** — there's nothing to
+- `InvalidateCache(nodeTypePath)` is **deleted** â€” there's nothing to
   invalidate; releases are immutable and durable. The closest replacement is
   "create a new release" (which the user does explicitly).
 
 ### 5. UI surfaces
 
-- **Release history view** at `{nodeTypePath}/_Release/*` — a list of
+- **Release history view** at `{nodeTypePath}/Release/*` â€” a list of
   Releases with their Status, Version, CreatedAt, Notes preview.
-- **Release detail view** at `{nodeTypePath}/_Release/{version}` — full
+- **Release detail view** at `{nodeTypePath}/Release/{version}` â€” full
   notes (rendered markdown), full Activity log (Messages), download links
   for the DLL/PDB.
-- **"Create release" form** on the NodeType detail page — Version field
+- **"Create release" form** on the NodeType detail page â€” Version field
   (optional), Notes textarea (markdown), Submit button. On click, posts
   `CreateReleaseRequest`, navigates to the new Release's detail view, the
   user watches the compile happen in real time via the Activity Control Plane
@@ -233,32 +233,32 @@ the old path.
 
 | Phase | What | Risk |
 |---|---|---|
-| 0 | Add `Release` content type + `CreateReleaseRequest`/`Response` + handler. | Low — new code, no existing consumers. |
+| 0 | Add `Release` content type + `CreateReleaseRequest`/`Response` + handler. | Low â€” new code, no existing consumers. |
 | 1 | New `CompilationCacheService.GetOrCreateLoadContextForRelease` already exists; add `UnloadContext(release.Path)` callsite when active release advances (no new behaviour, just gives `NodeTypeService` a hook to call). | Low. |
-| 2 | Wire compile-Activity to the Release node (extend `NodeTypeCompilationActivity` from Step 4 of the Activity Control Plane plan to emit on a `Release` content node, not just a generic `Activity` node). | Medium — Activity Control Plane changes. |
-| 3 | Add `INodeTypeService.GetActiveReleaseStream` reactive read; default `GetCachedConfiguration` to consult releases when present, fall back to the existing in-memory cache when not. | Medium — read-path change, but additive (fallback preserves current behaviour). |
-| 4 | UI: Release history + detail + create-release form. | Medium — UI work. |
+| 2 | Wire compile-Activity to the Release node (extend `NodeTypeCompilationActivity` from Step 4 of the Activity Control Plane plan to emit on a `Release` content node, not just a generic `Activity` node). | Medium â€” Activity Control Plane changes. |
+| 3 | Add `INodeTypeService.GetActiveReleaseStream` reactive read; default `GetCachedConfiguration` to consult releases when present, fall back to the existing in-memory cache when not. | Medium â€” read-path change, but additive (fallback preserves current behaviour). |
+| 4 | UI: Release history + detail + create-release form. | Medium â€” UI work. |
 | 5 | Migration: existing NodeTypes without Releases are auto-released on first compile (back-compat shim writes a Release MeshNode with the auto-stamped version). | Medium. |
-| 6 | Delete `InvalidateCache`, `_compilationErrors`, `_compilingInProgress` from `NodeTypeService`. The whole "implicit invalidation" path goes. | High — fan-out across many call sites. |
+| 6 | Delete `InvalidateCache`, `_compilationErrors`, `_compilingInProgress` from `NodeTypeService`. The whole "implicit invalidation" path goes. | High â€” fan-out across many call sites. |
 
 `CodeEditRecompileTest` un-skips at phase 3: the test rewrites itself as
-"create V1 release → read V1 → create V2 release → read V2 marker", which
+"create V1 release â†’ read V1 â†’ create V2 release â†’ read V2 marker", which
 exercises the explicit-release path with no `InvalidateCache` call and no
 file-delete race.
 
 ## Open questions for review
 
 1. **Version naming default.** When user omits Version, what's the auto-stamp
-   format? Suggest `{yyyyMMddHHmmss}-{8charContentHash}` — sortable + unique.
+   format? Suggest `{yyyyMMddHHmmss}-{8charContentHash}` â€” sortable + unique.
 2. **Garbage collection.** Releases accumulate forever. Do we need a TTL /
    "keep last N" / explicit delete? Probably yes, but as a follow-up.
-3. **Cross-instance.** Releases are MeshNodes — they ride the standard
+3. **Cross-instance.** Releases are MeshNodes â€” they ride the standard
    replication. Compiled DLLs on disk are per-instance. A Release that
    succeeded on instance A still needs to compile on instance B when it
    gets there. Does the compile run idempotently per instance? (Probably
-   yes, since the inputs hash the same → same release ID → same target
-   path → already-compiled = no-op.)
-4. **Failed releases — keep or drop?** Proposal: keep (Status=Failed),
+   yes, since the inputs hash the same â†’ same release ID â†’ same target
+   path â†’ already-compiled = no-op.)
+4. **Failed releases â€” keep or drop?** Proposal: keep (Status=Failed),
    surface in history. The Notes + Activity messages explain why it failed,
    useful for triage.
 5. **Concurrent create-release.** Two users create a release for the same

@@ -118,7 +118,6 @@ public static class OrganizationNodeType
         Name = "Organization",
         NodeType = "NodeType",
         Icon = "/static/NodeTypeIcons/building.svg",
-        AssemblyLocation = typeof(OrganizationNodeType).Assembly.Location,
         Content = new NodeTypeDefinition { DefaultNamespace = "" },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
