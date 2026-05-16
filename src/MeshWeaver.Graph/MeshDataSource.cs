@@ -568,21 +568,55 @@ public static class MeshDataSourceExtensions
         var ownPath = hub.Address.Path;
         var delSub = notifier.Subscribe(notification =>
         {
-            if (notification.Kind != DataChangeKind.Deleted)
-                return;
             if (!string.Equals(notification.Path, ownPath, StringComparison.OrdinalIgnoreCase))
                 return;
-            cache.IsDeleted = true;
-            // Do NOT dispose the hub here. The Deleted notification fires from
-            // inside the DeleteNodeRequest handler's pipeline while a
-            // SubscribeRequest at the same address is still in flight
-            // (workspace.GetMeshNodeStream(path).Take(1)). Synchronous Dispose
-            // calls CancelExecution and orphans that callback — the test base's
-            // pending-callback detector then trips ("leaked Observe
-            // subscriptions"). The IsDeleted flag is the single source of
-            // truth read by the read pipeline; routing-cache eviction on
-            // re-create happens at Workspace._remoteStreamCache via
-            // IMeshChangeFeed.
+
+            switch (notification.Kind)
+            {
+                case DataChangeKind.Deleted:
+                    cache.IsDeleted = true;
+                    // Do NOT dispose — the Deleted notification fires from inside
+                    // DeleteNodeRequest's pipeline while an in-flight SubscribeRequest
+                    // is still being served. Synchronous Dispose would CancelExecution
+                    // and orphan that callback. IsDeleted is the single source of
+                    // truth read by the read pipeline.
+                    return;
+
+                case DataChangeKind.Created:
+                case DataChangeKind.Updated:
+                    // Mesh-hub HandleCreateNodeRequest / HandleUpdateNodeRequest
+                    // writes persistence directly, then fires this notification with
+                    // the saved entity. The per-node hub's workspace would otherwise
+                    // stay stale on the pre-write MeshNode — caught by
+                    // WorkspaceCacheEvictionTest.AfterRecreate. Push the new entity
+                    // through our own MeshNodeStream so the InstanceCollection
+                    // refreshes; subsequent SubscribeRequests serve the live state.
+                    var notifLog = hub.ServiceProvider.GetService<ILogger<MeshDataSource>>();
+                    if (notification.Entity is MeshNode newNode)
+                    {
+                        cache.IsDeleted = false;
+                        notifLog?.LogDebug("[OwnNotif] {Path} reseed from external {Kind} entity.Name={Name}",
+                            ownPath, notification.Kind, newNode.Name);
+                        try
+                        {
+                            hub.GetWorkspace().GetMeshNodeStream()
+                                .Update(_ => newNode)
+                                .Subscribe(
+                                    _ => notifLog?.LogDebug("[OwnNotif] {Path} reseed Update OnNext", ownPath),
+                                    ex => notifLog?.LogWarning(ex, "[OwnNotif] {Path} reseed Update FAILED", ownPath));
+                        }
+                        catch (Exception ex)
+                        {
+                            notifLog?.LogWarning(ex, "[OwnNotif] {Path} reseed Update threw synchronously", ownPath);
+                        }
+                    }
+                    else
+                    {
+                        notifLog?.LogDebug("[OwnNotif] {Path} got {Kind} but Entity is not a MeshNode (type={EntityType})",
+                            ownPath, notification.Kind, notification.Entity?.GetType().Name ?? "null");
+                    }
+                    return;
+            }
         });
         hub.RegisterForDisposal(delSub);
     }

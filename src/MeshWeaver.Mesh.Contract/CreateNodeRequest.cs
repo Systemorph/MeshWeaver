@@ -357,10 +357,15 @@ public record CreateOrUpdateNodeResponse(MeshNode? Node)
     /// <summary>Rejection reason if the upsert failed.</summary>
     public NodeUpsertRejectionReason? RejectionReason { get; init; }
 
+    /// <summary>Success response for a newly-created node.</summary>
     public static CreateOrUpdateNodeResponse Created(MeshNode node, ActivityLog? log = null)
         => new(node) { WasCreated = true, Log = log };
+
+    /// <summary>Success response for a node that already existed and was updated.</summary>
     public static CreateOrUpdateNodeResponse Updated(MeshNode node, ActivityLog? log = null)
         => new(node) { WasCreated = false, Log = log };
+
+    /// <summary>Failure response with an explanatory message and rejection reason.</summary>
     public static CreateOrUpdateNodeResponse Fail(string error,
         NodeUpsertRejectionReason reason = NodeUpsertRejectionReason.Unknown,
         ActivityLog? log = null)
@@ -370,11 +375,17 @@ public record CreateOrUpdateNodeResponse(MeshNode? Node)
 /// <summary>Rejection reasons for <see cref="CreateOrUpdateNodeRequest"/>.</summary>
 public enum NodeUpsertRejectionReason
 {
+    /// <summary>Unknown / unclassified rejection.</summary>
     Unknown,
+    /// <summary>The supplied node Path is invalid (empty, malformed, or otherwise unroutable).</summary>
     InvalidPath,
+    /// <summary>The supplied <c>NodeType</c> is unknown or not allowed at this path.</summary>
     InvalidNodeType,
+    /// <summary>A registered <c>INodeValidator</c> rejected the create/update.</summary>
     ValidationFailed,
+    /// <summary>The caller does not have permission to create or update at this path.</summary>
     Unauthorized,
+    /// <summary>The JSON Patch on an existing node failed to apply (e.g. test operation mismatch).</summary>
     PatchFailed,
 }
 

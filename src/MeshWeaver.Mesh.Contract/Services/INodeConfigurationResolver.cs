@@ -10,10 +10,12 @@ namespace MeshWeaver.Mesh.Services;
 public interface INodeConfigurationResolver
 {
     /// <summary>
-    /// Enriches a MeshNode with its NodeType's <see cref="MeshNode.HubConfiguration"/> +
-    /// <see cref="MeshNode.AssemblyLocation"/>. Triggers compilation if needed.
-    /// Returns a cold observable that emits exactly one enriched node — callers
-    /// Subscribe on the hub dispatcher; no <c>await</c>, no <c>.ToTask()</c>.
+    /// Enriches a MeshNode with its NodeType's <see cref="MeshNode.HubConfiguration"/>
+    /// (and, for dynamic types, the persisted assembly reference fields on
+    /// <c>NodeTypeDefinition.LatestAssembly{Collection,Path}</c>). Triggers
+    /// compilation if needed. Returns a cold observable that emits exactly one
+    /// enriched node — callers Subscribe on the hub dispatcher; no <c>await</c>,
+    /// no <c>.ToTask()</c>.
     /// </summary>
     IObservable<MeshNode> ResolveConfiguration(MeshNode node);
 }

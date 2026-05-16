@@ -24,11 +24,13 @@ public interface IMeshNodeHubFactory
 {
     /// <summary>
     /// Emits the node enriched with <see cref="MeshNode.HubConfiguration"/>
-    /// (and <see cref="MeshNode.AssemblyLocation"/> if compiled). Triggers the
-    /// reactive compilation chain when the node type has source code; composes
-    /// the resulting per-node hub configuration with the mesh's
-    /// <c>DefaultNodeHubConfiguration</c> so per-node hubs inherit cross-cutting
-    /// concerns (security pipeline, layout areas, etc.) registered globally.
+    /// (and, for dynamic NodeTypes, the persisted assembly reference fields on
+    /// <c>NodeTypeDefinition.LatestAssemblyCollection</c> /
+    /// <c>LatestAssemblyPath</c>). Triggers the reactive compilation chain when
+    /// the node type has source code; composes the resulting per-node hub
+    /// configuration with the mesh's <c>DefaultNodeHubConfiguration</c> so
+    /// per-node hubs inherit cross-cutting concerns (security pipeline, layout
+    /// areas, etc.) registered globally.
     /// </summary>
     IObservable<MeshNode> ResolveHubConfiguration(MeshNode node);
 }

@@ -344,7 +344,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         };
         await _persistence!.SaveNode(updatedNode, SetupJsonOptions).FirstAsync().ToTask(ct);
 
-        var persistedNode = await _persistence.GetNodeAsync("graph/story1", SetupJsonOptions, ct);
+        var persistedNode = await _persistence!.GetNodeAsync("graph/story1", SetupJsonOptions, ct);
         persistedNode.Should().NotBeNull();
         var content = persistedNode!.Content as TestStory;
         content.Should().NotBeNull();

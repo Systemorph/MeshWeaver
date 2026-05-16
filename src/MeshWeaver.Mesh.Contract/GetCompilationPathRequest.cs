@@ -8,9 +8,9 @@ namespace MeshWeaver.Mesh;
 /// Posted to a NodeType's per-node hub to ask "where's the compiled assembly +
 /// HubConfiguration delegate for this NodeType?". The owning hub answers from its
 /// per-version compile cache, compiles on miss, or short-circuits when the
-/// MeshNode already carries <see cref="MeshNode.AssemblyLocation"/> +
-/// <see cref="MeshNode.HubConfiguration"/> (the static-provider /
-/// <c>AddMeshNodes</c> case).
+/// MeshNode already carries <see cref="MeshNode.HubConfiguration"/> + the
+/// persisted <c>NodeTypeDefinition.LatestAssembly{Collection,Path}</c> fields
+/// (the static-provider / <c>AddMeshNodes</c> case).
 ///
 /// <para>
 /// Use <paramref name="Version"/> to pin to a specific historical
