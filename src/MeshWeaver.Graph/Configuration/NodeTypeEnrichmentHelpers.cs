@@ -126,6 +126,53 @@ internal static class NodeTypeEnrichmentHelpers
         // creating the instance — otherwise the activation reads a pre-write
         // snapshot. See CodeEditRecompileTest for the canonical wait shape
         // (Mesh.GetWorkspace().GetMeshNodeStream(path).Where(...).Take(1)).
+        // Wrap the slow path in Observable.Defer so the eager call to
+        // meshHub.GetWorkspace() (which throws synchronously if IWorkspace
+        // isn't registered — e.g. the mocked IMessageHub in
+        // NodeTypeEnrichmentDoubleCallTest) surfaces as an OnError that the
+        // outer .Catch handler turns into a compilation-error overlay,
+        // instead of bubbling up before the caller can compose .Catch.
+        return Observable.Defer(() => BuildSlowPath(
+            meshHub, meshConfiguration, compilationService, node, nodeType, logger))
+            .Catch<MeshNode, Exception>(ex =>
+            {
+                // Surface at Warning. The previous Debug level hid the prod
+                // root cause behind the operator-visible "compilation error"
+                // overlay: every per-instance hub of an unsettled NodeType
+                // logged nothing while clients saw "no Overview". Warning
+                // makes the cause visible in App Insights at production
+                // log levels.
+                logger?.LogWarning(ex,
+                    "EnrichWithNodeType slow path for '{NodeType}' faulted ({ExceptionType}) — applying compilation-error overlay for '{InstancePath}'",
+                    nodeType, ex.GetType().Name, node.Path);
+                // Build a user-actionable message — TimeoutException's bare
+                // "The operation has timed out." gives the operator nothing
+                // to act on. Tell them which NodeType, which budget, and
+                // where to look.
+                var userMessage = ex is TimeoutException
+                    ? $"NodeType '{nodeType}' compile did not settle within {SlowPathTimeout.TotalSeconds:0}s.\n"
+                      + $"Instance '{node.Path}' is rendering this fallback. Check the NodeType's source code, "
+                      + $"its Code nodes' compilation diagnostics, or trigger a fresh release."
+                    : $"NodeType '{nodeType}' enrichment failed for instance '{node.Path}': {ex.Message}";
+                return Observable.Return(
+                    WithCompilationErrorOverlay(node, nodeType, userMessage, meshConfiguration));
+            });
+    }
+
+    /// <summary>
+    /// Slow path body — extracted so the entire body (including the eager
+    /// <see cref="WorkspaceExtensions.GetWorkspace"/> resolution) sits inside
+    /// the surrounding <c>Observable.Defer</c>, turning synchronous setup
+    /// failures into observable OnError emissions.
+    /// </summary>
+    private static IObservable<MeshNode> BuildSlowPath(
+        IMessageHub meshHub,
+        MeshConfiguration meshConfiguration,
+        IMeshNodeCompilationService? compilationService,
+        MeshNode node,
+        string nodeType,
+        ILogger? logger)
+    {
         var typeStream = meshHub.GetWorkspace().GetMeshNodeStream(nodeType);
 
         // Self-heal: stale `Status=Ok + null LatestAssembly{Collection,Path}`
@@ -186,30 +233,7 @@ internal static class NodeTypeEnrichmentHelpers
             .Timeout(SlowPathTimeout)
             .Finally(healSub.Dispose)
             .SelectMany(typeNode => ApplyStreamResult(
-                typeNode, node, nodeType, meshConfiguration, compilationService, meshHub, logger))
-            .Catch<MeshNode, Exception>(ex =>
-            {
-                // Surface at Warning. The previous Debug level hid the prod
-                // root cause behind the operator-visible "compilation error"
-                // overlay: every per-instance hub of an unsettled NodeType
-                // logged nothing while clients saw "no Overview". Warning
-                // makes the cause visible in App Insights at production
-                // log levels.
-                logger?.LogWarning(ex,
-                    "EnrichWithNodeType slow path for '{NodeType}' faulted ({ExceptionType}) — applying compilation-error overlay for '{InstancePath}'",
-                    nodeType, ex.GetType().Name, node.Path);
-                // Build a user-actionable message — TimeoutException's bare
-                // "The operation has timed out." gives the operator nothing
-                // to act on. Tell them which NodeType, which budget, and
-                // where to look.
-                var userMessage = ex is TimeoutException
-                    ? $"NodeType '{nodeType}' compile did not settle within {SlowPathTimeout.TotalSeconds:0}s.\n"
-                      + $"Instance '{node.Path}' is rendering this fallback. Check the NodeType's source code, "
-                      + $"its Code nodes' compilation diagnostics, or trigger a fresh release."
-                    : $"NodeType '{nodeType}' enrichment failed for instance '{node.Path}': {ex.Message}";
-                return Observable.Return(
-                    WithCompilationErrorOverlay(node, nodeType, userMessage, meshConfiguration));
-            });
+                typeNode, node, nodeType, meshConfiguration, compilationService, meshHub, logger));
     }
 
     /// <summary>
