@@ -1422,40 +1422,46 @@ public static class ThreadExecution
 
     /// <summary>
     /// Loads prior user-message ThreadMessage cells for <paramref name="threadPath"/>
-    /// via <see cref="IMeshQueryCore.ObserveQuery{T}"/> — single observable, no
-    /// per-message GetDataRequest fan-out, no CombineLatest hang. Filters to
-    /// user-role cells, excludes <paramref name="excludeMessageId"/> (the current
-    /// submission, whose text already comes via <c>request.UserMessageText</c>),
-    /// and orders by timestamp. Called only on AgentChatClient cache miss
-    /// (post-restart resume). The returned list is fed straight into the
-    /// AgentChatClient constructor.
+    /// by walking the live thread's <c>Messages</c> list and resolving each cell
+    /// via <c>GetMeshNodeStream</c> (per-node hub) — the authoritative live read
+    /// path. Filters to user-role cells, excludes <paramref name="excludeMessageId"/>
+    /// (the current submission, whose text already comes via
+    /// <c>request.UserMessageText</c>), and orders by timestamp. Called only on
+    /// AgentChatClient cache miss (post-restart resume). The returned list is fed
+    /// straight into the AgentChatClient constructor.
     /// </summary>
     private static IObservable<IReadOnlyList<ThreadMessage>> LoadPriorUserMessagesFromMesh(
         IMessageHub hub, string threadPath, string? excludeMessageId, ILogger<AgentChatClient> logger)
     {
-        var queryCore = hub.ServiceProvider.GetService<IMeshQueryCore>();
-        if (queryCore == null)
-        {
-            logger.LogWarning("[ThreadExec] LoadPriorUserMessages: no IMeshQueryCore on {Hub} — empty",
-                hub.Address);
-            return Observable.Return<IReadOnlyList<ThreadMessage>>(Array.Empty<ThreadMessage>());
-        }
-
-        var request = MeshQueryRequest.FromQuery(
-            $"path:{threadPath} scope:children nodeType:{ThreadMessageNodeType.NodeType}",
-            MeshWeaver.Mesh.Security.WellKnownUsers.System);
-
-        return queryCore.ObserveQuery<MeshNode>(request, hub.JsonSerializerOptions)
-            .Where(c => c.ChangeType == QueryChangeType.Initial)
+        var workspace = hub.GetWorkspace();
+        return workspace.GetMeshNodeStream(threadPath)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(10))
-            .Select(change => (IReadOnlyList<ThreadMessage>)change.Items
-                .Where(n => excludeMessageId == null || n.Id != excludeMessageId)
-                .Select(n => n.Content as ThreadMessage)
-                .Where(m => m != null && string.Equals(m.Role, "user", StringComparison.OrdinalIgnoreCase))
-                .OrderBy(m => m!.Timestamp)
-                .Cast<ThreadMessage>()
-                .ToList())
+            .Select(threadNode => threadNode.Content as MeshThread)
+            .Where(t => t != null)
+            .SelectMany(thread =>
+            {
+                var cellIds = thread!.Messages
+                    .Where(id => excludeMessageId == null || id != excludeMessageId)
+                    .ToList();
+                if (cellIds.Count == 0)
+                    return Observable.Return<IReadOnlyList<ThreadMessage>>(Array.Empty<ThreadMessage>());
+
+                var cellLookups = cellIds.Select(id =>
+                    workspace.GetMeshNodeStream($"{threadPath}/{id}")
+                        .Take(1)
+                        .Timeout(TimeSpan.FromSeconds(5))
+                        .Catch<MeshNode, Exception>(_ => Observable.Empty<MeshNode>()));
+
+                return cellLookups.Concat()
+                    .ToList()
+                    .Select(nodes => (IReadOnlyList<ThreadMessage>)nodes
+                        .Select(n => n.Content as ThreadMessage)
+                        .Where(m => m != null && string.Equals(m.Role, "user", StringComparison.OrdinalIgnoreCase))
+                        .OrderBy(m => m!.Timestamp)
+                        .Cast<ThreadMessage>()
+                        .ToList());
+            })
             .Catch<IReadOnlyList<ThreadMessage>, Exception>(ex =>
             {
                 logger.LogWarning(ex,

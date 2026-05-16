@@ -405,24 +405,34 @@ public static class ThreadLayoutAreas
     /// <summary>
     /// Renders a compact thumbnail for thread nodes in catalogs.
     /// Shows title, last activity time, and message preview.
-    /// Queries child ThreadMessage nodes for message count and preview.
+    /// Walks the live thread's <see cref="MeshThread.Messages"/> list and
+    /// resolves each cell via <c>GetMeshNodeStream</c> — authoritative live
+    /// content, no stale-catalog read.
     /// </summary>
     public static IObservable<UiControl?> Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
+        var workspace = host.Workspace;
 
-        // Live observable of child ThreadMessage nodes — auto-updates on add/edit/remove.
-        var messagesStream = meshQuery == null
-            ? Observable.Return<IReadOnlyList<MeshNode>>(Array.Empty<MeshNode>())
-            : meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                    $"namespace:{hubPath} nodeType:{ThreadMessageNodeType.NodeType} sort:Timestamp-asc"))
-                .Select(change => (IReadOnlyList<MeshNode>)change.Items)
-                .Catch<IReadOnlyList<MeshNode>, Exception>(_ => Observable.Return((IReadOnlyList<MeshNode>)Array.Empty<MeshNode>()));
+        return workspace.GetMeshNodeStream()
+            .SelectMany(node =>
+            {
+                var thread = node?.Content as MeshThread;
+                var cellIds = thread?.Messages ?? ImmutableList<string>.Empty;
+                if (cellIds.Count == 0)
+                    return Observable.Return((node, (IReadOnlyList<MeshNode>)Array.Empty<MeshNode>()));
 
-        return host.Workspace.GetMeshNodeStream()
-            .CombineLatest(messagesStream, (node, messageNodes) =>
-                BuildThumbnail(node, hubPath, messageNodes ?? Array.Empty<MeshNode>()));
+                var cellLookups = cellIds.Select(id =>
+                    workspace.GetMeshNodeStream($"{hubPath}/{id}")
+                        .Take(1)
+                        .Timeout(TimeSpan.FromSeconds(5))
+                        .Catch<MeshNode, Exception>(_ => Observable.Empty<MeshNode>()));
+
+                return cellLookups.Concat()
+                    .ToList()
+                    .Select(cells => (node, (IReadOnlyList<MeshNode>)cells));
+            })
+            .Select(t => BuildThumbnail(t.node, hubPath, t.Item2));
     }
 
     private static UiControl BuildThumbnail(MeshNode? node, string hubPath, IReadOnlyList<MeshNode> messageNodes)

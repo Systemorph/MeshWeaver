@@ -2,7 +2,6 @@ using System.Reactive.Linq;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -11,50 +10,46 @@ namespace MeshWeaver.Blazor.Portal.Infrastructure;
 
 /// <summary>
 /// Helper for managing VUser (virtual/anonymous user) nodes.
-/// Uses unprotected storage for existence checks and ImpersonateAsHub for creation.
 /// </summary>
 public static class VUserHelper
 {
     /// <summary>
-    /// Ensures a VUser node exists for the given virtual user ID.
-    /// Uses unprotected storage read for existence check (no security overhead),
-    /// and ImpersonateAsHub for creation (VUserAccessRule allows portal namespace).
+    /// Ensures a VUser node exists for the given virtual user ID. Posts a
+    /// <see cref="CreateNodeRequest"/> with skip-on-exists semantics — the
+    /// handler rejects with <see cref="NodeCreationRejectionReason.NodeAlreadyExists"/>
+    /// when the node is already there, which we treat as success. No
+    /// existence query, no race.
     /// </summary>
     public static void EnsureVUserNode(PortalApplication portalApp, string virtualUserId, ILogger? logger = null)
     {
         var hub = portalApp.Hub;
-        var queryCore = hub.ServiceProvider.GetRequiredService<IMeshQueryCore>();
         var path = $"VUser/{virtualUserId}";
+        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
 
-        // Existence check via IMeshQueryCore.ObserveQuery — fire-and-forget;
-        // subscribe creates the node on the very first emission if no rows.
-        queryCore.ObserveQuery<MeshNode>(
-                MeshQueryRequest.FromQuery($"path:{path}"),
-                hub.JsonSerializerOptions)
-            .Take(1)
-            .Subscribe(
-                change =>
-                {
-                    if (change.Items.Count > 0)
-                        return; // exists
+        var userNode = new MeshNode(virtualUserId, "VUser")
+        {
+            Name = "Guest",
+            NodeType = "VUser",
+            State = MeshNodeState.Active,
+            Content = new AccessObject { IsVirtual = true }
+        };
 
-                    var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
-                    using (accessService.ImpersonateAsHub(hub))
+        using (accessService.ImpersonateAsHub(hub))
+        {
+            hub.Observe<CreateNodeResponse>(new CreateNodeRequest(userNode))
+                .FirstAsync()
+                .Subscribe(
+                    delivery =>
                     {
-                        var userNode = new MeshNode(virtualUserId, "VUser")
-                        {
-                            Name = "Guest",
-                            NodeType = "VUser",
-                            State = MeshNodeState.Active,
-                            Content = new AccessObject { IsVirtual = true }
-                        };
-
-                        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-                        meshService.CreateNode(userNode).Subscribe(
-                            _ => logger?.LogDebug("VirtualUser: Created VUser node {Path}", path),
-                            ex => logger?.LogWarning(ex, "VirtualUser: Failed to create VUser node {Path}", path));
-                    }
-                },
-                ex => logger?.LogWarning(ex, "VirtualUser: existence check failed for {Path}", path));
+                        var resp = delivery.Message;
+                        if (resp.Success)
+                            logger?.LogDebug("VirtualUser: Created VUser node {Path}", path);
+                        else if (resp.RejectionReason == NodeCreationRejectionReason.NodeAlreadyExists)
+                            logger?.LogDebug("VirtualUser: VUser node {Path} already exists", path);
+                        else
+                            logger?.LogWarning("VirtualUser: Failed to create VUser node {Path}: {Error}", path, resp.Error);
+                    },
+                    ex => logger?.LogWarning(ex, "VirtualUser: Failed to ensure VUser node {Path}", path));
+        }
     }
 }
