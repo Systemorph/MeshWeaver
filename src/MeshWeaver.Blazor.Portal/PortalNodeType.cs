@@ -1,4 +1,4 @@
-using MeshWeaver.AI;
+﻿using MeshWeaver.AI;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Graph.Security;
 using MeshWeaver.Mesh;
@@ -41,7 +41,6 @@ public static class PortalNodeType
         Name = "Portal Session",
         IsSatelliteType = true,
         ExcludeFromContext = new HashSet<string> { "search", "create" },
-        AssemblyLocation = typeof(PortalNodeType).Assembly.Location,
         HubConfiguration = config =>
         {
             config.TypeRegistry.AddAITypes();

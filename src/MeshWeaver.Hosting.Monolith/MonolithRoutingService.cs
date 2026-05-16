@@ -116,26 +116,23 @@ internal class MonolithRoutingService(
         return hubFactory.ResolveHubConfiguration(node)
             .Select(enriched =>
             {
-                logger.LogDebug("[ROUTE-CREATE] ResolveHubConfiguration returned for {Address}: HubConfig={HasHubConfig}, AssemblyLocation={AssemblyLocation}",
-                    address, enriched.HubConfiguration is not null, enriched.AssemblyLocation ?? "(null)");
+                logger.LogDebug("[ROUTE-CREATE] ResolveHubConfiguration returned for {Address}: HubConfig={HasHubConfig}",
+                    address, enriched.HubConfiguration is not null);
 
                 if (enriched.HubConfiguration is null)
                     throw new InvalidOperationException(
                         $"No hub configuration for node '{enriched.Path}' (NodeType: {enriched.NodeType}). " +
                         "Ensure the node type is registered via AddGraph() or has a HubConfiguration set.");
 
-                // Enter the ALC for the dynamic assembly so that type resolution during
-                // hub activation (DI setup + HubConfiguration lambda) picks up types from
-                // the correct per-release ALC rather than defaulting to the app domain.
+                // No explicit ALC scope. The dynamic assembly is already loaded
+                // into a per-release AssemblyLoadContext by
+                // CompilationCacheService.GetOrCreateLoadContextForPath during
+                // enrichment, and the HubConfiguration delegate's closure
+                // captured types from that ALC — they resolve correctly when
+                // the delegate is invoked. EnterContextualReflection mattered
+                // for string-based Type.GetType lookups, which the canonical
+                // DI / lambda composition patterns don't use.
                 IDisposable? alcScope = null;
-                if (!string.IsNullOrEmpty(enriched.AssemblyLocation)
-                    && !enriched.AssemblyLocation.StartsWith("memory://", StringComparison.Ordinal))
-                {
-                    var alc = AssemblyLoadContext.All.FirstOrDefault(a =>
-                        a.Assemblies.Any(asm =>
-                            string.Equals(asm.Location, enriched.AssemblyLocation, StringComparison.OrdinalIgnoreCase)));
-                    alcScope = alc?.EnterContextualReflection();
-                }
 
                 try
                 {

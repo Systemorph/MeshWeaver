@@ -49,6 +49,15 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// </summary>
     protected static readonly TimeSpan TestQuiesceTimeout = TimeSpan.FromMilliseconds(500);
 
+    /// <summary>
+    /// Process-unique filesystem root for the <see cref="FileSystemAssemblyStore"/>
+    /// the monolith test base registers below. Per-pid so parallel xUnit assemblies
+    /// don't clash on the same DLL files; under the temp directory so OS cleanup
+    /// reclaims them at machine reboot.
+    /// </summary>
+    private static readonly string AssemblyStoreRoot =
+        Path.Combine(Path.GetTempPath(), $"meshweaver-test-assembly-store-{Environment.ProcessId}");
+
     protected MeshBuilder ConfigureMeshBase(MeshBuilder builder)
         => builder
             .UseMonolithMesh()
@@ -56,6 +65,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             .AddRowLevelSecurity()
             .AddGraph()
             .AddMeshNodes(new MeshNode(TestPartition) { Name = "Test Data", NodeType = "Markdown" })
+            .ConfigureServices(s => s.AddFileSystemAssemblyStore(AssemblyStoreRoot))
             .ConfigureHub(c => c.WithQuiesceTimeout(TestQuiesceTimeout));
 
     /// <summary>

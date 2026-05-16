@@ -186,8 +186,15 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 
         try
         {
-            if (node.AssemblyLocation is not null)
-                Assembly.LoadFrom(node.AssemblyLocation);
+            // No explicit Assembly.LoadFrom here — by the time we arrive,
+            // either (a) node.HubConfiguration is a static delegate captured by
+            // an in-process provider (framework assembly already in the default
+            // ALC), or (b) NodeTypeEnrichmentHelpers ran the dynamic path which
+            // resolved the bytes through IAssemblyStore and loaded them into a
+            // dedicated ALC via CompilationCacheService.GetOrCreateLoadContextForPath
+            // while extracting the HubConfiguration delegate. Either way the
+            // delegate is callable; a top-of-AppDomain LoadFrom would only
+            // duplicate the assembly across two ALCs.
 
             if (node.HubConfiguration is null)
             {
@@ -385,11 +392,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
             && meshConfig.Nodes.TryGetValue(staticNode.NodeType, out var nodeTypeNode)
             && nodeTypeNode.HubConfiguration is not null)
         {
-            return staticNode with
-            {
-                HubConfiguration = nodeTypeNode.HubConfiguration,
-                AssemblyLocation = nodeTypeNode.AssemblyLocation ?? staticNode.AssemblyLocation
-            };
+            return staticNode with { HubConfiguration = nodeTypeNode.HubConfiguration };
         }
 
         return staticNode;

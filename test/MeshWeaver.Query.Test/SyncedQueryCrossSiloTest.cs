@@ -358,7 +358,9 @@ public class SyncedQueryCrossSiloTest(ITestOutputHelper output)
         var settledDef = settled!.Content as NodeTypeDefinition;
         settledDef!.CompilationStatus.Should().Be(CompilationStatus.Ok,
             $"compile must succeed for valid C# source. Error: {settledDef.CompilationError}");
-        settled.AssemblyLocation.Should().NotBeNullOrEmpty(
-            "Ok status must come with an AssemblyLocation written back by the watcher");
+        settledDef.LatestAssemblyPath.Should().NotBeNullOrEmpty(
+            "Ok status must come with a LatestAssemblyPath stamped by the compile watcher");
+        settledDef.LatestAssemblyCollection.Should().NotBeNullOrEmpty(
+            "Ok status must come with a LatestAssemblyCollection naming the IAssemblyStore the bytes live in");
     }
 }

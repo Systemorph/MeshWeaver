@@ -181,7 +181,13 @@ internal static class NodeTypeCompileActivityHandler
                                 LatestReleasePath = newReleasePath ?? def.LatestReleasePath,
                                 ReleaseNotes = newReleasePath is not null ? null : def.ReleaseNotes,
                                 CompiledSources = outcome.Result!.CompiledSources
-                                    ?? System.Collections.Immutable.ImmutableDictionary<string, long>.Empty
+                                    ?? System.Collections.Immutable.ImmutableDictionary<string, long>.Empty,
+                                // Cross-silo durable assembly reference — denormalised
+                                // from the IAssemblyStore upload in CompileAndGetConfigurations.
+                                // Falls back to def's existing values when the producer
+                                // didn't populate them (Null store).
+                                LatestAssemblyCollection = outcome.Result.Collection ?? def.LatestAssemblyCollection,
+                                LatestAssemblyPath = outcome.Result.ContentPath ?? def.LatestAssemblyPath
                             };
                         var errorSummary = outcome.Error?.Message
                             ?? (outcome.Result?.Log?.Errors() is { Count: > 0 } errs
@@ -196,8 +202,15 @@ internal static class NodeTypeCompileActivityHandler
                         };
                     }, logger, parentPath,
                        ok ? "Ok" : "Error",
-                       extraAssemblyLocation: ok ? outcome.Result!.AssemblyLocation : null,
-                       extraLastCompiledVersion: ok);
+                       // Stamp LastCompiledVersion to MATCH the version the IAssemblyStore
+                       // upload used as its key (set by UploadToStoreIfNeeded in
+                       // MeshNodeCompilationService — the captured pendingNode.Version
+                       // from when the compile was kicked off). Using `curr.Version`
+                       // at write-back time would point activation at a different version
+                       // than the one the store actually has → TryGetAssemblyPath miss
+                       // → activation falls back to default config and IWorkspace fails
+                       // to activate (no AddData). Found via CodeEditRecompileTest.
+                       compiledVersion: ok ? outcome.Result?.Version : null);
                 },
                 ex => logger?.LogWarning(ex, "[NTCA] compile chain faulted for {ParentPath}", parentPath));
 
@@ -209,10 +222,10 @@ internal static class NodeTypeCompileActivityHandler
     /// parent MeshNode through the shared <see cref="INodeTypeStreamCache"/> —
     /// the ONE cached handle every reader of the parent stream shares, so the
     /// write actually lands and propagates (an ad-hoc remote stream would be a
-    /// lost separate instance). <paramref name="extraAssemblyLocation"/> (when
-    /// non-null) is written to <see cref="MeshNode.AssemblyLocation"/>;
-    /// <paramref name="extraLastCompiledVersion"/> stamps <c>LastCompiledVersion</c>
-    /// from the current MeshNode version.
+    /// lost separate instance). When <paramref name="compiledVersion"/> is
+    /// non-null, <c>LastCompiledVersion</c> is stamped with that value — the
+    /// captured snapshot version that the IAssemblyStore upload used as its
+    /// key, so activation's later <c>TryGetAssemblyPath</c> finds the bytes.
     /// </summary>
     private static void WriteToParent(
         INodeTypeStreamCache streamCache,
@@ -221,21 +234,16 @@ internal static class NodeTypeCompileActivityHandler
         ILogger? logger,
         string parentPathForLog,
         string transitionTag,
-        string? extraAssemblyLocation = null,
-        bool extraLastCompiledVersion = false)
+        long? compiledVersion = null)
     {
         streamCache.Update(parentPath, curr =>
             {
                 if (curr?.Content is not NodeTypeDefinition def)
                     return curr!;
                 var nextDef = transform(def);
-                if (extraLastCompiledVersion)
-                    nextDef = nextDef with { LastCompiledVersion = curr.Version };
-                return curr with
-                {
-                    Content = nextDef,
-                    AssemblyLocation = extraAssemblyLocation ?? curr.AssemblyLocation
-                };
+                if (compiledVersion is { } v)
+                    nextDef = nextDef with { LastCompiledVersion = v };
+                return curr with { Content = nextDef };
             })
             .Subscribe(
                 _ => { },

@@ -23,7 +23,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// <list type="number">
 ///   <item>Clicking Create Release (flipping <c>CompilationStatus = Pending</c>
 ///     with <c>ReleaseNotes</c> set) results in a <c>Release</c> MeshNode at
-///     <c>{nodeTypePath}/_Release/{version}</c>.</item>
+///     <c>{nodeTypePath}/Release/{version}</c>.</item>
 ///   <item>The Release carries the markdown notes the user wrote on the
 ///     NodeType.</item>
 ///   <item>The NodeType's <c>LatestReleasePath</c> points at the new release.</item>
@@ -110,7 +110,7 @@ public class NodeTypeReleaseTest(ITestOutputHelper output) : MonolithMeshTestBas
         //    "active" pointer can race). What matters for this test's invariant
         //    is that the user-authored notes were captured into a real Release
         //    MeshNode.
-        var releaseNamespace = $"{NodeTypePath}/_Release";
+        var releaseNamespace = $"{NodeTypePath}/Release";
         var release = await meshService
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{releaseNamespace} nodeType:Release"))

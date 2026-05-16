@@ -234,7 +234,6 @@ public class ApprovalAndNotificationTest
         node.Icon.Should().Contain("checkmark.svg");
         node.ExcludeFromContext.Should().Contain("search");
         node.ExcludeFromContext.Should().Contain("create");
-        node.AssemblyLocation.Should().NotBeNullOrEmpty();
         node.HubConfiguration.Should().NotBeNull();
     }
 
@@ -253,7 +252,6 @@ public class ApprovalAndNotificationTest
         node.Icon.Should().Contain("bell.svg");
         node.ExcludeFromContext.Should().Contain("search");
         node.ExcludeFromContext.Should().Contain("create");
-        node.AssemblyLocation.Should().NotBeNullOrEmpty();
         node.HubConfiguration.Should().NotBeNull();
     }
 

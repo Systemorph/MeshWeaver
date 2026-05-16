@@ -1,4 +1,4 @@
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -49,7 +49,6 @@ public static class VUserNodeType
         Icon = "/static/NodeTypeIcons/person.svg",
         NodeType = NodeType,
         ExcludeFromContext = new HashSet<string> { "search" },
-        AssemblyLocation = typeof(VUserNodeType).Assembly.Location,
         Content = new NodeTypeDefinition { DefaultNamespace = "VUser", RestrictedToNamespaces = ["VUser"] },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source

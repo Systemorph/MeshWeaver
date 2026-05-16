@@ -195,7 +195,6 @@ public static class ThreadNodeType
             Icon = DefaultIcon,
             IsSatelliteType = true,
             ExcludeFromContext = ImmutableHashSet.Create("search"),
-            AssemblyLocation = typeof(ThreadNodeType).Assembly.Location,
             // Register AI types DIRECTLY on the per-thread hub config — not just
             // via ConfigureDefaultNodeHub. The polymorphic resolver discriminator
             // is picked from the SENDING hub's TypeRegistry; if Thread NodeType's

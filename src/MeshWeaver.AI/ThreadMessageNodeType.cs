@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using MeshWeaver.Graph;
 
 namespace MeshWeaver.AI;
@@ -6,7 +6,7 @@ namespace MeshWeaver.AI;
 /// <summary>
 /// Constants, configuration, and MeshNode definition for ThreadMessage node types.
 /// ThreadMessage nodes are child nodes of Thread nodes containing individual messages.
-/// Each ThreadMessage hub manages its own persistence exclusively via AddMeshDataSource —
+/// Each ThreadMessage hub manages its own persistence exclusively via AddMeshDataSource â€”
 /// no external code should access ThreadMessage persistence via IMeshService or IMeshQuery.
 /// </summary>
 public static class ThreadMessageNodeType
@@ -39,7 +39,7 @@ public static class ThreadMessageNodeType
 
     /// <summary>
     /// Creates a MeshNode definition for the ThreadMessage node type.
-    /// HubConfiguration includes AddMeshDataSource — the hub owns persistence exclusively.
+    /// HubConfiguration includes AddMeshDataSource â€” the hub owns persistence exclusively.
     /// </summary>
     public static MeshNode CreateMeshNode() => new(NodeType)
     {
@@ -47,7 +47,6 @@ public static class ThreadMessageNodeType
         Icon = "/static/NodeTypeIcons/message.svg",
         IsSatelliteType = true,
         ExcludeFromContext = ImmutableHashSet.Create("search", "create"),
-        AssemblyLocation = typeof(ThreadMessageNodeType).Assembly.Location,
         HubConfiguration = config => config
             .AddThreadMessageViews()
             .AddMeshDataSource(source => source.WithContentType<ThreadMessage>())

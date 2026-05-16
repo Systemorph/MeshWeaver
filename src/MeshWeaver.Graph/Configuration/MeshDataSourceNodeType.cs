@@ -1,4 +1,4 @@
-using MeshWeaver.Data;
+﻿using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 
 namespace MeshWeaver.Graph.Configuration;
@@ -39,7 +39,6 @@ public static class MeshDataSourceNodeType
         Icon = "/static/NodeTypeIcons/database.svg",
         IsSatelliteType = false,
         ExcludeFromContext = new HashSet<string> { "search", "create" },
-        AssemblyLocation = typeof(MeshDataSourceNodeType).Assembly.Location,
         HubConfiguration = config => config
             .AddMeshDataSourceViews()
             .AddMeshDataSource(source => source.WithContentType<MeshDataSourceConfiguration>())

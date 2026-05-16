@@ -1,11 +1,11 @@
-using MeshWeaver.Data;
+﻿using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
 /// Provides configuration for Notification nodes in the graph.
-/// Notification nodes are system-generated — excluded from search and create contexts.
+/// Notification nodes are system-generated â€” excluded from search and create contexts.
 /// </summary>
 public static class NotificationNodeType
 {
@@ -32,7 +32,6 @@ public static class NotificationNodeType
         Name = "Notification",
         Icon = "/static/NodeTypeIcons/bell.svg",
         ExcludeFromContext = new HashSet<string> { "search", "create" },
-        AssemblyLocation = typeof(NotificationNodeType).Assembly.Location,
         HubConfiguration = config => config
             .AddNotificationViews()
             .AddMeshDataSource(source => source

@@ -12,6 +12,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Domain;
 using MeshWeaver.Graph;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Kernel;
 using MeshWeaver.Mesh.Services;
@@ -1191,10 +1192,24 @@ public class MeshOperations
             return Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(null);
 
         return hub.GetWorkspace().GetMeshNodeStream(nodeType)
-            .Where(n => n is not null && !string.IsNullOrEmpty(n.AssemblyLocation))
+            .Where(n => n?.Content is NodeTypeDefinition def
+                        && def.CompilationStatus == CompilationStatus.Ok
+                        && !string.IsNullOrEmpty(def.LatestAssemblyCollection)
+                        && !string.IsNullOrEmpty(def.LatestAssemblyPath))
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(5))
-            .SelectMany(node => compilationService.GetConfigurationsFromExistingAssembly(node!).Take(1))
+            .SelectMany(node =>
+            {
+                var def = (NodeTypeDefinition)node!.Content!;
+                var version = def.LastCompiledVersion ?? node.Version;
+                var store = string.Equals(def.LatestAssemblyCollection, FrameworkAssemblyStore.CollectionName, StringComparison.Ordinal)
+                    ? (IAssemblyStore)FrameworkAssemblyStore.Instance
+                    : hub.ServiceProvider.GetService<IAssemblyStore>() ?? NullAssemblyStore.Instance;
+                return store.TryGetAssemblyPath(node.Path, version)
+                    .SelectMany(localPath => string.IsNullOrEmpty(localPath)
+                        ? Observable.Return<NodeCompilationResult?>(null)
+                        : compilationService.GetConfigurationsFromExistingAssembly(localPath!, nodeType).Take(1));
+            })
             .Select(result =>
             {
                 var matching = result?.NodeTypeConfigurations

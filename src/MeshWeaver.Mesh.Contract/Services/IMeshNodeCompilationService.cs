@@ -13,12 +13,24 @@ namespace MeshWeaver.Mesh.Services;
 /// circuited the recompile; populated to the full input set otherwise. The
 /// compile watcher persists it onto the NodeType MeshNode so the next
 /// recompile-needed check is a data comparison instead of a timing guess.
+/// <para>
+/// <see cref="AssemblyLocation"/> is the process-local DLL path the compile
+/// just produced — valid only inside the producing silo. For cross-silo
+/// activation, consumers must use <see cref="Collection"/> + <see cref="ContentPath"/>
+/// to look the bytes up via <see cref="IAssemblyStore"/>; these get
+/// denormalised onto <c>NodeTypeDefinition.LatestAssembly{Collection,Path}</c>
+/// and <c>NodeTypeRelease.{AssemblyCollection,AssemblyContentPath}</c> by the
+/// compile watcher.
+/// </para>
 /// </summary>
 public record NodeCompilationResult(
     string? AssemblyLocation,
     IReadOnlyList<NodeTypeConfiguration> NodeTypeConfigurations,
     ActivityLog? Log = null,
-    ImmutableDictionary<string, long>? CompiledSources = null);
+    ImmutableDictionary<string, long>? CompiledSources = null,
+    string? Collection = null,
+    string? ContentPath = null,
+    long? Version = null);
 
 /// <summary>
 /// Service for on-demand compilation of dynamic MeshNode assemblies.
@@ -64,9 +76,12 @@ public interface IMeshNodeCompilationService
         IReadOnlyList<MeshNode>? sourcesOverride = null);
 
     /// <summary>
-    /// Loads NodeType configurations from an already-compiled assembly without
-    /// triggering a new compile. Used when <see cref="MeshNode.AssemblyLocation"/>
-    /// is already populated (e.g. the compile watcher just finished V2 and set it).
+    /// Loads NodeType configurations from an already-compiled assembly at an
+    /// explicit local path — callers resolve the path through
+    /// <see cref="IAssemblyStore"/> (typically <c>TryGetAssemblyPath(nodeTypePath, version)</c>).
+    /// Used by enrichment and the legacy <c>GetCompilationPathRequest</c>
+    /// handler when they hydrate a pinned release or the latest compile from
+    /// the store.
     /// </summary>
-    IObservable<NodeCompilationResult?> GetConfigurationsFromExistingAssembly(MeshNode node);
+    IObservable<NodeCompilationResult?> GetConfigurationsFromExistingAssembly(string localPath, string nodeTypePath);
 }

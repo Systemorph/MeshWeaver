@@ -100,8 +100,8 @@ internal static class NodeTypeCompilationHelpers
                     if (HasUsableBuild(node, def))
                     {
                         logger?.LogInformation(
-                            "Compile kickoff: skip {HubPath} — Ok + compiled assembly present ({Assembly})",
-                            hub.Address.Path, node.AssemblyLocation);
+                            "Compile kickoff: skip {HubPath} — Ok + compiled assembly present ({Collection}/{Path})",
+                            hub.Address.Path, def.LatestAssemblyCollection, def.LatestAssemblyPath);
                         return;
                     }
                     if (System.Threading.Interlocked.CompareExchange(ref kicked, 1, 0) != 0) return;
@@ -109,8 +109,7 @@ internal static class NodeTypeCompilationHelpers
                     logger?.LogInformation(
                         "Compile kickoff: flipping Pending for {HubPath} (status={Status}, assemblyPresent={Present})",
                         hub.Address.Path, def.CompilationStatus,
-                        !string.IsNullOrEmpty(node.AssemblyLocation)
-                            && System.IO.File.Exists(node.AssemblyLocation));
+                        !string.IsNullOrEmpty(def.LatestAssemblyPath));
                     workspace.GetMeshNodeStream().Update(curr =>
                         curr.Content is NodeTypeDefinition d
                             && !HasUsableBuild(curr, d)
@@ -301,15 +300,20 @@ internal static class NodeTypeCompilationHelpers
     /// </list>
     ///
     /// <para>Gating on <c>status == Ok</c> first is what makes the
-    /// <c>AssemblyLocation</c> check sound: a never-compiled NodeType has a
-    /// null status (enrichment stamps the FRAMEWORK assembly on
-    /// <c>AssemblyLocation</c> but never sets <c>Ok</c>), so a framework-dll
-    /// path can never falsely satisfy this predicate.</para>
+    /// <c>LatestAssemblyPath</c> check sound: a never-compiled NodeType has a
+    /// null status, so a leftover assembly reference can never falsely satisfy
+    /// this predicate.</para>
+    ///
+    /// <para>This is a metadata-only check — no <see cref="IAssemblyStore"/>
+    /// probe, no <c>File.Exists</c>. The kickoff path prefers a redundant
+    /// compile over a blocking store round-trip on every stream emission;
+    /// the runtime miss is caught later when activation tries to hydrate the
+    /// assembly and the store reports a miss.</para>
     /// </summary>
     internal static bool HasUsableBuild(MeshNode node, NodeTypeDefinition def) =>
         def.CompilationStatus == CompilationStatus.Ok
-        && !string.IsNullOrEmpty(node.AssemblyLocation)
-        && System.IO.File.Exists(node.AssemblyLocation)
+        && !string.IsNullOrEmpty(def.LatestAssemblyCollection)
+        && !string.IsNullOrEmpty(def.LatestAssemblyPath)
         && string.Equals(def.CompiledFrameworkVersion, FrameworkVersion, StringComparison.Ordinal);
 
     /// <summary>
@@ -400,19 +404,35 @@ internal static class NodeTypeCompilationHelpers
                                     CompilationStatus = CompilationStatus.Ok,
                                     CompilationError = null,
                                     LastCompileSucceededAt = DateTimeOffset.UtcNow,
-                                    LastCompiledVersion = curr.Version,
+                                    // Stamp LastCompiledVersion to MATCH the version the
+                                    // IAssemblyStore upload used (set by
+                                    // UploadToStoreIfNeeded — the captured pendingNode.Version
+                                    // at compile kickoff). Using curr.Version here would
+                                    // point activation at a different version than the one
+                                    // the store actually has — TryGetAssemblyPath miss,
+                                    // activation falls back to default config without
+                                    // AddMeshDataSource, IWorkspace fails to activate.
+                                    LastCompiledVersion = outcome.Result.Version ?? curr.Version,
                                     LastCompilationActivityPath = activityPath,
                                     LatestReleasePath = newReleasePath ?? def.LatestReleasePath,
                                     ReleaseNotes = newReleasePath is not null ? null : def.ReleaseNotes,
                                     CompiledSources = outcome.Result.CompiledSources
                                         ?? System.Collections.Immutable.ImmutableDictionary<string, long>.Empty,
+                                    // Cross-silo durable assembly reference. Populated from
+                                    // the IAssemblyStore upload during compile (see
+                                    // MeshNodeCompilationService.UploadToStoreIfNeeded).
+                                    // Falls back to the previous values on a producer that
+                                    // hasn't wired a store yet (Null store keeps the new
+                                    // fields null and consumers still fall through to the
+                                    // legacy AssemblyLocation path during Stage 0/1).
+                                    LatestAssemblyCollection = outcome.Result.Collection ?? def.LatestAssemblyCollection,
+                                    LatestAssemblyPath = outcome.Result.ContentPath ?? def.LatestAssemblyPath,
                                     // Stamp the framework version the assembly bound
                                     // against — HasUsableBuild compares this to the live
                                     // FrameworkVersion so a MeshWeaver redeploy forces a
                                     // recompile instead of loading an ABI-stale DLL.
                                     CompiledFrameworkVersion = FrameworkVersion
-                                },
-                                AssemblyLocation = outcome.Result.AssemblyLocation
+                                }
                             };
                         }
 

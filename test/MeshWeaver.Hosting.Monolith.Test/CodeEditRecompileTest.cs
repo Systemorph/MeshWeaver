@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Reactive.Linq;
@@ -23,9 +23,9 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
 /// End-to-end tests for the explicit compile pipeline:
-///   CreateReleaseRequest → IsUpToDate check → CompileWatcher → Release node.
+///   CreateReleaseRequest â†’ IsUpToDate check â†’ CompileWatcher â†’ Release node.
 ///
-/// The automatic MeshChangeFeed → TryTriggerRecompile path has been removed.
+/// The automatic MeshChangeFeed â†’ TryTriggerRecompile path has been removed.
 /// All compilation is now triggered explicitly via CreateReleaseRequest.
 /// </summary>
 public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestBase(output), IDisposable
@@ -78,13 +78,13 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
     /// <summary>
     /// Explicit compile flow (the new canonical shape post-2026-05-05):
     ///   1. Create NodeType + Code source.
-    ///   2. Send CreateReleaseRequest → should trigger compilation (not IsUpToDate).
+    ///   2. Send CreateReleaseRequest â†’ should trigger compilation (not IsUpToDate).
     ///   3. Wait for V1 release node.
-    ///   4. CreateReleaseRequest again → should return AlreadyUpToDate = true.
+    ///   4. CreateReleaseRequest again â†’ should return AlreadyUpToDate = true.
     ///   5. Modify source code to V2.
-    ///   6. CreateReleaseRequest → should re-compile (sources changed).
+    ///   6. CreateReleaseRequest â†’ should re-compile (sources changed).
     ///   7. Wait for V2 release node.
-    ///   8. Create fresh instance → must serve V2 layout.
+    ///   8. Create fresh instance â†’ must serve V2 layout.
     /// </summary>
     [Fact(Timeout = 90000)]
     public async Task CodeEdit_ExplicitRelease_IsUpToDate_RecompilesOnSourceChange()
@@ -113,19 +113,19 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         });
 
         // 3. Trigger V1 compilation. The per-NodeType hub's
-        // InstallCompileWatcher kickoff also flips Pending → Compile on first
+        // InstallCompileWatcher kickoff also flips Pending â†’ Compile on first
         // activation when HasUsableBuild is false; either path is acceptable so
         // long as a real V1 Release lands. We send CreateReleaseRequest both as
         // the canonical explicit trigger AND to wait for the compile to settle.
         // AlreadyUpToDate may legitimately be true here if the kickoff beat us
-        // to first compile — what we check is that V1 release is produced.
+        // to first compile â€” what we check is that V1 release is produced.
         var v1Response = await SendCreateReleaseAsync(NodeTypePath, force: false, ct);
         v1Response.Success.Should().BeTrue("CreateReleaseRequest should succeed");
 
         var v1Release = await WaitForNewReleaseAsync(NodeTypePath, knownReleases: [], ct);
         Output.WriteLine($"=== V1 release at {v1Release} ===");
 
-        // 4. CreateReleaseRequest again without changes → AlreadyUpToDate.
+        // 4. CreateReleaseRequest again without changes â†’ AlreadyUpToDate.
         var dupResponse = await SendCreateReleaseAsync(NodeTypePath, force: false, ct);
         dupResponse.AlreadyUpToDate.Should().BeTrue("sources unchanged since V1 compile");
 
@@ -138,7 +138,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         var v1Html = await ReadOverviewAsync(InstancePath, ct);
         v1Html.Should().Contain("MARKER_V1", "V1 release must be served");
 
-        // 6. Modify the source to V2. Live remote stream — path is known, no
+        // 6. Modify the source to V2. Live remote stream â€” path is known, no
         // index lag (per CqrsAndContentAccess.md).
         var sourceClient = GetClient(c => c.AddData());
         var codeNode = await sourceClient.GetWorkspace()
@@ -152,7 +152,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             Content = new CodeConfiguration { Code = CodeV2, Language = "csharp" }
         });
 
-        // 7. Explicitly trigger V2 compilation — sources changed, should recompile.
+        // 7. Explicitly trigger V2 compilation â€” sources changed, should recompile.
         var v2Response = await SendCreateReleaseAsync(NodeTypePath, force: false, ct);
         v2Response.Success.Should().BeTrue("CreateReleaseRequest should succeed after source change");
         v2Response.AlreadyUpToDate.Should().BeFalse("source was modified, must recompile");
@@ -163,13 +163,13 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
 
         // 8. Create a fresh instance and verify it serves V2.
         //
-        // 🚨 Wait for the MESH HUB's workspace to see the V2 release on the NodeType
+        // ðŸš¨ Wait for the MESH HUB's workspace to see the V2 release on the NodeType
         // BEFORE creating the new instance. The activation path
         // (NodeTypeEnrichmentHelpers.EnrichWithNodeType) reads the NodeType MeshNode
-        // from meshHub.GetWorkspace().GetMeshNodeStream(nodeType) — that workspace's
+        // from meshHub.GetWorkspace().GetMeshNodeStream(nodeType) â€” that workspace's
         // cache is updated asynchronously by DataChangedEvent fan-out from the
         // per-NodeType hub. A subscription on a SEPARATE client (e.g. WaitForNewReleaseAsync
-        // above) only confirms the per-NodeType hub flipped — NOT that the mesh hub's
+        // above) only confirms the per-NodeType hub flipped â€” NOT that the mesh hub's
         // cache observed the change. Creating instance2 before the mesh hub's view
         // catches up causes EnrichWithNodeType to read the stale V1 AssemblyLocation
         // and bind instance2 to the V1 assembly for its entire lifetime
@@ -201,8 +201,8 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
     ///   1. Compile V1, capture V1 release path.
     ///   2. Modify source to V2, compile V2 (V2 is now the latest release).
     ///   3. Pin <c>RequestedReleasePath</c> to V1 on the NodeType.
-    ///   4. Create a fresh instance — must serve V1 (the pinned release), not V2 (latest).
-    ///   5. Clear the pin → fresh instance must serve V2 again.
+    ///   4. Create a fresh instance â€” must serve V1 (the pinned release), not V2 (latest).
+    ///   5. Clear the pin â†’ fresh instance must serve V2 again.
     /// </summary>
     [Fact(Timeout = 90000)]
     public async Task NodeType_RequestedReleasePath_PinsToHistoricalRelease()
@@ -262,17 +262,17 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         // Wait for the pin write to land in the MESH HUB's workspace cache before
         // creating the instance. The activation path
         // (NodeTypeEnrichmentHelpers.EnrichWithNodeType) reads the NodeType MeshNode
-        // from meshHub.GetWorkspace().GetMeshNodeStream(nodeType) — that workspace's
+        // from meshHub.GetWorkspace().GetMeshNodeStream(nodeType) â€” that workspace's
         // cache is updated asynchronously by DataChangedEvent fan-out from the
         // per-NodeType hub. Waiting on a SEPARATE reader client's view only confirms
-        // the per-NodeType hub flipped — NOT that the mesh hub's cache observed the
+        // the per-NodeType hub flipped â€” NOT that the mesh hub's cache observed the
         // change. Creating instance pre-propagation causes the wrong release to be
         // selected.
         await WaitForMeshHubViewAsync(pinTypePath,
             n => n?.Content is NodeTypeDefinition d && d.RequestedReleasePath == v1Release,
             ct);
 
-        // 5. Fresh instance — pinned path means V1 must be served even though V2 is latest.
+        // 5. Fresh instance â€” pinned path means V1 must be served even though V2 is latest.
         await NodeFactory.CreateNode(new MeshNode("pinnedInstance", $"{TestPartition}/PinType")
         {
             Name = "Pinned Instance",
@@ -283,11 +283,11 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             html => html.Contains("MARKER_V1") || html.Contains("MARKER_V2"),
             ct);
         pinnedHtml.Should().Contain("MARKER_V1",
-            "RequestedReleasePath pins to V1 — instance must serve V1 even though V2 is latest");
+            "RequestedReleasePath pins to V1 â€” instance must serve V1 even though V2 is latest");
         pinnedHtml.Should().NotContain("MARKER_V2",
             "pinned release V1 must not leak V2's body");
 
-        // 6. Clear the pin → fresh instance serves V2 (latest) again.
+        // 6. Clear the pin â†’ fresh instance serves V2 (latest) again.
         nodeTypeNode = await FindNodeAsync(pinTypePath, ct);
         def = nodeTypeNode!.Content as NodeTypeDefinition;
         await NodeFactory.UpdateNode(nodeTypeNode with
@@ -297,7 +297,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         // Wait for the pin-clear to land in the MESH HUB's workspace cache. Same
         // rationale as the pin-set wait above: activation reads the NodeType from
         // the mesh hub's workspace, and the post-write state must propagate there
-        // before we create the new instance — otherwise the activation reads a
+        // before we create the new instance â€” otherwise the activation reads a
         // pre-clear snapshot, the pinned-release branch fires with v1Release, and
         // unpinnedInstance binds to V1 instead of V2.
         await WaitForMeshHubViewAsync(pinTypePath,
@@ -328,7 +328,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             .FirstAsync()
             .ToTask(ct);
         // Wait for compile to complete (status = Ok or Error) before returning.
-        // Live remote stream (GetMeshNodeStream(path)) — NOT ObserveQuery, which
+        // Live remote stream (GetMeshNodeStream(path)) â€” NOT ObserveQuery, which
         // is index-lagged and can miss the post-compile tick (per the CQRS
         // feedback note + Doc/Architecture/CqrsAndContentAccess.md). Path is
         // known here, so the live stream is the right primitive.
@@ -352,7 +352,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
     /// Reads the Overview area and waits for an <see cref="HtmlControl"/> whose
     /// data matches <paramref name="matches"/>. Used by V2 reads where the per-node
     /// hub may emit a stale (V1) snapshot first while the new release's
-    /// HubConfiguration is still propagating — taking <c>FirstAsync(x is HtmlControl)</c>
+    /// HubConfiguration is still propagating â€” taking <c>FirstAsync(x is HtmlControl)</c>
     /// would race the first stale emission and fail the assertion before the
     /// V2-bound re-render lands.
     /// </summary>
@@ -374,12 +374,12 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     /// <summary>
-    /// Waits for a fresh <c>_Release</c> MeshNode whose path differs from any in
+    /// Waits for a fresh <c>Release</c> MeshNode whose path differs from any in
     /// <paramref name="knownReleases"/>. Reads <see cref="NodeTypeDefinition.LatestReleasePath"/>
-    /// off the live <see cref="GetMeshNodeStream"/> — atomic with the post-compile
+    /// off the live <see cref="GetMeshNodeStream"/> â€” atomic with the post-compile
     /// status flip, so by the time CompilationStatus settles to Ok the new path
     /// is already on the NodeType. Avoids the lagged <c>ObserveQuery</c> namespace
-    /// scan over <c>_Release/*</c>.
+    /// scan over <c>Release/*</c>.
     /// </summary>
     private async Task<string> WaitForNewReleaseAsync(
         string nodeTypePath, HashSet<string> knownReleases, CancellationToken ct)
@@ -422,7 +422,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
     /// and that cache is updated asynchronously by DataChangedEvent fan-out
     /// from the per-NodeType hub. A separate client's view (e.g. a fresh test
     /// reader subscribed via <c>GetClient(...)</c>) is a different
-    /// <c>ISynchronizationStream</c> on a different scheduler — seeing the
+    /// <c>ISynchronizationStream</c> on a different scheduler â€” seeing the
     /// write there does NOT imply the mesh hub's cache has caught up. Per
     /// <c>HubConfiguration</c> being captured once at activation, an instance
     /// created before mesh hub catches up is bound to the stale snapshot for

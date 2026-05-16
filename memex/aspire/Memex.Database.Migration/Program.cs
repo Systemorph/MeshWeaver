@@ -75,6 +75,8 @@ var migrations = new IMigration[]
     new V15_FinalUserSchemaCleanup(),
     new V16_NormalizeAccessAssignmentShape(),
     new V17_EnsurePerUserSelfAssignments(),
+    new V18_BackfillUserPartitionRegistry(),
+    new V19_DeleteLegacyReleaseNodes(),
 };
 
 var ctx = new MigrationContext(dataSource, connectionString, options, logger, initResult.IsFreshDb);

@@ -78,7 +78,6 @@ public static class IStorageAdapterTestExtensions
                     Icon = source.Icon,
                     Order = source.Order,
                     Content = source.Content,
-                    AssemblyLocation = source.AssemblyLocation,
                     HubConfiguration = source.HubConfiguration,
                     GlobalServiceConfigurations = source.GlobalServiceConfigurations
                 };

@@ -214,7 +214,7 @@ public record NodeTypeDefinition
     public string? LastCompilationActivityPath { get; init; }
 
     /// <summary>
-    /// Path of the latest <c>Release</c> MeshNode at <c>{nodeTypePath}/_Release/{version}</c>
+    /// Path of the latest <c>Release</c> MeshNode at <c>{nodeTypePath}/Release/{version}</c>
     /// — the active compiled artefact for this NodeType. Set by the compile watcher
     /// after a successful compile + Release node creation; preserves the previous value
     /// across failed compiles so consumers (NodeTypeService, per-node hub activation,
@@ -228,7 +228,7 @@ public record NodeTypeDefinition
 
     /// <summary>
     /// Optional pin to a specific historical <c>Release</c> MeshNode at
-    /// <c>{nodeTypePath}/_Release/{version}</c>. When set, every per-instance hub of
+    /// <c>{nodeTypePath}/Release/{version}</c>. When set, every per-instance hub of
     /// this NodeType activates against that release's <c>AssemblyPath</c> instead of
     /// whichever assembly the latest compile produced. When <c>null</c> (the default),
     /// activations resolve to the most recent compile (<see cref="LatestReleasePath"/>)
@@ -241,6 +241,31 @@ public record NodeTypeDefinition
     /// stay on the pinned release until this field is cleared or repointed.</para>
     /// </summary>
     public string? RequestedReleasePath { get; init; }
+
+    /// <summary>
+    /// Content-collection name where the latest compiled assembly for this NodeType
+    /// lives (e.g. <c>"nodetype-cache"</c>). Pair with <see cref="LatestAssemblyPath"/>
+    /// to fetch the bytes via <c>IContentCollection</c>. Set by the compile watcher
+    /// after a successful Roslyn compile uploads the assembly to the blob container;
+    /// the same pair is denormalised onto the produced <see cref="NodeTypeRelease"/>
+    /// so pinned-release activations can read it without crossing back to the
+    /// NodeType MeshNode.
+    /// <para>
+    /// 🚨 This pair, not <c>MeshNode.AssemblyLocation</c>, is the authoritative
+    /// "where do I load the assembly from" hint for every silo. <c>AssemblyLocation</c>
+    /// is <c>[JsonIgnore]</c> and only valid in the process that ran the compile —
+    /// cross-silo activation MUST resolve through these fields.
+    /// </para>
+    /// </summary>
+    public string? LatestAssemblyCollection { get; init; }
+
+    /// <summary>
+    /// Path inside <see cref="LatestAssemblyCollection"/> where the latest compiled
+    /// assembly's bytes live (e.g. <c>"TestData/PinType/v2-abc123.dll"</c>). Together
+    /// with <see cref="LatestAssemblyCollection"/> forms the cross-silo durable
+    /// reference to the latest compile output.
+    /// </summary>
+    public string? LatestAssemblyPath { get; init; }
 
     /// <summary>
     /// Free-form release notes captured next to the "Create Release" button on

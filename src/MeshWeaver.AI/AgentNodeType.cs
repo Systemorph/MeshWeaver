@@ -54,7 +54,6 @@ public static class AgentNodeType
     {
         Name = "Agent",
         Icon = "/static/NodeTypeIcons/bot.svg",
-        AssemblyLocation = typeof(AgentNodeType).Assembly.Location,
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<AgentConfiguration>())

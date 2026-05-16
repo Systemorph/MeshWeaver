@@ -76,30 +76,32 @@ internal static class NodeTypeEnrichmentHelpers
         if (string.IsNullOrEmpty(nodeType))
             return Observable.Return(ApplyDefaultConfig(node, meshConfiguration));
 
-        // Static fast-path: any AddMeshNodes-registered type with both fields.
+        // Static fast-path: any AddMeshNodes-registered type with a HubConfiguration.
+        // The framework assembly hosting this type is already loaded into the default
+        // ALC (we got here by calling code in this AppDomain), so we only need the
+        // delegate. AssemblyLocation used to gate this too, but it added nothing —
+        // a static type registered without one still works fine because activation
+        // just invokes the HubConfiguration lambda.
         if (meshConfiguration.Nodes.TryGetValue(nodeType, out var staticTypeNode)
-            && staticTypeNode.HubConfiguration != null
-            && !string.IsNullOrEmpty(staticTypeNode.AssemblyLocation))
+            && staticTypeNode.HubConfiguration != null)
         {
             return Observable.Return(ApplyEntry(
-                node, staticTypeNode.AssemblyLocation,
-                staticTypeNode.HubConfiguration, nodeType, meshConfiguration));
+                node, staticTypeNode.HubConfiguration, nodeType, meshConfiguration));
         }
 
         // Static-provider fast-path: IStaticNodeProvider-registered NodeTypes
-        // ship HubConfiguration + AssemblyLocation in-process (the delegate
-        // doesn't survive serialisation, so we MUST find them locally before
-        // opening a remote stream). Look up the provider that owns the
-        // requested NodeType path and apply its config directly.
+        // ship HubConfiguration in-process (the delegate doesn't survive
+        // serialisation, so we MUST find them locally before opening a remote
+        // stream). Look up the provider that owns the requested NodeType path
+        // and apply its config directly.
         var providerNode = meshHub.ServiceProvider
             .GetServices<IStaticNodeProvider>()
             .SelectMany(p => p.GetStaticNodes())
             .FirstOrDefault(n => string.Equals(n.Path, nodeType, StringComparison.OrdinalIgnoreCase));
-        if (providerNode is { HubConfiguration: { } hubCfg }
-            && !string.IsNullOrEmpty(providerNode.AssemblyLocation))
+        if (providerNode is { HubConfiguration: { } hubCfg })
         {
             return Observable.Return(ApplyEntry(
-                node, providerNode.AssemblyLocation!, hubCfg, nodeType, meshConfiguration));
+                node, hubCfg, nodeType, meshConfiguration));
         }
 
         // Slow path: subscribe to the NodeType MeshNode stream directly via
@@ -126,7 +128,7 @@ internal static class NodeTypeEnrichmentHelpers
         // (Mesh.GetWorkspace().GetMeshNodeStream(path).Where(...).Take(1)).
         return meshHub.GetWorkspace().GetMeshNodeStream(nodeType)
             // Settled compile (Ok/Error) OR an already-configured node
-            // (HubConfiguration + AssemblyLocation pre-populated — static
+            // (HubConfiguration + LatestAssemblyPath pre-populated — static
             // provider, or a built-in that ships its assembly) OR the
             // NodeType path resolves to something that is NOT a
             // NodeTypeDefinition at all — a plain node (or a node mis-used
@@ -135,7 +137,8 @@ internal static class NodeTypeEnrichmentHelpers
             // and let ApplyStreamResult fall through to the default config
             // instead of stranding the wait for the full SlowPathTimeout.
             .Where(typeNode => (typeNode.HubConfiguration != null
-                                && !string.IsNullOrEmpty(typeNode.AssemblyLocation))
+                                && typeNode.Content is NodeTypeDefinition hcDef
+                                && !string.IsNullOrEmpty(hcDef.LatestAssemblyPath))
                 || (typeNode.Content is NodeTypeDefinition def
                     && (def.CompilationStatus == CompilationStatus.Ok
                         || def.CompilationStatus == CompilationStatus.Error))
@@ -181,21 +184,23 @@ internal static class NodeTypeEnrichmentHelpers
         var def = typeNode.Content as NodeTypeDefinition;
         // DIAGNOSTIC: trace what activation reads
         logger?.LogInformation(
-            "[ENRICH-DIAG] node={InstancePath} nodeType={NodeType} typeNode.AssemblyLocation={AsmLoc} typeNode.HubConfiguration={HasHubConfig} def.Status={Status} def.AssemblyPath={DefAsm} def.RequestedRelease={Pin} def.LatestRelease={Latest}",
-            node.Path, nodeType, typeNode.AssemblyLocation ?? "(null)",
+            "[ENRICH-DIAG] node={InstancePath} nodeType={NodeType} typeNode.HubConfiguration={HasHubConfig} def.Status={Status} def.LatestAssemblyCollection={Coll} def.LatestAssemblyPath={Path} def.RequestedRelease={Pin} def.LatestRelease={Latest}",
+            node.Path, nodeType,
             typeNode.HubConfiguration is not null, def?.CompilationStatus,
-            "n/a", def?.RequestedReleasePath ?? "(null)",
+            def?.LatestAssemblyCollection ?? "(null)", def?.LatestAssemblyPath ?? "(null)",
+            def?.RequestedReleasePath ?? "(null)",
             def?.LatestReleasePath ?? "(null)");
 
-        // Static-provider NodeType: HubConfiguration + AssemblyLocation pre-populated,
-        // no Roslyn compile to run. Use them directly — no reflection round-trip.
+        // Static-provider NodeType: HubConfiguration pre-populated, no Roslyn
+        // compile to run. Use it directly — no reflection round-trip, no store
+        // probe. The host already has the framework assembly loaded by virtue
+        // of the static provider being in-process at all.
         if (typeNode.HubConfiguration != null
-            && !string.IsNullOrEmpty(typeNode.AssemblyLocation)
             && (def?.CompilationStatus is null
                 || def.CompilationStatus == CompilationStatus.Unknown))
         {
             return Observable.Return(ApplyEntry(
-                node, typeNode.AssemblyLocation!, typeNode.HubConfiguration,
+                node, localAssemblyPath: null, typeNode.HubConfiguration,
                 nodeType, meshConfiguration));
         }
 
@@ -209,123 +214,164 @@ internal static class NodeTypeEnrichmentHelpers
 
         // Pinned release: when NodeTypeDefinition.RequestedReleasePath is set,
         // every per-instance hub MUST load the pinned Release's assembly, not
-        // the NodeType's latest AssemblyLocation. The Release MeshNode is a
-        // satellite owned by the NodeType's partition — read it via the mesh
-        // hub's IStorageAdapter (the routing adapter resolves the per-partition
-        // storage). Symmetric with NodeTypeContractHandler's pinned-release
-        // branch on the legacy GetCompilationPathRequest path; mirrored here so
-        // the activation hot path (which uses INodeTypeStreamCache, not the
-        // legacy request) also honors pinning. Repro:
-        // CodeEditRecompileTest.NodeType_RequestedReleasePath_PinsToHistoricalRelease.
-        if (!string.IsNullOrEmpty(def?.RequestedReleasePath) && compilationService is not null)
+        // the NodeType's latest. Read the Release MeshNode via
+        // workspace.GetMeshNodeStream — uniform single-path API that auto-
+        // dispatches own → local collection → remote. Resolve the bytes via
+        // IAssemblyStore.TryGetAssemblyPath(release.NodeTypePath, version) so
+        // the cross-silo coordinates land in the local cache regardless of
+        // which silo originally produced the compile. Symmetric with
+        // NodeTypeContractHandler's pinned-release branch.
+        // Repro: CodeEditRecompileTest.NodeType_RequestedReleasePath_PinsToHistoricalRelease.
+        if (!string.IsNullOrEmpty(def.RequestedReleasePath) && compilationService is not null)
         {
-            var requestedReleasePath = def!.RequestedReleasePath!;
-            var storage = meshHub.ServiceProvider.GetService<IStorageAdapter>();
-            if (storage is null)
-            {
-                logger?.LogWarning(
-                    "EnrichWithNodeType: no IStorageAdapter — cannot resolve pinned release {ReleasePath} for {NodeType}",
-                    requestedReleasePath, nodeType);
-                return Observable.Return(
-                    WithCompilationErrorOverlay(node, nodeType,
-                        $"Pinned release '{requestedReleasePath}' for '{nodeType}' could not be resolved (no storage adapter).",
-                        meshConfiguration));
-            }
-            return storage.Read(requestedReleasePath, meshHub.JsonSerializerOptions)
+            var requestedReleasePath = def.RequestedReleasePath!;
+            return meshHub.GetWorkspace().GetMeshNodeStream(requestedReleasePath)
                 .Take(1)
                 .SelectMany(releaseNode =>
                 {
-                    if (releaseNode?.Content is NodeTypeRelease release
-                        && !string.IsNullOrEmpty(release.AssemblyPath)
-                        && System.IO.File.Exists(release.AssemblyPath))
+                    if (releaseNode?.Content is not NodeTypeRelease release)
                     {
-                        var pinnedTypeNode = typeNode with { AssemblyLocation = release.AssemblyPath };
-                        return compilationService.GetConfigurationsFromExistingAssembly(pinnedTypeNode)
-                            .Take(1)
-                            .Select(result =>
-                            {
-                                var matching = result?.NodeTypeConfigurations
-                                    .FirstOrDefault(c =>
-                                        string.Equals(c.NodeType, nodeType, StringComparison.OrdinalIgnoreCase))
-                                    ?? result?.NodeTypeConfigurations.FirstOrDefault();
-                                return ApplyEntry(
-                                    node, release.AssemblyPath!, matching?.HubConfiguration,
-                                    nodeType, meshConfiguration);
-                            })
-                            .Catch<MeshNode, Exception>(ex =>
-                            {
-                                logger?.LogWarning(ex,
-                                    "EnrichWithNodeType: failed to load pinned release '{ReleasePath}' for {NodeType} — instance '{InstancePath}' falls back to default config",
-                                    requestedReleasePath, nodeType, node.Path);
-                                return Observable.Return(ApplyEntry(
-                                    node, release.AssemblyPath!, hubConfig: null,
-                                    nodeType, meshConfiguration));
-                            });
+                        logger?.LogWarning(
+                            "EnrichWithNodeType: pinned release {ReleasePath} for {NodeType} could not be resolved",
+                            requestedReleasePath, nodeType);
+                        return Observable.Return(
+                            WithCompilationErrorOverlay(node, nodeType,
+                                $"Pinned release '{requestedReleasePath}' for '{nodeType}' could not be resolved.",
+                                meshConfiguration));
                     }
-                    logger?.LogWarning(
-                        "EnrichWithNodeType: pinned release {ReleasePath} for {NodeType} could not be resolved",
-                        requestedReleasePath, nodeType);
-                    return Observable.Return(
-                        WithCompilationErrorOverlay(node, nodeType,
-                            $"Pinned release '{requestedReleasePath}' for '{nodeType}' could not be resolved.",
-                            meshConfiguration));
+                    var releaseVersion = TryParseReleaseVersion(release.Version);
+                    return ResolveAssembly(
+                            meshHub, release.AssemblyCollection, release.NodeTypePath, releaseVersion)
+                        .SelectMany(localPath =>
+                        {
+                            if (string.IsNullOrEmpty(localPath))
+                            {
+                                logger?.LogWarning(
+                                    "EnrichWithNodeType: pinned release {ReleasePath} bytes not found in store (collection={Coll}, version={Version})",
+                                    requestedReleasePath, release.AssemblyCollection, releaseVersion);
+                                return Observable.Return(
+                                    WithCompilationErrorOverlay(node, nodeType,
+                                        $"Pinned release '{requestedReleasePath}' assembly not found in store.",
+                                        meshConfiguration));
+                            }
+                            return compilationService.GetConfigurationsFromExistingAssembly(localPath!, nodeType)
+                                .Take(1)
+                                .Select(result =>
+                                {
+                                    var matching = result?.NodeTypeConfigurations
+                                        .FirstOrDefault(c =>
+                                            string.Equals(c.NodeType, nodeType, StringComparison.OrdinalIgnoreCase))
+                                        ?? result?.NodeTypeConfigurations.FirstOrDefault();
+                                    return ApplyEntry(
+                                        node, localPath, matching?.HubConfiguration,
+                                        nodeType, meshConfiguration);
+                                })
+                                .Catch<MeshNode, Exception>(ex =>
+                                {
+                                    logger?.LogWarning(ex,
+                                        "EnrichWithNodeType: failed to load pinned release '{ReleasePath}' for {NodeType} — instance '{InstancePath}' falls back to default config",
+                                        requestedReleasePath, nodeType, node.Path);
+                                    return Observable.Return(ApplyEntry(
+                                        node, localPath, hubConfig: null,
+                                        nodeType, meshConfiguration));
+                                });
+                        });
                 });
         }
 
-        if (def?.CompilationStatus == CompilationStatus.Ok
-            && !string.IsNullOrEmpty(typeNode.AssemblyLocation))
+        if (def.CompilationStatus == CompilationStatus.Ok
+            && !string.IsNullOrEmpty(def.LatestAssemblyCollection)
+            && !string.IsNullOrEmpty(def.LatestAssemblyPath))
         {
-            if (compilationService is null)
-                return Observable.Return(ApplyEntry(
-                    node, typeNode.AssemblyLocation!, hubConfig: null,
-                    nodeType, meshConfiguration));
+            // Hot path for activating per-instance hubs: the NodeType has a
+            // settled compile (status=Ok + LatestAssembly{Collection,Path}
+            // populated). Resolve the local file via IAssemblyStore and load
+            // configurations from the existing DLL via reflection — do NOT
+            // call CompileAndGetConfigurations, which re-enters the SyncedQuery
+            // source-discovery pipeline. Under concurrent activation that
+            // path stalls and every per-instance hub overlays a
+            // compilation-error fallback (CodeEditRecompileTest symptom).
+            var compileVersion = def.LastCompiledVersion ?? typeNode.Version;
+            return ResolveAssembly(meshHub, def.LatestAssemblyCollection, typeNode.Path, compileVersion)
+                .SelectMany(localPath =>
+                {
+                    if (string.IsNullOrEmpty(localPath))
+                    {
+                        logger?.LogWarning(
+                            "EnrichWithNodeType: latest assembly for {NodeType} not found in store (collection={Coll}, version={Version}) — falling back to default config",
+                            nodeType, def.LatestAssemblyCollection, compileVersion);
+                        return Observable.Return(ApplyEntry(
+                            node, localAssemblyPath: null, hubConfig: null,
+                            nodeType, meshConfiguration));
+                    }
+                    if (compilationService is null)
+                        return Observable.Return(ApplyEntry(
+                            node, localPath, hubConfig: null,
+                            nodeType, meshConfiguration));
 
-            // Hot path for activating per-instance hubs: the NodeType already
-            // has a usable assembly (status=Ok + AssemblyLocation set). Load
-            // configurations directly from the existing DLL via reflection —
-            // do NOT call CompileAndGetConfigurations, which re-enters the
-            // SyncedQuery source-discovery pipeline (DiscoverSourceMaxLastModified
-            // → ResolveSources → GetSourceCollection → workspace.GetQuery). Under
-            // concurrent activation that path stalls and every per-instance hub
-            // overlays a compilation-error fallback — exactly the
-            // CodeEditRecompileTest "Overview never renders" symptom. The
-            // identical short-circuit already lives in
-            // MeshNodeCompilationService.GetAssemblyLocationWithLog as a
-            // cache-hit branch; using the lighter helper here makes the
-            // enrichment path symmetric with NodeTypeContractHandler's
-            // "hasPublishedRelease" short-circuit.
-            return compilationService.GetConfigurationsFromExistingAssembly(typeNode)
-                .Take(1)
-                .Select(result =>
-                {
-                    var matching = result?.NodeTypeConfigurations
-                        .FirstOrDefault(c =>
-                            string.Equals(c.NodeType, nodeType, StringComparison.OrdinalIgnoreCase))
-                        ?? result?.NodeTypeConfigurations.FirstOrDefault();
-                    return ApplyEntry(
-                        node, typeNode.AssemblyLocation!, matching?.HubConfiguration,
-                        nodeType, meshConfiguration);
-                })
-                .Catch<MeshNode, Exception>(ex =>
-                {
-                    // Surface at Warning. Reflection over the compiled
-                    // assembly failing means HubConfiguration extraction
-                    // gave up — the per-instance hub will activate but
-                    // without the dynamic config, so users see "no Overview"
-                    // (or the wrong layout) with no log clue at production
-                    // log levels until this was promoted from Debug.
-                    logger?.LogWarning(ex,
-                        "EnrichWithNodeType: HubConfiguration reflection for '{NodeType}' faulted ({ExceptionType}) — instance '{InstancePath}' falls back to default config",
-                        nodeType, ex.GetType().Name, node.Path);
-                    return Observable.Return(ApplyEntry(
-                        node, typeNode.AssemblyLocation!, hubConfig: null,
-                        nodeType, meshConfiguration));
+                    return compilationService.GetConfigurationsFromExistingAssembly(localPath!, nodeType)
+                        .Take(1)
+                        .Select(result =>
+                        {
+                            var matching = result?.NodeTypeConfigurations
+                                .FirstOrDefault(c =>
+                                    string.Equals(c.NodeType, nodeType, StringComparison.OrdinalIgnoreCase))
+                                ?? result?.NodeTypeConfigurations.FirstOrDefault();
+                            return ApplyEntry(
+                                node, localPath, matching?.HubConfiguration,
+                                nodeType, meshConfiguration);
+                        })
+                        .Catch<MeshNode, Exception>(ex =>
+                        {
+                            // Reflection over the compiled assembly failing
+                            // means HubConfiguration extraction gave up — the
+                            // per-instance hub will activate without the
+                            // dynamic config.
+                            logger?.LogWarning(ex,
+                                "EnrichWithNodeType: HubConfiguration reflection for '{NodeType}' faulted ({ExceptionType}) — instance '{InstancePath}' falls back to default config",
+                                nodeType, ex.GetType().Name, node.Path);
+                            return Observable.Return(ApplyEntry(
+                                node, localPath, hubConfig: null,
+                                nodeType, meshConfiguration));
+                        });
                 });
         }
 
-        var error = def?.CompilationError ?? "Compilation failed";
+        var error = def.CompilationError ?? "Compilation failed";
         return Observable.Return(
             WithCompilationErrorOverlay(node, nodeType, error, meshConfiguration));
+    }
+
+    /// <summary>
+    /// Dispatches an <see cref="IAssemblyStore"/> lookup. Sentinel collection
+    /// <c>"framework"</c> routes to <see cref="FrameworkAssemblyStore"/>; any
+    /// other value routes to the registered <see cref="IAssemblyStore"/>
+    /// (blob / filesystem). Null/empty collection short-circuits to a null
+    /// emission so callers can fall through to the error overlay.
+    /// </summary>
+    private static IObservable<string?> ResolveAssembly(
+        IMessageHub meshHub, string? collection, string nodeTypePath, long version)
+    {
+        if (string.IsNullOrEmpty(collection)) return Observable.Return<string?>(null);
+        var store = string.Equals(collection, FrameworkAssemblyStore.CollectionName, StringComparison.Ordinal)
+            ? (IAssemblyStore)FrameworkAssemblyStore.Instance
+            : meshHub.ServiceProvider.GetService<IAssemblyStore>() ?? NullAssemblyStore.Instance;
+        return store.TryGetAssemblyPath(nodeTypePath, version);
+    }
+
+    /// <summary>
+    /// Parses the leading <c>yyyyMMddHHmmss</c> timestamp from a Release version
+    /// (<c>{yyyyMMddHHmmss}-{8hash}</c>) into a long usable as the store version
+    /// key. Returns 0 when the version string does not match the expected shape —
+    /// the store's <c>TryGetAssemblyPath</c> will then miss and the caller falls
+    /// through to the error overlay.
+    /// </summary>
+    private static long TryParseReleaseVersion(string? version)
+    {
+        if (string.IsNullOrEmpty(version)) return 0;
+        var dash = version.IndexOf('-');
+        var head = dash > 0 ? version[..dash] : version;
+        return long.TryParse(head, out var v) ? v : 0;
     }
 
     public static MeshNode ApplyDefaultConfig(MeshNode node, MeshConfiguration meshConfiguration)
@@ -337,20 +383,38 @@ internal static class NodeTypeEnrichmentHelpers
             : node;
     }
 
+    /// <summary>
+    /// Static-fast-path overload that does not touch <c>AssemblyLocation</c> at all —
+    /// the framework assembly is already loaded by virtue of the static provider
+    /// being in-process. Use this for static / framework NodeTypes.
+    /// </summary>
     private static MeshNode ApplyEntry(
         MeshNode node,
-        string assemblyLocation,
+        Func<MessageHubConfiguration, MessageHubConfiguration>? hubConfig,
+        string nodeType,
+        MeshConfiguration meshConfiguration)
+        => ApplyEntry(node, localAssemblyPath: null, hubConfig, nodeType, meshConfiguration);
+
+    /// <summary>
+    /// Dynamic-path overload. The store-resolved <paramref name="localAssemblyPath"/>
+    /// is no longer stamped onto the produced instance MeshNode — the assembly
+    /// has already been loaded into a per-release ALC by
+    /// <c>compilationService.GetConfigurationsFromExistingAssembly</c> (which
+    /// the caller invoked to recover <paramref name="hubConfig"/>), so the
+    /// HubConfiguration delegate closure resolves against the right ALC by
+    /// construction. The localAssemblyPath argument is retained for symmetry
+    /// with the producing call sites; it's effectively unused here.
+    /// </summary>
+    private static MeshNode ApplyEntry(
+        MeshNode node,
+        string? localAssemblyPath,
         Func<MessageHubConfiguration, MessageHubConfiguration>? hubConfig,
         string nodeType,
         MeshConfiguration meshConfiguration)
     {
+        _ = localAssemblyPath;
         return CopyIconFromNodeType(
-            node with
-            {
-                HubConfiguration = node.HubConfiguration ?? hubConfig,
-                AssemblyLocation = node.AssemblyLocation
-                    ?? (string.IsNullOrEmpty(assemblyLocation) ? null : assemblyLocation)
-            },
+            node with { HubConfiguration = node.HubConfiguration ?? hubConfig },
             nodeType,
             meshConfiguration);
     }

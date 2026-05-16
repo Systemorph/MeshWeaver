@@ -1,4 +1,4 @@
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
@@ -46,7 +46,6 @@ public static class PartitionNodeType
         Name = "Partition",
         NodeType = NodeType,
         Icon = "/static/NodeTypeIcons/database.svg",
-        AssemblyLocation = typeof(PartitionNodeType).Assembly.Location,
         ExcludeFromContext = new HashSet<string> { "create", "search" },
         Content = new NodeTypeDefinition { DefaultNamespace = Namespace },
         HubConfiguration = config => config

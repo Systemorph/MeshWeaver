@@ -1,4 +1,4 @@
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Kernel;
 using MeshWeaver.Mesh;
@@ -47,7 +47,7 @@ public static class CodeNodeType
 
     /// <summary>
     /// Creates a MeshNode definition for the Code node type.
-    /// Code nodes are primary content (source files), not satellite metadata —
+    /// Code nodes are primary content (source files), not satellite metadata â€”
     /// they are browsable, addressable, and first-class children of their NodeType.
     /// </summary>
     public static MeshNode CreateMeshNode() => new(NodeType)
@@ -56,7 +56,6 @@ public static class CodeNodeType
         Icon = "/static/NodeTypeIcons/code.svg",
         IsSatelliteType = false,
         ExcludeFromContext = new HashSet<string> { "search", "create" },
-        AssemblyLocation = typeof(CodeNodeType).Assembly.Location,
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<CodeConfiguration>())
@@ -76,7 +75,7 @@ public static class CodeNodeType
     private static IMessageDelivery HandleExecuteScript(
         IMessageHub hub, IMessageDelivery<ExecuteScriptRequest> request)
     {
-        // One-shot read of this hub's own MeshNode via GetDataRequest (posted to self) —
+        // One-shot read of this hub's own MeshNode via GetDataRequest (posted to self) â€”
         // true request/response, no SubscribeRequest+immediate-unsubscribe. Handler
         // itself returns Processed() immediately; the callback below fires when the
         // response arrives.
@@ -97,7 +96,7 @@ public static class CodeNodeType
 
                 var submissionId = request.Message.SubmissionId ?? Guid.NewGuid().ToString("N");
 
-                // Create an ActivityLog MeshNode for this run — scripts'
+                // Create an ActivityLog MeshNode for this run â€” scripts'
                 // Log.LogInformation(...) calls will append to it, and callers
                 // subscribe via GetRemoteStream<MeshNode, MeshNodeReference> to
                 // watch progress live. Created via IMeshService.CreateNode so it
@@ -106,10 +105,10 @@ public static class CodeNodeType
                 // The Activity hub also HOSTS the kernel: ActivityNodeType.HubConfiguration
                 // adds AddKernelSubHubHandlers, so SubmitCodeRequest sent to the activity
                 // path lands inside the activity's own action block. Replies route
-                // through the standard MeshNode chain — no `kernel/*` standalone hub.
+                // through the standard MeshNode chain â€” no `kernel/*` standalone hub.
                 // Activities live under {ActivityParentPath}/_Activity/{guid}.
                 // ActivityParentPath defaults to the partition root (the user's home)
-                // when null — every script run shows up in the user's activity feed,
+                // when null â€” every script run shows up in the user's activity feed,
                 // and the satellite path is shallow enough that routing materialises
                 // it reliably. The originating Code node is preserved on MainNode
                 // + ActivityLog.HubPath, so the link back is intact regardless of
@@ -122,7 +121,7 @@ public static class CodeNodeType
                 // The "{viewer}" sentinel at any layer expands to the calling
                 // user's home (so docs partition can route runs into whoever's
                 // browsing them). Resolution composes into the create-activity
-                // chain — the per-partition lookup is async (workspace query)
+                // chain â€” the per-partition lookup is async (workspace query)
                 // so we keep it observable end-to-end.
                 var accessService = hub.ServiceProvider.GetService<MeshWeaver.Messaging.AccessService>();
                 var viewerHome = accessService?.Context?.ObjectId
@@ -152,7 +151,7 @@ public static class CodeNodeType
                         var activityId = submissionId;
                         var activityNamespace = $"{activityParentPath}/_Activity";
                         var activityPath = $"{activityNamespace}/{activityId}";
-                        // MainNode points to the activity's PARENT — the user's
+                        // MainNode points to the activity's PARENT â€” the user's
                         // home or configured target. SatelliteAccessRule delegates
                         // access to MainNode, so this must be a node the viewer
                         // can read. ActivityLog.HubPath preserves the originating
@@ -180,8 +179,8 @@ public static class CodeNodeType
                             // Node created. Fire SubmitCodeRequest at the Activity
                             // hub (which now hosts the kernel handlers). Forward
                             // the caller-supplied Inputs so the script can read
-                            // them off the `Inputs` global — the canonical channel
-                            // for script-templated operations (export, import…).
+                            // them off the `Inputs` global â€” the canonical channel
+                            // for script-templated operations (export, importâ€¦).
                             hub.Post(
                                 new SubmitCodeRequest(code.Code ?? string.Empty)
                                 {
@@ -194,14 +193,14 @@ public static class CodeNodeType
                             // Stamp Last{ExecutedAt,ExecutedBy,ActivityPath} onto
                             // the Code MeshNode so the Content area can show
                             // "Last executed: <when> by <who>" and embed the last
-                            // activity's Progress area for the Output pane —
+                            // activity's Progress area for the Output pane â€”
                             // without separately querying activity children.
                             try
                             {
                                 var workspace = hub.GetWorkspace();
                                 var stampLogger = hub.ServiceProvider.GetService<ILoggerFactory>()
                                     ?.CreateLogger("MeshWeaver.Graph.CodeNodeType");
-                                // .Subscribe is mandatory: Update is Observable.Create —
+                                // .Subscribe is mandatory: Update is Observable.Create â€”
                                 // the partition write only runs on Subscribe. Discarding
                                 // the observable silently drops the stamp.
                                 workspace.GetMeshNodeStream().Update(curr =>
@@ -225,7 +224,7 @@ public static class CodeNodeType
                             catch
                             {
                                 // Workspace might not be ready (cold-start race)
-                                // — missing fields are a UI nicety, not a
+                                // â€” missing fields are a UI nicety, not a
                                 // correctness invariant. Activity log still written.
                             }
 

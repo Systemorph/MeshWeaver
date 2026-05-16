@@ -1,11 +1,11 @@
-using MeshWeaver.Data;
+﻿using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
 /// Provides configuration for Approval nodes in the graph.
-/// Approval nodes are system-generated — excluded from search and create contexts.
+/// Approval nodes are system-generated â€” excluded from search and create contexts.
 /// </summary>
 public static class ApprovalNodeType
 {
@@ -33,7 +33,6 @@ public static class ApprovalNodeType
         Icon = "/static/NodeTypeIcons/checkmark.svg",
         IsSatelliteType = true,
         ExcludeFromContext = new HashSet<string> { "search", "create" },
-        AssemblyLocation = typeof(ApprovalNodeType).Assembly.Location,
         HubConfiguration = config => config
             .AddApprovalViews()
             .AddMeshDataSource(source => source

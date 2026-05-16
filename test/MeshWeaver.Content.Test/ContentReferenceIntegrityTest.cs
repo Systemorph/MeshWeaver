@@ -292,9 +292,9 @@ public class ContentReferenceIntegrityTest
             // are not hand-authored sample content, and their image refs are
             // whatever the generator emitted, so validating them here is wrong
             // (and flaky: a compile test running alongside this one drops fresh
-            // `_Release/*.json` files into the sample tree).
-            if (relativePath.Contains("/_Release/", StringComparison.Ordinal)
-                || relativePath.StartsWith("_Release/", StringComparison.Ordinal))
+            // `Release/*.json` files into the sample tree).
+            if (relativePath.Contains("/Release/", StringComparison.Ordinal)
+                || relativePath.StartsWith("Release/", StringComparison.Ordinal))
                 continue;
 
             var fileContent = File.ReadAllText(filePath);

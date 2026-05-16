@@ -166,10 +166,9 @@ public class NodeTypeEnrichmentDoubleCallTest
         {
             NodeType = "Systemorph/EventCalendar",
             // The shape WithCompilationErrorOverlay produces: HubConfiguration set
-            // (so the caller can instantiate a hub), but AssemblyLocation null
-            // because no DLL was actually emitted.
+            // (so the caller can instantiate a hub), but no NodeTypeDefinition
+            // Content because no DLL was actually emitted.
             HubConfiguration = c => c,
-            AssemblyLocation = null,
         };
 
         var sw = Stopwatch.StartNew();

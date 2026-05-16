@@ -80,8 +80,13 @@ public sealed class BlobAssemblyStore : IAssemblyStore
     }
 
     public IObservable<string> Put(string nodeTypePath, long version, byte[] assemblyBytes, byte[]? pdbBytes)
+        => PutWithLocation(nodeTypePath, version, assemblyBytes, pdbBytes)
+            .Select(loc => loc.LocalPath);
+
+    public IObservable<AssemblyStoreLocation> PutWithLocation(string nodeTypePath, long version, byte[] assemblyBytes, byte[]? pdbBytes)
     {
         var localPath = LocalPath(nodeTypePath, version);
+        var dllBlobName = BlobName(nodeTypePath, version, ".dll");
         return Observable.FromAsync(async () =>
         {
             await EnsureContainerAsync();
@@ -95,7 +100,7 @@ public sealed class BlobAssemblyStore : IAssemblyStore
 
             // Then upload. Overwrite=true is safe because two replicas compiling the same
             // version produce (near-)identical bytes.
-            var dllBlob = container.GetBlobClient(BlobName(nodeTypePath, version, ".dll"));
+            var dllBlob = container.GetBlobClient(dllBlobName);
             using (var ms = new MemoryStream(assemblyBytes))
                 await dllBlob.UploadAsync(ms, overwrite: true);
 
@@ -109,7 +114,7 @@ public sealed class BlobAssemblyStore : IAssemblyStore
             logger.LogInformation(
                 "Uploaded {NodeTypePath}@v{Version} ({Bytes} bytes) to {Container}",
                 nodeTypePath, version, assemblyBytes.Length, container.Name);
-            return localPath;
+            return new AssemblyStoreLocation(localPath, container.Name, dllBlobName);
         });
     }
 

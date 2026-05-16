@@ -28,7 +28,6 @@ public abstract class MeshNodeProviderAttribute : Attribute
         => new(prefix)
         {
             Name = name,
-            AssemblyLocation = GetType().Assembly.Location,
             HubConfiguration = hubConfiguration
         };
 

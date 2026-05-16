@@ -1,4 +1,4 @@
-#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
+﻿#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
 using System;
 using System.Collections.Generic;
@@ -63,7 +63,6 @@ public class SchemaValidationTest : MonolithMeshTestBase
             .AddMeshNodes(new MeshNode(TestNodeType)
             {
                 Name = "Test Product",
-                AssemblyLocation = typeof(SchemaValidationTest).Assembly.Location,
                 HubConfiguration = config => config
                     .AddMeshDataSource(source => source.WithContentType<TestProduct>())
                     .AddDefaultLayoutAreas()
@@ -131,7 +130,7 @@ public class SchemaValidationTest : MonolithMeshTestBase
 
     #endregion
 
-    #region Content Validation — Valid Content
+    #region Content Validation â€” Valid Content
 
     [Fact]
     public async Task Create_WithValidContent_Succeeds()
@@ -175,7 +174,7 @@ public class SchemaValidationTest : MonolithMeshTestBase
 
     #endregion
 
-    #region Update — Null Content Rejection
+    #region Update â€” Null Content Rejection
 
     [Fact]
     public async Task Update_WithNullContent_ReturnsValidationErrorAndSchema()
@@ -194,7 +193,7 @@ public class SchemaValidationTest : MonolithMeshTestBase
         });
         (await plugin.Create(createJson)).Should().StartWith("Created:");
 
-        // Update with content explicitly set to null — should be rejected
+        // Update with content explicitly set to null â€” should be rejected
         var updateJson = JsonSerializer.Serialize(new object[]
         {
             new
@@ -239,7 +238,7 @@ public class SchemaValidationTest : MonolithMeshTestBase
         });
         (await plugin.Create(createJson)).Should().StartWith("Created:");
 
-        // Update without including the content key at all — also rejected
+        // Update without including the content key at all â€” also rejected
         var updateJson = JsonSerializer.Serialize(new object[]
         {
             new

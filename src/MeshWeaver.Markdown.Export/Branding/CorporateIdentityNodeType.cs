@@ -1,4 +1,4 @@
-using MeshWeaver.Mesh;
+﻿using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Markdown.Export.Branding;
@@ -19,7 +19,6 @@ public static class CorporateIdentityNodeType
     {
         Name = "Corporate Identity",
         Icon = "/static/NodeTypeIcons/organization.svg",
-        AssemblyLocation = typeof(CorporateIdentityNodeType).Assembly.Location,
         HubConfiguration = config => config
             .WithTypes(typeof(CorporateIdentity))
     };

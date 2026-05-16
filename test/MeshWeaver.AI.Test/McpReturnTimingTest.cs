@@ -1,4 +1,4 @@
-#pragma warning disable CS1591
+﻿#pragma warning disable CS1591
 
 using System;
 using System.Collections.Generic;
@@ -27,14 +27,14 @@ namespace MeshWeaver.AI.Test;
 /// every <see cref="MeshPlugin"/> method must return within a bounded time.
 /// The original incident was <c>Patch</c> timing out at 30 s because an
 /// exception in the Subscribe callback left the TCS unresolved. This test
-/// suite guards every public method from that pattern — the test itself
+/// suite guards every public method from that pattern â€” the test itself
 /// asserts a much shorter deadline than a hang, so any regression fails
 /// the build instead of sitting on a 30 s xUnit timeout.
 ///
 /// Covers: <c>Get</c>, <c>Search</c>, <c>Create</c>, <c>Update</c>,
 /// <c>Patch</c>, <c>Delete</c>, <c>Move</c>, <c>Copy</c>,
 /// <c>GetDiagnostics</c>, <c>Recycle</c>. <c>NavigateTo</c> / <c>GetBaseUrl</c>
-/// are trivial string returns — no hub traffic — so not covered here.
+/// are trivial string returns â€” no hub traffic â€” so not covered here.
 /// <c>ExecuteScript</c> needs an actual kernel and lives in
 /// OrleansKernelProgressTest.
 ///
@@ -62,7 +62,6 @@ public class McpReturnTimingTest : MonolithMeshTestBase
             .AddMeshNodes(new MeshNode(TestNodeType)
             {
                 Name = "Test Product",
-                AssemblyLocation = typeof(McpReturnTimingTest).Assembly.Location,
                 HubConfiguration = config => config
                     .AddMeshDataSource(source => source.WithContentType<TestProduct>())
                     .AddDefaultLayoutAreas()
@@ -76,7 +75,7 @@ public class McpReturnTimingTest : MonolithMeshTestBase
         var completed = await Task.WhenAny(call, Task.Delay(budgetMs));
         if (completed != call)
             throw new Xunit.Sdk.XunitException(
-                $"{methodName} did not return within {budgetMs} ms — suspect an unresolved TaskCompletionSource " +
+                $"{methodName} did not return within {budgetMs} ms â€” suspect an unresolved TaskCompletionSource " +
                 $"or an un-awaited Subscribe callback in the MCP plugin. See PatchWorkspaceAckTest's " +
                 $"cached-display incident for the canonical pattern.");
         return await call;
@@ -110,7 +109,7 @@ public class McpReturnTimingTest : MonolithMeshTestBase
     {
         var plugin = CreatePlugin();
         // Narrow search to a specific path scope so we don't enumerate the whole
-        // test mesh — the budget guarantee is about the Search API itself returning,
+        // test mesh â€” the budget guarantee is about the Search API itself returning,
         // not about how fast it can scan every provider in a large cluster.
         var id = $"search-{Guid.NewGuid():N}";
         await SeedAsync(plugin, id);
@@ -214,7 +213,7 @@ public class McpReturnTimingTest : MonolithMeshTestBase
     public async Task GetDiagnostics_ReturnsWithinBudget()
     {
         var plugin = CreatePlugin();
-        // Non-existent path is valid input — we're testing the timing, not the result.
+        // Non-existent path is valid input â€” we're testing the timing, not the result.
         var call = plugin.GetDiagnostics($"@ACME/doesnotexist-{Guid.NewGuid():N}");
         var result = await BoundedAsync(call, nameof(plugin.GetDiagnostics));
         result.Should().NotBeNull();
@@ -233,7 +232,7 @@ public class McpReturnTimingTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Minimal IAgentChat stub — MeshPlugin only reads ExecutionContext + Context,
+    /// Minimal IAgentChat stub â€” MeshPlugin only reads ExecutionContext + Context,
     /// so we can return nulls without breaking anything. Duplicated locally instead
     /// of shared across tests so each test file is self-contained.
     /// </summary>

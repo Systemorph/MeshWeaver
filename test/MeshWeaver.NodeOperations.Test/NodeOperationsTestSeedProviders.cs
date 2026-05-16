@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -43,10 +43,10 @@ internal static class NodeOperationsTypeNames
 /// to back the namespace with a read-only
 /// <see cref="MeshWeaver.Hosting.Persistence.StaticNodePartitionStore"/>
 /// instead of a writable
-/// <see cref="MeshWeaver.Hosting.Persistence.InMemoryStorageAdapter"/> —
+/// <see cref="MeshWeaver.Hosting.Persistence.InMemoryStorageAdapter"/> â€”
 /// so the test-only NodeType definition stays addressable by routing without
 /// being mutable. See
-/// <c>Doc/Architecture/PartitionedPersistence.md</c> §"Where Partitions Come From".
+/// <c>Doc/Architecture/PartitionedPersistence.md</c> Â§"Where Partitions Come From".
 /// </summary>
 internal static class NodeOperationsTypeProviderHelpers
 {
@@ -68,7 +68,6 @@ internal static class NodeOperationsTypeProviderHelpers
         {
             Name = displayName,
             NodeType = "NodeType",
-            AssemblyLocation = assembly.Location,
             HubConfiguration = c => c.AddMeshDataSource(),
             Content = new NodeTypeDefinition
             {
@@ -83,12 +82,12 @@ internal static class NodeOperationsTypeProviderHelpers
     /// to back the namespace with a read-only
     /// <see cref="MeshWeaver.Hosting.Persistence.StaticNodePartitionStore"/>
     /// so the type-def is reachable via <c>meshStorage.GetNodeAsync(typeName)</c>
-    /// — which is what
+    /// â€” which is what
     /// <c>NodeTypeService.GatherInputsAsync</c> does to find the
     /// <see cref="NodeTypeDefinition"/> content for compilation. Static-provider
     /// partitions are NEVER wrapped by <c>InMemoryStorageAdapter</c>; they
     /// are immutable. See
-    /// <c>Doc/Architecture/PartitionedPersistence.md</c> §"Where Partitions Come From".
+    /// <c>Doc/Architecture/PartitionedPersistence.md</c> Â§"Where Partitions Come From".
     /// </summary>
     public static MeshNode StaticPartitionFor(string typeNamespace) =>
         new(typeNamespace, "Admin/Partition")
