@@ -69,6 +69,30 @@ path:foo/bar/baz|foo/bar|foo sort:length(path)-desc limit:1
 
 → one Postgres query, indexed `IN (...)` lookup, server-side sort by path length, single row back.
 
+## Path Resolution (longest-prefix match)
+
+The routing layer asks the same question every page load: "for the URL path `foo/bar/baz`, which MeshNode owns the longest matching prefix?" Conceptually that's:
+
+```csharp
+nodes.Where(node => requestedPath.StartsWith(node.Path))
+     .OrderByDescending(node => node.Path.Length)
+     .First();
+```
+
+The canonical query idiom — backend-agnostic, one round-trip on indexed backends, in-memory walk on pedestrian ones:
+
+```
+path:foo/bar/baz scope:ancestorsandself sort:length(path)-desc limit:1
+```
+
+- **Postgres** pushes the ancestor set down as a single indexed `IN (...)` lookup with a server-side `ORDER BY length(path) DESC LIMIT 1` — one row back, no client-side ancestor enumeration.
+- **InMemory / FileSystem** walks candidate keys (no path index). Bounded — at most one entry per path segment — and cached at the resolver level.
+- **Static** providers (built-in roles, agents, partition roots, `AddMeshNodes` seed) filter their in-memory set with the same `StartsWith` predicate.
+
+`scope:ancestorsandself` is the explicit form (returns self + ancestors). `sort:length(path)-desc limit:1` collapses the candidate set to the deepest. Both clauses are required: the scope expands the candidate set, the sort+limit picks the winner.
+
+Callers that want the full ancestor chain (breadcrumbs, parent navigation) omit `limit:1`.
+
 ## Empty Values
 ```
 description:       # Matches nodes with no description

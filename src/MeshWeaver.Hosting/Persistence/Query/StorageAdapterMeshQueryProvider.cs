@@ -385,7 +385,14 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             yield break;
         }
 
-        var pathsToSearch = GetPathsForScope(basePath, effectiveScope);
+        // Multi-value `path:a|b|c` — parsedQuery.Paths carries the full IN list.
+        // For the path-resolution idiom (`path:a|b|c sort:length(path)-desc limit:1`)
+        // this is "probe every candidate ancestor and take the deepest hit", so
+        // exact probes across the whole list are exactly what we want — no scope
+        // walk on top.
+        var pathsToSearch = parsedQuery.Paths is { Count: > 1 } multi
+            ? multi.ToList()
+            : GetPathsForScope(basePath, effectiveScope);
         var emittedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         // Exact-path probes — pure-observable read+match for each path. The
