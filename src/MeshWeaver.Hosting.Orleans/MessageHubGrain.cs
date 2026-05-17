@@ -1,8 +1,8 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
-using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
 using System.Reflection;
+using System.Threading.Channels;
 using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -24,23 +24,22 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         meshHub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
 
     /// <summary>
-    /// Built hub as an observable — <see cref="ReplaySubject{T}"/>(buffer=1) IS the queue.
-    /// Every <see cref="DeliverMessage"/> subscribes, Posts the message when the hub emits,
-    /// and completes its TCS — Rx caches the emission so late subscribers (post-activation)
-    /// get it synchronously, and early subscribers (pre-activation) wait without blocking
-    /// any thread. Activation fault: OnError surfaces on every (current + future) subscriber,
-    /// each one immediately converting to a <see cref="DeliveryFailure"/>.
-    ///
-    /// <para>Per <c>Doc/Architecture/AsynchronousCalls.md</c> — no <c>WaitAsync</c>, no
-    /// readiness gate, no 30 s burn. The subject's natural buffering replaces the
-    /// previous TCS + 30 s WaitAsync pattern.</para>
+    /// Pending-delivery FIFO. Every <see cref="DeliverMessage"/> writes a
+    /// <c>(delivery, TCS)</c> tuple and returns the TCS task. When activation
+    /// completes, <see cref="StartPendingDrainer"/> reads from the channel in
+    /// FIFO order and dispatches into the built hub — strict ordering even
+    /// when the grain is <c>[Reentrant]</c> and multiple <c>DeliverMessage</c>
+    /// calls race before the hub is ready (the earlier <see cref="System.Reactive.Subjects.ReplaySubject{T}"/>
+    /// shape had non-deterministic subscriber order under concurrent Subscribe).
+    /// Per <c>Doc/Architecture/AsynchronousCalls.md</c> — no <c>WaitAsync</c>,
+    /// no readiness gate, no 30 s burn.
     /// </summary>
-    private readonly ReplaySubject<IMessageHub> _hubReady = new(bufferSize: 1);
-
-    /// <summary>Set true once <see cref="CompleteActivation"/> emits onto <see cref="_hubReady"/>.</summary>
-    private bool _hubEmitted;
+    private readonly Channel<(IMessageDelivery Delivery, TaskCompletionSource<IMessageDelivery> Tcs)> _pending =
+        Channel.CreateUnbounded<(IMessageDelivery, TaskCompletionSource<IMessageDelivery>)>(
+            new UnboundedChannelOptions { SingleReader = true, AllowSynchronousContinuations = false });
 
     private IMessageHub? _hub;
+    private Exception? _activationFault;
 
     private IDisposable? _activationSubscription;
 
@@ -152,21 +151,22 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 ex =>
                 {
                     logger.LogError(ex, "[ACTIVATE] Grain {StreamId}: activation faulted for {Path}", streamId, addressPath);
-                    _hubReady.OnError(ex);
+                    _activationFault = ex;
+                    FailAllPending($"Hub activation failed for {streamId}: {ex.Message}");
                 },
                 () =>
                 {
                     // Source completed without ever emitting a node with HubConfiguration.
-                    // Causes: catalog found no node at this address (lookup returned null),
-                    // or every emitted node failed the HubConfiguration filter (enrichment
-                    // gave up). Without this completion handler, _hubReady stays pending
-                    // and every queued DeliverMessage waits forever — the OnError below
-                    // surfaces the failure on every subscriber immediately.
-                    if (_hubEmitted) return;
-                    logger.LogWarning("[ACTIVATE] Grain {StreamId}: source completed with no usable node for {Path} — failing hub-readiness so callers see NotFound immediately",
+                    // Causes: catalog found no node at this address, or every emitted node
+                    // failed the HubConfiguration filter (enrichment gave up). Fail-fast
+                    // every queued DeliverMessage so callers see NotFound immediately
+                    // instead of waiting forever.
+                    if (_hub is not null) return;
+                    logger.LogWarning("[ACTIVATE] Grain {StreamId}: source completed with no usable node for {Path} — failing pending deliveries",
                         streamId, addressPath);
-                    _hubReady.OnError(new InvalidOperationException(
-                        $"No MeshNode resolvable for address '{addressPath}'. Either the node does not exist or no query provider claims its partition."));
+                    _activationFault = new InvalidOperationException(
+                        $"No MeshNode resolvable for address '{addressPath}'. Either the node does not exist or no query provider claims its partition.");
+                    FailAllPending(_activationFault.Message);
                     DeactivateOnIdle();
                 });
 
@@ -207,8 +207,9 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     }
 
     /// <summary>
-    /// Builds the hosted hub and emits it onto <see cref="_hubReady"/>. Called from the
-    /// activation subscription's onNext. Idempotent via <see cref="_hubEmitted"/>.
+    /// Builds the hosted hub and starts the pending-delivery drainer. Idempotent —
+    /// re-entry while <see cref="_hub"/> is already set is a no-op. On build failure,
+    /// fails every queued delivery via <see cref="FailAllPending"/> so no caller hangs.
     /// </summary>
     private void CompleteActivation(
         string streamId,
@@ -217,24 +218,15 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         MeshNode node,
         IObservable<MeshNode>? ownNodeStream = null)
     {
-        if (_hubEmitted) return;
+        if (_hub is not null) return;
 
         try
         {
-            // No explicit Assembly.LoadFrom here — by the time we arrive,
-            // either (a) node.HubConfiguration is a static delegate captured by
-            // an in-process provider (framework assembly already in the default
-            // ALC), or (b) NodeTypeEnrichmentHelpers ran the dynamic path which
-            // resolved the bytes through IAssemblyStore and loaded them into a
-            // dedicated ALC via CompilationCacheService.GetOrCreateLoadContextForPath
-            // while extracting the HubConfiguration delegate. Either way the
-            // delegate is callable; a top-of-AppDomain LoadFrom would only
-            // duplicate the assembly across two ALCs.
-
             if (node.HubConfiguration is null)
             {
-                _hubReady.OnError(new ArgumentException(
-                    $"No hub configuration resolved for {node.Path} (NodeType: {node.NodeType})."));
+                _activationFault = new ArgumentException(
+                    $"No hub configuration resolved for {node.Path} (NodeType: {node.NodeType}).");
+                FailAllPending(_activationFault.Message);
                 return;
             }
 
@@ -250,14 +242,19 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 
             hub.RegisterForDisposal(_ => DeactivateOnIdle());
             _hub = hub;
-            _hubEmitted = true;
-            _hubReady.OnNext(hub);
             logger.LogInformation("[ACTIVATE] Grain {StreamId} ready", streamId);
+
+            // Start the single-consumer drainer now that the hub exists. The drainer
+            // reads from the FIFO channel in caller-arrival order — strict ordering
+            // even though the grain is [Reentrant] and pre-activation DeliverMessage
+            // calls may have raced.
+            _ = StartPendingDrainer();
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Grain {StreamId}: CompleteActivation failed", streamId);
-            _hubReady.OnError(ex);
+            _activationFault = ex;
+            FailAllPending($"Hub build failed for {streamId}: {ex.Message}");
         }
     }
 
@@ -293,19 +290,16 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 
 
     /// <summary>
-    /// Subscribes to <see cref="_hubReady"/> (a ReplaySubject(1) — Rx-native queue):
-    /// when the hub is built the subscription fires synchronously off the cached
-    /// emission and Posts the delivery; when activation hasn't completed yet, the
-    /// subscription waits (no thread blocked); when activation faulted, OnError
-    /// converts to a <see cref="DeliveryFailure"/>. Orleans grain calls await this
-    /// Task — but the wait is the message queue itself, not a poll.
+    /// Writes the delivery into the FIFO pending channel and returns the TCS
+    /// task. When the hub is ready, <see cref="StartPendingDrainer"/> reads in
+    /// FIFO order and dispatches each. When activation faulted, both this
+    /// method and the drainer surface the fault as a <see cref="DeliveryFailure"/>.
+    /// No wait, no scheduler-hop, no order race.
     /// </summary>
     public Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery)
     {
-        var tcs = new TaskCompletionSource<IMessageDelivery>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        // Apply user identity from Orleans RequestContext to the delivery once,
-        // up-front — the captured delivery flows through whichever branch fires.
+        // Apply user identity from Orleans RequestContext up-front, while we
+        // still see RequestContext (after the channel hop it's gone).
         var userId = RequestContext.Get("UserId") as string;
         var userName = RequestContext.Get("UserName") as string;
         if (!string.IsNullOrEmpty(userId) &&
@@ -318,18 +312,58 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
             });
         }
 
-        _hubReady.Take(1).Subscribe(
-            hub =>
+        var tcs = new TaskCompletionSource<IMessageDelivery>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        if (_activationFault is { } fault)
+        {
+            tcs.TrySetResult(delivery.Failed(
+                $"Hub activation failed for {this.GetPrimaryKeyString()}: {fault.Message}"));
+            return tcs.Task;
+        }
+
+        if (!_pending.Writer.TryWrite((delivery, tcs)))
+        {
+            // Channel is completed (deactivation) — fail-fast.
+            tcs.TrySetResult(delivery.Failed(
+                $"Hub deactivated before delivery for {this.GetPrimaryKeyString()}."));
+        }
+        return tcs.Task;
+    }
+
+    /// <summary>
+    /// Single-consumer drainer. Started from <see cref="CompleteActivation"/> once
+    /// the hub instance is built. Reads pending deliveries in FIFO order and
+    /// dispatches them into the hub's action block, completing each TCS with
+    /// the hub's <see cref="IMessageHub.DeliverMessage"/> result. Loops until
+    /// the channel is completed (deactivation).
+    /// </summary>
+    private async Task StartPendingDrainer()
+    {
+        var hub = _hub!;
+        try
+        {
+            await foreach (var (delivery, tcs) in _pending.Reader.ReadAllAsync())
             {
                 try { tcs.TrySetResult(hub.DeliverMessage(delivery)); }
                 catch (Exception ex) { tcs.TrySetException(ex); }
-            },
-            ex => tcs.TrySetResult(delivery.Failed(
-                $"Hub activation failed for {this.GetPrimaryKeyString()}: {ex.Message}")),
-            () => tcs.TrySetResult(delivery.Failed(
-                $"Hub deactivated before delivery for {this.GetPrimaryKeyString()}.")));
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Pending-drainer faulted on {Grain}", this.GetPrimaryKeyString());
+        }
+    }
 
-        return tcs.Task;
+    /// <summary>
+    /// Drains any remaining queued items with a <see cref="DeliveryFailure"/>
+    /// when activation faults or the grain deactivates before the hub is built.
+    /// Idempotent — Completing twice is a no-op via TryComplete + TryRead.
+    /// </summary>
+    private void FailAllPending(string reason)
+    {
+        _pending.Writer.TryComplete();
+        while (_pending.Reader.TryRead(out var item))
+            item.Tcs.TrySetResult(item.Delivery.Failed(reason));
     }
 
 
@@ -343,14 +377,14 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         _activationSubscription?.Dispose();
         _activationSubscription = null;
 
-        // Resolve the hub if activation completed; otherwise dispose the subject so any
-        // pending DeliverMessage subscribers wake up with OnCompleted and fail-fast.
+        // Close the pending channel. The drainer's `await foreach` exits;
+        // any queued items the drainer hasn't picked up yet get failed by
+        // FailAllPending so no caller's task hangs forever.
         var hub = _hub;
         if (hub is null)
-        {
-            try { _hubReady.OnCompleted(); } catch { /* already terminated */ }
-        }
-        _hubReady.Dispose();
+            FailAllPending($"Hub deactivated before activation for {grainId}.");
+        else
+            _pending.Writer.TryComplete();
 
         if (hub != null)
         {
