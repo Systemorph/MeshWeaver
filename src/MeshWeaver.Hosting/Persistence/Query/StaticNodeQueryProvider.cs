@@ -299,7 +299,7 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
         {
             foreach (var node in _providerNodes)
             {
-                if (!string.IsNullOrEmpty(parsed.Path) && !MatchesPath(node, parsed)) continue;
+                if (!string.IsNullOrEmpty(parsed.Path) && !MatchesAnyPath(node, parsed)) continue;
                 if (!_evaluator.Matches(node, parsed)) continue;
                 if (IsExcludedByContext(node, context)) continue;
                 if (parsed.IsMain == true && node.MainNode != node.Path) continue;
@@ -312,7 +312,7 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
         {
             foreach (var node in _configNodes)
             {
-                if (!MatchesPath(node, parsed)) continue;
+                if (!MatchesAnyPath(node, parsed)) continue;
                 if (!_evaluator.Matches(node, parsed)) continue;
                 if (IsExcludedByContext(node, context)) continue;
                 if (parsed.IsMain == true && node.MainNode != node.Path) continue;
@@ -320,6 +320,55 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
             }
         }
         return items;
+    }
+
+    /// <summary>
+    /// Multi-value path support: <c>path:a|b|c</c> parses to
+    /// <see cref="ParsedQuery.Paths"/> with three entries. <see cref="MatchesPath"/>
+    /// only considers <see cref="ParsedQuery.Path"/> (the first value) — which
+    /// silently drops ancestor matches for path-resolution queries
+    /// (<see cref="MeshWeaver.Hosting.PathResolutionService"/> emits
+    /// <c>path:a/b/c/d|a/b/c|a/b|a</c>). This helper iterates every path value
+    /// and returns true on any match, mirroring the loop in
+    /// <c>StorageAdapterMeshQueryProvider</c>.
+    /// </summary>
+    private static bool MatchesAnyPath(MeshNode node, ParsedQuery parsed)
+    {
+        if (parsed.Paths is { Count: > 1 } multi)
+        {
+            foreach (var p in multi)
+            {
+                if (MatchesPathValue(node, p, parsed.Scope))
+                    return true;
+            }
+            return false;
+        }
+        return MatchesPath(node, parsed);
+    }
+
+    private static bool MatchesPathValue(MeshNode node, string path, QueryScope scope)
+    {
+        var nodePath = node.Path;
+        var nodeNamespace = node.Namespace ?? "";
+        return scope switch
+        {
+            QueryScope.Exact =>
+                string.Equals(nodePath, path, StringComparison.OrdinalIgnoreCase),
+            QueryScope.Children =>
+                string.Equals(nodeNamespace, path, StringComparison.OrdinalIgnoreCase),
+            QueryScope.Descendants =>
+                nodePath.StartsWith(path + "/", StringComparison.OrdinalIgnoreCase),
+            QueryScope.Subtree =>
+                string.Equals(nodePath, path, StringComparison.OrdinalIgnoreCase)
+                || nodePath.StartsWith(path + "/", StringComparison.OrdinalIgnoreCase),
+            QueryScope.Hierarchy =>
+                string.Equals(nodePath, path, StringComparison.OrdinalIgnoreCase)
+                || nodePath.StartsWith(path + "/", StringComparison.OrdinalIgnoreCase),
+            QueryScope.AncestorsAndSelf =>
+                string.Equals(nodePath, path, StringComparison.OrdinalIgnoreCase)
+                || path.StartsWith(nodePath + "/", StringComparison.OrdinalIgnoreCase),
+            _ => string.Equals(nodePath, path, StringComparison.OrdinalIgnoreCase),
+        };
     }
 
     public Task<T?> SelectAsync<T>(string path, string property, JsonSerializerOptions options, CancellationToken ct = default)
