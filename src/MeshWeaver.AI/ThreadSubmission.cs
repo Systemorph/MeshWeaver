@@ -594,14 +594,16 @@ internal static class ThreadSubmissionServer
                         return System.Reactive.Linq.Observable.Return(System.Reactive.Unit.Default);
                     }
 
-                    // CRITICAL: don't complete until the dispatch's commit (IsExecuting=true)
-                    // is visible on the workspace. The outer WatchSubmission Concat waits on
-                    // this completion before subscribing to the next dispatch — without it,
-                    // queued dispatches all re-read state BEFORE the first commit lands
-                    // and each one fresh-Plans + dispatches a duplicate round. Symptom: the
-                    // Resubmit flake fired 10 dispatches per single user-state change.
+                    // Wait until OUR commit is visible — i.e. dispatch.ResponseMessageId
+                    // appears in Thread.Messages. Waiting for `IsExecuting=true` was racey:
+                    // the workspace's MeshNode cache could emit a stale IsExecuting=true
+                    // from the prior round on Subscribe, completing the wait before our
+                    // commit landed, freeing the single-flight guard, and letting the
+                    // next dispatch fire immediately. Response id check is unique to this
+                    // round so it cannot match stale state.
+                    var responseId = dispatch.ResponseMessageId;
                     return hub.GetWorkspace().GetMeshNodeStream()
-                        .Where(n => n?.Content is MeshThread { IsExecuting: true })
+                        .Where(n => n?.Content is MeshThread mt && mt.Messages.Contains(responseId))
                         .Take(1)
                         .Timeout(TimeSpan.FromSeconds(10))
                         .Catch<MeshNode, Exception>(_ =>
