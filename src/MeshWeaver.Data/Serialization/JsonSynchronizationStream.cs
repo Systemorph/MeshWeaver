@@ -83,31 +83,13 @@ public static class JsonSynchronizationStream
         object feed, System.Reflection.PropertyInfo pathProperty, string ownerPath, Action onOwnerChanged)
         where TEvent : class
     {
-        // Recycle/recreate detection: only Created and Deleted indicate the
-        // owning hub may have been recycled (grain re-activated, persistence
-        // path replaced). Updated events fire on every content write — including
-        // NodeType compile-status flips that fan out via IMeshChangeFeed — and
-        // resubscribing on every Update collapses into N parallel SubscribeRequests
-        // that race the owner's regular pump and time out at 30 s. Repro:
-        // CodeEditRecompileTest.NodeType_RequestedReleasePath_PinsToHistoricalRelease.
-        // Comment at the caller (line ~321) already states this intent; the
-        // implementation was the missing piece.
-        var kindProperty = typeof(TEvent).GetProperty("Kind");
         Action<TEvent> handler = evt =>
         {
             try
             {
-                if (pathProperty.GetValue(evt) is not string p
-                    || !string.Equals(p, ownerPath, StringComparison.OrdinalIgnoreCase))
-                    return;
-                if (kindProperty?.GetValue(evt) is { } kind)
-                {
-                    var name = kind.ToString();
-                    if (!string.Equals(name, "Created", StringComparison.Ordinal)
-                        && !string.Equals(name, "Deleted", StringComparison.Ordinal))
-                        return;
-                }
-                onOwnerChanged();
+                if (pathProperty.GetValue(evt) is string p
+                    && string.Equals(p, ownerPath, StringComparison.OrdinalIgnoreCase))
+                    onOwnerChanged();
             }
             catch { /* keep change-feed alive on handler faults */ }
         };
