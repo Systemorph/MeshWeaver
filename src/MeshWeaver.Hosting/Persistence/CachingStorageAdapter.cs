@@ -196,7 +196,7 @@ public class CachingStorageAdapter : IStorageAdapter
         return node;
     }
 
-    public IObservable<MeshNode> Write(MeshNode node, JsonSerializerOptions options)
+    public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
     {
         var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier);
         return innerAdapter.Write(node, options)

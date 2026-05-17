@@ -50,9 +50,12 @@ public sealed class StaticNodeStorageAdapter : IStorageAdapter
         });
 
     /// <inheritdoc/>
-    public IObservable<MeshNode> Write(MeshNode node, JsonSerializerOptions options)
-        => Observable.Throw<MeshNode>(new NotSupportedException(
-            $"StaticNodeStorageAdapter is read-only; cannot write '{node.Path}'."));
+    /// <remarks>
+    /// Read-only — returns null so the try-then-claim chain moves on to the
+    /// next writable provider.
+    /// </remarks>
+    public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
+        => Observable.Return<MeshNode?>(null);
 
     /// <inheritdoc/>
     public IObservable<string> Delete(string path)

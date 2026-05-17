@@ -21,8 +21,13 @@ public interface IStorageAdapter
     /// <summary>Reads a node from storage. Emits the node (or null) and completes.</summary>
     IObservable<MeshNode?> Read(string path, JsonSerializerOptions options);
 
-    /// <summary>Writes a node to storage and emits the written node.</summary>
-    IObservable<MeshNode> Write(MeshNode node, JsonSerializerOptions options);
+    /// <summary>
+    /// Writes a node to storage. Emits the written node when this adapter
+    /// accepted the path; emits <c>null</c> when the path isn't owned here
+    /// so the try-then-claim chain in <c>PersistenceService.Write</c> moves
+    /// on to the next writable provider.
+    /// </summary>
+    IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options);
 
     /// <summary>Deletes a node from storage and emits the deleted path.</summary>
     IObservable<string> Delete(string path);
