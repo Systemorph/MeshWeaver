@@ -9,7 +9,7 @@ namespace MeshWeaver.Graph.Configuration;
 /// Resolves hub configuration for a MeshNode via
 /// <see cref="NodeTypeEnrichmentHelpers.EnrichWithNodeType"/>: stateless,
 /// reads the live NodeType MeshNode through the shared
-/// <see cref="INodeTypeStreamCache"/>. No INodeTypeService caches.
+/// <see cref="IMeshNodeStreamCache"/>. No INodeTypeService caches.
 /// </summary>
 internal class NodeConfigurationResolver(
     IMessageHub meshHub,
