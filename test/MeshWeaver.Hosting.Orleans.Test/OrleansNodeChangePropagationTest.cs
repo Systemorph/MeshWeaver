@@ -104,6 +104,9 @@ public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITes
     [Fact(Timeout = 60000)]
     public async Task Delegation_NodeChanges_PropagateFromSubThread()
     {
+        SharedOrleansFixture.SwappableFactory.SetInner(new NodeChangeTestChatClientFactory());
+        try
+        {
         var ct = new CancellationTokenSource(50.Seconds()).Token;
         var client = await GetClientAsync();
 
@@ -214,6 +217,11 @@ public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITes
         docChange.VersionAfter.Should().BeGreaterThan(docChange.VersionBefore ?? 0,
             "aggregated version should show progression from create to patch");
         Output.WriteLine($"Aggregated: {docChange.Path} {docChange.Operation} v{docChange.VersionBefore}â†’v{docChange.VersionAfter}");
+        }
+        finally
+        {
+            SharedOrleansFixture.SwappableFactory.Reset();
+        }
     }
 
     /// <summary>
