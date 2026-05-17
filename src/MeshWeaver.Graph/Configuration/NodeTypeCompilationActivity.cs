@@ -59,7 +59,7 @@ internal static class NodeTypeCompilationActivity
                 NodeType = ActivityNodeType.NodeType,
                 MainNode = nodeTypePath,
                 State = MeshNodeState.Active,
-                Content = new ActivityLog("NodeTypeCompilation")
+                Content = new ActivityLog(ActivityCategory.Compilation)
                 {
                     Id = activityId,
                     HubPath = nodeTypePath,
