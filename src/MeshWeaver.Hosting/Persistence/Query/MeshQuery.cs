@@ -296,10 +296,15 @@ public class MeshQuery : IMeshQueryCore
     /// condition and no <c>path:</c> filter) fan to every provider — the
     /// <see cref="IMeshQueryProvider.Matches"/> contract documents this.
     /// </summary>
-    private IReadOnlyList<IMeshQueryProvider> SelectMatchingProviders(IReadOnlyList<string> namespaces)
-        => namespaces.Count == 0
-            ? providers
-            : providers.Where(p => p.Matches(namespaces)).ToList();
+    /// <remarks>
+    /// Always fans out to every provider. Each provider self-filters by its
+    /// owned-namespaces / partition cache and returns empty for queries
+    /// outside its scope. The legacy <c>IMeshQueryProvider.Matches</c>
+    /// predicate was a centralised pre-filter; removing it lets each
+    /// provider own the "is this mine?" decision in one place.
+    /// </remarks>
+    private IReadOnlyList<IMeshQueryProvider> SelectMatchingProviders(IReadOnlyList<string> _)
+        => providers;
 
     /// <summary>
     /// Computes the namespace candidates for a <see cref="MeshQueryRequest"/>

@@ -1,36 +1,25 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
-using System.Reactive.Linq;
-using System.Reactive.Subjects;
-using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
-using MeshWeaver.Messaging;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 
 namespace MeshWeaver.Hosting.PostgreSql;
 
 /// <summary>
-/// <see cref="IPartitionStorageProvider"/> implementation backing Postgres
-/// partitions. Replaces the legacy <see cref="PostgreSqlPartitionedStoreFactory"/>
-/// shared-pool model with per-(schema, table) adapters that own a tiny
-/// <see cref="NpgsqlDataSource"/> with <c>MaxPoolSize=1</c>.
+/// Postgres-backed <see cref="IPartitionStorageProvider"/>. Owns a single
+/// shared <see cref="NpgsqlDataSource"/>; the actual storage adapter
+/// (<see cref="PostgreSqlPathRoutingAdapter"/>) routes per-path to a
+/// per-schema <see cref="PostgreSqlStorageAdapter"/>.
 ///
-/// <para><b>Live partition routing.</b> Per first-segment we hold a
-/// <see cref="ReplaySubject{T}"/> of <see cref="PartitionDefinition"/>?.
-/// On first <see cref="Matches"/>/<see cref="ResolveDefinition"/> against
-/// a previously-unseen first-segment we kick off a schema-existence probe
-/// against <c>information_schema.schemata</c> on the thread pool and push
-/// the result into the subject (<c>null</c> = no schema, hence no
-/// partition; non-null = synthesised <see cref="PartitionDefinition"/>).
-/// The <see cref="SubscribeToWorkspace"/> call later attaches an
-/// <c>ObserveQuery</c> subscription that updates each subject when its
-/// matching <c>Admin/Partition/*</c> row is added or removed — same
-/// <see cref="ReplaySubject{T}"/>, just refreshed values, so any
-/// subscriber (PersistenceService, PathRoutingAdapter) sees the new
-/// state without needing to know who's emitting.</para>
+/// <para><b>Partition discovery is lazy.</b> No upfront enumeration of
+/// schemas, no <c>ObserveQuery</c> fan-in of <c>Admin/Partition/*</c>
+/// rows. Each first-segment is cached in a per-namespace
+/// <see cref="System.Reactive.Subjects.ReplaySubject{T}"/> (held by
+/// <see cref="PgPartitionCache"/>) probed on first access; cross-silo
+/// invalidation comes from the <c>partition_changes</c> pg_notify channel
+/// via <see cref="PgPartitionNotifyListener"/>.</para>
 ///
 /// <para>See <c>Doc/Architecture/PartitionStorageHubs.md</c>.</para>
 /// </summary>
@@ -41,32 +30,19 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     private readonly PostgreSqlStorageOptions _options;
     private readonly IEmbeddingProvider? _embeddingProvider;
     private readonly Action<NpgsqlDataSourceBuilder>? _configureDataSource;
+    private readonly ILogger<PostgreSqlPartitionStorageProvider>? _logger;
+    private readonly PgPartitionCache _cache;
 
-    /// <summary>
-    /// Per first-segment <see cref="ReplaySubject{T}"/>. The subject buffers
-    /// the latest <see cref="PartitionDefinition"/>? for that namespace so
-    /// every subscriber receives the current value on subscribe and every
-    /// subsequent update. <c>null</c> means "no partition for this segment"
-    /// — <see cref="Matches"/> maps the null/non-null projection to a bool
-    /// observable.
-    /// </summary>
-    private readonly ConcurrentDictionary<string, ReplaySubject<PartitionDefinition?>> _partitionSubjects =
-        new(StringComparer.OrdinalIgnoreCase);
-
+    /// <summary>Per-silo memo of "CREATE SCHEMA already ran this session".</summary>
     private readonly ConcurrentDictionary<string, byte> _schemasInitialized =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, Task> _schemaInitTasks =
         new(StringComparer.OrdinalIgnoreCase);
-    private readonly ILogger<PostgreSqlPartitionStorageProvider>? _logger;
-    private IDisposable? _partitionSubscription;
 
-    /// <summary>
-    /// Internal access to the shared base <see cref="NpgsqlDataSource"/> so
-    /// the host service that drives schema discovery can issue an
-    /// <c>information_schema.tables</c> query against the same Postgres
-    /// instance without re-resolving DI.
-    /// </summary>
     internal NpgsqlDataSource BaseDataSource => _baseDataSource;
+
+    /// <summary>Cache shared with <see cref="PgPartitionNotifyListener"/>.</summary>
+    internal PgPartitionCache PartitionCache => _cache;
 
     /// <inheritdoc/>
     public string Name => "Postgres";
@@ -77,14 +53,6 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     /// <inheritdoc/>
     public ImmutableHashSet<string> Contexts { get; }
 
-    /// <summary>
-    /// Constructs a provider over <paramref name="baseDataSource"/> /
-    /// <paramref name="baseConnectionString"/>. <paramref name="partitions"/>
-    /// seeds the per-namespace subjects at boot. The standard mesh-builder
-    /// extension also wires an <c>ObserveQuery</c> subscription so partitions
-    /// added at runtime (e.g. organization creation) become routable without
-    /// a restart.
-    /// </summary>
     public PostgreSqlPartitionStorageProvider(
         NpgsqlDataSource baseDataSource,
         string baseConnectionString,
@@ -101,6 +69,7 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
         _embeddingProvider = embeddingProvider;
         _configureDataSource = configureDataSource;
         _logger = logger;
+        _cache = new PgPartitionCache(baseDataSource, logger);
 
         Contexts = contexts != null
             ? ImmutableHashSet.CreateRange(StringComparer.OrdinalIgnoreCase, contexts)
@@ -112,58 +81,20 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
 
         _adapter = new PostgreSqlPathRoutingAdapter(this);
 
+        // Boot-time seed: ANY pre-known partition definition (e.g. one passed
+        // by the mesh-builder for system schemas) primes the cache positive
+        // so first-touch reads don't pay the probe round-trip. No enumeration
+        // — only what the caller hands us.
         if (partitions != null)
             foreach (var def in partitions)
-                RegisterPartition(def);
+                if (!string.IsNullOrEmpty(def.Namespace))
+                    _cache.MarkExists(def.Namespace, def);
     }
 
     /// <summary>
-    /// Subscribes to <c>Admin/Partition/*</c> nodes on the workspace and
-    /// updates the per-first-segment subjects when partition rows are added,
-    /// changed, or removed. Each emission also ensures the SQL schema +
-    /// standard tables exist (idempotent CREATE SCHEMA IF NOT EXISTS).
-    /// <para>Call once after the mesh hub is up. Returns an <see cref="IDisposable"/>
-    /// that ends the subscription; the provider also disposes it on
-    /// <see cref="Dispose"/>.</para>
-    /// </summary>
-    public IDisposable SubscribeToWorkspace(IMessageHub mesh)
-    {
-        var meshService = mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        _partitionSubscription = meshService
-            .ObserveQuery<MeshNode>(new MeshQueryRequest
-            {
-                Query = "namespace:Admin/Partition nodeType:Partition",
-                Skip = 0,
-                Limit = 1000
-            })
-            .Select(c => c.Items
-                .Select(n => n.Content)
-                .OfType<PartitionDefinition>()
-                .Where(d => !string.IsNullOrEmpty(d.Namespace))
-                .ToImmutableList())
-            .SelectMany(defs => defs.ToObservable()
-                .SelectMany(def => Observable.FromAsync(ct => EnsureSchemaAsync(def, ct))
-                    .Catch<PartitionDefinition, Exception>(ex =>
-                    {
-                        _logger?.LogWarning(ex,
-                            "PostgreSqlPartitionStorageProvider: failed to ensure schema for {Namespace}; "
-                            + "writes to this partition will not route until the next emission.",
-                            def.Namespace);
-                        return Observable.Empty<PartitionDefinition>();
-                    })))
-            .Subscribe(
-                def => RegisterPartition(def),
-                ex => _logger?.LogError(ex,
-                    "PostgreSqlPartitionStorageProvider: Admin/Partition stream failed; "
-                    + "no further partition updates will be observed."));
-        return _partitionSubscription;
-    }
-
-    /// <summary>
-    /// Internal entrypoint for callers that pre-register a partition before
-    /// the workspace stream emits it (e.g.
-    /// <see cref="PostgreSqlPartitionSubscriptionHostedService"/>'s static-provider
-    /// seeding pass). Idempotent.
+    /// Idempotent CREATE SCHEMA + standard-tables init for one partition. Hot
+    /// path: in-process memo (<see cref="_schemasInitialized"/>) returns
+    /// immediately after the first call per (silo, schema).
     /// </summary>
     internal Task EnsureSchemaForPartitionAsync(PartitionDefinition def, CancellationToken ct)
         => EnsureSchemaAsync(def, ct);
@@ -174,7 +105,6 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
         var schema = !string.IsNullOrEmpty(def.Schema) ? def.Schema : def.Namespace;
         if (string.IsNullOrEmpty(schema)) return def;
 
-        // Fast path — already initialized this silo session.
         if (_schemasInitialized.ContainsKey(schema)) return def;
 
         await using (var cmd = _baseDataSource.CreateCommand(
@@ -216,118 +146,41 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
         }
 
         _schemasInitialized.TryAdd(schema, 0);
+        _cache.MarkExists(def.Namespace, def);
         _logger?.LogInformation(
             "PostgreSqlPartitionStorageProvider: schema {Schema} ready for partition {Namespace}",
             schema, def.Namespace);
         return def;
     }
 
-    /// <inheritdoc/>
-    public void Dispose()
-    {
-        _partitionSubscription?.Dispose();
-        _partitionSubscription = null;
-        foreach (var subj in _partitionSubjects.Values)
-            subj.OnCompleted();
-    }
-
     /// <summary>
-    /// Pushes a partition into the per-namespace subject. Subsequent
-    /// <see cref="Matches"/>/<see cref="ResolveDefinition"/> subscribers see
-    /// the new value immediately (ReplaySubject buffer = 1). Idempotent —
-    /// pushing the same definition twice is a no-op as far as downstream
-    /// equality-comparing operators are concerned.
+    /// Tests / boot-time callers can pre-prime the cache with a known
+    /// <see cref="PartitionDefinition"/>, skipping the
+    /// <c>information_schema.schemata</c> probe. No-op when the namespace
+    /// is empty.
     /// </summary>
     public void RegisterPartition(PartitionDefinition def)
     {
         if (string.IsNullOrEmpty(def.Namespace)) return;
-        GetOrCreateSubject(def.Namespace).OnNext(def);
+        _cache.MarkExists(def.Namespace, def);
     }
 
     /// <summary>
-    /// Pushes <c>null</c> into the namespace's subject, marking it as no
-    /// longer routable. Useful when an organization is decommissioned and
-    /// we want the route to fail fast rather than wait out a TTL.
+    /// Drops the cache entry for <paramref name="namespace"/>. Used by tests
+    /// that simulate partition deletion; production uses
+    /// <see cref="PgPartitionNotifyListener"/> driven by the
+    /// <c>partition_changes</c> pg_notify channel.
     /// </summary>
     public void RemovePartition(string @namespace)
     {
         if (string.IsNullOrEmpty(@namespace)) return;
-        if (_partitionSubjects.TryGetValue(@namespace, out var subj))
-            subj.OnNext(null);
+        _cache.Invalidate(@namespace);
     }
 
-    private ReplaySubject<PartitionDefinition?> GetOrCreateSubject(string firstSegment)
+    /// <inheritdoc/>
+    public void Dispose()
     {
-        return _partitionSubjects.GetOrAdd(firstSegment, seg =>
-        {
-            // Each fresh subject seeds itself via a thread-pool schema probe
-            // so the value is available within milliseconds of first
-            // subscribe even if SubscribeToWorkspace hasn't yet attached its
-            // ObserveQuery feed. We escape any captured scheduler (Orleans
-            // grain) by using Task.Run — the npgsql call below is fully async.
-            var subj = new ReplaySubject<PartitionDefinition?>(1);
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    var def = await QueryPartitionFromSchemaAsync(seg).ConfigureAwait(false);
-                    subj.OnNext(def);
-                }
-                catch (Exception ex)
-                {
-                    _logger?.LogDebug(ex,
-                        "PostgreSqlPartitionStorageProvider: schema probe for '{Segment}' failed; "
-                        + "treating as unroutable until next update.", seg);
-                    subj.OnNext(null);
-                }
-            });
-            return subj;
-        });
-    }
-
-    /// <summary>
-    /// Internal lookup used by <see cref="PostgreSqlPathRoutingAdapter"/> —
-    /// emits the cached <see cref="PartitionDefinition"/> for the path's
-    /// first segment (probing <c>information_schema.schemata</c> on first
-    /// access). To be replaced by <c>PgPartitionCache</c> in Stage 5.
-    /// </summary>
-    internal IObservable<PartitionDefinition?> ResolvePartitionDefinition(string fullPath)
-    {
-        var seg = GetFirstSegment(fullPath);
-        if (string.IsNullOrEmpty(seg)) return Observable.Return<PartitionDefinition?>(null);
-        return GetOrCreateSubject(seg);
-    }
-
-    /// <summary>
-    /// Asynchronous schema-existence probe against <c>information_schema.schemata</c>.
-    /// If the schema exists, returns a default <see cref="PartitionDefinition"/>
-    /// with standard table mappings; otherwise null. Hot path is the
-    /// <see cref="_partitionSubjects"/> ReplaySubject; this is the cold-fill
-    /// (one round-trip per unseen first-segment per silo).
-    /// </summary>
-    private async Task<PartitionDefinition?> QueryPartitionFromSchemaAsync(string firstSegment)
-    {
-        await using var conn = await _baseDataSource.OpenConnectionAsync().ConfigureAwait(false);
-        await using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
-            SELECT schema_name FROM information_schema.schemata
-            WHERE lower(schema_name) = lower($1)
-            LIMIT 1
-            """;
-        cmd.Parameters.AddWithValue(firstSegment);
-        var scalar = await cmd.ExecuteScalarAsync().ConfigureAwait(false);
-        if (scalar is not string actualSchema || string.IsNullOrEmpty(actualSchema))
-            return null;
-
-        return new PartitionDefinition
-        {
-            Namespace = firstSegment,
-            DataSource = "default",
-            Schema = actualSchema,
-            Table = "mesh_nodes",
-            TableMappings = PartitionDefinition.StandardTableMappings,
-            Versioned = true,
-        };
+        _cache.Dispose();
     }
 
     /// <inheritdoc/>
@@ -361,41 +214,12 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     private readonly PostgreSqlPathRoutingAdapter _adapter;
 
     /// <summary>
-    /// Per-schema adapter cache used by <see cref="Adapter"/>. Each entry
-    /// reuses the shared base <see cref="NpgsqlDataSource"/> with a
-    /// <see cref="PartitionDefinition"/> scoped to the schema; per-table
-    /// routing happens inside <see cref="PostgreSqlStorageAdapter"/> via
-    /// <see cref="PartitionDefinition.ResolveTable"/>.
-    /// <para>Observable form — callers compose with <c>SelectMany</c>; the
-    /// adapter is materialised once the partition definition is known.</para>
+    /// Synchronously ensures the schema for <paramref name="def"/> exists.
+    /// Used by <see cref="PostgreSqlPathRoutingAdapter"/> on the lazy-create
+    /// path. Concurrent first-touches share the same in-flight task via
+    /// <see cref="_schemaInitTasks"/> so duplicate CREATE SCHEMAs don't race.
     /// </summary>
-    internal IObservable<IStorageAdapter?> ResolveAdapterForSchema(string firstSegment)
-    {
-        return ResolvePartitionDefinition(firstSegment).Take(1).Select(def =>
-        {
-            // Stage 1: lazy-create when the cache reports the schema doesn't
-            // exist. Mirrors the pre-refactor catch-all behaviour; PgPartitionCache
-            // (Stage 5) will refine this to distinguish PendingCreate vs Absent.
-            var effective = def ?? new PartitionDefinition
-            {
-                Namespace = firstSegment,
-                DataSource = "default",
-                Schema = firstSegment.ToLowerInvariant(),
-                Table = "mesh_nodes",
-                TableMappings = PartitionDefinition.StandardTableMappings,
-                Versioned = true,
-            };
-            EnsureSchemaForPartitionSync(effective);
-            return (IStorageAdapter?)new PostgreSqlStorageAdapter(_baseDataSource, _embeddingProvider, effective);
-        });
-    }
-
-    /// <summary>
-    /// Synchronously waits for the schema's first-touch init to complete.
-    /// Idempotent — already-initialized schemas return immediately via the
-    /// <see cref="_schemasInitialized"/> fast path.
-    /// </summary>
-    private void EnsureSchemaForPartitionSync(PartitionDefinition def)
+    internal void EnsureSchemaForPartitionSync(PartitionDefinition def)
     {
         var schema = !string.IsNullOrEmpty(def.Schema) ? def.Schema : def.Namespace;
         if (string.IsNullOrEmpty(schema)) return;
@@ -406,7 +230,7 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
         task.GetAwaiter().GetResult();
     }
 
-    private static string? GetFirstSegment(string? path)
+    internal static string? GetFirstSegment(string? path)
     {
         if (string.IsNullOrWhiteSpace(path)) return null;
         var normalized = path.Trim('/');

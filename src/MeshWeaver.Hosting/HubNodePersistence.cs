@@ -104,6 +104,8 @@ internal sealed class HubNodePersistence(
         if (persistence is null)
             return CreateNode(node);
         var transient = node with { State = MeshNodeState.Transient };
-        return persistence.Write(transient, hub.JsonSerializerOptions);
+        return persistence.Write(transient, hub.JsonSerializerOptions)
+            .Where(n => n is not null)
+            .Select(n => n!);
     }
 }

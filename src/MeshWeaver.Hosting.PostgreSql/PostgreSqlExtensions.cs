@@ -268,13 +268,21 @@ public static class PostgreSqlExtensions
             return new PostgreSqlChangeListener(baseDataSource, notifier, listenerLogger);
         });
         services.AddHostedService<PostgreSqlChangeListenerHostedService>();
-        // Start the Admin/Partition/* subscription so the provider's
-        // _partitions dictionary is populated from MeshNodes at runtime.
-        // Without this, writes to any path fault with
-        // "no IPartitionStorageProvider matches" (Matches() requires the
-        // first segment in _partitions). See
-        // PostgreSqlPartitionSubscriptionHostedService.
+        // Boot-time seed: CREATE SCHEMA + table init for every framework
+        // partition advertised by a static node provider. No enumeration —
+        // only what's explicitly registered.
         services.AddHostedService<PostgreSqlPartitionSubscriptionHostedService>();
+        // Cross-silo partition-state invalidation: LISTEN partition_changes
+        // and drop the PgPartitionCache entry for any namespace whose
+        // Admin/Partition row was added/updated/deleted on any silo.
+        // Migration V23 installs the trigger.
+        services.AddSingleton(sp =>
+        {
+            var provider = sp.GetRequiredService<PostgreSqlPartitionStorageProvider>();
+            var notifyLogger = sp.GetService<ILogger<PgPartitionNotifyListener>>();
+            return new PgPartitionNotifyListener(baseDataSource, provider, notifyLogger);
+        });
+        services.AddHostedService(sp => sp.GetRequiredService<PgPartitionNotifyListener>());
 
         services.AddPartitionedCoreAndWrapperServices();
 

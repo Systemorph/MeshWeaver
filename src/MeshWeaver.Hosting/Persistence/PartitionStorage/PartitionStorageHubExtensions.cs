@@ -58,6 +58,8 @@ public static class PartitionStorageHubExtensions
         request.Message.Nodes
             .ToObservable()
             .SelectMany(node => adapter.Write(node, request.Message.Options))
+            .Where(n => n is not null)
+            .Select(n => n!)
             .ToList()
             .Subscribe(
                 written => hub.Post(

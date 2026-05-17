@@ -126,7 +126,9 @@ internal sealed class MeshService(
         // method allowed to bypass the hub-message pipeline — every other CRUD method
         // routes through `Post + RegisterCallback` and never touches persistence.
         var transientNode = node with { State = MeshNodeState.Transient };
-        return persistence.Write(transientNode, hub.JsonSerializerOptions);
+        return persistence.Write(transientNode, hub.JsonSerializerOptions)
+            .Where(n => n is not null)
+            .Select(n => n!);
     }
 
     public IObservable<MeshNode> CopyNode(string sourcePath, string targetPath,
