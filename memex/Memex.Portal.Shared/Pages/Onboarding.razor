@@ -6,12 +6,15 @@
 @using MeshWeaver.Mesh.Services
 @using MeshWeaver.Messaging
 @using MeshWeaver.Hosting.Blazor
+@using Memex.Portal.Shared.Authentication
 @using Microsoft.Extensions.DependencyInjection
 @using Microsoft.Extensions.Logging
 @using System.Reactive.Linq
+@using System.Reactive.Threading.Tasks
 @inject AccessService AccessService
 @inject IMeshService NodeFactory
 @inject IMeshService MeshQuery
+@inject UserOnboardingService OnboardingService
 @inject PortalApplication PortalApplication
 @inject NavigationManager Navigation
 @inject CircuitAccessHandler CircuitAccessHandler
@@ -229,16 +232,20 @@ else
                     return;
                 }
 
-                var node = new MeshNode(username, "User")
-                {
-                    Name = string.IsNullOrWhiteSpace(fullName) ? username : fullName,
-                    NodeType = "User",
-                    State = MeshNodeState.Active,
-                    Icon = string.IsNullOrWhiteSpace(model.AvatarUrl) ? null : model.AvatarUrl.Trim(),
-                    Content = userContent
-                };
-
-                await NodeFactory.CreateNode(node);
+                // Delegate the three-row dual-write to UserOnboardingService —
+                // one composed IObservable chain, side effects run on Subscribe,
+                // no Task chain on the hub-publishing thread (would deadlock per
+                // Doc/Architecture/AsynchronousCalls.md). Blazor's HandleSubmit
+                // bridges to Task at the UI edge (.FirstAsync().ToTask()) — that
+                // single bridge is the only sanctioned place.
+                var node = await OnboardingService.CreateUser(new UserOnboardingRequest(
+                    Username: username,
+                    Email: model.Email.Trim(),
+                    FullName: fullName,
+                    Bio: model.Bio,
+                    Role: model.Role,
+                    AvatarUrl: model.AvatarUrl))
+                    .FirstAsync().ToTask();
 
                 // Self-AccessAssignment in the user's own partition so they can
                 // create/update content in their own scope. Post-v10 each user

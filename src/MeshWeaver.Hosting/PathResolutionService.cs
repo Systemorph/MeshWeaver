@@ -148,28 +148,6 @@ internal class PathResolutionService : IPathResolver, IDisposable
                 if (staticHit is { } sh && sh.Node is not null)
                     return BuildResolution(sh.Node.Path, segments, sh.Depth, matchedNode: sh.Node);
 
-                // 4. Partition-root fallback — when the first segment maps
-                //    to a registered partition but no MeshNode exists at
-                //    that exact path (e.g. user partition `rbuergi` with
-                //    content only in satellites). Synthesize a placeholder
-                //    MeshNode so every downstream consumer (routing,
-                //    MessageHubGrain.OnActivateAsync's source stream filter)
-                //    sees a concrete Node — null would otherwise deadlock
-                //    grain activation by failing the `Where(Node is not null)`
-                //    gate. The placeholder carries the bare partition path
-                //    and no NodeType so enrichment falls back to the default
-                //    hub config — the user partition's hub then renders the
-                //    standard portal layout (start screen, user activity).
-                if (segments.Length >= 1 && IsRegisteredPartition(segments[0]))
-                {
-                    var partitionRoot = new MeshNode(segments[0])
-                    {
-                        Name = segments[0],
-                        State = MeshNodeState.Active
-                    };
-                    return BuildResolution(segments[0], segments, matchedSegments: 1, matchedNode: partitionRoot);
-                }
-
                 _logger?.LogDebug("[RESOLVE] {Path} → NULL (no match across all steps)", path);
                 return null;
             });

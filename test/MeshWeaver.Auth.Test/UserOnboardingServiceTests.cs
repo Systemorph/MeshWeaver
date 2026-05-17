@@ -1,0 +1,167 @@
+using System;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
+using System.Threading;
+using System.Threading.Tasks;
+using FluentAssertions;
+using FluentAssertions.Extensions;
+using Memex.Portal.Shared.Authentication;
+using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Xunit;
+
+namespace MeshWeaver.Auth.Test;
+
+/// <summary>
+/// Pins the onboarding dual-write contract — every <see cref="UserOnboardingService.CreateUser"/>
+/// call lands THREE rows: partition-root, user-catalog mirror, Admin/Partition entry.
+/// Without all three either path routing (<c>/{username}</c>), login lookup
+/// (<c>nodeType:User content.email:X</c>), or partition activation breaks.
+///
+/// <para>Real mesh, in-memory partitioned persistence, no mocks — this is the
+/// shape prod hits when a new user signs up. The chain stays 100% reactive
+/// inside the service; the test's single <c>.FirstAsync().ToTask()</c> bridge
+/// is the sanctioned test-edge boundary.</para>
+/// </summary>
+public class UserOnboardingServiceTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    private CancellationToken Ct => TestContext.Current.CancellationToken;
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => ConfigureMeshBase(builder)
+            .ConfigureServices(services =>
+            {
+                services.AddScoped<UserOnboardingService>();
+                return services;
+            });
+
+    /// <summary>
+    /// Pre-warm User + Partition type hubs so the post-creation pipeline doesn't
+    /// have to cold-start them during the test.
+    /// </summary>
+    protected override void PreWarmNodeTypeHubs()
+    {
+        base.PreWarmNodeTypeHubs();
+        var meshConfig = Mesh.ServiceProvider.GetService<MeshConfiguration>();
+        if (meshConfig is null) return;
+        foreach (var typeName in new[] { "User", "Partition" })
+        {
+            if (meshConfig.Nodes.TryGetValue(typeName, out var typeNode)
+                && typeNode.HubConfiguration is { } cfg)
+            {
+                _ = Mesh.GetHostedHub(new Address(typeName), cfg);
+            }
+        }
+    }
+
+    private void ImpersonateAsUser(string userId)
+        => Mesh.ServiceProvider.GetRequiredService<AccessService>()
+            .SetCircuitContext(new AccessContext { ObjectId = userId, Name = userId });
+
+    /// <summary>
+    /// The service emits the partition-root MeshNode AND persists all three
+    /// rows (a/b/c) such that subsequent reads find them at the expected paths.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task CreateUser_WritesAllThreeRows()
+    {
+        var username = $"obtest-{Guid.NewGuid():N}".ToLowerInvariant()[..16];
+
+        // Prod onboarding wraps the create chain in
+        // `AccessService.ImpersonateAsHub(PortalApplication.Hub)` — the portal
+        // hub identity has the platform-admin scope needed to write into
+        // Admin/Partition. The test runs the equivalent: impersonate as the
+        // mesh hub which is the same identity surface in test config.
+        var service = Mesh.ServiceProvider.GetRequiredService<UserOnboardingService>();
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var request = new UserOnboardingRequest(
+            Username: username,
+            Email: $"{username}@example.com",
+            FullName: "Obtest User",
+            Bio: "test bio");
+
+        MeshNode emitted;
+        using (accessService.ImpersonateAsSystem())
+        {
+            emitted = await service.CreateUser(request)
+                .FirstAsync()
+                .ToTask(Ct);
+        }
+
+        // The observable emits the partition-root node — that's the canonical
+        // identity for downstream consumers (path = "{username}").
+        emitted.Should().NotBeNull();
+        emitted.Id.Should().Be(username);
+        emitted.Namespace.Should().BeNullOrEmpty(
+            "partition-root entry MUST have empty namespace (path = '{username}')");
+        emitted.Path.Should().Be(username);
+        emitted.NodeType.Should().Be("User");
+
+        // (a) Per-user partition root — path = "{username}", ns = ""
+        var partitionRoot = await ReadNodeAsync(username, Ct);
+        partitionRoot.Should().NotBeNull("partition-root entry must be readable at the bare path");
+        partitionRoot!.NodeType.Should().Be("User");
+        partitionRoot.Namespace.Should().BeNullOrEmpty();
+
+        // (b) User-catalog mirror — path = "User/{username}", ns = "User"
+        var catalogMirror = await ReadNodeAsync($"User/{username}", Ct);
+        catalogMirror.Should().NotBeNull(
+            "user-catalog mirror at user.mesh_nodes (ns=User) is what the login " +
+            "query `nodeType:User content.email:X` scans — without it, every signed-in user " +
+            "bounces back to /onboarding");
+        catalogMirror!.NodeType.Should().Be("User");
+        catalogMirror.Namespace.Should().Be("User");
+
+        // (c) Admin/Partition catalog entry — path = "Admin/Partition/{username}"
+        var partitionCatalog = await ReadNodeAsync($"Admin/Partition/{username}", Ct);
+        partitionCatalog.Should().NotBeNull(
+            "Admin/Partition catalog entry is required so the storage provider's " +
+            "first-segment lookup matches '{username}' — without it the partition-root " +
+            "write itself doesn't route");
+        partitionCatalog!.NodeType.Should().Be("Partition");
+    }
+
+    /// <summary>
+    /// Login query (the actual one used by <c>OnboardingMiddleware.FindUserByEmail</c>)
+    /// must find the just-created user by email. This is the contract that the
+    /// catalog-mirror row (b) exists for.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task CreateUser_LoginQueryFindsUserByEmail()
+    {
+        var username = $"obtest-{Guid.NewGuid():N}".ToLowerInvariant()[..16];
+        var email = $"{username}@example.com";
+
+        var service = Mesh.ServiceProvider.GetRequiredService<UserOnboardingService>();
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        using (accessService.ImpersonateAsSystem())
+        {
+            await service.CreateUser(new UserOnboardingRequest(username, email, FullName: "Login Test"))
+                .FirstAsync().ToTask(Ct);
+        }
+
+        // Same shape as OnboardingMiddleware.FindUserByEmail — search for the user
+        // by email. We use IMeshService (public surface; the middleware uses the
+        // internal IMeshQueryCore but the query string + result shape are identical).
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var found = await meshService
+            .ObserveQuery<MeshNode>(
+                MeshQueryRequest.FromQuery(
+                    $"nodeType:User content.email:{email} limit:1"))
+            .Where(c => c.Items.Count > 0)
+            .Take(1)
+            .Timeout(10.Seconds())
+            .FirstAsync()
+            .ToTask(Ct);
+
+        found.Items.Should().ContainSingle(
+            "the login query MUST find the user by email — that's why we keep the " +
+            "user-catalog mirror at user.mesh_nodes (namespace=User)");
+        found.Items[0].Id.Should().Be(username);
+    }
+}

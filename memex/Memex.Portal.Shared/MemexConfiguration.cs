@@ -85,6 +85,10 @@ public static class MemexConfiguration
             })
             .AddBlazorPortalServices();
 
+        // Onboarding service — pulls the three-row dual-write out of
+        // Onboarding.razor so it's unit-testable end-to-end.
+        services.AddScoped<Memex.Portal.Shared.Authentication.UserOnboardingService>();
+
         // Configure Radzen
         services.AddRadzenServices();
 
