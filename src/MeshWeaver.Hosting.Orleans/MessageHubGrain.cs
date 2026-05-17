@@ -2,7 +2,6 @@
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Reflection;
-using System.Threading.Channels;
 using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -24,35 +23,38 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         meshHub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
 
     /// <summary>
-    /// Pending-delivery FIFO. Every <see cref="DeliverMessage"/> writes a
-    /// <c>(delivery, TCS)</c> tuple and returns the TCS task. When activation
-    /// completes, <see cref="StartPendingDrainer"/> reads from the channel in
-    /// FIFO order and dispatches into the built hub — strict ordering even
-    /// when the grain is <c>[Reentrant]</c> and multiple <c>DeliverMessage</c>
-    /// calls race before the hub is ready (the earlier <see cref="System.Reactive.Subjects.ReplaySubject{T}"/>
-    /// shape had non-deterministic subscriber order under concurrent Subscribe).
-    /// Per <c>Doc/Architecture/AsynchronousCalls.md</c> — no <c>WaitAsync</c>,
-    /// no readiness gate, no 30 s burn.
+    /// The hub built during <see cref="OnActivateAsync"/>. Non-null by the time any
+    /// <see cref="DeliverMessage"/> runs — Orleans guarantees OnActivateAsync completes
+    /// before dispatching messages to the grain. No queue, no fail-fast for "not ready":
+    /// activation IS the wait, and it's bounded by an explicit timeout so a stuck
+    /// MeshNode lookup throws and the grain activation fails rather than hanging forever.
     /// </summary>
-    private readonly Channel<(IMessageDelivery Delivery, TaskCompletionSource<IMessageDelivery> Tcs)> _pending =
-        Channel.CreateUnbounded<(IMessageDelivery, TaskCompletionSource<IMessageDelivery>)>(
-            new UnboundedChannelOptions { SingleReader = true, AllowSynchronousContinuations = false });
-
     private IMessageHub? _hub;
-    private Exception? _activationFault;
 
-    private IDisposable? _activationSubscription;
-
-    public override Task OnActivateAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// Blocking activation: resolve the MeshNode (from the mesh-node cache or static
+    /// providers), let <see cref="IMeshNodeHubFactory"/> hydrate the assembly bytes via
+    /// <see cref="IAssemblyStore"/> and produce the HubConfiguration delegate, then
+    /// build the hub. Orleans waits on this completion before dispatching any messages
+    /// to the grain — so by the time <see cref="DeliverMessage"/> runs, <see cref="_hub"/>
+    /// is guaranteed non-null. No pending-queue, no fail-fast for "not ready", no
+    /// scheduler hop on the message path.
+    ///
+    /// <para>Bounded by a 30 s timeout so a missing MeshNode (no static provider claims
+    /// it, no storage backend serves it) throws and Orleans deactivates the grain
+    /// rather than hanging. The activation source can complete-without-emitting too —
+    /// <c>FirstOrDefaultAsync</c> returns null in that case and we throw with a
+    /// "No MeshNode resolvable" message.</para>
+    /// </summary>
+    public override async Task OnActivateAsync(CancellationToken cancellationToken)
     {
         var streamId = this.GetPrimaryKeyString();
         var address = meshHub.GetAddress(streamId);
         var addressPath = address.ToString();
         var grainScheduler = TaskScheduler.Current;
 
-        // Register the keep-alive timer up-front. Independent of node
-        // resolution — it only acts when the long-running-operation counter
-        // is > 0, so it's a no-op until the hub starts processing work.
+        // Keep-alive timer — independent of node resolution, no-op until the hub
+        // starts processing long-running work.
         _keepAliveTimer = this.RegisterGrainTimer(
             _ =>
             {
@@ -69,21 +71,6 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 
         logger.LogInformation("[ACTIVATE] Grain {StreamId} activating", streamId);
 
-        // 1. Static/config nodes: synchronous lookup, no grain round-trip.
-        // 2. Persisted nodes: read directly from MeshCatalog (persistence layer) without
-        //    going through the stream cache. streamCache.GetStream(addressPath) routes a
-        //    SubscribeRequest back through RoutingGrain → this same grain → awaits _hubReady
-        //    → deadlock. catalog.GetNodeForRouting reads from DB/static providers directly.
-        //
-        // Both paths funnel through ResolveHubConfigurationObservable so the
-        // DefaultNodeHubConfiguration overlay (API tokens settings tab, AI types,
-        // threads layout, heartbeat, content collections, …) reaches every per-node
-        // hub. Previously this method short-circuited for static nodes and for
-        // persisted instances whose NodeType template carried HubConfiguration —
-        // those branches set node.HubConfiguration directly and skipped the factory,
-        // silently dropping the default overlay. Symptom: API Tokens tab missing
-        // from /rbuergi/Settings, chat-from-user-page hangs because AI types not
-        // registered on the user hub. The single funnel below is the fix.
         var staticNode = TryResolveStaticNode(addressPath);
         IObservable<MeshNode> sourceStream;
         if (staticNode is { HubConfiguration: not null })
@@ -94,34 +81,9 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         else
         {
             logger.LogInformation("[ACTIVATE] Grain {StreamId}: no static node with HubConfig, merging path resolver + mesh-node cache", streamId);
-            // Two complementary sources, merged on first emission with a
-            // non-null Node — whichever responds first wins the activation
-            // race:
-            //
-            //   (a) IPathResolver.ResolvePath — cached AddressResolution
-            //       observable. Reads directly from storage / static / the
-            //       partition-root fallback, so a brand-new path resolves
-            //       without taking a SubscribeRequest. The matched MeshNode
-            //       rides on AddressResolution.Node (synthesized for
-            //       partition-root virtual matches so this stream always
-            //       yields a Node when the path is routable).
-            //
-            //   (b) IMeshNodeStreamCache.GetStream — live MeshNodeStreamHandle
-            //       over workspace.GetMeshNodeStream(addressPath). Provides
-            //       continued updates after activation. Safe to merge here
-            //       because the path resolver's emission is already enough
-            //       for the .Take(1) below; the cache's later emissions
-            //       just keep _activationSubscription warm in case post-
-            //       activation hub config needs to re-fire enrichment.
-            //
-            // Pre-fix: this used only PathResolver, which returned a null
-            // Node for partition-root virtual matches → the source stream
-            // never emitted, _hubReady stayed pending, every DeliverMessage
-            // burned the 30 s Orleans response budget. The fix is twofold —
-            // PathResolutionService now synthesizes a placeholder MeshNode
-            // for partition-root matches, AND this Merge means the cache
-            // can also bootstrap activation if it's first to produce a
-            // real persisted Node.
+            // Path resolver gives a fast in-process answer (no SubscribeRequest round-trip)
+            // for routable paths; the mesh-node cache backs it up for dynamic / freshly-
+            // created nodes that the path resolver hasn't indexed yet.
             var pathResolver = meshHub.ServiceProvider.GetRequiredService<IPathResolver>();
             sourceStream = Observable.Merge(
                 pathResolver.ResolvePath(addressPath)
@@ -130,47 +92,83 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 streamCache.GetStream(addressPath));
         }
 
-        _activationSubscription = sourceStream
-            .SelectMany(node =>
-            {
-                logger.LogInformation("[ACTIVATE] Grain {StreamId}: source emitted node={Path} NodeType={NodeType} hasHubConfig={HasConfig}",
-                    streamId, node.Path, node.NodeType ?? "(null)", node.HubConfiguration != null);
-                return ResolveHubConfigurationObservable(node);
-            })
-            .Where(node => node.HubConfiguration is not null)
-            .Take(1)
-            .Subscribe(
-                node =>
+        // ═══════════════════════════════════════════════════════════════════════════════════════
+        // 🚨 SANCTIONED `await` — Orleans grain activation lifecycle boundary.
+        //
+        // The general rule (Doc/Architecture/AsynchronousCalls.md) is: NEVER bridge a hub
+        // round-trip back to Task and await it inside hub-reachable code. That rule applies
+        // to handlers, services, layout areas — the message-handling pipeline.
+        //
+        // OnActivateAsync is NOT that pipeline. It is Orleans' one-shot grain-lifecycle hook,
+        // called by the Orleans runtime BEFORE the grain begins processing messages, on the
+        // grain scheduler itself. Orleans actively serializes the wait — `await` here cannot
+        // deadlock any hub action block because no hub action block is running yet (this is
+        // pre-activation). The awaited observable runs on its own schedulers (the workspace
+        // hub's reducer for the mesh-node cache, the path-resolver's IMeshQueryCore subscription)
+        // — none of which call back through THIS grain (we explicitly avoid streamCache paths
+        // that route through RoutingGrain → MessageHubGrain → us).
+        //
+        // The boundary semantics are: Orleans expects OnActivateAsync to return a Task that
+        // completes when the grain is ready. Our "ready" state is "_hub is built". Returning
+        // before the hub exists would force every DeliverMessage into a queue + retry shape
+        // (the previous Channel<T> / ReplaySubject(1) drafts) whose correctness depended on
+        // subtle reactive plumbing and turned out to mis-fire under [Reentrant] races. Blocking
+        // activation removes the queue + retry machinery entirely: by the time Orleans hands
+        // us a message, _hub is non-null and DeliverMessage is one synchronous call.
+        //
+        // The 30 s Timeout below makes the wait bounded — a missing MeshNode throws
+        // InvalidOperationException, Orleans surfaces that to the caller as a delivery failure,
+        // and the grain deactivates instead of hanging.
+        // ═══════════════════════════════════════════════════════════════════════════════════════
+        MeshNode? readyNode;
+        try
+        {
+            readyNode = await sourceStream
+                .SelectMany(node =>
                 {
-                    logger.LogInformation("[ACTIVATE] Grain {StreamId}: completing activation", streamId);
-                    // Pass the source stream to the hub so MeshNodeTypeSource can
-                    // seed the workspace from it (and follow subsequent emissions)
-                    // instead of issuing a duplicate persistence read on init.
-                    CompleteActivation(streamId, address, grainScheduler, node, sourceStream);
-                },
-                ex =>
-                {
-                    logger.LogError(ex, "[ACTIVATE] Grain {StreamId}: activation faulted for {Path}", streamId, addressPath);
-                    _activationFault = ex;
-                    FailAllPending($"Hub activation failed for {streamId}: {ex.Message}");
-                },
-                () =>
-                {
-                    // Source completed without ever emitting a node with HubConfiguration.
-                    // Causes: catalog found no node at this address, or every emitted node
-                    // failed the HubConfiguration filter (enrichment gave up). Fail-fast
-                    // every queued DeliverMessage so callers see NotFound immediately
-                    // instead of waiting forever.
-                    if (_hub is not null) return;
-                    logger.LogWarning("[ACTIVATE] Grain {StreamId}: source completed with no usable node for {Path} — failing pending deliveries",
-                        streamId, addressPath);
-                    _activationFault = new InvalidOperationException(
-                        $"No MeshNode resolvable for address '{addressPath}'. Either the node does not exist or no query provider claims its partition.");
-                    FailAllPending(_activationFault.Message);
-                    DeactivateOnIdle();
-                });
+                    logger.LogInformation("[ACTIVATE] Grain {StreamId}: source emitted node={Path} NodeType={NodeType} hasHubConfig={HasConfig}",
+                        streamId, node.Path, node.NodeType ?? "(null)", node.HubConfiguration != null);
+                    return ResolveHubConfigurationObservable(node);
+                })
+                .Where(node => node.HubConfiguration is not null)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(30))
+                .FirstOrDefaultAsync()
+                .ToTask(cancellationToken);
+        }
+        catch (TimeoutException)
+        {
+            logger.LogError("[ACTIVATE] Grain {StreamId}: timed out resolving MeshNode + HubConfiguration for {Path}",
+                streamId, addressPath);
+            DeactivateOnIdle();
+            throw new InvalidOperationException(
+                $"Activation timed out for address '{addressPath}': no MeshNode with HubConfiguration available within 30 s.");
+        }
 
-        return Task.CompletedTask;
+        if (readyNode?.HubConfiguration is null)
+        {
+            logger.LogWarning("[ACTIVATE] Grain {StreamId}: source completed with no usable node for {Path}", streamId, addressPath);
+            DeactivateOnIdle();
+            throw new InvalidOperationException(
+                $"No MeshNode resolvable for address '{addressPath}'. Either the node does not exist or no query provider claims its partition.");
+        }
+
+        // Build the hub synchronously. Static NodeTypes capture an in-process delegate;
+        // dynamic NodeTypes have already loaded their assembly via the factory above.
+        // Pass sourceStream so MeshNodeTypeSource can follow subsequent emissions
+        // without issuing a duplicate persistence read on init.
+        var hub = meshHub.GetHostedHub(address, config =>
+        {
+            config = config.WithOwnNodeStream(sourceStream);
+            return readyNode.HubConfiguration(config)
+                .WithTaskScheduler(grainScheduler)
+                .Set(new GrainKeepAliveCallback(() => DelayDeactivation(TimeSpan.FromMinutes(10))))
+                .Set(new GrainLongRunningOperationCallback(BeginLongRunningOperation));
+        })!;
+
+        hub.RegisterForDisposal(_ => DeactivateOnIdle());
+        _hub = hub;
+        logger.LogInformation("[ACTIVATE] Grain {StreamId} ready", streamId);
     }
 
     /// <summary>
@@ -206,58 +204,6 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
             : hubFactory.ResolveHubConfiguration(node);
     }
 
-    /// <summary>
-    /// Builds the hosted hub and starts the pending-delivery drainer. Idempotent —
-    /// re-entry while <see cref="_hub"/> is already set is a no-op. On build failure,
-    /// fails every queued delivery via <see cref="FailAllPending"/> so no caller hangs.
-    /// </summary>
-    private void CompleteActivation(
-        string streamId,
-        Address address,
-        TaskScheduler grainScheduler,
-        MeshNode node,
-        IObservable<MeshNode>? ownNodeStream = null)
-    {
-        if (_hub is not null) return;
-
-        try
-        {
-            if (node.HubConfiguration is null)
-            {
-                _activationFault = new ArgumentException(
-                    $"No hub configuration resolved for {node.Path} (NodeType: {node.NodeType}).");
-                FailAllPending(_activationFault.Message);
-                return;
-            }
-
-            var hub = meshHub.GetHostedHub(address, config =>
-            {
-                if (ownNodeStream is not null)
-                    config = config.WithOwnNodeStream(ownNodeStream);
-                return node.HubConfiguration(config)
-                    .WithTaskScheduler(grainScheduler)
-                    .Set(new GrainKeepAliveCallback(() => DelayDeactivation(TimeSpan.FromMinutes(10))))
-                    .Set(new GrainLongRunningOperationCallback(BeginLongRunningOperation));
-            })!;
-
-            hub.RegisterForDisposal(_ => DeactivateOnIdle());
-            _hub = hub;
-            logger.LogInformation("[ACTIVATE] Grain {StreamId} ready", streamId);
-
-            // Start the single-consumer drainer now that the hub exists. The drainer
-            // reads from the FIFO channel in caller-arrival order — strict ordering
-            // even though the grain is [Reentrant] and pre-activation DeliverMessage
-            // calls may have raced.
-            _ = StartPendingDrainer();
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Grain {StreamId}: CompleteActivation failed", streamId);
-            _activationFault = ex;
-            FailAllPending($"Hub build failed for {streamId}: {ex.Message}");
-        }
-    }
-
     private IGrainTimer? _keepAliveTimer;
     private int _activeOperations;
 
@@ -290,16 +236,14 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 
 
     /// <summary>
-    /// Writes the delivery into the FIFO pending channel and returns the TCS
-    /// task. When the hub is ready, <see cref="StartPendingDrainer"/> reads in
-    /// FIFO order and dispatches each. When activation faulted, both this
-    /// method and the drainer surface the fault as a <see cref="DeliveryFailure"/>.
-    /// No wait, no scheduler-hop, no order race.
+    /// Thin pass-through to the hub built in <see cref="OnActivateAsync"/>.
+    /// Orleans guarantees activation completes before any message dispatch, so
+    /// <see cref="_hub"/> is non-null here. No queue, no fail-fast for "not ready",
+    /// no scheduler hop.
     /// </summary>
     public Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery)
     {
-        // Apply user identity from Orleans RequestContext up-front, while we
-        // still see RequestContext (after the channel hop it's gone).
+        // Apply user identity from Orleans RequestContext to the delivery.
         var userId = RequestContext.Get("UserId") as string;
         var userName = RequestContext.Get("UserName") as string;
         if (!string.IsNullOrEmpty(userId) &&
@@ -312,58 +256,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
             });
         }
 
-        var tcs = new TaskCompletionSource<IMessageDelivery>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        if (_activationFault is { } fault)
-        {
-            tcs.TrySetResult(delivery.Failed(
-                $"Hub activation failed for {this.GetPrimaryKeyString()}: {fault.Message}"));
-            return tcs.Task;
-        }
-
-        if (!_pending.Writer.TryWrite((delivery, tcs)))
-        {
-            // Channel is completed (deactivation) — fail-fast.
-            tcs.TrySetResult(delivery.Failed(
-                $"Hub deactivated before delivery for {this.GetPrimaryKeyString()}."));
-        }
-        return tcs.Task;
-    }
-
-    /// <summary>
-    /// Single-consumer drainer. Started from <see cref="CompleteActivation"/> once
-    /// the hub instance is built. Reads pending deliveries in FIFO order and
-    /// dispatches them into the hub's action block, completing each TCS with
-    /// the hub's <see cref="IMessageHub.DeliverMessage"/> result. Loops until
-    /// the channel is completed (deactivation).
-    /// </summary>
-    private async Task StartPendingDrainer()
-    {
-        var hub = _hub!;
-        try
-        {
-            await foreach (var (delivery, tcs) in _pending.Reader.ReadAllAsync())
-            {
-                try { tcs.TrySetResult(hub.DeliverMessage(delivery)); }
-                catch (Exception ex) { tcs.TrySetException(ex); }
-            }
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Pending-drainer faulted on {Grain}", this.GetPrimaryKeyString());
-        }
-    }
-
-    /// <summary>
-    /// Drains any remaining queued items with a <see cref="DeliveryFailure"/>
-    /// when activation faults or the grain deactivates before the hub is built.
-    /// Idempotent — Completing twice is a no-op via TryComplete + TryRead.
-    /// </summary>
-    private void FailAllPending(string reason)
-    {
-        _pending.Writer.TryComplete();
-        while (_pending.Reader.TryRead(out var item))
-            item.Tcs.TrySetResult(item.Delivery.Failed(reason));
+        return Task.FromResult(_hub!.DeliverMessage(delivery));
     }
 
 
@@ -372,20 +265,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         var grainId = this.GetPrimaryKeyString();
         logger.LogInformation("Grain {GrainId} deactivating: reason={Reason}", grainId, reason.ReasonCode);
 
-        // Tear down the activation subscription first so any in-flight
-        // emission can't try to instantiate the hub after deactivation began.
-        _activationSubscription?.Dispose();
-        _activationSubscription = null;
-
-        // Close the pending channel. The drainer's `await foreach` exits;
-        // any queued items the drainer hasn't picked up yet get failed by
-        // FailAllPending so no caller's task hangs forever.
         var hub = _hub;
-        if (hub is null)
-            FailAllPending($"Hub deactivated before activation for {grainId}.");
-        else
-            _pending.Writer.TryComplete();
-
         if (hub != null)
         {
             try
