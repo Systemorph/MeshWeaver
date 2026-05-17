@@ -28,6 +28,9 @@ public static class PersistenceExtensions
     /// </summary>
     private const string InnerStorageAdapterKey = "inner";
 
+    /// <summary>Marker singleton: present once <see cref="DecorateStorageAdapterWithVersionWriting"/> ran.</summary>
+    private sealed class VersionWritingDecoratedMarker { }
+
     /// <summary>
     /// Finds the last <see cref="IStorageAdapter"/> registration, re-exposes it as a
     /// keyed singleton with key "inner", then re-registers the default
@@ -36,14 +39,24 @@ public static class PersistenceExtensions
     /// <c>FileSystemPersistenceService.SaveNodeAsync</c> chokepoint deleted in the
     /// persistence cull (2026-05-12) — without this, every save path skipped the
     /// version-history snapshot.
+    ///
+    /// <para>Idempotency is via the <see cref="VersionWritingDecoratedMarker"/> singleton:
+    /// the previous <c>descriptor.ImplementationType == typeof(VersionWritingStorageAdapter)</c>
+    /// check never fired because the decorator is registered as a factory (so
+    /// <c>ImplementationType</c> is null). Repeated calls (e.g.
+    /// <c>UseOrleansMeshServer</c> wires <c>AddPartitionedInMemoryPersistence</c>
+    /// as default, then the host calls another <c>Add…Persistence</c>) stacked
+    /// decorators and duplicate keyed <c>"inner"</c> entries — the
+    /// <see cref="System.Collections.IEnumerable"/>-mediated cycle that produced
+    /// the StackOverflow at Orleans silo bootstrap.</para>
     /// </summary>
     private static void DecorateStorageAdapterWithVersionWriting(IServiceCollection services)
     {
+        if (services.Any(d => d.ServiceType == typeof(VersionWritingDecoratedMarker)))
+            return;
+
         var descriptor = services.LastOrDefault(d => d.ServiceType == typeof(IStorageAdapter));
         if (descriptor == null) return;
-        // Already decorated — bail out (idempotent for callers that compose
-        // AddCoreAndWrapperServices into AddPartitionedCoreAndWrapperServices).
-        if (descriptor.ImplementationType == typeof(VersionWritingStorageAdapter)) return;
 
         services.Remove(descriptor);
 
@@ -76,6 +89,11 @@ public static class PersistenceExtensions
             new VersionWritingStorageAdapter(
                 sp.GetRequiredKeyedService<IStorageAdapter>(InnerStorageAdapterKey),
                 sp.GetService<IVersionQuery>()));
+
+        // Sentinel so repeat calls (Orleans default + host-explicit persistence)
+        // see the prior decoration and bail above instead of stacking another
+        // decorator + another keyed "inner" entry.
+        services.AddSingleton<VersionWritingDecoratedMarker>(new VersionWritingDecoratedMarker());
     }
 
     /// <summary>
@@ -481,13 +499,26 @@ public static class PersistenceExtensions
         return builder;
     }
 
+    /// <summary>Marker singleton: present once a core/wrapper-services pass ran.</summary>
+    private sealed class CoreAndWrapperServicesMarker { }
+
     /// <summary>
     /// Adds partitioned persistence using a custom IPartitionedStoreFactory.
+    ///
+    /// <para>Idempotent — repeat calls (Orleans defaults the partitioned in-memory
+    /// stack from <c>UseOrleansMeshServer</c>, the host typically calls another
+    /// <c>Add…Persistence</c> right after, both of which funnel here) bail on a
+    /// sentinel marker. Otherwise the duplicate <c>IStorageAdapter</c> +
+    /// <c>IMeshQueryProvider</c> factory registrations stack and Autofac cycles
+    /// through the IEnumerable fan-in.</para>
     /// </summary>
     /// <param name="services">The service collection</param>
     /// <returns>The service collection for chaining</returns>
     public static IServiceCollection AddPartitionedCoreAndWrapperServices(this IServiceCollection services)
     {
+        if (services.Any(d => d.ServiceType == typeof(CoreAndWrapperServicesMarker)))
+            return services;
+
         services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
 
         // PersistenceService bundles all IPartitionStorageProvider adapters.
@@ -544,14 +575,22 @@ public static class PersistenceExtensions
                 sp.GetRequiredService<IMessageHub>(),
                 sp.GetService<ILogger<ChatCompletionOrchestrator>>()));
 
+        services.AddSingleton<CoreAndWrapperServicesMarker>(new CoreAndWrapperServicesMarker());
         return services;
     }
 
     /// <summary>
     /// Helper method to register common services and wrapper services.
+    /// Shares the <see cref="CoreAndWrapperServicesMarker"/> sentinel with the
+    /// partitioned overload so mixed callers (e.g. <c>UseOrleansMeshServer</c>
+    /// + <c>AddFileSystemPersistence</c>) bail safely on the second pass
+    /// instead of stacking duplicate registrations.
     /// </summary>
     private static IServiceCollection AddCoreAndWrapperServices(this IServiceCollection services)
     {
+        if (services.Any(d => d.ServiceType == typeof(CoreAndWrapperServicesMarker)))
+            return services;
+
         services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
         services.TryAddSingleton<StorageAdapterMeshQueryProvider>();
         services.TryAddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<StorageAdapterMeshQueryProvider>());
@@ -603,6 +642,7 @@ public static class PersistenceExtensions
                 sp.GetRequiredService<IMessageHub>(),
                 sp.GetService<ILogger<ChatCompletionOrchestrator>>()));
 
+        services.AddSingleton<CoreAndWrapperServicesMarker>(new CoreAndWrapperServicesMarker());
         return services;
     }
 
