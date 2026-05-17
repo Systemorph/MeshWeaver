@@ -2,6 +2,8 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.Blazor.Infrastructure;
+using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -23,15 +25,15 @@ namespace Memex.Portal.Shared.Authentication;
 /// </list>
 /// </para>
 ///
-/// <para>The user lookup uses <see cref="IMeshQueryCore"/> (the unsecured
-/// infrastructure surface — same one VUserHelper / SyncedQueryMeshNodes use).
-/// Going through <c>IMeshService</c> applies the ACL filter, but at this point
-/// in the pipeline the authenticated user has no mesh roles yet — so the
-/// secured query returns nothing and every signed-in user got bounced to
-/// /onboarding even when their User node existed.</para>
+/// <para>The user lookup uses <c>workspace.GetQuery</c> (the canonical synced-query
+/// API from <c>SyncedMeshNodeQueries.md</c>). The synced layer bypasses RLS internally
+/// (System identity), dedupes by path, gates on Initial, and includes static-node
+/// providers — same guarantees as <c>ApiTokenService.GetTokensForUser</c> and
+/// <c>AgentChatClient.Initialize</c>. Direct <c>IMeshQueryCore.ObserveQuery</c> calls
+/// from application code are pedestrian queries and were forbidden in 2026-05.</para>
 ///
 /// <para>Internally the lookup is a reactive observable chain
-/// (<c>ObserveQuery</c> → <c>Where</c> → <c>Take(1)</c> → <c>Timeout</c>);
+/// (<c>workspace.GetQuery</c> → <c>Where</c> → <c>Take(1)</c> → <c>Timeout</c>);
 /// the single <c>await</c> at the middleware boundary is unavoidable because
 /// ASP.NET Core's <c>RequestDelegate</c> is Task-based.</para>
 /// </summary>
@@ -137,13 +139,11 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
             && userContext.ObjectId != email)
             return Observable.Return(OnboardingOutcome.PassThrough);
 
-        var meshQuery = portalApp.Hub.ServiceProvider.GetService<IMeshQueryCore>();
-        if (meshQuery == null)
-            return Observable.Return(OnboardingOutcome.PassThrough);
+        var workspace = portalApp.Hub.GetWorkspace();
 
         // Reactive composition: FindUser → SelectMany → either Redirect (no
         // node / Transient) or LoadRoles → set context → PassThrough.
-        return FindUserByEmail(meshQuery, portalApp.Hub, email, logger)
+        return FindUserByEmail(workspace, email, logger)
             .SelectMany(node =>
             {
                 if (node == null || node.State == MeshNodeState.Transient)
@@ -155,7 +155,7 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
                 }
 
                 var username = node.Id;
-                return LoadUserRoles(meshQuery, portalApp.Hub, username, logger)
+                return LoadUserRoles(workspace, username, logger)
                     .Select(roles =>
                     {
                         var updatedContext = userContext with
@@ -181,80 +181,40 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
     }
 
     /// <summary>
-    /// Reactive lookup of the User node by email. Returns
-    /// <see cref="IObservable{T}"/> rather than <see cref="Task{T}"/> so the
-    /// caller composes the chain rather than bridging to Task in the middle —
-    /// awaited Tasks on hub-touching observables can deadlock when the awaited
-    /// thread is the one that would publish the result. The middleware is the
-    /// single allowed bridge point (ASP.NET's RequestDelegate is Task-based);
-    /// it composes <c>FindUserByEmail(...).FirstOrDefaultAsync().ToTask()</c>
-    /// at the very edge.
+    /// Reactive lookup of the User node by email via the canonical synced query
+    /// (<c>workspace.GetQuery</c>). The synced layer dedupes by path, gates on
+    /// Initial, includes static providers, and runs queries with System identity
+    /// internally — so this RLS-bypassing lookup uses exactly the same machinery
+    /// as every other "live mesh node set" consumer in the codebase
+    /// (<c>ApiTokenService.GetTokensForUser</c>, <c>AgentChatClient</c>, etc.).
+    /// Direct <c>IMeshQueryCore.ObserveQuery</c> here was a pedestrian-query
+    /// antipattern — replaced 2026-05 per <c>SyncedMeshNodeQueries.md</c>.
     ///
-    /// <para>Built on <see cref="IMeshQueryCore.ObserveQuery{T}"/> so the chain
-    /// emits live: Initial may be empty before the catalog finishes loading
-    /// the User partition; <see cref="Observable.Where{TSource}"/> skips empty
-    /// snapshots and waits for the first change carrying an item. Timeout
-    /// falls back to null instead of hanging.</para>
-    /// </summary>
-    /// <summary>
-    /// Public reactive User-by-email lookup for callers outside this
-    /// middleware (e.g. <c>ApiTokenAuthenticationHandler</c> needs the
-    /// same shape to enrich Bearer logins with DB-resolved roles).
+    /// <para>Returns <see cref="IObservable{T}"/> rather than <see cref="Task{T}"/>
+    /// so the caller composes the chain; the middleware is the single allowed
+    /// bridge point (ASP.NET's RequestDelegate is Task-based).</para>
     ///
-    /// <para>Robustness shape:</para>
-    /// <list type="bullet">
-    ///   <item>Subscribe and emit the first non-empty snapshot, whichever
-    ///         <see cref="QueryChangeType"/> it carries.</item>
-    ///   <item>If the first emission's snapshot is empty (and only empties
-    ///         keep arriving), wait <see cref="RetryDelay"/> then
-    ///         <em>resubscribe once</em> to the same query — covers the
-    ///         catalog-emitted-empty-Initial-but-never-fires-Added cold-start
-    ///         pathology that previously bounced real users to
-    ///         <c>/onboarding</c> on the first request after restart.</item>
-    ///   <item>If the second pass also yields nothing within
-    ///         <see cref="LookupTimeout"/>, fall back to <c>null</c> (which
-    ///         the middleware reads as "no user node — onboard them").</item>
-    /// </list>
-    ///
-    /// <para>Logging is opt-in via the <paramref name="logger"/> parameter
-    /// so the API stays usable from non-DI call sites (the legacy
-    /// no-logger overload is preserved for back-compat).</para>
+    /// <para>Robustness: the synced layer's Initial-gating means the first
+    /// emission is already the authoritative snapshot — no per-emission Where
+    /// filter needed. We Take(1) and Timeout (cold start can take seconds while
+    /// the partition hydrates). Empty snapshot → <c>null</c> → "redirect to
+    /// /onboarding".</para>
     /// </summary>
     internal static IObservable<MeshNode?> FindUserByEmail(
-        IMeshQueryCore meshQuery, IMessageHub hub, string email, ILogger? logger)
+        IWorkspace workspace, string email, ILogger? logger)
     {
-        // Post-v10: User identity nodes live at root namespace (id = userId).
-        // Pre-v10 layout under namespace=User no longer exists.
-        var request = MeshQueryRequest.FromQuery(
-            $"nodeType:User content.email:{email} limit:1",
-            WellKnownUsers.System);
-
-        IObservable<MeshNode?> SubscribeOnce(string pass) =>
-            meshQuery.ObserveQuery<MeshNode>(request, hub.JsonSerializerOptions)
-                .Do(c => logger?.LogDebug(
-                    "FindUserByEmail({Email}) [{Pass}]: {ChangeType} items={Count}",
-                    email, pass, c.ChangeType, c.Items.Count))
-                .Where(c => c.Items.Count > 0)
-                .Select(c => (MeshNode?)c.Items[0])
-                .Take(1);
-
-        // First pass + retry-once on empty. Concat is short-circuited by Take(1)
-        // — if the first pass produces a node, the retry observable is never
-        // materialised. If the first pass terminates without emitting (it can't
-        // here since SubscribeOnce never completes early, but we model the path
-        // explicitly via Timeout below), we still get a deterministic null.
-        var firstPass = SubscribeOnce("first");
-        var retryPass = Observable.Timer(RetryDelay)
-            .SelectMany(_ =>
-            {
-                logger?.LogDebug(
-                    "FindUserByEmail({Email}): first-pass snapshot empty after {Delay}, resubscribing",
-                    email, RetryDelay);
-                return SubscribeOnce("retry");
-            });
-
-        return firstPass.Amb(retryPass)
+        // Cache id per-email — synced query result snapshot is shared across
+        // any concurrent request for the same email. The synced registry holds
+        // the entry for the workspace's lifetime; live mesh change events keep
+        // the snapshot fresh, so subsequent requests see up-to-date state.
+        return workspace.GetQuery(
+                $"auth:userByEmail:{email}",
+                $"nodeType:User content.email:{email} limit:1")
+            .Do(items => logger?.LogDebug(
+                "FindUserByEmail({Email}): synced query emit, items={Count}",
+                email, items.Count()))
             .Take(1)
+            .Select(items => (MeshNode?)items.FirstOrDefault())
             .Timeout(LookupTimeout, Observable.Defer(() =>
             {
                 logger?.LogWarning(
@@ -266,43 +226,35 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
 
     /// <summary>Back-compat overload used by callers that don't yet pass a logger.</summary>
     internal static IObservable<MeshNode?> FindUserByEmail(
-        IMeshQueryCore meshQuery, IMessageHub hub, string email)
-        => FindUserByEmail(meshQuery, hub, email, logger: null);
+        IWorkspace workspace, string email)
+        => FindUserByEmail(workspace, email, logger: null);
 
     /// <summary>
-    /// Reactive load of the user's role names from AccessAssignment nodes —
-    /// same shape as <see cref="FindUserByEmail"/>. Returns
-    /// <see cref="IObservable{T}"/> so the caller composes; the Initial /
-    /// Reset change carries the snapshot, fold roles via Select, Take(1) and
-    /// Timeout the empty set on failure. No <c>.ToTask()</c>, no <c>await</c>;
-    /// the only Task bridge in this file is at the middleware boundary.
-    /// </summary>
-    /// <summary>
-    /// Public reactive role-loader for the same reason
-    /// <see cref="FindUserByEmail(IMeshQueryCore, IMessageHub, string, ILogger?)"/>
-    /// is public — Bearer auth needs to enrich the principal with DB-resolved
-    /// AccessAssignment roles, not just whatever roles were stamped on the
-    /// API token at creation time. Same timeout + null-fallback contract.
+    /// Reactive load of the user's role names from AccessAssignment nodes via the
+    /// canonical synced query (<c>workspace.GetQuery</c>). Same machinery as
+    /// <see cref="FindUserByEmail"/> — bypasses RLS, dedupes, gates on Initial,
+    /// includes static providers. Bearer auth uses this via
+    /// <see cref="UserRoleResolver.LoadDbRolesAsync"/> to enrich principals with
+    /// DB-resolved roles rather than only the roles stamped on the API token at
+    /// creation time.
     /// </summary>
     internal static IObservable<IReadOnlyCollection<string>> LoadUserRoles(
-        IMeshQueryCore meshQuery, IMessageHub hub, string username, ILogger? logger)
+        IWorkspace workspace, string username, ILogger? logger)
     {
-        var request = MeshQueryRequest.FromQuery(
-            $"nodeType:AccessAssignment content.accessObject:\"{username}\" scope:subtree limit:10",
-            WellKnownUsers.System);
+        var jsonOptions = workspace.Hub.JsonSerializerOptions;
 
-        return meshQuery.ObserveQuery<MeshNode>(request, hub.JsonSerializerOptions)
-            .Do(c => logger?.LogDebug(
-                "LoadUserRoles({User}): {ChangeType} items={Count}",
-                username, c.ChangeType, c.Items.Count))
-            .Where(c => c.ChangeType == QueryChangeType.Initial
-                     || c.ChangeType == QueryChangeType.Reset)
+        return workspace.GetQuery(
+                $"auth:userRoles:{username}",
+                $"nodeType:AccessAssignment content.accessObject:\"{username}\" scope:subtree limit:10")
+            .Do(items => logger?.LogDebug(
+                "LoadUserRoles({User}): synced query emit, items={Count}",
+                username, items.Count()))
             .Take(1)
-            .Select(change => FoldRoles(change, hub.JsonSerializerOptions))
+            .Select(items => FoldRoles(items, jsonOptions))
             .Timeout(LookupTimeout, Observable.Defer(() =>
             {
                 logger?.LogWarning(
-                    "LoadUserRoles({User}): no Initial/Reset within {Timeout} — defaulting to no roles",
+                    "LoadUserRoles({User}): no snapshot within {Timeout} — defaulting to no roles",
                     username, LookupTimeout);
                 return Observable.Return((IReadOnlyCollection<string>)Array.Empty<string>());
             }))
@@ -315,14 +267,14 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
 
     /// <summary>Back-compat overload used by callers that don't yet pass a logger.</summary>
     internal static IObservable<IReadOnlyCollection<string>> LoadUserRoles(
-        IMeshQueryCore meshQuery, IMessageHub hub, string username)
-        => LoadUserRoles(meshQuery, hub, username, logger: null);
+        IWorkspace workspace, string username)
+        => LoadUserRoles(workspace, username, logger: null);
 
     private static IReadOnlyCollection<string> FoldRoles(
-        QueryResultChange<MeshNode> change, JsonSerializerOptions options)
+        IEnumerable<MeshNode> items, JsonSerializerOptions options)
     {
         var roles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var accessNode in change.Items)
+        foreach (var accessNode in items)
         {
             if (accessNode.Content == null)
                 continue;
