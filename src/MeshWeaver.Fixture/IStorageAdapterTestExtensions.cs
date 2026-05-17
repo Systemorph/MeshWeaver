@@ -4,13 +4,14 @@ using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 
-namespace MeshWeaver.Mesh;
+namespace MeshWeaver.Fixture;
 
 /// <summary>
 /// Test-only sanctioned bridge from <see cref="IObservable{T}"/> back to <see cref="Task{T}"/>
 /// at the test boundary. Production code MUST NOT use these — it composes
 /// <c>IObservable&lt;T&gt;</c> end-to-end per <c>Doc/Architecture/AsynchronousCalls.md</c>.
 /// Tests are allowed to bridge because their assertion phase requires waiting for completion.
+/// Lives in <c>MeshWeaver.Fixture</c> so production code can't accidentally take a reference.
 /// </summary>
 public static class IStorageAdapterTestExtensions
 {
@@ -22,16 +23,16 @@ public static class IStorageAdapterTestExtensions
     public static Task<MeshNode?> GetNodeAsync(this IStorageAdapter adapter, string path, JsonSerializerOptions options, CancellationToken ct = default)
         => adapter.Read(path, options).FirstAsync().ToTask(ct);
 
-    /// <summary>Test bridge: <c>Write</c> → awaitable persisted node.</summary>
-    public static Task<MeshNode> WriteAsync(this IStorageAdapter adapter, MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
+    /// <summary>Test bridge: <c>Write</c> → awaitable persisted node (may be null if the adapter declined).</summary>
+    public static Task<MeshNode?> WriteAsync(this IStorageAdapter adapter, MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
         => adapter.Write(node, options).FirstAsync().ToTask(ct);
 
     /// <summary>Legacy alias for tests: <c>SaveNode</c> → <c>Write</c>.</summary>
-    public static IObservable<MeshNode> SaveNode(this IStorageAdapter adapter, MeshNode node, JsonSerializerOptions options)
+    public static IObservable<MeshNode?> SaveNode(this IStorageAdapter adapter, MeshNode node, JsonSerializerOptions options)
         => adapter.Write(node, options);
 
     /// <summary>Legacy alias for tests: <c>SaveNodeAsync</c> → <c>Write</c>.</summary>
-    public static Task<MeshNode> SaveNodeAsync(this IStorageAdapter adapter, MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
+    public static Task<MeshNode?> SaveNodeAsync(this IStorageAdapter adapter, MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
         => adapter.Write(node, options).FirstAsync().ToTask(ct);
 
     /// <summary>Test bridge: <c>Delete</c> → awaitable deleted path.</summary>
@@ -65,12 +66,12 @@ public static class IStorageAdapterTestExtensions
         => adapter.Delete(path);
 
     /// <summary>Legacy alias for tests: <c>MoveNode</c> via copy-delete (in-memory tests only — production uses per-node-hub fan-out).</summary>
-    public static IObservable<MeshNode> MoveNode(this IStorageAdapter adapter, string sourcePath, string targetPath, JsonSerializerOptions options)
+    public static IObservable<MeshNode?> MoveNode(this IStorageAdapter adapter, string sourcePath, string targetPath, JsonSerializerOptions options)
         => adapter.Read(sourcePath, options)
             .SelectMany(source =>
             {
                 if (source is null)
-                    return System.Reactive.Linq.Observable.Throw<MeshNode>(new InvalidOperationException($"Source node not found: {sourcePath}"));
+                    return Observable.Throw<MeshNode>(new InvalidOperationException($"Source node not found: {sourcePath}"));
                 var moved = MeshNode.FromPath(targetPath) with
                 {
                     Name = source.Name,
@@ -81,7 +82,7 @@ public static class IStorageAdapterTestExtensions
                     HubConfiguration = source.HubConfiguration,
                     GlobalServiceConfigurations = source.GlobalServiceConfigurations
                 };
-                return adapter.Write(moved, options).SelectMany(_ => adapter.Delete(sourcePath).Select(_ => moved));
+                return adapter.Write(moved, options).SelectMany(_ => adapter.Delete(sourcePath).Select(_ => (MeshNode?)moved));
             });
 
     /// <summary>Test bridge: <c>GetPartitionObjects</c> → async-enumerable of partition objects.</summary>

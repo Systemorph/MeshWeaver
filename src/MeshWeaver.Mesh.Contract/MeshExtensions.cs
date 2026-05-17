@@ -259,6 +259,8 @@ public static class MeshExtensions
                         };
                         var saveObs = persistence != null
                             ? persistence.Write(confirmedNode, hub.JsonSerializerOptions)
+                                .Where(n => n is not null)
+                                .Select(n => n!)
                             : Observable.Return(confirmedNode);
                         return saveObs.Select(savedConfirmed => (mode: "confirm", node: savedConfirmed));
                     }
@@ -373,6 +375,8 @@ public static class MeshExtensions
                                     enriched.Path, persistence != null);
                                 var saveObs = persistence != null
                                     ? persistence.Write(enriched, hub.JsonSerializerOptions)
+                                        .Where(n => n is not null)
+                                        .Select(n => n!)
                                         .Do(s => logger.LogDebug("[CreateNode] step=save-emit path={Path} version={Version}",
                                             s.Path, s.Version))
                                     : Observable.Return(enriched);
