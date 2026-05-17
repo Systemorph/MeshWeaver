@@ -74,14 +74,6 @@ internal class PathResolutionService : IPathResolver
     private IObservable<AddressResolution?> ResolveOnce(string path)
     {
         var segments = path.Split('/');
-        // Multi-value path with explicit ancestor list — pushes down to
-        // `WHERE path IN (...)` on Postgres and exact-path probes on
-        // pedestrian backends. NO `limit:1` here — pedestrian probes are
-        // parallel and emit in completion order, and the `sort:length(path)`
-        // SQL-function doesn't apply client-side (QueryEvaluator's
-        // GetPropertyValue can't resolve length() as a property). Without
-        // limit every matching ancestor flows through; <see cref="Observable.Scan"/>
-        // below picks the deepest authoritatively.
         var pathList = string.Join("|", Enumerable.Range(1, segments.Length)
             .Select(depth => string.Join("/", segments.Take(depth)))
             .Reverse());
