@@ -560,44 +560,54 @@ internal static class ThreadSubmissionServer
 
     /// <summary>
     /// Wrap the existing <see cref="DispatchRound"/> in <c>IObservable&lt;Unit&gt;</c>
-    /// so it composes via <c>SelectMany</c>. The body fires <c>OnNext + OnCompleted</c>
-    /// on success, <c>OnCompleted</c> alone on failure (failures don't tear down the
-    /// outer subscription — the next state change retries).
+    /// so it composes via <c>Concat</c>. Each queued dispatch re-reads the LATEST
+    /// thread state — the upstream emission's captured <paramref name="threadNode"/>
+    /// is only used as a fallback when the workspace read fails.
+    ///
+    /// <para>Why re-read: WatchSubmission uses <c>Concat</c> to serialize dispatch
+    /// rounds. If 3 upstream fingerprint emissions queue up faster than the first
+    /// dispatch's async commit can land, each queued dispatch must re-evaluate
+    /// against current state. Otherwise the captured (IsExecuting=false) state
+    /// at upstream-emission time bypasses <see cref="PlanNextRound"/>'s
+    /// <c>IsExecuting</c> guard and we get duplicate response cells per round
+    /// (the Resubmit flake symptom).</para>
     /// </summary>
     private static IObservable<System.Reactive.Unit> DispatchRoundObs(
         IMessageHub hub, MeshNode threadNode, ILogger<AgentChatClient>? logger) =>
-        Observable.Create<System.Reactive.Unit>(observer =>
-        {
-            if (threadNode.Content is not MeshThread thread)
-            {
-                observer.OnCompleted();
-                return System.Reactive.Disposables.Disposable.Empty;
-            }
-            var dispatch = ThreadSubmission.PlanNextRound(thread);
-            if (dispatch is null)
-            {
-                observer.OnCompleted();
-                return System.Reactive.Disposables.Disposable.Empty;
-            }
-            try
-            {
-                DispatchRound(hub, threadNode, dispatch, logger,
-                    onFailure: () => observer.OnCompleted());
-                // DispatchRound's last imperative step (post SubmitMessageRequest to _Exec)
-                // is fire-and-forget; from the watcher's perspective the round is
-                // "dispatched" once that post returns. We OnNext immediately so the
-                // outer SelectMany completes; the round finishes asynchronously inside
-                // the _Exec hub.
-                observer.OnNext(System.Reactive.Unit.Default);
-                observer.OnCompleted();
-            }
-            catch (Exception ex)
-            {
-                logger?.LogWarning(ex, "[ThreadSubmission] DispatchRoundObs failed for {ThreadPath}", hub.Address.Path);
-                observer.OnCompleted();
-            }
-            return System.Reactive.Disposables.Disposable.Empty;
-        });
+        System.Reactive.Linq.Observable.Defer(() =>
+            hub.GetWorkspace().GetMeshNodeStream().Take(1)
+                .Select(latest => latest ?? threadNode)
+                .SelectMany(latest =>
+                {
+                    if (latest?.Content is not MeshThread thread)
+                        return System.Reactive.Linq.Observable.Return(System.Reactive.Unit.Default);
+                    var dispatch = ThreadSubmission.PlanNextRound(thread);
+                    if (dispatch is null) // IsExecuting=true or nothing unprocessed
+                        return System.Reactive.Linq.Observable.Return(System.Reactive.Unit.Default);
+
+                    try { DispatchRound(hub, latest!, dispatch, logger, onFailure: () => { }); }
+                    catch (Exception ex)
+                    {
+                        logger?.LogWarning(ex,
+                            "[ThreadSubmission] DispatchRoundObs failed for {ThreadPath}",
+                            hub.Address.Path);
+                        return System.Reactive.Linq.Observable.Return(System.Reactive.Unit.Default);
+                    }
+
+                    // CRITICAL: don't complete until the dispatch's commit (IsExecuting=true)
+                    // is visible on the workspace. The outer WatchSubmission Concat waits on
+                    // this completion before subscribing to the next dispatch — without it,
+                    // queued dispatches all re-read state BEFORE the first commit lands
+                    // and each one fresh-Plans + dispatches a duplicate round. Symptom: the
+                    // Resubmit flake fired 10 dispatches per single user-state change.
+                    return hub.GetWorkspace().GetMeshNodeStream()
+                        .Where(n => n?.Content is MeshThread { IsExecuting: true })
+                        .Take(1)
+                        .Timeout(TimeSpan.FromSeconds(10))
+                        .Catch<MeshNode, Exception>(_ =>
+                            System.Reactive.Linq.Observable.Return<MeshNode>(null!))
+                        .Select(_ => System.Reactive.Unit.Default);
+                }));
 
     /// <summary>
     /// Creates the output cell, writes the committed round to the thread node, and
@@ -716,6 +726,13 @@ internal static class ThreadSubmissionServer
             }
 
             hub.Observe((IMessageDelivery)createDelivery)
+                // The delivery observable can emit more than once for the same request
+                // (Forwarded intermediate delivery + actual CreateNodeResponse, or stream
+                // re-replay on resubscribe). Take exactly the first terminal response —
+                // without this guard the commit step below ran 6× per Resubmit, each
+                // appending the same responseMsgId to Thread.Messages.
+                .Where(r => r.Message is CreateNodeResponse)
+                .Take(1)
                 .Subscribe(
                     response =>
                     {

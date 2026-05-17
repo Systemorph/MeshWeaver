@@ -178,9 +178,21 @@ public record MessageHubConfiguration
         return targetWithoutHost.Equals(hub.Address);
     }
 
+    /// <summary>
+    /// Idempotent: re-adding the same delegate (method group / cached lambda)
+    /// is a no-op. Without this, a configurator composed through multiple layers
+    /// (e.g. NodeType <c>HubConfiguration</c> + <c>DefaultNodeHubConfiguration</c>
+    /// + module extensions) silently stacks duplicate init runs — each watcher /
+    /// subscription that runs in the init then fires N×, dispatching N rounds
+    /// per state change. Symptom: Resubmit test saw Thread.Messages accumulate
+    /// the same response id 3× because <see cref="ThreadSubmissionServer.InstallServerWatcher"/>
+    /// was running on N stacked subscriptions.
+    /// </summary>
     public MessageHubConfiguration WithInitialization(Action<IMessageHub> action) => this with
     {
-        SyncBuildupActions = SyncBuildupActions.Add(action)
+        SyncBuildupActions = SyncBuildupActions.Contains(action)
+            ? SyncBuildupActions
+            : SyncBuildupActions.Add(action)
     };
 
     /// <summary>
@@ -190,11 +202,26 @@ public record MessageHubConfiguration
     /// <c>Observable.FromAsync(() =&gt; method())</c> for the typical "load initial data
     /// before processing messages" shape. Hub-reachable code returns
     /// <see cref="IObservable{T}"/>, never <see cref="Task{T}"/>.
+    /// <para>Idempotent on the caller's delegate identity — the inner action is tracked
+    /// in <see cref="RegisteredObservableInits"/> so repeat <c>WithInitialization(F)</c>
+    /// calls (composed configurators) collapse to one Subscribe.</para>
     /// </summary>
-    public MessageHubConfiguration WithInitialization(Func<IMessageHub, IObservable<Unit>> action) => this with
+    public MessageHubConfiguration WithInitialization(Func<IMessageHub, IObservable<Unit>> action)
     {
-        BuildupActions = BuildupActions.Add((hub, ct) => action(hub).DefaultIfEmpty(Unit.Default).FirstAsync().ToTask(ct))
-    };
+        if (RegisteredObservableInits.Contains(action))
+            return this;
+        Func<IMessageHub, CancellationToken, Task> wrapped = (hub, ct) =>
+            action(hub).DefaultIfEmpty(Unit.Default).FirstAsync().ToTask(ct);
+        return this with
+        {
+            RegisteredObservableInits = RegisteredObservableInits.Add(action),
+            BuildupActions = BuildupActions.Add(wrapped),
+        };
+    }
+
+    /// <summary>Identity-tracking set for the observable <c>WithInitialization</c> overload.</summary>
+    internal ImmutableHashSet<Func<IMessageHub, IObservable<Unit>>> RegisteredObservableInits { get; init; } =
+        ImmutableHashSet<Func<IMessageHub, IObservable<Unit>>>.Empty;
 
     protected void CreateServiceProvider(IMessageHub? parent)
     {

@@ -126,9 +126,21 @@ public static class ActivityControlPlaneExtensions
         logger ??= hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.JobOrchestration");
 
+        // Atomic single-flight guard. The upstream `GetMeshNodeStream` can emit
+        // multiple distinct fingerprints before any single dispatch's async
+        // commit (CreateNodeRequest + workspace.Update) has landed; without
+        // the guard each fires its own DispatchRound with a fresh response id.
+        // Concat doesn't help because the inner dispatch completes synchronously
+        // (DispatchRound is fire-and-forget). The flag is per-watcher (one per
+        // hub), set on entry, cleared on dispatch completion — the next state
+        // change re-evaluates `needsDispatch` against current state and either
+        // dispatches a fresh round (legitimate next round) or drops (in-flight
+        // round set IsExecuting=true).
+        var dispatching = 0;
         return hub.GetWorkspace().GetMeshNodeStream()
             .DistinctUntilChanged(fingerprint)
             .Where(needsDispatch)
+            .Where(_ => System.Threading.Interlocked.CompareExchange(ref dispatching, 1, 0) == 0)
             .SelectMany(node => dispatch(node)
                 .Catch<System.Reactive.Unit, Exception>(ex =>
                 {
@@ -136,7 +148,8 @@ public static class ActivityControlPlaneExtensions
                         "Submission dispatch failed on {Address}; next state change will retry",
                         hub.Address);
                     return System.Reactive.Linq.Observable.Empty<System.Reactive.Unit>();
-                }))
+                })
+                .Finally(() => System.Threading.Interlocked.Exchange(ref dispatching, 0)))
             .Subscribe(
                 _ => { },
                 ex => logger?.LogError(ex,
