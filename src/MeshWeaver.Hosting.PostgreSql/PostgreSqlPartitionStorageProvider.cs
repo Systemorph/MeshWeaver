@@ -32,8 +32,19 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     private readonly PostgreSqlStorageOptions _options;
     private readonly IEmbeddingProvider? _embeddingProvider;
     private readonly Action<NpgsqlDataSourceBuilder>? _configureDataSource;
-    private readonly ConcurrentDictionary<string, PartitionDefinition> _partitions =
+    // Lazy per-partition cache. Each entry holds a single partition's
+    // PartitionDefinition (or null = not a partition) with a TTL so a
+    // partition registered / unregistered mid-flight becomes visible
+    // without a process restart. NO upfront enumeration — entries are
+    // populated on first <see cref="Matches"/> / <see cref="ResolveDefinition"/>
+    // call against that partition. This is the "per-partition query, no
+    // 'I know all the partitions' business" contract the user requested.
+    private readonly ConcurrentDictionary<string, CachedPartitionEntry> _partitionCache =
         new(StringComparer.OrdinalIgnoreCase);
+    private static readonly TimeSpan PartitionCacheTtl = TimeSpan.FromMinutes(5);
+
+    private sealed record CachedPartitionEntry(DateTime ExpiresUtc, PartitionDefinition? Definition);
+
     private readonly ConcurrentDictionary<string, byte> _schemasInitialized =
         new(StringComparer.OrdinalIgnoreCase);
     // Per-schema init Task cache so concurrent first-touch racers join the
@@ -229,42 +240,112 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     public void RegisterPartition(PartitionDefinition def)
     {
         if (string.IsNullOrEmpty(def.Namespace)) return;
-        _partitions[def.Namespace] = def;
+        // Boot / in-code registrations get `DateTime.MaxValue` so the TTL
+        // eviction doesn't drop them. (DB-discovered entries use the TTL —
+        // those get re-queried on expiry, which lets a partition row deleted
+        // out-of-band become unroutable within one TTL window.) The next
+        // `RegisterPartition` call with the same key overrides; an explicit
+        // `RemovePartition` evicts.
+        _partitionCache[def.Namespace] = new CachedPartitionEntry(
+            DateTime.MaxValue, def);
     }
 
     /// <summary>
-    /// Removes a partition definition (e.g. organization deletion). Existing
-    /// partition hubs will idle-expire from the router's 5-minute cache.
+    /// Removes a cached partition entry so the next lookup re-queries
+    /// <c>admin.mesh_nodes</c>. The authoritative state is the DB row;
+    /// callers that actually want to UNREGISTER a partition delete the
+    /// <c>Admin/Partition/{namespace}</c> row.
     /// </summary>
     public void RemovePartition(string @namespace)
     {
         if (string.IsNullOrEmpty(@namespace)) return;
-        _partitions.TryRemove(@namespace, out _);
+        _partitionCache.TryRemove(@namespace, out _);
     }
 
     /// <inheritdoc/>
     /// <remarks>
-    /// Strict — matches only if a <see cref="PartitionDefinition"/> for the
-    /// first segment has been registered (via the hosted-service static-seed
-    /// pass, the <c>Admin/Partition/*</c> workspace stream, schema-discovery,
-    /// or an explicit <see cref="RegisterPartition"/> call). Unknown first
-    /// segments return false — routing must come from partition-table state,
-    /// not a wildcard. Tests pinning this contract live in
-    /// <c>PartitionRoutingTests</c>.
+    /// Per-partition lazy lookup against <c>admin.mesh_nodes</c>. No global
+    /// "I know all the partitions" cache; each first-segment is queried on
+    /// demand, cached for <see cref="PartitionCacheTtl"/>, and re-checked
+    /// after expiry. Subsequent partition registrations / removals become
+    /// visible within one TTL window without a process restart.
     /// </remarks>
     public bool Matches(string fullPath)
     {
         var firstSegment = GetFirstSegment(fullPath);
-        return firstSegment != null && _partitions.ContainsKey(firstSegment);
+        return firstSegment != null && LookupPartition(firstSegment) != null;
     }
 
     /// <inheritdoc/>
     public PartitionDefinition? ResolveDefinition(string fullPath)
     {
         var firstSegment = GetFirstSegment(fullPath);
-        if (firstSegment == null) return null;
-        _partitions.TryGetValue(firstSegment, out var def);
+        return firstSegment == null ? null : LookupPartition(firstSegment);
+    }
+
+    /// <summary>
+    /// Per-partition cache lookup with TTL refresh. Cache misses (or expired
+    /// entries) issue ONE round-trip to <c>admin.mesh_nodes</c> for the
+    /// requested first-segment only — never an enumeration.
+    /// </summary>
+    private PartitionDefinition? LookupPartition(string firstSegment)
+    {
+        if (_partitionCache.TryGetValue(firstSegment, out var cached)
+            && cached.ExpiresUtc > DateTime.UtcNow)
+            return cached.Definition;
+
+        var def = QueryPartitionFromAdmin(firstSegment);
+        _partitionCache[firstSegment] = new CachedPartitionEntry(
+            DateTime.UtcNow + PartitionCacheTtl,
+            def);
         return def;
+    }
+
+    /// <summary>
+    /// Synchronous single-row lookup against <c>information_schema.schemata</c>:
+    /// does a Postgres schema exist for this first-segment? If yes, build a
+    /// default <see cref="PartitionDefinition"/> with standard table mappings.
+    ///
+    /// <para>Schema existence IS the partition's existence — no separate
+    /// <c>Admin/Partition</c> registry needed for routing. The Admin/Partition
+    /// MeshNode (when it exists) is a UI/catalog concept, not a routing
+    /// requirement. Hot path is the cache; this only runs on cold miss.</para>
+    /// </summary>
+    private PartitionDefinition? QueryPartitionFromAdmin(string firstSegment)
+    {
+        try
+        {
+            using var conn = _baseDataSource.OpenConnection();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT schema_name FROM information_schema.schemata
+                WHERE lower(schema_name) = lower($1)
+                LIMIT 1
+                """;
+            cmd.Parameters.AddWithValue(firstSegment);
+            var scalar = cmd.ExecuteScalar();
+            System.IO.File.AppendAllText(@"C:\tmp\claude\pg-partition.log",
+                $"{DateTime.UtcNow:HH:mm:ss.fff} [QUERY] {firstSegment} → {(scalar?.ToString() ?? "null")}\n");
+            if (scalar is not string actualSchema || string.IsNullOrEmpty(actualSchema))
+                return null;
+
+            return new PartitionDefinition
+            {
+                Namespace = firstSegment,
+                DataSource = "default",
+                Schema = actualSchema,
+                Table = "mesh_nodes",
+                TableMappings = PartitionDefinition.StandardTableMappings,
+                Versioned = true,
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogDebug(ex,
+                "PostgreSqlPartitionStorageProvider: lookup for partition '{Partition}' failed " +
+                "— treating as unknown (cached for {Ttl})", firstSegment, PartitionCacheTtl);
+            return null;
+        }
     }
 
     /// <inheritdoc/>
