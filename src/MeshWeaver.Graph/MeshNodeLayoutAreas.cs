@@ -83,13 +83,37 @@ public static class MeshNodeLayoutAreas
     public const string ModelArea = "$Model";
 
     /// <summary>
+    /// Marker that records whether <see cref="AddDefaultLayoutAreas"/> has
+    /// already run on this <see cref="MessageHubConfiguration"/>, so a second
+    /// call is a safe no-op. Necessary because <c>AddGraph</c> now applies
+    /// <c>AddDefaultLayoutAreas</c> via <c>ConfigureDefaultNodeHub</c>, and
+    /// many hard-coded NodeType <c>HubConfiguration</c>s also call it directly
+    /// — without dedup, the framework would register
+    /// <c>WithHandler&lt;RollbackNodeRequest&gt;</c> / <c>UndoActivityRequest</c>
+    /// twice, and AddDefaultMeshMenu / AddDefaultSettingsMenuItems would also
+    /// double-emit.
+    /// </summary>
+    private sealed record DefaultLayoutAreasMarker;
+
+    /// <summary>
     /// Adds the mesh node views (Details, Thumbnail, Metadata, Settings, Catalog, Calendar) to the hub's layout.
     /// Requires AddMeshDataSource() to be called first to enable GetStream&lt;MeshNode&gt;() in views.
     /// Catalog is set as the default area for browsing children with search.
     /// For comments support, call AddComments() after this method.
+    ///
+    /// <para><b>Idempotent</b>: a second call on the same configuration is a
+    /// no-op. The marker is keyed on the <see cref="MessageHubConfiguration"/>
+    /// instance, so the default node hub config and a per-NodeType
+    /// <c>HubConfiguration</c> both calling this layer their respective
+    /// <c>AddLayout(WithView(...))</c> overrides on top of the same single
+    /// registration of the framework-level handlers/menus.</para>
     /// </summary>
     public static MessageHubConfiguration AddDefaultLayoutAreas(this MessageHubConfiguration configuration)
-        => configuration
+    {
+        if (configuration.Get<DefaultLayoutAreasMarker>() is not null)
+            return configuration;
+        return configuration
+            .Set(new DefaultLayoutAreasMarker())
             // Always wire MeshDataSource so the canonical
             // workspace.GetMeshNodeStream() / MeshNodeReference reducer is
             // available even on hubs that don't declare a ContentType. Every
@@ -103,6 +127,7 @@ public static class MeshNodeLayoutAreas
             .WithHandler<RollbackNodeRequest>(VersionLayoutArea.HandleRollbackNodeRequest)
             .WithHandler<UndoActivityRequest>(VersionLayoutArea.HandleUndoActivityRequest)
             .AddLayout(layout => layout.AddDefaultLayoutAreas());
+    }
 
     public static LayoutDefinition AddDefaultLayoutAreas(this LayoutDefinition layout)
         => layout

@@ -1007,7 +1007,11 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     public async Task CreateNode_PreservesName()
     {
         var name = "My Test Article";
-        var nodePath = $"{TestPartition}/name-preservation-test";
+        // Unique suffix per run — SamplesGraphDataTest uses
+        // `AddPartitionedFileSystemPersistence` rooted at the shared SamplesGraph
+        // dir, so a fixed path leaves a stale `.md` on disk that fails the next
+        // run with NodeAlreadyExists.
+        var nodePath = $"{TestPartition}/name-preservation-{Guid.NewGuid():N}";
 
         await NodeFactory.CreateNode(MeshNode.FromPath(nodePath) with
         {

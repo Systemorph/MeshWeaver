@@ -193,6 +193,119 @@ D. **`async Task` init hooks** on hubs whose body subscribes to streams.
    registers the callback synchronously, the observable does the work later.
    The async overload's `await` adds a deadlock surface for nothing.
 
+## Finishing an activity — `ActivityLog.Finish` on every terminal write
+
+A fresh `ActivityLog` starts at `Status = Running` (the enum default). Until
+something calls `.Finish(version, status)` on it, *every* consumer that reads
+the log — the response carrying it, the activity MeshNode's content stream,
+the UI overlay — sees `Running`. Long after the work is done, the activity
+looks live.
+
+### The contract
+
+> **Every code path that owns the activity's terminal write — success OR
+> failure — MUST call `.Finish(version, status)` on the log before the log
+> escapes its caller.** This includes:
+> - the success branch (`.Finish(version, ActivityStatus.Succeeded)`)
+> - every catch / failure branch (`.Finish(version, ActivityStatus.Failed)`)
+> - every early-return short-circuit (cache hit, "no work to do", validation
+>   reject) — the log is still escaping, still wants a terminal state
+
+`Finish` reads `Messages` and computes `GetFinalStatus()`:
+`Error` message → `Failed`, `Warning` → `Warning`, otherwise → `Succeeded`.
+The `overrideStatus` argument is a floor — the function returns
+`MAX(overrideStatus, GetFinalStatus())`. So `Finish(v, Succeeded)` after an
+`AppendError` correctly returns `Failed`. **Pass the natural success status
+as the override; trust `GetFinalStatus()` to bump it on errors.**
+
+### Anti-pattern: appending an error after `Finish` and assuming status flips
+
+```csharp
+// ❌ WRONG — log says Succeeded, has an Error message
+var log = freshLog.Finish(v, ActivityStatus.Succeeded);
+log = AppendError(log, "actually it failed");          // doesn't flip Status
+
+// ✅ RIGHT — re-Finish so GetFinalStatus() reads the new Error
+log = AppendError(log, "actually it failed");
+log = log.Finish(v, ActivityStatus.Succeeded);         // Status → Failed
+```
+
+### Anti-pattern: handing back a result whose log was never finished
+
+```csharp
+// ❌ WRONG — log stays Running forever. Repro:
+// CompileActivityLogTest.SuccessfulCompile_ReportsActivityLogWithSourceQueries…
+var log = new ActivityLog(ActivityCategory.Compilation) { HubPath = path };
+return Observable.Return(new CompileResult(asm, configs, log));
+
+// ✅ RIGHT — Finish on the way out, success or failure
+var log = new ActivityLog(ActivityCategory.Compilation) { HubPath = path };
+var result = BuildResult(asm, log);
+return Observable.Return(result with
+{
+    Log = result.Log.Finish((int)hub.Version, ActivityStatus.Succeeded)
+});
+```
+
+The same applies to *every* exception branch you can swallow: the log was
+born `Running`; the only correct end state is `Finish(…)` with the right
+status. A `try { … } catch (Exception ex) { return Fail(ex.Message); }` that
+forgets to Finish leaves consumers polling forever.
+
+### Writing the terminal state back through `GetMeshNodeStream`
+
+When the activity *is* a MeshNode (the canonical shape — `_Activity/{id}`
+nodes), the terminal write must land via the activity hub's own
+`workspace.GetMeshNodeStream(activityPath).Update(...)`. Reasons:
+
+- It rides the data-sync protocol — every subscriber (UI overlay, agent,
+  Activity Details panel) sees the transition as one tick of the stream.
+- It debounces through `MeshNodeTypeSource.Sample(200ms)` like any other
+  content edit — no extra `SaveMeshNodeRequest` hand-rolled.
+- It can't bypass the per-node hub's reducer; no "wrote to persistence, hub
+  still serving stale content" race.
+
+```csharp
+hub.GetWorkspace().GetMeshNodeStream(activityPath!)
+    .Update(current =>
+        current?.Content is ActivityLog log
+            ? current with
+            {
+                Content = log with
+                {
+                    Status = ActivityStatus.Succeeded,
+                    End = DateTime.UtcNow,
+                }
+            }
+            : current!)
+    .Subscribe(_ => { }, ex => logger.LogWarning(ex,
+        "Activity terminal write failed for {Path}", activityPath));
+```
+
+**Do NOT** post `UpdateNodeRequest(activityNode with { Content = … })` —
+that bypasses the activity hub's reducer and races the per-node hub's own
+view of its content.
+
+**Do NOT** call `IStorageAdapter.Write` directly — same race, worse
+because persistence is invisible to the per-node hub's MeshNodeReference
+cache. The next `GetDataRequest` returns the pre-patch content.
+
+`NodeTypeCompilationActivity.MarkSucceeded` / `MarkFailed` in
+`MeshWeaver.Graph.Configuration` is the canonical implementation —
+copy its shape (Update through GetMeshNodeStream + best-effort try/catch
+that *logs and swallows* so observability never breaks the work).
+
+### When the activity is just a response field
+
+Some handlers return an `ActivityLog` inline on a response (e.g.
+`GetCompilationPathResponse.Log`) instead of (or alongside) a `_Activity`
+MeshNode. The same rule applies: **Finish before the response is posted**.
+The handler chain that produces the response is the activity's owner for
+that emission; if multiple compile paths produce the response (fresh
+compile, cached hydration, pinned release), each must Finish at the end
+of its branch. A shortcut path that hands the log straight to
+`BuildResponse` without a Finish is a "Running forever" bug.
+
 ## Reporting status back to the UI
 
 Status flows the other direction the same way: through the same content the user is patching. The owning hub writes `Status` (and `Messages`, and any other observable progress fields) on the activity's content, and every UI / agent / monitor subscribed to the node's `MeshNodeReference` stream gets the snapshot pushed within milliseconds.
