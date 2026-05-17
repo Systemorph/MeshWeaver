@@ -253,9 +253,6 @@ public static class PostgreSqlExtensions
         services.AddSingleton<IPartitionStorageProvider>(sp =>
             sp.GetRequiredService<PostgreSqlPartitionStorageProvider>());
 
-        services.AddSingleton<IPartitionAccessProvider>(
-            new PostgreSqlPartitionAccessProvider(baseDataSource));
-
         // pg_notify listener: register both the singleton and an IHostedService
         // wrapper so the LISTEN session opens at host startup. Without the
         // hosted-service wrapper the listener never starts and every synced
@@ -337,9 +334,6 @@ public static class PostgreSqlExtensions
         });
         services.AddSingleton<IPartitionStorageProvider>(sp =>
             sp.GetRequiredService<PostgreSqlPartitionStorageProvider>());
-
-        services.AddSingleton<IPartitionAccessProvider>(sp =>
-            new PostgreSqlPartitionAccessProvider(sp.GetRequiredService<NpgsqlDataSource>()));
 
         // Cross-schema query provider — uses stored procedure for single-query fan-out.
         // Self-contained discovery via information_schema; no provider/factory dependency.
