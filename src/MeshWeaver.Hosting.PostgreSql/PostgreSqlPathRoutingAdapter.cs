@@ -59,6 +59,23 @@ internal sealed class PostgreSqlPathRoutingAdapter : IStorageAdapter
         => Resolve(fullPath)?.FindBestPrefixMatch(fullPath, options)
             ?? Observable.Return<(MeshNode?, int)>((null, 0));
 
+    /// <summary>
+    /// Forwards to the per-schema adapter's <see cref="IStorageAdapter.ResolvePath"/>
+    /// — PostgreSqlStorageAdapter overrides this with a single UNION query
+    /// across mesh_nodes + every satellite table named in
+    /// <see cref="PartitionDefinition.TableMappings"/>. Without this forward,
+    /// <see cref="IStorageAdapter"/>'s default impl falls back to
+    /// <see cref="FindBestPrefixMatch"/> which probes mesh_nodes only — every
+    /// bare-partition-root lookup whose User node lives at <c>ns=''</c> in
+    /// mesh_nodes still works, but lookups whose content lives only in
+    /// satellites (<c>_Access</c>, <c>_UserActivity</c>, etc.) miss it and
+    /// the route NotFounds. Pinned by <c>PathResolutionTests</c>.
+    /// </summary>
+    public IObservable<(MeshNode? Node, int MatchedSegments)> ResolvePath(
+        string fullPath, JsonSerializerOptions options)
+        => Resolve(fullPath)?.ResolvePath(fullPath, options)
+            ?? Observable.Return<(MeshNode?, int)>((null, 0));
+
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)>
         ListChildPaths(string? parentPath)
         => string.IsNullOrEmpty(parentPath)

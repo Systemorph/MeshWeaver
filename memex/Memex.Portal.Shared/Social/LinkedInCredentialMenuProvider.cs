@@ -1,5 +1,6 @@
 using System.Linq;
 using System.Reactive.Linq;
+using System.Threading.Channels;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -40,27 +41,22 @@ public sealed class LinkedInCredentialMenuProvider : INodeMenuProvider
                        ?? accessService?.CircuitContext?.ObjectId;
         if (string.IsNullOrEmpty(viewerId)) yield break;
 
-        var mesh = host.Hub.ServiceProvider.GetService(typeof(IMeshService)) as IMeshService;
-        if (mesh is null) yield break;
-
-        // Load the current node.
-        var nodes = await (host.Workspace.GetStream<MeshNode>()
-                ?.Select(n => n ?? System.Array.Empty<MeshNode>())
-            ?? Observable.Return(System.Array.Empty<MeshNode>()))
-            .FirstAsync();
-        var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+        // Bridge IObservable -> IAsyncEnumerable via Channel per the canonical pattern
+        // (UserNodeType.GetGlobalAdminTabAsync). No await on a hub round-trip; the
+        // Subscribe is fire-and-forget into the Channel, and the only `await foreach`
+        // is on the Channel reader (a synchronous queue, no hub bridge).
+        // See Doc/Architecture/AsynchronousCalls.md.
+        var node = await ReadNodeOnceAsync(host.Workspace, hubPath);
         if (node is null) yield break;
 
         // Case 1: viewer's own User node.
         if (hubPath.Equals($"User/{viewerId}", System.StringComparison.OrdinalIgnoreCase)
             && string.Equals(node.NodeType, "User", System.StringComparison.OrdinalIgnoreCase))
         {
-            // Only show "Link LinkedIn" when no credential exists yet.
-            var credentialChange = await mesh
-                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                    $"path:{hubPath}/_ApiCredentials/linkedin"))
-                .FirstAsync();
-            var credentialExists = credentialChange.Items.Count > 0;
+            // Only show "Link LinkedIn" when no credential exists yet. Synced query
+            // via workspace.GetQuery — bypasses RLS, gated on Initial, deduped by path.
+            var credentialExists = await CredentialExistsAsync(
+                host.Workspace, $"{hubPath}/_ApiCredentials/linkedin");
 
             if (!credentialExists)
             {
@@ -114,5 +110,48 @@ public sealed class LinkedInCredentialMenuProvider : INodeMenuProvider
             && p.ValueKind == System.Text.Json.JsonValueKind.String)
             return p.GetString();
         return null;
+    }
+
+    /// <summary>
+    /// Channel bridge: subscribe to the workspace's MeshNode stream for
+    /// <paramref name="path"/>, push the first emission into a bounded channel,
+    /// then read it back via <c>await foreach</c>. No await on a hub round-trip —
+    /// the await is on the Channel reader (a synchronous queue), so this body is
+    /// safe to call from <c>IAsyncEnumerable</c> on the framework's iteration thread.
+    /// </summary>
+    private static async System.Threading.Tasks.Task<MeshNode?> ReadNodeOnceAsync(IWorkspace workspace, string path)
+    {
+        var channel = Channel.CreateBounded<MeshNode?>(
+            new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropOldest });
+        using var sub = workspace.GetMeshNodeStream(path)
+            .Take(1)
+            .Subscribe(
+                n => { channel.Writer.TryWrite(n); channel.Writer.TryComplete(); },
+                _ => channel.Writer.TryComplete(),
+                () => channel.Writer.TryComplete());
+        await foreach (var item in channel.Reader.ReadAllAsync())
+            return item;
+        return null;
+    }
+
+    /// <summary>
+    /// Channel bridge for existence-check via a synced query — same pattern as
+    /// <see cref="ReadNodeOnceAsync"/>. <c>workspace.GetQuery</c> runs as System
+    /// (bypasses RLS) and is gated on Initial, so the first emission is the
+    /// authoritative snapshot.
+    /// </summary>
+    private static async System.Threading.Tasks.Task<bool> CredentialExistsAsync(IWorkspace workspace, string path)
+    {
+        var channel = Channel.CreateBounded<bool>(
+            new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropOldest });
+        using var sub = workspace.GetQuery($"linkedin-credential:{path}", $"path:{path}")
+            .Take(1)
+            .Subscribe(
+                items => { channel.Writer.TryWrite(items.Any()); channel.Writer.TryComplete(); },
+                _ => channel.Writer.TryComplete(),
+                () => channel.Writer.TryComplete());
+        await foreach (var item in channel.Reader.ReadAllAsync())
+            return item;
+        return false;
     }
 }

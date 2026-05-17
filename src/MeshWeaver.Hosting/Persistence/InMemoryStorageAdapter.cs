@@ -3,6 +3,7 @@ using System.Reactive;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Persistence;
@@ -14,7 +15,7 @@ namespace MeshWeaver.Hosting.Persistence;
 /// that IS the storage of record — there is no separate persistence-service
 /// cache on top.
 /// </summary>
-public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage
+public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdapter
 {
     private readonly ConcurrentDictionary<string, MeshNode> _nodes =
         new(StringComparer.OrdinalIgnoreCase);
@@ -126,6 +127,22 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage
             }
             return Observable.Return<(MeshNode?, int)>((null, 0));
         });
+
+    /// <summary>
+    /// In-memory has no satellite-UNION to preserve, so <c>ResolvePath</c> just
+    /// reuses the <see cref="FindBestPrefixMatch"/> segment walk. Declared
+    /// explicitly so the interface implementation lives on
+    /// <c>InMemoryStorageAdapter</c> itself (alongside the <c>, IStorageAdapter</c>
+    /// in the class header) — without that, the base
+    /// <see cref="SimpleMeshNodeStorage"/> owns the interface slot and our
+    /// <c>public</c> override is shadowed by the interface's default
+    /// <c>(null, 0)</c> impl. Symptom of the bug: every
+    /// <c>FileSystemObservableQueryTests</c> Delete failed NotFound while the
+    /// node sat happily in <c>_nodes</c>.
+    /// </summary>
+    public IObservable<(MeshNode? Node, int MatchedSegments)> ResolvePath(
+        string fullPath, JsonSerializerOptions options)
+        => FindBestPrefixMatch(fullPath, options);
 
     public override IObservable<object> GetPartitionObjects(
         string nodePath, string? subPath, JsonSerializerOptions options)

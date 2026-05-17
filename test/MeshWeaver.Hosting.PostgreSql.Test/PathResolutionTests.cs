@@ -206,6 +206,99 @@ public class PathResolutionTests
         }
     }
 
+    /// <summary>
+    /// Regression for the prod "/rbuergi → No node found" outage even after
+    /// the partition-root MeshNode was correctly written to
+    /// <c>{username}.mesh_nodes</c> at <c>(namespace='', id={username})</c>.
+    ///
+    /// <para>Root cause: <see cref="PostgreSqlPathRoutingAdapter"/> (the
+    /// <see cref="IStorageAdapter"/> singleton in DI) didn't override
+    /// <see cref="IStorageAdapter.ResolvePath"/> — only
+    /// <c>FindBestPrefixMatch</c>. <see cref="PathResolutionService"/>
+    /// calls <c>_storageAdapter.ResolvePath(path)</c>; the default impl
+    /// delegates to <c>FindBestPrefixMatch</c>, which only probes
+    /// <c>mesh_nodes</c>. The per-schema <c>PostgreSqlStorageAdapter</c>'s
+    /// UNION-across-satellites override was never reached, so every bare
+    /// partition lookup whose User content sat in <c>mesh_nodes</c> still
+    /// worked but lookups that depended on the satellite UNION (e.g.
+    /// future partition-root content that lives in <c>code</c> /
+    /// <c>access</c> / etc.) silently missed.</para>
+    ///
+    /// <para>This test goes through the partition provider's routing
+    /// surface — the same one prod code resolves via DI — instead of
+    /// poking the per-schema adapter directly like the other tests in this
+    /// file do.</para>
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task RoutingAdapter_ForwardsResolvePath_ToPerSchemaAdapter()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string schema = "pathres_routingfwd";
+        var (ds, _) = await CreateSchemaWithStandardMappingsAsync(schema, ct);
+
+        try
+        {
+            using var provider = new PostgreSqlPartitionStorageProvider(
+                _fixture.DataSource,
+                _fixture.ConnectionString,
+                new PostgreSqlStorageOptions { ConnectionString = _fixture.ConnectionString },
+                partitions: null);
+            provider.RegisterPartition(new PartitionDefinition
+            {
+                Namespace = schema,
+                DataSource = "default",
+                Schema = schema,
+                Table = "mesh_nodes",
+                TableMappings = PartitionDefinition.StandardTableMappings,
+                Versioned = true,
+            });
+
+            // Write a User node directly into the schema at the bare partition
+            // root — the post-v10 onboarding shape (path = "{schema}",
+            // namespace='', id=schema, nodeType=User).
+            var schemaAdapter = new PostgreSqlStorageAdapter(ds, partitionDefinition: new PartitionDefinition
+            {
+                Namespace = schema,
+                Schema = schema,
+                Table = "mesh_nodes",
+                TableMappings = PartitionDefinition.StandardTableMappings,
+            });
+            var userNode = new MeshNode(schema)
+            {
+                Name = schema,
+                NodeType = "User",
+                State = MeshNodeState.Active,
+            };
+            await schemaAdapter.Write(userNode, JsonSerializerOptions.Default).FirstAsync().ToTask(ct);
+
+            // Act: hit the ROUTING adapter (same surface PathResolutionService
+            // sees as IStorageAdapter in DI), not the per-schema one.
+            var routingAdapter = provider.Adapter;
+            var (resolved, segs) = await routingAdapter
+                .ResolvePath(schema, JsonSerializerOptions.Default)
+                .FirstAsync().ToTask(ct);
+
+            // Assert: the routing layer must surface the User node. Pre-fix,
+            // the default IStorageAdapter.ResolvePath impl delegated to
+            // FindBestPrefixMatch which works for mesh_nodes-only matches —
+            // this test ALSO exercises the contract that the routing adapter
+            // forwards to the per-schema adapter's ResolvePath override, not
+            // to its FindBestPrefixMatch.
+            resolved.Should().NotBeNull(
+                "PostgreSqlPathRoutingAdapter.ResolvePath must forward to the per-schema adapter's " +
+                "ResolvePath override — the default IStorageAdapter impl probes mesh_nodes only " +
+                "and misses content in satellite tables (prod symptom: /rbuergi → 'No node found' " +
+                "even after V20 placed the User row at ns='' id=rbuergi).");
+            resolved!.Path.Should().Be(schema);
+            resolved.NodeType.Should().Be("User");
+            segs.Should().Be(1);
+        }
+        finally
+        {
+            await ds.DisposeAsync();
+        }
+    }
+
     // -------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------

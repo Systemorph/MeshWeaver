@@ -1,6 +1,8 @@
 @page "/onboarding"
 @attribute [Microsoft.AspNetCore.Authorization.Authorize]
 @using MeshWeaver.Blazor.Infrastructure
+@using MeshWeaver.Data
+@using MeshWeaver.Graph
 @using MeshWeaver.Mesh
 @using MeshWeaver.Mesh.Security
 @using MeshWeaver.Mesh.Services
@@ -9,16 +11,15 @@
 @using Memex.Portal.Shared.Authentication
 @using Microsoft.Extensions.DependencyInjection
 @using Microsoft.Extensions.Logging
+@using System.Reactive.Disposables
 @using System.Reactive.Linq
-@using System.Reactive.Threading.Tasks
 @inject AccessService AccessService
-@inject IMeshService NodeFactory
-@inject IMeshService MeshQuery
 @inject UserOnboardingService OnboardingService
 @inject PortalApplication PortalApplication
 @inject NavigationManager Navigation
 @inject CircuitAccessHandler CircuitAccessHandler
 @inject ILogger<Onboarding> Logger
+@implements IDisposable
 
 <PageTitle>Complete Your Profile - Memex Portal</PageTitle>
 
@@ -108,68 +109,83 @@ else
     private bool checkCompleted;
     private bool existingUserFound;
 
-    protected override async Task OnInitializedAsync()
+    // Holds the subscriptions from OnInitialized (existing-user lookup) and
+    // HandleSubmit (the dual-write pipeline). Disposed when the page tears
+    // down so an in-flight chain can't write back to a stale circuit.
+    private readonly CompositeDisposable subscriptions = new();
+
+    protected override void OnInitialized()
     {
         var context = AccessService?.Context ?? AccessService?.CircuitContext;
-        if (context == null) { checkCompleted = true; return; }
+        if (context is null) { checkCompleted = true; return; }
 
         model.Email = context.Email ?? "";
-
-        // Only lock the email field if we got a valid email from OAuth
         emailReadOnly = !string.IsNullOrEmpty(context.Email) && context.Email.Contains('@');
 
-        // Pre-populate full name from OAuth claims
         if (!string.IsNullOrEmpty(context.Name) && context.Name != "Unknown")
             model.FullName = context.Name;
 
-        // Suggest username from email prefix (lowercase)
         if (!string.IsNullOrEmpty(context.Email) && context.Email.Contains('@'))
             model.Username = context.Email.Split('@')[0].ToLowerInvariant();
 
-        // Check if a User node already exists for this email (e.g., created via another portal)
-        if (!string.IsNullOrEmpty(context.Email))
+        if (string.IsNullOrEmpty(context.Email))
         {
-            using (AccessService!.ImpersonateAsHub(PortalApplication!.Hub))
-            {
-                // TODO(persistence-cull): framework boundary; review against UserIdentityCache.
-                var existing = (await MeshQuery.ObserveQuery<MeshNode>(
-                        MeshQueryRequest.FromQuery(
-                            $"nodeType:User namespace:User content.email:{context.Email} limit:1"))
-                    .FirstAsync())
-                    .Items.FirstOrDefault();
+            checkCompleted = true;
+            return;
+        }
 
-                if (existing is { State: MeshNodeState.Active })
-                {
-                    // Adopt existing identity and skip onboarding
-                    var updated = (AccessService.Context ?? new AccessContext()) with
+        var email = context.Email;
+        var workspace = PortalApplication!.Hub.GetWorkspace();
+
+        // Synced query — bypasses RLS (runs as System) and is gated on Initial,
+        // so the first emission IS the authoritative snapshot. Take(1) completes
+        // the subscription after that single emission; no FirstAsync, no ToTask.
+        subscriptions.Add(
+            workspace.GetQuery(
+                    $"onboarding:byEmail:{email}",
+                    $"nodeType:User namespace:User content.email:{email} limit:1")
+                .Take(1)
+                .Subscribe(
+                    snapshot => OnExistingUserCheckCompleted(email, snapshot.FirstOrDefault()),
+                    ex =>
                     {
-                        ObjectId = existing.Id,
-                        Name = existing.Name ?? existing.Id,
-                        Email = context.Email
-                    };
-                    AccessService.SetContext(updated);
-                    // Update the circuit-level context so subsequent client-side
-                    // navigations (e.g., to Index.razor) see the resolved identity.
-                    CircuitAccessHandler.UpdateUserContext(updated);
-                    existingUserFound = true;
-                    checkCompleted = true;
-                    return;
-                }
-            }
-        }
-        checkCompleted = true;
+                        Logger.LogWarning(ex,
+                            "Onboarding: existing-user lookup failed for {Email}", email);
+                        InvokeAsync(() => { checkCompleted = true; StateHasChanged(); });
+                    }));
     }
 
-    protected override Task OnAfterRenderAsync(bool firstRender)
+    private void OnExistingUserCheckCompleted(string email, MeshNode? existing)
     {
-        if (firstRender && existingUserFound)
+        if (existing is { State: MeshNodeState.Active })
         {
-            Navigation.NavigateTo("/"); // Client-side only, no forceLoad
+            var updated = (AccessService!.Context ?? new AccessContext()) with
+            {
+                ObjectId = existing.Id,
+                Name = existing.Name ?? existing.Id,
+                Email = email
+            };
+            AccessService.SetContext(updated);
+            // Update the circuit-level context so subsequent client-side
+            // navigations (e.g., to Index.razor) see the resolved identity.
+            CircuitAccessHandler.UpdateUserContext(updated);
+
+            InvokeAsync(() =>
+            {
+                existingUserFound = true;
+                checkCompleted = true;
+                StateHasChanged();
+                // Client-side only, no forceLoad — preserves the resolved circuit.
+                Navigation.NavigateTo("/");
+            });
         }
-        return Task.CompletedTask;
+        else
+        {
+            InvokeAsync(() => { checkCompleted = true; StateHasChanged(); });
+        }
     }
 
-    private async Task HandleSubmit()
+    private void HandleSubmit()
     {
         if (string.IsNullOrWhiteSpace(model.Username))
         {
@@ -177,179 +193,122 @@ else
             return;
         }
 
+        var callerId = AccessService?.Context?.ObjectId
+                       ?? AccessService?.CircuitContext?.ObjectId;
+        if (string.IsNullOrEmpty(callerId))
+        {
+            errorMessage = "Not authenticated. Please sign in again.";
+            return;
+        }
+
         isSaving = true;
         errorMessage = null;
 
-        try
+        var username = model.Username.Trim().ToLowerInvariant();
+        var email = model.Email.Trim();
+        var fullName = model.FullName?.Trim();
+        var workspace = PortalApplication!.Hub.GetWorkspace();
+
+        var request = new UserOnboardingRequest(
+            Username: username,
+            Email: email,
+            FullName: fullName,
+            Bio: model.Bio,
+            Role: model.Role,
+            AvatarUrl: model.AvatarUrl);
+
+        // Three synced queries — bypass RLS, gated on Initial, deduped on path.
+        // workspace.GetQuery is the canonical primitive for reading a set of
+        // MeshNodes (see Doc/Architecture/SyncedMeshNodeQueries.md). Distinct
+        // cache ids per check; the username/email ones live for the page's
+        // lifetime, which is fine for one-shot pre-checks.
+        var firstUserQuery = workspace.GetQuery(
+            "onboarding:firstUserCheck",
+            "namespace:User limit:1");
+        var usernameQuery = workspace.GetQuery(
+            $"onboarding:username:{username}",
+            $"path:User/{username} scope:self");
+        var emailQuery = workspace.GetQuery(
+            $"onboarding:email:{email}",
+            $"nodeType:User content.email:{email}");
+
+        // Observable.Using holds ImpersonateAsHub's IDisposable for the entire
+        // subscription lifetime so every meshService.CreateNode call inside the
+        // chain captures the portal-hub identity (the portal create-rule lets
+        // the portal-hub identity write User / AccessAssignment nodes).
+        var pipeline = Observable.Using(
+            () => AccessService!.ImpersonateAsHub(PortalApplication!.Hub),
+            _ => Observable
+                .CombineLatest(firstUserQuery, usernameQuery, emailQuery,
+                    (all, byName, byMail) => (all, byName, byMail))
+                .Take(1)
+                .SelectMany(checks =>
+                {
+                    if (checks.byName.Any())
+                        return Observable.Throw<MeshNode>(new InvalidOperationException(
+                            $"Username '{username}' is already taken. Please choose a different one."));
+
+                    var existingByEmail = checks.byMail
+                        .FirstOrDefault(n => n.State == MeshNodeState.Active);
+                    if (existingByEmail is not null)
+                        return Observable.Throw<MeshNode>(new InvalidOperationException(
+                            $"This email is already assigned to user '{existingByEmail.Id}'. " +
+                            "Please sign in with that account."));
+
+                    var isFirstUser = !checks.all.Any();
+
+                    // Dual-write (3 rows) → self-AccessAssignment → optional
+                    // platform-Admin grant. All four steps are sequenced via
+                    // SelectMany so error / cancellation flows through one chain.
+                    return OnboardingService.CreateUser(request)
+                        .SelectMany(rootNode => OnboardingService.GrantSelfAdmin(username)
+                            .Select(_ => rootNode))
+                        .SelectMany(rootNode => isFirstUser
+                            ? OnboardingService.GrantPlatformAdmin(username).Select(_ => rootNode)
+                            : Observable.Return(rootNode));
+                }));
+
+        subscriptions.Add(pipeline.Subscribe(
+            _ => OnOnboardingSucceeded(username, email),
+            ex => OnOnboardingFailed(username, ex)));
+    }
+
+    private void OnOnboardingSucceeded(string username, string email)
+    {
+        // Update request-scoped context so the OnboardingMiddleware on the next
+        // request recognizes this user as already onboarded. The forceLoad
+        // navigation below triggers a fresh HTTP request + circuit, so
+        // CircuitAccessHandler will re-resolve the user from AuthenticationState.
+        var updatedContext = (AccessService!.Context ?? new AccessContext()) with
         {
-            var userId = AccessService?.Context?.ObjectId
-                         ?? AccessService?.CircuitContext?.ObjectId;
-            if (string.IsNullOrEmpty(userId))
-            {
-                errorMessage = "Not authenticated. Please sign in again.";
-                return;
-            }
+            ObjectId = username,
+            Name = username,
+            Email = email
+        };
+        AccessService.SetContext(updatedContext);
 
-            var username = model.Username.Trim().ToLowerInvariant();
-            var fullName = model.FullName?.Trim();
-            var userContent = new User
-            {
-                FullName = string.IsNullOrWhiteSpace(fullName) ? null : fullName,
-                Email = model.Email.Trim(),
-                Bio = string.IsNullOrWhiteSpace(model.Bio) ? null : model.Bio.Trim(),
-                Role = string.IsNullOrWhiteSpace(model.Role) ? null : model.Role.Trim(),
-                PinnedPaths = ["Doc"],
-            };
-
-            // Use ImpersonateAsHub so the portal hub identity is recognized
-            // by the portal create access rule (portal namespace = create/read/update User nodes)
-            using (AccessService!.ImpersonateAsHub(PortalApplication!.Hub))
-            {
-                // Check if this is the first user (no existing User nodes = platform admin)
-                var firstUserCheck = (await MeshQuery
-                    .ObserveQuery<MeshNode>(new MeshQueryRequest { Query = "namespace:User", Limit = 1 })
-                    .FirstAsync()).Items;
-                var isFirstUser = firstUserCheck.Count == 0;
-
-                // Check that the username is not already taken
-                var existingNode = (await MeshQuery
-                    .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:User/{username} scope:self"))
-                    .FirstAsync()).Items.FirstOrDefault();
-                if (existingNode != null)
-                {
-                    errorMessage = $"Username '{username}' is already taken. Please choose a different one.";
-                    return;
-                }
-
-                // Check that the email is not already assigned to another user
-                var emailValue = model.Email.Trim();
-                var existingByEmail = (await MeshQuery
-                    .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:User content.email:{emailValue}"))
-                    .FirstAsync()).Items.FirstOrDefault();
-                if (existingByEmail != null && existingByEmail.State == MeshNodeState.Active)
-                {
-                    errorMessage = $"This email is already assigned to user '{existingByEmail.Id}'. Please sign in with that account.";
-                    return;
-                }
-
-                // Delegate the three-row dual-write to UserOnboardingService —
-                // one composed IObservable chain, side effects run on Subscribe,
-                // no Task chain on the hub-publishing thread (would deadlock per
-                // Doc/Architecture/AsynchronousCalls.md). Blazor's HandleSubmit
-                // bridges to Task at the UI edge (.FirstAsync().ToTask()) — that
-                // single bridge is the only sanctioned place.
-                var node = await OnboardingService.CreateUser(new UserOnboardingRequest(
-                    Username: username,
-                    Email: model.Email.Trim(),
-                    FullName: fullName,
-                    Bio: model.Bio,
-                    Role: model.Role,
-                    AvatarUrl: model.AvatarUrl))
-                    .FirstAsync().ToTask();
-
-                // Self-AccessAssignment in the user's own partition so they can
-                // create/update content in their own scope. Post-v10 each user
-                // has their own Postgres schema; this assignment lives there
-                // (namespace = "{username}/_Access") and grants Admin on the
-                // user's whole partition. Without this, ApiToken creation,
-                // settings writes, etc. all fail with "Create permission required".
-                //
-                // Awaited rather than fire-and-forget: a silent failure here
-                // leaves the user able to sign in but unable to write anything,
-                // which surfaces only later as "Create permission required" on
-                // first content write. Surface the error here so onboarding
-                // either succeeds end-to-end or shows the user what went wrong.
-                var selfAssignment = new MeshNode($"{username}_Access", $"{username}/_Access")
-                {
-                    NodeType = "AccessAssignment",
-                    Name = $"{username} Access",
-                    MainNode = username,
-                    Content = new AccessAssignment
-                    {
-                        AccessObject = username,
-                        DisplayName = username,
-                        Roles = [new RoleAssignment { Role = Role.Admin.Id, Denied = false }]
-                    }
-                };
-                try
-                {
-                    await NodeFactory.CreateNode(selfAssignment);
-                }
-                catch (Exception aaEx)
-                {
-                    Logger.LogError(aaEx,
-                        "Onboarding: failed to create self-AccessAssignment for {Username} at {Namespace}",
-                        username, $"{username}/_Access");
-                    errorMessage =
-                        $"Profile created but failed to grant access on your own partition: {aaEx.Message}. " +
-                        "You will see 'Create permission required' on writes until this is fixed.";
-                    return;
-                }
-
-                // First user becomes global Admin — write the AccessAssignment node
-                // directly via IMeshService.CreateNode (replaces the obsolete
-                // ISecurityService.AddUserRoleAsync). Awaited and logged: a silent
-                // failure here would leave the platform with no admins at all,
-                // which is not recoverable from the UI side without manual SQL.
-                if (isFirstUser)
-                {
-                    var assignmentNode = new MeshNode($"{username}_Access", "Admin/_Access")
-                    {
-                        NodeType = "AccessAssignment",
-                        Name = $"{username} Access",
-                        MainNode = "Admin",
-                        Content = new AccessAssignment
-                        {
-                            AccessObject = username,
-                            DisplayName = username,
-                            Roles = [new RoleAssignment { Role = Role.Admin.Id, Denied = false }]
-                        }
-                    };
-                    try
-                    {
-                        await NodeFactory.CreateNode(assignmentNode);
-                    }
-                    catch (Exception adminEx)
-                    {
-                        Logger.LogError(adminEx,
-                            "Onboarding: failed to grant first-user global Admin to {Username}",
-                            username);
-                        errorMessage =
-                            $"Profile created but failed to grant global admin (first user): {adminEx.Message}. " +
-                            "Platform has no admin yet — fix manually before proceeding.";
-                        return;
-                    }
-                }
-            }
-
-            // Update request-scoped context so the OnboardingMiddleware on the next request
-            // recognizes this user as already onboarded. The forceLoad navigation below
-            // triggers a fresh HTTP request + circuit, so CircuitAccessHandler will
-            // re-resolve the user from AuthenticationState.
-            var updatedContext = (AccessService.Context ?? new AccessContext()) with
-            {
-                ObjectId = username,
-                Name = username,
-                Email = model.Email.Trim()
-            };
-            AccessService.SetContext(updatedContext);
-
-            Navigation.NavigateTo("/", forceLoad: true);
-        }
-        catch (Microsoft.AspNetCore.Components.NavigationException)
-        {
-            // NavigateTo with forceLoad throws NavigationException — let it propagate
-            throw;
-        }
-        catch (Exception ex)
-        {
-            errorMessage = $"Failed to save profile: {ex.Message}";
-        }
-        finally
+        InvokeAsync(() =>
         {
             isSaving = false;
-        }
+            StateHasChanged();
+            Navigation.NavigateTo("/", forceLoad: true);
+        });
     }
+
+    private void OnOnboardingFailed(string username, Exception ex)
+    {
+        Logger.LogError(ex, "Onboarding submit failed for {Username}", username);
+        InvokeAsync(() =>
+        {
+            errorMessage = ex is InvalidOperationException
+                ? ex.Message
+                : $"Failed to save profile: {ex.Message}";
+            isSaving = false;
+            StateHasChanged();
+        });
+    }
+
+    public void Dispose() => subscriptions.Dispose();
 
     private class OnboardingModel
     {

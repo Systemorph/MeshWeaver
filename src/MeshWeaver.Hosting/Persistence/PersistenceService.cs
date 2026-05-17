@@ -60,6 +60,19 @@ public sealed class PersistenceService : IStorageAdapter
         => Resolve(fullPath)?.FindBestPrefixMatch(fullPath, options)
             ?? Observable.Return<(MeshNode?, int)>((null, 0));
 
+    /// <summary>
+    /// Forwards to the matching provider's <see cref="IStorageAdapter.ResolvePath"/>
+    /// so backends that override it (e.g. Postgres satellite-UNION) keep their
+    /// stronger contract. Without this forward, the interface default routes
+    /// through <c>this.FindBestPrefixMatch</c> which selects only the primary
+    /// table — satellite-only matches (e.g. <c>rbuergi/_Activity/&lt;id&gt;</c>)
+    /// collapse to <c>(null, 0)</c>.
+    /// </summary>
+    public IObservable<(MeshNode? Node, int MatchedSegments)> ResolvePath(
+        string fullPath, JsonSerializerOptions options)
+        => Resolve(fullPath)?.ResolvePath(fullPath, options)
+            ?? Observable.Return<(MeshNode?, int)>((null, 0));
+
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)>
         ListChildPaths(string? parentPath)
         => string.IsNullOrEmpty(parentPath)
