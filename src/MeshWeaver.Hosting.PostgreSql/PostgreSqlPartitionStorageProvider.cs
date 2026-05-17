@@ -72,13 +72,7 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     public string Name => "Postgres";
 
     /// <inheritdoc/>
-    /// <remarks>
-    /// Schema-aware wildcard — sits ahead of catch-all wildcards (InMemory,
-    /// FileSystem). <see cref="Matches"/> only emits true once the schema
-    /// existence probe confirms the partition is real, so this priority
-    /// can't steal paths from a non-Postgres backend.
-    /// </remarks>
-    public int Priority => 100;
+    public bool IsReadOnly => false;
 
     /// <inheritdoc/>
     public ImmutableHashSet<string> Contexts { get; }
@@ -291,24 +285,13 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
         });
     }
 
-    /// <inheritdoc/>
-    /// <remarks>
-    /// Returns the <see cref="ReplaySubject{T}"/> for this path's first
-    /// segment projected to <c>def is not null</c>. First subscribe blocks
-    /// until the schema probe completes (typically &lt;5 ms locally); later
-    /// subscribes are instantaneous. The subject is hot — once a partition
-    /// is registered or schema-probed, every future subscriber sees the
-    /// current value immediately.
-    /// </remarks>
-    public IObservable<bool> Matches(string fullPath)
-    {
-        var seg = GetFirstSegment(fullPath);
-        if (string.IsNullOrEmpty(seg)) return Observable.Return(false);
-        return GetOrCreateSubject(seg).Select(def => def is not null);
-    }
-
-    /// <inheritdoc/>
-    public IObservable<PartitionDefinition?> ResolveDefinition(string fullPath)
+    /// <summary>
+    /// Internal lookup used by <see cref="PostgreSqlPathRoutingAdapter"/> —
+    /// emits the cached <see cref="PartitionDefinition"/> for the path's
+    /// first segment (probing <c>information_schema.schemata</c> on first
+    /// access). To be replaced by <c>PgPartitionCache</c> in Stage 5.
+    /// </summary>
+    internal IObservable<PartitionDefinition?> ResolvePartitionDefinition(string fullPath)
     {
         var seg = GetFirstSegment(fullPath);
         if (string.IsNullOrEmpty(seg)) return Observable.Return<PartitionDefinition?>(null);
@@ -388,11 +371,22 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     /// </summary>
     internal IObservable<IStorageAdapter?> ResolveAdapterForSchema(string firstSegment)
     {
-        return ResolveDefinition(firstSegment).Take(1).Select(def =>
+        return ResolvePartitionDefinition(firstSegment).Take(1).Select(def =>
         {
-            if (def is null) return (IStorageAdapter?)null;
-            EnsureSchemaForPartitionSync(def);
-            return (IStorageAdapter?)new PostgreSqlStorageAdapter(_baseDataSource, _embeddingProvider, def);
+            // Stage 1: lazy-create when the cache reports the schema doesn't
+            // exist. Mirrors the pre-refactor catch-all behaviour; PgPartitionCache
+            // (Stage 5) will refine this to distinguish PendingCreate vs Absent.
+            var effective = def ?? new PartitionDefinition
+            {
+                Namespace = firstSegment,
+                DataSource = "default",
+                Schema = firstSegment.ToLowerInvariant(),
+                Table = "mesh_nodes",
+                TableMappings = PartitionDefinition.StandardTableMappings,
+                Versioned = true,
+            };
+            EnsureSchemaForPartitionSync(effective);
+            return (IStorageAdapter?)new PostgreSqlStorageAdapter(_baseDataSource, _embeddingProvider, effective);
         });
     }
 

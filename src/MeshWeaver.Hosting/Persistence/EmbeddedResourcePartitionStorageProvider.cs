@@ -1,5 +1,4 @@
 using System.Collections.Immutable;
-using System.Reactive.Linq;
 using System.Reflection;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -16,6 +15,7 @@ public sealed class EmbeddedResourcePartitionStorageProvider : IPartitionStorage
     private readonly string _namespace;
 
     public string Name => _namespace;
+    public bool IsReadOnly => true;
     public IStorageAdapter Adapter { get; }
     public PartitionDefinition? PartitionDefinition { get; }
     public ImmutableHashSet<string> Contexts { get; }
@@ -47,6 +47,4 @@ public sealed class EmbeddedResourcePartitionStorageProvider : IPartitionStorage
                 PartitionContexts.Browse);
     }
 
-    public IObservable<bool> Matches(string fullPath)
-        => Observable.Return(string.Equals(PathPartition.GetFirstSegment(fullPath), _namespace, StringComparison.OrdinalIgnoreCase));
 }

@@ -1,5 +1,4 @@
 using System.Collections.Immutable;
-using System.Reactive.Linq;
 
 namespace MeshWeaver.Mesh.Services;
 
@@ -18,15 +17,12 @@ namespace MeshWeaver.Mesh.Services;
 /// </summary>
 public sealed class StaticNodePartitionStorageProvider : IPartitionStorageProvider
 {
-    /// <summary>
-    /// Match predicate. Receives the path's first segment (lowercased) for
-    /// compatibility with the original first-segment-routing semantics.
-    /// </summary>
-    private readonly Func<string, bool> _matchesFirstSegment;
     private readonly Lazy<IStorageAdapter> _adapter;
 
     /// <inheritdoc/>
     public string Name { get; }
+    /// <inheritdoc/>
+    public bool IsReadOnly => true;
     /// <inheritdoc/>
     public IStorageAdapter Adapter => _adapter.Value;
     /// <inheritdoc/>
@@ -43,18 +39,14 @@ public sealed class StaticNodePartitionStorageProvider : IPartitionStorageProvid
         IStaticNodeProvider provider,
         string? description = null,
         IEnumerable<string>? contexts = null)
-        : this(@namespace,
-              s => string.Equals(s, @namespace, StringComparison.OrdinalIgnoreCase),
-              provider,
-              description,
-              contexts)
+        : this(@namespace, provider, description, contexts, ignored: 0)
     {
     }
 
     /// <summary>
-    /// Lambda-driven rule. <paramref name="matches"/> receives the path's
-    /// first segment (lowercased). Use this when a single static provider
-    /// owns multiple top-level namespaces or a wildcard pattern.
+    /// Multi-namespace / pattern rule preserved for source-compat. The lambda
+    /// is ignored — read fan-out via <see cref="IMeshQueryProvider"/> handles
+    /// path filtering now.
     /// </summary>
     public StaticNodePartitionStorageProvider(
         string name,
@@ -62,9 +54,20 @@ public sealed class StaticNodePartitionStorageProvider : IPartitionStorageProvid
         IStaticNodeProvider provider,
         string? description = null,
         IEnumerable<string>? contexts = null)
+        : this(name, provider, description, contexts, ignored: 0)
     {
+        _ = matches;
+    }
+
+    private StaticNodePartitionStorageProvider(
+        string name,
+        IStaticNodeProvider provider,
+        string? description,
+        IEnumerable<string>? contexts,
+        int ignored)
+    {
+        _ = ignored;
         Name = name;
-        _matchesFirstSegment = matches;
         // Lazy: GetStaticNodes() may touch hub-scoped services (e.g. logging) —
         // construct the adapter on first access, after DI is fully wired.
         _adapter = new Lazy<IStorageAdapter>(() =>
@@ -85,19 +88,4 @@ public sealed class StaticNodePartitionStorageProvider : IPartitionStorageProvid
                 PartitionContexts.Browse);
     }
 
-    /// <inheritdoc/>
-    public IObservable<bool> Matches(string fullPath)
-    {
-        var firstSegment = ExtractFirstSegment(fullPath);
-        return Observable.Return(firstSegment != null && _matchesFirstSegment(firstSegment));
-    }
-
-    private static string? ExtractFirstSegment(string? path)
-    {
-        if (string.IsNullOrWhiteSpace(path)) return null;
-        var normalized = path.Trim('/');
-        if (normalized.Length == 0) return null;
-        var slash = normalized.IndexOf('/');
-        return slash < 0 ? normalized : normalized[..slash];
-    }
 }

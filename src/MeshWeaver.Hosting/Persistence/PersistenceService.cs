@@ -29,51 +29,55 @@ public sealed class PersistenceService : IStorageAdapter
     private readonly IReadOnlyList<IPartitionStorageProvider> _providersSpecific;
     private readonly IReadOnlyList<IPartitionStorageProvider> _providersWildcard;
     private readonly IReadOnlyList<IPartitionStorageProvider> _allOrdered;
+    private readonly IReadOnlyList<IPartitionStorageProvider> _writable;
 
     public PersistenceService(IEnumerable<IPartitionStorageProvider> providers)
     {
-        // Split providers into "specific" (own a fixed PartitionDefinition.Namespace —
-        // e.g. EmbeddedResource("Doc"), InMemoryPartitionStorageProvider scoped to
-        // /Release/) and "wildcard" (no fixed namespace — Postgres + InMemory
-        // catch-alls that lazily mint per-first-segment definitions in
-        // ResolveDefinition). Specific providers iterate first so a /Doc/...
-        // path lands on the EmbeddedResource adapter even when the wildcard
-        // InMemory provider was registered earlier in DI order.
         var all = providers.ToList();
+        // Specific = fixed-namespace providers (EmbeddedResource("Doc"), Static
+        // providers, etc.). Wildcard = backend catch-alls (Postgres, InMemory,
+        // FileSystem). Specific lookups happen first by first-segment match;
+        // wildcards fall through. Stage 1 routing — Stage 3 will replace this
+        // with try-then-claim across writable adapters.
         _providersSpecific = all
             .Where(p => p.PartitionDefinition != null
                         && !string.IsNullOrEmpty(p.PartitionDefinition.Namespace))
-            .OrderByDescending(p => p.Priority)
             .ToList();
-        // Wildcards: schema-aware (Postgres, Priority=100) ahead of catch-all
-        // (InMemory/FileSystem, Priority=0) so a Postgres-backed namespace
-        // doesn't accidentally route to an empty in-memory adapter.
         _providersWildcard = all
             .Where(p => p.PartitionDefinition == null
                         || string.IsNullOrEmpty(p.PartitionDefinition.Namespace))
-            .OrderByDescending(p => p.Priority)
             .ToList();
         _allOrdered = _providersSpecific.Concat(_providersWildcard).ToList();
+        _writable = _allOrdered.Where(p => !p.IsReadOnly).ToList();
     }
 
     /// <summary>
-    /// Emits the first <see cref="IStorageAdapter"/> whose owning provider's
-    /// <see cref="IPartitionStorageProvider.Matches"/> reports <c>true</c>
-    /// for <paramref name="path"/>. Concat-then-FirstOrDefault preserves
-    /// registration order — specific providers first, wildcards last — and
-    /// each per-provider <c>Take(1)</c> bounds the subscription to a single
-    /// reading so a never-emitting subject can't strand the routing call.
+    /// Stage-1 stub: picks the first specific provider whose
+    /// <see cref="PartitionDefinition.Namespace"/> matches the path's first
+    /// segment; otherwise the first wildcard provider. Stage 3 (try-then-claim)
+    /// will replace this with a chain of <c>Adapter.Write</c> calls that each
+    /// return <c>null</c> when the path isn't theirs.
     /// </summary>
     private IObservable<IStorageAdapter?> Resolve(string? path)
     {
         if (string.IsNullOrEmpty(path)) return Observable.Return<IStorageAdapter?>(null);
+        var firstSegment = GetFirstSegment(path);
+        if (string.IsNullOrEmpty(firstSegment)) return Observable.Return<IStorageAdapter?>(null);
 
-        return _allOrdered
-            .Select(p => p.Matches(path).Take(1).Select(match => match ? p.Adapter : null))
-            .Concat()
-            .Where(a => a is not null)
-            .FirstOrDefaultAsync()
-            .Select(a => a!);
+        foreach (var p in _providersSpecific)
+            if (string.Equals(p.PartitionDefinition?.Namespace, firstSegment, StringComparison.OrdinalIgnoreCase))
+                return Observable.Return<IStorageAdapter?>(p.Adapter);
+
+        var firstWildcard = _providersWildcard.FirstOrDefault();
+        return Observable.Return<IStorageAdapter?>(firstWildcard?.Adapter);
+    }
+
+    private static string? GetFirstSegment(string path)
+    {
+        var normalized = path.Trim('/');
+        if (normalized.Length == 0) return null;
+        var slash = normalized.IndexOf('/');
+        return slash < 0 ? normalized : normalized[..slash];
     }
 
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)

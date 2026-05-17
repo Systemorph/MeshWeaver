@@ -36,45 +36,14 @@ public class PartitionRoutingTests
     /// pre-exists in Postgres. That keeps writes routed by partition-table
     /// state, not by accidental schema presence.
     /// </summary>
-    [Fact(Timeout = 30000)]
-    public async Task Matches_OnlyTrue_AfterRegisterPartition()
-    {
-        using var provider = new PostgreSqlPartitionStorageProvider(
-            _fixture.DataSource,
-            _fixture.ConnectionString,
-            new PostgreSqlStorageOptions { ConnectionString = _fixture.ConnectionString },
-            partitions: null);
-
-        const string ns = "routingtest_a";
-
-        // Before: no partition registered, no schema exists → no match.
-        (await provider.Matches($"{ns}/some-node").FirstAsync().ToTask()).Should().BeFalse(
-            "the partition has not been registered yet — Matches must reflect partition-table state");
-
-        // Register (mirrors what SubscribeToWorkspace does when the
-        // Admin/Partition/{ns} MeshNode emits).
-        provider.RegisterPartition(new PartitionDefinition
-        {
-            Namespace = ns,
-            DataSource = "default",
-            Schema = ns,
-            Table = "mesh_nodes",
-            TableMappings = PartitionDefinition.StandardTableMappings,
-            Versioned = true,
-        });
-
-        // After: matches every path under that namespace.
-        (await provider.Matches($"{ns}/some-node").FirstAsync().ToTask()).Should().BeTrue(
-            "RegisterPartition is the single source of truth for routing — Matches must follow");
-        (await provider.Matches($"{ns}/_Access/user_Access").FirstAsync().ToTask()).Should().BeTrue(
-            "satellite paths under the registered namespace must also match");
-        (await provider.Matches($"{ns}/Source/file.cs").FirstAsync().ToTask()).Should().BeTrue(
-            "Source paths under the registered namespace must also match");
-
-        // A different namespace stays unmatched until it's registered.
-        (await provider.Matches("other_namespace/some-node").FirstAsync().ToTask()).Should().BeFalse(
-            "Matches must be partition-scoped, not a wildcard");
-    }
+    /// <summary>
+    /// Obsolete after Matches() removal. The IsReadOnly + try-then-claim
+    /// design is exercised end-to-end by the Stage 9 test suites
+    /// (PgOnlyProdShapeTests, MixedPgStaticTests, PartitionLifecycleTests).
+    /// Keep as a Skip-marker so the file compiles until the new suites land.
+    /// </summary>
+    [Fact(Skip = "Replaced by PartitionLifecycleTests (Stage 9c) after Matches() removal")]
+    public Task Matches_OnlyTrue_AfterRegisterPartition() => Task.CompletedTask;
 
     /// <summary>
     /// Writes to satellite paths must land in the satellite table named by
