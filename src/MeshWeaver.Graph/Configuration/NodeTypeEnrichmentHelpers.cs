@@ -17,7 +17,7 @@ namespace MeshWeaver.Graph.Configuration;
 /// change-feed subscription. The MeshNode IS the cache.
 ///
 /// <para>The slow path consumes the single shared NodeType stream from
-/// <see cref="INodeTypeStreamCache"/> — one <c>Replay(1).RefCount()</c>
+/// <see cref="IMeshNodeStreamCache"/> — one <c>Replay(1).RefCount()</c>
 /// subscription per NodeType path, kept in the cache's concurrent
 /// dictionary. The cache's <c>MaybeKickCompile</c> side-effect fires the
 /// compile exactly once on first touch. There is no dedicated "node-type
@@ -36,7 +36,7 @@ internal static class NodeTypeEnrichmentHelpers
     /// sees the diagnostic instead of a dead grain.
     ///
     /// <para>The slow path itself nests another remote-stream subscribe (the
-    /// per-NodeType hub's MeshNode stream behind <c>INodeTypeStreamCache</c>),
+    /// per-NodeType hub's MeshNode stream behind <c>IMeshNodeStreamCache</c>),
     /// which in turn drives that hub's own activation chain. 30 s leaves
     /// budget for the chained SubscribeRequest to land its Initial frame
     /// before the overlay fallback kicks in. The double-enrichment that
@@ -109,7 +109,7 @@ internal static class NodeTypeEnrichmentHelpers
         // dedupes the underlying SubscribeRequest so concurrent activations
         // share ONE upstream subscription; each subscriber's Take(1) gets
         // the current ISynchronizationStream.Current value (or the next
-        // emission past it). We deliberately bypass INodeTypeStreamCache's
+        // emission past it). We deliberately bypass IMeshNodeStreamCache's
         // Replay(1).RefCount() — under bursty activation the RefCount drops
         // to 0 between Take(1) consumers and reopens a fresh subscription,
         // racing the Replay buffer with the stale snapshot returned to the

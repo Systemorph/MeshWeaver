@@ -63,11 +63,11 @@ public class NodeTypeEnrichmentDoubleCallTest
     private static readonly TimeSpan SingleSlowPathBudget = SlowPathTimeout + TimeSpan.FromSeconds(5);
 
     /// <summary>
-    /// Stand-in <see cref="INodeTypeStreamCache"/> whose <see cref="GetStream"/>
+    /// Stand-in <see cref="IMeshNodeStreamCache"/> whose <see cref="GetStream"/>
     /// returns <see cref="Observable.Never{T}"/> — a NodeType MeshNode that
     /// never lands a settled compile state, exactly the prod symptom.
     /// </summary>
-    private sealed class HangingStreamCache : INodeTypeStreamCache
+    private sealed class HangingStreamCache : IMeshNodeStreamCache
     {
         public int GetStreamCalls { get; private set; }
         public IObservable<MeshNode> GetStream(string path)
@@ -83,7 +83,7 @@ public class NodeTypeEnrichmentDoubleCallTest
     {
         var cache = new HangingStreamCache();
         var services = new ServiceCollection()
-            .AddSingleton<INodeTypeStreamCache>(cache)
+            .AddSingleton<IMeshNodeStreamCache>(cache)
             .BuildServiceProvider();
         var hub = Substitute.For<IMessageHub>();
         hub.ServiceProvider.Returns(services);
