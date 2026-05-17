@@ -127,6 +127,22 @@ internal static class NodeTypeCompileActivityHandler
                     var ok = outcome.Error is null
                         && !string.IsNullOrEmpty(outcome.Result?.AssemblyLocation);
 
+                    // Propagate CompileCore's discovery + result log lines onto the
+                    // activity MeshNode so the GetCompilationPathRequest hydration
+                    // shortcut (NodeTypeContractHandler.BuildResponseFromLocal +
+                    // GetConfigurationsFromExistingAssembly) can surface them as
+                    // response.Log without re-running Roslyn. Without this, the
+                    // "Source query / matched N Code / Compiled assembly" lines
+                    // live only on the in-process NodeCompilationResult.Log and
+                    // are lost the moment the activity hub completes. Repro:
+                    // CompileActivityLogTest.SuccessfulCompile_ReportsActivityLog…
+                    if (outcome.Result?.Log is { } compileLog && compileLog.Messages.Count > 0)
+                    {
+                        foreach (var msg in compileLog.Messages)
+                            NodeTypeCompilationActivity.AppendLog(
+                                activityHub, activityPath, msg.Message, logger!, msg.LogLevel);
+                    }
+
                     if (ok)
                     {
                         NodeTypeCompilationActivity.AppendLog(activityHub, activityPath,

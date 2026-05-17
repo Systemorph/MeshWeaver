@@ -364,10 +364,16 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new Address(path), reference);
 
+        // Where(...).Take(1).Timeout(...) is the canonical wait shape — same
+        // semantics as FirstAsync(predicate) but composes cleanly with other
+        // operators and produces a cleaner OnError on Timeout (the bare
+        // FirstAsync(predicate)+Timeout combination occasionally swallows
+        // intermediate Timeout cancellations on long-lived activation streams).
         var control = await stream
             .GetControlStream(reference.Area!)
+            .Where(x => x is HtmlControl h && matches(h.Data?.ToString() ?? string.Empty))
+            .Take(1)
             .Timeout(30.Seconds())
-            .FirstAsync(x => x is HtmlControl h && matches(h.Data?.ToString() ?? string.Empty))
             .ToTask(ct);
 
         return (control as HtmlControl)?.Data?.ToString() ?? string.Empty;

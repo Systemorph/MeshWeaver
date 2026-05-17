@@ -1732,7 +1732,7 @@ public static class MeshExtensions
                     DispatchInnerCreate();
                     return;
                 }
-                ApplyUpdateViaStream();
+                ApplyUpdateViaStream(existing);
             },
             ex =>
             {
@@ -1772,23 +1772,46 @@ public static class MeshExtensions
                     });
         }
 
-        void ApplyUpdateViaStream()
+        void ApplyUpdateViaStream(MeshNode existing)
         {
-            // The owning per-node hub IS the sole writer of its MeshNode.
-            // Update through the workspace's MeshNode stream — the framework
-            // routes the patch to the per-node hub via the data-sync protocol;
-            // the hub's MeshNodeReference reducer applies it; MeshNodeTypeSource
-            // debounces + persists. NO UpdateNodeRequest, NO persistence.Write.
-            var workspace = hub.GetWorkspace();
-            workspace.GetMeshNodeStream(node.Path)
-                .Update(state => UpdateAccordingToSourceNode(state, node))
+            // Forward as UpdateNodeRequest to the owning per-node hub. The
+            // per-node hub's handler reads its OWN MeshNodeReference stream
+            // (workspace.GetMeshNodeStream(own).Update — UpdateOwn) which
+            // writes through the primary EntityStore stream — the canonical
+            // path that MeshNodeTypeSource watches for debounce + persist
+            // and that ReduceToMeshNode reads on GetDataRequest.
+            //
+            // Previous shape — `workspace.GetMeshNodeStream(remotePath)
+            //   .Update(state => ...)` from the mesh hub — silently broke:
+            // UpdateRemote sends a PatchDataChangeRequest, the per-node
+            // hub's HandlePatchDataRequest patches the typed REDUCED
+            // MeshNode stream, that emission never back-propagates to the
+            // primary InstanceCollection, so the next GetDataRequest reads
+            // stale. Repro:
+            // NodeCopyHelperTest.CopyNodeTree_OverwritesExistingWhenForced.
+            var merged = UpdateAccordingToSourceNode(existing, node);
+            var inner = new UpdateNodeRequest(merged) { UpdatedBy = requestedBy };
+            var forwarded = hub.Post(inner, o =>
+            {
+                var withTarget = o.WithTarget(new Address(node.Path));
+                return inboundCtx is not null ? withTarget.WithAccessContext(inboundCtx) : withTarget;
+            })!;
+            hub.Observe(forwarded)
                 .Subscribe(
-                    updated => PostOk(updated, isCreate: false, $"Updated node at '{node.Path}'"),
+                    d =>
+                    {
+                        if (d.Message is UpdateNodeResponse ur && ur.Node is not null)
+                            PostOk(ur.Node, isCreate: false, $"Updated node at '{node.Path}'");
+                        else
+                            PostFail(
+                                (d.Message as UpdateNodeResponse)?.Error ?? "Inner UpdateNode returned no response",
+                                MapUpdateRejection((d.Message as UpdateNodeResponse)?.RejectionReason));
+                    },
                     ex =>
                     {
                         logger.LogWarning(ex,
-                            "[CreateOrUpdate] stream Update faulted for {Path}", node.Path);
-                        PostFail($"Stream Update faulted: {ex.Message}",
+                            "[CreateOrUpdate] inner UpdateNode faulted for {Path}", node.Path);
+                        PostFail($"Inner UpdateNode faulted: {ex.Message}",
                             NodeUpsertRejectionReason.Unknown);
                     });
         }
@@ -1828,6 +1851,13 @@ public static class MeshExtensions
             NodeCreationRejectionReason.InvalidPath => NodeUpsertRejectionReason.InvalidPath,
             NodeCreationRejectionReason.InvalidNodeType => NodeUpsertRejectionReason.InvalidNodeType,
             NodeCreationRejectionReason.ValidationFailed => NodeUpsertRejectionReason.ValidationFailed,
+            _ => NodeUpsertRejectionReason.Unknown,
+        };
+
+        static NodeUpsertRejectionReason MapUpdateRejection(NodeUpdateRejectionReason? r) => r switch
+        {
+            NodeUpdateRejectionReason.NodeNotFound => NodeUpsertRejectionReason.InvalidPath,
+            NodeUpdateRejectionReason.ValidationFailed => NodeUpsertRejectionReason.ValidationFailed,
             _ => NodeUpsertRejectionReason.Unknown,
         };
     }

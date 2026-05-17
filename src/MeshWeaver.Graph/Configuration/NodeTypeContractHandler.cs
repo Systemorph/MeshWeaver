@@ -147,9 +147,11 @@ internal static class NodeTypeContractHandler
                                 "GetCompilationPathRequest at {HubPath}: using existing assembly at {LocalPath}.",
                                 hubPath, localPath);
                             return compilationService.GetConfigurationsFromExistingAssembly(localPath!, hubPath)
-                                .Select(result => BuildResponseFromLocal(
-                                    hubPath, node, localPath!, def.LatestAssemblyCollection,
-                                    def.LatestAssemblyPath, result));
+                                .SelectMany(result => SurfaceActivityLog(
+                                    hub, def.LastCompilationActivityPath, result,
+                                    res => BuildResponseFromLocal(
+                                        hubPath, node, localPath!, def.LatestAssemblyCollection,
+                                        def.LatestAssemblyPath, res)));
                         });
                 }
 
@@ -228,6 +230,44 @@ internal static class NodeTypeContractHandler
                 });
 
         return request.Processed();
+    }
+
+    /// <summary>
+    /// Reads the persisted compile activity (when available) and overlays its
+    /// log messages onto <paramref name="result"/>'s `Log` BEFORE handing
+    /// the result to <paramref name="build"/>. The hydration shortcut
+    /// (<see cref="IMeshNodeCompilationService.GetConfigurationsFromExistingAssembly"/>)
+    /// hands back a fresh empty log because no Roslyn ran — so the response
+    /// would otherwise carry no Source-query / matched-Code / compile-result
+    /// lines. <c>NodeTypeCompileActivityHandler</c> already appends those
+    /// onto the activity MeshNode's <see cref="ActivityLog.Messages"/>; this
+    /// helper reads them back and uses the activity log as the response log.
+    /// Falls through to <paramref name="build"/>(result) when the activity
+    /// path is empty or the read fails.
+    /// </summary>
+    private static IObservable<GetCompilationPathResponse?> SurfaceActivityLog(
+        IMessageHub hub,
+        string? activityPath,
+        NodeCompilationResult? result,
+        Func<NodeCompilationResult?, GetCompilationPathResponse?> build)
+    {
+        if (string.IsNullOrEmpty(activityPath) || result is null)
+            return Observable.Return(build(result));
+
+        return hub.GetWorkspace().GetMeshNodeStream(activityPath)
+            .Where(n => n?.Content is ActivityLog)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(5))
+            .Select(activityNode =>
+            {
+                var activityLog = activityNode!.Content as ActivityLog;
+                var enriched = activityLog is null
+                    ? result
+                    : result with { Log = activityLog };
+                return build(enriched);
+            })
+            .Catch<GetCompilationPathResponse?, Exception>(_ =>
+                Observable.Return(build(result)));
     }
 
     private static GetCompilationPathResponse BuildResponse(
