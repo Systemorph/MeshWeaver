@@ -104,7 +104,11 @@ public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITes
     [Fact(Timeout = 60000)]
     public async Task Delegation_NodeChanges_PropagateFromSubThread()
     {
-        SharedOrleansFixture.SwappableFactory.SetInner(new NodeChangeTestChatClientFactory());
+        // Pull IMessageHub from the silo's container — ChatClientAgentFactory needs it
+        // so MeshPlugin tools (Create/Patch/delegate_to_agent) get wired into every test agent.
+        var siloHub = ((InProcessSiloHandle)Fixture.Cluster.Silos[0]).SiloHost.Services
+            .GetRequiredService<IMessageHub>();
+        SharedOrleansFixture.SwappableFactory.SetInner(new NodeChangeTestChatClientFactory(siloHub));
         try
         {
         var ct = new CancellationTokenSource(50.Seconds()).Token;
@@ -172,13 +176,23 @@ public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITes
         delegateCall!.DelegationPath.Should().NotBeNullOrEmpty("delegation should have a sub-thread path");
         Output.WriteLine($"Delegation: path={delegateCall.DelegationPath}, success={delegateCall.IsSuccess}");
 
-        // 7. Verify the Markdown node was created by the Create tool
-        var meshService = Fixture.Cluster.Client.ServiceProvider.GetRequiredService<IMeshService>();
-        var createdNodes = await meshService
-            .QueryAsync<MeshNode>("path:TestUser/test-doc-nodechange", ct: ct)
-            .ToListAsync(ct);
-        createdNodes.Should().ContainSingle("Create tool should have created the Markdown node");
-        Output.WriteLine($"Created node: {createdNodes[0].Path}, name={createdNodes[0].Name}");
+        // 7. Verify the Markdown node was created by the Create tool.
+        // ObserveQuery on the silo (not the client!) — the change feed +
+        // query providers are silo-local; the client's IMeshService aggregates
+        // client-local providers only. ObserveQuery here gives the live Added
+        // delta from the in-memory adapter on the silo, so the wait races
+        // against the actual persistence commit, not against any index lag.
+        var siloMeshService = siloHub.ServiceProvider.GetRequiredService<IMeshService>();
+        var createdNode = await siloMeshService
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:TestUser/test-doc-nodechange"))
+            .SelectMany(change => change.Items)
+            .Where(n => n.Path == "TestUser/test-doc-nodechange")
+            .Take(1)
+            .Timeout(10.Seconds())
+            .FirstAsync()
+            .ToTask(ct);
+        createdNode.Should().NotBeNull("Create tool should have created the Markdown node");
+        Output.WriteLine($"Created node: {createdNode.Path}, name={createdNode.Name}");
 
         // 8. Verify sub-thread exists and completed
         var subThreadPath = delegateCall.DelegationPath!;
@@ -466,42 +480,27 @@ internal class PatchToolChatClient : IChatClient
 }
 
 /// <summary>
-/// Factory: top-level agents (Navigator/Orchestrator) get ToolCallDelegatingChatClient;
-/// sub-agents (Worker/Executor/Coder) get PatchToolChatClient.
+/// Factory: top-level agents (Navigator/Orchestrator/IsDefault) get
+/// <see cref="ToolCallDelegatingChatClient"/>; sub-agents (Worker/Executor/Coder)
+/// get <see cref="PatchToolChatClient"/>. Extends <see cref="ChatClientAgentFactory"/>
+/// so MeshPlugin's Create/Patch/delegate_to_agent tools are wired into every agent —
+/// otherwise the fake chat clients stream <c>FunctionCallContent</c> for tools the
+/// agent doesn't have and <c>FunctionInvokingChatClient</c> never executes them
+/// (responseMsg.ToolCalls would stay empty).
 /// </summary>
-internal class NodeChangeTestChatClientFactory : IChatClientFactory
+internal class NodeChangeTestChatClientFactory(IMessageHub hub) : ChatClientAgentFactory(hub)
 {
-    public string Name => "NodeChangeTestFactory";
-    public IReadOnlyList<string> Models => ["fake-model"];
-    public int Order => 0;
+    public override string Name => "NodeChangeTestFactory";
+    public override IReadOnlyList<string> Models => ["fake-model"];
+    public override int Order => 0;
 
-    public ChatClientAgent CreateAgent(
-        AgentConfiguration config, IAgentChat chat,
-        IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
-        IReadOnlyList<AgentConfiguration> hierarchyAgents,
-        string? modelName = null)
+    protected override IChatClient CreateChatClient(AgentConfiguration agentConfig)
     {
-        var isTopLevel = config.IsDefault || config.Id is "Navigator" or "Orchestrator";
-        IChatClient chatClient = isTopLevel
+        var isTopLevel = agentConfig.IsDefault || agentConfig.Id is "Navigator" or "Orchestrator";
+        return isTopLevel
             ? new ToolCallDelegatingChatClient()
             : new PatchToolChatClient();
-
-        return new ChatClientAgent(
-            chatClient: chatClient,
-            instructions: config.Instructions ?? "Test assistant with tools.",
-            name: config.Id,
-            description: config.Description ?? config.Id,
-            tools: [], // Tools added by ChatClientAgentFactory
-            loggerFactory: null,
-            services: null);
     }
-
-    public Task<ChatClientAgent> CreateAgentAsync(
-        AgentConfiguration config, IAgentChat chat,
-        IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
-        IReadOnlyList<AgentConfiguration> hierarchyAgents,
-        string? modelName = null)
-        => Task.FromResult(CreateAgent(config, chat, existingAgents, hierarchyAgents, modelName));
 }
 
 /// <summary>
@@ -526,7 +525,8 @@ public class NodeChangePropagationSiloConfigurator : ISiloConfigurator, IHostCon
                 new MeshNode("TestUser", "User") { Name = "TestUser", NodeType = "User" })
             .AddMeshNodes(PublicEditorAccess())
             .ConfigureServices(services =>
-                services.AddSingleton<IChatClientFactory>(new NodeChangeTestChatClientFactory()))
+                services.AddSingleton<IChatClientFactory>(sp =>
+                    new NodeChangeTestChatClientFactory(sp.GetRequiredService<IMessageHub>())))
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 
