@@ -67,16 +67,38 @@ public sealed class PartitionStorageRouter : IDisposable
         if (_disposed) return Observable.Return<Address?>(null);
         if (string.IsNullOrEmpty(path)) return Observable.Return<Address?>(null);
 
-        return _providers
-            .Select(provider => provider.Matches(path).Take(1).SelectMany(match =>
-                match
-                    ? provider.ResolveDefinition(path).Take(1)
-                        .Select(def => def is null ? null : SpawnOrReuse(path, provider, def))
-                    : Observable.Return<Address?>(null)))
-            .Concat()
-            .Where(a => a is not null)
-            .FirstOrDefaultAsync()
-            .Select(a => a);
+        // Stage 1 stub: pick the first writable provider; build a synthesized
+        // PartitionDefinition keyed on the path's first segment. PartitionStorageRouter
+        // is currently dead code on the main message path (RoutingProxyAdapter is the
+        // proxy and its partition-object surface is stubbed); will be revisited or
+        // removed in a follow-up alongside the try-then-claim refactor.
+        var firstSegment = GetFirstSegment(path);
+        if (string.IsNullOrEmpty(firstSegment)) return Observable.Return<Address?>(null);
+
+        foreach (var provider in _providers)
+        {
+            if (provider.IsReadOnly) continue;
+            var def = provider.PartitionDefinition ?? new PartitionDefinition
+            {
+                Namespace = firstSegment,
+                DataSource = provider.Name,
+                Schema = firstSegment.ToLowerInvariant(),
+                Table = "mesh_nodes",
+                TableMappings = PartitionDefinition.StandardTableMappings,
+                Versioned = false,
+            };
+            return Observable.Return<Address?>(SpawnOrReuse(path, provider, def));
+        }
+        return Observable.Return<Address?>(null);
+    }
+
+    private static string? GetFirstSegment(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        var normalized = path.Trim('/');
+        if (normalized.Length == 0) return null;
+        var slash = normalized.IndexOf('/');
+        return slash < 0 ? normalized : normalized[..slash];
     }
 
     private Address? SpawnOrReuse(string path, IPartitionStorageProvider provider, PartitionDefinition def)
