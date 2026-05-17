@@ -160,74 +160,58 @@ public static class InsuranceApplicationExtensions
         }
     }
 
-    private static async Task<IMessageDelivery> HandleGeocodingRequest(
+    // Sync handler — compose IObservable chain, Subscribe posts the response.
+    // No await on the workspace stream (would deadlock the hub pump); the geocoding
+    // HTTP call is bridged via Observable.FromAsync at the EXTERNAL boundary (a
+    // pure HTTP client wrapper, not hub-touching — see GoogleGeocodingService).
+    // See Doc/Architecture/AsynchronousCalls.md.
+    private static IMessageDelivery HandleGeocodingRequest(
         IMessageHub hub,
-        IMessageDelivery<GeocodingRequest> request,
-        CancellationToken ct)
+        IMessageDelivery<GeocodingRequest> request)
     {
-        try
+        var geocodingService = hub.ServiceProvider.GetRequiredService<IGeocodingService>();
+        var riskStream = hub.GetWorkspace().GetStream<PropertyRisk>();
+        if (riskStream == null)
         {
-            // Get the geocoding service
-            var geocodingService = hub.ServiceProvider.GetRequiredService<IGeocodingService>();
-
-            // Get the current property risks from the workspace
-            var workspace = hub.GetWorkspace();
-            var riskStream = workspace.GetStream<PropertyRisk>();
-            if (riskStream == null)
-            {
-                var errorResponse = new GeocodingResponse
-                {
-                    Success = false,
-                    GeocodedCount = 0,
-                    Error = "No property risks found in workspace"
-                };
-                hub.Post(errorResponse, o => o.ResponseFor(request));
-                return request.Processed();
-            }
-
-            var risks = await riskStream.FirstAsync();
-            var riskList = risks?.ToList() ?? new List<PropertyRisk>();
-
-            if (!riskList.Any())
-            {
-                var errorResponse = new GeocodingResponse
-                {
-                    Success = false,
-                    GeocodedCount = 0,
-                    Error = "No property risks available to geocode"
-                };
-                hub.Post(errorResponse, o => o.ResponseFor(request));
-                return request.Processed();
-            }
-
-            // Geocode the risks
-            var geocodingResponse = await geocodingService.GeocodeRisksAsync(riskList, ct);
-
-            // If successful and we have updated risks, update the workspace
-            if (geocodingResponse is { Success: true, UpdatedRisks: not null } && geocodingResponse.UpdatedRisks.Any())
-            {
-                // Update the workspace with the geocoded risks
-                var dataChangeRequest = new DataChangeRequest
-                {
-                    Updates = geocodingResponse.UpdatedRisks.ToList()
-                };
-
-                hub.Post(dataChangeRequest, o => o.WithTarget(hub.Address));
-            }
-
-            // Post the response
-            hub.Post(geocodingResponse, o => o.ResponseFor(request));
+            hub.Post(
+                new GeocodingResponse { Success = false, GeocodedCount = 0, Error = "No property risks found in workspace" },
+                o => o.ResponseFor(request));
+            return request.Processed();
         }
-        catch (Exception ex)
-        {
-            var errorResponse = new GeocodingResponse
+
+        riskStream
+            .Select(risks => risks?.ToList() ?? new List<PropertyRisk>())
+            .Take(1)
+            .SelectMany(riskList =>
             {
-                Success = false,
-                GeocodedCount = 0,
-                Error = $"Geocoding failed: {ex.Message}"
-            };
-            hub.Post(errorResponse, o => o.ResponseFor(request));
-        }
+                if (riskList.Count == 0)
+                    return Observable.Return(new GeocodingResponse
+                    {
+                        Success = false,
+                        GeocodedCount = 0,
+                        Error = "No property risks available to geocode"
+                    });
+
+                // External HTTP boundary — FromAsync is sanctioned because the
+                // inner method is a plain HTTP client, not a hub round-trip.
+                return Observable.FromAsync(token => geocodingService.GeocodeRisksAsync(riskList, token));
+            })
+            .Subscribe(
+                geocodingResponse =>
+                {
+                    if (geocodingResponse is { Success: true, UpdatedRisks: not null }
+                        && geocodingResponse.UpdatedRisks.Any())
+                    {
+                        hub.Post(
+                            new DataChangeRequest { Updates = geocodingResponse.UpdatedRisks.ToList() },
+                            o => o.WithTarget(hub.Address));
+                    }
+                    hub.Post(geocodingResponse, o => o.ResponseFor(request));
+                },
+                ex =>
+                    hub.Post(
+                        new GeocodingResponse { Success = false, GeocodedCount = 0, Error = $"Geocoding failed: {ex.Message}" },
+                        o => o.ResponseFor(request)));
 
         return request.Processed();
     }

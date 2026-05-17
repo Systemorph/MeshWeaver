@@ -90,7 +90,7 @@
             @* Action buttons *@
             <div style="display: flex; gap: 12px; margin-top: 8px;">
                 <FluentButton Appearance="Appearance.Accent"
-                              OnClick="CreateNodeAsync"
+                              OnClick="CreateNodeAction"
                               Disabled="@(!CanCreate)">
                     @if (isCreating)
                     {
@@ -287,7 +287,8 @@
         }
     }
 
-    private async Task CreateNodeAsync()
+    // Sync — the body only Subscribes; never awaits a hub round-trip.
+    private void CreateNodeAction()
     {
         if (selectedTypeItem == null || string.IsNullOrWhiteSpace(nodeName) || selectedLocation == null)
             return;

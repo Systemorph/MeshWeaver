@@ -273,38 +273,46 @@ public static class TodoLayoutAreas
                     .WithClickAction(_ => { host.UpdateArea(DialogControl.DialogArea, null!); return System.Threading.Tasks.Task.CompletedTask; }))
                 .WithView(Controls.Button("Delete").WithAppearance(Appearance.Accent)
                     .WithStyle(s => s.WithBackgroundColor("#dc3545"))
-                    .WithClickAction(async ctx =>
+                    .WithClickAction(ctx =>
                     {
                         host.UpdateArea(DialogControl.DialogArea, null!);
-                        await SoftDeleteTodo(host);
-                        // Navigate back to parent after soft delete
-                        var segments = host.Hub.Address.Segments;
-                        if (segments.Length > 1)
-                        {
-                            var parentPath = string.Join("/", segments.Take(segments.Length - 1));
-                            ctx.NavigateTo($"/{parentPath}");
-                        }
+                        // Subscribe — no await on hub round-trip. Navigation happens
+                        // on the success leg once the soft-delete commit lands.
+                        SoftDeleteTodo(host, ctx);
+                        return System.Threading.Tasks.Task.CompletedTask;
                     })));
 
         host.UpdateArea(DialogControl.DialogArea, Controls.Dialog(content, "Delete Task").WithSize("S").WithClosable(false));
     }
 
-    private static async System.Threading.Tasks.Task SoftDeleteTodo(LayoutAreaHost host)
+    // No async — fully reactive. The workspace stream feeds into UpdateNode via
+    // SelectMany; Subscribe drives the side effect. Errors propagate to OnError.
+    // See Doc/Architecture/AsynchronousCalls.md.
+    private static void SoftDeleteTodo(LayoutAreaHost host, MeshWeaver.Layout.UiActionContext ctx)
     {
         var meshService = host.Hub.ServiceProvider.GetService<IMeshService>();
         if (meshService == null) return;
 
-        // Get current node from workspace stream (already loaded via AddMeshDataSource)
         var meshNodeStream = host.Workspace.GetStream<MeshNode>();
         if (meshNodeStream == null) return;
 
-        var node = await meshNodeStream
+        meshNodeStream
             .Select(nodes => nodes?.FirstOrDefault())
-            .FirstOrDefaultAsync();
-        if (node == null) return;
-
-        var deletedNode = node with { State = MeshWeaver.Mesh.MeshNodeState.Deleted };
-        await meshService.UpdateNodeAsync(deletedNode);
+            .Where(n => n is not null)
+            .Take(1)
+            .SelectMany(node => meshService.UpdateNode(
+                node! with { State = MeshWeaver.Mesh.MeshNodeState.Deleted }))
+            .Subscribe(
+                _ =>
+                {
+                    var segments = host.Hub.Address.Segments;
+                    if (segments.Length > 1)
+                    {
+                        var parentPath = string.Join("/", segments.Take(segments.Length - 1));
+                        ctx.NavigateTo($"/{parentPath}");
+                    }
+                },
+                _ => { /* dialog already closed; surfacing here would require a re-open */ });
     }
 
     private static UiControl BuildStatusPromotionMenu(LayoutAreaHost host, Todo todo)
