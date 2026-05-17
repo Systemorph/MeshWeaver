@@ -234,7 +234,15 @@ internal static class NodeTypeEnrichmentHelpers
                     && ((def.CompilationStatus == CompilationStatus.Ok
                             && !string.IsNullOrEmpty(def.LatestAssemblyCollection)
                             && !string.IsNullOrEmpty(def.LatestAssemblyPath))
-                        || def.CompilationStatus == CompilationStatus.Error))
+                        || def.CompilationStatus == CompilationStatus.Error
+                        // No compile lifecycle attached (null = never compiled,
+                        // Unknown = invalidation pending but nothing to wait
+                        // for). Either way, pass through so ApplyStreamResult
+                        // can fall back to DefaultNodeHubConfiguration —
+                        // otherwise the SlowPathTimeout strands every per-
+                        // instance hub (repro: CreatableTypesIntegrationTest).
+                        || def.CompilationStatus is null
+                        || def.CompilationStatus == CompilationStatus.Unknown))
                 || typeNode.Content is not NodeTypeDefinition)
             .Take(1)
             .Timeout(SlowPathTimeout)
@@ -293,6 +301,19 @@ internal static class NodeTypeEnrichmentHelpers
         if (def is null)
             return Observable.Return(CopyIconFromNodeType(
                 ApplyDefaultConfig(node, meshConfiguration), nodeType, meshConfiguration));
+
+        // NodeTypeDefinition with no compile lifecycle attached and no
+        // HubConfiguration: a test-seeded type definition (or any framework
+        // type that won't be Roslyn-compiled). Apply the default node hub
+        // config so per-instance hubs activate without waiting on a compile
+        // that will never start.
+        if ((def.CompilationStatus is null
+                || def.CompilationStatus == CompilationStatus.Unknown)
+            && typeNode.HubConfiguration is null)
+        {
+            return Observable.Return(CopyIconFromNodeType(
+                ApplyDefaultConfig(node, meshConfiguration), nodeType, meshConfiguration));
+        }
 
         // Pinned release: when NodeTypeDefinition.RequestedReleasePath is set,
         // every per-instance hub MUST load the pinned Release's assembly, not
