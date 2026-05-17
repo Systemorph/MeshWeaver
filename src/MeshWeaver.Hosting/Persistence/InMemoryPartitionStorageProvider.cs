@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Reactive.Linq;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 
@@ -70,22 +71,22 @@ public sealed class InMemoryPartitionStorageProvider : IPartitionStorageProvider
     }
 
     /// <inheritdoc/>
-    public bool Matches(string fullPath)
-        => _matches is not null
+    public IObservable<bool> Matches(string fullPath)
+        => Observable.Return(_matches is not null
             ? _matches(fullPath)
-            : !string.IsNullOrWhiteSpace(GetFirstSegment(fullPath));
+            : !string.IsNullOrWhiteSpace(GetFirstSegment(fullPath)));
 
     /// <inheritdoc/>
-    public PartitionDefinition? ResolveDefinition(string fullPath)
+    public IObservable<PartitionDefinition?> ResolveDefinition(string fullPath)
     {
         var firstSegment = GetFirstSegment(fullPath);
-        if (firstSegment == null) return null;
-        return _partitions.GetOrAdd(firstSegment, ns => new PartitionDefinition
+        if (firstSegment == null) return Observable.Return<PartitionDefinition?>(null);
+        return Observable.Return<PartitionDefinition?>(_partitions.GetOrAdd(firstSegment, ns => new PartitionDefinition
         {
             Namespace = ns,
             DataSource = "InMemory",
             Versioned = false
-        });
+        }));
     }
 
     /// <inheritdoc/>

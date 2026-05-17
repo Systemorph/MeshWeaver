@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Reactive.Linq;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 
@@ -52,19 +53,20 @@ public sealed class FileSystemPartitionStorageProvider : IPartitionStorageProvid
     }
 
     /// <inheritdoc/>
-    public bool Matches(string fullPath) => !string.IsNullOrWhiteSpace(GetFirstSegment(fullPath));
+    public IObservable<bool> Matches(string fullPath)
+        => Observable.Return(!string.IsNullOrWhiteSpace(GetFirstSegment(fullPath)));
 
     /// <inheritdoc/>
-    public PartitionDefinition? ResolveDefinition(string fullPath)
+    public IObservable<PartitionDefinition?> ResolveDefinition(string fullPath)
     {
         var firstSegment = GetFirstSegment(fullPath);
-        if (firstSegment == null) return null;
-        return _partitions.GetOrAdd(firstSegment, ns => new PartitionDefinition
+        if (firstSegment == null) return Observable.Return<PartitionDefinition?>(null);
+        return Observable.Return<PartitionDefinition?>(_partitions.GetOrAdd(firstSegment, ns => new PartitionDefinition
         {
             Namespace = ns,
             DataSource = "FileSystem",
             Versioned = false
-        });
+        }));
     }
 
     /// <inheritdoc/>

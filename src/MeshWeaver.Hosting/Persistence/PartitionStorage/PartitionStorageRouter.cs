@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -14,6 +15,12 @@ namespace MeshWeaver.Hosting.Persistence.PartitionStorage;
 /// via <c>hub.Observe(req, o =&gt; o.WithTarget(addr))</c>. No intermediate
 /// routing hub is on the message path; the caller hub talks straight to the
 /// partition hub that owns the I/O for the target table.</para>
+///
+/// <para><b>Observable resolution.</b> <see cref="AddressFor(string)"/>
+/// returns <c>IObservable&lt;Address?&gt;</c> because partition existence is
+/// observable: the per-provider <see cref="System.Reactive.Subjects.ReplaySubject{T}"/>
+/// re-emits when the catalog changes (e.g. organization creation). Callers
+/// compose via <c>SelectMany</c> — no blocking, no stale cached <c>null</c>.</para>
 ///
 /// <para>Hubs live in <see cref="IMemoryCache"/> with a 5-minute sliding
 /// expiration — they spawn on first request and dispose themselves when the
@@ -49,40 +56,52 @@ public sealed class PartitionStorageRouter : IDisposable
     /// Resolves <paramref name="path"/> to the partition-hub address that
     /// owns the table the node lives in. Spawns the hub lazily on first
     /// access and resets the sliding-expiration timer on every call.
-    /// Returns null when no provider claims the path.
+    /// Emits null when no provider claims the path.
+    /// <para>Routing iterates providers in registration order; the first
+    /// whose <see cref="IPartitionStorageProvider.Matches"/> emits true
+    /// wins. Per-provider <c>Take(1)</c> bounds each subscription so a
+    /// silent subject can't strand the resolution.</para>
     /// </summary>
-    public Address? AddressFor(string path)
+    public IObservable<Address?> AddressFor(string path)
     {
-        if (_disposed) return null;
-        foreach (var provider in _providers)
+        if (_disposed) return Observable.Return<Address?>(null);
+        if (string.IsNullOrEmpty(path)) return Observable.Return<Address?>(null);
+
+        return _providers
+            .Select(provider => provider.Matches(path).Take(1).SelectMany(match =>
+                match
+                    ? provider.ResolveDefinition(path).Take(1)
+                        .Select(def => def is null ? null : SpawnOrReuse(path, provider, def))
+                    : Observable.Return<Address?>(null)))
+            .Concat()
+            .Where(a => a is not null)
+            .FirstOrDefaultAsync()
+            .Select(a => a);
+    }
+
+    private Address? SpawnOrReuse(string path, IPartitionStorageProvider provider, PartitionDefinition def)
+    {
+        var schema = !string.IsNullOrEmpty(def.Schema) ? def.Schema : def.Namespace;
+        if (string.IsNullOrEmpty(schema)) return null;
+        var table = def.ResolveTable(path);
+        var cacheKey = $"storage/{schema}/{table}".ToLowerInvariant();
+
+        var hub = _hubs.GetOrCreate(cacheKey, entry =>
         {
-            if (!provider.Matches(path)) continue;
-            var def = provider.ResolveDefinition(path);
-            if (def == null) continue;
-            var schema = !string.IsNullOrEmpty(def.Schema) ? def.Schema : def.Namespace;
-            if (string.IsNullOrEmpty(schema)) continue;
-            var table = def.ResolveTable(path);
-            var cacheKey = $"storage/{schema}/{table}".ToLowerInvariant();
-
-            var hub = _hubs.GetOrCreate(cacheKey, entry =>
+            entry.SlidingExpiration = IdleTtl;
+            var spawned = SpawnHub(schema!, table, provider, def);
+            entry.RegisterPostEvictionCallback(static (_, value, _, _) =>
             {
-                entry.SlidingExpiration = IdleTtl;
-                var spawned = SpawnHub(schema!, table, provider, def);
-                // Dispose the spawned hub when the cache evicts it (idle, capacity, etc.).
-                entry.RegisterPostEvictionCallback(static (_, value, _, _) =>
+                if (value is IMessageHub h)
                 {
-                    if (value is IMessageHub h)
-                    {
-                        try { h.Dispose(); }
-                        catch { /* swallow — best-effort */ }
-                    }
-                });
-                return spawned;
-            })!;
+                    try { h.Dispose(); }
+                    catch { /* swallow — best-effort */ }
+                }
+            });
+            return spawned;
+        })!;
 
-            return hub.Address;
-        }
-        return null;
+        return hub.Address;
     }
 
     private IMessageHub SpawnHub(
@@ -104,8 +123,6 @@ public sealed class PartitionStorageRouter : IDisposable
         if (_disposed) return;
         _disposed = true;
         // IMemoryCache disposal cascades to PostEviction callbacks, which
-        // dispose each live partition hub. The cache itself is owned and
-        // disposed by DI if registered there; we don't dispose it here so
-        // shared-cache scenarios remain safe.
+        // dispose each live partition hub.
     }
 }
