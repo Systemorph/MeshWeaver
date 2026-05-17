@@ -68,20 +68,23 @@ public sealed class PersistenceService : IStorageAdapter
 
     /// <summary>
     /// Try-then-claim: each writable provider's <see cref="IStorageAdapter.Write"/>
-    /// emits the saved node on accept or null on decline. Chain stops on first
-    /// non-null. Throws when every writable declines (e.g. PG cache says
-    /// partition doesn't exist AND no fallback InMemory is registered).
+    /// emits the saved node on accept or <c>null</c> on decline. We walk the
+    /// chain sequentially (<see cref="Observable.Concat{TSource}(System.Collections.Generic.IEnumerable{IObservable{TSource}})"/>)
+    /// and take the FIRST non-null result; if every adapter returned null,
+    /// no one saved → throw "couldn't save". This is the canonical pattern
+    /// for "must always know where to save" without a central registry.
     /// </summary>
     public IObservable<MeshNode> Write(MeshNode node, JsonSerializerOptions options)
         => _writable
             .Select(p => p.Adapter.Write(node, options))
             .Concat()
             .Where(n => n is not null)
-            .Select(n => n!)
             .Take(1)
-            .Concat(Observable.Throw<MeshNode>(new InvalidOperationException(
-                $"No writable storage provider accepted '{node.Path}'.")))
-            .Take(1);
+            .DefaultIfEmpty()
+            .SelectMany(n => n is not null
+                ? Observable.Return(n)
+                : Observable.Throw<MeshNode>(new InvalidOperationException(
+                    $"Could not save '{node.Path}': no writable storage provider accepted the node.")));
 
     /// <summary>
     /// Fan out across every writable adapter: each self-checks containment

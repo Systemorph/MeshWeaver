@@ -200,7 +200,10 @@ public class CachingStorageAdapter : IStorageAdapter
     {
         var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier);
         return innerAdapter.Write(node, options)
-            .Do(written => RefreshCacheForPath(written.Path));
+            .Do(written =>
+            {
+                if (written is not null) RefreshCacheForPath(written.Path);
+            });
     }
 
     public IObservable<string> Delete(string path)
