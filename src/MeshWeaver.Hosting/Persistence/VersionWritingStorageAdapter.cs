@@ -50,6 +50,18 @@ internal class VersionWritingStorageAdapter(
         string fullPath, JsonSerializerOptions options)
         => inner.FindBestPrefixMatch(fullPath, options);
 
+    /// <summary>
+    /// Explicit forward — without this, the interface default routes through
+    /// <c>this.FindBestPrefixMatch</c>, stripping the Postgres satellite-UNION
+    /// that <see cref="MeshWeaver.Hosting.PostgreSql.PostgreSqlPathRoutingAdapter.ResolvePath"/>
+    /// produces. FileSystem doesn't need the override (its
+    /// <c>FindBestPrefixMatch</c> already walks segments), but preserving the
+    /// stronger Postgres contract requires the forward.
+    /// </summary>
+    public IObservable<(MeshNode? Node, int MatchedSegments)> ResolvePath(
+        string fullPath, JsonSerializerOptions options)
+        => inner.ResolvePath(fullPath, options);
+
     public IObservable<IEnumerable<string>> ListPartitionSubPaths(string nodePath)
         => inner.ListPartitionSubPaths(nodePath);
 

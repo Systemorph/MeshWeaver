@@ -114,39 +114,55 @@ internal class PathResolutionService : IPathResolver, IDisposable
             .DistinctUntilChanged(AddressResolutionEquality.Instance);
 
     /// <summary>
-    /// One-shot resolution: configuration → storage → static → partition root.
-    /// Each step is short-circuit; the storage step is the only DB round-trip.
-    /// The matched <see cref="MeshNode"/> is carried back on
-    /// <see cref="AddressResolution.Node"/> so routing can share this cached
-    /// observable instead of issuing a second <c>path:X</c> query.
+    /// One-shot resolution: <b>deepest match wins</b> across configuration,
+    /// storage, and static-node providers. Storage is the only DB round-trip;
+    /// it is skipped only when config produces an exact-path match (no
+    /// remainder), because nothing in storage could resolve deeper than the
+    /// requested path itself. The matched <see cref="MeshNode"/> is carried
+    /// back on <see cref="AddressResolution.Node"/> so routing can share this
+    /// cached observable instead of issuing a second <c>path:X</c> query.
+    ///
+    /// <para>The naive "config first, short-circuit" shape was the root cause
+    /// of the <c>FileSystemObservableQueryTests</c> failures: a registered
+    /// config node at depth 1 (e.g. <c>TestData</c>) hid the deeper actual
+    /// node at depth 4 (<c>TestData/FsObsQuery/{guid}/Project1</c>), making
+    /// every routed message fail NotFound with the config node as
+    /// closest-ancestor.</para>
     /// </summary>
     private IObservable<AddressResolution?> ResolveOnce(string path)
     {
         var segments = path.Split('/');
 
-        // 1. Configuration match — pure in-memory, no I/O.
+        // Config match — pure in-memory, no I/O.
         var configMatch = _configuration.Nodes.Values
             .Where(node => !node.IsSatelliteType)
             .Select(node => (Node: node, Score: ScoreMatch(node, segments)))
             .Where(m => m.Score > 0)
             .OrderByDescending(m => m.Score)
             .FirstOrDefault();
-        if (configMatch.Node != null)
-            return Observable.Return<AddressResolution?>(
-                BuildResolution(configMatch.Node.Path, segments, MatchedSegments(configMatch.Node.Path),
-                    matchedNode: configMatch.Node));
+        var configDepth = configMatch.Node != null ? configMatch.Score : 0;
 
-        // 2. Storage adapter — one PG query covering primary + satellites.
+        // Config exact-match — nothing in storage can resolve deeper than the
+        // requested path itself, so skip the DB round-trip.
+        if (configMatch.Node != null && configMatch.Score == segments.Length)
+            return Observable.Return<AddressResolution?>(
+                BuildResolution(configMatch.Node.Path, segments, configMatch.Score, matchedNode: configMatch.Node));
+
+        // Storage adapter — one query covering primary + satellites. Take the
+        // deepest of {storage, config, static}.
         return _storageAdapter.ResolvePath(path, _hub.JsonSerializerOptions)
             .Select<(MeshNode? Node, int MatchedSegments), AddressResolution?>(result =>
             {
-                if (result.Node != null)
+                if (result.Node != null && result.MatchedSegments > configDepth)
                     return BuildResolution(result.Node.Path, segments, result.MatchedSegments, matchedNode: result.Node);
 
-                // 3. Static-node-provider exact-path fallback.
+                if (configMatch.Node != null)
+                    return BuildResolution(configMatch.Node.Path, segments, configMatch.Score, matchedNode: configMatch.Node);
+
+                // Static-node-provider fallback (rarely the deepest source).
                 var staticHit = ProbeStaticNodes(segments);
-                if (staticHit is { } sh && sh.Node is not null)
-                    return BuildResolution(sh.Node.Path, segments, sh.Depth, matchedNode: sh.Node);
+                if (staticHit is { Node: { } sn, Depth: var sd } && sd > configDepth)
+                    return BuildResolution(sn.Path, segments, sd, matchedNode: sn);
 
                 _logger?.LogDebug("[RESOLVE] {Path} → NULL (no match across all steps)", path);
                 return null;

@@ -44,6 +44,42 @@ public class FileSystemStorageAdapter : IStorageAdapter
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
         => Observable.FromAsync(ct => ReadAsyncCore(path, options, ct));
 
+    /// <summary>
+    /// Walks segments deepest-first, calling <see cref="Read"/> per depth and
+    /// returning the deepest match. Handles the FileSystem index-file case
+    /// (e.g. <c>FutuRe</c> resolves via <c>FutuRe/index.md</c>) that the
+    /// default <c>(null, 0)</c> impl misses because this adapter has no
+    /// prefix-match index. Pinned by
+    /// <c>ApplicationPageResolutionTest.ResolvePathAsync_FutuRe_ShouldNotReturnNull</c>.
+    ///
+    /// <para>Implemented at the <see cref="FindBestPrefixMatch"/> seam — the
+    /// default <c>ResolvePath = FindBestPrefixMatch</c> implementation then
+    /// routes through here when neither <c>VersionWritingStorageAdapter</c> nor
+    /// <c>PersistenceService</c> overrides <c>ResolvePath</c>. For FS there's
+    /// no satellite-UNION to preserve, so this single seam suffices.</para>
+    /// </summary>
+    public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
+        string fullPath, JsonSerializerOptions options)
+        => Observable.FromAsync(ct => FindBestPrefixMatchAsyncCore(fullPath, options, ct));
+
+    private async Task<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatchAsyncCore(
+        string fullPath, JsonSerializerOptions options, CancellationToken ct)
+    {
+        var normalized = fullPath?.Trim('/') ?? "";
+        if (string.IsNullOrEmpty(normalized))
+            return (null, 0);
+
+        var segments = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        for (var depth = segments.Length; depth >= 1; depth--)
+        {
+            var testPath = string.Join("/", segments.Take(depth));
+            var node = await ReadAsyncCore(testPath, options, ct);
+            if (node != null)
+                return (node, depth);
+        }
+        return (null, 0);
+    }
+
     private async Task<MeshNode?> ReadAsyncCore(string path, JsonSerializerOptions options, CancellationToken ct)
     {
         var (filePath, extension) = FindFileWithExtension(path);
