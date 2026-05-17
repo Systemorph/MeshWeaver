@@ -97,7 +97,19 @@ public static class GraphConfigurationExtensions
             // round-trip fails with "type 'RunCompileResponse' is not registered
             // in this hub's TypeRegistry" and the compile never settles.
             builder.ConfigureHub(config => config.WithGraphTypes());
-            builder.ConfigureDefaultNodeHub(config => config.WithGraphTypes());
+            // Every per-node hub gets MeshDataSource + Overview/Thumbnail/Settings/Search
+            // as a baseline. Compiled NodeType HubConfigurations layer on top
+            // (AddMeshDataSource is idempotent via its marker; WithView overrides
+            // the default Overview/Settings when the NodeType provides its own).
+            // Without this, per-instance hubs that activate before their NodeType
+            // is compiled (or whose NodeType never compiles — seeded test definitions,
+            // framework types that don't ship a Configuration string) get no
+            // GetDataRequest handler at all → GetDataRequest returns NotFound,
+            // ReadNodeAsync returns null. Repro: FileSystem_Organizations,
+            // LinkedInProfile_NodeType_CompilesAndRendersOverview.
+            builder.ConfigureDefaultNodeHub(config => config
+                .WithGraphTypes()
+                .AddDefaultLayoutAreas());
 
             // Seed the built-in NodeCopy + Mirror script templates as Code MeshNodes
             // at Templates/Import/{NodeCopy,Mirror}. ImportLayoutArea fires

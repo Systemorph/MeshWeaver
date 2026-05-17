@@ -541,6 +541,16 @@ internal class MeshNodeCompilationService(
             var selfPath = ntDef != null ? node.Path : node.NodeType ?? node.Path;
             return DiscoverSourceVersionSnapshot(ntDef, selfPath ?? "", sourcesOverride)
                 .Select(snapshot => CompileResultFromAssembly(node, assemblyLocation, log, snapshot))
+                // Re-Finish the log after CompileResultFromAssembly. CompileCore already
+                // Finished it Succeeded, but CompileResultFromAssembly's downstream steps
+                // (assembly load, MeshNodeProviderAttribute reflection) can append fresh
+                // Error messages — those need to flip Status to Failed.
+                // ActivityLog.Finish(version, override) takes MAX(override, GetFinalStatus
+                // from Messages), so an Error message appended after the first Finish
+                // bumps Status to Failed automatically.
+                .Select(result => result is null
+                    ? result
+                    : result with { Log = result.Log?.Finish((int)hub.Version, ActivityStatus.Succeeded) })
                 .SelectMany(result => UploadToStoreIfNeeded(result, node));
         });
 
@@ -629,9 +639,24 @@ internal class MeshNodeCompilationService(
         // for this path because we're not running Roslyn.
         var stubNode = new MeshNode(MeshNode.FromPath(nodeTypePath).Id, MeshNode.FromPath(nodeTypePath).Namespace);
         var log = new ActivityLog(ActivityCategory.Compilation) { HubPath = nodeTypePath };
-        return Observable.Return<NodeCompilationResult?>(
-            CompileResultFromAssembly(stubNode, localPath, log,
-                ImmutableDictionary<string, long>.Empty));
+        var result = CompileResultFromAssembly(stubNode, localPath, log,
+            ImmutableDictionary<string, long>.Empty);
+        // CompileResultFromAssembly hands back a log that's still Running (the
+        // constructor default). Finish it so callers (response.Log readers,
+        // activity-MeshNode renderers) see a terminal Succeeded / Failed.
+        // ActivityLog.Finish reads its own Messages: any Error appended along
+        // the way (assembly load fail, reflection fail) flips status to Failed
+        // automatically — we pass Succeeded as the floor, the message-level
+        // dominates a higher severity. CompileCore on the fresh-compile path
+        // already Finishes; this branch covers the assembly-hydration shortcut.
+        if (result is not null)
+        {
+            result = result with
+            {
+                Log = (result.Log ?? log).Finish((int)hub.Version, ActivityStatus.Succeeded)
+            };
+        }
+        return Observable.Return(result);
     }
 
     private NodeCompilationResult? CompileResultFromAssembly(
