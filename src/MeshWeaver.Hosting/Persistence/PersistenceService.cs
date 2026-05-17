@@ -25,17 +25,39 @@ namespace MeshWeaver.Hosting.Persistence;
 /// </summary>
 public sealed class PersistenceService : IStorageAdapter
 {
-    private readonly IReadOnlyList<IPartitionStorageProvider> _providers;
+    private readonly IReadOnlyList<IPartitionStorageProvider> _providersSpecific;
+    private readonly IReadOnlyList<IPartitionStorageProvider> _providersWildcard;
 
     public PersistenceService(IEnumerable<IPartitionStorageProvider> providers)
     {
-        _providers = providers.ToList();
+        // Split providers into "specific" (own a fixed PartitionDefinition.Namespace —
+        // e.g. EmbeddedResource("Doc"), InMemoryPartitionStorageProvider scoped to
+        // /Release/) and "wildcard" (no fixed namespace — Postgres + InMemory
+        // catch-alls that lazily mint per-first-segment definitions in
+        // ResolveDefinition). Specific providers iterate first so a /Doc/...
+        // path lands on the EmbeddedResource adapter even when the wildcard
+        // InMemory provider was registered earlier in DI order. Without this
+        // priority, AddPartitionedInMemoryPersistence + AddDocumentation in
+        // either order pinned /Doc/... to the empty in-memory store and broke
+        // CessionLayoutAreaTest.MotorXL_PathResolves.
+        var all = providers.ToList();
+        _providersSpecific = all
+            .Where(p => p.PartitionDefinition != null
+                        && !string.IsNullOrEmpty(p.PartitionDefinition.Namespace))
+            .ToList();
+        _providersWildcard = all
+            .Where(p => p.PartitionDefinition == null
+                        || string.IsNullOrEmpty(p.PartitionDefinition.Namespace))
+            .ToList();
     }
 
     private IStorageAdapter? Resolve(string? path)
     {
         if (string.IsNullOrEmpty(path)) return null;
-        foreach (var p in _providers)
+        foreach (var p in _providersSpecific)
+            if (p.Matches(path))
+                return p.Adapter;
+        foreach (var p in _providersWildcard)
             if (p.Matches(path))
                 return p.Adapter;
         return null;
@@ -96,7 +118,7 @@ public sealed class PersistenceService : IStorageAdapter
     /// </summary>
     private IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)>
         AggregateRootListings()
-        => _providers
+        => _providersSpecific.Concat(_providersWildcard)
             .ToObservable()
             .SelectMany(p => p.Adapter.ListChildPaths(null)
                 .Catch<(IEnumerable<string>, IEnumerable<string>), Exception>(_ =>
