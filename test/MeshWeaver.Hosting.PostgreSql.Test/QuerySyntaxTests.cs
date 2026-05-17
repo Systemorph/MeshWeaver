@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -6,6 +6,7 @@ using FluentAssertions;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
@@ -358,7 +359,7 @@ public class QuerySyntaxTests
         var meshConfig = new MeshConfiguration(typeNodes);
 
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter, meshConfiguration: meshConfig);
-        // Use "create" context — Bug is only excluded from "search", not "create"
+        // Use "create" context â€” Bug is only excluded from "search", not "create"
         var request = MeshQueryRequest.FromQuery("namespace:ACME/Project context:create");
 
         var results = await CollectResults(query, request);
@@ -464,7 +465,7 @@ public class QuerySyntaxTests
         var results = await CollectResults(query, request);
 
         // 3 stories sorted: Claims Dashboard, Claims Processing, User Authentication
-        // Limit 2 → first two.
+        // Limit 2 â†’ first two.
         results.Should().HaveCount(2);
         results[0].Name.Should().Be("Claims Dashboard");
         results[1].Name.Should().Be("Claims Processing");
@@ -486,14 +487,14 @@ public class QuerySyntaxTests
 
     #endregion
 
-    #region Pipe Alternation (`field:A|B|C`) — pushed down as `IN (...)`
+    #region Pipe Alternation (`field:A|B|C`) â€” pushed down as `IN (...)`
 
     [Fact]
     public async Task PipeAlternation_NodeType_ReturnsAllListedTypes()
     {
         await SeedTestDataAsync();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
-        // Equivalent to nodeType:(Story OR Bug) — concise grep-style form.
+        // Equivalent to nodeType:(Story OR Bug) â€” concise grep-style form.
         var request = MeshQueryRequest.FromQuery("nodeType:Story|Bug path:ACME scope:descendants");
 
         var results = await CollectResults(query, request);
@@ -529,7 +530,7 @@ public class QuerySyntaxTests
 
         var results = await CollectResults(query, request);
 
-        // Story1 and Bug1 exist; Missing doesn't — IN(...) returns the existing two.
+        // Story1 and Bug1 exist; Missing doesn't â€” IN(...) returns the existing two.
         results.Should().HaveCount(2);
         results.Select(n => n.Path).Should().BeEquivalentTo(
             "ACME/Project/Story1", "ACME/Project/Bug1");
@@ -544,7 +545,7 @@ public class QuerySyntaxTests
     {
         await SeedTestDataAsync();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
-        // Routing-layer canonical form — "longest matching path wins" in one
+        // Routing-layer canonical form â€” "longest matching path wins" in one
         // round-trip. Pin this contract: backends MUST emit ORDER BY length(...)
         // and respect descending direction so MeshCatalog.FindBestPersistenceMatch
         // can rely on a single query for prefix resolution.
@@ -554,7 +555,7 @@ public class QuerySyntaxTests
         var results = await CollectResults(query, request);
 
         // All three exact paths should hit (the 'ACME' top-level node won't exist
-        // since SeedTestDataAsync seeds children only — verify ordering of the rest).
+        // since SeedTestDataAsync seeds children only â€” verify ordering of the rest).
         results.Should().NotBeEmpty();
         // Among the existing results, longest path must come first.
         for (var i = 1; i < results.Count; i++)
@@ -568,7 +569,7 @@ public class QuerySyntaxTests
         await SeedTestDataAsync();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
         // The single canonical form for routing-layer prefix lookup:
-        // path:a|b|c sort:length(path)-desc limit:1 → one row back, the deepest.
+        // path:a|b|c sort:length(path)-desc limit:1 â†’ one row back, the deepest.
         var request = new MeshQueryRequest
         {
             Query = "path:ACME/Project/Story1|ACME/Project|ACME sort:length(path)-desc",
@@ -586,7 +587,7 @@ public class QuerySyntaxTests
     {
         await SeedTestDataAsync();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
-        // Generic SQL-function selector — verifies the function-call syntax isn't
+        // Generic SQL-function selector â€” verifies the function-call syntax isn't
         // hard-coded to length() and works for the other allow-listed functions.
         var request = MeshQueryRequest.FromQuery(
             "nodeType:Story sort:lower(name) path:ACME scope:descendants");

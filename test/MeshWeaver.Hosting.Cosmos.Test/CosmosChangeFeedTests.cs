@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -7,6 +7,7 @@ using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Azure.Cosmos;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Cosmos.Test;
 

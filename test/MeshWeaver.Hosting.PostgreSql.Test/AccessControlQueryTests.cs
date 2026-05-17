@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -7,6 +7,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
@@ -160,7 +161,7 @@ public class AccessControlQueryTests
         await SeedDataAndPermissionsAsync();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
-        // Explicit "Public" userId — should see Contoso nodes but NOT ACME nodes
+        // Explicit "Public" userId â€” should see Contoso nodes but NOT ACME nodes
         var request = MeshQueryRequest.FromQuery("scope:descendants", "Public");
 
         var results = new List<object>();
@@ -267,7 +268,7 @@ public class AccessControlQueryTests
             [new MeshWeaver.Mesh.Security.NodeTypePermission("NodeType", PublicRead: true)],
             TestContext.Current.CancellationToken);
 
-        // Seed a NodeType definition and a regular node — no access grants at all
+        // Seed a NodeType definition and a regular node â€” no access grants at all
         await adapter.WriteAsync(new MeshNode("Organization", "") { Name = "Organization", NodeType = "NodeType" }, _options, TestContext.Current.CancellationToken);
         await adapter.WriteAsync(new MeshNode("ACME", "") { Name = "ACME Corp", NodeType = "Organization" }, _options, TestContext.Current.CancellationToken);
         await adapter.WriteAsync(new MeshNode("Secret", "Private") { Name = "Secret", NodeType = "Document" }, _options, TestContext.Current.CancellationToken);
@@ -364,7 +365,7 @@ public class AccessControlQueryTests
         await ac.GrantAsync("ACME", "alice", "Read", isAllow: true, TestContext.Current.CancellationToken);
         await ac.GrantAsync("ACME", "alice", "Update", isAllow: true, TestContext.Current.CancellationToken);
 
-        // Deny only Update — Read should still work
+        // Deny only Update â€” Read should still work
         await ac.SetPolicyAsync("ACME", update: false, ct: TestContext.Current.CancellationToken);
 
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
@@ -390,7 +391,7 @@ public class AccessControlQueryTests
         await ac.GrantAsync("ACME", "alice", "Read", isAllow: true, TestContext.Current.CancellationToken);
         await ac.GrantAsync("ACME", "alice", "Update", isAllow: true, TestContext.Current.CancellationToken);
 
-        // Deny Read — query should return nothing
+        // Deny Read â€” query should return nothing
         await ac.SetPolicyAsync("ACME", read: false, ct: TestContext.Current.CancellationToken);
 
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
@@ -399,7 +400,7 @@ public class AccessControlQueryTests
         await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
             results.Add(item);
 
-        results.Should().BeEmpty("Read denied by policy — alice cannot see any nodes");
+        results.Should().BeEmpty("Read denied by policy â€” alice cannot see any nodes");
     }
 
     [Fact]

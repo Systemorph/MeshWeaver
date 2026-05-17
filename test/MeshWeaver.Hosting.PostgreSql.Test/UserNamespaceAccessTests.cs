@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -7,13 +7,14 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
 /// <summary>
 /// Tests that access control in the User namespace works correctly with PostgreSQL:
 /// 1) User/<name> (the User node itself) is visible to any authenticated user via public-read.
-/// 2) User/<name>/<subnode> is visible ONLY to the owner (<name>) — not to other users.
+/// 2) User/<name>/<subnode> is visible ONLY to the owner (<name>) â€” not to other users.
 /// 3) When an explicit access grant is added for <subnode>, it becomes visible to others.
 /// </summary>
 [Collection("PostgreSql")]
@@ -77,7 +78,7 @@ public class UserNamespaceAccessTests
         await SeedUserNamespaceDataAsync();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
-        // Bob queries for User/Alice — should be visible via public-read on User nodeType
+        // Bob queries for User/Alice â€” should be visible via public-read on User nodeType
         var request = MeshQueryRequest.FromQuery("path:User/Alice", "Bob");
         var results = new List<MeshNode>();
         await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
@@ -96,7 +97,7 @@ public class UserNamespaceAccessTests
         await SeedUserNamespaceDataAsync();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
-        // Bob queries for User/Alice/MyProject — should NOT be visible (no access grant)
+        // Bob queries for User/Alice/MyProject â€” should NOT be visible (no access grant)
         var request = MeshQueryRequest.FromQuery("path:User/Alice/MyProject", "Bob");
         var results = new List<MeshNode>();
         await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
@@ -105,7 +106,7 @@ public class UserNamespaceAccessTests
         }
 
         results.Should().BeEmpty(
-            "User/Alice/MyProject should NOT be visible to Bob — " +
+            "User/Alice/MyProject should NOT be visible to Bob â€” " +
             "subnodes under a User namespace require explicit access");
     }
 
@@ -115,7 +116,7 @@ public class UserNamespaceAccessTests
         await SeedUserNamespaceDataAsync();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
-        // Alice queries for her own subnode — should be visible (she has Read on User/Alice)
+        // Alice queries for her own subnode â€” should be visible (she has Read on User/Alice)
         var request = MeshQueryRequest.FromQuery("path:User/Alice/MyProject", "Alice");
         var results = new List<MeshNode>();
         await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
@@ -165,7 +166,7 @@ public class UserNamespaceAccessTests
         await SeedUserNamespaceDataAsync();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
-        // Alice queries descendants of User/Alice — should see MyProject
+        // Alice queries descendants of User/Alice â€” should see MyProject
         var aliceRequest = MeshQueryRequest.FromQuery("path:User/Alice scope:descendants", "Alice");
         var aliceResults = new List<MeshNode>();
         await foreach (var item in query.QueryAsync(aliceRequest, _options, TestContext.Current.CancellationToken))
@@ -175,7 +176,7 @@ public class UserNamespaceAccessTests
         aliceResults.Should().Contain(n => n.Path == "User/Alice/MyProject",
             "Alice should see her own subnodes in descendant queries");
 
-        // Bob queries descendants of User/Alice — should NOT see MyProject
+        // Bob queries descendants of User/Alice â€” should NOT see MyProject
         var bobRequest = MeshQueryRequest.FromQuery("path:User/Alice scope:descendants", "Bob");
         var bobResults = new List<MeshNode>();
         await foreach (var item in query.QueryAsync(bobRequest, _options, TestContext.Current.CancellationToken))

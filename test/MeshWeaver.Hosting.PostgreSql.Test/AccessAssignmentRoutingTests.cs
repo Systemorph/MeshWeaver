@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -6,6 +6,7 @@ using FluentAssertions;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
@@ -45,7 +46,7 @@ public class AccessAssignmentRoutingTests
         try
         {
             // Write an AccessAssignment as a direct child (path: TestOrg/rbuergi_Access)
-            // This is the pattern used in production — NOT under a _Access segment
+            // This is the pattern used in production â€” NOT under a _Access segment
             var accessNode = new MeshNode("rbuergi_Access", "TestOrg")
             {
                 Name = "rbuergi Access",

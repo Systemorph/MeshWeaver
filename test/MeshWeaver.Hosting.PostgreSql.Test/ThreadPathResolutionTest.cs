@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -6,6 +6,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Xunit;
 using MeshThread = MeshWeaver.AI.Thread;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
@@ -118,7 +119,7 @@ public class ThreadPathResolutionTest
 
         await adapter.WriteAsync(new MeshNode("TestOrg") { Name = "Test Org", NodeType = "Markdown" }, _options, ct);
 
-        // Thread → Message → Sub-thread (delegation pattern)
+        // Thread â†’ Message â†’ Sub-thread (delegation pattern)
         await adapter.WriteAsync(new MeshNode("parent-thread", "TestOrg/_Thread")
         {
             Name = "Parent Thread", NodeType = "Thread", MainNode = "TestOrg",
@@ -181,7 +182,7 @@ public class ThreadPathResolutionTest
             Content = new MeshThread()
         }, _options, ct);
 
-        // FindBestPrefixMatch for the sub-thread path — must find it in threads table
+        // FindBestPrefixMatch for the sub-thread path â€” must find it in threads table
         var (match, segments) = await adapter.FindBestPrefixMatchAsync(
             "TestOrg/_Thread/parent-thread/msg1/sub-thread", _options, ct);
 

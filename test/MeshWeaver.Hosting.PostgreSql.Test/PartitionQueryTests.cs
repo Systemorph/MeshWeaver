@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -7,6 +7,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
@@ -176,10 +177,10 @@ public class PartitionQueryTests
             TableMappings = PartitionDefinition.StandardTableMappings
         };
 
-        // Main node → primary table
+        // Main node â†’ primary table
         def.ResolveTable("User/roland").Should().Be("mesh_nodes");
 
-        // Satellite nodes → respective tables
+        // Satellite nodes â†’ respective tables
         def.ResolveTable("User/roland/_Activity/abc").Should().Be("activities");
         def.ResolveTable("User/roland/_UserActivity/xyz").Should().Be("user_activities");
         def.ResolveTable("User/roland/_Thread/mythread").Should().Be("threads");

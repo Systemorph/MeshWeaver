@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -14,6 +14,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Npgsql;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
@@ -52,7 +53,7 @@ public class CrossPartitionSearchTests
             TableMappings = PartitionDefinition.StandardTableMappings
         };
 
-        // Admin partition (default schema) — stores partition metadata
+        // Admin partition (default schema) â€” stores partition metadata
         var adminAdapter = _fixture.StorageAdapter;
 
         // Create 3 org schemas
@@ -134,7 +135,7 @@ public class CrossPartitionSearchTests
         var ct = TestContext.Current.CancellationToken;
         var (adminAdapter, partitions) = await SetupMultiOrgEnvironmentAsync(ct);
 
-        // Query each partition individually — verify data is there
+        // Query each partition individually â€” verify data is there
         foreach (var (org, (_, adapter)) in partitions)
         {
             var nodes = new List<MeshNode>();
@@ -277,7 +278,7 @@ public class CrossPartitionSearchTests
         }
     }
 
-    // ── Stored Procedure: search_across_schemas ──────────────────────
+    // â”€â”€ Stored Procedure: search_across_schemas â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 60000)]
     public async Task StoredProc_SearchAcrossSchemas_ReturnsAllOrgs()
@@ -378,7 +379,7 @@ public class CrossPartitionSearchTests
 
         var results = await CallSearchAcrossSchemasAsync("", "testuser", "last_modified DESC", 50, ct);
 
-        // testuser has partition_access only to ACME — should only see ACME nodes
+        // testuser has partition_access only to ACME â€” should only see ACME nodes
         results.Should().NotBeEmpty();
         results.Select(n => n.Id).Should().Contain("ACME");
 
@@ -386,9 +387,9 @@ public class CrossPartitionSearchTests
         // testuser has NO partition_access to FutuRe or Contoso,
         // so those nodes must NOT appear even though Markdown is public_read.
         results.Should().NotContain(n => n.Id == "FutuRe",
-            "testuser has no partition_access to FutuRe — public_read must not bypass partition check");
+            "testuser has no partition_access to FutuRe â€” public_read must not bypass partition check");
         results.Should().NotContain(n => n.Id == "Contoso",
-            "testuser has no partition_access to Contoso — public_read must not bypass partition check");
+            "testuser has no partition_access to Contoso â€” public_read must not bypass partition check");
         results.Should().NotContain(n => n.Id == "Report" && n.Namespace == "FutuRe",
             "FutuRe child nodes must also be hidden");
         results.Should().NotContain(n => n.Id == "Report" && n.Namespace == "Contoso",
@@ -434,7 +435,7 @@ public class CrossPartitionSearchTests
         results.Select(n => n.Id).Should().Contain("Contoso");
     }
 
-    // ── Helpers ──────────────────────────────────────────────────────
+    // â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     private async Task PopulateSearchableSchemasAsync(IEnumerable<string> schemas, CancellationToken ct)
     {

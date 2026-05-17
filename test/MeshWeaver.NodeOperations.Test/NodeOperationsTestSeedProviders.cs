@@ -4,6 +4,7 @@ using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.NodeOperations.Test;
 

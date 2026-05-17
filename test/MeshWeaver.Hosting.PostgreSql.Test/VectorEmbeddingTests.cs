@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -7,6 +7,7 @@ using MeshWeaver.Mesh;
 using Npgsql;
 using Testcontainers.PostgreSql;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 

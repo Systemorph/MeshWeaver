@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -8,6 +8,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Services;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
@@ -74,7 +75,7 @@ public class SatelliteQueryTests : IAsyncLifetime
         return results;
     }
 
-    /// <summary>Direct SQL query for debugging — bypasses the MeshQuery layer.</summary>
+    /// <summary>Direct SQL query for debugging â€” bypasses the MeshQuery layer.</summary>
     private async Task<List<MeshNode>> RawQueryAsync(string tableName, string? nodeType = null)
     {
         var ct = TestContext.Current.CancellationToken;
@@ -95,7 +96,7 @@ public class SatelliteQueryTests : IAsyncLifetime
         return results;
     }
 
-    // ── Diagnostic ──────────────────────────────────────────────────────────
+    // â”€â”€ Diagnostic â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 30000)]
     public async Task Diagnostic_ResolveTableByNodeType_WorksCorrectly()
@@ -108,7 +109,7 @@ public class SatelliteQueryTests : IAsyncLifetime
         UserPartition.ResolveTableByNodeType("Comment").Should().Be("annotations");
         UserPartition.ResolveTableByNodeType("AccessAssignment").Should().Be("access");
         // Code maps to Source which maps to "code", but NodeTypeToSuffix
-        // doesn't have "Code" entry — it uses path-based resolution instead
+        // doesn't have "Code" entry â€” it uses path-based resolution instead
         UserPartition.ResolveTable("User/alice/Source/MyClass").Should().Be("code");
 
         // Verify parser extracts nodeType correctly
@@ -120,7 +121,7 @@ public class SatelliteQueryTests : IAsyncLifetime
         parsed.Scope.Should().Be(QueryScope.Exact, "no scope specified, defaults to Exact");
     }
 
-    // ── Thread ──────────────────────────────────────────────────────────────
+    // â”€â”€ Thread â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 30000)]
     public async Task NodeType_Thread_FindsInThreadsTable()
@@ -146,7 +147,7 @@ public class SatelliteQueryTests : IAsyncLifetime
             "SELECT COUNT(*) FROM mesh_nodes WHERE id = 'hello-world'");
         var mnCount = (long)(await mnCmd.ExecuteScalarAsync(ct))!;
 
-        // Query by nodeType only (no path) — must resolve to threads table
+        // Query by nodeType only (no path) â€” must resolve to threads table
         var results = await QueryAsync("nodeType:Thread sort:LastModified-desc");
 
         // Raw SQL verification: data IS in threads table
@@ -201,7 +202,7 @@ public class SatelliteQueryTests : IAsyncLifetime
         results.Should().Contain(n => n.Name == "Namespace Thread");
     }
 
-    // ── ThreadMessage ───────────────────────────────────────────────────────
+    // â”€â”€ ThreadMessage â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 30000)]
     public async Task NodeType_ThreadMessage_FindsInThreadsTable()
@@ -219,7 +220,7 @@ public class SatelliteQueryTests : IAsyncLifetime
         results.Should().NotBeEmpty("nodeType:ThreadMessage should find messages in threads table");
     }
 
-    // ── Activity ────────────────────────────────────────────────────────────
+    // â”€â”€ Activity â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 30000)]
     public async Task NodeType_Activity_FindsInActivitiesTable()
@@ -276,7 +277,7 @@ public class SatelliteQueryTests : IAsyncLifetime
             "source:activity should return main nodes with activity satellites");
     }
 
-    // ── UserActivity ────────────────────────────────────────────────────────
+    // â”€â”€ UserActivity â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 30000)]
     public async Task NodeType_UserActivity_FindsInUserActivitiesTable()
@@ -304,7 +305,7 @@ public class SatelliteQueryTests : IAsyncLifetime
         results.Should().NotBeEmpty("nodeType:UserActivity should find records in user_activities table");
     }
 
-    // ── AccessAssignment ────────────────────────────────────────────────────
+    // â”€â”€ AccessAssignment â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 30000)]
     public async Task NodeType_AccessAssignment_FindsInAccessTable()
@@ -322,7 +323,7 @@ public class SatelliteQueryTests : IAsyncLifetime
         results.Should().NotBeEmpty("nodeType:AccessAssignment should find records in access table");
     }
 
-    // ── Comment ─────────────────────────────────────────────────────────────
+    // â”€â”€ Comment â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 30000)]
     public async Task NodeType_Comment_FindsInAnnotationsTable()
@@ -340,7 +341,7 @@ public class SatelliteQueryTests : IAsyncLifetime
         results.Should().NotBeEmpty("nodeType:Comment should find records in annotations table");
     }
 
-    // ── TrackedChange ───────────────────────────────────────────────────────
+    // â”€â”€ TrackedChange â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 30000)]
     public async Task NodeType_TrackedChange_FindsInAnnotationsTable()
@@ -358,7 +359,7 @@ public class SatelliteQueryTests : IAsyncLifetime
         results.Should().NotBeEmpty("nodeType:TrackedChange should find records in annotations table");
     }
 
-    // ── Approval ────────────────────────────────────────────────────────────
+    // â”€â”€ Approval â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 30000)]
     public async Task NodeType_Approval_FindsInAnnotationsTable()
@@ -376,7 +377,7 @@ public class SatelliteQueryTests : IAsyncLifetime
         results.Should().NotBeEmpty("nodeType:Approval should find records in annotations table");
     }
 
-    // ── Code ────────────────────────────────────────────────────────────────
+    // â”€â”€ Code â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 30000)]
     public async Task NodeType_Code_RequiresPathBasedResolution()
@@ -397,6 +398,6 @@ public class SatelliteQueryTests : IAsyncLifetime
 
         // nodeType-only query with DefaultPath falls back to mesh_nodes (Code has no NodeTypeToSuffix entry)
         var byType = await QueryAsync("nodeType:Code scope:descendants", defaultPath: "User");
-        // This returns empty because Code isn't in NodeTypeToSuffix — expected limitation
+        // This returns empty because Code isn't in NodeTypeToSuffix â€” expected limitation
     }
 }

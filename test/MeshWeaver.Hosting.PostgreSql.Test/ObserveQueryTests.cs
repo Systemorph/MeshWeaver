@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
@@ -9,13 +9,14 @@ using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
 /// <summary>
 /// Tests that ObserveQuery correctly receives change notifications
 /// through the full PostgreSQL LISTEN/NOTIFY pipeline:
-/// DB trigger → pg_notify → PostgreSqlChangeListener → DataChangeNotifier → ObserveQuery
+/// DB trigger â†’ pg_notify â†’ PostgreSqlChangeListener â†’ DataChangeNotifier â†’ ObserveQuery
 /// </summary>
 [Collection("PostgreSqlIsolated")]
 public class ObserveQueryTests : IAsyncLifetime
@@ -163,7 +164,7 @@ public class ObserveQueryTests : IAsyncLifetime
 
         // Subscribe TWICE on the same stream:
         //   (a) capture the Initial emission for the in-scope sanity check
-        //   (b) filter to emissions actually carrying a Contoso/Team item —
+        //   (b) filter to emissions actually carrying a Contoso/Team item â€”
         //       the assertion target. Counting raw emissions (the old shape)
         //       trips on pg_notify duplicate `Updated` events for in-scope
         //       nodes (Story1 update echoes) that are unrelated to whether
@@ -185,7 +186,7 @@ public class ObserveQueryTests : IAsyncLifetime
         await Task.Delay(1000, TestContext.Current.CancellationToken);
 
         // Assert: the in-scope Initial fired exactly once, and no emission
-        // carried a Contoso/Team item — that's the actual scope-filter claim.
+        // carried a Contoso/Team item â€” that's the actual scope-filter claim.
         initialChanges.Should().ContainSingle();
         initialChanges[0].Items.Should().ContainSingle(n => n.Id == "Story1");
         outOfScopeChanges.Should().BeEmpty(

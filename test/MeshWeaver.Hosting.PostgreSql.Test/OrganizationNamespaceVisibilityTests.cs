@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -8,6 +8,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
@@ -100,7 +101,7 @@ public class OrganizationNamespaceVisibilityTests
         await SeedOrganizationAsync();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
-        // This is how the namespace picker queries — root-level nodes
+        // This is how the namespace picker queries â€” root-level nodes
         var request = MeshQueryRequest.FromQuery("namespace:", "alice");
         var results = new List<MeshNode>();
         await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
@@ -147,7 +148,7 @@ public class OrganizationNamespaceVisibilityTests
         }
 
         results.Should().Contain(n => n.Path == "PartnerRe",
-            "Organization root node must appear in context:create queries — " +
+            "Organization root node must appear in context:create queries â€” " +
             "otherwise the namespace picker won't show it");
     }
 }

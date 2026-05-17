@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -8,6 +8,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Services;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
@@ -155,7 +156,7 @@ public class ActivityOrderedQueryTests
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
         var request = new MeshQueryRequest
         {
-            // Doc1 has no UserActivity record — should not appear with INNER JOIN
+            // Doc1 has no UserActivity record â€” should not appear with INNER JOIN
             Query = "source:accessed nodeType:Document path:org scope:descendants",
             UserId = "alice"
         };
@@ -167,7 +168,7 @@ public class ActivityOrderedQueryTests
                 results.Add(node);
         }
 
-        // Doc1 has no UserActivity — INNER JOIN excludes it
+        // Doc1 has no UserActivity â€” INNER JOIN excludes it
         results.Should().BeEmpty();
     }
 
@@ -200,7 +201,7 @@ public class ActivityOrderedQueryTests
     {
         await SeedNodesAndActivityAsync();
 
-        // bob has no UserActivity nodes — INNER JOIN returns nothing
+        // bob has no UserActivity nodes â€” INNER JOIN returns nothing
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
         var request = new MeshQueryRequest
         {

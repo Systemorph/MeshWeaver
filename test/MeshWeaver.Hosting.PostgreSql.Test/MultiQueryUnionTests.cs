@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
@@ -9,6 +9,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
@@ -42,13 +43,13 @@ public class MultiQueryUnionTests
         await _fixture.CleanDataAsync();
         var adapter = _fixture.StorageAdapter;
 
-        // Namespace A — two Agent nodes.
+        // Namespace A â€” two Agent nodes.
         await adapter.WriteAsync(new MeshNode("Orchestrator", "Agent")
         { Name = "Orchestrator", NodeType = "Agent" }, _options, TestContext.Current.CancellationToken);
         await adapter.WriteAsync(new MeshNode("Coder", "Agent")
         { Name = "Coder", NodeType = "Agent" }, _options, TestContext.Current.CancellationToken);
 
-        // Namespace B — one Agent node + non-Agent node (must NOT show up).
+        // Namespace B â€” one Agent node + non-Agent node (must NOT show up).
         await adapter.WriteAsync(new MeshNode("CustomBot", "User/Roland")
         { Name = "Custom Bot", NodeType = "Agent" }, _options, TestContext.Current.CancellationToken);
         await adapter.WriteAsync(new MeshNode("Notes", "User/Roland")
@@ -67,8 +68,8 @@ public class MultiQueryUnionTests
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
         var request = MeshQueryRequest.FromQueries(new[]
         {
-            "namespace:Agent nodeType:Agent",       // Children-of-Agent → Orchestrator + Coder
-            "namespace:User/Roland nodeType:Agent", // Children-of-User/Roland → CustomBot
+            "namespace:Agent nodeType:Agent",       // Children-of-Agent â†’ Orchestrator + Coder
+            "namespace:User/Roland nodeType:Agent", // Children-of-User/Roland â†’ CustomBot
         });
 
         var results = new List<MeshNode>();
@@ -88,7 +89,7 @@ public class MultiQueryUnionTests
         await SeedTwoNamespacesAsync();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
-        // Both queries match Agent/Orchestrator. Postgres UNION dedupes — so the
+        // Both queries match Agent/Orchestrator. Postgres UNION dedupes â€” so the
         // node appears EXACTLY ONCE in the result, proving the dedup happened
         // server-side (a client-side "merge" of two separate result sets would
         // also need a dedup pass, but THIS test specifically validates the
@@ -137,7 +138,7 @@ public class MultiQueryUnionTests
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
         // Sanity: passing a single-element Queries array (or just FromQuery)
-        // must yield the same result as the original single-query path —
+        // must yield the same result as the original single-query path â€”
         // multi-query plumbing is additive.
         var multi = MeshQueryRequest.FromQueries(new[] { "namespace:Agent nodeType:Agent" });
         var single = MeshQueryRequest.FromQuery("namespace:Agent nodeType:Agent");

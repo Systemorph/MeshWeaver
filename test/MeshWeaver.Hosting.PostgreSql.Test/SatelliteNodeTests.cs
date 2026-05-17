@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -7,6 +7,7 @@ using FluentAssertions;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
@@ -185,7 +186,7 @@ public class SatelliteNodeTests : IAsyncLifetime
 
     #endregion
 
-    #region Comment satellite (→ annotations)
+    #region Comment satellite (â†’ annotations)
 
     [Fact(Timeout = 30000)]
     public async Task Comment_WriteAndRead_RoutesToAnnotationsTable()
@@ -235,7 +236,7 @@ public class SatelliteNodeTests : IAsyncLifetime
 
     #endregion
 
-    #region TrackedChange satellite (→ annotations)
+    #region TrackedChange satellite (â†’ annotations)
 
     [Fact(Timeout = 30000)]
     public async Task TrackedChange_WriteAndRead_RoutesToAnnotationsTable()
@@ -264,7 +265,7 @@ public class SatelliteNodeTests : IAsyncLifetime
 
     #endregion
 
-    #region Approval satellite (→ annotations)
+    #region Approval satellite (â†’ annotations)
 
     [Fact(Timeout = 30000)]
     public async Task Approval_WriteAndRead_RoutesToAnnotationsTable()
@@ -289,7 +290,7 @@ public class SatelliteNodeTests : IAsyncLifetime
 
     #endregion
 
-    #region Code content (Source and Test → code table)
+    #region Code content (Source and Test â†’ code table)
 
     [Fact(Timeout = 30000)]
     public async Task CodeFile_WriteAndRead_RoutesToCodeTable()

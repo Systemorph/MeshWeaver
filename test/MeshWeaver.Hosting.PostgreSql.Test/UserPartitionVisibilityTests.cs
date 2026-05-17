@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -7,6 +7,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
@@ -91,7 +92,7 @@ public class UserPartitionVisibilityTests
             if (item is MeshNode node) results.Add(node);
         }
 
-        // Bob should see zero content nodes — subnodes require explicit access
+        // Bob should see zero content nodes â€” subnodes require explicit access
         results
             .Where(n => n.NodeType != "User")
             .Should().BeEmpty("Bob must not see Alice's partition content");

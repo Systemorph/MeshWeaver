@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -11,6 +11,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Npgsql;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
@@ -20,7 +21,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 /// giving them full permissions across all partitions.
 ///
 /// Bug: Onboarding.razor was calling AddUserRoleAsync(username, "PlatformAdmin", "Admin", username)
-/// — correct namespace but wrong role ("PlatformAdmin" instead of "Admin").
+/// â€” correct namespace but wrong role ("PlatformAdmin" instead of "Admin").
 /// Fix: AddUserRoleAsync(username, Role.Admin.Id, "Admin", username)
 /// </summary>
 [Collection("PostgreSql")]
@@ -74,7 +75,7 @@ public class FirstUserOnboardingTests
 
         // Step 2: Assign global Admin role (simulates the fixed onboarding code)
         // AddUserRoleAsync(username, Role.Admin.Id, "Admin", username)
-        // → namespace = "Admin/_Access", stored in admin.access table
+        // â†’ namespace = "Admin/_Access", stored in admin.access table
         var ns = "Admin/_Access";
         var nodeId = $"{username}_Access";
         await adminAdapter.WriteAsync(new MeshNode(nodeId, ns)
@@ -196,7 +197,7 @@ public class FirstUserOnboardingTests
         results.Select(n => n.Name).Should().Contain("OrgBeta Corp");
     }
 
-    // ── Helpers ──────────────────────────────────────────────────────
+    // â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     private async Task PopulateSearchableSchemasAsync(IEnumerable<string> schemas, CancellationToken ct)
     {

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive;
@@ -10,11 +10,12 @@ using FluentAssertions;
 using MeshWeaver.Hosting.Persistence.Http;
 using MeshWeaver.Mesh;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Test;
 
 /// <summary>
-/// Tests for <see cref="HttpMeshStorageAdapter"/> — verifies the adapter
+/// Tests for <see cref="HttpMeshStorageAdapter"/> â€” verifies the adapter
 /// correctly translates each <see cref="MeshWeaver.Mesh.Services.IStorageAdapter"/>
 /// method into the right <see cref="IRemoteMeshClient"/> call(s) without ever
 /// hitting an actual HTTP endpoint. The wire-level behaviour of
@@ -135,7 +136,7 @@ public class HttpMeshStorageAdapterTests
             because: "remote-backed adapters have no notion of empty directories");
         stub.SearchCalls.Should().ContainSingle()
             .Which.Should().Be("namespace:rbuergi/Story",
-                because: "scope must be IMMEDIATE children only — StorageImporter recurses one level at a time");
+                because: "scope must be IMMEDIATE children only â€” StorageImporter recurses one level at a time");
     }
 
     [Fact]
@@ -171,7 +172,7 @@ public class HttpMeshStorageAdapterTests
 
         await adapter.SavePartitionObjectsAsync("rbuergi", null, [new object()], JsonOptions, TestContext.Current.CancellationToken);
 
-        // The stub records every call routed through it — partitions are no-op,
+        // The stub records every call routed through it â€” partitions are no-op,
         // so nothing should have hit the remote client.
         stub.GetCalls.Should().BeEmpty();
         stub.CreateCalls.Should().BeEmpty();

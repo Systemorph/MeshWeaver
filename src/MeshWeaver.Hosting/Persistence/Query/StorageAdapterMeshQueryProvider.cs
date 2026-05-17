@@ -284,25 +284,41 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 firstParsed = parsedQuery;
             }
 
-            await foreach (var node in FindMatchingNodesAsync(
-                parsedQuery, effectiveScope, basePath, userId, context, request, options, ct))
-            {
-                if (node is MeshNode meshNode)
+            // Per-query reactive composition: FindMatchingNodes emits objects;
+            // we filter by validator (when useSecurityFilter), dedup, and fold
+            // into the shared closures. ForEachAsync awaits source completion
+            // and is the single Task bridge per query — everything inside the
+            // observable chain stays IObservable.
+            await FindMatchingNodes(
+                    parsedQuery, effectiveScope, basePath, userId, context, request, options)
+                .SelectMany(node =>
                 {
-                    if (!string.IsNullOrEmpty(meshNode.Path) && matchedByPath.ContainsKey(meshNode.Path))
-                        continue;
-                    if (useSecurityFilter && !await ValidateReadAsync(meshNode, userId, ct))
-                        continue;
-                    if (!string.IsNullOrEmpty(meshNode.Path))
-                        matchedByPath[meshNode.Path] = meshNode;
-                    else if (seenRefs.Add(meshNode))
-                        nonNodeMatched.Add(meshNode);
-                }
-                else if (seenRefs.Add(node))
+                    if (node is MeshNode meshNode)
+                    {
+                        if (!string.IsNullOrEmpty(meshNode.Path) && matchedByPath.ContainsKey(meshNode.Path))
+                            return Observable.Empty<object>();
+                        return useSecurityFilter
+                            ? ValidateRead(meshNode, userId)
+                                .Where(valid => valid)
+                                .Select(_ => (object)meshNode)
+                            : Observable.Return<object>(meshNode);
+                    }
+                    return Observable.Return(node);
+                })
+                .ForEachAsync(n =>
                 {
-                    nonNodeMatched.Add(node);
-                }
-            }
+                    if (n is MeshNode mn)
+                    {
+                        if (!string.IsNullOrEmpty(mn.Path))
+                            matchedByPath[mn.Path] = mn;
+                        else if (seenRefs.Add(mn))
+                            nonNodeMatched.Add(mn);
+                    }
+                    else if (seenRefs.Add(n))
+                    {
+                        nonNodeMatched.Add(n);
+                    }
+                }, ct);
         }
 
         var matched = matchedByPath.Values.Cast<object>().Concat(nonNodeMatched).ToList();
@@ -333,15 +349,21 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     /// Yields matching nodes as they are discovered across all applicable scopes.
     /// No buffering or sorting — results stream immediately.
     /// </summary>
-    private async IAsyncEnumerable<object> FindMatchingNodesAsync(
+    /// <summary>
+    /// Pure-IObservable per-query node finder — no <c>async</c>, no <c>await</c>,
+    /// no <c>IAsyncEnumerable</c> bridge inside. The three sub-pipelines
+    /// (activity-source / exact-path probes / scope-walk) compose into a single
+    /// observable; the caller (<see cref="CollectMatchedAsync"/>) consumes
+    /// reactively via <c>SelectMany</c>.
+    /// </summary>
+    private IObservable<object> FindMatchingNodes(
         ParsedQuery parsedQuery,
         QueryScope effectiveScope,
         string basePath,
         string userId,
         string? context,
         MeshQueryRequest request,
-        JsonSerializerOptions options,
-        [EnumeratorCancellation] CancellationToken ct)
+        JsonSerializerOptions options)
     {
         // source:activity is a join with the `_activity` satellites — pushed
         // down to SQL by PostgreSqlSqlGenerator (INNER JOIN activities ON
@@ -350,11 +372,13 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         // `{mainPath}/_activity/{actId}`, so we derive the MainNode by string
         // trim and skip the satellite read entirely. 1 walk + 1 read per
         // distinct main — same cost shape as Postgres' JOIN.
+        //
+        // source:activity is exclusive — bypass the normal walk/exact-probe.
         if (parsedQuery.Source == QuerySource.Activity)
         {
             const string activitySegment = "/_activity/";
             var seenMains = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var activityPipeline = WalkAdapter(basePath, QueryScope.Subtree)
+            return WalkAdapter(basePath, QueryScope.Subtree)
                 .Select(path =>
                 {
                     if (string.IsNullOrEmpty(path)) return null;
@@ -376,13 +400,8 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                         "[StorageAdapterMeshQueryProvider.SourceActivity] pipeline threw query=[{Query}] basePath={BasePath}",
                         string.Join(" | ", request.EffectiveQueries), basePath);
                     return Observable.Empty<MeshNode>();
-                });
-
-            await foreach (var node in activityPipeline.ToAsyncEnumerableSequence(ct))
-                yield return node;
-
-            // source:activity is exclusive — bypass the normal walk/exact-probe.
-            yield break;
+                })
+                .Cast<object>();
         }
 
         // Multi-value `path:a|b|c` — parsedQuery.Paths carries the full IN list.
@@ -395,13 +414,8 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             : GetPathsForScope(basePath, effectiveScope);
         var emittedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        // Exact-path probes — pure-observable read+match for each path. The
-        // IAsyncEnumerable surface above iterates via Subscribe-pump
-        // (Observable.ToAsyncEnumerable), no inner await on hub-routed reads.
-        // Skip empty/null entries — persistence.Read("") on some adapters throws NRE
-        // before the observable starts (RoutingPersistenceServiceCore tolerates it,
-        // but FileSystemStorageAdapter doesn't), so a bare "scope:descendants" query
-        // with no namespace would otherwise blow up the whole pipeline.
+        // Exact-path probes. Skip empty/null entries — persistence.Read("") on
+        // some adapters throws NRE before the observable starts.
         var exactPathNodes = pathsToSearch.ToObservable()
             .Where(searchPath => !string.IsNullOrEmpty(searchPath))
             .SelectMany(searchPath => Observable.Defer(() =>
@@ -430,9 +444,6 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 return Observable.Empty<MeshNode>();
             });
 
-        await foreach (var node in exactPathNodes.ToAsyncEnumerableSequence(ct))
-            yield return node;
-
         // Children / Descendants / Hierarchy / Subtree / AncestorsAndSelf scopes —
         // walk via the adapter. Each scope expands to a list of (root, scope)
         // pairs the walker iterates over.
@@ -441,59 +452,62 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         //                    (siblings of self and uncles, but not entire
         //                    sibling subtrees — that's the "hierarchy" semantic).
         //  Children / Descendants / Subtree → just basePath, with the scope as-is.
-        if (effectiveScope is QueryScope.Children
+        if (effectiveScope is not (QueryScope.Children
             or QueryScope.Descendants
             or QueryScope.Hierarchy
             or QueryScope.Subtree
-            or QueryScope.AncestorsAndSelf)
+            or QueryScope.AncestorsAndSelf))
         {
-            var walkPairs = new List<(string Root, QueryScope Scope)>();
-            if (effectiveScope == QueryScope.AncestorsAndSelf)
-            {
-                foreach (var ancestor in GetPathsForScope(basePath, QueryScope.AncestorsAndSelf))
-                    walkPairs.Add((ancestor, QueryScope.Children));
-            }
-            else if (effectiveScope == QueryScope.Hierarchy)
-            {
-                // descendants of self
-                walkPairs.Add((basePath, QueryScope.Subtree));
-                // children of each strict ancestor (skip self — already covered)
-                foreach (var ancestor in GetPathsForScope(basePath, QueryScope.Ancestors))
-                    walkPairs.Add((ancestor, QueryScope.Children));
-            }
-            else
-            {
-                walkPairs.Add((basePath, effectiveScope));
-            }
-
-            // Compose pure-observable walk + read + match — no inner await.
-            // The IAsyncEnumerable boundary at the top of QueryAsync still
-            // needs to iterate; Subscribe-collect into a channel for that.
-            var matchedScopeNodes = walkPairs
-                .ToObservable()
-                .SelectMany(pair => WalkAdapter(pair.Root, pair.Scope))
-                .Where(path => !string.IsNullOrEmpty(path))
-                .Where(path => emittedPaths.Add(path))
-                .SelectMany(path =>
-                    persistence.Read(path, options)
-                        .Take(1)
-                        .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null)))
-                .Where(node => node != null)
-                .Select(node => node!)
-                .Where(node => _evaluator.Matches(node, parsedQuery)
-                    && !IsExcludedByContext(node, context)
-                    && !IsExcludedByIsMain(node, parsedQuery))
-                .Catch<MeshNode, Exception>(ex =>
-                {
-                    logger?.LogWarning(ex,
-                        "[StorageAdapterMeshQueryProvider.MatchScope] pipeline threw query=[{Query}] basePath={BasePath}",
-                        string.Join(" | ", request.EffectiveQueries), basePath);
-                    return Observable.Empty<MeshNode>();
-                });
-
-            await foreach (var node in matchedScopeNodes.ToAsyncEnumerableSequence(ct))
-                yield return node;
+            return exactPathNodes.Cast<object>();
         }
+
+        var walkPairs = new List<(string Root, QueryScope Scope)>();
+        if (effectiveScope == QueryScope.AncestorsAndSelf)
+        {
+            foreach (var ancestor in GetPathsForScope(basePath, QueryScope.AncestorsAndSelf))
+                walkPairs.Add((ancestor, QueryScope.Children));
+        }
+        else if (effectiveScope == QueryScope.Hierarchy)
+        {
+            // descendants of self
+            walkPairs.Add((basePath, QueryScope.Subtree));
+            // children of each strict ancestor (skip self — already covered)
+            foreach (var ancestor in GetPathsForScope(basePath, QueryScope.Ancestors))
+                walkPairs.Add((ancestor, QueryScope.Children));
+        }
+        else
+        {
+            walkPairs.Add((basePath, effectiveScope));
+        }
+
+        var matchedScopeNodes = walkPairs
+            .ToObservable()
+            .SelectMany(pair => WalkAdapter(pair.Root, pair.Scope))
+            .Where(path => !string.IsNullOrEmpty(path))
+            .Where(path => emittedPaths.Add(path))
+            .SelectMany(path =>
+                persistence.Read(path, options)
+                    .Take(1)
+                    .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null)))
+            .Where(node => node != null)
+            .Select(node => node!)
+            .Where(node => _evaluator.Matches(node, parsedQuery)
+                && !IsExcludedByContext(node, context)
+                && !IsExcludedByIsMain(node, parsedQuery))
+            .Catch<MeshNode, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "[StorageAdapterMeshQueryProvider.MatchScope] pipeline threw query=[{Query}] basePath={BasePath}",
+                    string.Join(" | ", request.EffectiveQueries), basePath);
+                return Observable.Empty<MeshNode>();
+            });
+
+        // Sequential composition: exact-path probes complete first (populating
+        // emittedPaths), then scope-walk filters via the shared HashSet. The
+        // Concat operator guarantees the second observable doesn't subscribe
+        // until the first completes — same ordering as the original two
+        // sequential await-foreach loops.
+        return Observable.Concat(exactPathNodes, matchedScopeNodes).Cast<object>();
     }
 
     /// <summary>
@@ -584,12 +598,17 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
 
     /// <summary>
     /// Validates a node read operation using INodeValidator instances from DI.
-    /// Mirrors MeshCatalog.ValidateReadAsync logic.
+    /// Pure-reactive — no await, no FirstAsync().ToTask() bridge. Each validator's
+    /// <see cref="INodeValidator.Validate"/> returns IObservable&lt;NodeValidationResult&gt;
+    /// already; we sequence them via Concat and short-circuit via .All, which
+    /// disposes the upstream subscription on the first false (so subsequent
+    /// validators in the Concat queue never subscribe — same semantics as the
+    /// old loop's early <c>return false</c>).
     /// </summary>
-    private async Task<bool> ValidateReadAsync(MeshNode node, string userId, CancellationToken ct = default)
+    private IObservable<bool> ValidateRead(MeshNode node, string userId)
     {
         if (nodeValidators == null)
-            return true;
+            return Observable.Return(true);
 
         // Always use the effective userId for the validation context.
         // The query's explicit UserId takes precedence over session AccessContext
@@ -605,25 +624,29 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             AccessContext = accessContext
         };
 
-        foreach (var lazyValidator in nodeValidators)
-        {
-            // Resolve lazily — see ctor comment on `nodeValidators` for the
-            // SecurityService cycle this defers.
-            var validator = lazyValidator.Value;
-            if (validator.SupportedOperations.Count > 0 &&
-                !validator.SupportedOperations.Contains(NodeOperation.Read))
-                continue;
+        // Resolve lazily — see ctor comment on `nodeValidators` for the
+        // SecurityService cycle this defers. Materialise the relevant set
+        // synchronously (cheap — typically 0–3 validators per partition);
+        // each .Validate(...) call stays observable.
+        var relevant = nodeValidators
+            .Select(lv => lv.Value)
+            .Where(v => v.SupportedOperations.Count == 0
+                     || v.SupportedOperations.Contains(NodeOperation.Read))
+            .ToList();
 
-            var result = await validator.Validate(context).FirstAsync().ToTask(ct);
-            if (!result.IsValid)
+        if (relevant.Count == 0)
+            return Observable.Return(true);
+
+        return relevant
+            .Select(v => v.Validate(context).Take(1).Do(r =>
             {
-                logger?.LogDebug("Validator {Validator} rejected read on node {Path}: {Error}",
-                    validator.GetType().Name, node.Path, result.ErrorMessage);
-                return false;
-            }
-        }
-
-        return true;
+                if (!r.IsValid)
+                    logger?.LogDebug("Validator {Validator} rejected read on node {Path}: {Error}",
+                        v.GetType().Name, node.Path, r.ErrorMessage);
+            }))
+            .ToObservable()
+            .Concat()
+            .All(r => r.IsValid);
     }
 
     /// <inheritdoc />

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -11,6 +11,7 @@ using MeshWeaver.Mesh.Services;
 using Npgsql;
 using Xunit;
 using MeshThread = MeshWeaver.AI.Thread;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
@@ -81,7 +82,7 @@ public class CrossPartitionSatelliteFanOutTests
         return partitions;
     }
 
-    // ── Thread fan-out ──────────────────────────────────────────────────
+    // â”€â”€ Thread fan-out â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 60000)]
     public async Task NodeTypeThread_WithNamespace_QueriesThreadsTable()
@@ -128,7 +129,7 @@ public class CrossPartitionSatelliteFanOutTests
         allResults.Should().OnlyContain(n => n.NodeType == "Thread");
     }
 
-    // ── Comment fan-out ─────────────────────────────────────────────────
+    // â”€â”€ Comment fan-out â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 60000)]
     public async Task NodeTypeComment_WithNamespace_QueriesAnnotationsTable()
@@ -170,7 +171,7 @@ public class CrossPartitionSatelliteFanOutTests
         allComments.Should().OnlyContain(n => n.NodeType == "Comment");
     }
 
-    // ── Activity fan-out ────────────────────────────────────────────────
+    // â”€â”€ Activity fan-out â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 60000)]
     public async Task NodeTypeActivity_WithNamespace_QueriesActivitiesTable()
@@ -213,7 +214,7 @@ public class CrossPartitionSatelliteFanOutTests
         allActivities.Should().OnlyContain(n => n.NodeType == "Activity");
     }
 
-    // ── Mixed: nodeType without namespace fans out correctly ─────────
+    // â”€â”€ Mixed: nodeType without namespace fans out correctly â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 60000)]
     public async Task NodeTypeOnly_WithoutNamespace_EachPartitionResolvesCorrectTable()
@@ -245,7 +246,7 @@ public class CrossPartitionSatelliteFanOutTests
             State = MeshNodeState.Active,
         }, _options, ct);
 
-        // Query without namespace — each adapter should resolve to threads table
+        // Query without namespace â€” each adapter should resolve to threads table
         var parser = new QueryParser();
         var query = parser.Parse("nodeType:Thread sort:LastModified-desc");
 

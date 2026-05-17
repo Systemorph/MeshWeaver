@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -10,6 +10,7 @@ using MeshWeaver.Mesh.Services;
 using Npgsql;
 using Xunit;
 using MeshThread = MeshWeaver.AI.Thread;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
@@ -23,7 +24,7 @@ public class CrossPartitionThreadQueryTests
 {
     private readonly PostgreSqlFixture _fixture;
 
-    // Must use CamelCase to match hub serialization (Thread.CreatedBy → "createdBy" in JSONB)
+    // Must use CamelCase to match hub serialization (Thread.CreatedBy â†’ "createdBy" in JSONB)
     private readonly JsonSerializerOptions _options = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
@@ -139,7 +140,7 @@ public class CrossPartitionThreadQueryTests
         var ct = TestContext.Current.CancellationToken;
         var partitions = await SetupPartitionsWithThreadsAsync(ct);
 
-        // Query Northwind for Roland's threads — should exclude Alice's thread
+        // Query Northwind for Roland's threads â€” should exclude Alice's thread
         var parser = new QueryParser();
         var query = parser.Parse("nodeType:Thread content.createdBy:Roland scope:subtree sort:LastModified-desc");
 

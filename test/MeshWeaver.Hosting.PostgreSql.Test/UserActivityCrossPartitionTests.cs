@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -11,12 +11,13 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Npgsql;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
 /// <summary>
 /// Tests that UserActivity dashboard queries return results across partitions.
-/// Covers: Latest Threads, Activity Feed, Recently Viewed — all of which use
+/// Covers: Latest Threads, Activity Feed, Recently Viewed â€” all of which use
 /// satellite tables (threads, activities, user_activities) that require
 /// per-partition fan-out instead of the cross-schema stored proc.
 /// </summary>
@@ -176,7 +177,7 @@ public class UserActivityCrossPartitionTests
             "LOWER(n.node_type) = 'thread'", "testuser", "last_modified DESC", 50, ct);
 
         results.Should().BeEmpty(
-            "Threads are in satellite tables — stored proc only searches mesh_nodes");
+            "Threads are in satellite tables â€” stored proc only searches mesh_nodes");
     }
 
     [Fact(Timeout = 60000)]
@@ -185,7 +186,7 @@ public class UserActivityCrossPartitionTests
         var ct = TestContext.Current.CancellationToken;
         await SetupMultiOrgWithThreadsAsync(ct);
 
-        // First verify without access control (no userId) — confirms data is there
+        // First verify without access control (no userId) â€” confirms data is there
         var schemas = new List<string> { "orga", "orgb" };
         var generator = new PostgreSqlSqlGenerator();
         var query = new QueryParser().Parse("nodeType:Thread scope:subtree");
@@ -211,7 +212,7 @@ public class UserActivityCrossPartitionTests
         }
         noAcResults.Should().HaveCount(2, "data should exist in both schemas (no access control)");
 
-        // Now with access control — testuser should see threads via partition_access + UEP
+        // Now with access control â€” testuser should see threads via partition_access + UEP
         var generator2 = new PostgreSqlSqlGenerator();
         var (sql, parameters) = generator2.GenerateCrossSchemaSelectQuery(
             query, schemas, userId: "testuser", tableName: "threads");
@@ -257,7 +258,7 @@ public class UserActivityCrossPartitionTests
             "Threads should not appear in cross-schema results");
     }
 
-    // ── Helpers ──────────────────────────────────────────────────────
+    // â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     private async Task PopulateSearchableSchemasAsync(IEnumerable<string> schemas, CancellationToken ct)
     {

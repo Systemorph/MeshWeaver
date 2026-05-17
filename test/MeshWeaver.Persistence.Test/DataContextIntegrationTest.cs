@@ -19,6 +19,7 @@ using Xunit;
 
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using MeshWeaver.Fixture;
 namespace MeshWeaver.Persistence.Test;
 
 /// <summary>
