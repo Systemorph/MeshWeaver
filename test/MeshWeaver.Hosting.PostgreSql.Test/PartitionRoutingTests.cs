@@ -37,7 +37,7 @@ public class PartitionRoutingTests
     /// state, not by accidental schema presence.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void Matches_OnlyTrue_AfterRegisterPartition()
+    public async Task Matches_OnlyTrue_AfterRegisterPartition()
     {
         using var provider = new PostgreSqlPartitionStorageProvider(
             _fixture.DataSource,
@@ -47,8 +47,8 @@ public class PartitionRoutingTests
 
         const string ns = "routingtest_a";
 
-        // Before: no partition registered → no match.
-        provider.Matches($"{ns}/some-node").Should().BeFalse(
+        // Before: no partition registered, no schema exists → no match.
+        (await provider.Matches($"{ns}/some-node").FirstAsync().ToTask()).Should().BeFalse(
             "the partition has not been registered yet — Matches must reflect partition-table state");
 
         // Register (mirrors what SubscribeToWorkspace does when the
@@ -64,15 +64,15 @@ public class PartitionRoutingTests
         });
 
         // After: matches every path under that namespace.
-        provider.Matches($"{ns}/some-node").Should().BeTrue(
+        (await provider.Matches($"{ns}/some-node").FirstAsync().ToTask()).Should().BeTrue(
             "RegisterPartition is the single source of truth for routing — Matches must follow");
-        provider.Matches($"{ns}/_Access/user_Access").Should().BeTrue(
+        (await provider.Matches($"{ns}/_Access/user_Access").FirstAsync().ToTask()).Should().BeTrue(
             "satellite paths under the registered namespace must also match");
-        provider.Matches($"{ns}/Source/file.cs").Should().BeTrue(
+        (await provider.Matches($"{ns}/Source/file.cs").FirstAsync().ToTask()).Should().BeTrue(
             "Source paths under the registered namespace must also match");
 
         // A different namespace stays unmatched until it's registered.
-        provider.Matches("other_namespace/some-node").Should().BeFalse(
+        (await provider.Matches("other_namespace/some-node").FirstAsync().ToTask()).Should().BeFalse(
             "Matches must be partition-scoped, not a wildcard");
     }
 

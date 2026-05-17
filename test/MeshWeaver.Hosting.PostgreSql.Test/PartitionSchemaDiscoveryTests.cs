@@ -1,3 +1,5 @@
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Mesh;
@@ -64,9 +66,9 @@ public class PartitionSchemaDiscoveryTests
             // under `discoverytest/...` would fault with "No node found".
             discovered.Should().BeGreaterThan(0,
                 "at least the test schema must have been discovered");
-            provider.Matches($"{schemaName}/some-node").Should().BeTrue(
+            (await provider.Matches($"{schemaName}/some-node").FirstAsync().ToTask(ct)).Should().BeTrue(
                 $"a {schemaName}.mesh_nodes-bearing schema must route even without an Admin/Partition/{schemaName} MeshNode");
-            provider.Matches($"{schemaName}/_UserActivity/{schemaName}").Should().BeTrue(
+            (await provider.Matches($"{schemaName}/_UserActivity/{schemaName}").FirstAsync().ToTask(ct)).Should().BeTrue(
                 "satellite paths under a discovered partition must also route");
         }
         finally

@@ -22,6 +22,7 @@
     <ItemGroup>
         <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Orleans\MeshWeaver.Hosting.Orleans.csproj" />
+        <ProjectReference Include="..\..\src\MeshWeaver.Hosting.PostgreSql\MeshWeaver.Hosting.PostgreSql.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Kernel.Hub\MeshWeaver.Kernel.Hub.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />

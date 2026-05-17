@@ -15,10 +15,12 @@ namespace MeshWeaver.Hosting.PostgreSql;
 /// happens inside <see cref="PostgreSqlStorageAdapter"/> itself via
 /// <see cref="PartitionDefinition.ResolveTable"/>.
 ///
-/// <para>Replaces the legacy <c>PostgreSqlPartitionedStoreFactory</c>'s
-/// per-segment <c>CreateStoreAsync</c> output: same per-schema isolation,
-/// but driven by a synchronous lookup against the registered partition
-/// dictionary rather than an async factory call.</para>
+/// <para>Routing is observable end-to-end:
+/// <see cref="PostgreSqlPartitionStorageProvider.ResolveAdapterForSchema"/>
+/// composes the per-namespace <see cref="System.Reactive.Subjects.ReplaySubject{T}"/>
+/// (live partition state) with adapter construction. Once a schema is
+/// resolved it's cached locally in <see cref="_adapters"/> so the
+/// observable round-trip is paid once per (schema, silo).</para>
 /// </summary>
 internal sealed class PostgreSqlPathRoutingAdapter : IStorageAdapter
 {
@@ -31,50 +33,56 @@ internal sealed class PostgreSqlPathRoutingAdapter : IStorageAdapter
         _provider = provider;
     }
 
-    private IStorageAdapter? Resolve(string? path)
+    private IObservable<IStorageAdapter?> Resolve(string? path)
     {
-        if (string.IsNullOrEmpty(path)) return null;
+        if (string.IsNullOrEmpty(path)) return Observable.Return<IStorageAdapter?>(null);
         var seg = GetFirstSegment(path);
-        if (seg == null) return null;
-        if (!_provider.Matches(path)) return null;
-        return _adapters.GetOrAdd(seg, _provider.ResolveAdapterForSchema);
+        if (seg == null) return Observable.Return<IStorageAdapter?>(null);
+
+        // Cached per-schema adapter: avoids re-querying the partition subject
+        // after the first resolution. The subject still feeds Matches/
+        // ResolveDefinition for live partition-existence checks — this cache
+        // is purely an "adapter instance for an already-known schema" map.
+        if (_adapters.TryGetValue(seg, out var cached))
+            return Observable.Return<IStorageAdapter?>(cached);
+
+        return _provider.ResolveAdapterForSchema(seg)
+            .Select(adapter =>
+            {
+                if (adapter is null) return (IStorageAdapter?)null;
+                return _adapters.GetOrAdd(seg, _ => adapter);
+            });
     }
 
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
-        => Resolve(path)?.Read(path, options) ?? Observable.Return<MeshNode?>(null);
+        => Resolve(path).SelectMany(a => a?.Read(path, options) ?? Observable.Return<MeshNode?>(null));
 
     public IObservable<MeshNode> Write(MeshNode node, JsonSerializerOptions options)
-        => Resolve(node.Path)?.Write(node, options)
+        => Resolve(node.Path).SelectMany(a => a?.Write(node, options)
             ?? Observable.Throw<MeshNode>(new InvalidOperationException(
-                $"PostgreSql provider has no PartitionDefinition for '{node.Path}'."));
+                $"PostgreSql provider has no PartitionDefinition for '{node.Path}'.")));
 
     public IObservable<string> Delete(string path)
-        => Resolve(path)?.Delete(path) ?? Observable.Return(path);
+        => Resolve(path).SelectMany(a => a?.Delete(path) ?? Observable.Return(path));
 
     public IObservable<bool> Exists(string path)
-        => Resolve(path)?.Exists(path) ?? Observable.Return(false);
+        => Resolve(path).SelectMany(a => a?.Exists(path) ?? Observable.Return(false));
 
     public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
         string fullPath, JsonSerializerOptions options)
-        => Resolve(fullPath)?.FindBestPrefixMatch(fullPath, options)
-            ?? Observable.Return<(MeshNode?, int)>((null, 0));
+        => Resolve(fullPath).SelectMany(a => a?.FindBestPrefixMatch(fullPath, options)
+            ?? Observable.Return<(MeshNode?, int)>((null, 0)));
 
     /// <summary>
     /// Forwards to the per-schema adapter's <see cref="IStorageAdapter.ResolvePath"/>
     /// — PostgreSqlStorageAdapter overrides this with a single UNION query
     /// across mesh_nodes + every satellite table named in
-    /// <see cref="PartitionDefinition.TableMappings"/>. Without this forward,
-    /// <see cref="IStorageAdapter"/>'s default impl falls back to
-    /// <see cref="FindBestPrefixMatch"/> which probes mesh_nodes only — every
-    /// bare-partition-root lookup whose User node lives at <c>ns=''</c> in
-    /// mesh_nodes still works, but lookups whose content lives only in
-    /// satellites (<c>_Access</c>, <c>_UserActivity</c>, etc.) miss it and
-    /// the route NotFounds. Pinned by <c>PathResolutionTests</c>.
+    /// <see cref="PartitionDefinition.TableMappings"/>.
     /// </summary>
     public IObservable<(MeshNode? Node, int MatchedSegments)> ResolvePath(
         string fullPath, JsonSerializerOptions options)
-        => Resolve(fullPath)?.ResolvePath(fullPath, options)
-            ?? Observable.Return<(MeshNode?, int)>((null, 0));
+        => Resolve(fullPath).SelectMany(a => a?.ResolvePath(fullPath, options)
+            ?? Observable.Return<(MeshNode?, int)>((null, 0)));
 
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)>
         ListChildPaths(string? parentPath)
@@ -82,30 +90,30 @@ internal sealed class PostgreSqlPathRoutingAdapter : IStorageAdapter
             ? Observable.Throw<(IEnumerable<string>, IEnumerable<string>)>(
                 new NotSupportedException(
                     "Root-level listing is a query concern; use IMeshQueryCore."))
-            : Resolve(parentPath)?.ListChildPaths(parentPath)
-                ?? Observable.Return<(IEnumerable<string>, IEnumerable<string>)>(([], []));
+            : Resolve(parentPath).SelectMany(a => a?.ListChildPaths(parentPath)
+                ?? Observable.Return<(IEnumerable<string>, IEnumerable<string>)>(([], [])));
 
     public IObservable<IEnumerable<string>> ListPartitionSubPaths(string nodePath)
-        => Resolve(nodePath)?.ListPartitionSubPaths(nodePath)
-            ?? Observable.Return(Enumerable.Empty<string>());
+        => Resolve(nodePath).SelectMany(a => a?.ListPartitionSubPaths(nodePath)
+            ?? Observable.Return(Enumerable.Empty<string>()));
 
     public IObservable<object> GetPartitionObjects(
         string nodePath, string? subPath, JsonSerializerOptions options)
-        => Resolve(nodePath)?.GetPartitionObjects(nodePath, subPath, options)
-            ?? Observable.Empty<object>();
+        => Resolve(nodePath).SelectMany(a => a?.GetPartitionObjects(nodePath, subPath, options)
+            ?? Observable.Empty<object>());
 
     public IObservable<Unit> SavePartitionObjects(
         string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options)
-        => Resolve(nodePath)?.SavePartitionObjects(nodePath, subPath, objects, options)
-            ?? Observable.Return(Unit.Default);
+        => Resolve(nodePath).SelectMany(a => a?.SavePartitionObjects(nodePath, subPath, objects, options)
+            ?? Observable.Return(Unit.Default));
 
     public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
-        => Resolve(nodePath)?.DeletePartitionObjects(nodePath, subPath)
-            ?? Observable.Return(Unit.Default);
+        => Resolve(nodePath).SelectMany(a => a?.DeletePartitionObjects(nodePath, subPath)
+            ?? Observable.Return(Unit.Default));
 
     public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
-        => Resolve(nodePath)?.GetPartitionMaxTimestamp(nodePath, subPath)
-            ?? Observable.Return<DateTimeOffset?>(null);
+        => Resolve(nodePath).SelectMany(a => a?.GetPartitionMaxTimestamp(nodePath, subPath)
+            ?? Observable.Return<DateTimeOffset?>(null));
 
     private static string? GetFirstSegment(string? path)
     {

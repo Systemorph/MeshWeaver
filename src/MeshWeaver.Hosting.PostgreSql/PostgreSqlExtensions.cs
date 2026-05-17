@@ -233,6 +233,13 @@ public static class PostgreSqlExtensions
 
         services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
 
+        // No need to remove a pre-registered InMemory wildcard: PersistenceService
+        // orders wildcards by IPartitionStorageProvider.Priority desc, and
+        // PostgreSqlPartitionStorageProvider returns 100 (schema-aware) vs.
+        // InMemory's default 0 (catch-all). Postgres claims rbuergi (schema
+        // exists) before InMemory is asked; for paths Postgres doesn't own
+        // (Matches emits false), InMemory's catch-all wins.
+
         services.AddSingleton<PostgreSqlPartitionStorageProvider>(sp =>
             new PostgreSqlPartitionStorageProvider(
                 baseDataSource,

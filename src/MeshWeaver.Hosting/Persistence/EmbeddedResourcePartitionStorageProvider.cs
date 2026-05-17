@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Reactive.Linq;
 using System.Reflection;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -46,6 +47,6 @@ public sealed class EmbeddedResourcePartitionStorageProvider : IPartitionStorage
                 PartitionContexts.Browse);
     }
 
-    public bool Matches(string fullPath)
-        => string.Equals(PathPartition.GetFirstSegment(fullPath), _namespace, StringComparison.OrdinalIgnoreCase);
+    public IObservable<bool> Matches(string fullPath)
+        => Observable.Return(string.Equals(PathPartition.GetFirstSegment(fullPath), _namespace, StringComparison.OrdinalIgnoreCase));
 }

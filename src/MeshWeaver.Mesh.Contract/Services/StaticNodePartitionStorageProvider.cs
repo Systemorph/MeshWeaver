@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Reactive.Linq;
 
 namespace MeshWeaver.Mesh.Services;
 
@@ -85,10 +86,10 @@ public sealed class StaticNodePartitionStorageProvider : IPartitionStorageProvid
     }
 
     /// <inheritdoc/>
-    public bool Matches(string fullPath)
+    public IObservable<bool> Matches(string fullPath)
     {
         var firstSegment = ExtractFirstSegment(fullPath);
-        return firstSegment != null && _matchesFirstSegment(firstSegment);
+        return Observable.Return(firstSegment != null && _matchesFirstSegment(firstSegment));
     }
 
     private static string? ExtractFirstSegment(string? path)

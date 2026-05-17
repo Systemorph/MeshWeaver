@@ -40,56 +40,50 @@ public sealed class RoutingProxyAdapter : IStorageAdapter
 
     /// <inheritdoc/>
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
-    {
-        var addr = _router.AddressFor(path);
-        if (addr == null) return Observable.Return<MeshNode?>(null);
-        return _callerHub
-            .Observe<ReadNodeResponse>(new ReadNodeRequest(path, options), o => o.WithTarget(addr))
-            .Take(1)
-            .Select(d => d.Message.Node);
-    }
+        => _router.AddressFor(path).SelectMany(addr =>
+            addr is null
+                ? Observable.Return<MeshNode?>(null)
+                : _callerHub
+                    .Observe<ReadNodeResponse>(new ReadNodeRequest(path, options), o => o.WithTarget(addr))
+                    .Take(1)
+                    .Select(d => d.Message.Node));
 
     /// <inheritdoc/>
     public IObservable<MeshNode> Write(MeshNode node, JsonSerializerOptions options)
-    {
-        var addr = _router.AddressFor(node.Path);
-        if (addr == null)
-            return Observable.Throw<MeshNode>(
-                new InvalidOperationException(
-                    $"Cannot write '{node.Path}': no partition storage provider matches."));
-        return _callerHub
-            .Observe<WriteBatchResponse>(
-                new WriteBatchRequest(ImmutableList.Create(node), options),
-                o => o.WithTarget(addr))
-            .Take(1)
-            .SelectMany(d => d.Message.Error != null
-                ? Observable.Throw<MeshNode>(new InvalidOperationException(d.Message.Error))
-                : Observable.Return(d.Message.WrittenNodes.First()));
-    }
+        => _router.AddressFor(node.Path).SelectMany(addr =>
+            addr is null
+                ? Observable.Throw<MeshNode>(new InvalidOperationException(
+                    $"Cannot write '{node.Path}': no partition storage provider matches."))
+                : _callerHub
+                    .Observe<WriteBatchResponse>(
+                        new WriteBatchRequest(ImmutableList.Create(node), options),
+                        o => o.WithTarget(addr))
+                    .Take(1)
+                    .SelectMany(d => d.Message.Error != null
+                        ? Observable.Throw<MeshNode>(new InvalidOperationException(d.Message.Error))
+                        : Observable.Return(d.Message.WrittenNodes.First())));
 
     /// <inheritdoc/>
     public IObservable<string> Delete(string path)
-    {
-        var addr = _router.AddressFor(path);
-        if (addr == null) return Observable.Return(path);
-        return _callerHub
-            .Observe<DeleteBatchResponse>(
-                new DeleteBatchRequest(ImmutableList.Create(path)),
-                o => o.WithTarget(addr))
-            .Take(1)
-            .Select(d => d.Message.Error != null ? path : d.Message.DeletedPaths.FirstOrDefault() ?? path);
-    }
+        => _router.AddressFor(path).SelectMany(addr =>
+            addr is null
+                ? Observable.Return(path)
+                : _callerHub
+                    .Observe<DeleteBatchResponse>(
+                        new DeleteBatchRequest(ImmutableList.Create(path)),
+                        o => o.WithTarget(addr))
+                    .Take(1)
+                    .Select(d => d.Message.Error != null ? path : d.Message.DeletedPaths.FirstOrDefault() ?? path));
 
     /// <inheritdoc/>
     public IObservable<bool> Exists(string path)
-    {
-        var addr = _router.AddressFor(path);
-        if (addr == null) return Observable.Return(false);
-        return _callerHub
-            .Observe<ExistsResponse>(new ExistsRequest(path), o => o.WithTarget(addr))
-            .Take(1)
-            .Select(d => d.Message.Exists);
-    }
+        => _router.AddressFor(path).SelectMany(addr =>
+            addr is null
+                ? Observable.Return(false)
+                : _callerHub
+                    .Observe<ExistsResponse>(new ExistsRequest(path), o => o.WithTarget(addr))
+                    .Take(1)
+                    .Select(d => d.Message.Exists));
 
     /// <inheritdoc/>
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)>
@@ -103,13 +97,13 @@ public sealed class RoutingProxyAdapter : IStorageAdapter
         if (string.IsNullOrEmpty(parentPath))
             return Observable.Return<(IEnumerable<string>, IEnumerable<string>)>(([], []));
 
-        var addr = _router.AddressFor(parentPath);
-        if (addr == null)
-            return Observable.Return<(IEnumerable<string>, IEnumerable<string>)>(([], []));
-        return _callerHub
-            .Observe<ListChildPathsResponse>(new ListChildPathsRequest(parentPath), o => o.WithTarget(addr))
-            .Take(1)
-            .Select(d => ((IEnumerable<string>)d.Message.NodePaths, (IEnumerable<string>)d.Message.DirectoryPaths));
+        return _router.AddressFor(parentPath).SelectMany(addr =>
+            addr is null
+                ? Observable.Return<(IEnumerable<string>, IEnumerable<string>)>(([], []))
+                : _callerHub
+                    .Observe<ListChildPathsResponse>(new ListChildPathsRequest(parentPath), o => o.WithTarget(addr))
+                    .Take(1)
+                    .Select(d => ((IEnumerable<string>)d.Message.NodePaths, (IEnumerable<string>)d.Message.DirectoryPaths)));
     }
 
     // ── Partition objects: not yet routed via hub messages. ─────────────
