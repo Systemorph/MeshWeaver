@@ -25,19 +25,23 @@ internal class VersionWritingStorageAdapter(
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
         => inner.Read(path, options);
 
-    public IObservable<MeshNode> Write(MeshNode node, JsonSerializerOptions options)
+    public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
     {
         var write = inner.Write(node, options);
         if (versionQuery is null)
             return write;
 
-        return write.SelectMany(saved =>
-            versionQuery.WriteVersion(saved, options)
-                .Catch<MeshNode, Exception>(_ => Observable.Return(saved))
-                .DefaultIfEmpty(saved)
-                .LastAsync()
-                .Select(_ => saved));
+        return write.SelectMany(saved => saved is null
+            ? Observable.Return<MeshNode?>(null)
+            : WriteVersionAndReturn(saved!, options));
     }
+
+    private IObservable<MeshNode?> WriteVersionAndReturn(MeshNode saved, JsonSerializerOptions options) =>
+        versionQuery!.WriteVersion(saved, options)
+            .Catch<MeshNode, Exception>(_ => Observable.Return(saved))
+            .DefaultIfEmpty(saved)
+            .LastAsync()
+            .Select(_ => (MeshNode?)saved);
 
     public IObservable<string> Delete(string path) => inner.Delete(path);
 

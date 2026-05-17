@@ -49,19 +49,23 @@ public sealed class RoutingProxyAdapter : IStorageAdapter
                     .Select(d => d.Message.Node));
 
     /// <inheritdoc/>
-    public IObservable<MeshNode> Write(MeshNode node, JsonSerializerOptions options)
+    /// <remarks>
+    /// Returns null when no partition-storage hub claims the path so the
+    /// outer try-then-claim chain (<see cref="PersistenceService.Write"/>)
+    /// can fall through to the next writable provider.
+    /// </remarks>
+    public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
         => _router.AddressFor(node.Path).SelectMany(addr =>
             addr is null
-                ? Observable.Throw<MeshNode>(new InvalidOperationException(
-                    $"Cannot write '{node.Path}': no partition storage provider matches."))
+                ? Observable.Return<MeshNode?>(null)
                 : _callerHub
                     .Observe<WriteBatchResponse>(
                         new WriteBatchRequest(ImmutableList.Create(node), options),
                         o => o.WithTarget(addr))
                     .Take(1)
                     .SelectMany(d => d.Message.Error != null
-                        ? Observable.Throw<MeshNode>(new InvalidOperationException(d.Message.Error))
-                        : Observable.Return(d.Message.WrittenNodes.First())));
+                        ? Observable.Throw<MeshNode?>(new InvalidOperationException(d.Message.Error))
+                        : Observable.Return<MeshNode?>(d.Message.WrittenNodes.First())));
 
     /// <inheritdoc/>
     public IObservable<string> Delete(string path)

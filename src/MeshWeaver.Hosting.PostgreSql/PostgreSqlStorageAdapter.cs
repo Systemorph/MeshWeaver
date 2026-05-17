@@ -102,8 +102,8 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         return ReadMeshNode(reader, options);
     }
 
-    public IObservable<MeshNode> Write(MeshNode node, JsonSerializerOptions options)
-        => Observable.FromAsync(async ct => { await WriteAsyncCore(node, options, ct); return node; });
+    public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
+        => Observable.FromAsync<MeshNode?>(async ct => { await WriteAsyncCore(node, options, ct); return node; });
 
     private async Task WriteAsyncCore(MeshNode node, JsonSerializerOptions options, CancellationToken ct)
     {

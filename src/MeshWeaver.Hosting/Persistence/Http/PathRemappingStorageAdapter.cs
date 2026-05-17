@@ -86,7 +86,7 @@ public sealed class PathRemappingStorageAdapter : IStorageAdapter
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
         => _inner.Read(Remap(path), options);
 
-    public IObservable<MeshNode> Write(MeshNode node, JsonSerializerOptions options)
+    public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
         => _inner.Write(RemapNode(node), options);
 
     public IObservable<string> Delete(string path)

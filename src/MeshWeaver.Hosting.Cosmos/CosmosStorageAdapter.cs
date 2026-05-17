@@ -98,7 +98,7 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
         }
     }
 
-    public IObservable<MeshNode> Write(MeshNode node, JsonSerializerOptions options)
+    public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
         => Observable.FromAsync(async ct => { await WriteAsyncCore(node, options, ct); return node; });
 
     private async Task WriteAsyncCore(MeshNode node, JsonSerializerOptions options, CancellationToken ct)

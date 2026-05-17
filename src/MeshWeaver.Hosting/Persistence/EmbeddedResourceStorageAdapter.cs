@@ -176,7 +176,7 @@ public sealed class EmbeddedResourceStorageAdapter : IStorageAdapter
         return node;
     }
 
-    public IObservable<MeshNode> Write(MeshNode node, JsonSerializerOptions options)
+    public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
         => Observable.Defer(() =>
         {
             // Mutate the in-memory overlay only — embedded resources stay immutable.

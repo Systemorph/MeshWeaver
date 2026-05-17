@@ -39,7 +39,7 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
             return Observable.Return<MeshNode?>(node);
         });
 
-    public override IObservable<MeshNode> Write(MeshNode node, JsonSerializerOptions options)
+    public override IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
         => Observable.Defer(() =>
         {
             if (!string.IsNullOrEmpty(node.Path))

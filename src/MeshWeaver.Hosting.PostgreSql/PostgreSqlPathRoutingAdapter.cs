@@ -57,10 +57,15 @@ internal sealed class PostgreSqlPathRoutingAdapter : IStorageAdapter
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
         => Resolve(path).SelectMany(a => a?.Read(path, options) ?? Observable.Return<MeshNode?>(null));
 
-    public IObservable<MeshNode> Write(MeshNode node, JsonSerializerOptions options)
+    /// <summary>
+    /// Try-then-claim semantics: when <see cref="Resolve"/> can't find a
+    /// schema adapter for the path's first segment (cache miss + probe miss),
+    /// returns null so the outer try-then-claim chain (PersistenceService)
+    /// can hand the write to the next writable provider.
+    /// </summary>
+    public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
         => Resolve(node.Path).SelectMany(a => a?.Write(node, options)
-            ?? Observable.Throw<MeshNode>(new InvalidOperationException(
-                $"PostgreSql provider has no PartitionDefinition for '{node.Path}'.")));
+            ?? Observable.Return<MeshNode?>(null));
 
     public IObservable<string> Delete(string path)
         => Resolve(path).SelectMany(a => a?.Delete(path) ?? Observable.Return(path));
