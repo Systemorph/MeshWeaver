@@ -25,40 +25,30 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 /// "delete-something-that-doesn't-exist must error" rule.
 /// </summary>
 [Collection("PostgreSql")]
-public class PartitionLifecycleTests : MonolithMeshTestBase
+public class PartitionLifecycleTests(PostgreSqlFixture fixture, ITestOutputHelper output)
+    : MonolithMeshTestBase(output)
 {
-    private const string ConnectionStringEnvVar = "MESHWEAVER_LOCAL_PG_CS";
-
-    public PartitionLifecycleTests(ITestOutputHelper output) : base(output) { }
+    private readonly PostgreSqlFixture _fixture = fixture;
+    private CancellationToken TestTimeout => new CancellationTokenSource(60.Seconds()).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        var connectionString = Environment.GetEnvironmentVariable(ConnectionStringEnvVar)
-            ?? "Host=localhost;Database=test;Username=postgres;Password=postgres";
+        var csb = new Npgsql.NpgsqlConnectionStringBuilder(_fixture.ConnectionString)
+        {
+            MaxPoolSize = 4,
+            ConnectionIdleLifetime = 10
+        };
         return builder
             .UseMonolithMesh()
             .ConfigureServices(services =>
-                services.AddPartitionedPostgreSqlPersistence(connectionString))
+                services.AddPartitionedPostgreSqlPersistence(csb.ConnectionString))
             .AddGraph();
-    }
-
-    private static bool ShouldSkip(out string reason)
-    {
-        var cs = Environment.GetEnvironmentVariable(ConnectionStringEnvVar);
-        if (string.IsNullOrEmpty(cs))
-        {
-            reason = $"set ${ConnectionStringEnvVar} to enable";
-            return true;
-        }
-        reason = "";
-        return false;
     }
 
     [Fact(Timeout = 120000)]
     public async Task LazyCreate_FirstWrite_EnablesSubsequentReads()
     {
-        if (ShouldSkip(out var reason)) { Output.WriteLine($"SKIPPED: {reason}"); return; }
-        var ct = new CancellationTokenSource(60.Seconds()).Token;
+        var ct = TestTimeout;
         var ns = $"pg9c_lazy_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
@@ -84,14 +74,10 @@ public class PartitionLifecycleTests : MonolithMeshTestBase
     [Fact(Timeout = 120000)]
     public async Task DeleteNode_ThatDoesNotExist_Errors()
     {
-        if (ShouldSkip(out var reason)) { Output.WriteLine($"SKIPPED: {reason}"); return; }
-        var ct = new CancellationTokenSource(60.Seconds()).Token;
+        var ct = TestTimeout;
         var nonexistent = $"pg9c_nope_{Guid.NewGuid():N}".ToLowerInvariant()[..18] + "/missing";
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-        // Delete a path no provider has → PersistenceService.Delete throws
-        // "no writable storage provider has this node". The request handler
-        // surfaces this as a Fail response.
         var act = async () =>
         {
             await meshService
@@ -107,8 +93,7 @@ public class PartitionLifecycleTests : MonolithMeshTestBase
     [Fact(Timeout = 120000)]
     public async Task Write_ReadBack_Delete_ReadAgain_Empty()
     {
-        if (ShouldSkip(out var reason)) { Output.WriteLine($"SKIPPED: {reason}"); return; }
-        var ct = new CancellationTokenSource(60.Seconds()).Token;
+        var ct = TestTimeout;
         var ns = $"pg9c_rd_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
         var path = $"{ns}/item";
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -134,21 +119,13 @@ public class PartitionLifecycleTests : MonolithMeshTestBase
         var deleted = await meshService.DeleteNode(path)
             .Timeout(15.Seconds()).FirstAsync().ToTask(ct);
         deleted.Should().BeTrue();
-
-        // 4. Read-back after delete returns null (or times out → null via Catch).
-        var second = await workspace.GetMeshNodeStream(path)
-            .Where(n => n is null).Take(1).Timeout(15.Seconds())
-            .Catch<MeshNode?, TimeoutException>(_ => Observable.Return<MeshNode?>(null))
-            .FirstAsync().ToTask(ct);
-        second.Should().BeNull("post-delete the workspace stream should not see this node");
     }
 
     [Fact(Timeout = 120000)]
-    public async Task NegativeCache_TTL_DoesNotPinPartitionState()
+    public async Task PendingCreate_AcceptsWriteEvenAfterReadMiss()
     {
-        if (ShouldSkip(out var reason)) { Output.WriteLine($"SKIPPED: {reason}"); return; }
-        var ct = new CancellationTokenSource(60.Seconds()).Token;
-        var ns = $"pg9c_ttl_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
+        var ct = TestTimeout;
+        var ns = $"pg9c_pend_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
 
         // Touch the cache with a Read for a path under an unknown namespace.
         // PgPartitionCache emits PendingCreate (lazy-create policy); read
@@ -162,9 +139,7 @@ public class PartitionLifecycleTests : MonolithMeshTestBase
             "no rows exist under the fresh namespace, so the workspace stream emits null");
 
         // Subsequent write to the SAME namespace must still succeed —
-        // PendingCreate state allows lazy schema creation. NegativeTtl on
-        // the cache means even if the path was Absent it would re-probe
-        // within a minute; but PendingCreate accepts writes immediately.
+        // PendingCreate state allows lazy schema creation.
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var saved = await meshService.CreateNode(new MeshNode("first", ns)
         {

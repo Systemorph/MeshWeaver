@@ -25,70 +25,37 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 /// wires it. No InMemory wildcard, no FileSystem fallback; every routing
 /// decision goes through the PG path-routing adapter.
 ///
-/// <para>Skipped on CI (no local DB). Run locally with <c>MESHWEAVER_LOCAL_PG_CS</c>
-/// pointing at the running Aspire <c>memex-postgres</c> container.</para>
+/// <para>Uses the shared testcontainer-backed <see cref="PostgreSqlFixture"/>
+/// so the same suite runs in CI (Docker available) and locally without
+/// requiring an Aspire DB on a fixed port.</para>
 /// </summary>
 [Collection("PostgreSql")]
-public class PgOnlyProdShapeTests : MonolithMeshTestBase
+public class PgOnlyProdShapeTests(PostgreSqlFixture fixture, ITestOutputHelper output)
+    : MonolithMeshTestBase(output)
 {
-    private const string ConnectionStringEnvVar = "MESHWEAVER_LOCAL_PG_CS";
-
-    public PgOnlyProdShapeTests(ITestOutputHelper output) : base(output) { }
+    private readonly PostgreSqlFixture _fixture = fixture;
+    private CancellationToken TestTimeout => new CancellationTokenSource(60.Seconds()).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        var connectionString = Environment.GetEnvironmentVariable(ConnectionStringEnvVar)
-            ?? "Host=localhost;Database=test;Username=postgres;Password=postgres";
+        var csb = new Npgsql.NpgsqlConnectionStringBuilder(_fixture.ConnectionString)
+        {
+            MaxPoolSize = 4,
+            ConnectionIdleLifetime = 10
+        };
         return builder
             .UseMonolithMesh()
             .ConfigureServices(services =>
-                services.AddPartitionedPostgreSqlPersistence(connectionString))
+                services.AddPartitionedPostgreSqlPersistence(csb.ConnectionString))
             .AddRowLevelSecurity()
             .AddGraph();
-    }
-
-    private static bool ShouldSkip(out string reason)
-    {
-        var cs = Environment.GetEnvironmentVariable(ConnectionStringEnvVar);
-        if (string.IsNullOrEmpty(cs))
-        {
-            reason = $"set ${ConnectionStringEnvVar} to enable (running Aspire DB only)";
-            return true;
-        }
-        reason = "";
-        return false;
-    }
-
-    [Fact(Timeout = 120000)]
-    public async Task Resolve_UserPartition_BareSegment()
-    {
-        if (ShouldSkip(out var reason)) { Output.WriteLine($"SKIPPED: {reason}"); return; }
-        var username = Environment.GetEnvironmentVariable("MESHWEAVER_LOCAL_USER") ?? "rbuergi";
-        var ct = new CancellationTokenSource(60.Seconds()).Token;
-
-        var resolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
-        var resolution = await resolver.ResolvePath(username)
-            .Where(r => r is not null)
-            .Take(1)
-            .Timeout(30.Seconds())
-            .Catch<AddressResolution?, TimeoutException>(_ => Observable.Return<AddressResolution?>(null))
-            .FirstAsync()
-            .ToTask(ct);
-
-        resolution.Should().NotBeNull(
-            "/{0} is the prod symptom that motivated this refactor", username);
-        resolution!.Prefix.Should().Be(username);
-        resolution.Node.Should().NotBeNull();
     }
 
     [Fact(Timeout = 120000)]
     public async Task Write_AccessAssignment_LazyCreatesSchema()
     {
-        if (ShouldSkip(out var reason)) { Output.WriteLine($"SKIPPED: {reason}"); return; }
-        var ct = new CancellationTokenSource(60.Seconds()).Token;
-
-        // Pick a fresh namespace per run to avoid colliding with prior test state.
-        var ns = $"pg9a_{Guid.NewGuid():N}".ToLowerInvariant()[..16];
+        var ct = TestTimeout;
+        var ns = $"pg9a_lazy_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
         var path = $"{ns}/_Access/grant1";
 
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -117,12 +84,9 @@ public class PgOnlyProdShapeTests : MonolithMeshTestBase
 
         var workspace = Mesh.GetWorkspace();
         var readBack = await workspace.GetMeshNodeStream(path)
-            .Where(n => n is not null)
-            .Take(1)
-            .Timeout(15.Seconds())
+            .Where(n => n is not null).Take(1).Timeout(15.Seconds())
             .Catch<MeshNode?, TimeoutException>(_ => Observable.Return<MeshNode?>(null))
-            .FirstAsync()
-            .ToTask(ct);
+            .FirstAsync().ToTask(ct);
 
         readBack.Should().NotBeNull("read-back after lazy schema-create must succeed");
         readBack!.Path.Should().Be(path);
@@ -131,10 +95,8 @@ public class PgOnlyProdShapeTests : MonolithMeshTestBase
     [Fact(Timeout = 120000)]
     public async Task Write_OrgPartition_RoutesByFirstSegment()
     {
-        if (ShouldSkip(out var reason)) { Output.WriteLine($"SKIPPED: {reason}"); return; }
-        var ct = new CancellationTokenSource(60.Seconds()).Token;
-
-        var org = $"pg9a_org_{Guid.NewGuid():N}".ToLowerInvariant()[..16];
+        var ct = TestTimeout;
+        var org = $"pg9a_org_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
         var path = $"{org}/Project/Todo/1";
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var node = new MeshNode("1", $"{org}/Project/Todo")
@@ -150,25 +112,19 @@ public class PgOnlyProdShapeTests : MonolithMeshTestBase
 
         var workspace = Mesh.GetWorkspace();
         var readBack = await workspace.GetMeshNodeStream(path)
-            .Where(n => n is not null)
-            .Take(1)
-            .Timeout(15.Seconds())
+            .Where(n => n is not null).Take(1).Timeout(15.Seconds())
             .Catch<MeshNode?, TimeoutException>(_ => Observable.Return<MeshNode?>(null))
-            .FirstAsync()
-            .ToTask(ct);
+            .FirstAsync().ToTask(ct);
         readBack.Should().NotBeNull("write went to {0}.mesh_nodes; read-back must hit the same partition", org);
     }
 
     [Fact(Timeout = 120000)]
     public async Task Read_SatelliteUnion_AcrossPartitionTables()
     {
-        if (ShouldSkip(out var reason)) { Output.WriteLine($"SKIPPED: {reason}"); return; }
-        var ct = new CancellationTokenSource(60.Seconds()).Token;
-
-        var ns = $"pg9a_sat_{Guid.NewGuid():N}".ToLowerInvariant()[..16];
+        var ct = TestTimeout;
+        var ns = $"pg9a_sat_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-        // Primary (mesh_nodes)
         await meshService.CreateNode(new MeshNode(ns)
         {
             NodeType = "User",
@@ -176,7 +132,6 @@ public class PgOnlyProdShapeTests : MonolithMeshTestBase
             State = MeshNodeState.Active,
         }).Timeout(15.Seconds()).FirstAsync().ToTask(ct);
 
-        // Satellite (_Access)
         var satPath = $"{ns}/_Access/sat";
         await meshService.CreateNode(new MeshNode("sat", $"{ns}/_Access")
         {
@@ -193,12 +148,9 @@ public class PgOnlyProdShapeTests : MonolithMeshTestBase
 
         var resolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
         var resolution = await resolver.ResolvePath(satPath)
-            .Where(r => r is not null)
-            .Take(1)
-            .Timeout(15.Seconds())
+            .Where(r => r is not null).Take(1).Timeout(15.Seconds())
             .Catch<AddressResolution?, TimeoutException>(_ => Observable.Return<AddressResolution?>(null))
-            .FirstAsync()
-            .ToTask(ct);
+            .FirstAsync().ToTask(ct);
 
         resolution.Should().NotBeNull("satellite UNION must surface _Access rows for ResolvePath");
         resolution!.Prefix.Should().Be(satPath);

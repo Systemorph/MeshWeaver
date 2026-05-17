@@ -34,28 +34,26 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 ///   <item>an admin creates a new organization → Admin/Partition/{org} +
 ///     {org} partition root.</item>
 /// </list>
-///
-/// <para>Both flows depend on PgPartitionCache invalidation / lazy
-/// schema-create + try-then-claim Write. The pg_notify partition_changes
-/// channel covers cross-silo invalidation in Stage 9e; here we exercise
-/// single-silo Monolith semantics.</para>
 /// </summary>
 [Collection("PostgreSql")]
-public class OrganizationOnboardingIntegrationTests : MonolithMeshTestBase
+public class OrganizationOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOutputHelper output)
+    : MonolithMeshTestBase(output)
 {
-    private const string ConnectionStringEnvVar = "MESHWEAVER_LOCAL_PG_CS";
-
-    public OrganizationOnboardingIntegrationTests(ITestOutputHelper output) : base(output) { }
+    private readonly PostgreSqlFixture _fixture = fixture;
+    private CancellationToken TestTimeout => new CancellationTokenSource(90.Seconds()).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        var connectionString = Environment.GetEnvironmentVariable(ConnectionStringEnvVar)
-            ?? "Host=localhost;Database=test;Username=postgres;Password=postgres";
+        var csb = new Npgsql.NpgsqlConnectionStringBuilder(_fixture.ConnectionString)
+        {
+            MaxPoolSize = 4,
+            ConnectionIdleLifetime = 10
+        };
         return builder
             .UseMonolithMesh()
             .ConfigureServices(services =>
             {
-                services.AddPartitionedPostgreSqlPersistence(connectionString);
+                services.AddPartitionedPostgreSqlPersistence(csb.ConnectionString);
                 services.AddSingleton<UserOnboardingService>();
                 return services;
             })
@@ -64,24 +62,10 @@ public class OrganizationOnboardingIntegrationTests : MonolithMeshTestBase
             .AddOrganizationType();
     }
 
-    private static bool ShouldSkip(out string reason)
-    {
-        var cs = Environment.GetEnvironmentVariable(ConnectionStringEnvVar);
-        if (string.IsNullOrEmpty(cs))
-        {
-            reason = $"set ${ConnectionStringEnvVar} to enable";
-            return true;
-        }
-        reason = "";
-        return false;
-    }
-
     [Fact(Timeout = 120000)]
     public async Task UserOnboarding_CreatesPerUserPartition()
     {
-        if (ShouldSkip(out var reason)) { Output.WriteLine($"SKIPPED: {reason}"); return; }
-        var ct = new CancellationTokenSource(60.Seconds()).Token;
-
+        var ct = TestTimeout;
         var username = $"pg9d_user_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
         var onboarding = Mesh.ServiceProvider.GetRequiredService<UserOnboardingService>();
 
@@ -96,7 +80,6 @@ public class OrganizationOnboardingIntegrationTests : MonolithMeshTestBase
         partitionRoot.Should().NotBeNull("UserOnboardingService.CreateUser must emit the partition-root node");
         partitionRoot.Path.Should().Be(username);
 
-        // After onboarding, /{username} must resolve through the routing layer.
         var resolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
         var resolution = await resolver.ResolvePath(username)
             .Where(r => r is not null).Take(1).Timeout(20.Seconds())
@@ -110,15 +93,10 @@ public class OrganizationOnboardingIntegrationTests : MonolithMeshTestBase
     [Fact(Timeout = 120000)]
     public async Task CreateOrganization_RoutableAfterAdminPartitionWrite()
     {
-        if (ShouldSkip(out var reason)) { Output.WriteLine($"SKIPPED: {reason}"); return; }
-        var ct = new CancellationTokenSource(60.Seconds()).Token;
-
+        var ct = TestTimeout;
         var orgId = $"pg9d_org_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-        // Step 1 — register the Admin/Partition/{org} catalog row first
-        // (the contract: writing Admin/Partition triggers schema creation
-        // and invalidates the negative cache for orgId).
         await meshService.CreateNode(new MeshNode(orgId, "Admin/Partition")
         {
             NodeType = "Partition",
@@ -135,8 +113,6 @@ public class OrganizationOnboardingIntegrationTests : MonolithMeshTestBase
             },
         }).Timeout(30.Seconds()).FirstAsync().ToTask(ct);
 
-        // Step 2 — write the organization root (the bare {org} node lives at
-        // partition root). Should now succeed routing into {org}.mesh_nodes.
         var orgRoot = await meshService.CreateNode(new MeshNode(orgId)
         {
             NodeType = "Organization",
@@ -145,22 +121,19 @@ public class OrganizationOnboardingIntegrationTests : MonolithMeshTestBase
         }).Timeout(30.Seconds()).FirstAsync().ToTask(ct);
         orgRoot.Should().NotBeNull();
 
-        // Step 3 — resolve via path resolver
         var resolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
         var resolution = await resolver.ResolvePath(orgId)
             .Where(r => r is not null).Take(1).Timeout(20.Seconds())
             .Catch<AddressResolution?, TimeoutException>(_ => Observable.Return<AddressResolution?>(null))
             .FirstAsync().ToTask(ct);
         resolution.Should().NotBeNull(
-            "post-create the organization partition must be routable from any silo");
+            "post-create the organization partition must be routable");
     }
 
     [Fact(Timeout = 120000)]
     public async Task OnboardedUser_CanWriteAndReadInOwnNamespace()
     {
-        if (ShouldSkip(out var reason)) { Output.WriteLine($"SKIPPED: {reason}"); return; }
-        var ct = new CancellationTokenSource(60.Seconds()).Token;
-
+        var ct = TestTimeout;
         var username = $"pg9d_owner_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
         var onboarding = Mesh.ServiceProvider.GetRequiredService<UserOnboardingService>();
         await onboarding.CreateUser(new UserOnboardingRequest(
