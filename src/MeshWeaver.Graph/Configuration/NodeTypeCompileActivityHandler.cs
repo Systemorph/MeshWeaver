@@ -227,7 +227,15 @@ internal static class NodeTypeCompileActivityHandler
                                 // Falls back to def's existing values when the producer
                                 // didn't populate them (Null store).
                                 LatestAssemblyCollection = outcome.Result.Collection ?? def.LatestAssemblyCollection,
-                                LatestAssemblyPath = outcome.Result.ContentPath ?? def.LatestAssemblyPath
+                                LatestAssemblyPath = outcome.Result.ContentPath ?? def.LatestAssemblyPath,
+                                // Pin the compiled assembly to the current
+                                // framework version. HasUsableBuild reads this
+                                // back to decide if the cached bytes are
+                                // still safe to load; without it the field
+                                // stays null and every activation falls
+                                // through to the error overlay even with a
+                                // valid local DLL.
+                                CompiledFrameworkVersion = NodeTypeCompilationHelpers.FrameworkVersion
                             };
                         var errorSummary = outcome.Error?.Message
                             ?? (outcome.Result?.Log?.Errors() is { Count: > 0 } errs

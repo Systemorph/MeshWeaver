@@ -230,19 +230,36 @@ internal static class NodeTypeEnrichmentHelpers
             .Where(typeNode => (typeNode.HubConfiguration != null
                                 && typeNode.Content is NodeTypeDefinition hcDef
                                 && !string.IsNullOrEmpty(hcDef.LatestAssemblyPath))
+                // No-compile-coming short-circuit. Mirrors the kickoff's skip
+                // condition in InstallCompileWatcher: when the NodeType has
+                // no source code anywhere to compile (no Configuration string,
+                // no HubConfiguration string, no Sources list) AND no settled
+                // compile state, no Pending will ever fire. Without this
+                // branch the slow-path would wait out the full SlowPathTimeout
+                // for a transition that's not coming. Test-seeded NodeTypes
+                // (CreatableTypesIntegrationTest) hit this routinely.
+                //
+                // The typeNode's HubConfiguration delegate doesn't round-trip
+                // through the synced stream, so we can't gate on it here —
+                // gate on "no source data" + "no settled compile" instead.
+                || (typeNode.Content is NodeTypeDefinition staticDef
+                    && (staticDef.CompilationStatus is null
+                        || staticDef.CompilationStatus == CompilationStatus.Unknown)
+                    && string.IsNullOrEmpty(staticDef.LatestAssemblyCollection)
+                    && string.IsNullOrEmpty(staticDef.LatestAssemblyPath)
+                    && string.IsNullOrWhiteSpace(staticDef.Configuration)
+                    && string.IsNullOrWhiteSpace(staticDef.HubConfiguration)
+                    && (staticDef.Sources is null || staticDef.Sources.Count == 0))
+                // Settled compile — Ok with assembly fields, or Error. The
+                // kickoff has flipped Pending and the activity is driving the
+                // transition. Take(1) here would otherwise snap a pre-compile
+                // null/Unknown emission and bind every per-instance hub to
+                // default config before the assembly even exists.
                 || (typeNode.Content is NodeTypeDefinition def
                     && ((def.CompilationStatus == CompilationStatus.Ok
                             && !string.IsNullOrEmpty(def.LatestAssemblyCollection)
                             && !string.IsNullOrEmpty(def.LatestAssemblyPath))
-                        || def.CompilationStatus == CompilationStatus.Error
-                        // No compile lifecycle attached (null = never compiled,
-                        // Unknown = invalidation pending but nothing to wait
-                        // for). Either way, pass through so ApplyStreamResult
-                        // can fall back to DefaultNodeHubConfiguration —
-                        // otherwise the SlowPathTimeout strands every per-
-                        // instance hub (repro: CreatableTypesIntegrationTest).
-                        || def.CompilationStatus is null
-                        || def.CompilationStatus == CompilationStatus.Unknown))
+                        || def.CompilationStatus == CompilationStatus.Error))
                 || typeNode.Content is not NodeTypeDefinition)
             .Take(1)
             .Timeout(SlowPathTimeout)
@@ -402,18 +419,25 @@ internal static class NodeTypeEnrichmentHelpers
                 });
         }
 
-        if (def.CompilationStatus == CompilationStatus.Ok
-            && !string.IsNullOrEmpty(def.LatestAssemblyCollection)
-            && !string.IsNullOrEmpty(def.LatestAssemblyPath))
+        if (NodeTypeCompilationHelpers.HasUsableBuild(typeNode, def))
         {
             // Hot path for activating per-instance hubs: the NodeType has a
-            // settled compile (status=Ok + LatestAssembly{Collection,Path}
-            // populated). Resolve the local file via IAssemblyStore and load
-            // configurations from the existing DLL via reflection — do NOT
-            // call CompileAndGetConfigurations, which re-enters the SyncedQuery
+            // usable compile (LatestAssembly{Collection,Path} populated AND
+            // CompiledFrameworkVersion matches the current framework). Resolve
+            // the local file via IAssemblyStore and load configurations from
+            // the existing DLL via reflection — do NOT call
+            // CompileAndGetConfigurations, which re-enters the SyncedQuery
             // source-discovery pipeline. Under concurrent activation that
             // path stalls and every per-instance hub overlays a
             // compilation-error fallback (CodeEditRecompileTest symptom).
+            //
+            // Status may be Error (a subsequent compile failed after a prior
+            // successful one — e.g. ALC-locked v{N}.dll during cross-test
+            // re-write, or a polluted seed JSON). HasUsableBuild deliberately
+            // ignores Status: assembly fields + framework match are only set
+            // by a SUCCESSFUL compile write-back, so the bytes the store
+            // points at are valid. If the store has since lost them,
+            // TriggerRecompileAndRetry kicks a fresh compile below.
             var compileVersion = def.LastCompiledVersion ?? typeNode.Version;
             return ResolveAssembly(meshHub, def.LatestAssemblyCollection, typeNode.Path, compileVersion)
                 .SelectMany(localPath =>
