@@ -86,19 +86,41 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         }
         else
         {
-            logger.LogInformation("[ACTIVATE] Grain {StreamId}: no static node with HubConfig, reading from path resolver", streamId);
-            // Read the matched MeshNode from IPathResolver's cached stream —
-            // AddressResolution.Node carries the same node the routing layer
-            // sees, no second query. streamCache.GetStream(addressPath) would
-            // SubscribeRequest → RoutingGrain → this same grain → await
-            // _hubReady → deadlock; the resolver reads directly from
-            // storage / static providers and skips that loop.
-            var pathResolver = meshHub.ServiceProvider.GetService<IPathResolver>();
-            sourceStream = pathResolver != null
-                ? pathResolver.ResolvePath(addressPath)
+            logger.LogInformation("[ACTIVATE] Grain {StreamId}: no static node with HubConfig, merging path resolver + mesh-node cache", streamId);
+            // Two complementary sources, merged on first emission with a
+            // non-null Node — whichever responds first wins the activation
+            // race:
+            //
+            //   (a) IPathResolver.ResolvePath — cached AddressResolution
+            //       observable. Reads directly from storage / static / the
+            //       partition-root fallback, so a brand-new path resolves
+            //       without taking a SubscribeRequest. The matched MeshNode
+            //       rides on AddressResolution.Node (synthesized for
+            //       partition-root virtual matches so this stream always
+            //       yields a Node when the path is routable).
+            //
+            //   (b) IMeshNodeStreamCache.GetStream — live MeshNodeStreamHandle
+            //       over workspace.GetMeshNodeStream(addressPath). Provides
+            //       continued updates after activation. Safe to merge here
+            //       because the path resolver's emission is already enough
+            //       for the .Take(1) below; the cache's later emissions
+            //       just keep _activationSubscription warm in case post-
+            //       activation hub config needs to re-fire enrichment.
+            //
+            // Pre-fix: this used only PathResolver, which returned a null
+            // Node for partition-root virtual matches → the source stream
+            // never emitted, _hubReady stayed pending, every DeliverMessage
+            // burned the 30 s Orleans response budget. The fix is twofold —
+            // PathResolutionService now synthesizes a placeholder MeshNode
+            // for partition-root matches, AND this Merge means the cache
+            // can also bootstrap activation if it's first to produce a
+            // real persisted Node.
+            var pathResolver = meshHub.ServiceProvider.GetRequiredService<IPathResolver>();
+            sourceStream = Observable.Merge(
+                pathResolver.ResolvePath(addressPath)
                     .Where(r => r is { Node: not null })
-                    .Select(r => r!.Node!)
-                : streamCache.GetStream(addressPath);
+                    .Select(r => r!.Node!),
+                streamCache.GetStream(addressPath));
         }
 
         _activationSubscription = sourceStream
