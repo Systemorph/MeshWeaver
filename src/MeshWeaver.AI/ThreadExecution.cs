@@ -425,17 +425,36 @@ public static class ThreadExecution
 
         // Update Thread state. Set PendingUserMessage so WatchForExecution
         // creates cells when they don't exist (server flow, delegation flow).
+        //
+        // Parity note: the canonical PendingUserMessages → watcher → DispatchRound
+        // path sets IngestedMessageIds + UserMessageIds when it claims a user
+        // message for a round. SubmitMessageRequest is the other entry point
+        // (Submit/Resubmit click → ThreadSubmission.Submit) and historically
+        // skipped those fields. That left `IngestedMessageIds = []` even after
+        // a successful round, breaking every consumer that uses
+        // `UserMessageIds \ IngestedMessageIds` to find unprocessed input
+        // (NeedsDispatch, ThreadInput's unprocessed-set, the 6 failing
+        // ThreadSubmissionIntegrationTest cases). Update both lists here so the
+        // data-model contract holds regardless of which entry point posted.
         hub.GetWorkspace().GetMeshNodeStream().Update(node =>
         {
             var thread = node.Content as MeshThread ?? new MeshThread();
             var msgs = thread.Messages;
             if (!msgs.Contains(userMsgId)) msgs = msgs.Add(userMsgId);
             if (!msgs.Contains(responseMsgId)) msgs = msgs.Add(responseMsgId);
+            var userIds = thread.UserMessageIds.Contains(userMsgId)
+                ? thread.UserMessageIds
+                : thread.UserMessageIds.Add(userMsgId);
+            var ingested = thread.IngestedMessageIds.Contains(userMsgId)
+                ? thread.IngestedMessageIds
+                : thread.IngestedMessageIds.Add(userMsgId);
             return node with
             {
                 Content = thread with
                 {
                     Messages = msgs,
+                    UserMessageIds = userIds,
+                    IngestedMessageIds = ingested,
                     IsExecuting = true,
                     ActiveMessageId = responseMsgId,
                     ExecutionStatus = null,
