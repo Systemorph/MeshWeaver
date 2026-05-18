@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
@@ -27,9 +27,9 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// <summary>
 /// Orleans integration: exact portal flow.
 /// 1. Create thread (BuildThreadNode)
-/// 2. Create user cell â†’ verify
-/// 3. Create response cell â†’ verify
-/// 4. SubmitMessageRequest (state update only) â†’ verify
+/// 2. Create user cell Ã¢â€ â€™ verify
+/// 3. Create response cell Ã¢â€ â€™ verify
+/// 4. SubmitMessageRequest (state update only) Ã¢â€ â€™ verify
 /// 5. WatchForExecution triggers execution
 /// 6. Response cell gets agent text
 ///
@@ -38,12 +38,11 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// posts SubmitMessageRequest with both UserMessageId + ResponseMessageId" flow.
 /// The new AppendUserMessageRequest path makes the server own cell creation
 /// (via PendingUserMessages + the watcher), so the explicit pre-created cell ids
-/// have no equivalent. Production code (thread hub â†’ _Exec) still routes through
+/// have no equivalent. Production code (thread hub Ã¢â€ â€™ _Exec) still routes through
 /// SubmitMessageRequest with explicit ResponseMessageId, so this Orleans-level
 /// flow check remains meaningful until the legacy code is removed.
 /// </summary>
-[Collection(nameof(OrleansClusterCollection))]
-public class OrleansPortalFlowTest(SharedOrleansFixture fixture, ITestOutputHelper output) : OrleansSharedTestBase(fixture, output)
+public class OrleansPortalFlowTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
         => await base.GetClientAsync($"portal-{name}-{Guid.NewGuid():N}", "TestUser");
@@ -62,9 +61,9 @@ public class OrleansPortalFlowTest(SharedOrleansFixture fixture, ITestOutputHelp
     }
 
     /// <summary>
-    /// Exact portal flow: create thread â†’ create cells (verified) â†’ submit â†’ execution â†’ response.
+    /// Exact portal flow: create thread Ã¢â€ â€™ create cells (verified) Ã¢â€ â€™ submit Ã¢â€ â€™ execution Ã¢â€ â€™ response.
     /// </summary>
-    // TODO(append-migration): kept on SubmitMessageRequest â€” see class-level comment.
+    // TODO(append-migration): kept on SubmitMessageRequest Ã¢â‚¬â€ see class-level comment.
     [Fact]
     public async Task PortalFlow_CreateThread_CreateCells_Submit_ExecutionCompletes()
     {
@@ -81,7 +80,7 @@ public class OrleansPortalFlowTest(SharedOrleansFixture fixture, ITestOutputHelp
             var threadPath = createResp.Message.Node!.Path!;
             Output.WriteLine($"Thread: {threadPath}");
 
-            // Step 2: Create user cell â†’ verify
+            // Step 2: Create user cell Ã¢â€ â€™ verify
             var userMsgId = Guid.NewGuid().ToString("N")[..8];
             var responseMsgId = Guid.NewGuid().ToString("N")[..8];
 
@@ -97,7 +96,7 @@ public class OrleansPortalFlowTest(SharedOrleansFixture fixture, ITestOutputHelp
             userCellResp.Message.Success.Should().BeTrue("user cell creation must succeed");
             Output.WriteLine($"User cell created: {userMsgId}");
 
-            // Step 3: Create response cell â†’ verify
+            // Step 3: Create response cell Ã¢â€ â€™ verify
             var responseCellResp = await client.Observe(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
                 {
                     NodeType = ThreadMessageNodeType.NodeType, MainNode = "TestUser",
@@ -110,7 +109,7 @@ public class OrleansPortalFlowTest(SharedOrleansFixture fixture, ITestOutputHelp
             responseCellResp.Message.Success.Should().BeTrue("response cell creation must succeed");
             Output.WriteLine($"Response cell created: {responseMsgId}");
 
-            // Step 4: Submit â€” updates state, WatchForExecution triggers execution
+            // Step 4: Submit Ã¢â‚¬â€ updates state, WatchForExecution triggers execution
             var submitResp = await client.Observe(new SubmitMessageRequest
                 {
                     ThreadPath = threadPath,
@@ -121,7 +120,7 @@ public class OrleansPortalFlowTest(SharedOrleansFixture fixture, ITestOutputHelp
                     ContextPath = "TestUser"
                 }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
             submitResp.Message.Success.Should().BeTrue("submit must succeed");
-            Output.WriteLine("Submitted â€” WatchForExecution should trigger");
+            Output.WriteLine("Submitted Ã¢â‚¬â€ WatchForExecution should trigger");
 
             // Step 5: Poll for execution to complete
             var responsePath = $"{threadPath}/{responseMsgId}";
@@ -159,7 +158,7 @@ public class OrleansPortalFlowTest(SharedOrleansFixture fixture, ITestOutputHelp
     /// Existing thread: second message on a thread that already has messages.
     /// Verifies WatchForExecution triggers for new ActiveMessageId.
     /// </summary>
-    // TODO(append-migration): kept on SubmitMessageRequest â€” see class-level comment.
+    // TODO(append-migration): kept on SubmitMessageRequest Ã¢â‚¬â€ see class-level comment.
     [Fact]
     public async Task ExistingThread_SecondMessage_ExecutionCompletes()
     {
@@ -201,7 +200,7 @@ public class OrleansPortalFlowTest(SharedOrleansFixture fixture, ITestOutputHelp
             }
             Output.WriteLine("First message complete");
 
-            // Second message â€” same thread, new cells
+            // Second message Ã¢â‚¬â€ same thread, new cells
             var u2 = Guid.NewGuid().ToString("N")[..8];
             var r2 = Guid.NewGuid().ToString("N")[..8];
             await client.Observe(new CreateNodeRequest(new MeshNode(u2, threadPath)

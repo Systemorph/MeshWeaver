@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using MeshWeaver.Mesh;
@@ -14,9 +14,7 @@ using Orleans;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Orleans.Test;
-
-[Collection(nameof(OrleansClusterCollection))]
-public class OrleansMeshTests(SharedOrleansFixture fixture, ITestOutputHelper output) : OrleansSharedTestBase(fixture, output)
+public class OrleansMeshTests(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
         => await base.GetClientAsync($"mesh-{name}-{Guid.NewGuid():N}", "TestUser");

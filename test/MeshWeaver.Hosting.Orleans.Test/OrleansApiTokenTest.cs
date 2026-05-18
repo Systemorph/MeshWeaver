@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Threading;
@@ -20,11 +20,10 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
 /// Orleans integration test for API token creation and validation.
-/// Uses standard CreateNodeRequest with nodeType=ApiToken â€” same satellite pattern
-/// as Thread/Comment. The RLS validator maps ApiToken â†’ Permission.Api.
+/// Uses standard CreateNodeRequest with nodeType=ApiToken Ã¢â‚¬â€ same satellite pattern
+/// as Thread/Comment. The RLS validator maps ApiToken Ã¢â€ â€™ Permission.Api.
 /// </summary>
-[Collection(nameof(OrleansClusterCollection))]
-public class OrleansApiTokenTest(SharedOrleansFixture fixture, ITestOutputHelper output) : OrleansSharedTestBase(fixture, output)
+public class OrleansApiTokenTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
     {
@@ -47,7 +46,7 @@ public class OrleansApiTokenTest(SharedOrleansFixture fixture, ITestOutputHelper
         var hash = ValidateTokenRequest.HashToken(rawToken);
         var hashPrefix = hash[..12];
 
-        // Create token as satellite of User node â€” same pattern as Thread
+        // Create token as satellite of User node Ã¢â‚¬â€ same pattern as Thread
         var userId = "TestUser";
         var tokenNode = new MeshNode(hashPrefix, $"User/{userId}/_Api")
         {
@@ -65,7 +64,7 @@ public class OrleansApiTokenTest(SharedOrleansFixture fixture, ITestOutputHelper
             }
         };
 
-        // Act â€” standard CreateNodeRequest (same as Thread creation)
+        // Act Ã¢â‚¬â€ standard CreateNodeRequest (same as Thread creation)
         var response = await client.Observe(new CreateNodeRequest(tokenNode), o => o.WithTarget(meshAddress)).FirstAsync().ToTask(ct);
 
         response.Message.Success.Should().BeTrue(response.Message.Error);
@@ -95,7 +94,7 @@ public class OrleansApiTokenTest(SharedOrleansFixture fixture, ITestOutputHelper
         }
         catch (Exception)
         {
-            // Expected â€” grain activation fails because node doesn't exist
+            // Expected Ã¢â‚¬â€ grain activation fails because node doesn't exist
         }
     }
 }

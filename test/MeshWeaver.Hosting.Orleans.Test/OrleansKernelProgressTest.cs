@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Reactive.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
@@ -20,7 +20,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// End-to-end coverage of a script's logger output propagating through the
 /// <c>ActivityLog</c> stream. A script posted via <see cref="SubmitCodeRequest"/>
 /// calls <c>Log.LogInformation("...")</c>; subscribers to the activity log's
-/// <c>MeshNodeReference</c> stream see each message land — same shape as Thread
+/// <c>MeshNodeReference</c> stream see each message land â€” same shape as Thread
 /// streams.
 ///
 /// Replaces the earlier <c>IProgress&lt;string&gt; Progress</c>-based tests; that
@@ -29,8 +29,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// an ActivityLog MeshNode at script dispatch and thread its id/logger through
 /// to the script's <c>Log</c> global).
 /// </summary>
-[Collection(nameof(OrleansClusterCollection))]
-public class OrleansKernelProgressTest(SharedOrleansFixture fixture, ITestOutputHelper output) : OrleansSharedTestBase(fixture, output)
+public class OrleansKernelProgressTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
     private const int DefaultTimeoutMs = 30_000;
 

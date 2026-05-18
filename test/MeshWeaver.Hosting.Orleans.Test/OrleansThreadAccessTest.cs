@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -40,8 +40,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// 3. Submit a message and verify cells are pushed
 /// 4. Verify streaming response arrives
 /// </summary>
-[Collection(nameof(OrleansClusterCollection))]
-public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHelper output) : OrleansSharedTestBase(fixture, output)
+public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
         => await base.GetClientAsync($"threadaccess-{name}-{Guid.NewGuid():N}", "TestUser");
@@ -74,7 +73,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
 
     /// <summary>
     /// Reactive single-node content read via <see cref="MeshNodeStreamExtensions.GetMeshNodeStream(IWorkspace, string)"/>
-    /// — the canonical CQRS path. The stream filters out pre-load empty snapshots
+    /// â€” the canonical CQRS path. The stream filters out pre-load empty snapshots
     /// (it is `Where(change => change.Value != null).Select(...)` internally), so
     /// the first emission always carries content. No GetDataRequest single-shot,
     /// no FirstAsync trap on a transient empty initial snapshot.
@@ -104,7 +103,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
         var ct = new CancellationTokenSource(50.Seconds()).Token;
         var client = await GetClientAsync();
         var suffix = Guid.NewGuid().ToString("N")[..4];
-        // 1. Create Organization under TestUser — this is where TestUser has Admin
+        // 1. Create Organization under TestUser â€” this is where TestUser has Admin
         // (via the seeded Public_Access AccessAssignment with MainNode = "User"). A
         // root-level path like "TestOrg{suffix}" would fail the RLS Create check
         // because Public_Access is scoped to "User/*" only.
@@ -123,7 +122,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
         var threadNode = ThreadNodeType.BuildThreadNode(docPath, "Hello from test", "TestUser");
         Output.WriteLine($"BuildThreadNode: id={threadNode.Id}, ns={threadNode.Namespace}, path={threadNode.Path}");
 
-        // Target the document address â€” same as the side panel does
+        // Target the document address Ã¢â‚¬â€ same as the side panel does
         var threadPath = await CreateNodeAsync(client, threadNode, docPath, ct);
         Output.WriteLine($"Thread created: {threadPath}");
 
@@ -236,7 +235,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
     /// Simulates the Blazor GUI flow where UserContextMiddleware sets CircuitContext
     /// on the portal hub's AccessService, then the component posts AppendUserMessageRequest.
     /// Verifies that the user identity propagates through:
-    ///   PostPipeline â†’ OrleansRoutingService â†’ MessageHubGrain â†’ AccessControlPipeline
+    ///   PostPipeline Ã¢â€ â€™ OrleansRoutingService Ã¢â€ â€™ MessageHubGrain Ã¢â€ â€™ AccessControlPipeline
     /// </summary>
     [Fact(Timeout = 60000)]
     public async Task SubmitChat_WithCircuitContext_IdentityPropagates()
@@ -246,7 +245,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
         // 1. Create client hub simulating a portal circuit
         var client = await GetClientAsync();
 
-        // 2. Set CircuitContext on the client hub â€” exactly what UserContextMiddleware does
+        // 2. Set CircuitContext on the client hub Ã¢â‚¬â€ exactly what UserContextMiddleware does
         //    in Blazor after authentication. This is the persistent session identity.
         var accessService = client.ServiceProvider.GetRequiredService<AccessService>();
         accessService.SetCircuitContext(new AccessContext
@@ -268,7 +267,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
             .FirstAsync()
             .ToTask(ct);
 
-        // 6. Submit message â€” this is the critical path that fails in production.
+        // 6. Submit message Ã¢â‚¬â€ this is the critical path that fails in production.
         //    AppendUserMessageRequest has [SubmitMessagePermission] which checks Thread on the parent partition.
         //    If identity is lost, AccessControlPipeline rejects with "(anonymous)".
         Output.WriteLine("Posting AppendUserMessageRequest with CircuitContext identity...");
@@ -283,7 +282,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
             o => o.WithTarget(new Address(threadPath)));
         submitDelivery.Should().NotBeNull("Post should return delivery");
 
-        // Subscribe via hub.Observe — DeliveryFailure flows via OnError as DeliveryFailureException.
+        // Subscribe via hub.Observe â€” DeliveryFailure flows via OnError as DeliveryFailureException.
         var responseTcs = new TaskCompletionSource<string?>();
         client.Observe((IMessageDelivery)submitDelivery!).Subscribe(
             response =>
@@ -340,7 +339,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
 
     /// <summary>
     /// Verifies that when a user lacks Thread permission, AppendUserMessageRequest
-    /// returns a clear DeliveryFailure error â€” NOT a silent timeout/hang.
+    /// returns a clear DeliveryFailure error Ã¢â‚¬â€ NOT a silent timeout/hang.
     /// Uses Viewer role which has Read+Execute but NOT Thread.
     /// </summary>
     [Fact(Timeout = 60000)]
@@ -358,7 +357,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
         });
 
         // Create thread (Thread permission maps to Thread, Viewer doesn't have it)
-        // But first we need the thread to exist â€” create with a privileged context
+        // But first we need the thread to exist Ã¢â‚¬â€ create with a privileged context
         accessService.SetCircuitContext(new AccessContext
         {
             ObjectId = "TestUser",
@@ -376,7 +375,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
             Name = "Viewer Only"
         });
 
-        // Submit message â€” should fail with a clear error, not hang
+        // Submit message Ã¢â‚¬â€ should fail with a clear error, not hang
         var submitDelivery = client.Post(
             new AppendUserMessageRequest
             {
@@ -404,7 +403,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
         var timeoutTask = Task.Delay(15_000, ct);
         var error = await Task.WhenAny(responseTcs.Task, timeoutTask) == responseTcs.Task
             ? await responseTcs.Task
-            : "TIMEOUT: No error response received â€” UI would hang silently!";
+            : "TIMEOUT: No error response received Ã¢â‚¬â€ UI would hang silently!";
 
         Output.WriteLine($"Error response: {error}");
         error.Should().NotBeNull("should receive an error, not succeed");
@@ -487,8 +486,8 @@ public class RlsChatSiloConfigurator : ISiloConfigurator, IHostConfigurator
 
     /// <summary>
     /// Creates Public Admin access on the User partition. The AccessAssignment
-    /// node MUST live in a namespace ending in "/_Access" — SecurityService.
-    /// ComputeScopeRoles drops anything else from the scope→roles map.
+    /// node MUST live in a namespace ending in "/_Access" â€” SecurityService.
+    /// ComputeScopeRoles drops anything else from the scopeâ†’roles map.
     /// </summary>
     private static MeshNode[] PublicEditorAccess()
     {

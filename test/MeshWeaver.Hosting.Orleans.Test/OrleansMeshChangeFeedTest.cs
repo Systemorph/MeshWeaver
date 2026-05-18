@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
@@ -34,8 +34,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// and that path resolver cache is invalidated correctly.
 /// Uses the shared test cluster.
 /// </summary>
-[Collection(nameof(OrleansClusterCollection))]
-public class OrleansMeshChangeFeedTest(SharedOrleansFixture fixture, ITestOutputHelper output) : OrleansSharedTestBase(fixture, output)
+public class OrleansMeshChangeFeedTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
     private IMessageHub ClientMesh => Fixture.ClientMesh;
 
@@ -88,7 +87,7 @@ public class OrleansMeshChangeFeedTest(SharedOrleansFixture fixture, ITestOutput
             data = je.Deserialize<MeshNode>(ClientMesh.JsonSerializerOptions);
         data.Should().NotBeNull("child node should be reachable via routing");
         data!.Path.Should().Be(childPath);
-        Output.WriteLine("PASSED â€” CreateNode immediately routable");
+        Output.WriteLine("PASSED Ã¢â‚¬â€ CreateNode immediately routable");
     }
 
     /// <summary>
@@ -148,7 +147,7 @@ public class OrleansMeshChangeFeedTest(SharedOrleansFixture fixture, ITestOutput
         var subThreadPath = await CreateNodeAsync(client, subThreadNode, threadPath, ct);
         Output.WriteLine($"Sub-thread created: {subThreadPath}");
 
-        // NOW submit to the sub-thread â€” this is where routing failed before
+        // NOW submit to the sub-thread Ã¢â‚¬â€ this is where routing failed before
         // (stale cache sent the request to the parent message grain)
         var subSubmitResponse = await client.Observe(new AppendUserMessageRequest
             {
@@ -160,6 +159,6 @@ public class OrleansMeshChangeFeedTest(SharedOrleansFixture fixture, ITestOutput
 
         subSubmitResponse.Message.Success.Should().BeTrue(
             $"Sub-thread AppendUserMessage should succeed but got: {subSubmitResponse.Message.Error}");
-        Output.WriteLine("PASSED â€” sub-thread AppendUserMessage routed correctly");
+        Output.WriteLine("PASSED Ã¢â‚¬â€ sub-thread AppendUserMessage routed correctly");
     }
 }

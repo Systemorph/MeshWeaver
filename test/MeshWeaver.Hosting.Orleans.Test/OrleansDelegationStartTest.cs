@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -31,10 +31,9 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// 1. Create user cell
 /// 2. Create response cell
 /// 3. Create thread with Messages + IsExecuting=true + PendingUserMessage
-/// 4. WatchForExecution triggers â†’ starts streaming â†’ response cell gets text
+/// 4. WatchForExecution triggers Ã¢â€ â€™ starts streaming Ã¢â€ â€™ response cell gets text
 /// </summary>
-[Collection(nameof(OrleansClusterCollection))]
-public class OrleansDelegationStartTest(SharedOrleansFixture fixture, ITestOutputHelper output) : OrleansSharedTestBase(fixture, output)
+public class OrleansDelegationStartTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
         => await base.GetClientAsync($"deleg-{name}-{Guid.NewGuid():N}", "TestUser");
@@ -98,7 +97,7 @@ public class OrleansDelegationStartTest(SharedOrleansFixture fixture, ITestOutpu
             // concurrently / fire-and-forget so the routing race is hidden.
             var threadResp = await client.Observe(new CreateNodeRequest(subThreadNode), o => o.WithTarget(new Address(parentMsgPath))).FirstAsync().ToTask(ct);
             threadResp.Message.Success.Should().BeTrue(threadResp.Message.Error);
-            Output.WriteLine("Sub-thread created â€” WatchForExecution should trigger");
+            Output.WriteLine("Sub-thread created Ã¢â‚¬â€ WatchForExecution should trigger");
 
             // Step 2: Create user cell (now that sub-thread exists routing succeeds)
             var userCellResp = await client.Observe(new CreateNodeRequest(new MeshNode(userMsgId, subThreadPath)

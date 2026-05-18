@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
@@ -33,7 +33,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 ///   <item><see cref="RoutingGrain.RouteMessage"/> resolves the path, gets the
 ///   per-thread <see cref="MessageHubGrain"/>, calls <c>DeliverMessage</c>.</item>
 ///   <item>The grain's hub (configured by Thread's NodeType
-///   <see cref="ThreadNodeType.CreateMeshNode"/> â†’ <c>HubConfiguration</c> â†’
+///   <see cref="ThreadNodeType.CreateMeshNode"/> Ã¢â€ â€™ <c>HubConfiguration</c> Ã¢â€ â€™
 ///   <see cref="ThreadExecution.AddThreadExecution"/>) handles the message and
 ///   posts a response.</item>
 ///   <item>The response routes back to the client memory stream and the test
@@ -41,21 +41,19 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// </list>
 ///
 /// <para>
-/// If this test fails, the basic "post â†’ per-grain hub â†’ response" round trip
+/// If this test fails, the basic "post Ã¢â€ â€™ per-grain hub Ã¢â€ â€™ response" round trip
 /// is broken. Many of the 17 ailing Orleans tests build on top of this round
 /// trip, so a green here is the prerequisite for diagnosing them.
 /// </para>
 /// </summary>
-[Collection(nameof(OrleansClusterCollection))]
-public class OrleansHostedHubRoutingTest(SharedOrleansFixture fixture, ITestOutputHelper output)
-    : OrleansSharedTestBase(fixture, output)
+public class OrleansHostedHubRoutingTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
         => await base.GetClientAsync($"hostedhubrouting-{name}-{Guid.NewGuid():N}", "TestUser");
 
     /// <summary>
     /// Foundation: the per-thread grain hub answers a request that has a synchronous
-    /// handler. Proves "client â†’ Orleans routing â†’ per-grain hub â†’ ResponseFor"
+    /// handler. Proves "client Ã¢â€ â€™ Orleans routing Ã¢â€ â€™ per-grain hub Ã¢â€ â€™ ResponseFor"
     /// works end-to-end without any LLM, hosted-sub-hub, or watcher in the picture.
     /// </summary>
     [Fact(Timeout = 30_000)]
@@ -66,7 +64,7 @@ public class OrleansHostedHubRoutingTest(SharedOrleansFixture fixture, ITestOutp
 
         // 1. Create the Thread node so the per-thread grain has something to activate
         //    against. Use BuildThreadNode (NOT BuildThreadWithMessages) so no auto-execute
-        //    fires â€” we only want the hub to come up with the Thread NodeType's
+        //    fires Ã¢â‚¬â€ we only want the hub to come up with the Thread NodeType's
         //    HubConfiguration applied.
         var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Routing test (no LLM)", "TestUser");
         var threadPath = threadNode.Path!;
@@ -107,7 +105,7 @@ public class OrleansHostedHubRoutingTest(SharedOrleansFixture fixture, ITestOutp
     /// on the Thread hub by <see cref="ThreadExecution.AddThreadExecution"/>. The handler
     /// calls <c>UpdateMeshNode</c> to push the new message id onto <see cref="MeshThread.Messages"/>
     /// and then posts a response. After the response arrives, a fresh GetDataRequest must
-    /// see the appended message id â€” if it doesn't, the per-grain workspace's
+    /// see the appended message id Ã¢â‚¬â€ if it doesn't, the per-grain workspace's
     /// <see cref="MeshNodeReference"/> reducer is not picking up local writes (which is
     /// the suspected root cause of the 17 polling-based test failures).
     /// </para>
@@ -137,7 +135,7 @@ public class OrleansHostedHubRoutingTest(SharedOrleansFixture fixture, ITestOutp
         // 3. Trigger UpdateMeshNode by posting AppendUserMessageRequest. The handler
         //    routes through ThreadInput.AppendUserInput which calls
         //    workspace.UpdateMeshNode to add a SERVER-allocated id to UserMessageIds
-        //    (the legacy UserMessageId on the request is ignored — see
+        //    (the legacy UserMessageId on the request is ignored â€” see
         //    ThreadSubmission.HandleAppendUserMessage). Asserting on UserMessageIds.Count
         //    growing is the canary for "local workspace write visible to grain-direct read".
         Output.WriteLine($"[Act] Posting AppendUserMessageRequest");
@@ -146,7 +144,7 @@ public class OrleansHostedHubRoutingTest(SharedOrleansFixture fixture, ITestOutp
                 {
                     ThreadPath = threadPath,
                     // UserMessageId is required by the contract but ignored by the new
-                    // server flow — the handler allocates a server-side id; we assert
+                    // server flow â€” the handler allocates a server-side id; we assert
                     // on UserMessageIds.Count growing instead of looking for this id.
                     UserMessageId = Guid.NewGuid().ToString("N")[..8],
                     UserText = "Workspace propagation test message",
@@ -159,7 +157,7 @@ public class OrleansHostedHubRoutingTest(SharedOrleansFixture fixture, ITestOutp
 
         // 4. Poll until the new UserMessageId shows up via a fresh GetDataRequest.
         //    If this fails, the local workspace write is invisible to subsequent
-        //    grain-direct reads — that's the bug class behind the polling failures.
+        //    grain-direct reads â€” that's the bug class behind the polling failures.
         MeshThread? current = null;
         for (var i = 0; i < 20; i++)
         {
