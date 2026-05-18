@@ -124,6 +124,13 @@ public class PgOnlyProdShapeTests(PostgreSqlFixture fixture, ITestOutputHelper o
         var ct = TestTimeout;
         var ns = $"pg9a_sat_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+
+        // ImpersonateAsSystem: the test creates a brand-new top-level partition
+        // root (pg9a_sat_*) which the auto-logged-in admin user has no Create
+        // permission on. This is an infrastructure-setup operation, the
+        // documented use case for ImpersonateAsSystem.
+        using var _systemScope = accessService.ImpersonateAsSystem();
 
         await meshService.CreateNode(new MeshNode(ns)
         {

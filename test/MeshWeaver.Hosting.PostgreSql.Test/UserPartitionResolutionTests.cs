@@ -77,6 +77,13 @@ public class UserPartitionResolutionTests(PostgreSqlFixture fixture, ITestOutput
         var pgProvider = Mesh.ServiceProvider.GetRequiredService<PostgreSqlPartitionStorageProvider>();
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var pathResolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+
+        // Infrastructure setup: writing a brand-new partition root the admin
+        // doesn't own — same pattern as Read_SatelliteUnion_AcrossPartitionTables
+        // and the onboarding-service. ImpersonateAsSystem grants Permission.All
+        // for the scope so the Create writes don't hit RlsNodeValidator.
+        using var _systemScope = accessService.ImpersonateAsSystem();
 
         // 1) Register the per-user partition (Admin/Partition/{username}).
         //    Without this, PostgreSqlPartitionStorageProvider.Matches(username)
