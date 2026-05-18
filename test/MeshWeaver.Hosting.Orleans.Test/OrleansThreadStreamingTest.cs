@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -95,16 +95,14 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
             .FirstAsync().ToTask(ct);
 
         // Submit via AppendUserMessageRequest
-        var submit = await client.Observe(new AppendUserMessageRequest
+        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
             {
+                Hub = client,
                 ThreadPath = threadPath,
-                UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Tell me something",
                 ContextPath = ContextPath
-            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-        submit.Message.Success.Should().BeTrue(submit.Message.Error);
-
-        var msgIds = await twoMessages;
+            });
+            var msgIds = await twoMessages;
         var responseMsgId = msgIds[1];
         Output.WriteLine($"Response message: {responseMsgId}");
 
@@ -169,15 +167,14 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
 
         // Submit message via AppendUserMessageRequest
         Output.WriteLine("2. Submitting message...");
-        var submit = await client.Observe(new AppendUserMessageRequest
+        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
             {
+                Hub = client,
                 ThreadPath = threadPath,
-                UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Use the test tool please",
                 ContextPath = ContextPath
-            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-        submit.Message.Success.Should().BeTrue(submit.Message.Error);
-        Output.WriteLine("3. Message submitted successfully");
+            });
+            Output.WriteLine("3. Message submitted successfully");
 
         // Wait for 2 message IDs
         var msgIds = await twoMessages;
@@ -266,15 +263,14 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
         Output.WriteLine($"1. Thread: {threadPath}");
 
         // 2. Submit message via AppendUserMessageRequest
-        var submitResp = await client.Observe(new AppendUserMessageRequest
+        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
             {
+                Hub = client,
                 ThreadPath = threadPath,
-                UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Use the test tool please",
                 ContextPath = ContextPath
-            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-        submitResp.Message.Success.Should().BeTrue(submitResp.Message.Error);
-        Output.WriteLine("2. Message submitted");
+            });
+            Output.WriteLine("2. Message submitted");
 
         // 3. Wait for 2 messages (user + response)
         var msgIds = await workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
@@ -345,15 +341,14 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
         var threadPath = createResp.Message.Node!.Path!;
         Output.WriteLine($"1. Thread: {threadPath}");
 
-        var submitResp = await client.Observe(new AppendUserMessageRequest
+        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
             {
+                Hub = client,
                 ThreadPath = threadPath,
-                UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Test",
                 ContextPath = ContextPath
-            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-        submitResp.Message.Success.Should().BeTrue();
-        Output.WriteLine("2. Submitted");
+            });
+            Output.WriteLine("2. Submitted");
 
         // 2. Wait for response message to appear
         var msgIds = await workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!

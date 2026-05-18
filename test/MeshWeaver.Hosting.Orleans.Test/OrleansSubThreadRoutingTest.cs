@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -108,15 +108,14 @@ public class OrleansSubThreadRoutingTest(ITestOutputHelper output) : OrleansShar
             .FirstAsync()
             .ToTask(ct);
 
-        var submitResponse = await client.Observe(new AppendUserMessageRequest
+        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
             {
+                Hub = client,
                 ThreadPath = threadPath,
-                UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Test message for sub-thread routing",
                 ContextPath = "TestUser"
-            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-        submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
-        Output.WriteLine("First AppendUserMessageRequest succeeded");
+            });
+            Output.WriteLine("First AppendUserMessageRequest succeeded");
 
         var msgIds = await twoMessages;
         msgIds.Should().HaveCount(2);
@@ -159,17 +158,14 @@ public class OrleansSubThreadRoutingTest(ITestOutputHelper output) : OrleansShar
             .ToTask(ct);
 
         Output.WriteLine($"Posting AppendUserMessageRequest to sub-thread: {subThreadPath}");
-        var subSubmitResponse = await client.Observe(new AppendUserMessageRequest
+        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
             {
+                Hub = client,
                 ThreadPath = subThreadPath,
-                UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Hello from sub-thread!",
                 ContextPath = "TestUser"
-            }, o => o.WithTarget(new Address(subThreadPath))).FirstAsync().ToTask(ct);
-
-        subSubmitResponse.Message.Success.Should().BeTrue(
-            $"Sub-thread AppendUserMessage should succeed but got: {subSubmitResponse.Message.Error}");
-        Output.WriteLine("Sub-thread AppendUserMessageRequest succeeded!");
+            });
+            Output.WriteLine("Sub-thread AppendUserMessageRequest succeeded!");
 
         // 5. Wait for sub-thread cells to appear
         var subMsgIds = await subTwoMessages;
@@ -222,16 +218,14 @@ public class OrleansSubThreadRoutingTest(ITestOutputHelper output) : OrleansShar
             .FirstAsync()
             .ToTask(ct);
 
-        var submitResponse = await client.Observe(new AppendUserMessageRequest
+        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
             {
+                Hub = client,
                 ThreadPath = threadPath,
-                UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Access context test msg",
                 ContextPath = "TestUser"
-            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-        submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
-
-        var msgIds = await twoMessages;
+            });
+            var msgIds = await twoMessages;
         var responseMsgId = msgIds[1];
         Output.WriteLine($"Response message: {responseMsgId}");
 

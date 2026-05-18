@@ -134,28 +134,20 @@ public class OrleansHostedHubRoutingTest(ITestOutputHelper output) : OrleansShar
         before.Should().NotBeNull();
         before!.UserMessageIds.Count.Should().Be(0, "thread starts empty");
 
-        // 3. Trigger UpdateMeshNode by posting AppendUserMessageRequest. The handler
-        //    routes through ThreadInput.AppendUserInput which calls
-        //    workspace.UpdateMeshNode to add a SERVER-allocated id to UserMessageIds
-        //    (the legacy UserMessageId on the request is ignored â€” see
-        //    ThreadSubmission.HandleAppendUserMessage). Asserting on UserMessageIds.Count
-        //    growing is the canary for "local workspace write visible to grain-direct read".
-        Output.WriteLine($"[Act] Posting AppendUserMessageRequest");
-        var resp = await client.Observe(
-                new AppendUserMessageRequest
-                {
-                    ThreadPath = threadPath,
-                    // UserMessageId is required by the contract but ignored by the new
-                    // server flow â€” the handler allocates a server-side id; we assert
-                    // on UserMessageIds.Count growing instead of looking for this id.
-                    UserMessageId = Guid.NewGuid().ToString("N")[..8],
-                    UserText = "Workspace propagation test message",
-                    ContextPath = "TestUser"
-                },
-                o => o.WithTarget(new Address(threadPath)))
-            .FirstAsync().ToTask(ct);
-        resp.Message.Success.Should().BeTrue(resp.Message.Error);
-        Output.WriteLine($"[Resp] AppendUserMessageResponse OK");
+        // 3. Trigger the same stream-update path the production GUI uses.
+        //    ThreadSubmission.Submit → ThreadInput.AppendUserInput →
+        //    workspace.GetMeshNodeStream(threadPath).Update(...) adds the
+        //    new id to UserMessageIds + PendingUserMessages. Asserting on
+        //    UserMessageIds.Count growing is the canary for "local
+        //    workspace write visible to grain-direct read".
+        Output.WriteLine("[Act] ThreadSubmission.Submit");
+        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
+        {
+            Hub = client,
+            ThreadPath = threadPath,
+            UserText = "Workspace propagation test message",
+            ContextPath = "TestUser"
+        });
 
         // 4. Poll until the new UserMessageId shows up via a fresh GetDataRequest.
         //    If this fails, the local workspace write is invisible to subsequent

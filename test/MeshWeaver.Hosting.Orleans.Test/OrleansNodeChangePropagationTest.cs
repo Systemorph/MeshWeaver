@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -129,15 +129,14 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
         //    Turn 2: calls delegate_to_agent (Executor)
         //    Turn 3: returns summary text after delegation completes
         Output.WriteLine("Posting AppendUserMessageRequest (Create + Delegate chain)...");
-        var submitResponse = await client.Observe(new AppendUserMessageRequest
+        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
             {
+                Hub = client,
                 ThreadPath = threadPath,
-                UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Create a doc and delegate updates to Executor",
                 ContextPath = "TestUser"
-            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-        submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
-        Output.WriteLine("AppendUserMessageRequest succeeded Ã¢â‚¬â€ submission queued");
+            });
+            Output.WriteLine("AppendUserMessageRequest succeeded Ã¢â‚¬â€ submission queued");
 
         // 4. Wait for message IDs
         var msgIds = await twoMessages;
@@ -257,15 +256,14 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
             .FirstAsync()
             .ToTask(ct);
 
-        await client.Observe(new AppendUserMessageRequest
+        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
             {
+                Hub = client,
                 ThreadPath = threadPath,
-                UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "First message",
                 ContextPath = "TestUser"
-            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-
-        var msgIds = await twoMessages;
+            });
+            var msgIds = await twoMessages;
         Output.WriteLine($"Initial messages: [{string.Join(", ", msgIds)}]");
 
         // Wait for execution to complete
