@@ -44,10 +44,33 @@ public static class UserActivityLayoutAreas
             var ownerNode = change.Value;
             var ownerName = ownerNode?.Name ?? nodeOwnerId;
 
-            // Determine if the viewer is the node owner
+            // Determine if the viewer is the node owner. AccessService exposes
+            // two surfaces: request-scoped <c>Context</c> (set by the inbound
+            // delivery pipeline) and the long-lived <c>CircuitContext</c>
+            // (persistent for the Blazor circuit). Layout-area handlers run
+            // off the workspace stream, NOT inside a request delivery, so
+            // <c>Context</c> is typically null and the identity is only
+            // visible via <c>CircuitContext</c>. Falling back through both
+            // is what every other access-aware handler does (see
+            // <see cref="StorageAdapterMeshQueryProvider.GetEffectiveUserId"/>).
             var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
-            var viewerId = accessService?.Context?.ObjectId ?? "";
-            var isOwner = string.Equals(viewerId, nodeOwnerId, StringComparison.OrdinalIgnoreCase);
+            var viewerId = accessService?.Context?.ObjectId
+                           ?? accessService?.CircuitContext?.ObjectId
+                           ?? "";
+            // Allow either an exact match on the partition key (rbuergi) or
+            // the configured email — depending on auth wiring the AccessContext
+            // may carry either. Email-vs-partition-key alignment is also what
+            // CircuitAccessHandler.UsernameFromEmail builds.
+            var viewerEmail = accessService?.Context?.Email
+                              ?? accessService?.CircuitContext?.Email
+                              ?? "";
+            var viewerAlias = !string.IsNullOrEmpty(viewerEmail) && viewerEmail.Contains('@')
+                ? viewerEmail.Split('@')[0].ToLowerInvariant()
+                : "";
+
+            var isOwner =
+                string.Equals(viewerId, nodeOwnerId, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(viewerAlias, nodeOwnerId, StringComparison.OrdinalIgnoreCase);
 
             if (isOwner)
                 return (UiControl?)BuildOwnerDashboard(host, nodePath, ownerName, nodeOwnerId, ownerNode);
