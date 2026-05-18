@@ -772,17 +772,10 @@ internal static class ThreadSubmissionServer
                             // Messages from a prior round — ApplyResubmit removed u1 from
                             // IngestedMessageIds (so the watcher re-dispatches it) but kept it
                             // in Messages, so a blind AddRange would duplicate it.
-                            //
-                            // The responseMsgId dedup is defensive: the IsExecuting guard above
-                            // is supposed to single-flight this Update, but under concurrent
-                            // watcher emissions every lambda invocation can see the pre-first-
-                            // commit state (IsExecuting=false). Without the Contains check,
-                            // each invocation appends responseMsgId — 9 invocations → 9 duplicates
-                            // in Messages. Repro: OrleansThreadAccessTest.SubmitChat_FromSidePanel_CellsAppearAndStream.
                             var msgs = t.Messages;
                             foreach (var uid in dispatch.UserMessageIds)
                                 if (!msgs.Contains(uid)) msgs = msgs.Add(uid);
-                            if (!msgs.Contains(responseMsgId)) msgs = msgs.Add(responseMsgId);
+                            msgs = msgs.Add(responseMsgId);
 
                             var ingested = t.IngestedMessageIds.AddRange(
                                 dispatch.UserMessageIds.Where(uid => !t.IngestedMessageIds.Contains(uid)));
