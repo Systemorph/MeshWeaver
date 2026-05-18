@@ -361,18 +361,31 @@ internal static class NodeTypeCompilationHelpers
         var hubPath = hub.Address.Path;
         var ownStream = workspace.GetMeshNodeStream();
 
+        // Process-local memory of the last RequestedReleaseAt we have already
+        // dispatched. The framework's stream emissions can arrive faster than
+        // our own Update can round-trip (especially across the test's remote
+        // UpdateRemote path) so the on-node `LastReleaseRequestHandledAt`
+        // alone isn't enough — every emission in the gap re-fires with the
+        // same trigger. The local timestamp short-circuits the watcher
+        // before it queues a redundant Update. The on-node stamp is still
+        // written for cross-silo / restart consistency.
+        DateTimeOffset? localLastDispatched = null;
+
         return ownStream
             .Where(node => node?.Content is NodeTypeDefinition def
                 && def.RequestedReleaseAt is { } req
+                && (localLastDispatched is null || req > localLastDispatched.Value)
                 && (def.LastReleaseRequestHandledAt is null
                     || req > def.LastReleaseRequestHandledAt.Value))
             .Subscribe(
                 node =>
                 {
+                    var triggerAt = (node!.Content as NodeTypeDefinition)?.RequestedReleaseAt;
+                    if (triggerAt is null) return;
+                    localLastDispatched = triggerAt;
                     logger?.LogInformation(
                         "[ReleaseRequestWatcher] {HubPath}: handling RequestedReleaseAt={Req} (force={Force}, lastHandled={Handled})",
-                        hubPath,
-                        (node!.Content as NodeTypeDefinition)?.RequestedReleaseAt,
+                        hubPath, triggerAt,
                         (node!.Content as NodeTypeDefinition)?.RequestedReleaseForce,
                         (node!.Content as NodeTypeDefinition)?.LastReleaseRequestHandledAt);
                     workspace.GetMeshNodeStream().Update(curr =>
