@@ -1,3 +1,4 @@
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -47,6 +48,7 @@ namespace Memex.Portal.Shared.Authentication;
 /// </summary>
 public sealed class UserOnboardingService(
     IMeshService meshService,
+    AccessService accessService,
     ILogger<UserOnboardingService>? logger = null)
 {
     /// <summary>
@@ -110,18 +112,29 @@ public sealed class UserOnboardingService(
         // partition-root write can route, then the user-catalog mirror. The
         // outer observable emits ONLY the partition-root node (the canonical
         // identity) so callers can treat the return value as `the User node`.
-        return meshService.CreateNode(partitionCatalogEntry)
-            .Do(_ => logger?.LogInformation(
-                "Onboarding: registered partition '{Username}' via Admin/Partition catalog", username))
-            .SelectMany(_ => meshService.CreateNode(partitionRootNode))
-            .Do(_ => logger?.LogInformation(
-                "Onboarding: wrote partition-root User '{Username}' to {Schema}.mesh_nodes",
-                username, username.ToLowerInvariant()))
-            .SelectMany(rootNode => meshService.CreateNode(userCatalogMirror)
-                .Do(_ => logger?.LogInformation(
-                    "Onboarding: wrote login-catalog mirror at user.mesh_nodes (namespace=User, id={Username})",
-                    username))
-                .Select(_ => rootNode));
+        //
+        // Wrap in Observable.Using + ImpersonateAsSystem so the whole onboarding
+        // chain runs as the System identity (Permission.All unconditionally).
+        // Reason: the new user does not yet exist, the partition root they
+        // would own doesn't yet exist either, and the caller (signed-in admin
+        // OR the user-being-onboarded themselves during first-login) can't
+        // have Create permission on a brand-new top-level partition. This is
+        // the canonical "infrastructure operation" use case ImpersonateAsSystem
+        // was built for — explicitly documented in AccessService.cs.
+        return Observable.Using(
+            () => accessService.ImpersonateAsSystem(),
+            _ => meshService.CreateNode(partitionCatalogEntry)
+                .Do(__ => logger?.LogInformation(
+                    "Onboarding: registered partition '{Username}' via Admin/Partition catalog", username))
+                .SelectMany(__ => meshService.CreateNode(partitionRootNode))
+                .Do(__ => logger?.LogInformation(
+                    "Onboarding: wrote partition-root User '{Username}' to {Schema}.mesh_nodes",
+                    username, username.ToLowerInvariant()))
+                .SelectMany(rootNode => meshService.CreateNode(userCatalogMirror)
+                    .Do(__ => logger?.LogInformation(
+                        "Onboarding: wrote login-catalog mirror at user.mesh_nodes (namespace=User, id={Username})",
+                        username))
+                    .Select(__ => rootNode)));
     }
 
     /// <summary>
