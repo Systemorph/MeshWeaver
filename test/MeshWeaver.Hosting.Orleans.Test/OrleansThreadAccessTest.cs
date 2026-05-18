@@ -266,44 +266,20 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTe
             .FirstAsync()
             .ToTask(ct);
 
-        // 6. Submit message Ã¢â‚¬â€ this is the critical path that fails in production.
-        //    AppendUserMessageRequest has [SubmitMessagePermission] which checks Thread on the parent partition.
-        //    If identity is lost, AccessControlPipeline rejects with "(anonymous)".
-        Output.WriteLine("Posting AppendUserMessageRequest with CircuitContext identity...");
-        var submitDelivery = client.Post(
-            new AppendUserMessageRequest
-            {
-                ThreadPath = threadPath,
-                UserMessageId = Guid.NewGuid().ToString("N")[..8],
-                UserText = "Hello with identity",
-                ContextPath = "TestUser"
-            },
-            o => o.WithTarget(new Address(threadPath)));
-        submitDelivery.Should().NotBeNull("Post should return delivery");
-
-        // Subscribe via hub.Observe â€” DeliveryFailure flows via OnError as DeliveryFailureException.
-        var responseTcs = new TaskCompletionSource<string?>();
-        client.Observe((IMessageDelivery)submitDelivery!).Subscribe(
-            response =>
-            {
-                string? error = response.Message switch
-                {
-                    AppendUserMessageResponse { Success: false } sr => sr.Error ?? "AppendUserMessageResponse.Success=false",
-                    AppendUserMessageResponse { Success: true } => null,
-                    _ => $"Unexpected response type: {response.Message?.GetType().Name}"
-                };
-                responseTcs.TrySetResult(error);
-            },
-            ex => responseTcs.TrySetResult($"DeliveryFailure: {ex.Message}"));
-
-        var timeoutTask = Task.Delay(15_000, ct);
-        var responseError = await Task.WhenAny(responseTcs.Task, timeoutTask) == responseTcs.Task
-            ? await responseTcs.Task
-            : "TIMEOUT: No response received within 15s";
-
-        Output.WriteLine($"AppendUserMessageRequest result: {responseError ?? "SUCCESS"}");
-        responseError.Should().BeNull(
-            $"AppendUserMessageRequest should succeed with identity 'TestUser'. Got: {responseError}");
+        // 6. Submit message - critical access-control path.
+        //    ThreadInput.AppendUserInput -> UpdateRemote -> owning per-thread
+        //    grain's MeshNodeReference reducer write. The
+        //    [SubmitMessagePermission] check now sits on the data-change
+        //    pipeline; if identity is lost, the per-thread grain rejects the
+        //    write with "(anonymous)" and Messages stays empty.
+        Output.WriteLine("ThreadSubmission.Submit with CircuitContext identity...");
+        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
+        {
+            Hub = client,
+            ThreadPath = threadPath,
+            UserText = "Hello with identity",
+            ContextPath = "TestUser"
+        });
 
         // 6. Wait for both cells to appear in stream
         var msgIds = await twoMessages;
@@ -375,29 +351,18 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTe
         });
 
         // Submit message Ã¢â‚¬â€ should fail with a clear error, not hang
-        var submitDelivery = client.Post(
-            new AppendUserMessageRequest
-            {
-                ThreadPath = threadPath,
-                UserMessageId = Guid.NewGuid().ToString("N")[..8],
-                UserText = "Should be denied",
-                ContextPath = "TestUser"
-            },
-            o => o.WithTarget(new Address(threadPath)));
-        submitDelivery.Should().NotBeNull();
-
+        // Submit via SubmitContext.OnError - same callback the production GUI
+        // uses (ThreadChatView). If the permission check fails the OnError
+        // callback fires with the rejection message and the test does NOT hang.
         var responseTcs = new TaskCompletionSource<string?>();
-        client.Observe((IMessageDelivery)submitDelivery!).Subscribe(
-            response =>
-            {
-                string? msg = response.Message switch
-                {
-                    AppendUserMessageResponse sr => sr.Success ? null : sr.Error,
-                    _ => $"Unexpected: {response.Message?.GetType().Name}"
-                };
-                responseTcs.TrySetResult(msg);
-            },
-            ex => responseTcs.TrySetResult(ex.Message));
+        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
+        {
+            Hub = client,
+            ThreadPath = threadPath,
+            UserText = "Should be denied",
+            ContextPath = "TestUser",
+            OnError = msg => responseTcs.TrySetResult(msg)
+        });
 
         var timeoutTask = Task.Delay(15_000, ct);
         var error = await Task.WhenAny(responseTcs.Task, timeoutTask) == responseTcs.Task
