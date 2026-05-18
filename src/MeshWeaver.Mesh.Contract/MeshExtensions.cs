@@ -1196,6 +1196,8 @@ public static class MeshExtensions
 
                 var saveExtras = additional
                     .Select(extra => persistence.Write(extra with { State = MeshNodeState.Active }, hub.JsonSerializerOptions)
+                        .Where(saved => saved is not null)
+                        .Select(saved => saved!)
                         .Do(saved =>
                         {
                             hub.Post(DataChangeRequest.Update([saved]),

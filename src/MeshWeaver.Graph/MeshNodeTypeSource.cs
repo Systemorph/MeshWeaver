@@ -281,7 +281,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
                 .Select(saved =>
                 {
                     _logger?.LogDebug("MeshNodeTypeSource: Saved {Path} (version={Version})",
-                        saved.Path, saved.Version);
+                        saved?.Path, saved?.Version);
                     return System.Reactive.Unit.Default;
                 })
                 .Catch<System.Reactive.Unit, Exception>(ex =>
