@@ -84,6 +84,15 @@ public static class SerializationExtensions
             o.ReadCommentHandling = JsonCommentHandling.Skip;
             o.AllowTrailingCommas = true;
             o.IncludeFields = true; // Enable field serialization for ValueTuple support
+            // Per System.Text.Json default rules a polymorphic discriminator
+            // ($type) must be the FIRST property in the JSON object — otherwise
+            // the deserializer throws "metadata property must be the first
+            // property" and the whole read fails. We have legacy persisted rows
+            // (Thread.pendingUserMessages.{id}.$type after other fields) that
+            // pre-date this rule, plus future migrations risk hitting it again
+            // if a property reorder happens. Opt into the tolerant mode so a
+            // discriminator anywhere in the object is accepted.
+            o.AllowOutOfOrderMetadataProperties = true;
             o.Converters.Add(new EnumMemberJsonStringEnumConverter());
         });
     }
