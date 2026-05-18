@@ -160,6 +160,12 @@ public class UserPartitionResolutionTests(PostgreSqlFixture fixture, ITestOutput
         var pgProvider = Mesh.ServiceProvider.GetRequiredService<PostgreSqlPartitionStorageProvider>();
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var workspace = Mesh.GetWorkspace();
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+
+        // Same shape as ResolvePath_UserPartitionRoot_ReturnsUserNode — creating
+        // a brand-new top-level partition root the admin doesn't own.
+        // RlsNodeValidator rejects without ImpersonateAsSystem.
+        using var _systemScope = accessService.ImpersonateAsSystem();
 
         var partitionDef = new PartitionDefinition
         {
