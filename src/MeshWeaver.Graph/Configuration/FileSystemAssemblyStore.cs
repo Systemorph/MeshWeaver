@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Security.Cryptography;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.Logging;
 
@@ -8,7 +9,12 @@ namespace MeshWeaver.Graph.Configuration;
 /// Filesystem-backed <see cref="IAssemblyStore"/>. Used by the monolith portal and
 /// tests where there is no shared blob storage — the cache lives on local disk,
 /// survives process restarts, and is safe to share across multiple in-process hubs.
-/// Layout: <c>{RootDirectory}/{sanitized-nodeTypePath}/v{version}.dll</c> (+ <c>.pdb</c>).
+/// Layout: <c>{RootDirectory}/{sanitized-nodeTypePath}/v{version}-{contentHash}.dll</c>
+/// (+ <c>.pdb</c>). The content-hash suffix is what makes each compile's path unique
+/// — two compiles for the same (nodeTypePath, version) but different bytes (e.g. an
+/// edit-then-recompile that happens to land on the same hub-version key, or two test
+/// runs that reuse a stale on-disk dll from a previous session) get distinct files
+/// instead of one overwriting / "winning" the other.
 /// </summary>
 public sealed class FileSystemAssemblyStore : IAssemblyStore
 {
@@ -24,14 +30,29 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
 
     public IObservable<string?> TryGetAssemblyPath(string nodeTypePath, long version)
     {
-        var dllPath = GetDllPath(nodeTypePath, version);
-        if (File.Exists(dllPath))
+        // Lookup by (nodeTypePath, version) alone — the caller doesn't know the
+        // content hash. Returns the newest dll matching the v{version}- prefix,
+        // which is the same file that the latest Put for this (nodeTypePath, version)
+        // produced. A stale dll from a prior session with the same version key but
+        // different content is sorted before the freshly-written one (LastWriteTimeUtc),
+        // so newest-first ensures we never serve a stale-bytes hit.
+        var dir = Path.Combine(rootDirectory, Sanitize(nodeTypePath));
+        if (!Directory.Exists(dir))
         {
-            logger.LogDebug("Assembly cache hit at {DllPath}", dllPath);
-            return Observable.Return<string?>(dllPath);
+            logger.LogDebug("Assembly cache miss for {NodeTypePath}@v{Version} — no dir", nodeTypePath, version);
+            return Observable.Return<string?>(null);
         }
-        logger.LogDebug("Assembly cache miss for {NodeTypePath}@v{Version}", nodeTypePath, version);
-        return Observable.Return<string?>(null);
+        var candidate = new DirectoryInfo(dir)
+            .EnumerateFiles($"v{version}-*.dll")
+            .OrderByDescending(f => f.LastWriteTimeUtc)
+            .FirstOrDefault();
+        if (candidate is null)
+        {
+            logger.LogDebug("Assembly cache miss for {NodeTypePath}@v{Version}", nodeTypePath, version);
+            return Observable.Return<string?>(null);
+        }
+        logger.LogDebug("Assembly cache hit at {DllPath}", candidate.FullName);
+        return Observable.Return<string?>(candidate.FullName);
     }
 
     public IObservable<string> Put(string nodeTypePath, long version, byte[] assemblyBytes, byte[]? pdbBytes)
@@ -47,26 +68,22 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
 
     public IObservable<AssemblyStoreLocation> PutWithLocation(string nodeTypePath, long version, byte[] assemblyBytes, byte[]? pdbBytes)
     {
-        var dllPath = GetDllPath(nodeTypePath, version);
+        var dllPath = GetDllPath(nodeTypePath, version, assemblyBytes);
         var pdbPath = Path.ChangeExtension(dllPath, ".pdb");
         Directory.CreateDirectory(Path.GetDirectoryName(dllPath)!);
         var relativeContentPath = Path.GetRelativePath(rootDirectory, dllPath).Replace('\\', '/');
 
-        // Per (nodeTypePath, version), the bytes are deterministic — same source
-        // compiled against the same framework produces an equivalent assembly. If
-        // the destination DLL already exists, skip the write: it's either the
-        // same compile finishing twice (two replicas raced), or a prior process
-        // produced this version and an ALC in the current process has the file
-        // locked. Overwriting a locked file throws IOException ("being used by
-        // another process") and bubbles up as outcome.Error → CompilationStatus.Error
-        // gets persisted to the NodeType JSON, where every subsequent activation
-        // re-reads it and fails forever. Re-use is the self-healing path:
-        // FrameworkVersion has rolled (Graph.dll rebuild → new version key →
-        // new dllPath) iff a recompile is genuinely needed.
+        // Content-hashed path: if the file already exists, the bytes are identical
+        // (same hash → same content) and skipping the write is the right thing. The
+        // file may also be ALC-locked from a prior load in the same process —
+        // skipping avoids the IOException that would otherwise bubble up as
+        // CompilationStatus.Error and strand the NodeType in a permanently-broken
+        // state. Different bytes for the same (nodeTypePath, version) land at a
+        // different hash → different path → no collision.
         if (File.Exists(dllPath))
         {
             logger.LogDebug(
-                "Assembly already at {DllPath} — skipping write (idempotent put, file may be ALC-locked)",
+                "Assembly already at {DllPath} — skipping write (content-hash hit, idempotent put)",
                 dllPath);
             return Observable.Return(new AssemblyStoreLocation(dllPath, FileSystemCollectionName, relativeContentPath));
         }
@@ -79,8 +96,20 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
         return Observable.Return(new AssemblyStoreLocation(dllPath, FileSystemCollectionName, relativeContentPath));
     }
 
-    private string GetDllPath(string nodeTypePath, long version) =>
-        Path.Combine(rootDirectory, Sanitize(nodeTypePath), $"v{version}.dll");
+    private string GetDllPath(string nodeTypePath, long version, byte[] bytes)
+    {
+        var hash = ContentHash(bytes);
+        return Path.Combine(rootDirectory, Sanitize(nodeTypePath), $"v{version}-{hash}.dll");
+    }
+
+    private static string ContentHash(byte[] bytes)
+    {
+        Span<byte> hash = stackalloc byte[32];
+        SHA256.HashData(bytes, hash);
+        // 12 hex chars from the SHA-256 — collision-resistant for the assembly-bytes
+        // population we're keying on, short enough to keep paths readable in logs.
+        return Convert.ToHexString(hash[..6]).ToLowerInvariant();
+    }
 
     /// <summary>
     /// Turns a mesh path like <c>Systemorph/FutuRe/Pricing</c> into a filesystem-safe
