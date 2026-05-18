@@ -134,7 +134,17 @@ public class NodeTypeProgressAreaTest(ITestOutputHelper output) : MonolithMeshTe
     {
         if (!File.Exists(jsonPath)) return;
         var raw = File.ReadAllText(jsonPath);
-        var root = System.Text.Json.Nodes.JsonNode.Parse(raw)?.AsObject();
+        // AllowTrailingCommas: a previous compile-write-back may leave a
+        // trailing comma in the JSON if the writer is lenient (rare but
+        // observed once on CI as 'trailing comma at end LineNumber: 17').
+        // Be tolerant on read; the rewrite always emits strict JSON.
+        var parseOptions = new System.Text.Json.Nodes.JsonNodeOptions();
+        var docOptions = new System.Text.Json.JsonDocumentOptions
+        {
+            AllowTrailingCommas = true,
+            CommentHandling = System.Text.Json.JsonCommentHandling.Skip
+        };
+        var root = System.Text.Json.Nodes.JsonNode.Parse(raw, parseOptions, docOptions)?.AsObject();
         if (root?["content"] is not System.Text.Json.Nodes.JsonObject content) return;
         var keysToStrip = new[]
         {
