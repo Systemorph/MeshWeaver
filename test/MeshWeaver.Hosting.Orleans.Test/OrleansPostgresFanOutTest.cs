@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
@@ -6,6 +7,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
+using System.Text.Json;
+using Pgvector.Npgsql;
 using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Data;
 using MeshWeaver.Documentation;
@@ -17,6 +20,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Orleans.Hosting;
@@ -83,9 +87,9 @@ public class OrleansPostgresFanOutTest(ITestOutputHelper output)
         // p1 and p2 — each a partition with a main content node and one
         // _Activity satellite. Older activity goes to p1, newer to p2 so the
         // sort:LastModified-desc test asserts the fan-out preserves order.
-        await SeedPartitionAsync(mesh, p1, "doc1", "p1 doc",
+        await SeedPartitionAsync(silo, p1, "doc1", "p1 doc",
             activityLastModified: DateTimeOffset.UtcNow.AddMinutes(-30), ct);
-        await SeedPartitionAsync(mesh, p2, "doc2", "p2 doc",
+        await SeedPartitionAsync(silo, p2, "doc2", "p2 doc",
             activityLastModified: DateTimeOffset.UtcNow.AddMinutes(-5), ct);
 
         // Same query string the GUI builds for the Activity Feed area.
@@ -129,11 +133,11 @@ public class OrleansPostgresFanOutTest(ITestOutputHelper output)
         var silo = ((InProcessSiloHandle)Cluster.Silos[0]).SiloHost.Services;
         var mesh = silo.GetRequiredService<IMeshService>();
 
-        await SeedPartitionAsync(mesh, p1, "doc1", "p1 doc",
+        await SeedPartitionAsync(silo, p1, "doc1", "p1 doc",
             activityLastModified: DateTimeOffset.UtcNow.AddMinutes(-20),
             createThreadByUser: user, threadLastModified: DateTimeOffset.UtcNow.AddMinutes(-20),
             ct: ct);
-        await SeedPartitionAsync(mesh, p2, "doc2", "p2 doc",
+        await SeedPartitionAsync(silo, p2, "doc2", "p2 doc",
             activityLastModified: DateTimeOffset.UtcNow.AddMinutes(-2),
             createThreadByUser: user, threadLastModified: DateTimeOffset.UtcNow.AddMinutes(-2),
             ct: ct);
@@ -163,14 +167,175 @@ public class OrleansPostgresFanOutTest(ITestOutputHelper output)
             "sort:LastModified-desc must order threads by their own last_modified across partitions");
     }
 
+    [Fact(Timeout = 240000)]
+    public async Task ScopedQuery_StaysOnSinglePartition_NoFanOut()
+    {
+        if (ShouldSkip(out var reason)) { Output.WriteLine($"SKIPPED: {reason}"); return; }
+        var ct = new CancellationTokenSource(180.Seconds()).Token;
+
+        var run = Guid.NewGuid().ToString("N")[..6];
+        var p1 = $"pgfs_a_{run}";
+        var p2 = $"pgfs_b_{run}";
+
+        var silo = ((InProcessSiloHandle)Cluster.Silos[0]).SiloHost.Services;
+        var mesh = silo.GetRequiredService<IMeshService>();
+
+        await SeedPartitionAsync(silo, p1, "doc1", "p1 doc",
+            activityLastModified: DateTimeOffset.UtcNow.AddMinutes(-30), ct);
+        await SeedPartitionAsync(silo, p2, "doc2", "p2 doc",
+            activityLastModified: DateTimeOffset.UtcNow.AddMinutes(-5), ct);
+
+        // Scoped query — namespace pins to p1. The fan-out provider must
+        // short-circuit (NeedsFanOut=false) and leave the per-schema
+        // StorageAdapterMeshQueryProvider to handle this.
+        var query = $"source:activity namespace:{p1} scope:subtree is:main sort:LastModified-desc";
+        Output.WriteLine($"Running: {query}");
+        var results = await mesh.QueryAsync<MeshNode>(new MeshQueryRequest
+        {
+            Query = query,
+            UserId = WellKnownUsers.System,
+        }).ToListAsync(ct);
+
+        Output.WriteLine($"Hits: [{string.Join(", ", results.Select(r => r.Path))}]");
+
+        results.Should().Contain(n => n.Path == $"{p1}/doc1",
+            "scoped query must still surface p1's row through the per-schema provider");
+        results.Should().NotContain(n => n.Path == $"{p2}/doc2",
+            "scoped query MUST NOT leak rows from p2 — fan-out is gated on unscoped/wildcard");
+    }
+
+    [Fact(Timeout = 240000)]
+    public async Task ActivityFeed_RespectsExplicitLimit_AcrossPartitions()
+    {
+        if (ShouldSkip(out var reason)) { Output.WriteLine($"SKIPPED: {reason}"); return; }
+        var ct = new CancellationTokenSource(180.Seconds()).Token;
+
+        var run = Guid.NewGuid().ToString("N")[..6];
+        var p1 = $"pgfl_a_{run}";
+        var p2 = $"pgfl_b_{run}";
+        var p3 = $"pgfl_c_{run}";
+
+        var silo = ((InProcessSiloHandle)Cluster.Silos[0]).SiloHost.Services;
+        var mesh = silo.GetRequiredService<IMeshService>();
+
+        await SeedPartitionAsync(silo, p1, "doc1", "p1 doc",
+            activityLastModified: DateTimeOffset.UtcNow.AddMinutes(-30), ct);
+        await SeedPartitionAsync(silo, p2, "doc2", "p2 doc",
+            activityLastModified: DateTimeOffset.UtcNow.AddMinutes(-15), ct);
+        await SeedPartitionAsync(silo, p3, "doc3", "p3 doc",
+            activityLastModified: DateTimeOffset.UtcNow.AddMinutes(-1), ct);
+
+        var query = "source:activity scope:subtree is:main sort:LastModified-desc limit:2";
+        Output.WriteLine($"Running: {query}");
+        var results = await mesh.QueryAsync<MeshNode>(new MeshQueryRequest
+        {
+            Query = query,
+            UserId = WellKnownUsers.System,
+        }).ToListAsync(ct);
+
+        Output.WriteLine($"Hits: [{string.Join(", ", results.Select(r => r.Path))}]");
+
+        // Limit applies across the UNION'd result. Cross-test pollution can
+        // dominate either slot (a prior test left rows in other schemas that
+        // are still in the searchable-schemas set), so the strict assertion is:
+        //   1. limit:2 is honoured — exactly 2 rows back
+        //   2. p3 (the most recent of MY three seeded partitions) is present
+        //      — its `_Activity` row's last_modified is ~1 minute ago, so any
+        //      leftover data older than that loses the top spot
+        results.Should().HaveCount(2,
+            "limit:2 must cap the cross-partition UNION at two rows");
+        results.Should().Contain(n => n.Path == $"{p3}/doc3",
+            "p3's activity (~1 min ago) must rank at the top of the limited window");
+        results.Should().NotContain(n => n.Path == $"{p1}/doc1",
+            "p1's activity (~30 min ago) is the oldest of MY seeded partitions and must NOT be in the top 2");
+    }
+
+    [Fact(Timeout = 240000)]
+    public async Task LatestThreads_FiltersOutOtherUsers()
+    {
+        if (ShouldSkip(out var reason)) { Output.WriteLine($"SKIPPED: {reason}"); return; }
+        var ct = new CancellationTokenSource(180.Seconds()).Token;
+
+        var run = Guid.NewGuid().ToString("N")[..6];
+        var p1 = $"pgfu_a_{run}";
+        var p2 = $"pgfu_b_{run}";
+        var me = $"me_{run}";
+        var other = $"other_{run}";
+
+        var silo = ((InProcessSiloHandle)Cluster.Silos[0]).SiloHost.Services;
+        var mesh = silo.GetRequiredService<IMeshService>();
+
+        await SeedPartitionAsync(silo, p1, "doc1", "p1 doc",
+            activityLastModified: DateTimeOffset.UtcNow.AddMinutes(-30),
+            createThreadByUser: me, ct: ct);
+        await SeedPartitionAsync(silo, p2, "doc2", "p2 doc",
+            activityLastModified: DateTimeOffset.UtcNow.AddMinutes(-5),
+            createThreadByUser: other, ct: ct);
+
+        var query = $"nodeType:Thread namespace:*/_Thread content.createdBy:{me} sort:LastModified-desc";
+        Output.WriteLine($"Running: {query}");
+        var results = await mesh.QueryAsync<MeshNode>(new MeshQueryRequest
+        {
+            Query = query,
+            UserId = WellKnownUsers.System,
+        }).ToListAsync(ct);
+
+        Output.WriteLine($"Hits: [{string.Join(", ", results.Select(r => r.Path))}]");
+
+        results.Should().Contain(n => n.Path == $"{p1}/_Thread/t-{p1}",
+            "thread created by `me` must be returned");
+        results.Should().NotContain(n => n.Path == $"{p2}/_Thread/t-{p2}",
+            "thread created by `other` must NOT be returned — content.createdBy filter applies post-UNION");
+    }
+
     /// <summary>
-    /// Creates the Admin/Partition row, partition root, one main content node
-    /// + one _Activity satellite, and (optionally) one _Thread satellite.
-    /// Mirrors <c>UserOnboardingService</c> + the Activity Control Plane's
-    /// satellite write shape.
+    /// Seeds a partition + its satellite rows DIRECTLY via SQL. We bypass
+    /// <c>IMeshService.CreateNode</c> (RLS pipeline) and even the IStorageAdapter
+    /// abstraction (we observed silent no-ops under cache-race conditions in
+    /// the test harness). Raw SQL gives us deterministic state so the fan-out
+    /// query is exercised against a known repository shape:
+    ///   <c>CREATE SCHEMA</c>, <c>CREATE TABLE</c> (mesh_nodes + satellites
+    ///   via <see cref="PostgreSqlSchemaInitializer.CreateSatelliteTablesAsync"/>),
+    ///   then per-row <c>INSERT</c> with exact <c>last_modified</c> timestamps.
+    /// The Admin/Partition row at <c>admin.mesh_nodes</c> drives the runtime
+    /// partition registry; the rest mirrors what UserOnboarding +
+    /// ActivityControlPlane produce in prod.
     /// </summary>
-    private static async Task SeedPartitionAsync(
-        IMeshService mesh,
+    /// <summary>
+    /// Single test-owned NpgsqlDataSource for all seed SQL. CreateAdapterForTable
+    /// (used to materialise schemas + satellite tables) caches per-schema adapters
+    /// inside the silo's <see cref="PostgreSqlPartitionStorageProvider"/> with
+    /// <c>MaxPoolSize=1</c>; seeding all schemas through THOSE adapters exhausts
+    /// the test container's connection limit (53300 "too many clients") by the
+    /// 3rd or 4th test. Routing INSERTs through ONE shared pool keeps the
+    /// connection footprint bounded.
+    /// </summary>
+    private Npgsql.NpgsqlDataSource? _seedDataSource;
+
+    private Npgsql.NpgsqlDataSource GetSeedDataSource()
+    {
+        if (_seedDataSource is null)
+        {
+            var connectionString = Environment.GetEnvironmentVariable(ConnectionStringEnvVar)!;
+            var csb = new Npgsql.NpgsqlConnectionStringBuilder(connectionString) { MaxPoolSize = 4 };
+            var dsBuilder = new Npgsql.NpgsqlDataSourceBuilder(csb.ConnectionString);
+            _seedDataSource = dsBuilder.Build();
+        }
+        return _seedDataSource;
+    }
+
+    public override async ValueTask DisposeAsync()
+    {
+        if (_seedDataSource is not null)
+        {
+            await _seedDataSource.DisposeAsync();
+            _seedDataSource = null;
+        }
+        await base.DisposeAsync();
+    }
+
+    private async Task SeedPartitionAsync(
+        IServiceProvider siloSp,
         string partition,
         string docId,
         string docName,
@@ -179,12 +344,41 @@ public class OrleansPostgresFanOutTest(ITestOutputHelper output)
         string? createThreadByUser = null,
         DateTimeOffset? threadLastModified = null)
     {
-        await mesh.CreateNode(new MeshNode(partition, "Admin/Partition")
+        var partitionDef = new PartitionDefinition
         {
-            NodeType = "Partition",
-            Name = partition,
-            State = MeshNodeState.Active,
-            Content = new PartitionDefinition
+            Namespace = partition,
+            DataSource = "default",
+            Schema = partition,
+            Table = "mesh_nodes",
+            TableMappings = PartitionDefinition.StandardTableMappings,
+            Versioned = true,
+        };
+
+        // CreateAdapterForTable internally calls EnsureSchemaForPartitionSync
+        // (CREATE SCHEMA + InitializeAsync + CreateSatelliteTablesAsync), so by
+        // the time it returns the schema + mesh_nodes + activities + threads
+        // tables are all in place. We only care about the side-effect — the
+        // returned adapter is discarded; seed INSERTs use a single shared
+        // NpgsqlDataSource (see GetSeedDataSource) to keep connection count
+        // bounded across tests.
+        var pgProvider = siloSp.GetRequiredService<PostgreSqlPartitionStorageProvider>();
+        _ = pgProvider.CreateAdapterForTable(partitionDef, "mesh_nodes");
+        var dataSource = GetSeedDataSource();
+
+        var jsonOptions = siloSp.GetRequiredService<IMessageHub>().JsonSerializerOptions;
+
+        // 2. Admin/Partition registry row at admin.mesh_nodes — drives the
+        //    runtime partition catalog (V23 pg_notify primes the per-silo
+        //    PgPartitionCache so the fan-out's GetSearchableSchemasAsync
+        //    surfaces this partition).
+        await InsertMeshNodeAsync(dataSource, "admin", "mesh_nodes",
+            namespacePart: "Admin/Partition",
+            id: partition,
+            nodeType: "Partition",
+            name: partition,
+            mainNode: $"Admin/Partition/{partition}",
+            lastModified: DateTimeOffset.UtcNow,
+            content: new PartitionDefinition
             {
                 Namespace = partition,
                 DataSource = "default",
@@ -193,50 +387,88 @@ public class OrleansPostgresFanOutTest(ITestOutputHelper output)
                 TableMappings = PartitionDefinition.StandardTableMappings,
                 Versioned = true,
             },
-        }).Timeout(30.Seconds()).FirstAsync().ToTask(ct);
+            jsonOptions: jsonOptions,
+            ct: ct);
 
-        await mesh.CreateNode(new MeshNode(partition)
-        {
-            NodeType = "User",
-            Name = partition,
-            State = MeshNodeState.Active,
-        }).Timeout(30.Seconds()).FirstAsync().ToTask(ct);
+        // 3. Partition root + main content node + _Activity satellite + optional _Thread.
+        await InsertMeshNodeAsync(dataSource, partition, "mesh_nodes",
+            namespacePart: "", id: partition, nodeType: "User", name: partition,
+            mainNode: partition,
+            lastModified: DateTimeOffset.UtcNow,
+            content: null, jsonOptions: jsonOptions, ct: ct);
 
-        // Main content node — what the Activity Feed Where(is:main) keeps.
         var mainPath = $"{partition}/{docId}";
-        await mesh.CreateNode(new MeshNode(docId, partition)
-        {
-            NodeType = "Markdown",
-            Name = docName,
-            State = MeshNodeState.Active,
-        }).Timeout(30.Seconds()).FirstAsync().ToTask(ct);
+        await InsertMeshNodeAsync(dataSource, partition, "mesh_nodes",
+            namespacePart: partition, id: docId, nodeType: "Markdown", name: docName,
+            mainNode: mainPath,
+            lastModified: DateTimeOffset.UtcNow,
+            content: null, jsonOptions: jsonOptions, ct: ct);
 
-        // _Activity satellite — JOIN target of source:activity. MainNode
-        // points back at the main content node so the join projects the main
-        // row, and last_modified drives the sort.
-        await mesh.CreateNode(new MeshNode($"a-{partition}", $"{partition}/{docId}/_Activity")
-        {
-            NodeType = "Activity",
-            Name = $"act-{partition}",
-            State = MeshNodeState.Active,
-            MainNode = mainPath,
-            LastModified = activityLastModified,
-            Content = new ActivityLog("DataUpdate") { HubPath = mainPath },
-        }).Timeout(30.Seconds()).FirstAsync().ToTask(ct);
+        await InsertMeshNodeAsync(dataSource, partition, "activities",
+            namespacePart: $"{partition}/{docId}/_Activity",
+            id: $"a-{partition}",
+            nodeType: "Activity",
+            name: $"act-{partition}",
+            mainNode: mainPath,
+            lastModified: activityLastModified,
+            content: new ActivityLog("DataUpdate") { HubPath = mainPath },
+            jsonOptions: jsonOptions, ct: ct);
 
         if (createThreadByUser is not null)
         {
-            await mesh.CreateNode(new MeshNode($"t-{partition}", $"{partition}/_Thread")
-            {
-                NodeType = "Thread",
-                Name = $"Thread in {partition}",
-                State = MeshNodeState.Active,
-                MainNode = $"{partition}/_Thread/t-{partition}",
-                LastModified = threadLastModified ?? activityLastModified,
-                // content.createdBy is the filter the GUI applies.
-                Content = new { CreatedBy = createThreadByUser },
-            }).Timeout(30.Seconds()).FirstAsync().ToTask(ct);
+            var threadPath = $"{partition}/_Thread/t-{partition}";
+            await InsertMeshNodeAsync(dataSource, partition, "threads",
+                namespacePart: $"{partition}/_Thread",
+                id: $"t-{partition}",
+                nodeType: "Thread",
+                name: $"Thread in {partition}",
+                mainNode: threadPath,
+                lastModified: threadLastModified ?? activityLastModified,
+                content: new { createdBy = createThreadByUser },
+                jsonOptions: jsonOptions, ct: ct);
         }
+    }
+
+    private static async Task InsertMeshNodeAsync(
+        Npgsql.NpgsqlDataSource dataSource,
+        string schema,
+        string table,
+        string namespacePart,
+        string id,
+        string nodeType,
+        string name,
+        string mainNode,
+        DateTimeOffset lastModified,
+        object? content,
+        JsonSerializerOptions jsonOptions,
+        CancellationToken ct)
+    {
+        var contentJson = content is null ? null
+            : JsonSerializer.Serialize(content, content.GetType(), jsonOptions);
+        await using var cmd = dataSource.CreateCommand(
+            $"""
+            INSERT INTO "{schema}"."{table}"
+                (namespace, id, name, node_type, last_modified, version, state, content, main_node)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
+            ON CONFLICT (namespace, id) DO UPDATE SET
+                name = EXCLUDED.name,
+                node_type = EXCLUDED.node_type,
+                last_modified = EXCLUDED.last_modified,
+                version = EXCLUDED.version,
+                state = EXCLUDED.state,
+                content = EXCLUDED.content,
+                main_node = EXCLUDED.main_node
+            """);
+        cmd.Parameters.AddWithValue(namespacePart);
+        cmd.Parameters.AddWithValue(id);
+        cmd.Parameters.AddWithValue((object?)name ?? DBNull.Value);
+        cmd.Parameters.AddWithValue(nodeType);
+        cmd.Parameters.AddWithValue(lastModified);
+        cmd.Parameters.AddWithValue(1L);
+        cmd.Parameters.AddWithValue((short)MeshNodeState.Active);
+        cmd.Parameters.AddWithValue((object?)contentJson ?? DBNull.Value);
+        cmd.Parameters.AddWithValue(mainNode);
+        await cmd.ExecuteNonQueryAsync(ct);
     }
 
     public class PostgresFanOutSiloConfigurator : ISiloConfigurator, IHostConfigurator
