@@ -1,10 +1,12 @@
 namespace MeshWeaver.Layout;
 
 /// <summary>
-/// Request to resubmit a user message in a thread.
-/// The handler truncates ThreadMessages from the given message onwards,
-/// then posts a new SubmitMessageRequest with the provided text.
+/// <b>DEPRECATED — call <see cref="MeshWeaver.AI.ThreadSubmission.ApplyResubmit"/>
+/// directly instead.</b> Production callers (the thread-message layout area
+/// click actions) have been migrated. This type is retained only so any
+/// out-of-tree caller compiles. See <c>Doc/Architecture/RequestViaStreamUpdate.md</c>.
 /// </summary>
+[System.Obsolete("Use ThreadSubmission.ApplyResubmit(hub, threadPath, messageId, …) — see RequestViaStreamUpdate.md.")]
 public record ResubmitMessageRequest
 {
     public required string ThreadPath { get; init; }
@@ -15,9 +17,10 @@ public record ResubmitMessageRequest
 }
 
 /// <summary>
-/// Request to delete a message and all subsequent messages from a thread.
-/// The handler truncates ThreadMessages from the given message onwards.
+/// <b>DEPRECATED — call <see cref="MeshWeaver.AI.ThreadSubmission.ApplyDeleteFromMessage"/>
+/// directly instead.</b> See <see cref="ResubmitMessageRequest"/> rationale.
 /// </summary>
+[System.Obsolete("Use ThreadSubmission.ApplyDeleteFromMessage(hub, threadPath, messageId) — see RequestViaStreamUpdate.md.")]
 public record DeleteFromMessageRequest
 {
     public required string ThreadPath { get; init; }

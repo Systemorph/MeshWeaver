@@ -247,12 +247,10 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
             .Timeout(15.Seconds())
             .FirstAsync().ToTask(ct);
 
-        client.Post(new ResubmitMessageRequest
-        {
-            ThreadPath = threadPath,
-            MessageId = msgIds[0],
-            UserMessageText = "Delegate something"
-        }, o => o.WithTarget(new Address(threadPath)));
+        // Stream-update resubmit — see RequestViaStreamUpdate.md.
+        MeshWeaver.AI.ThreadSubmission.ApplyResubmit(
+            client, threadPath, msgIds[0],
+            newUserText: "Delegate something", agentName: null, modelName: null);
 
         var newMsgIds = await resubmitted;
         Output.WriteLine($"3. After resubmit: [{string.Join(", ", newMsgIds)}]");

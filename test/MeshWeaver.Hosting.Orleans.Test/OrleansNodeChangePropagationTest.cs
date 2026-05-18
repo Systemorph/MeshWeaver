@@ -288,14 +288,10 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
             .FirstAsync()
             .ToTask(ct);
 
-        Output.WriteLine("Posting ResubmitMessageRequest...");
-        var resubmitDelivery = client.Post(new ResubmitMessageRequest
-        {
-            ThreadPath = threadPath,
-            MessageId = msgIds[0],
-            UserMessageText = "Resubmitted message"
-        }, o => o.WithTarget(new Address(threadPath)));
-        Output.WriteLine($"ResubmitMessageRequest delivery: {resubmitDelivery != null}");
+        Output.WriteLine("Resubmitting via stream.Update (ApplyResubmit)...");
+        MeshWeaver.AI.ThreadSubmission.ApplyResubmit(
+            client, threadPath, msgIds[0],
+            newUserText: "Resubmitted message", agentName: null, modelName: null);
 
         // 3. Wait for message IDs to change Ã¢â‚¬â€ if deadlocked, this times out
         var newMsgIds = await resubmittedMessages;
