@@ -222,20 +222,15 @@ public class ThreadSubmissionIntegrationTest : AITestBase
 
         var errorTcs = new TaskCompletionSource<string>();
 
-        // Simulate a failure path by posting RecordSubmissionFailureRequest directly.
-        // (Exercises the handler contract the client's OnError goes through.)
+        // Simulate a failure path by invoking the production helper directly
+        // (replaces the legacy RecordSubmissionFailureRequest post + handler).
         var fakeUserMsgId = Guid.NewGuid().ToString("N")[..8];
-        var delivery = client.Post(
-            new RecordSubmissionFailureRequest
-            {
-                ThreadPath = threadPath,
-                UserMessageId = fakeUserMsgId,
-                UserText = "message that failed",
-                ErrorMessage = "network timeout"
-            },
-            o => o.WithTarget(new Address(threadPath)));
-
-        delivery.Should().NotBeNull();
+        MeshWeaver.AI.ThreadSubmission.ApplyRecordSubmissionFailure(
+            client,
+            threadPath: threadPath,
+            userMessageId: fakeUserMsgId,
+            userText: "message that failed",
+            errorMessage: "network timeout");
 
         // Wait for the thread to reflect: user id appended + an error response cell appended
         // + user id marked as ingested (so watcher doesn't retry).

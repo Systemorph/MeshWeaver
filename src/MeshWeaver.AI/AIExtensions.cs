@@ -78,24 +78,15 @@ public static class AIExtensions
             .WithType(typeof(AI.Thread), nameof(AI.Thread))
             .WithType(typeof(ThreadMessage), nameof(ThreadMessage))
             // MessageViewModel is not registered — handled as JsonElement on the wire.
+            // SubmitMessageRequest is the LAST surviving thread-mutation request —
+            // its handler pre-allocates a CancellationTokenSource that the
+            // stream-update path can't replicate without a side-effect watcher.
+            // Migration plan tracked in tasks #10. Everything else
+            // (Append/Resubmit/Cancel/Delete) was migrated to stream.Update via
+            // ThreadInput / ThreadSubmission helpers and DELETED.
+            // See Doc/Architecture/RequestViaStreamUpdate.md.
             .WithType(typeof(SubmitMessageRequest), nameof(SubmitMessageRequest))
             .WithType(typeof(SubmitMessageResponse), nameof(SubmitMessageResponse))
-            // [Obsolete] types below — kept in the wire registry so deserialisation
-            // of stale messages still works while callers migrate. The legacy
-            // hub handlers have been removed; production callers must now use
-            // ThreadInput.AppendUserInput / ThreadSubmission.Apply* /
-            // workspace.GetMeshNodeStream(threadPath).Update(...). See
-            // Doc/Architecture/RequestViaStreamUpdate.md.
-#pragma warning disable CS0618
-            .WithType(typeof(AppendUserMessageRequest), nameof(AppendUserMessageRequest))
-            .WithType(typeof(AppendUserMessageResponse), nameof(AppendUserMessageResponse))
-            .WithType(typeof(ResubmitUserMessageRequest), nameof(ResubmitUserMessageRequest))
-            .WithType(typeof(RecordSubmissionFailureRequest), nameof(RecordSubmissionFailureRequest))
-            .WithType(typeof(CancelThreadStreamRequest), nameof(CancelThreadStreamRequest))
-            .WithType(typeof(CancelThreadStreamResponse), nameof(CancelThreadStreamResponse))
-            .WithType(typeof(MeshWeaver.Layout.ResubmitMessageRequest), nameof(MeshWeaver.Layout.ResubmitMessageRequest))
-            .WithType(typeof(MeshWeaver.Layout.DeleteFromMessageRequest), nameof(MeshWeaver.Layout.DeleteFromMessageRequest))
-#pragma warning restore CS0618
             .WithType(typeof(ToolCallEntry), nameof(ToolCallEntry))
             .WithType(typeof(NodeChangeEntry), nameof(NodeChangeEntry))
             .WithType(typeof(ThreadExecutionContext), nameof(ThreadExecutionContext))
