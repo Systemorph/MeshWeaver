@@ -817,9 +817,27 @@ public static class ThreadExecution
 
                     var toolCallLog = ImmutableList<ToolCallEntry>.Empty;
                 var nodeChangeLog = ImmutableList<NodeChangeEntry>.Empty;
+                // toolCallLog + nodeChangeLog are mutated from 4 concurrent paths:
+                //   1. Streaming loop (Task.Run with await foreach over agent updates)
+                //   2. FCC middleware (ChatClientAgentFactory's .Use(...) callback,
+                //      fires on FCC's invocation thread)
+                //   3. client.ForwardToolCall (alias for path 2 on test agents that
+                //      bypass FCC)
+                //   4. client.UpdateDelegationStatus (sub-thread completion callback
+                //      on the sub-thread hub's grain scheduler)
+                // Without a lock, the read-modify-write idiom
+                //   `toolCallLog = toolCallLog.Select/Add/SetItem(...)`
+                // suffers (a) lost updates — the flapping "delegations=0/1"
+                // alternation in OrleansDelegationTest's STREAM log — and
+                // (b) Index-out-of-range when one thread captures idx via FindIndex
+                // and a concurrent thread reassigns the list between FindIndex and
+                // SetItem (the line 167 InvalidOperationException). Repro:
+                // OrleansDelegationTest.Delegation_ToolCallsAppear_WithDelegationPath
+                // failed intermittently before this lock.
+                var logLock = new object();
                 // responseText is captured after InvokeAsync creates it (see below)
                 StringBuilder? capturedResponseText = null;
-                client.ForwardNodeChange = entry => { nodeChangeLog = nodeChangeLog.Add(entry); };
+                client.ForwardNodeChange = entry => { lock (logLock) { nodeChangeLog = nodeChangeLog.Add(entry); } };
                 string? currentStatus = null;
                 client.UpdateDelegationStatus = status =>
                 {
@@ -835,22 +853,39 @@ public static class ThreadExecution
                     {
                         // Stamp the path on the first unmatched delegation tool call
                         var stamped = false;
-                        toolCallLog = toolCallLog.Select(e =>
+                        ImmutableList<ToolCallEntry> snapshotLog;
+                        ImmutableList<NodeChangeEntry> snapshotNodes;
+                        string textSnapshot;
+                        lock (logLock)
                         {
-                            if (!stamped && e.Name.StartsWith("delegate_to") && e.DelegationPath == null)
+                            toolCallLog = toolCallLog.Select(e =>
                             {
-                                stamped = true;
-                                logger.LogInformation("[ThreadExec] DELEGATION_STAMPED: name={Name} delPath={DelPath}",
-                                    e.Name, delPath);
-                                return e with { DelegationPath = delPath };
-                            }
-                            return e;
-                        }).ToImmutableList();
+                                if (!stamped && e.Name.StartsWith("delegate_to") && e.DelegationPath == null)
+                                {
+                                    stamped = true;
+                                    logger.LogInformation("[ThreadExec] DELEGATION_STAMPED: name={Name} delPath={DelPath}",
+                                        e.Name, delPath);
+                                    return e with { DelegationPath = delPath };
+                                }
+                                return e;
+                            }).ToImmutableList();
+                            snapshotLog = toolCallLog;
+                            snapshotNodes = nodeChangeLog;
+                            // StringBuilder.ToString() is NOT thread-safe with concurrent
+                            // Append — it walks an internal chunk list. The streaming task
+                            // is Append-ing words for the "Delegation completed successfully"
+                            // text concurrently with this callback running on the sub-thread's
+                            // grain scheduler. Without the lock, ToString throws
+                            // ArgumentOutOfRangeException("index") mid-walk — the exact failure
+                            // OrleansDelegationTest.Delegation_ToolCallsAppear_WithDelegationPath
+                            // hits at line 167.
+                            textSnapshot = capturedResponseText?.ToString() ?? "";
+                        }
                         if (!stamped)
                             logger.LogWarning("[ThreadExec] DELEGATION_NO_STAMP: status={Status} — no unmatched delegate_to entry to stamp (logSize={LogSize})",
-                                status, toolCallLog.Count);
+                                status, snapshotLog.Count);
                         // Preserve any previously streamed text
-                        PushToResponseMessage(capturedResponseText?.ToString() ?? "", toolCallLog, nodeChangeLog,
+                        PushToResponseMessage(textSnapshot, snapshotLog, snapshotNodes,
                             request.AgentName, request.ModelName);
                     }
                     else
@@ -867,9 +902,12 @@ public static class ThreadExecution
                 // entirely — we dedup it instead.
                 client.ForwardToolCall = entry =>
                 {
-                    if (toolCallLog.Any(e => e.Name == entry.Name && e.Result == null))
-                        return;
-                    toolCallLog = toolCallLog.Add(entry);
+                    lock (logLock)
+                    {
+                        if (toolCallLog.Any(e => e.Name == entry.Name && e.Result == null))
+                            return;
+                        toolCallLog = toolCallLog.Add(entry);
+                    }
                 };
 
                 var agentDisplayName = request.AgentName ?? "Agent";
@@ -983,16 +1021,19 @@ public static class ThreadExecution
                         // signal in production). Without the second guard the log doubles per call —
                         // the FRC handler only replaces the first match by name, leaving the second
                         // as a permanent "pending" entry the UI renders forever.
-                        var alreadyPending = toolCallLog.Any(e => e.Name == functionCall.Name && e.Result == null);
-                        if (!isDuplicate && !alreadyPending)
+                        lock (logLock)
                         {
-                            toolCallLog = toolCallLog.Add(new ToolCallEntry
+                            var alreadyPending = toolCallLog.Any(e => e.Name == functionCall.Name && e.Result == null);
+                            if (!isDuplicate && !alreadyPending)
                             {
-                                Name = functionCall.Name,
-                                DisplayName = formatted,
-                                Arguments = argsDetail,
-                                Timestamp = DateTime.UtcNow
-                            });
+                                toolCallLog = toolCallLog.Add(new ToolCallEntry
+                                {
+                                    Name = functionCall.Name,
+                                    DisplayName = formatted,
+                                    Arguments = argsDetail,
+                                    Timestamp = DateTime.UtcNow
+                                });
+                            }
                         }
                     }
                     else if (content is UsageContent usage)
@@ -1036,62 +1077,99 @@ public static class ThreadExecution
 
                             // Replace pending entry with final (has Result + DelegationPath).
                             // Preserve DelegationPath if already stamped by UpdateDelegationStatus.
-                            var idx = toolCallLog.FindIndex(e => e.Name == originalCall.Name && e.Result == null);
-                            var existingDelegationPath = idx >= 0 ? toolCallLog[idx].DelegationPath : null;
-                            logger.LogInformation(
-                                "[ThreadExec] TOOL_RESULT_REPLACE: name={Name} callId={CallId} idx={Idx} " +
-                                "existingDelegationPath={ExistingDelegationPath} extractedPath={ExtractedPath} logSize={LogSize}",
-                                originalCall.Name, originalCall.CallId, idx,
-                                existingDelegationPath ?? "(null)", delegationPath ?? "(null)", toolCallLog.Count);
-                            var finalEntry = new ToolCallEntry
+                            // FindIndex + SetItem must be atomic — without the lock a concurrent
+                            // Select/.ToImmutableList rebuild from another path (UpdateDelegationStatus
+                            // or middleware ForwardToolCall) can change the list reference between
+                            // FindIndex returning idx and SetItem(idx) consuming it.
+                            // Repro: OrleansDelegationTest's
+                            // `Index was out of range. (Parameter 'index')`.
+                            lock (logLock)
                             {
-                                Name = originalCall.Name,
-                                DisplayName = ToolStatusFormatter.Format(originalCall),
-                                Arguments = SerializeArgs(originalCall.Arguments),
-                                Result = Truncate(resultText),
-                                IsSuccess = isSuccess,
-                                DelegationPath = delegationPath ?? existingDelegationPath,
-                                Timestamp = DateTime.UtcNow
-                            };
-                            toolCallLog = idx >= 0 ? toolCallLog.SetItem(idx, finalEntry) : toolCallLog.Add(finalEntry);
-                            logger.LogDebug("[ThreadExec] TOOL_DONE: {Time:HH:mm:ss.fff} {Name} callId={CallId} delegation={Delegation} resultLen={ResultLen}",
-                                DateTime.UtcNow, originalCall.Name, originalCall.CallId, delegationPath,
-                                finalEntry.Result?.Length ?? 0);
+                                var idx = toolCallLog.FindIndex(e => e.Name == originalCall.Name && e.Result == null);
+                                var existingDelegationPath = idx >= 0 ? toolCallLog[idx].DelegationPath : null;
+                                logger.LogInformation(
+                                    "[ThreadExec] TOOL_RESULT_REPLACE: name={Name} callId={CallId} idx={Idx} " +
+                                    "existingDelegationPath={ExistingDelegationPath} extractedPath={ExtractedPath} logSize={LogSize}",
+                                    originalCall.Name, originalCall.CallId, idx,
+                                    existingDelegationPath ?? "(null)", delegationPath ?? "(null)", toolCallLog.Count);
+                                var finalEntry = new ToolCallEntry
+                                {
+                                    Name = originalCall.Name,
+                                    DisplayName = ToolStatusFormatter.Format(originalCall),
+                                    Arguments = SerializeArgs(originalCall.Arguments),
+                                    Result = Truncate(resultText),
+                                    IsSuccess = isSuccess,
+                                    DelegationPath = delegationPath ?? existingDelegationPath,
+                                    Timestamp = DateTime.UtcNow
+                                };
+                                toolCallLog = idx >= 0 ? toolCallLog.SetItem(idx, finalEntry) : toolCallLog.Add(finalEntry);
+                                logger.LogDebug("[ThreadExec] TOOL_DONE: {Time:HH:mm:ss.fff} {Name} callId={CallId} delegation={Delegation} resultLen={ResultLen}",
+                                    DateTime.UtcNow, originalCall.Name, originalCall.CallId, delegationPath,
+                                    finalEntry.Result?.Length ?? 0);
+                            }
                         }
                         currentStatus = null; // Tool call completed
                     }
                 }
 
-                if (!string.IsNullOrEmpty(update.Text))
-                    responseText.Append(update.Text);
-
                 // Stamp delegation paths on any unmatched delegation tool calls.
-                var pathValues = chatClient.DelegationPaths.Values.ToList();
-                var pathIdx = 0;
-                toolCallLog = toolCallLog.Select(e =>
-                    e.Name.StartsWith("delegate_to") && e.DelegationPath == null && pathIdx < pathValues.Count
-                        ? e with { DelegationPath = pathValues[pathIdx++] }
-                        : e).ToImmutableList();
+                // Same lock as every other toolCallLog mutation site — otherwise this
+                // rebuild silently overwrites an in-flight FunctionResultContent
+                // SetItem and the completed entry's Result/IsSuccess fields are lost.
+                // Also guards responseText.Append + ToString from the StringBuilder
+                // chunk-walk race with UpdateDelegationStatus on the sub-thread.
+                ImmutableList<ToolCallEntry> snapshotLog;
+                ImmutableList<NodeChangeEntry> snapshotNodes;
+                string textSnapshot;
+                lock (logLock)
+                {
+                    if (!string.IsNullOrEmpty(update.Text))
+                        responseText.Append(update.Text);
+
+                    var pathValues = chatClient.DelegationPaths.Values.ToList();
+                    var pathIdx = 0;
+                    toolCallLog = toolCallLog.Select(e =>
+                        e.Name.StartsWith("delegate_to") && e.DelegationPath == null && pathIdx < pathValues.Count
+                            ? e with { DelegationPath = pathValues[pathIdx++] }
+                            : e).ToImmutableList();
+                    snapshotLog = toolCallLog;
+                    snapshotNodes = nodeChangeLog;
+                    textSnapshot = responseText.ToString();
+                }
 
                 snapshots.OnNext(new StreamingSnapshot(
-                    responseText.ToString(), toolCallLog, nodeChangeLog));
+                    textSnapshot, snapshotLog, snapshotNodes));
             }
 
                     snapshots.OnCompleted();
+                    // Capture a final consistent snapshot under the same lock that
+                    // guarded every prior Append/ToString — UpdateDelegationStatus
+                    // can still fire after the await foreach exits if a sub-thread
+                    // completes during the trailing iteration.
+                    string finalText;
+                    int finalTextLen;
+                    ImmutableList<ToolCallEntry> finalToolCalls;
+                    ImmutableList<NodeChangeEntry> finalNodeChanges;
+                    lock (logLock)
+                    {
+                        finalText = responseText.ToString();
+                        finalTextLen = responseText.Length;
+                        finalToolCalls = toolCallLog;
+                        finalNodeChanges = nodeChangeLog;
+                    }
                     // include token usage + completion timestamp so the cell can show duration / tokens.
-                    var aggregatedChanges = AggregateNodeChanges(nodeChangeLog);
+                    var aggregatedChanges = AggregateNodeChanges(finalNodeChanges);
                     if (totalTokens is null && (inputTokens.HasValue || outputTokens.HasValue))
                         totalTokens = (inputTokens ?? 0) + (outputTokens ?? 0);
                     logger.LogInformation("[ThreadExec] EXECUTION_COMPLETE: {Time:HH:mm:ss.fff} threadPath={ThreadPath}, responseLength={Length}, toolCalls={ToolCalls}, tokens={In}/{Out}/{Total}",
-                        DateTime.UtcNow, threadPath, responseText.Length, toolCallLog.Count,
+                        DateTime.UtcNow, threadPath, finalTextLen, finalToolCalls.Count,
                         inputTokens, outputTokens, totalTokens);
-                    var finalText = responseText.ToString();
                     // Empty stream + no tool calls = silent agent failure
                     // (e.g. underlying API returned nothing). Surface so the
                     // user sees a real terminal state instead of a blank cell.
-                    if (string.IsNullOrEmpty(finalText) && toolCallLog.IsEmpty)
+                    if (string.IsNullOrEmpty(finalText) && finalToolCalls.IsEmpty)
                         finalText = "*Agent returned no response — streaming completed with zero tokens.*";
-                    PushToResponseMessage(finalText, toolCallLog, aggregatedChanges,
+                    PushToResponseMessage(finalText, finalToolCalls, aggregatedChanges,
                         request.AgentName, request.ModelName,
                         inputTokens: inputTokens, outputTokens: outputTokens,
                         totalTokens: totalTokens, completedAt: DateTime.UtcNow,
