@@ -116,6 +116,8 @@ private void OnTitleChanged(string newTitle)
 
 The framework propagates the patch to the owning hub, persists, and notifies all other subscribers — no separate `DataChangeRequest` needed for own-node edits inside a bound view.
 
+> **Server-side mirror.** The same rule holds on the server: every mesh-node mutation goes through `workspace.GetMeshNodeStream(path).Update(...)`, never through a bespoke `IRequest` handler. State machines (compile, thread execution, satellite operations) flip a `RequestedX` field on the node's content; the owning hub's watcher reacts. Full reference: **[Requesting Work via stream.Update()](xref:Architecture/RequestViaStreamUpdate)** — the default pattern, applies to threads, NodeType compile, Code edits, every annotation flow.
+
 ## Anti-patterns — never do these
 
 | ❌ Wrong | Why | ✅ Right |

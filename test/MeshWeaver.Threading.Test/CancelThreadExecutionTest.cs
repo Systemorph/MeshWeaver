@@ -151,10 +151,19 @@ public class CancelThreadExecutionTest(ITestOutputHelper output) : MonolithMeshT
             .ToTask(ct);
         Output.WriteLine("Streaming confirmed armed (response cell shows 'Generating response...')");
 
-        // 3. Cancel the stream
-        Output.WriteLine("Sending CancelThreadStreamRequest...");
-        client.Post(new CancelThreadStreamRequest { ThreadPath = threadPath },
-            o => o.WithTarget(new Address(threadPath)));
+        // 3. Cancel via stream.Update — flip RequestedCancellationAt on the
+        //    thread node. ThreadExecution.InstallCancellationWatcher reacts:
+        //    cancels the stored CTS and propagates to active delegation
+        //    sub-threads. See RequestViaStreamUpdate.md. Awaiting the post-
+        //    update emission asserts the write actually landed.
+        Output.WriteLine("Flipping RequestedCancellationAt via stream.Update...");
+        var cancelled = await client.GetWorkspace().GetMeshNodeStream(threadPath)
+            .Update(curr => curr?.Content is MeshThread t
+                ? curr with { Content = t with { RequestedCancellationAt = DateTime.UtcNow } }
+                : curr!)
+            .FirstAsync().ToTask(ct);
+        (cancelled.Content as MeshThread)?.RequestedCancellationAt.Should().NotBeNull(
+            "stream.Update should have stamped RequestedCancellationAt on the thread node");
 
         // 4. Wait for execution to stop via the stream — IsExecuting=false.
         //    Replaces the old 30×200ms poll loop on GetDataRequest, which

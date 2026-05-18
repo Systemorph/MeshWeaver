@@ -1375,13 +1375,30 @@ public sealed class MessageHub : IMessageHub
         }
     }
 
+    private const int PendingCallbackLogCap = 20;
+
     private static string FormatPendingCallbacks(
         (string MessageId, string RequestType, Address? Target, long AgeMs)[] pending)
     {
         if (pending.Length == 0)
             return "<none>";
-        return string.Join(", ", pending.Select(p =>
+        // Cap individual-callback enumeration — a stuck hub with 995 outstanding
+        // DataChangeRequests was emitting a single ~100KB log line that broke
+        // downstream TRX parsers (`xmlSAX2Characters: huge text node`). The first
+        // few + a per-(RequestType,Target) tally is enough to diagnose; anything
+        // beyond is noise that drowns the rest of the log.
+        if (pending.Length <= PendingCallbackLogCap)
+        {
+            return string.Join(", ", pending.Select(p =>
+                $"{p.MessageId}={p.RequestType}@{p.Target}({p.AgeMs}ms)"));
+        }
+        var head = string.Join(", ", pending.Take(PendingCallbackLogCap).Select(p =>
             $"{p.MessageId}={p.RequestType}@{p.Target}({p.AgeMs}ms)"));
+        var rest = pending.Skip(PendingCallbackLogCap)
+            .GroupBy(p => $"{p.RequestType}@{p.Target}")
+            .OrderByDescending(g => g.Count())
+            .Select(g => $"{g.Key}×{g.Count()}");
+        return $"{head}, …+{pending.Length - PendingCallbackLogCap} more [{string.Join(", ", rest)}]";
     }
 
     /// <summary>

@@ -102,9 +102,16 @@ public class DelegationFailureTest(ITestOutputHelper output) : MonolithMeshTestB
         // Wait a bit for delegation to start
         await Task.Delay(1000, ct);
 
-        // Cancel the execution
-        client.Post(new CancelThreadStreamRequest { ThreadPath = threadPath },
-            o => o.WithTarget(new Address(threadPath)));
+        // Cancel via stream.Update — flip RequestedCancellationAt; the
+        // thread hub's InstallCancellationWatcher reacts. See
+        // RequestViaStreamUpdate.md. Awaiting the emission asserts the
+        // write actually landed.
+        var cancelled = await client.GetWorkspace().GetMeshNodeStream(threadPath)
+            .Update(curr => curr?.Content is MeshThread t
+                ? curr with { Content = t with { RequestedCancellationAt = DateTime.UtcNow } }
+                : curr!)
+            .FirstAsync().ToTask(ct);
+        (cancelled.Content as MeshThread)?.RequestedCancellationAt.Should().NotBeNull();
 
         // Wait for execution to stop â€” should not hang
         var workspace = client.GetWorkspace();

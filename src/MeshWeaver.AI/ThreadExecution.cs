@@ -104,10 +104,16 @@ public static class ThreadExecution
             .WithHandler<AppendUserMessageRequest>(ThreadSubmission.HandleAppendUserMessage)
             .WithHandler<ResubmitUserMessageRequest>(ThreadSubmission.HandleResubmitUserMessage)
             .WithHandler<RecordSubmissionFailureRequest>(ThreadSubmission.HandleRecordSubmissionFailure)
-            .WithHandler<CancelThreadStreamRequest>(HandleCancelStream)
+            // Back-compat shim — new callers should flip RequestedCancellationAt
+            // via stream.Update directly. The shim translates the legacy request
+            // into the same stream update so existing wire-level tests still pass.
+#pragma warning disable CS0618
+            .WithHandler<CancelThreadStreamRequest>(HandleCancelStreamShim)
+#pragma warning restore CS0618
             .WithInitialization(SetThreadHubIdentity)
             .WithInitialization(RecoverStaleExecutingThread)
             .WithInitialization(WatchForExecution)
+            .WithInitialization(InstallCancellationWatcher)
             .WithInitialization(InstallSubmissionWatcher);
 
     /// <summary>
@@ -1313,47 +1319,97 @@ public static class ThreadExecution
         return (text, null, isSuccess);
     }
 
-    private static IMessageDelivery HandleCancelStream(
+    /// <summary>
+    /// Back-compat: translates a legacy <see cref="CancelThreadStreamRequest"/>
+    /// into the canonical stream update on the OWN thread node. New callers
+    /// should flip <see cref="MeshThread.RequestedCancellationAt"/> directly
+    /// via <c>workspace.GetMeshNodeStream(threadPath).Update(...)</c> — see
+    /// <c>RequestViaStreamUpdate.md</c>. The shim keeps wire-level routing
+    /// tests (e.g. <c>OrleansHostedHubRoutingTest</c>) working without
+    /// reintroducing bespoke cancel logic.
+    /// </summary>
+    [Obsolete("Flip MeshThread.RequestedCancellationAt via stream.Update — see RequestViaStreamUpdate.md.")]
+    private static IMessageDelivery HandleCancelStreamShim(
         IMessageHub hub, IMessageDelivery<CancelThreadStreamRequest> delivery)
     {
         var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
-        var threadPath = hub.Address.Path;
-
-        // Read Thread.StreamingToolCalls from workspace (runs on grain scheduler — safe).
-        // Find active delegation sub-threads and propagate cancel via Post (fire-and-forget).
-        hub.GetWorkspace().GetMeshNodeStream().Take(1).Subscribe(
-            node =>
-            {
-                var thread = node.Content as MeshThread;
-                if (thread?.StreamingToolCalls is { Count: > 0 })
-                {
-                    foreach (var tc in thread.StreamingToolCalls.Where(
-                        tc => !string.IsNullOrEmpty(tc.DelegationPath) && tc.Result == null))
-                    {
-                        logger?.LogInformation("[ThreadExec] Propagating cancel to sub-thread {SubThread}", tc.DelegationPath);
-                        hub.Post(new CancelThreadStreamRequest { ThreadPath = tc.DelegationPath! },
-                            o => o.WithTarget(new Address(tc.DelegationPath!)));
-                    }
-                }
-            },
-            ex => logger?.LogWarning(ex,
-                "HandleCancelStream: read failed for {ThreadPath}", threadPath));
-
-        // Cancel own execution via CancellationTokenSource (streaming runs on
-        // thread pool). The CTS was stored on the parent thread hub via Set —
-        // the _Exec hub stored it on its parent (= this hub).
-        var cts = hub.Get<CancellationTokenSource>();
-        if (cts != null)
-        {
-            logger?.LogInformation("[ThreadExec] Cancelling own execution for {ThreadPath}", threadPath);
-            cts.Cancel();
-        }
-
-        // Post response so parent can await confirmation
-        hub.Post(new CancelThreadStreamResponse { ThreadPath = threadPath },
+        hub.GetWorkspace().GetMeshNodeStream()
+            .Update(curr => curr?.Content is MeshThread t
+                ? curr with { Content = t with { RequestedCancellationAt = DateTime.UtcNow } }
+                : curr!)
+            .Subscribe(_ => { }, ex => logger?.LogWarning(ex,
+                "[ThreadExec] CancelThreadStreamRequest shim update failed for {Hub}", hub.Address));
+        hub.Post(new CancelThreadStreamResponse { ThreadPath = hub.Address.Path },
             o => o.ResponseFor(delivery));
-
         return delivery.Processed();
+    }
+
+    /// <summary>
+    /// Stream-update cancellation: clients flip <see cref="MeshThread.RequestedCancellationAt"/>
+    /// on the thread node via <c>workspace.GetMeshNodeStream(threadPath).Update(...)</c>.
+    /// The watcher below observes the OWN thread node, treats every transition
+    /// to "<c>RequestedCancellationAt &gt; ExecutionStartedAt</c>" as a cancel
+    /// signal, cancels the stored CTS, and propagates the same flip onto every
+    /// active delegation sub-thread.
+    ///
+    /// <para>The bare <c>RequestedCancellationAt</c> compare is the only single-
+    /// flight needed: the action block serialises Updates, and once we've
+    /// cancelled we record <c>handledAt</c> in process memory so the same
+    /// timestamp isn't acted on twice. A subsequent round starts when
+    /// <c>ExecutionStartedAt</c> moves past <c>RequestedCancellationAt</c>;
+    /// future flips beat that threshold and trigger again.</para>
+    /// </summary>
+    private static void InstallCancellationWatcher(IMessageHub hub)
+    {
+        var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
+        var threadPath = hub.Address.Path;
+        DateTime? lastHandledAt = null;
+
+        var sub = hub.GetWorkspace().GetMeshNodeStream()
+            .Where(n => n?.Content is MeshThread t
+                && t.RequestedCancellationAt is { } req
+                && (lastHandledAt is null || req > lastHandledAt.Value)
+                // Only act when the request is fresher than the current round —
+                // a stale flag from before this round's start is not a cancel.
+                && (t.ExecutionStartedAt is null || req >= t.ExecutionStartedAt.Value))
+            .Subscribe(
+                node =>
+                {
+                    var thread = (MeshThread)node!.Content!;
+                    lastHandledAt = thread.RequestedCancellationAt;
+
+                    // Propagate to every active delegation sub-thread.
+                    if (thread.StreamingToolCalls is { Count: > 0 })
+                    {
+                        foreach (var tc in thread.StreamingToolCalls.Where(
+                            tc => !string.IsNullOrEmpty(tc.DelegationPath) && tc.Result == null))
+                        {
+                            logger?.LogInformation(
+                                "[ThreadExec] Propagating cancel to sub-thread {SubThread}", tc.DelegationPath);
+                            hub.GetWorkspace().GetMeshNodeStream(tc.DelegationPath!)
+                                .Update(curr => curr?.Content is MeshThread sub
+                                    ? curr with { Content = sub with { RequestedCancellationAt = thread.RequestedCancellationAt } }
+                                    : curr!)
+                                .Subscribe(_ => { }, ex => logger?.LogWarning(ex,
+                                    "[ThreadExec] Cancel propagation failed for {SubThread}", tc.DelegationPath));
+                        }
+                    }
+
+                    // Cancel own execution via CancellationTokenSource (streaming
+                    // runs on thread pool). The CTS was stored on the parent
+                    // thread hub via Set — the _Exec hub stored it on its parent
+                    // (= this hub).
+                    var cts = hub.Get<CancellationTokenSource>();
+                    if (cts != null)
+                    {
+                        logger?.LogInformation("[ThreadExec] Cancelling own execution for {ThreadPath}", threadPath);
+                        cts.Cancel();
+                    }
+                },
+                ex => logger?.LogWarning(ex,
+                    "[ThreadExec] Cancellation watcher faulted for {ThreadPath}", threadPath));
+
+        hub.RegisterForDisposal(sub);
     }
 
     /// <summary>

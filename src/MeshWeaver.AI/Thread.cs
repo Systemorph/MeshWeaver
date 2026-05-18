@@ -175,6 +175,20 @@ public record Thread
     public DateTime? ExecutionStartedAt { get; init; }
 
     /// <summary>
+    /// User requested cancellation of the in-flight round. The thread hub's
+    /// cancel watcher observes its own thread node and, when
+    /// <c>RequestedCancellationAt &gt; ExecutionStartedAt</c>, cancels the
+    /// stored CTS and propagates the same flip onto every active delegation
+    /// sub-thread.
+    ///
+    /// <para><b>Stream-update only — never a CancelThreadStreamRequest.</b> The
+    /// owning thread hub serialises writes on its action block, so racing
+    /// flips collapse into one observed transition. See
+    /// [RequestViaStreamUpdate.md] for the rule.</para>
+    /// </summary>
+    public DateTime? RequestedCancellationAt { get; init; }
+
+    /// <summary>
     /// Pending user message text — set at thread creation to auto-start execution.
     /// When the thread grain activates and sees this, it immediately starts streaming.
     /// Cleared after execution starts.

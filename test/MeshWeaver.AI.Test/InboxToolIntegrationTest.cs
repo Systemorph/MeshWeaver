@@ -219,8 +219,14 @@ public class InboxToolIntegrationTest : AITestBase
             "u2 must be queued in PendingUserMessages while round 1 runs");
 
         // ESC: post CancelThreadStreamRequest.
-        client.Post(new CancelThreadStreamRequest { ThreadPath = threadPath },
-            o => o.WithTarget(new Address(threadPath)));
+        // Cancel via stream.Update (see RequestViaStreamUpdate.md). Awaiting
+        // the post-update emission asserts the write actually landed.
+        var cancelled = await client.GetWorkspace().GetMeshNodeStream(threadPath)
+            .Update(curr => curr?.Content is MeshThread t
+                ? curr with { Content = t with { RequestedCancellationAt = DateTime.UtcNow } }
+                : curr!)
+            .FirstAsync().ToTask(ct);
+        (cancelled.Content as MeshThread)?.RequestedCancellationAt.Should().NotBeNull();
 
         // After cancel, the watcher should pick up u2 and dispatch round 2.
         // Round 2 ingests u2 and produces a NEW response cell distinct from r1.
@@ -256,8 +262,14 @@ public class InboxToolIntegrationTest : AITestBase
         var initialMsgsCount = roundStart.Messages.Count;
 
         // Cancel — no follow-ups queued.
-        client.Post(new CancelThreadStreamRequest { ThreadPath = threadPath },
-            o => o.WithTarget(new Address(threadPath)));
+        // Cancel via stream.Update (see RequestViaStreamUpdate.md). Awaiting
+        // the post-update emission asserts the write actually landed.
+        var cancelled = await client.GetWorkspace().GetMeshNodeStream(threadPath)
+            .Update(curr => curr?.Content is MeshThread t
+                ? curr with { Content = t with { RequestedCancellationAt = DateTime.UtcNow } }
+                : curr!)
+            .FirstAsync().ToTask(ct);
+        (cancelled.Content as MeshThread)?.RequestedCancellationAt.Should().NotBeNull();
 
         // Wait for the cancel cleanup to settle (IsExecuting flips false).
         var afterCancel = await WaitForThreadAsync(threadPath,
@@ -304,8 +316,14 @@ public class InboxToolIntegrationTest : AITestBase
             t => t.UserMessageIds.Count == 4, 5_000, ct);
 
         // ESC.
-        client.Post(new CancelThreadStreamRequest { ThreadPath = threadPath },
-            o => o.WithTarget(new Address(threadPath)));
+        // Cancel via stream.Update (see RequestViaStreamUpdate.md). Awaiting
+        // the post-update emission asserts the write actually landed.
+        var cancelled = await client.GetWorkspace().GetMeshNodeStream(threadPath)
+            .Update(curr => curr?.Content is MeshThread t
+                ? curr with { Content = t with { RequestedCancellationAt = DateTime.UtcNow } }
+                : curr!)
+            .FirstAsync().ToTask(ct);
+        (cancelled.Content as MeshThread)?.RequestedCancellationAt.Should().NotBeNull();
 
         // All four should eventually end up ingested as the watcher dispatches
         // round 2/3/4 (one user message per round per PlanNextRound design).

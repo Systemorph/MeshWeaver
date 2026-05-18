@@ -116,6 +116,28 @@ When you change code in `Memex.Portal.Distributed` or any project it references,
 
 Full reference: [LocalDevWorkflow.md](src/MeshWeaver.Documentation/Data/Architecture/LocalDevWorkflow.md)
 
+## 🚨 NodeMutations: `stream.Update()` only — never request/response
+
+**Threads, thread messages, NodeType compile state, Code editing — every mesh-node mutation goes through `workspace.GetMeshNodeStream(path).Update(current => modified)`. NO bespoke `IRequest`/`IResponse` pairs.**
+
+This is the unification of three rules we used to write separately:
+
+1. **Writes**: `stream.Update(current => current with { Content = ... })`. The owning hub's action block serialises; no race. State-machine semantics? Set a `RequestedX` field — the owning hub's watcher reacts (see [ActivityControlPlane.md](src/MeshWeaver.Documentation/Data/Architecture/ActivityControlPlane.md)).
+2. **Reads**: `workspace.GetMeshNodeStream(path)` (server-side, backed by [IMeshNodeStreamCache](src/MeshWeaver.Hosting/MeshNodeStreamCache.cs)) or `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReference())` (client/Blazor — see [GUI Data Binding](src/MeshWeaver.Documentation/Data/GUI/DataBinding.md)). Never `meshService.QueryAsync(path:X)` for a single node's content (stale by design).
+3. **Delete the request type.** If you find yourself writing `class XxxRequest` to mutate a thread / message / NodeType, stop. Add a `RequestedXxx` field to the node's content and watch it from the owning hub.
+
+Sanctioned exceptions (NOT for state mutations):
+- `CreateNodeRequest` / `DeleteNodeRequest` / `MoveNodeRequest` — node-lifecycle on the mesh hub. These route, they don't mutate node content.
+- Transient queries that don't belong on any node (e.g. autocomplete completions).
+
+Why this rule unblocks tests: every "hub becomes unresponsive after the second compile" failure (CodeEditRecompile, NodeTypeRelease, LinkedInPullActions, ThreadAgentIntegration in CI 26036857424) traces back to bespoke request/response patterns that race the watcher → two concurrent activities → leaked callbacks → wedged hub.
+
+Canonical references:
+- [RequestViaStreamUpdate.md](src/MeshWeaver.Documentation/Data/Architecture/RequestViaStreamUpdate.md) — the canonical pattern + helpers (`hub.WatchControlPlane`, `hub.WatchSubmission`).
+- [ActivityControlPlane.md](src/MeshWeaver.Documentation/Data/Architecture/ActivityControlPlane.md) — `Status`/`RequestedStatus` pair, operations-as-scripts.
+- [CqrsAndContentAccess.md](src/MeshWeaver.Documentation/Data/Architecture/CqrsAndContentAccess.md) — read semantics + why `QueryAsync` lags.
+- [DataBinding.md](src/MeshWeaver.Documentation/Data/GUI/DataBinding.md) — the Blazor-side mirror of the same pattern.
+
 ## 🚨 Reactive Pattern — Nothing Async Ever
 
 **No `await`, no `async`, no `Task<T>` in hub-reachable code.** All hub code is `IObservable<T>` end-to-end.
