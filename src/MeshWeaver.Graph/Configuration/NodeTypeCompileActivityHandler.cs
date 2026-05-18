@@ -315,7 +315,12 @@ internal static class NodeTypeCompileActivityHandler
                 return curr with { Content = nextDef };
             })
             .Subscribe(
-                _ => { },
+                result => logger?.LogInformation(
+                    "[NTCA] WriteToParent {Transition} for {ParentPath} completed — status={Status} coll={Coll} path={Path}",
+                    transitionTag, parentPathForLog,
+                    (result?.Content as NodeTypeDefinition)?.CompilationStatus,
+                    (result?.Content as NodeTypeDefinition)?.LatestAssemblyCollection,
+                    (result?.Content as NodeTypeDefinition)?.LatestAssemblyPath),
                 ex => logger?.LogWarning(ex,
                     "[NTCA] failed to write {Transition} state to parent {ParentPath}",
                     transitionTag, parentPathForLog));
