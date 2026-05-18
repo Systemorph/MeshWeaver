@@ -355,35 +355,70 @@ public class PostgreSqlSqlGenerator
     /// <summary>
     /// Generates a UNION ALL query across multiple schemas.
     /// Each schema gets the same WHERE clause but different schema-qualified table names.
+    ///
+    /// <para><paramref name="activityUserId"/> opts into the
+    /// <c>source:activity</c> / <c>source:accessed</c> JOIN form: for activity,
+    /// each schema's branch INNER JOINs <c>{schema}.activities</c> on
+    /// <c>main_node = n.path</c>; for accessed, it JOINs
+    /// <c>{schema}.user_activities</c> by the user's namespace. <c>is:main</c>
+    /// is implied (<c>n.main_node = n.path</c>) and the default sort becomes
+    /// the joined satellite's <c>last_modified</c> so activity-recency
+    /// ordering survives the UNION.</para>
     /// </summary>
     public (string Sql, Dictionary<string, object> Parameters) GenerateCrossSchemaSelectQuery(
         ParsedQuery query,
         IReadOnlyList<string> schemas,
         string? userId = null,
-        string tableName = "mesh_nodes")
+        string tableName = "mesh_nodes",
+        string? activityUserId = null)
     {
-        // Don't pass userId to GenerateWhereClause — access control is handled per-schema
-        // by BuildPerSchemaAccessClause with properly schema-qualified table names.
-        // GenerateWhereClause would add unqualified UEP references that resolve to public schema.
         var (whereClause, parameters) = GenerateWhereClause(query);
+        var whereCore = whereClause.StartsWith("WHERE ", StringComparison.Ordinal)
+            ? whereClause[6..]
+            : whereClause;
+
+        var isActivity = query.Source == QuerySource.Activity;
+        var isAccessed = query.Source == QuerySource.Accessed && !string.IsNullOrEmpty(activityUserId);
+
+        if (isAccessed)
+            parameters["@actUserNs"] = $"{activityUserId}/_UserActivity";
 
         var parts = new List<string>();
         foreach (var schema in schemas)
         {
             var qualifiedTable = $"\"{schema}\".\"{tableName}\"";
+            var activityTable = $"\"{schema}\".\"activities\"";
+            var userActivityTable = $"\"{schema}\".\"user_activities\"";
             var uepTable = $"\"{schema}\".\"user_effective_permissions\"";
             var ntpTable = $"\"{schema}\".\"node_type_permissions\"";
 
+            // For source:activity, project the JOINed activity's last_modified into
+            // the same column slot so the outer ORDER BY ranks rows by activity recency.
+            // For source:accessed, project the UserActivity row's last_modified the same way.
+            // For plain queries, n.last_modified is fine.
+            var lastModifiedExpr = isActivity ? "act.last_modified" : (isAccessed ? "ua.last_modified" : "n.last_modified");
+
             var selectSql = "SELECT n.id, n.namespace, n.name, n.node_type, n.description, " +
-                "n.category, n.icon, n.display_order, n.last_modified, n.version, n.state, n.content, " +
+                $"n.category, n.icon, n.display_order, {lastModifiedExpr} AS last_modified, " +
+                "n.version, n.state, n.content, " +
                 $"n.desired_id, n.main_node FROM {qualifiedTable} n";
 
-            // Build per-schema access control inline (can't use the instance SchemaName for multi-schema)
-            var accessClause = BuildPerSchemaAccessClause(userId, schema, uepTable, ntpTable, parameters);
+            if (isAccessed)
+                selectSql += $" INNER JOIN {userActivityTable} ua ON ua.namespace = @actUserNs" +
+                             " AND ua.node_type = 'UserActivity'" +
+                             " AND REPLACE(n.path, '/', '_') = ua.id";
+            else if (isActivity)
+                selectSql += $" INNER JOIN {activityTable} act ON act.main_node = n.path" +
+                             " AND act.node_type = 'Activity'";
 
-            var fullWhere = string.IsNullOrEmpty(whereClause)
-                ? (string.IsNullOrEmpty(accessClause) ? "" : $"WHERE {accessClause}")
-                : (string.IsNullOrEmpty(accessClause) ? whereClause : $"{whereClause} AND {accessClause}");
+            var accessClause = BuildPerSchemaAccessClause(userId, schema, uepTable, ntpTable, parameters);
+            var mainNodeFilter = (isActivity || isAccessed) ? "n.main_node = n.path" : null;
+
+            var clauses = new List<string>();
+            if (!string.IsNullOrEmpty(whereCore)) clauses.Add(whereCore);
+            if (mainNodeFilter is not null) clauses.Add(mainNodeFilter);
+            if (!string.IsNullOrEmpty(accessClause)) clauses.Add(accessClause);
+            var fullWhere = clauses.Count == 0 ? "" : "WHERE " + string.Join(" AND ", clauses);
 
             parts.Add($"{selectSql} {fullWhere}");
         }
@@ -396,6 +431,13 @@ public class PostgreSqlSqlGenerator
             // Strip "n." prefix — the outer query uses alias "combined", not "n"
             var orderCol = MapOrderBySelector(query.OrderBy.Property).Replace("n.", "");
             sql = $"SELECT * FROM ({sql}) combined ORDER BY {orderCol} {direction}";
+        }
+        else if (isActivity || isAccessed)
+        {
+            // Activity / accessed default ordering: satellite's last_modified DESC.
+            // We projected the joined timestamp into the last_modified column slot above,
+            // so a plain column reference is enough.
+            sql = $"SELECT * FROM ({sql}) combined ORDER BY last_modified DESC NULLS LAST";
         }
 
         if (query.Limit.HasValue)

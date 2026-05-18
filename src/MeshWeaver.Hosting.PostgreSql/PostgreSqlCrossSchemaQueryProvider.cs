@@ -80,6 +80,36 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
+    /// <summary>
+    /// Returns the subset of searchable schemas that actually contain
+    /// <paramref name="tableName"/>. Use this before fanning out a UNION over
+    /// a satellite table — older partitions / static-mesh schemas only have
+    /// <c>mesh_nodes</c> (no <c>activities</c> / <c>threads</c> / <c>annotations</c>),
+    /// and joining across them produces a <c>42P01 relation does not exist</c>.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> GetSchemasWithTableAsync(
+        string tableName, CancellationToken ct = default)
+    {
+        var schemas = await GetSearchableSchemasAsync(ct);
+        if (schemas.Count == 0 || string.IsNullOrEmpty(tableName))
+            return schemas;
+
+        var present = new List<string>(schemas.Count);
+        await using var cmd = _dataSource.CreateCommand(
+            $"""
+            SELECT DISTINCT table_schema
+            FROM information_schema.tables
+            WHERE table_name = $1
+              AND table_schema = ANY($2)
+            """);
+        cmd.Parameters.AddWithValue(tableName);
+        cmd.Parameters.AddWithValue(schemas.ToArray());
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            present.Add(reader.GetString(0));
+        return present;
+    }
+
     public async Task<IReadOnlyList<string>> GetSearchableSchemasAsync(CancellationToken ct = default)
     {
         try
@@ -243,23 +273,46 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         };
     }
 
-    public async IAsyncEnumerable<MeshNode> QueryAcrossSchemasAsync(
+    public IAsyncEnumerable<MeshNode> QueryAcrossSchemasAsync(
         ParsedQuery query,
         JsonSerializerOptions options,
         IReadOnlyList<string> schemas,
         string tableName,
         string? userId = null,
+        CancellationToken ct = default)
+        => QueryAcrossSchemasAsync(query, options, schemas, tableName, userId, activityUserId: null, ct);
+
+    /// <summary>
+    /// UNION-ALL fan-out across <paramref name="schemas"/> with optional
+    /// <c>source:activity</c> / <c>source:accessed</c> JOIN support. When
+    /// <paramref name="activityUserId"/> is non-null AND the query carries
+    /// <see cref="QuerySource.Accessed"/>, each schema branch INNER JOINs the
+    /// per-schema <c>user_activities</c> table by the user's
+    /// <c>{user}/_UserActivity</c> namespace; when the query carries
+    /// <see cref="QuerySource.Activity"/>, each branch INNER JOINs the
+    /// per-schema <c>activities</c> table on <c>main_node</c>. The default
+    /// sort becomes the joined satellite's <c>last_modified</c> DESC so the
+    /// merged feed preserves "most recent activity first" across partitions.
+    /// </summary>
+    public async IAsyncEnumerable<MeshNode> QueryAcrossSchemasAsync(
+        ParsedQuery query,
+        JsonSerializerOptions options,
+        IReadOnlyList<string> schemas,
+        string tableName,
+        string? userId,
+        string? activityUserId,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         if (schemas.Count == 0)
             yield break;
 
         var generator = new PostgreSqlSqlGenerator();
-        var (sql, parameters) = generator.GenerateCrossSchemaSelectQuery(query, schemas, userId, tableName);
+        var (sql, parameters) = generator.GenerateCrossSchemaSelectQuery(
+            query, schemas, userId, tableName, activityUserId);
 
         _logger?.LogInformation(
-            "[CrossSchema] Satellite query: table={Table}, schemas={Count}, userId={User}",
-            tableName, schemas.Count, userId);
+            "[CrossSchema] Satellite query: table={Table}, schemas={Count}, userId={User}, source={Source}",
+            tableName, schemas.Count, userId, query.Source);
 
         await using var cmd = _dataSource.CreateCommand(sql);
         foreach (var (name, value) in parameters)

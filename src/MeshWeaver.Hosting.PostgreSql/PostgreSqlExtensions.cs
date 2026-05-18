@@ -253,6 +253,22 @@ public static class PostgreSqlExtensions
         services.AddSingleton<IPartitionStorageProvider>(sp =>
             sp.GetRequiredService<PostgreSqlPartitionStorageProvider>());
 
+        // Cross-schema query provider — UNION fan-out over searchable partitions.
+        services.AddSingleton<ICrossSchemaQueryProvider>(sp =>
+            new PostgreSqlCrossSchemaQueryProvider(
+                baseDataSource,
+                sp.GetService<ILoggerFactory>()?.CreateLogger<PostgreSqlCrossSchemaQueryProvider>()));
+
+        // Fan-out IMeshQueryProvider — picks up unscoped + wildcard-namespace
+        // queries (Activity Feed, Latest Threads, Recently Viewed) and routes
+        // them through the cross-schema UNION. Scoped queries fall through to
+        // the per-schema StorageAdapterMeshQueryProvider unchanged.
+        services.AddSingleton<IMeshQueryProvider>(sp =>
+            new PostgreSqlFanOutMeshQuery(
+                sp.GetRequiredService<ICrossSchemaQueryProvider>(),
+                sp.GetService<AccessService>(),
+                sp.GetService<ILogger<PostgreSqlFanOutMeshQuery>>()));
+
         // pg_notify listener: register both the singleton and an IHostedService
         // wrapper so the LISTEN session opens at host startup. Without the
         // hosted-service wrapper the listener never starts and every synced
@@ -341,6 +357,16 @@ public static class PostgreSqlExtensions
             new PostgreSqlCrossSchemaQueryProvider(
                 sp.GetRequiredService<NpgsqlDataSource>(),
                 sp.GetService<ILoggerFactory>()?.CreateLogger<PostgreSqlCrossSchemaQueryProvider>()));
+
+        // Fan-out IMeshQueryProvider — picks up unscoped + wildcard-namespace
+        // queries (Activity Feed, Latest Threads, Recently Viewed) and routes
+        // them through the cross-schema UNION. Scoped queries fall through to
+        // the per-schema StorageAdapterMeshQueryProvider unchanged.
+        services.AddSingleton<IMeshQueryProvider>(sp =>
+            new PostgreSqlFanOutMeshQuery(
+                sp.GetRequiredService<ICrossSchemaQueryProvider>(),
+                sp.GetService<AccessService>(),
+                sp.GetService<ILogger<PostgreSqlFanOutMeshQuery>>()));
 
         // Start the Admin/Partition/* subscription so writes can route — see
         // the longer comment on the same registration in the connection-string
