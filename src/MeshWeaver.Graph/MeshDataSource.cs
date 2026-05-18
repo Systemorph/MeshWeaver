@@ -545,6 +545,14 @@ public static class MeshDataSourceExtensions
                 var watcherSub = NodeTypeCompilationHelpers.InstallCompileWatcher(
                     hub, workspace, compilationService);
                 hub.RegisterForDisposal(watcherSub);
+                // Stream-update release trigger watcher — see
+                // RequestViaStreamUpdate.md. Clients flip
+                // NodeTypeDefinition.RequestedReleaseAt on the NodeType node
+                // and this watcher promotes that into Status=Pending, which
+                // the compile watcher above turns into a Roslyn run.
+                var releaseReqSub = NodeTypeCompilationHelpers
+                    .InstallReleaseRequestWatcher(hub, workspace);
+                hub.RegisterForDisposal(releaseReqSub);
             }
         }
         catch

@@ -243,6 +243,38 @@ public record NodeTypeDefinition
     public string? RequestedReleasePath { get; init; }
 
     /// <summary>
+    /// Stream-update trigger for "create a new release now" (the per-NodeType
+    /// hub's watcher observes this field, runs <c>DispatchPendingFlip</c> when
+    /// it moves past <see cref="LastReleaseRequestHandledAt"/>, and the
+    /// auto-watcher kicks Roslyn). Set via
+    /// <c>workspace.GetMeshNodeStream(nodeTypePath).Update(...)</c> — never
+    /// post a <c>CreateReleaseRequest</c> from new code. See
+    /// <c>RequestViaStreamUpdate.md</c>.
+    ///
+    /// <para>Carries the trigger timestamp so multiple requests are distinct
+    /// (idempotent CompareAndSwap on the watcher side via the last-handled
+    /// stamp).</para>
+    /// </summary>
+    public DateTimeOffset? RequestedReleaseAt { get; init; }
+
+    /// <summary>
+    /// Whether the corresponding <see cref="RequestedReleaseAt"/> trigger
+    /// should bypass the "sources match the last compile" short-circuit and
+    /// always dispatch a fresh compile. Mirrors the legacy
+    /// <c>CreateReleaseRequest.Force</c> flag.
+    /// </summary>
+    public bool RequestedReleaseForce { get; init; }
+
+    /// <summary>
+    /// Set by the per-NodeType release watcher after it has reacted to a
+    /// <see cref="RequestedReleaseAt"/> flip. The watcher only dispatches when
+    /// <c>RequestedReleaseAt &gt; LastReleaseRequestHandledAt</c>, preventing
+    /// re-fire on every subsequent stream emission that still carries the same
+    /// trigger timestamp.
+    /// </summary>
+    public DateTimeOffset? LastReleaseRequestHandledAt { get; init; }
+
+    /// <summary>
     /// Content-collection name where the latest compiled assembly for this NodeType
     /// lives (e.g. <c>"nodetype-cache"</c>). Pair with <see cref="LatestAssemblyPath"/>
     /// to fetch the bytes via <c>IContentCollection</c>. Set by the compile watcher
