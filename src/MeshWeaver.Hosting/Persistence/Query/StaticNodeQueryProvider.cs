@@ -131,29 +131,32 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
         if (nodeTypeFilter != null && !_nodeTypes.Contains(nodeTypeFilter))
             yield break;
 
-        // Provider nodes (roles, agents, etc.) — included when:
-        // 1. There's an explicit field filter (e.g., nodeType:Role) — global match, no path check
-        // 2. There's a path constraint (e.g., namespace:Agent) — path-scoped match
-        if (HasFieldFilter(parsed) || !string.IsNullOrEmpty(parsed.Path))
+        // Provider nodes (roles, agents, etc.). Same architectural contract
+        // as the Postgres provider's fan-out: an unscoped query (no path, no
+        // namespace, no filters) is the caller saying "give me everything";
+        // we honour that by scanning ALL nodes and letting the per-node
+        // _evaluator / MatchesPath / context filters decide. The earlier
+        // `HasFieldFilter || !string.IsNullOrEmpty(parsed.Path)` gate
+        // returned nothing for the truly-unscoped case, which is wrong by
+        // contract — the provider's responsibility is to surface every
+        // node in its domain that matches whatever the query specifies.
+        foreach (var node in _providerNodes)
         {
-            foreach (var node in _providerNodes)
-            {
-                if (!string.IsNullOrEmpty(parsed.Path) && !MatchesPath(node, parsed))
-                    continue;
-                if (!_evaluator.Matches(node, parsed))
-                    continue;
-                if (IsExcludedByContext(node, context))
-                    continue;
-                if (parsed.IsMain == true && node.MainNode != node.Path)
-                    continue;
-                yield return node;
-            }
+            if (!string.IsNullOrEmpty(parsed.Path) && !MatchesPath(node, parsed))
+                continue;
+            if (!_evaluator.Matches(node, parsed))
+                continue;
+            if (IsExcludedByContext(node, context))
+                continue;
+            if (parsed.IsMain == true && node.MainNode != node.Path)
+                continue;
+            yield return node;
         }
 
         // Config nodes are type definitions (meta-infrastructure), not user content.
         // They are excluded from search context — user content comes from persistence providers.
         var isSearch = string.Equals(context, "search", StringComparison.OrdinalIgnoreCase);
-        if (!isSearch && (HasFieldFilter(parsed) || !string.IsNullOrEmpty(parsed.Path)))
+        if (!isSearch)
         {
             foreach (var node in _configNodes)
             {

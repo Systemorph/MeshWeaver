@@ -264,10 +264,10 @@ public static class PostgreSqlExtensions
         // them through the cross-schema UNION. Scoped queries fall through to
         // the per-schema StorageAdapterMeshQueryProvider unchanged.
         services.AddSingleton<IMeshQueryProvider>(sp =>
-            new PostgreSqlFanOutMeshQuery(
+            new PostgreSqlPartitionedMeshQuery(
                 sp.GetRequiredService<ICrossSchemaQueryProvider>(),
                 sp.GetService<AccessService>(),
-                sp.GetService<ILogger<PostgreSqlFanOutMeshQuery>>()));
+                sp.GetService<ILogger<PostgreSqlPartitionedMeshQuery>>()));
 
         // pg_notify listener: register both the singleton and an IHostedService
         // wrapper so the LISTEN session opens at host startup. Without the
@@ -363,10 +363,10 @@ public static class PostgreSqlExtensions
         // them through the cross-schema UNION. Scoped queries fall through to
         // the per-schema StorageAdapterMeshQueryProvider unchanged.
         services.AddSingleton<IMeshQueryProvider>(sp =>
-            new PostgreSqlFanOutMeshQuery(
+            new PostgreSqlPartitionedMeshQuery(
                 sp.GetRequiredService<ICrossSchemaQueryProvider>(),
                 sp.GetService<AccessService>(),
-                sp.GetService<ILogger<PostgreSqlFanOutMeshQuery>>()));
+                sp.GetService<ILogger<PostgreSqlPartitionedMeshQuery>>()));
 
         // Start the Admin/Partition/* subscription so writes can route — see
         // the longer comment on the same registration in the connection-string

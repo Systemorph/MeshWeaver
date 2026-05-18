@@ -12,52 +12,60 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.Hosting.PostgreSql;
 
 /// <summary>
-/// PostgreSQL fan-out query provider — the missing piece behind the prod
-/// symptom where <c>UserActivityLayoutAreas</c>' Activity Feed and Latest
-/// Threads come back empty for users with content in multiple partitions.
+/// The PostgreSQL <see cref="IMeshQueryProvider"/> for partitioned setups —
+/// the one Postgres-aware brain in the <see cref="MeshQuery"/> fan-in chain.
 ///
-/// <para>The pedestrian <see cref="StorageAdapterMeshQueryProvider"/> talks
-/// to a single <see cref="IStorageAdapter"/> (the path-routing facade) and
-/// walks via <c>ListChildPaths</c>; with no base path the routing adapter
-/// throws (root-level walks are a query concern, not a storage concern), so
-/// every unscoped or wildcard-namespaced query degrades to "nothing in the
-/// caller's own partition." This provider plugs that gap by deciding, at
-/// the start of every <c>ObserveQuery</c> / <c>QueryAsync</c> /
-/// <c>AutocompleteAsync</c> call:</para>
+/// <para><b>The architectural contract.</b> <see cref="MeshQuery"/> delegates
+/// every query to every registered provider and merges the returned
+/// observables. Each provider is responsible for the WHOLE shape of its own
+/// data domain — the aggregator never tells a provider "you handle only X."
+/// For Postgres, that means this provider alone reacts to a missing
+/// namespace (unscoped query) or a wildcard first segment by fanning out
+/// across every searchable partition. Fan-out is an implementation detail
+/// of the Postgres provider, NOT a separate provider type, NOT a concern
+/// of <c>MeshSearch</c> or any GUI control.</para>
+///
+/// <para><b>Two query shapes, one provider:</b></para>
 /// <list type="number">
-///   <item><b>Scoped</b> (single concrete first segment, no wildcard) → return
-///     empty. <see cref="StorageAdapterMeshQueryProvider"/> handles those
-///     unchanged via the per-schema path-routing adapter — there is no value
-///     in doubling the result set.</item>
-///   <item><b>Fan-out</b> (no path, empty path, or a path whose first segment
-///     is <c>*</c>) → consult every searchable partition via
+///   <item><b>Scoped</b> (single concrete first segment, no wildcard) →
+///     short-circuit to an empty Initial emission. The pedestrian
+///     <see cref="StorageAdapterMeshQueryProvider"/> backed by the
+///     <see cref="IStorageAdapter"/> path-routing facade still runs in the
+///     fan-in chain; for a scoped Postgres path it routes directly to the
+///     per-schema adapter and contributes the actual rows. We deliberately
+///     don't duplicate that work here — the result-merge in
+///     <see cref="MeshQuery"/> dedupes by Path so returning the row twice
+///     would be wasted load, not wrong.</item>
+///   <item><b>Missing namespace / wildcard first segment</b> → fan out
+///     across every searchable partition via
 ///     <see cref="ICrossSchemaQueryProvider.QueryAcrossSchemasAsync(ParsedQuery,JsonSerializerOptions,IReadOnlyList{string},string,string?,string?,CancellationToken)"/>.
-///     The provider picks the right satellite table from
-///     <see cref="PartitionDefinition.NodeTypeToSuffix"/> / <see cref="PartitionDefinition.StandardTableMappings"/>
-///     when the query carries a <c>nodeType:</c> filter, and forwards the
-///     <c>source:activity</c> / <c>source:accessed</c> JOIN hint so the
-///     UNION preserves activity-recency ordering across schemas.</item>
+///     Satellite-aware: a <c>nodeType:</c> filter routes the UNION to the
+///     matching satellite table (Thread → <c>threads</c>, Activity →
+///     <c>activities</c>, …); <c>source:activity</c> / <c>source:accessed</c>
+///     turn into a per-schema INNER JOIN that projects the satellite's
+///     <c>last_modified</c> into the result row so cross-partition
+///     sort:LastModified-desc ranks by activity recency. Schema selection
+///     filters to partitions that actually contain both the projection and
+///     join tables — older partitions / static-mesh schemas (Doc, etc.)
+///     only ship <c>mesh_nodes</c>.</item>
 /// </list>
 ///
-/// <para>The fan-out result emits as a single
-/// <see cref="QueryChangeType.Initial"/> emission — there is no per-partition
-/// live notify hookup here. The pedestrian provider's live deltas keep
-/// flowing on scoped queries; for cross-partition dashboards an explicit
-/// re-query (or a future cross-partition change-notify subscription) is the
-/// expected re-poll strategy.</para>
+/// <para>The Initial emission is a one-shot snapshot. Live deltas across
+/// partitions are out of scope; a cross-partition feed (Activity, Latest
+/// Threads, Recently Viewed) is an explicit re-query, not a live cursor.</para>
 /// </summary>
-public sealed class PostgreSqlFanOutMeshQuery : IMeshQueryProvider
+public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
 {
     private readonly ICrossSchemaQueryProvider _crossSchema;
     private readonly AccessService? _accessService;
-    private readonly ILogger<PostgreSqlFanOutMeshQuery>? _logger;
+    private readonly ILogger<PostgreSqlPartitionedMeshQuery>? _logger;
     private readonly QueryParser _parser = new();
     private long _version;
 
-    public PostgreSqlFanOutMeshQuery(
+    public PostgreSqlPartitionedMeshQuery(
         ICrossSchemaQueryProvider crossSchema,
         AccessService? accessService = null,
-        ILogger<PostgreSqlFanOutMeshQuery>? logger = null)
+        ILogger<PostgreSqlPartitionedMeshQuery>? logger = null)
     {
         _crossSchema = crossSchema;
         _accessService = accessService;
@@ -197,6 +205,14 @@ public sealed class PostgreSqlFanOutMeshQuery : IMeshQueryProvider
         // rows; it just runs against a one-element schema list.
         if (parsed.Source is QuerySource.Activity or QuerySource.Accessed)
             return true;
+        // Any query that resolves to a SATELLITE table (Thread, Activity,
+        // Comment, …) — whether via path segment or nodeType filter — must
+        // go through this provider, because the pedestrian StorageAdapterMeshQueryProvider's
+        // path walk never visits satellite tables. Without this, even a
+        // single-partition `namespace:partition/*/_Thread` query degrades to
+        // empty.
+        if (ResolveTable(parsed) != "mesh_nodes")
+            return true;
         // No Path → unscoped → fan out.
         if (string.IsNullOrEmpty(parsed.Path))
             return true;
@@ -236,8 +252,9 @@ public sealed class PostgreSqlFanOutMeshQuery : IMeshQueryProvider
         // For source:activity, the satellite to JOIN is "activities" — the
         // primary projection still comes from mesh_nodes (the main content
         // node). For source:accessed, the same shape uses user_activities.
-        // Otherwise: a nodeType filter routes the UNION to its satellite
-        // table when one is known; an unconstrained query goes to mesh_nodes.
+        // Otherwise: ResolveTable picks between path-based satellite mapping
+        // (namespace:*/_Thread → threads) and nodeType-based mapping
+        // (nodeType:Thread → threads, nodeType:ThreadMessage → threads, …).
         string tableName;
         string? joinTable = null;
         if (parsed.Source is QuerySource.Activity)
@@ -252,7 +269,7 @@ public sealed class PostgreSqlFanOutMeshQuery : IMeshQueryProvider
         }
         else
         {
-            tableName = ResolveTableForNodeTypeFilter(parsed) ?? "mesh_nodes";
+            tableName = ResolveTable(parsed);
         }
 
         // Filter to schemas that contain BOTH the projection table and the
@@ -267,26 +284,28 @@ public sealed class PostgreSqlFanOutMeshQuery : IMeshQueryProvider
             schemas = schemas.Where(s => joinSet.Contains(s)).ToList();
         }
 
-        // If the query is namespace-scoped (single concrete first segment),
-        // narrow the fan-out to that one partition. Postgres-schema names
-        // are lowercased relative to MeshNode namespaces, mirroring the
-        // PartitionDefinition.Schema convention.
-        if (!string.IsNullOrEmpty(parsed.Path) && FirstSegment(parsed.Path) != "*")
+        // Pinned partition (concrete first segment) narrows the fan-out to a
+        // single schema; wildcard / missing first segment leaves the full
+        // searchable-schemas list intact.
+        var pinned = ResolvePinnedPartition(parsed);
+        if (pinned is not null)
         {
-            var pinned = FirstSegment(parsed.Path).ToLowerInvariant();
             schemas = schemas.Where(s => string.Equals(s, pinned, StringComparison.OrdinalIgnoreCase)).ToList();
         }
         _logger?.LogDebug(
-            "[FanOut] schemas: count={Count} table={Table} joinTable={JoinTable} list=[{Schemas}]",
-            schemas.Count, tableName, joinTable ?? "(none)", string.Join(", ", schemas));
+            "[FanOut] schemas: count={Count} table={Table} joinTable={JoinTable} pinned={Pinned} list=[{Schemas}]",
+            schemas.Count, tableName, joinTable ?? "(none)", pinned ?? "(none)", string.Join(", ", schemas));
         if (schemas.Count == 0)
             yield break;
 
-        // Strip the wildcard from Path so the SQL where-clause doesn't try
-        // to filter on `n.path LIKE '*/...'`. The fan-out itself is what
-        // honours the wildcard semantic.
+        // Strip the path when it carries a wildcard segment ("*"). The schema
+        // selection + satellite table selection above already encoded the
+        // routing intent — keeping `*` in the SQL WHERE clause would force
+        // `n.path LIKE '*/...'` which matches nothing. For partition-pinned
+        // wildcards (e.g. `namespace:p/*/_Thread`) the partition schema is
+        // already bound so every row in `p.threads` matches the pattern.
         var queryForSql = parsed;
-        if (!string.IsNullOrEmpty(queryForSql.Path) && FirstSegment(queryForSql.Path) == "*")
+        if (!string.IsNullOrEmpty(queryForSql.Path) && queryForSql.Path.Contains('*'))
             queryForSql = queryForSql with { Path = null, Scope = QueryScope.Exact };
 
         var userId = GetEffectiveUserId(request);
@@ -309,20 +328,165 @@ public sealed class PostgreSqlFanOutMeshQuery : IMeshQueryProvider
     }
 
     /// <summary>
-    /// If the parsed query has a <c>nodeType:</c> filter whose type maps to
-    /// a known satellite path suffix, return the satellite table name so the
-    /// UNION targets the right table per schema. <see langword="null"/>
-    /// means "use <c>mesh_nodes</c>".
+    /// Resolves the satellite table the fan-out should UNION across, given a
+    /// parsed query. Consulted in priority order:
+    /// <list type="number">
+    ///   <item><b>Path segment</b> — <c>namespace:*/_Thread</c>,
+    ///     <c>namespace:partition/_Thread</c>, <c>namespace:partition/*/_Thread</c>,
+    ///     and any other path that carries a satellite segment
+    ///     (<c>_Thread</c>, <c>_ThreadMessage</c>, <c>_Activity</c>,
+    ///     <c>_Access</c>, …) resolve via <see cref="PartitionDefinition.StandardTableMappings"/>.
+    ///     Longest-suffix-wins ordering inside <see cref="PartitionDefinition.ResolveTable"/>
+    ///     means <c>_ThreadMessage</c> beats <c>_Thread</c> when both could match.</item>
+    ///   <item><b>nodeType filter</b> — when the path is missing or doesn't
+    ///     contain a satellite segment, fall back to the nodeType filter:
+    ///     <c>nodeType:Thread</c> → <c>threads</c>, <c>nodeType:ThreadMessage</c> → <c>threads</c>,
+    ///     <c>nodeType:Activity</c> → <c>activities</c>, <c>nodeType:Comment</c> → <c>annotations</c>,
+    ///     etc. — via <see cref="PartitionDefinition.NodeTypeToSuffix"/> chained
+    ///     into <see cref="PartitionDefinition.StandardTableMappings"/>.</item>
+    ///   <item><b>Fallback</b> — <c>mesh_nodes</c> for primary content.</item>
+    /// </list>
     /// </summary>
-    private static string? ResolveTableForNodeTypeFilter(ParsedQuery parsed)
+    internal static string ResolveTable(ParsedQuery parsed)
     {
+        // Path-based mapping first — a concrete path with a satellite segment
+        // (e.g. namespace:partition/doc/_Thread) pins the satellite table.
+        if (!string.IsNullOrEmpty(parsed.Path))
+        {
+            foreach (var (suffix, table) in PartitionDefinition.StandardTableMappings
+                         .OrderByDescending(kv => kv.Key.Length))
+            {
+                if (PathContainsSegment(parsed.Path, suffix))
+                    return table;
+            }
+        }
+
+        // Wildcard namespace mapping — `namespace:*/_Thread` is parsed as a
+        // `namespace LIKE '%/_Thread'` filter (NOT as a Path), so the
+        // path-based check above doesn't see it. Walk the parsed filter for
+        // a namespace LIKE node and inspect its value for a satellite segment.
+        var nsLikeValue = ExtractNamespaceLikeValue(parsed.Filter);
+        if (!string.IsNullOrEmpty(nsLikeValue))
+        {
+            // Strip SQL wildcards so PathContainsSegment can do its
+            // boundary check ("partition/%/_Thread" → "partition//_Thread"
+            // → still has '_Thread' bounded by '/').
+            var sanitized = nsLikeValue.Replace("%", "");
+            foreach (var (suffix, table) in PartitionDefinition.StandardTableMappings
+                         .OrderByDescending(kv => kv.Key.Length))
+            {
+                if (PathContainsSegment(sanitized, suffix))
+                    return table;
+            }
+        }
+
+        // nodeType-based mapping when neither path nor namespace LIKE
+        // carries a satellite hint.
         var nodeType = parsed.ExtractNodeType();
-        if (string.IsNullOrEmpty(nodeType)) return null;
-        if (!PartitionDefinition.NodeTypeToSuffix.TryGetValue(nodeType, out var suffix))
-            return null;
-        return PartitionDefinition.StandardTableMappings.TryGetValue(suffix, out var table)
-            ? table
-            : null;
+        if (!string.IsNullOrEmpty(nodeType)
+            && PartitionDefinition.NodeTypeToSuffix.TryGetValue(nodeType, out var nodeTypeSuffix)
+            && PartitionDefinition.StandardTableMappings.TryGetValue(nodeTypeSuffix, out var nodeTypeTable))
+        {
+            return nodeTypeTable;
+        }
+
+        return "mesh_nodes";
+    }
+
+    /// <summary>
+    /// Walks <paramref name="node"/> for a <c>QueryComparison</c> whose
+    /// selector is <c>namespace</c> and operator is <c>Like</c>. The
+    /// <see cref="QueryParser"/> emits exactly this shape for
+    /// <c>namespace:VALUE_WITH_*</c> (e.g. <c>namespace:*/_Thread</c>) —
+    /// stashing the matched pattern as the LIKE argument. Returns the raw
+    /// pattern (with <c>%</c> still in place) for the caller to sanitise.
+    /// <see langword="null"/> if no matching node.
+    /// </summary>
+    private static string? ExtractNamespaceLikeValue(QueryNode? node)
+    {
+        if (node is null) return null;
+        if (node is QueryComparison c
+            && c.Condition.Selector.Equals("namespace", StringComparison.OrdinalIgnoreCase)
+            && c.Condition.Operator == QueryOperator.Like
+            && c.Condition.Values is { Length: > 0 } values)
+        {
+            return values[0];
+        }
+        if (node is QueryAnd andNode)
+        {
+            foreach (var child in andNode.Children)
+            {
+                var v = ExtractNamespaceLikeValue(child);
+                if (v is not null) return v;
+            }
+        }
+        if (node is QueryOr orNode)
+        {
+            foreach (var child in orNode.Children)
+            {
+                var v = ExtractNamespaceLikeValue(child);
+                if (v is not null) return v;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Returns the partition scope of <paramref name="parsed"/>:
+    /// <list type="bullet">
+    ///   <item>A concrete first segment (e.g. <c>namespace:partition/...</c>,
+    ///     <c>namespace:partition/*/_Thread</c>) pins the query to ONE
+    ///     partition; the fan-out narrows to that single schema.</item>
+    ///   <item><c>*</c> as first segment or an empty/missing path → fan out
+    ///     across every searchable partition.</item>
+    /// </list>
+    /// </summary>
+    internal static string? ResolvePinnedPartition(ParsedQuery parsed)
+    {
+        // Concrete Path wins — e.g. `namespace:partition/doc/_Thread` lands here.
+        if (!string.IsNullOrEmpty(parsed.Path))
+        {
+            var first = FirstSegment(parsed.Path);
+            if (string.IsNullOrEmpty(first) || first == "*") return null;
+            return first.ToLowerInvariant();
+        }
+
+        // Wildcard namespace path went into a LIKE filter — e.g.
+        // `namespace:partition/*/_Thread` parses as `namespace LIKE 'partition/%/_Thread'`.
+        // If the FIRST segment of the LIKE pattern is concrete (no '*' / '%'),
+        // pin to that partition.
+        var nsLike = ExtractNamespaceLikeValue(parsed.Filter);
+        if (!string.IsNullOrEmpty(nsLike))
+        {
+            // Find the first segment of the pattern (everything before the
+            // first '/' or '%'). If it has no wildcard, it's the partition.
+            var trimmed = nsLike.TrimStart('/');
+            var stopIdx = trimmed.IndexOfAny(new[] { '/', '%', '*' });
+            var first = stopIdx < 0 ? trimmed : trimmed[..stopIdx];
+            if (!string.IsNullOrEmpty(first) && !first.Contains('*') && !first.Contains('%'))
+                return first.ToLowerInvariant();
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Mirrors <see cref="PartitionDefinition"/>'s private path-segment match:
+    /// the suffix must appear at a path boundary (either start-of-string or
+    /// preceded by '/' AND followed by '/' or end-of-string).
+    /// </summary>
+    private static bool PathContainsSegment(string path, string segment)
+    {
+        var idx = 0;
+        while (idx < path.Length)
+        {
+            var pos = path.IndexOf(segment, idx, StringComparison.OrdinalIgnoreCase);
+            if (pos < 0) return false;
+            var atStart = pos == 0 || path[pos - 1] == '/';
+            var atEnd = pos + segment.Length == path.Length || path[pos + segment.Length] == '/';
+            if (atStart && atEnd) return true;
+            idx = pos + 1;
+        }
+        return false;
     }
 
     private string GetEffectiveUserId(MeshQueryRequest request)
