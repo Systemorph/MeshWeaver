@@ -95,15 +95,30 @@ internal static class NodeTypeCompileActivityHandler
                     $"Read NodeType MeshNode snapshot (version={pendingNode.Version}). Invoking Roslyn…",
                     logger!);
 
-                // 🚨 Fetch sources via UNCACHED IMeshService.ObserveQuery, not via
-                // the compiler's cached SyncedQuery. The cached query's Replay(1)
-                // can return the pre-update V1 snapshot when this compile fires
-                // immediately after a source edit (the upstream change event has
-                // been emitted but the SyncedQuery's gate hasn't propagated it
-                // through the Replay buffer yet). Compiling V1 source under a V2
-                // version key uploads V1 bytes to v(V2-version).dll → instance2
-                // activates against V1 layout → MARKER_V1 instead of MARKER_V2.
-                // Repro: CodeEditRecompileTest.CodeEdit_ExplicitRelease_IsUpToDate_RecompilesOnSourceChange.
+                // Fetch sources via UNCACHED IMeshService.ObserveQuery — when it
+                // emits, the result is the post-write fresh source set. The
+                // cached SyncedQuery's Replay(1) can return the pre-update V1
+                // snapshot when this compile fires immediately after a source
+                // edit (the upstream change event has been emitted but the
+                // SyncedQuery's gate hasn't propagated through the Replay
+                // buffer yet). Repro:
+                // CodeEditRecompileTest.CodeEdit_ExplicitRelease_IsUpToDate_RecompilesOnSourceChange.
+                //
+                // 5s Timeout + null-fallback: ObserveQuery's MergeProviderObservables
+                // gates the merged Initial on every provider emitting Initial — when
+                // one provider's emission stalls (storage adapter's async enumeration
+                // blocked by security-service init, source MeshNode not yet visible
+                // to the provider's worker thread, etc.), Take(1) waits forever.
+                // Falling back to <c>sourcesOverride: null</c> lets
+                // CompileAndGetConfigurations resolve sources via its cached
+                // SyncedQuery (workspace.GetQuery in GetSourceCollection), which
+                // takes a different aggregation path and works even when
+                // ObserveQuery's merge is stalled. The V1→V2 freshness regression
+                // the override was added for only surfaces when a source edit
+                // happens within the same compile cycle; the kickoff-driven first
+                // compile after a fresh CreateNode is not affected, so the
+                // fallback is safe for V1 compiles.
+                // Repro: CodeEditRecompileTest.NodeType_RequestedReleasePath_…
                 var meshService = activityHub.ServiceProvider.GetService<IMeshService>();
                 var sourcesObservable = meshService is null
                     ? Observable.Return((IReadOnlyList<MeshNode>?)null)
@@ -111,8 +126,14 @@ internal static class NodeTypeCompileActivityHandler
                             $"namespace:{parentPath}/Source scope:subtree nodeType:Code"))
                         .Take(1)
                         .Select(r => (IReadOnlyList<MeshNode>?)r.Items.ToList())
-                        .Catch<IReadOnlyList<MeshNode>?, Exception>(_ =>
-                            Observable.Return((IReadOnlyList<MeshNode>?)null));
+                        .Timeout(TimeSpan.FromSeconds(5))
+                        .Catch<IReadOnlyList<MeshNode>?, Exception>(ex =>
+                        {
+                            logger?.LogWarning(
+                                "[NTCA] ObserveQuery for sources of {ParentPath} faulted ({ExType}) — falling back to cached SyncedQuery via CompileAndGetConfigurations(sourcesOverride: null)",
+                                parentPath, ex.GetType().Name);
+                            return Observable.Return((IReadOnlyList<MeshNode>?)null);
+                        });
 
                 return sourcesObservable.SelectMany(fresh =>
                     compilationService.CompileAndGetConfigurations(pendingNode, sourcesOverride: fresh)
