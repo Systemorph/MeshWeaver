@@ -1,4 +1,7 @@
-﻿using MeshWeaver.Layout;
+﻿using MeshWeaver.Data;
+using MeshWeaver.Graph;
+using MeshWeaver.Layout;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging;
@@ -79,6 +82,38 @@ public partial class NamedAreaView
                     if (IsViewDisposed || error is ObjectDisposedException)
                     {
                         Logger.LogDebug(error, "Suppressed teardown error in control stream for area {Area}", AreaToBeRendered);
+                        return;
+                    }
+
+                    // Routing-grain NACK: the target hub cannot activate because its NodeType
+                    // is mid-compile. Swap RootControl to a LayoutAreaControl pointing at the
+                    // NodeType hub's "Progress" area — Blazor renders that as a fresh
+                    // LayoutAreaView whose stream binds to the NodeType's own MeshNode stream
+                    // (status lines) and, transitively, the compile activity's progress.
+                    // When the compile settles and the original area becomes addressable, the
+                    // user re-navigates / re-mounts and the regular path resumes. Detected
+                    // strictly on the typed Failure.ErrorType — no string sniff.
+                    if (TryGetCompilationInProgressNodeType(error) is { } nodeTypePath)
+                    {
+                        Logger.LogInformation(
+                            "NACK CompilationInProgress for area {Area} on NodeType {NodeType} — swapping to Progress",
+                            AreaToBeRendered, nodeTypePath);
+                        try
+                        {
+                            InvokeAsync(() =>
+                            {
+                                if (IsViewDisposed) return;
+                                try
+                                {
+                                    RootControl = new LayoutAreaControl(
+                                        new Address(nodeTypePath),
+                                        new LayoutAreaReference(NodeTypeLayoutAreas.ProgressArea));
+                                    RequestStateChange();
+                                }
+                                catch (ObjectDisposedException) { /* renderer gone */ }
+                            });
+                        }
+                        catch (ObjectDisposedException) { /* renderer gone */ }
                         return;
                     }
 
@@ -188,6 +223,27 @@ public partial class NamedAreaView
             if (msg.Contains("undeliverable", StringComparison.OrdinalIgnoreCase)) return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// Walks the exception chain for a <see cref="DeliveryFailureException"/> whose
+    /// underlying <see cref="DeliveryFailure.ErrorType"/> is
+    /// <see cref="ErrorType.CompilationInProgress"/>. Returns the failure's
+    /// <see cref="DeliveryFailure.NodeTypePath"/> when found — that's the NodeType
+    /// whose "Progress" layout area the GUI swaps to. Null otherwise.
+    /// </summary>
+    private static string? TryGetCompilationInProgressNodeType(Exception? ex)
+    {
+        for (var e = ex; e != null; e = e.InnerException)
+        {
+            if (e is DeliveryFailureException dfe
+                && dfe.Failure.ErrorType == ErrorType.CompilationInProgress
+                && !string.IsNullOrEmpty(dfe.Failure.NodeTypePath))
+            {
+                return dfe.Failure.NodeTypePath;
+            }
+        }
+        return null;
     }
 
     private static bool IsExpectedUserActionFailure(Exception? ex)
