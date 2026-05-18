@@ -335,6 +335,15 @@ public static class MeshNodeExtensions
         typeRegistry.WithType(typeof(CreateReleaseResponse), nameof(CreateReleaseResponse));
         typeRegistry.WithType(typeof(RunTestsRequest), nameof(RunTestsRequest));
         typeRegistry.WithType(typeof(RunTestsResponse), nameof(RunTestsResponse));
+        // Release MeshNode Content carries NodeTypeRelease. Without this entry
+        // the polymorphic serializer falls back to FullName on the wire,
+        // receiving hubs lack a matching short-name registration, and the
+        // payload arrives as JsonElement — the pinned-release branch in
+        // EnrichWithNodeType then can't cast back to NodeTypeRelease, logs
+        // "pinned release could not be resolved", and the per-instance hub
+        // falls through to the error overlay. Repro:
+        // CodeEditRecompileTest.NodeType_RequestedReleasePath_PinsToHistoricalRelease.
+        typeRegistry.WithType(typeof(NodeTypeRelease), nameof(NodeTypeRelease));
         return typeRegistry;
     }
 }
