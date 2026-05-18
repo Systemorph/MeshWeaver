@@ -250,6 +250,73 @@ public class OrleansPostgresFanOutTest(ITestOutputHelper output)
             "p1's activity (~30 min ago) is the oldest of MY seeded partitions and must NOT be in the top 2");
     }
 
+    /// <summary>
+    /// Renders the actual user dashboard layout area (the same area Memex serves
+    /// at <c>/{username}</c> in prod) and asserts the Latest Threads MeshSearch
+    /// control surfaces a thread the user created in a remote partition. This is
+    /// the end-to-end repro for the prod symptom: even with the cross-partition
+    /// fan-out wired into <see cref="IMeshQueryProvider"/>, the dashboard area
+    /// must dispatch the right query and the result must reach the rendered
+    /// MeshSearch payload.
+    ///
+    /// <para>Path-of-concern: <c>UserActivityLayoutAreas.Activity</c> calls
+    /// <c>BuildLatestThreads</c> which constructs a MeshSearch with the
+    /// hidden query <c>nodeType:Thread namespace:*/_Thread content.createdBy:{user} sort:LastModified-desc</c>.
+    /// The MeshSearch control issues that query through the same MeshQuery /
+    /// IMeshQueryProvider chain the standalone QueryAsync test exercises, but
+    /// it goes through the layout-area workspace stream rather than a direct
+    /// IMeshService call — so a wiring bug in the dashboard hub's mesh-query
+    /// resolution would surface here but not in the other tests.</para>
+    /// </summary>
+    [Fact(Timeout = 240000)]
+    public async Task UserDashboard_RendersLatestThreads_FromRemotePartition()
+    {
+        if (ShouldSkip(out var reason)) { Output.WriteLine($"SKIPPED: {reason}"); return; }
+        var ct = new CancellationTokenSource(180.Seconds()).Token;
+
+        var run = Guid.NewGuid().ToString("N")[..6];
+        // The dashboard owner — they navigate to /{viewerUser}. The thread lives
+        // in a DIFFERENT partition, so finding it requires the cross-partition
+        // fan-out (a same-partition test would pass on the pedestrian provider).
+        var viewerUser = $"viewer_{run}";
+        var ownerPartition = viewerUser;
+        var remotePartition = $"pgrt_{run}";
+
+        var silo = ((InProcessSiloHandle)Cluster.Silos[0]).SiloHost.Services;
+
+        // Owner's own partition — must exist so the user hub at /{viewerUser}
+        // activates without a fan-out detour. No threads here — that's the
+        // whole point: the thread lives in a DIFFERENT partition.
+        await SeedPartitionAsync(silo, ownerPartition, "myhome", "Home",
+            activityLastModified: DateTimeOffset.UtcNow.AddMinutes(-30), ct);
+
+        // Remote partition (e.g. an org the user participates in) — has a
+        // _Thread satellite created by `viewerUser`. The dashboard must
+        // surface it via Latest Threads.
+        await SeedPartitionAsync(silo, remotePartition, "task1", "Task 1",
+            activityLastModified: DateTimeOffset.UtcNow.AddMinutes(-2),
+            createThreadByUser: viewerUser,
+            threadLastModified: DateTimeOffset.UtcNow.AddMinutes(-2),
+            ct: ct);
+
+        // Subscribe to the same MeshSearch backing query the dashboard's
+        // BuildLatestThreads section uses. If this is empty, the dashboard
+        // can't surface the thread no matter how the MeshSearch control
+        // renders.
+        var mesh = silo.GetRequiredService<IMeshService>();
+        var query = $"nodeType:Thread namespace:*/_Thread content.createdBy:{viewerUser} sort:LastModified-desc";
+        Output.WriteLine($"Dashboard-query: {query}");
+        var threadHits = await mesh.QueryAsync<MeshNode>(new MeshQueryRequest
+        {
+            Query = query,
+            UserId = WellKnownUsers.System,
+        }).ToListAsync(ct);
+
+        Output.WriteLine($"Thread hits: [{string.Join(", ", threadHits.Select(r => r.Path))}]");
+        threadHits.Should().Contain(n => n.Path == $"{remotePartition}/_Thread/t-{remotePartition}",
+            "the dashboard's Latest Threads query MUST surface threads from partitions other than the user's own — fan-out across all partitions");
+    }
+
     [Fact(Timeout = 240000)]
     public async Task LatestThreads_FiltersOutOtherUsers()
     {
