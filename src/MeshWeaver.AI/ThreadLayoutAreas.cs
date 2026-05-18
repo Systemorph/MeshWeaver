@@ -33,8 +33,9 @@ public static class ThreadLayoutAreas
     /// </summary>
     public static MessageHubConfiguration AddThreadLayoutAreas(this MessageHubConfiguration configuration)
         => configuration
-            .WithHandler<ResubmitMessageRequest>(ThreadMessageHandlers.HandleResubmitMessage)
-            .WithHandler<DeleteFromMessageRequest>(ThreadMessageHandlers.HandleDeleteFromMessage)
+            // Legacy ResubmitMessageRequest / DeleteFromMessageRequest handlers
+            // removed — click actions now call ThreadSubmission.ApplyResubmit /
+            // ApplyDeleteFromMessage directly. See RequestViaStreamUpdate.md.
             .AddDefaultMeshMenu()
             .AddNodeMenuItems("SidePanel", SidePanelMenuProvider)
             .AddNodeMenuItems(DelegationsMenuProvider)

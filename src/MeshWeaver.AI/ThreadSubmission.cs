@@ -226,106 +226,57 @@ public static class ThreadSubmission
     // ═════════════════════════════════════════════════════════════════════
     // Server-side handlers for client requests
     // ═════════════════════════════════════════════════════════════════════
+    // Legacy AppendUserMessage / Resubmit / RecordSubmissionFailure handlers
+    // removed — see RequestViaStreamUpdate.md. Public entry points:
+    //   • ThreadInput.AppendUserInput  (append a new user message)
+    //   • ApplyResubmit                (truncate + re-stamp pending)
+    //   • ApplyDeleteFromMessage       (truncate Messages list)
+    //   • ApplyRecordSubmissionFailure (error cell + parent state)
+    // ═════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Thread-hub handler kept as a back-compat shim: re-routes legacy
-    /// <see cref="AppendUserMessageRequest"/> through the new <see cref="ThreadInput.AppendUserInput"/>
-    /// path. New callers should write directly to the thread's MeshNode via ThreadInput
-    /// instead of posting this request.
+    /// Records a failed submission by creating an error response cell and
+    /// updating the parent thread's state in one chained operation. Replaces
+    /// the legacy <c>RecordSubmissionFailureRequest</c> handler — callers
+    /// invoke this directly via <c>workspace.Hub</c>.
     /// </summary>
-    public static IMessageDelivery HandleAppendUserMessage(
+    public static void ApplyRecordSubmissionFailure(
         IMessageHub hub,
-        IMessageDelivery<AppendUserMessageRequest> delivery)
+        string threadPath,
+        string userMessageId,
+        string userText,
+        string errorMessage)
     {
-        var req = delivery.Message;
-        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
-            ?.CreateLogger("MeshWeaver.AI.ThreadSubmission");
-        logger?.LogDebug(
-            "[AppendUserMsg] handler entry hub={Hub} threadPath={ThreadPath} accessCtx={AccessCtx} textLen={TextLen} agent={Agent} model={Model}",
-            hub.Address, req.ThreadPath,
-            delivery.AccessContext?.ObjectId ?? "(null)",
-            req.UserText?.Length ?? 0, req.AgentName ?? "(null)", req.ModelName ?? "(null)");
-        try
-        {
-            var msg = ThreadInput.CreateUserMessage(
-                req.UserText ?? string.Empty,
-                createdBy: delivery.AccessContext?.ObjectId,
-                authorName: null,
-                agentName: req.AgentName,
-                modelName: req.ModelName,
-                contextPath: req.ContextPath,
-                attachments: req.Attachments);
-            // Note: this shim ignores req.UserMessageId — the new flow allocates its own.
-            // Tests + the legacy client posted the id eagerly; the new flow only uses
-            // server-allocated ids so we don't honour the request's id here.
-            ThreadInput.AppendUserInput(hub.GetWorkspace(), req.ThreadPath, msg);
-            logger?.LogDebug(
-                "[AppendUserMsg] AppendUserInput dispatched for {ThreadPath} (cold subscribe fired)",
-                req.ThreadPath);
-            hub.Post(new AppendUserMessageResponse { Success = true }, o => o.ResponseFor(delivery));
-        }
-        catch (Exception ex)
-        {
-            logger?.LogWarning(ex,
-                "[AppendUserMsg] handler threw for {ThreadPath}", req.ThreadPath);
-            hub.Post(new AppendUserMessageResponse { Success = false, Error = ex.Message }, o => o.ResponseFor(delivery));
-        }
-        return delivery.Processed();
-    }
-
-    /// <summary>
-    /// Thread-hub handler: records a failed submission. Creates an error response cell
-    /// (role=assistant, Text=ErrorMessage, marked as AgentResponse), registers the user
-    /// message id on the thread if not already there, and marks it as ingested.
-    /// The UI sees the natural chat flow: user message followed by an error reply.
-    /// </summary>
-    public static IMessageDelivery HandleRecordSubmissionFailure(
-        IMessageHub hub,
-        IMessageDelivery<RecordSubmissionFailureRequest> delivery)
-    {
-        var req = delivery.Message;
         var errorResponseId = Guid.NewGuid().ToString("N")[..8];
-
-        // Create the error response cell at {threadPath}/{errorResponseId}.
-        var errorCell = new MeshNode(errorResponseId, req.ThreadPath)
+        var errorCell = new MeshNode(errorResponseId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
-            MainNode = req.ThreadPath,
+            MainNode = threadPath,
             Content = new ThreadMessage
             {
                 Role = "assistant",
-                Text = $"**Submission failed:** {req.ErrorMessage}",
+                Text = $"**Submission failed:** {errorMessage}",
                 Timestamp = DateTime.UtcNow,
                 Type = ThreadMessageType.AgentResponse
             }
         };
-
-        // Canonical satellite-creation pattern (see SatelliteEntityPatterns.md):
-        // create the child node first, and only update the parent's Messages list +
-        // post the response inside the Subscribe(onNext) callback. The previous
-        // fire-and-forget hub.Post + immediate state update raced the watcher: tests
-        // saw the new id on the thread before the cell was actually persisted, then
-        // ReadNode at {threadPath}/{errorResponseId} returned null.
         var workspace = hub.GetWorkspace();
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-        // Chain CreateNode → UpdateMeshNode via SelectMany so the response is only posted
-        // after the satellite cell is persisted AND the parent's state commit completes.
-        // UpdateMeshNode returns a cold IObservable<MeshNode>; SelectMany subscribes it,
-        // which triggers the dsStream.Update side effect. Without the SelectMany subscribe,
-        // the parent state never updated.
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.AI.ThreadSubmission");
         meshService.CreateNode(errorCell)
-            .SelectMany(_ => workspace.GetMeshNodeStream().Update(node =>
+            .SelectMany(_ => workspace.GetMeshNodeStream(threadPath).Update(node =>
             {
                 var t = node.Content as MeshThread ?? new MeshThread();
                 var msgs = t.Messages;
-                if (!msgs.Contains(req.UserMessageId)) msgs = msgs.Add(req.UserMessageId);
+                if (!msgs.Contains(userMessageId)) msgs = msgs.Add(userMessageId);
                 if (!msgs.Contains(errorResponseId)) msgs = msgs.Add(errorResponseId);
-                var userIds = t.UserMessageIds.Contains(req.UserMessageId)
+                var userIds = t.UserMessageIds.Contains(userMessageId)
                     ? t.UserMessageIds
-                    : t.UserMessageIds.Add(req.UserMessageId);
-                var ingested = t.IngestedMessageIds.Contains(req.UserMessageId)
+                    : t.UserMessageIds.Add(userMessageId);
+                var ingested = t.IngestedMessageIds.Contains(userMessageId)
                     ? t.IngestedMessageIds
-                    : t.IngestedMessageIds.Add(req.UserMessageId);
+                    : t.IngestedMessageIds.Add(userMessageId);
                 return node with
                 {
                     Content = t with
@@ -333,35 +284,16 @@ public static class ThreadSubmission
                         Messages = msgs,
                         UserMessageIds = userIds,
                         IngestedMessageIds = ingested,
-                        // Clear any pending text for this message so the watcher doesn't dispatch it again.
+                        // Clear pending text so the watcher doesn't dispatch it again.
                         PendingUserMessage = null
                     }
                 };
             }))
             .Subscribe(
-                _ => hub.Post(
-                    new AppendUserMessageResponse { Success = true },
-                    o => o.ResponseFor(delivery)),
-                ex => hub.Post(
-                    new AppendUserMessageResponse { Success = false, Error = ex.Message },
-                    o => o.ResponseFor(delivery)));
-
-        return delivery.Processed();
-    }
-
-    /// <summary>
-    /// Thread-hub handler: truncates the thread after the replayed user message id,
-    /// drops it from IngestedMessageIds, optionally updates its text, and resets the
-    /// executing flags. Watcher re-dispatches.
-    /// </summary>
-    public static IMessageDelivery HandleResubmitUserMessage(
-        IMessageHub hub,
-        IMessageDelivery<ResubmitUserMessageRequest> delivery)
-    {
-        var req = delivery.Message;
-        ApplyResubmit(hub, req.ThreadPath, req.UserMessageId, req.NewUserText, req.AgentName, req.ModelName);
-        hub.Post(new AppendUserMessageResponse { Success = true }, o => o.ResponseFor(delivery));
-        return delivery.Processed();
+                _ => { },
+                ex => logger?.LogWarning(ex,
+                    "ApplyRecordSubmissionFailure: chained update failed for thread {ThreadPath} message {MessageId}",
+                    threadPath, userMessageId));
     }
 
     /// <summary>

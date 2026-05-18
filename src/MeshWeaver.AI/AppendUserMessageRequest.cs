@@ -5,15 +5,17 @@ using MeshWeaver.Messaging.Security;
 namespace MeshWeaver.AI;
 
 /// <summary>
-/// Registers a user message id with the thread hub. Client posts this right after
-/// (or in parallel with) the CreateNodeRequest for the user cell. The thread hub
-/// appends the id to <c>Thread.Messages</c> and <c>Thread.UserMessageIds</c>, stores
-/// Pending* settings for the next round, and the server watcher dispatches.
-///
-/// Going through a first-class message (not a remote-stream write) avoids the
-/// patch-index race condition seen with <c>workspace.UpdateMeshNode(address:)</c>.
+/// <b>DEPRECATED — use <see cref="ThreadInput.AppendUserInput"/> directly.</b>
+/// Production callers now mutate the thread MeshNode via
+/// <c>workspace.GetMeshNodeStream(threadPath).Update(...)</c>. This type is
+/// retained only because (1) wire-level routing tests still post it and
+/// (2) cross-process clients without an in-process IWorkspace can't yet
+/// call <c>ThreadInput.AppendUserInput</c>. The legacy thread-hub handler
+/// has been removed; future cleanup should delete this type after every
+/// caller is migrated. See <c>Doc/Architecture/RequestViaStreamUpdate.md</c>.
 /// </summary>
 [SubmitMessagePermission]
+[System.Obsolete("Use ThreadInput.AppendUserInput(workspace, threadPath, message) — see RequestViaStreamUpdate.md.")]
 public record AppendUserMessageRequest : IRequest<AppendUserMessageResponse>
 {
     public required string ThreadPath { get; init; }
@@ -25,6 +27,7 @@ public record AppendUserMessageRequest : IRequest<AppendUserMessageResponse>
     public IReadOnlyList<string>? Attachments { get; init; }
 }
 
+[System.Obsolete("Use ThreadInput.AppendUserInput(workspace, threadPath, message) — see RequestViaStreamUpdate.md.")]
 public record AppendUserMessageResponse
 {
     public bool Success { get; init; }
@@ -32,10 +35,11 @@ public record AppendUserMessageResponse
 }
 
 /// <summary>
-/// Request to resubmit — truncates the thread after the user message id and
-/// re-adds it to the queue so the server watcher dispatches a new round.
+/// <b>DEPRECATED — use <see cref="ThreadSubmission.ApplyResubmit"/> directly.</b>
+/// See <see cref="AppendUserMessageRequest"/> rationale.
 /// </summary>
 [SubmitMessagePermission]
+[System.Obsolete("Use ThreadSubmission.ApplyResubmit(hub, threadPath, …) — see RequestViaStreamUpdate.md.")]
 public record ResubmitUserMessageRequest : IRequest<AppendUserMessageResponse>
 {
     public required string ThreadPath { get; init; }
@@ -46,12 +50,11 @@ public record ResubmitUserMessageRequest : IRequest<AppendUserMessageResponse>
 }
 
 /// <summary>
-/// Request fired when the client's submit pipeline hits an error (cell creation failed,
-/// append failed, etc.). The thread hub creates a failed-response output cell that shows
-/// the error inline in the chat, links the user message to the thread if not already linked,
-/// and marks it as ingested so the watcher doesn't try to dispatch it.
+/// <b>DEPRECATED — use <see cref="ThreadSubmission.ApplyRecordSubmissionFailure"/> directly.</b>
+/// See <see cref="AppendUserMessageRequest"/> rationale.
 /// </summary>
 [SubmitMessagePermission]
+[System.Obsolete("Use ThreadSubmission.ApplyRecordSubmissionFailure(hub, …) — see RequestViaStreamUpdate.md.")]
 public record RecordSubmissionFailureRequest : IRequest<AppendUserMessageResponse>
 {
     public required string ThreadPath { get; init; }

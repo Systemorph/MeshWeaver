@@ -77,17 +77,25 @@ public static class AIExtensions
             .WithType(typeof(ModelDefinition), nameof(ModelDefinition))
             .WithType(typeof(AI.Thread), nameof(AI.Thread))
             .WithType(typeof(ThreadMessage), nameof(ThreadMessage))
-            // MessageViewModel is not registered — handled as JsonElement on the wire
+            // MessageViewModel is not registered — handled as JsonElement on the wire.
             .WithType(typeof(SubmitMessageRequest), nameof(SubmitMessageRequest))
             .WithType(typeof(SubmitMessageResponse), nameof(SubmitMessageResponse))
+            // [Obsolete] types below — kept in the wire registry so deserialisation
+            // of stale messages still works while callers migrate. The legacy
+            // hub handlers have been removed; production callers must now use
+            // ThreadInput.AppendUserInput / ThreadSubmission.Apply* /
+            // workspace.GetMeshNodeStream(threadPath).Update(...). See
+            // Doc/Architecture/RequestViaStreamUpdate.md.
+#pragma warning disable CS0618
             .WithType(typeof(AppendUserMessageRequest), nameof(AppendUserMessageRequest))
             .WithType(typeof(AppendUserMessageResponse), nameof(AppendUserMessageResponse))
             .WithType(typeof(ResubmitUserMessageRequest), nameof(ResubmitUserMessageRequest))
             .WithType(typeof(RecordSubmissionFailureRequest), nameof(RecordSubmissionFailureRequest))
             .WithType(typeof(CancelThreadStreamRequest), nameof(CancelThreadStreamRequest))
             .WithType(typeof(CancelThreadStreamResponse), nameof(CancelThreadStreamResponse))
-            .WithType(typeof(ResubmitMessageRequest), nameof(ResubmitMessageRequest))
-            .WithType(typeof(DeleteFromMessageRequest), nameof(DeleteFromMessageRequest))
+            .WithType(typeof(MeshWeaver.Layout.ResubmitMessageRequest), nameof(MeshWeaver.Layout.ResubmitMessageRequest))
+            .WithType(typeof(MeshWeaver.Layout.DeleteFromMessageRequest), nameof(MeshWeaver.Layout.DeleteFromMessageRequest))
+#pragma warning restore CS0618
             .WithType(typeof(ToolCallEntry), nameof(ToolCallEntry))
             .WithType(typeof(NodeChangeEntry), nameof(NodeChangeEntry))
             .WithType(typeof(ThreadExecutionContext), nameof(ThreadExecutionContext))

@@ -100,16 +100,6 @@ public static class ThreadExecution
 
     public static MessageHubConfiguration AddThreadExecution(this MessageHubConfiguration configuration)
         => configuration
-            .WithHandler<SubmitMessageRequest>(HandleSubmitMessage)
-            .WithHandler<AppendUserMessageRequest>(ThreadSubmission.HandleAppendUserMessage)
-            .WithHandler<ResubmitUserMessageRequest>(ThreadSubmission.HandleResubmitUserMessage)
-            .WithHandler<RecordSubmissionFailureRequest>(ThreadSubmission.HandleRecordSubmissionFailure)
-            // Back-compat shim — new callers should flip RequestedCancellationAt
-            // via stream.Update directly. The shim translates the legacy request
-            // into the same stream update so existing wire-level tests still pass.
-#pragma warning disable CS0618
-            .WithHandler<CancelThreadStreamRequest>(HandleCancelStreamShim)
-#pragma warning restore CS0618
             .WithInitialization(SetThreadHubIdentity)
             .WithInitialization(RecoverStaleExecutingThread)
             .WithInitialization(WatchForExecution)
@@ -412,7 +402,7 @@ public static class ThreadExecution
         // SubmitMessageResponse is posted. ExecuteMessageAsync on the _Exec
         // hub uses parentHub.Get<CancellationTokenSource>() (= this hub) and
         // the CTS must be visible the moment IsExecuting flips to true so
-        // that an early CancelThreadStreamRequest (Stop button clicked
+        // that an early RequestedCancellationAt flip (Stop button clicked
         // immediately after Send) doesn't no-op against a null slot.
         // Replacing any existing CTS so a fresh round always starts with
         // a non-cancelled token.
@@ -934,8 +924,9 @@ public static class ThreadExecution
                     // from a "stuck" pipeline from the parent's perspective — and an
                     // arbitrary deadline that fires `executionCts.Cancel()` would
                     // tear those down even when something is happening down the tree.
-                    // Manual cancellation via the Stop button (CancelThreadStreamRequest)
-                    // is the only legitimate cancel.
+                    // Manual cancellation via the Stop button (RequestedCancellationAt
+                    // flip on the thread node, see RequestViaStreamUpdate.md) is the
+                    // only legitimate cancel.
 
                     try
                     {
@@ -1317,31 +1308,6 @@ public static class ThreadExecution
 
         var isSuccess = !text.StartsWith("Error", StringComparison.Ordinal);
         return (text, null, isSuccess);
-    }
-
-    /// <summary>
-    /// Back-compat: translates a legacy <see cref="CancelThreadStreamRequest"/>
-    /// into the canonical stream update on the OWN thread node. New callers
-    /// should flip <see cref="MeshThread.RequestedCancellationAt"/> directly
-    /// via <c>workspace.GetMeshNodeStream(threadPath).Update(...)</c> — see
-    /// <c>RequestViaStreamUpdate.md</c>. The shim keeps wire-level routing
-    /// tests (e.g. <c>OrleansHostedHubRoutingTest</c>) working without
-    /// reintroducing bespoke cancel logic.
-    /// </summary>
-    [Obsolete("Flip MeshThread.RequestedCancellationAt via stream.Update — see RequestViaStreamUpdate.md.")]
-    private static IMessageDelivery HandleCancelStreamShim(
-        IMessageHub hub, IMessageDelivery<CancelThreadStreamRequest> delivery)
-    {
-        var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
-        hub.GetWorkspace().GetMeshNodeStream()
-            .Update(curr => curr?.Content is MeshThread t
-                ? curr with { Content = t with { RequestedCancellationAt = DateTime.UtcNow } }
-                : curr!)
-            .Subscribe(_ => { }, ex => logger?.LogWarning(ex,
-                "[ThreadExec] CancelThreadStreamRequest shim update failed for {Hub}", hub.Address));
-        hub.Post(new CancelThreadStreamResponse { ThreadPath = hub.Address.Path },
-            o => o.ResponseFor(delivery));
-        return delivery.Processed();
     }
 
     /// <summary>

@@ -76,22 +76,24 @@ public class OrleansHostedHubRoutingTest(ITestOutputHelper output) : OrleansShar
             .FirstAsync().ToTask(ct);
         createResp.Message.Success.Should().BeTrue(createResp.Message.Error);
 
-        // 2. Post CancelThreadStreamRequest at the per-thread address. The handler
-        //    in ThreadExecution.HandleCancelStream is synchronous and posts the
-        //    response back via ResponseFor before returning Processed().
-        Output.WriteLine($"[Act] Posting CancelThreadStreamRequest to {threadPath}");
+        // 2. Post GetDataRequest at the per-thread address — generic round-trip
+        //    that exercises the same routing layer and returns a response from
+        //    the per-thread grain. Replaces the legacy CancelThreadStreamRequest
+        //    routing test (cancellation is now stream-update only — see
+        //    RequestViaStreamUpdate.md).
+        Output.WriteLine($"[Act] Posting GetDataRequest to {threadPath}");
         var response = await client.Observe(
-                new CancelThreadStreamRequest { ThreadPath = threadPath },
+                new GetDataRequest(new MeshNodeReference()),
                 o => o.WithTarget(new Address(threadPath)))
             .FirstAsync().ToTask(ct);
 
-        // 3. The response must round-trip with the same ThreadPath the handler stamps
-        //    (which is hub.Address.Path, i.e. the same path we posted to).
+        // 3. The response must round-trip with a non-null payload (the thread
+        //    grain's MeshNodeReference reducer returns the thread MeshNode).
         response.Should().NotBeNull("response must arrive back at the client");
-        response.Message.Should().NotBeNull("response message must deserialize as CancelThreadStreamResponse");
-        response.Message.ThreadPath.Should().Be(threadPath,
-            "the response is stamped with hub.Address.Path on the silo side");
-        Output.WriteLine($"[Assert] Got CancelThreadStreamResponse from {response.Message.ThreadPath}");
+        response.Message.Should().NotBeNull("response message must deserialize");
+        response.Message.Data.Should().NotBeNull(
+            "the thread grain's MeshNodeReference reducer must return the OWN MeshNode");
+        Output.WriteLine("[Assert] Got GetDataResponse from thread grain");
     }
 
     /// <summary>
