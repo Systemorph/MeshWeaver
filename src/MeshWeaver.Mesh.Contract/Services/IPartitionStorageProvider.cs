@@ -30,10 +30,10 @@ public static class PartitionContexts
 
 /// <summary>
 /// One backend in the partition routing table. Routing is implicit —
-/// each provider's <see cref="Adapter"/> answers <see cref="IStorageAdapter.Write"/>
-/// with <c>null</c> when the path isn't theirs, and the
-/// <see cref="MeshWeaver.Hosting.Persistence.PersistenceService"/> walks the
-/// writable list until one accepts. There is no <c>Matches</c> predicate.
+/// each provider's <see cref="Adapter"/> answers
+/// <see cref="IStorageAdapter"/>.Write
+/// with <c>null</c> when the path isn't theirs, and the routing layer walks
+/// the writable list until one accepts. There is no <c>Matches</c> predicate.
 ///
 /// <para><b>Read vs. write split.</b> <see cref="IsReadOnly"/> filters the
 /// writable list. Read-only providers (<c>EmbeddedResource</c>,
@@ -65,8 +65,7 @@ public interface IPartitionStorageProvider
 
     /// <summary>
     /// <c>true</c> = read-only seed (EmbeddedResource, StaticNode). Excluded
-    /// from the write-attempt chain in
-    /// <see cref="MeshWeaver.Hosting.Persistence.PersistenceService.Write"/>.
+    /// from the write-attempt chain.
     /// <c>false</c> = writable backend (InMemory, FileSystem, Postgres,
     /// Cosmos, AzureBlob); included in the chain.
     /// </summary>

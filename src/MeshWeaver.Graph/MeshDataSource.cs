@@ -222,7 +222,7 @@ public static class MeshDataSourceExtensions
         persistence.Write(node, hub.JsonSerializerOptions)
             .Subscribe(
                 saved => logger?.LogDebug("[SaveMeshNode] persisted path={Path} version={Version}",
-                    saved.Path, saved.Version),
+                    saved?.Path, saved?.Version),
                 ex => logger?.LogWarning(ex, "SaveMeshNode failed for {Path} (version={Version})",
                     node.Path, node.Version));
         return request.Processed();
