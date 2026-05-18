@@ -66,7 +66,7 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
                 return services;
             });
 
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 120000)]
     public async Task LinkedInTelemetryImport_CompilesAndRendersImportArea()
     {
         var ct = new CancellationTokenSource(45.Seconds()).Token;
@@ -130,9 +130,14 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new Address(path), reference);
 
+        // CI compile cold-start + cross-process JIT pushes us past 30s on the
+        // first activation under load — local Windows runs settle in ~25s but
+        // GitHub-hosted Linux runners commonly take 40-45s for the same path.
+        // Bump to 60s so the test asserts the eventual render rather than the
+        // CI-specific timing.
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Timeout(30.Seconds())
+            .Timeout(60.Seconds())
             .FirstAsync(x => x is StackControl or HtmlControl or MarkdownControl)
             .ToTask(ct);
 
