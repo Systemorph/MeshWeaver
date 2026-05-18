@@ -71,7 +71,15 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             .AddGraph()
             .AddMeshNodes(new MeshNode(TestPartition) { Name = "Test Data", NodeType = "Markdown" })
             .ConfigureServices(s => s.AddFileSystemAssemblyStore(_assemblyStoreRoot))
-            .ConfigureHub(c => c.WithQuiesceTimeout(TestQuiesceTimeout));
+            // Match the 60s RequestTimeout we apply to client hubs in
+            // ConfigureClient — without this the mesh hub still defaults to 30s,
+            // so any test that does Mesh.Observe(req, target=...) and waits for
+            // the response hits a hub-level Timeout on CI cold starts long
+            // before the per-node hub actually replies (CompilationPending /
+            // CreateRelease symptom).
+            .ConfigureHub(c => c
+                .WithQuiesceTimeout(TestQuiesceTimeout)
+                .WithRequestTimeout(TimeSpan.FromSeconds(60)));
 
     /// <summary>
     /// Default mesh configuration with PublicAdminAccess for in-memory tests.
