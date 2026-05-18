@@ -474,6 +474,13 @@ public static class ThreadSubmission
 
             var keep = t.Messages.Take(idx + 1).ToImmutableList();
             var trimmedUserIds = t.UserMessageIds.Where(uid => keep.Contains(uid)).ToImmutableList();
+            // The watcher's NeedsDispatch fires on "UserMessageIds has at least one
+            // id not in IngestedMessageIds". HandleSubmitMessage doesn't populate
+            // UserMessageIds (it writes Messages only), so without this Add the
+            // resubmit would never trigger a new round. Adding the id is idempotent
+            // (the Where above keeps only ids already in keep).
+            if (!trimmedUserIds.Contains(userMessageId))
+                trimmedUserIds = trimmedUserIds.Add(userMessageId);
             var ingested = t.IngestedMessageIds.Remove(userMessageId);
             return node with
             {
