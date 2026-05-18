@@ -27,6 +27,13 @@ public class PostgreSqlFixture : IAsyncLifetime
             .WithDatabase("meshweaver_test")
             .WithUsername("postgres")
             .WithPassword("postgres")
+            // Container default max_connections=100. Each test creates ~30 schema
+            // data sources (MaxPoolSize=2 each = 60 conns) plus the main pool +
+            // bootstrap admin. With concurrent tests in the same fixture session
+            // and slow CI-side connection teardown we still hit "53300: sorry,
+            // too many clients already" on CrossPartitionSearchTests batches.
+            // Bump to 400 — keeps headroom even when xUnit parallelises classes.
+            .WithCommand("postgres", "-c", "max_connections=400")
             .Build();
 
         await _container.StartAsync();

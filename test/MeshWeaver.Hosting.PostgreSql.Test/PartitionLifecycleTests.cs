@@ -129,14 +129,16 @@ public class PartitionLifecycleTests(PostgreSqlFixture fixture, ITestOutputHelpe
 
         // Touch the cache with a Read for a path under an unknown namespace.
         // PgPartitionCache emits PendingCreate (lazy-create policy); read
-        // returns null since no rows exist yet.
+        // returns null since no rows exist yet. The routing service surfaces
+        // "no node found" as DeliveryFailureException (NotFound) — that's the
+        // read-miss signal here, so catch it and normalise to null.
         var workspace = Mesh.GetWorkspace();
         var preWriteRead = await workspace.GetMeshNodeStream($"{ns}/never_written")
             .Where(_ => true).Take(1).Timeout(10.Seconds())
-            .Catch<MeshNode?, TimeoutException>(_ => Observable.Return<MeshNode?>(null))
+            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
             .FirstAsync().ToTask(ct);
         preWriteRead.Should().BeNull(
-            "no rows exist under the fresh namespace, so the workspace stream emits null");
+            "no rows exist under the fresh namespace, so the workspace stream resolves to null");
 
         // Subsequent write to the SAME namespace must still succeed —
         // PendingCreate state allows lazy schema creation.
