@@ -182,9 +182,12 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new Address(nodePath), reference);
 
-        // GetControlStream hits LayoutExtensions.GetStream<UiControl> â€” exactly the path
-        // that throws in the user's stack trace.
-        var control = await stream.GetControlStream(string.Empty)
+        // GetControlStream hits LayoutExtensions.GetStream<UiControl> — exactly the path
+        // that throws in the user's stack trace. The server renders the UiControl under
+        // the Area pointer (LayoutAreaReference.GetControlPointer(area)), so we must
+        // pass the same area name we subscribed with — empty-string asks for a
+        // non-existent key and the stream never emits.
+        var control = await stream.GetControlStream(reference.Area!)
             .Timeout(30.Seconds())
             .FirstAsync(x => x != null);
 
