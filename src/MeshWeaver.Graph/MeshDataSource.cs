@@ -777,6 +777,9 @@ public static class MeshDataSourceExtensions
     {
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.HandleCreateRelease");
+        logger?.LogInformation(
+            "[CreateRelease] DispatchPendingFlip on {HubPath} (request={RequestId})",
+            hub.Address.Path, request.Id);
         // Ack first — the watcher's compile is async and the requester
         // shouldn't be blocked on Roslyn. Subscribers waiting for the Release
         // MeshNode use ObserveQuery / GetMeshNodeStream on the Release
