@@ -353,7 +353,8 @@ public static class ThreadSubmission
         string? agentName,
         string? modelName)
     {
-        // Optionally update the user cell text.
+        // Optionally update the user cell text. Target the thread address
+        // (not the caller's own address — the cell lives under the thread).
         if (!string.IsNullOrEmpty(newUserText))
         {
             var updatedCell = new MeshNode(userMessageId, threadPath)
@@ -367,7 +368,7 @@ public static class ThreadSubmission
                     Type = ThreadMessageType.ExecutedInput
                 }
             };
-            hub.Post(new UpdateNodeRequest(updatedCell), o => o.WithTarget(hub.Address));
+            hub.Post(new UpdateNodeRequest(updatedCell), o => o.WithTarget(new Address(threadPath)));
         }
 
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()

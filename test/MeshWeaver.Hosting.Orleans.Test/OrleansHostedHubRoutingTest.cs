@@ -129,17 +129,18 @@ public class OrleansHostedHubRoutingTest(ITestOutputHelper output) : OrleansShar
             .FirstAsync().ToTask(ct);
         createResp.Message.Success.Should().BeTrue(createResp.Message.Error);
 
-        // 2. Confirm the thread starts empty (no UserMessageIds).
+        // 2. Confirm the thread starts empty.
         var before = await ReadThreadAsync(client, threadPath, ct);
         before.Should().NotBeNull();
-        before!.UserMessageIds.Count.Should().Be(0, "thread starts empty");
+        before!.Messages.Count.Should().Be(0, "thread starts empty");
 
-        // 3. Trigger the same stream-update path the production GUI uses.
-        //    ThreadSubmission.Submit → ThreadInput.AppendUserInput →
-        //    workspace.GetMeshNodeStream(threadPath).Update(...) adds the
-        //    new id to UserMessageIds + PendingUserMessages. Asserting on
-        //    UserMessageIds.Count growing is the canary for "local
-        //    workspace write visible to grain-direct read".
+        // 3. Trigger the same submit path the production GUI uses.
+        //    ThreadSubmission.Submit posts SubmitMessageRequest; the per-thread
+        //    HandleSubmitMessage runs `workspace.UpdateMeshNode(...)` to add
+        //    the new user + response ids to MeshThread.Messages. Asserting
+        //    on Messages.Count growing is the canary for "local workspace
+        //    write visible to grain-direct read" — the bug class behind the
+        //    polling failures.
         Output.WriteLine("[Act] ThreadSubmission.Submit");
         MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
         {
@@ -149,23 +150,20 @@ public class OrleansHostedHubRoutingTest(ITestOutputHelper output) : OrleansShar
             ContextPath = "TestUser"
         });
 
-        // 4. Poll until the new UserMessageId shows up via a fresh GetDataRequest.
-        //    If this fails, the local workspace write is invisible to subsequent
-        //    grain-direct reads â€” that's the bug class behind the polling failures.
+        // 4. Poll until the new message ids show up via a fresh GetDataRequest.
         MeshThread? current = null;
         for (var i = 0; i < 20; i++)
         {
             current = await ReadThreadAsync(client, threadPath, ct);
-            if (current?.UserMessageIds.Count > 0)
+            if (current?.Messages.Count > 0)
             {
-                Output.WriteLine($"[Assert] After {i * 200}ms: UserMessageIds=[{string.Join(",", current.UserMessageIds)}], Messages=[{string.Join(",", current.Messages)}]");
+                Output.WriteLine($"[Assert] After {i * 200}ms: Messages=[{string.Join(",", current.Messages)}]");
                 return;
             }
             await Task.Delay(200, ct);
         }
         throw new Xunit.Sdk.XunitException(
-            $"After 4s the GetDataRequest for {threadPath} still shows UserMessageIds.Count=0. " +
-            $"current.Messages={(current == null ? "(null)" : string.Join(",", current.Messages))}. " +
+            $"After 4s the GetDataRequest for {threadPath} still shows Messages.Count=0. " +
             "The per-thread grain's UpdateMeshNode write did not become visible to a fresh MeshNodeReference read on the same grain.");
     }
 
