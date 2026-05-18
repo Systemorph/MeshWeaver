@@ -175,6 +175,11 @@ public static class MeshExtensions
         var logger = hub.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("MeshWeaver.Mesh.CreateNode");
         var meshConfig = hub.ServiceProvider.GetService<MeshConfiguration>();
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        // Resolved once and threaded through both save paths (confirm + create) so the
+        // Created/Updated publish is composed into the storage observable via the
+        // StorageAdapterChangeFeedExtensions helpers — no chance of publishing the
+        // event before the storage write has committed.
+        var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
 
         if (meshConfig == null)
         {
@@ -257,8 +262,14 @@ public static class MeshExtensions
                             Category = node.Category ?? existingNode.Category,
                             Content = node.Content ?? existingNode.Content
                         };
+                        // Commit-then-publish: Updated event fires inside the helper's
+                        // .Do operator, which runs only after the storage write emits
+                        // (post-commit). The no-persistence fallback below skips the
+                        // publish entirely — historically that path published an Updated
+                        // event with no backing write, so cross-replica subscribers saw
+                        // a phantom row update.
                         var saveObs = persistence != null
-                            ? persistence.Write(confirmedNode, hub.JsonSerializerOptions)
+                            ? persistence.WriteAndPublishUpdated(confirmedNode, hub.JsonSerializerOptions, changeFeed)
                                 .Where(n => n is not null)
                                 .Select(n => n!)
                             : Observable.Return(confirmedNode);
@@ -373,8 +384,12 @@ public static class MeshExtensions
                                 var enriched = newNode;
                                 logger.LogDebug("[CreateNode] step=save-start path={Path} persistence={HasPersistence}",
                                     enriched.Path, persistence != null);
+                                // Commit-then-publish: Created event fires inside the helper's
+                                // .Do operator, which runs only after the storage write emits
+                                // (post-commit). No-persistence fallback skips the publish —
+                                // see the confirm branch above for the rationale.
                                 var saveObs = persistence != null
-                                    ? persistence.Write(enriched, hub.JsonSerializerOptions)
+                                    ? persistence.WriteAndPublishCreated(enriched, hub.JsonSerializerOptions, changeFeed)
                                         .Where(n => n is not null)
                                         .Select(n => n!)
                                         .Do(s => logger.LogDebug("[CreateNode] step=save-emit path={Path} version={Version}",
@@ -391,11 +406,12 @@ public static class MeshExtensions
                     var resultNode = tuple.node;
                     var mode = tuple.mode;
 
-                    // Notify change feed (sync side-effect).
-                    var changeEvent = mode == "create"
-                        ? MeshChangeEvent.Created(resultNode)
-                        : MeshChangeEvent.Updated(resultNode);
-                    hub.ServiceProvider.GetService<IMeshChangeFeed>()?.Publish(changeEvent);
+                    // MeshChangeEvent.Created/Updated already published inside the
+                    // save observable via WriteAndPublishCreated/WriteAndPublishUpdated
+                    // — guarantees the event fires only after the storage write committed.
+                    // This Subscribe handles the remaining side-effects (live-query
+                    // notification, response Post, version-history write, logging) which
+                    // happen after the change-feed publish in the chain.
 
                     // Notify the live ObserveQuery change feed — the engine subscribes
                     // to IDataChangeNotifier to surface Added/Updated/Removed deltas.
@@ -732,9 +748,14 @@ public static class MeshExtensions
                                                     path, deletedPaths.Count, warningMsgs.Count,
                                                     capturedRequest.DeletedBy ?? "system");
 
-                                                var changeFeed = meshHub.ServiceProvider.GetService<IMeshChangeFeed>();
-                                                foreach (var deletedPath in deletedPaths)
-                                                    changeFeed?.Publish(MeshChangeEvent.Deleted(deletedPath));
+                                                // MeshChangeEvent.Deleted is published per-path inside
+                                                // FanOutDeleteSubtree's storage.DeleteAndPublish — once
+                                                // per leaf, immediately after its commit. The previous
+                                                // shape published from here AFTER all deletes completed,
+                                                // which (a) delayed subscribers' invalidation until the
+                                                // slowest leaf finished, and (b) duplicated per-leaf
+                                                // publishes that already happened during descendant
+                                                // re-entries through this same handler.
 
                                                 meshHub.Post(
                                                     DeleteNodeResponse.Ok() with { Log = okLog },
@@ -899,8 +920,15 @@ public static class MeshExtensions
                     // Root: delete locally via storage — already validated by the
                     // calling handler. Avoids re-entering this same handler via
                     // hub.Observe (which would cause an infinite request loop).
+                    //
+                    // Commit-then-publish: DeleteAndPublish chains the
+                    // MeshChangeEvent.Deleted publish into the storage observable
+                    // so it fires only AFTER storage.Delete emits (post-commit).
+                    // Descendant deletes re-enter this same handler and hit this
+                    // branch for THEIR own path, so each leaf publishes once.
                     logger.LogDebug("[DeleteNode] storage.Delete (root) {Path}", path);
-                    return storage.Delete(path)
+                    var changeFeed = meshHub.ServiceProvider.GetService<IMeshChangeFeed>();
+                    return storage.DeleteAndPublish(path, changeFeed)
                         .Do(_ => meshHub.ServiceProvider.GetService<IDataChangeNotifier>()?
                             .NotifyChange(DataChangeNotification.Deleted(path, null)));
                 }
@@ -1550,11 +1578,14 @@ public static class MeshExtensions
                     var updateChangeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
                     if (updatePersistence != null)
                     {
-                        updatePersistence.Write(nodeToSave, hub.JsonSerializerOptions)
+                        // Commit-then-publish: WriteAndPublishUpdated chains the
+                        // MeshChangeEvent.Updated publish into the storage observable
+                        // so it fires only AFTER the storage write emits (post-commit).
+                        updatePersistence.WriteAndPublishUpdated(nodeToSave, hub.JsonSerializerOptions, updateChangeFeed)
                             .Subscribe(
                                 saved =>
                                 {
-                                    updateChangeFeed?.Publish(MeshChangeEvent.Updated(saved));
+                                    if (saved is null) return;
                                     hub.ServiceProvider.GetService<IDataChangeNotifier>()?
                                         .NotifyChange(DataChangeNotification.Updated(saved.Path, saved));
                                     logger.LogInformation(
@@ -1574,9 +1605,14 @@ public static class MeshExtensions
                     }
                     else
                     {
-                        updateChangeFeed?.Publish(MeshChangeEvent.Updated(nodeToSave));
+                        // No persistence registered — DON'T publish a MeshChangeEvent.
+                        // Previously this branch fired Updated unconditionally, so
+                        // cross-replica subscribers saw a phantom write for a row no
+                        // backing store ever received. The workspace stream update
+                        // above (line ~1553) already gave the local hub the new state;
+                        // anything that wants persistence must register a real adapter.
                         logger.LogInformation(
-                            "Node persisted at {Path} by {UpdatedBy}",
+                            "Node persisted at {Path} by {UpdatedBy} (no IStorageAdapter — workspace-only)",
                             nodeToSave.Path, capturedRequest.UpdatedBy ?? "system");
                         hub.Post(UpdateNodeResponse.Ok(nodeToSave), o => o.ResponseFor(request));
                     }
@@ -1932,15 +1968,18 @@ public static class MeshExtensions
                         // Bottom-up delete (longest path first) so parent storage entries
                         // are removed only after their descendants. Each delete is its own
                         // observable; Merge runs them concurrently, ToList awaits all.
+                        //
+                        // Commit-then-publish: DeleteAndPublish chains the
+                        // MeshChangeEvent.Deleted into the storage observable, so the
+                        // event for each path fires only after that path's storage
+                        // commit completes. The IDataChangeNotifier notify stays as a
+                        // separate .Do so it runs in the same per-emission step.
                         return paths
                             .OrderByDescending(p => p.Length)
                             .ToObservable()
-                            .SelectMany(p => storage.Delete(p)
-                                .Do(_ =>
-                                {
-                                    changeNotifier?.NotifyChange(DataChangeNotification.Deleted(p, null));
-                                    changeFeed?.Publish(MeshChangeEvent.Deleted(p));
-                                }))
+                            .SelectMany(p => storage.DeleteAndPublish(p, changeFeed)
+                                .Do(_ => changeNotifier?.NotifyChange(
+                                    DataChangeNotification.Deleted(p, null))))
                             .ToList()
                             .Select(_ => copied);
                     }))
