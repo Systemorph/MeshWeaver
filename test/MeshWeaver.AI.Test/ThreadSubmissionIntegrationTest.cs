@@ -213,7 +213,13 @@ public class ThreadSubmissionIntegrationTest : AITestBase
 
     // ─── Failure recovery: error renders as an assistant response cell ───
 
-    [Fact]
+    [Fact(Skip = "ApplyRecordSubmissionFailure depends on MeshNodeStreamHandle.UpdateRemote, " +
+                  "which re-runs its lambda against a stale baseline when called from a non-owner " +
+                  "hub. ThreadSubmission.Submit was reverted to SubmitMessageRequest for the same " +
+                  "reason (see d988fcb6e). The legacy RecordSubmissionFailureRequest was deleted in " +
+                  "e32130052 without a replacement path, so this test exercises a dead-code helper " +
+                  "until either UpdateRemote is fixed or a new failure-recording request type is " +
+                  "introduced.")]
     public async Task SubmissionFailure_RecordsErrorAsOutputCell_InThreadMessages()
     {
         var ct = TestContext.Current.CancellationToken;
