@@ -29,6 +29,9 @@ public class DataChangeNotifier : IDataChangeNotifier, IDisposable
 
     /// <summary>
     /// Disposes the notifier and completes the observable sequence.
+    /// Tolerates downstream subscribers whose own Subjects have already been
+    /// disposed (race during ordered teardown: listener disposes its inner
+    /// subjects before the notifier broadcasts OnCompleted).
     /// </summary>
     public void Dispose()
     {
@@ -36,7 +39,7 @@ public class DataChangeNotifier : IDataChangeNotifier, IDisposable
             return;
 
         _disposed = true;
-        _subject.OnCompleted();
+        try { _subject.OnCompleted(); } catch (ObjectDisposedException) { }
         _subject.Dispose();
     }
 }
