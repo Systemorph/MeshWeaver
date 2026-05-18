@@ -242,7 +242,7 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         }
     }
 
-    private static MeshNode ReadMeshNode(NpgsqlDataReader reader, JsonSerializerOptions options)
+    private MeshNode ReadMeshNode(NpgsqlDataReader reader, JsonSerializerOptions options)
     {
         var id = reader.GetString(reader.GetOrdinal("id"));
         var ns = reader.GetString(reader.GetOrdinal("namespace"));
@@ -252,7 +252,25 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         if (!reader.IsDBNull(contentOrd))
         {
             var json = reader.GetString(contentOrd);
-            content = JsonSerializer.Deserialize<object>(json, options);
+            // A poisoned row (malformed polymorphic discriminator, an unknown
+            // $type, etc.) must NOT take down the entire query. Skip the
+            // content deserialization for THIS row only, leaving the MeshNode
+            // skeleton intact so paths/names/timestamps still surface in the
+            // cross-partition UNION result. Production repro: a Thread row
+            // with `pendingUserMessages.{id}.$type` after the first property
+            // → System.Text.Json polymorphic deserialiser throws "metadata
+            // property must be first" → every Latest Threads fan-out hangs
+            // in the Blazor loading spinner.
+            try
+            {
+                content = JsonSerializer.Deserialize<object>(json, options);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex,
+                    "[CrossSchema] Skipping content for poisoned row {Path}: {Error}",
+                    string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}", ex.Message);
+            }
         }
 
         return new MeshNode(id, string.IsNullOrEmpty(ns) ? null : ns)
@@ -320,7 +338,21 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
-            yield return ReadMeshNode(reader, options);
+        {
+            MeshNode? node;
+            try { node = ReadMeshNode(reader, options); }
+            catch (Exception ex)
+            {
+                // Per-row defence: a malformed reader value (corrupt vector,
+                // unparseable timestamp, etc.) must not take down the entire
+                // UNION. Log + skip.
+                _logger?.LogWarning(ex,
+                    "[CrossSchema] Skipping unreadable row in {Table}: {Error}",
+                    tableName, ex.Message);
+                continue;
+            }
+            yield return node;
+        }
     }
 
     private static string EscapeSql(string input) =>
