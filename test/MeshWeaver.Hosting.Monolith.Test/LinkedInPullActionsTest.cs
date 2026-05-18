@@ -40,7 +40,7 @@ public class LinkedInPullActionsTest(ITestOutputHelper output) : MonolithMeshTes
     private const string NodeTypePath = "Systemorph/LinkedInProfile";
     private const string SourceNamespace = "Systemorph/LinkedInProfile/Source";
 
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 120000)]
     public async Task LinkedInPullActions_CompilesAndRendersNoCredentialBranch()
     {
         var ct = new CancellationTokenSource(45.Seconds()).Token;
@@ -107,9 +107,11 @@ public class LinkedInPullActionsTest(ITestOutputHelper output) : MonolithMeshTes
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new Address(path), reference);
 
+        // Match the LinkedInTelemetry / CompilationPending timeout budget —
+        // 30s caps below the cold-cache compile + activation pipeline on CI.
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Timeout(30.Seconds())
+            .Timeout(60.Seconds())
             .FirstAsync(x => x is MarkdownControl or StackControl or HtmlControl)
             .ToTask(ct);
 
