@@ -50,13 +50,18 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     protected static readonly TimeSpan TestQuiesceTimeout = TimeSpan.FromMilliseconds(500);
 
     /// <summary>
-    /// Process-unique filesystem root for the <see cref="FileSystemAssemblyStore"/>
-    /// the monolith test base registers below. Per-pid so parallel xUnit assemblies
-    /// don't clash on the same DLL files; under the temp directory so OS cleanup
-    /// reclaims them at machine reboot.
+    /// Per-mesh-instance filesystem root for the <see cref="FileSystemAssemblyStore"/>
+    /// the monolith test base registers below. A fresh GUID per ConfigureMeshBase call
+    /// means each test-class mesh gets its own store — so two test classes both
+    /// compiling the same NodeType path (e.g., several LinkedIn tests all using
+    /// <c>Systemorph/LinkedInProfile</c>) don't collide on the AssemblyStore key
+    /// <c>(path, version)</c> and serve each other's compiled bytes. Process-pid
+    /// scoping wasn't enough because all test classes share one xUnit process.
+    /// Under the temp directory so OS cleanup reclaims at reboot.
     /// </summary>
-    private static readonly string AssemblyStoreRoot =
-        Path.Combine(Path.GetTempPath(), $"meshweaver-test-assembly-store-{Environment.ProcessId}");
+    private readonly string _assemblyStoreRoot = Path.Combine(
+        Path.GetTempPath(),
+        $"meshweaver-test-assembly-store-{Environment.ProcessId}-{Guid.NewGuid():N}");
 
     protected MeshBuilder ConfigureMeshBase(MeshBuilder builder)
         => builder
@@ -65,7 +70,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             .AddRowLevelSecurity()
             .AddGraph()
             .AddMeshNodes(new MeshNode(TestPartition) { Name = "Test Data", NodeType = "Markdown" })
-            .ConfigureServices(s => s.AddFileSystemAssemblyStore(AssemblyStoreRoot))
+            .ConfigureServices(s => s.AddFileSystemAssemblyStore(_assemblyStoreRoot))
             .ConfigureHub(c => c.WithQuiesceTimeout(TestQuiesceTimeout));
 
     /// <summary>

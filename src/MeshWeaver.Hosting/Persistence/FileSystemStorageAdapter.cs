@@ -211,7 +211,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
             Directory.CreateDirectory(directory);
         }
 
-        await File.WriteAllTextAsync(filePath, content, ct);
+        await WriteAtomicAsync(filePath, content, ct);
 
         // Clean up old files with different extensions (e.g., if originally read from .json)
         CleanupOtherExtensions(node.Path, extension);
@@ -871,6 +871,35 @@ public class FileSystemStorageAdapter : IStorageAdapter
         await using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         using var reader = new StreamReader(stream);
         return await reader.ReadToEndAsync(ct);
+    }
+
+    // Writes content via a temp file + atomic rename so a mid-write cancellation
+    // can never leave a truncated/empty target on disk. File.WriteAllTextAsync
+    // opens with FileMode.Create (truncates first); if ct cancels between
+    // truncate and the actual write, the original file is gone and the new one
+    // is empty — exactly the 0-byte SamplesGraph corruption pattern.
+    private static async Task WriteAtomicAsync(string filePath, string content, CancellationToken ct)
+    {
+        // DIAGNOSTIC: trace empty/tiny writes so we can identify the caller that
+        // overwrites SamplesGraph JSON with 0-byte content. Remove once located.
+        if (string.IsNullOrWhiteSpace(content) || content.Length < 20)
+        {
+            var stack = new System.Diagnostics.StackTrace(skipFrames: 1, fNeedFileInfo: true);
+            System.Console.Error.WriteLine(
+                $"[FileSystemStorageAdapter.WriteAtomic] EMPTY/TINY WRITE — file='{filePath}' len={content?.Length ?? -1} content='{content}'\nStack:\n{stack}");
+        }
+
+        var tempPath = filePath + ".tmp." + Guid.NewGuid().ToString("N");
+        try
+        {
+            await File.WriteAllTextAsync(tempPath, content, ct);
+            File.Move(tempPath, filePath, overwrite: true);
+        }
+        catch
+        {
+            try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
+            throw;
+        }
     }
 
     #endregion

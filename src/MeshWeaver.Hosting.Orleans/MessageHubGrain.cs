@@ -134,7 +134,6 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 },
                 () =>
                 {
-                    // Source completed with no usable node — fail every pending + future subscriber.
                     if (_hub is not null) return;
                     logger.LogWarning("[ACTIVATE] Grain {StreamId}: source completed with no usable node for {Path}",
                         streamId, addressPath);

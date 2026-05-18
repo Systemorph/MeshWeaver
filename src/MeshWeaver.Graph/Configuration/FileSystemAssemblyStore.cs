@@ -50,15 +50,32 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
         var dllPath = GetDllPath(nodeTypePath, version);
         var pdbPath = Path.ChangeExtension(dllPath, ".pdb");
         Directory.CreateDirectory(Path.GetDirectoryName(dllPath)!);
-        // Idempotent overwrite: two replicas compiling the same version race on the
-        // same file but produce identical (or near-identical) bytes, so the overwrite
-        // is harmless.
+        var relativeContentPath = Path.GetRelativePath(rootDirectory, dllPath).Replace('\\', '/');
+
+        // Per (nodeTypePath, version), the bytes are deterministic — same source
+        // compiled against the same framework produces an equivalent assembly. If
+        // the destination DLL already exists, skip the write: it's either the
+        // same compile finishing twice (two replicas raced), or a prior process
+        // produced this version and an ALC in the current process has the file
+        // locked. Overwriting a locked file throws IOException ("being used by
+        // another process") and bubbles up as outcome.Error → CompilationStatus.Error
+        // gets persisted to the NodeType JSON, where every subsequent activation
+        // re-reads it and fails forever. Re-use is the self-healing path:
+        // FrameworkVersion has rolled (Graph.dll rebuild → new version key →
+        // new dllPath) iff a recompile is genuinely needed.
+        if (File.Exists(dllPath))
+        {
+            logger.LogDebug(
+                "Assembly already at {DllPath} — skipping write (idempotent put, file may be ALC-locked)",
+                dllPath);
+            return Observable.Return(new AssemblyStoreLocation(dllPath, FileSystemCollectionName, relativeContentPath));
+        }
+
         File.WriteAllBytes(dllPath, assemblyBytes);
         if (pdbBytes is { Length: > 0 })
             File.WriteAllBytes(pdbPath, pdbBytes);
         logger.LogInformation(
             "Cached assembly at {DllPath} ({Bytes} bytes)", dllPath, assemblyBytes.Length);
-        var relativeContentPath = Path.GetRelativePath(rootDirectory, dllPath).Replace('\\', '/');
         return Observable.Return(new AssemblyStoreLocation(dllPath, FileSystemCollectionName, relativeContentPath));
     }
 
