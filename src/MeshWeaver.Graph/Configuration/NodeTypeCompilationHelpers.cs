@@ -46,6 +46,8 @@ internal static class NodeTypeCompilationHelpers
     /// The watcher sees the flip and runs the compile; the result lands on the
     /// MeshNode and every subscriber sees it through synced-query fan-out.</para>
     /// </summary>
+    private static int _watcherInstallCount;
+
     public static IDisposable InstallCompileWatcher(
         IMessageHub hub,
         IWorkspace workspace,
@@ -53,6 +55,11 @@ internal static class NodeTypeCompilationHelpers
     {
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.CompileWatcher");
+
+        var installSeq = System.Threading.Interlocked.Increment(ref _watcherInstallCount);
+        logger?.LogInformation(
+            "Compile watcher: install#{Seq} on {HubPath}",
+            installSeq, hub.Address.Path);
 
         // No in-memory single-flight flag. CompilationStatus on the
         // NodeTypeDefinition IS the lock: the watcher atomically transitions
@@ -126,8 +133,10 @@ internal static class NodeTypeCompilationHelpers
                     if (HasUsableBuild(node, def))
                     {
                         logger?.LogInformation(
-                            "Compile kickoff: skip {HubPath} — Ok + compiled assembly present ({Collection}/{Path})",
-                            hub.Address.Path, def.LatestAssemblyCollection, def.LatestAssemblyPath);
+                            "Compile kickoff: skip {HubPath} — assembly reusable (status={Status}, {Collection}/{Path}, framework={FrameworkVersion})",
+                            hub.Address.Path, def.CompilationStatus,
+                            def.LatestAssemblyCollection, def.LatestAssemblyPath,
+                            def.CompiledFrameworkVersion);
                         return;
                     }
                     if (System.Threading.Interlocked.CompareExchange(ref kicked, 1, 0) != 0) return;
@@ -334,31 +343,25 @@ internal static class NodeTypeCompilationHelpers
 
     /// <summary>
     /// True when a NodeType's persisted compile state is backed by a compiled
-    /// assembly that (a) still exists on disk and (b) was compiled against the
-    /// CURRENT MeshWeaver framework version — the ONLY condition under which the
-    /// compile kickoff may safely skip a (re)compile.
+    /// assembly that was compiled against the CURRENT MeshWeaver framework
+    /// version — the condition under which the compile kickoff may safely skip
+    /// a (re)compile. Self-healing across <c>Status=Error</c>:
+    /// <c>LatestAssembly{Collection,Path}</c> and <c>CompiledFrameworkVersion</c>
+    /// are only ever populated by a <i>successful</i> compile write-back, so
+    /// if all three match the current framework, a prior compile produced a
+    /// usable assembly even if a subsequent compile failed (e.g. ALC file lock
+    /// during cross-test re-write) and left <c>Status=Error</c> behind in the
+    /// persisted JSON. Activation re-uses the existing assembly via
+    /// <see cref="IAssemblyStore.TryGetAssemblyPath"/>; if the store has lost
+    /// the bytes, activation's <c>TriggerRecompileAndRetry</c> kicks a fresh
+    /// compile. Trusting the assembly fields here gates the kickoff against
+    /// pointless recompiles that pollute <c>Status</c> further on failure.
     ///
-    /// <para><c>CompilationStatus</c>, <c>MeshNode.AssemblyLocation</c> and
-    /// <see cref="NodeTypeDefinition.CompiledFrameworkVersion"/> are runtime
-    /// state, but they are persisted into the NodeType MeshNode's JSON. A stale
-    /// <c>Ok</c> therefore outlives the process — and the temp /
-    /// <c>.mesh-cache</c> assembly — that produced it (seed-data pollution,
-    /// cleaned-up caches, cross-machine checkouts, <b>and a redeployed
-    /// framework</b>). The two checks below make a cold hub start self-healing
-    /// instead of trusting a pointer into the void:</para>
-    /// <list type="number">
-    ///   <item><b>Assembly present</b> — the compiled DLL still exists on disk.</item>
-    ///   <item><b>Framework match</b> — it was compiled against the current
-    ///     <see cref="FrameworkVersion"/>. A MeshWeaver redeploy at a new version
-    ///     changes the framework assemblies the cached DLL bound against, so a
-    ///     mismatch forces a recompile (which mints a new release and leaves the
-    ///     old one as history for instances still loaded on it).</item>
-    /// </list>
-    ///
-    /// <para>Gating on <c>status == Ok</c> first is what makes the
-    /// <c>LatestAssemblyPath</c> check sound: a never-compiled NodeType has a
-    /// null status, so a leftover assembly reference can never falsely satisfy
-    /// this predicate.</para>
+    /// <para><b>Framework match is the freshness check.</b> A MeshWeaver
+    /// redeploy changes <see cref="FrameworkVersion"/> (semver or, in dev
+    /// builds, Graph.dll's last-write time), invalidating every cached compile.
+    /// Mismatch forces a recompile (which mints a new release and leaves the
+    /// old one as history for instances still loaded on it).</para>
     ///
     /// <para>This is a metadata-only check — no <see cref="IAssemblyStore"/>
     /// probe, no <c>File.Exists</c>. The kickoff path prefers a redundant
@@ -367,8 +370,7 @@ internal static class NodeTypeCompilationHelpers
     /// assembly and the store reports a miss.</para>
     /// </summary>
     internal static bool HasUsableBuild(MeshNode node, NodeTypeDefinition def) =>
-        def.CompilationStatus == CompilationStatus.Ok
-        && !string.IsNullOrEmpty(def.LatestAssemblyCollection)
+        !string.IsNullOrEmpty(def.LatestAssemblyCollection)
         && !string.IsNullOrEmpty(def.LatestAssemblyPath)
         && string.Equals(def.CompiledFrameworkVersion, FrameworkVersion, StringComparison.Ordinal);
 
