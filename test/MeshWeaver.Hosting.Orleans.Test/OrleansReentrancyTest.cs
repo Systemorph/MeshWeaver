@@ -110,19 +110,23 @@ public class OrleansReentrancyTest(ITestOutputHelper output) : TestBase(output)
         var threadPath = createResp.Message.Node!.Path!;
         Output.WriteLine($"Thread: {threadPath}");
 
-        // Subscribe to the thread's content. The thread node's MeshThread.Messages
-        // list grows as cells are created, and IsExecuting flips false when the
-        // streaming loop finishes. Both signals are sufficient to prove
-        // reentrancy: if a tool call deadlocked the grain scheduler, IsExecuting
-        // would never flip back.
+        // Cache the per-node hub's MeshNodeReference sync stream — the authoritative
+        // live stream from the executing thread hub. The older GetRemoteStream<MeshNode>
+        // (CollectionReference) overload returns the MESH HUB's MeshNode cache, which is
+        // fed by fan-out and lags the thread hub's own state — IsExecuting/Messages
+        // emissions seen through that cache can interleave or miss the post-commit tick
+        // that proves the response cell landed.
+        //
+        // Holding the ISynchronizationStream<MeshNode> reference (rather than wrapping
+        // it in .Select(...).Replay(1)) preserves the stream's own Current cache so
+        // each downstream Subscribe replays the latest server-side value directly —
+        // no risk of the Replay buffer holding a stale projection.
         var workspace = client.GetWorkspace();
-        var threadStream = workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Select(nodes => nodes?.Cast<MeshNode>().FirstOrDefault(n => n.Path == threadPath)?.Content as MeshThread)
-            .Replay(1);
-        using var streamConnection = threadStream.Connect();
+        var threadSyncStream = workspace
+            .GetRemoteStream<MeshNode, MeshNodeReference>(new Address(threadPath), new MeshNodeReference());
 
-        var twoMessages = threadStream
-            .Select(t => t?.Messages ?? [])
+        var twoMessages = threadSyncStream
+            .Select(change => (change.Value?.Content as MeshThread)?.Messages ?? [])
             .Where(ids => ids.Count >= 2)
             .FirstAsync()
             .ToTask(ct);
@@ -144,7 +148,8 @@ public class OrleansReentrancyTest(ITestOutputHelper output) : TestBase(output)
 
         // Wait for execution to finish — IsExecuting goes false. If the tool
         // call deadlocked the grain, this never flips and the test times out.
-        var completed = await threadStream
+        var completed = await threadSyncStream
+            .Select(change => change.Value?.Content as MeshThread)
             .Where(t => t != null && !t.IsExecuting)
             .Timeout(40.Seconds())
             .FirstAsync()
