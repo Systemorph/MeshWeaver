@@ -139,7 +139,7 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
         // step is async and races the org create otherwise. Also persist
         // the Admin/Partition MeshNode so subsequent reads via the workspace
         // see the partition's catalog entry.
-        await pgProvider.EnsureSchemaForPartitionAsync(partitionDef, default);
+        await pgProvider.EnsureSchemaForPartitionAsync(partitionDef, TestContext.Current.CancellationToken);
         pgProvider.RegisterPartition(partitionDef);
         await meshService.CreateNode(partitionNode)
             .FirstAsync()
@@ -220,7 +220,7 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
                 TableMappings = PartitionDefinition.StandardTableMappings,
                 Versioned = true,
             };
-            await pgProvider.EnsureSchemaForPartitionAsync(partitionDef, default);
+            await pgProvider.EnsureSchemaForPartitionAsync(partitionDef, TestContext.Current.CancellationToken);
             pgProvider.RegisterPartition(partitionDef);
             var partitionNode = new MeshNode(scope, "Admin/Partition")
             {

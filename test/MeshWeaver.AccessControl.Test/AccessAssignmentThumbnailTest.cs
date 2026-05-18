@@ -294,15 +294,24 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             hostAddress, reference);
 
-        // Wait for Overview to render with actual areas (skip progress-only emissions)
-        var item = await stream
-            .Where(i => i.Value.TryGetProperty("areas", out var areas)
-                && areas.EnumerateObject().Any())
+        // Wait for the Overview area control itself to render. The prior
+        // shape ("first emission with any 'areas'") raced the menu burst —
+        // $Menu/$Menu:Node/$Menu:Mesh land before Overview, and matching on
+        // "any areas" would happily snap the menu-only frame and assert
+        // against menus that have no Change Subject button.
+        await stream
+            .GetControlStream(reference.Area!)
             .Timeout(10.Seconds())
+            .FirstAsync(x => x != null);
+
+        // Read the assembled entity-store now that the Overview area exists.
+        var settled = await stream
+            .Where(i => i.Value.TryGetProperty("areas", out var areas)
+                && areas.EnumerateObject().Any(a => a.Name.Contains("Overview")))
+            .Timeout(5.Seconds())
             .FirstAsync();
 
-        // Search through the raw JSON for a ButtonControl with label "Change Subject"
-        var json = item.Value.GetRawText();
+        var json = settled.Value.GetRawText();
         json.Should().Contain("Change Subject",
             "Overview should contain a 'Change Subject' button for admins");
     }

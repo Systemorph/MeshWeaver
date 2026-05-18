@@ -65,14 +65,22 @@ public class FileSystemAssemblyStoreTest : IDisposable
     }
 
     [Fact]
-    public void Put_same_version_overwrites_idempotently()
+    public void Put_same_version_is_idempotent_and_preserves_first_write()
     {
+        // Idempotent put (6e909188f): a second Put for an existing (path, version)
+        // does NOT overwrite — it returns the existing path. Reason: per
+        // (path, version) the bytes are deterministic (same source + framework
+        // produces equivalent assembly), and overwriting a DLL the current
+        // process has already ALC-loaded throws IOException, which bubbles up
+        // as CompilationStatus.Error and poisons the NodeType forever. Skip
+        // is the self-heal: if FrameworkVersion rolled, the version key rolls
+        // with it and we land on a fresh dllPath.
         var v1 = Encoding.UTF8.GetBytes("first-compile");
         var v2 = Encoding.UTF8.GetBytes("second-compile-of-same-version");
         var p1 = store.Put("X/Y", version: 4, v1, null).Wait()!;
         var p2 = store.Put("X/Y", version: 4, v2, null).Wait()!;
         p2.Should().Be(p1, "same version must resolve to the same filesystem path");
-        File.ReadAllBytes(p2).Should().BeEquivalentTo(v2);
+        File.ReadAllBytes(p2).Should().BeEquivalentTo(v1, "second put is a no-op — first-write-wins for ALC safety");
     }
 
     [Fact]
