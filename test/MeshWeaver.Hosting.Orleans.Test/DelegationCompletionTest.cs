@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
@@ -39,14 +39,13 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// specifically validates the dual-response (CellsCreated + ExecutionCompleted)
 /// semantic of the legacy submit pipeline. The new AppendUserMessageRequest API
 /// returns a single Success/Error response and the agent's response text lives
-/// only on the response satellite cell â€” there's no equivalent of the second
+/// only on the response satellite cell Ã¢â‚¬â€ there's no equivalent of the second
 /// completion response for this test to assert against. Internal production code
-/// (thread hub â†’ _Exec sub-hub) still uses SubmitMessageRequest with this dual
+/// (thread hub Ã¢â€ â€™ _Exec sub-hub) still uses SubmitMessageRequest with this dual
 /// response semantic, so the underlying behaviour is still worth exercising
 /// while the legacy contract is in place.
 /// </summary>
-[Collection(nameof(OrleansClusterCollection))]
-public class DelegationCompletionTest(SharedOrleansFixture fixture, ITestOutputHelper output) : OrleansSharedTestBase(fixture, output)
+public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
         => await base.GetClientAsync($"completion-{name}-{Guid.NewGuid():N}", "TestUser");
@@ -59,7 +58,7 @@ public class DelegationCompletionTest(SharedOrleansFixture fixture, ITestOutputH
     /// The test uses RegisterCallback (same pattern as delegation tool)
     /// and collects all responses until ExecutionCompleted arrives.
     /// </summary>
-    // TODO(append-migration): kept on SubmitMessageRequest â€” see class-level comment.
+    // TODO(append-migration): kept on SubmitMessageRequest Ã¢â‚¬â€ see class-level comment.
     [Fact(Timeout = 60000)]
     public async Task SubmitMessage_ReceivesBothCellsCreated_AndExecutionCompleted()
     {
@@ -87,7 +86,7 @@ public class DelegationCompletionTest(SharedOrleansFixture fixture, ITestOutputH
         delivery.Should().NotBeNull("Post should return delivery");
 
         // hub.Observe completes after the first emission. Re-subscribe after CellsCreated
-        // to catch the second response (ExecutionCompleted) — same shape as the legacy
+        // to catch the second response (ExecutionCompleted) â€” same shape as the legacy
         // RegisterCallback re-register pattern.
         void SubscribeForResponse(IMessageDelivery del)
         {
@@ -126,7 +125,7 @@ public class DelegationCompletionTest(SharedOrleansFixture fixture, ITestOutputH
             Output.WriteLine($"TIMEOUT! Received {responses.Count} response(s): [{string.Join(", ", responses.Select(r => r.Status))}]");
         }
         completed.Should().Be(completionTcs.Task,
-            "should receive ExecutionCompleted before timeout â€” parent thread would hang otherwise");
+            "should receive ExecutionCompleted before timeout Ã¢â‚¬â€ parent thread would hang otherwise");
 
         // Verify we got both responses
         responses.Should().HaveCountGreaterThanOrEqualTo(2,

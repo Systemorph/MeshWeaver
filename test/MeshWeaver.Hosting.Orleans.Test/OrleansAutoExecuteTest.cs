@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -37,8 +37,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// went to the thread grain instead of the response message grain
 /// because the child nodes weren't created in persistence.
 /// </summary>
-[Collection(nameof(OrleansClusterCollection))]
-public class OrleansAutoExecuteTest(SharedOrleansFixture fixture, ITestOutputHelper output) : OrleansSharedTestBase(fixture, output)
+public class OrleansAutoExecuteTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
         => await base.GetClientAsync($"autoexec-{name}-{Guid.NewGuid():N}", "TestUser");
@@ -49,7 +48,7 @@ public class OrleansAutoExecuteTest(SharedOrleansFixture fixture, ITestOutputHel
         // reducer, not an EntityCollection lookup. The owning hub is the source of
         // truth for MeshNode content; this avoids any catalog / index lag.
         // Polling tests call this while a node is still being materialized (response
-        // cell created async by the agent loop) — routing returns NotFound until then.
+        // cell created async by the agent loop) â€” routing returns NotFound until then.
         // Swallow that as null so the caller's polling loop can keep trying.
         IMessageDelivery<GetDataResponse> response;
         try
@@ -90,7 +89,7 @@ public class OrleansAutoExecuteTest(SharedOrleansFixture fixture, ITestOutputHel
             var threadPath = threadNode.Path!;
             Output.WriteLine($"Thread: {threadPath}, user={userMsgId}, response={responseMsgId}");
 
-            // Create the thread â€” AutoExecutePendingMessage should fire on grain activation
+            // Create the thread Ã¢â‚¬â€ AutoExecutePendingMessage should fire on grain activation
             var createResponse = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("TestUser"))).FirstAsync().ToTask(ct);
             createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error);
             Output.WriteLine("Thread created, waiting for execution...");
@@ -152,7 +151,7 @@ public class OrleansAutoExecuteTest(SharedOrleansFixture fixture, ITestOutputHel
 
             await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("TestUser"))).FirstAsync().ToTask(ct);
 
-            // Activate the per-thread hub by sending it a message — CreateNodeRequest above
+            // Activate the per-thread hub by sending it a message â€” CreateNodeRequest above
             // landed at TestUser, the catalog has the node, but the per-thread grain
             // is created lazily on its first inbound message. Without this ping, the hub's
             // WithInitialization callbacks (including WatchForExecution that fires the

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -31,8 +31,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// Submits a 3rd message and verifies the agent sees ALL 5 previous messages
 /// via GetDataRequest + CombineLatest (not from cache or local workspace).
 /// </summary>
-[Collection(nameof(OrleansClusterCollection))]
-public class OrleansChatHistoryTest(SharedOrleansFixture fixture, ITestOutputHelper output) : OrleansSharedTestBase(fixture, output)
+public class OrleansChatHistoryTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
     private const string ThreadPath = "TestUser/_Thread/history-cold-start";
 
@@ -53,7 +52,7 @@ public class OrleansChatHistoryTest(SharedOrleansFixture fixture, ITestOutputHel
             Output.WriteLine("Thread pre-seeded with 4 messages via AddMeshNodes");
 
             // Submit via AppendUserMessageRequest, then wait for the response cell to settle.
-            // The new API returns Success/Error only â€” the agent's response text lives on the
+            // The new API returns Success/Error only Ã¢â‚¬â€ the agent's response text lives on the
             // response satellite cell. Read it via the workspace stream once execution completes.
             Output.WriteLine("Posting AppendUserMessageRequest...");
             var workspace = client.GetWorkspace();
@@ -76,20 +75,20 @@ public class OrleansChatHistoryTest(SharedOrleansFixture fixture, ITestOutputHel
             {
                 ThreadPath = ThreadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
-                UserText = "Third question â€” can you see history?",
+                UserText = "Third question Ã¢â‚¬â€ can you see history?",
                 ContextPath = "TestUser"
             }, o => o.WithTarget(new Address(ThreadPath))).FirstAsync().ToTask(ct);
             submitResp.Message.Success.Should().BeTrue(submitResp.Message.Error);
             Output.WriteLine($"Append accepted: success={submitResp.Message.Success}");
 
-            // Resolve message ids — last id is the new agent response cell.
+            // Resolve message ids â€” last id is the new agent response cell.
             var msgIds = await sixMessages;
             var responseMsgId = msgIds[^1];
             var responsePath = $"{ThreadPath}/{responseMsgId}";
             Output.WriteLine($"Response cell: {responseMsgId} (full list: [{string.Join(",", msgIds)}])");
 
             // Wait for the response cell text to fill in. Skip transient placeholders
-            // ("Allocating agent...", "Initializing...") — the EchoChatClient's final
+            // ("Allocating agent...", "Initializing...") â€” the EchoChatClient's final
             // streaming text always contains "received" once execution is done.
             ThreadMessage? responseMsg = null;
             for (var i = 0; i < 100; i++)

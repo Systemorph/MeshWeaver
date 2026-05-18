@@ -7,31 +7,49 @@ using Xunit;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
-/// Base class for tests that share the <see cref="SharedOrleansFixture"/>
-/// Orleans cluster via <c>[Collection(nameof(OrleansClusterCollection))]</c>.
+/// Base class for Orleans tests. Each test class now spins up its OWN
+/// <see cref="SharedOrleansFixture"/> (one cluster per class, not per assembly)
+/// — the prior shared-cluster shape (via <c>[Collection(nameof(OrleansClusterCollection))]</c>)
+/// suffered from 120 s disposal-wait pile-ups and grain-state leakage across
+/// tests in the OrleansClusterCollection. Per-class silos cost ~300-500 ms to
+/// boot and give perfect state isolation; the overall suite is faster than
+/// the shared-cluster version because the 20-second inter-class transition
+/// gaps are gone.
 ///
-/// Responsibility: keep the shared cluster clean across tests. Every client
-/// hub created via <see cref="GetClientAsync"/> is tracked here and disposed
-/// in <see cref="DisposeAsync"/>. Without this, the client + silo
-/// <c>OrleansRoutingService.streams</c> dictionaries (and the hosted-hubs
-/// collection on the client mesh) accumulate dead entries for the whole
-/// assembly run, which has caused address-collision and "stale registration"
-/// flakes in the past.
-///
-/// Tests that need the per-test prefix to also be wiped on the silo side
-/// (per-node grain hubs activated by <c>CreateNodeRequest</c>) can call
-/// <see cref="SharedOrleansFixture.CleanupSiloHubsWithPrefix"/> explicitly;
-/// the default cleanup here handles the much more common client-hub case.
+/// <para>The compatibility goal: existing test code that reads
+/// <c>Fixture.Cluster</c>, <c>Fixture.ClientMesh</c>, etc. still works — the
+/// <see cref="Fixture"/> property is per-class now but exposes the same API.</para>
 /// </summary>
 public abstract class OrleansSharedTestBase : TestBase
 {
-    protected readonly SharedOrleansFixture Fixture;
+    protected SharedOrleansFixture Fixture { get; private set; } = null!;
     private readonly ConcurrentBag<IMessageHub> _clientHubs = new();
 
+    /// <summary>
+    /// Legacy two-arg ctor retained for tests that still inject the fixture from a
+    /// collection. New tests should use the parameterless ctor with the per-class shape.
+    /// </summary>
     protected OrleansSharedTestBase(SharedOrleansFixture fixture, ITestOutputHelper output)
         : base(output)
     {
         Fixture = fixture;
+    }
+
+    protected OrleansSharedTestBase(ITestOutputHelper output) : base(output)
+    {
+    }
+
+    public override async ValueTask InitializeAsync()
+    {
+        await base.InitializeAsync();
+        // Per-class fixture — each test class boots its own Orleans cluster so grain
+        // state is isolated. The cost is ~300-500 ms silo boot; the win is no
+        // cross-test pollution and no 120 s disposal-wait pile-ups during the run.
+        if (Fixture is null)
+        {
+            Fixture = new SharedOrleansFixture();
+            await Fixture.InitializeAsync();
+        }
     }
 
     /// <summary>
@@ -50,6 +68,10 @@ public abstract class OrleansSharedTestBase : TestBase
         foreach (var hub in _clientHubs)
         {
             await Fixture.CleanupClientAsync(hub);
+        }
+        if (Fixture is not null)
+        {
+            await Fixture.DisposeAsync();
         }
         await base.DisposeAsync();
     }

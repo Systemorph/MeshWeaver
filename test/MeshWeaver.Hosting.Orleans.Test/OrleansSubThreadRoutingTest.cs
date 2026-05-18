@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -36,8 +36,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// This is 5+ segments deep and requires the RoutingGrain to correctly resolve
 /// the path and update the delivery target.
 /// </summary>
-[Collection(nameof(OrleansClusterCollection))]
-public class OrleansSubThreadRoutingTest(SharedOrleansFixture fixture, ITestOutputHelper output) : OrleansSharedTestBase(fixture, output)
+public class OrleansSubThreadRoutingTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
         => await base.GetClientAsync($"subrouting-{name}-{Guid.NewGuid():N}", "TestUser");
@@ -151,7 +150,7 @@ public class OrleansSubThreadRoutingTest(SharedOrleansFixture fixture, ITestOutp
         Output.WriteLine($"Sub-thread created: {createdSubThreadPath}");
         createdSubThreadPath.Should().Be(subThreadPath);
 
-        // 4. Submit message to the sub-thread â€” this is the critical routing test!
+        // 4. Submit message to the sub-thread Ã¢â‚¬â€ this is the critical routing test!
         // The sub-thread is 6 segments deep. The RoutingGrain must resolve this
         // to the correct grain key and propagate access context.
         var subTwoMessages = ObserveThreadMessages(client, subThreadPath)
@@ -203,7 +202,7 @@ public class OrleansSubThreadRoutingTest(SharedOrleansFixture fixture, ITestOutp
 
     /// <summary>
     /// Verifies that access context propagates correctly when creating and accessing
-    /// nodes at deeply nested paths. Uses the real submission flow (SubmitMessage â†’ cells)
+    /// nodes at deeply nested paths. Uses the real submission flow (SubmitMessage Ã¢â€ â€™ cells)
     /// to create intermediate nodes, then creates a sub-thread under them.
     /// </summary>
     [Fact(Timeout = 60000)]

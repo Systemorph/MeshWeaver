@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
@@ -22,15 +22,13 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// separate client's repeated <c>GetDataRequest</c> polls?
 ///
 /// <para>
-/// Polling pattern — each call creates a fresh per-call reduce stream wrapper.
+/// Polling pattern â€” each call creates a fresh per-call reduce stream wrapper.
 /// If the framework has a SetCurrentRequest race in the per-call reduce
 /// pipeline, polls return Data=null indefinitely. The monolith counterpart
 /// passes; this checks the Orleans grain boundary doesn't introduce the bug.
 /// </para>
 /// </summary>
-[Collection(nameof(OrleansClusterCollection))]
-public class OrleansGetDataRequestPropagationTest(SharedOrleansFixture fixture, ITestOutputHelper output)
-    : OrleansSharedTestBase(fixture, output)
+public class OrleansGetDataRequestPropagationTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
     [Fact(Timeout = 60_000)]
     public async Task LocalUpdate_VisibleViaPolledGetDataRequest_AcrossGrains()
@@ -38,7 +36,7 @@ public class OrleansGetDataRequestPropagationTest(SharedOrleansFixture fixture, 
         var ct = new CancellationTokenSource(50.Seconds()).Token;
         Output.WriteLine("[test] start");
 
-        // 1. Create node a (plain Markdown — same NodeType as the working
+        // 1. Create node a (plain Markdown â€” same NodeType as the working
         //    Orleans 3-node test). Use a creator client to avoid mixing roles.
         var aId = $"poll-a-{Guid.NewGuid():N}";
         var pathA = $"TestUser/{aId}";
@@ -56,7 +54,7 @@ public class OrleansGetDataRequestPropagationTest(SharedOrleansFixture fixture, 
         Output.WriteLine($"[test] CreateNode succeeded: {pathA}");
 
         // 2. Read via polled GetDataRequest from a SEPARATE client. Retry the
-        //    initial read — grain activation + MeshDataSource init runs lazily.
+        //    initial read â€” grain activation + MeshDataSource init runs lazily.
         var reader = await GetClientAsync($"reader-{Guid.NewGuid():N}", "TestUser");
         MeshNode? initial = null;
         for (var i = 0; i < 50; i++)
@@ -70,7 +68,7 @@ public class OrleansGetDataRequestPropagationTest(SharedOrleansFixture fixture, 
         initial!.Name.Should().Be("A0");
         Output.WriteLine($"[poll] initial: Name={initial.Name}");
 
-        // 3. Update via UpdateNodeRequest — this routes to a's grain hub which
+        // 3. Update via UpdateNodeRequest â€” this routes to a's grain hub which
         //    invokes its local UpdateMeshNode handler.
         var updResp = await creator.Observe(
                 new UpdateNodeRequest(initial with { Name = "A1" }),

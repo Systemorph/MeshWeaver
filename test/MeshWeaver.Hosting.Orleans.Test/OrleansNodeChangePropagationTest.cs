@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -38,15 +38,15 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 ///
 /// Exercises the FULL production flow:
 /// 1. Client creates a thread (like ThreadChatView.SendMessageAsync)
-/// 2. Client submits a message (AppendUserMessageRequest â†’ thread grain)
+/// 2. Client submits a message (AppendUserMessageRequest Ã¢â€ â€™ thread grain)
 /// 3. Thread grain creates user + response cells via Observable
 /// 4. Execution starts on _Exec hosted hub (streaming loop via InvokeAsync)
-/// 5. Top-level agent calls Create tool (MeshPlugin) â†’ NodeChangeEntry generated
-/// 6. Top-level agent delegates to sub-agent â†’ sub-thread created, SubmitMessage posted
-/// 7. Sub-agent calls Patch tool â†’ NodeChangeEntry generated in sub-thread
-/// 8. Sub-thread completes â†’ server-internal SubmitMessageResponse.UpdatedNodes propagates up
-/// 9. Parent merges node changes via ForwardNodeChange â†’ aggregated with min/max versions
-/// 10. Parent completes â†’ final NodeChangeEntry list on response message
+/// 5. Top-level agent calls Create tool (MeshPlugin) Ã¢â€ â€™ NodeChangeEntry generated
+/// 6. Top-level agent delegates to sub-agent Ã¢â€ â€™ sub-thread created, SubmitMessage posted
+/// 7. Sub-agent calls Patch tool Ã¢â€ â€™ NodeChangeEntry generated in sub-thread
+/// 8. Sub-thread completes Ã¢â€ â€™ server-internal SubmitMessageResponse.UpdatedNodes propagates up
+/// 9. Parent merges node changes via ForwardNodeChange Ã¢â€ â€™ aggregated with min/max versions
+/// 10. Parent completes Ã¢â€ â€™ final NodeChangeEntry list on response message
 ///
 /// This test specifically validates:
 /// - No deadlocks in the delegation chain (execution hub, TCS resolution, callbacks)
@@ -54,8 +54,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// - NodeChangeEntry aggregation across delegation boundaries
 /// - Correct routing of deeply nested sub-thread paths in Orleans
 /// </summary>
-[Collection(nameof(OrleansClusterCollection))]
-public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITestOutputHelper output) : OrleansSharedTestBase(fixture, output)
+public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
         => await base.GetClientAsync($"nodechange-{name}-{Guid.NewGuid():N}", "TestUser");
@@ -97,14 +96,14 @@ public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITes
     }
 
     /// <summary>
-    /// Full chain: top agent calls Create â†’ delegates â†’ sub-agent calls Patch â†’ NodeChangeEntry propagates.
+    /// Full chain: top agent calls Create Ã¢â€ â€™ delegates Ã¢â€ â€™ sub-agent calls Patch Ã¢â€ â€™ NodeChangeEntry propagates.
     /// Tests for deadlocks: the execution hub (InvokeAsync) blocks during streaming;
     /// delegation TCS resolution must not require the blocked scheduler.
     /// </summary>
     [Fact(Timeout = 60000)]
     public async Task Delegation_NodeChanges_PropagateFromSubThread()
     {
-        // Pull IMessageHub from the silo's container — ChatClientAgentFactory needs it
+        // Pull IMessageHub from the silo's container â€” ChatClientAgentFactory needs it
         // so MeshPlugin tools (Create/Patch/delegate_to_agent) get wired into every test agent.
         var siloHub = ((InProcessSiloHandle)Fixture.Cluster.Silos[0]).SiloHost.Services
             .GetRequiredService<IMessageHub>();
@@ -114,7 +113,7 @@ public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITes
         var ct = new CancellationTokenSource(50.Seconds()).Token;
         var client = await GetClientAsync();
 
-        // 1. Create thread â€” exactly like ThreadChatView.SendMessageAsync does
+        // 1. Create thread Ã¢â‚¬â€ exactly like ThreadChatView.SendMessageAsync does
         var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "NodeChange propagation test", "TestUser");
         var threadPath = await CreateNodeAsync(client, threadNode, "TestUser", ct);
         Output.WriteLine($"Thread created: {threadPath}");
@@ -125,7 +124,7 @@ public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITes
             .FirstAsync()
             .ToTask(ct);
 
-        // 3. Submit message â€” triggers the ToolCallDelegatingChatClient which:
+        // 3. Submit message Ã¢â‚¬â€ triggers the ToolCallDelegatingChatClient which:
         //    Turn 1: calls Create (creates a Markdown node)
         //    Turn 2: calls delegate_to_agent (Executor)
         //    Turn 3: returns summary text after delegation completes
@@ -138,14 +137,14 @@ public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITes
                 ContextPath = "TestUser"
             }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
-        Output.WriteLine("AppendUserMessageRequest succeeded â€” submission queued");
+        Output.WriteLine("AppendUserMessageRequest succeeded Ã¢â‚¬â€ submission queued");
 
         // 4. Wait for message IDs
         var msgIds = await twoMessages;
         msgIds.Should().HaveCount(2);
         Output.WriteLine($"Message IDs: [{string.Join(", ", msgIds)}]");
 
-        // 5. Wait for execution to complete â€” poll response message
+        // 5. Wait for execution to complete Ã¢â‚¬â€ poll response message
         //    If the delegation chain deadlocks, this times out.
         var responsePath = $"{threadPath}/{msgIds[1]}";
         ThreadMessage? responseMsg = null;
@@ -177,7 +176,7 @@ public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITes
         Output.WriteLine($"Delegation: path={delegateCall.DelegationPath}, success={delegateCall.IsSuccess}");
 
         // 7. Verify the Markdown node was created by the Create tool.
-        // ObserveQuery on the silo (not the client!) — the change feed +
+        // ObserveQuery on the silo (not the client!) â€” the change feed +
         // query providers are silo-local; the client's IMeshService aggregates
         // client-local providers only. ObserveQuery here gives the live Added
         // delta from the in-memory adapter on the silo, so the wait races
@@ -220,7 +219,7 @@ public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITes
             "parent response should have aggregated UpdatedNodes from both Create and sub-thread Patch");
         Output.WriteLine($"UpdatedNodes on parent response: {responseMsg.UpdatedNodes.Count} entries");
         foreach (var entry in responseMsg.UpdatedNodes)
-            Output.WriteLine($"  {entry.Operation}: {entry.Path} v{entry.VersionBefore}â†’v{entry.VersionAfter}");
+            Output.WriteLine($"  {entry.Operation}: {entry.Path} v{entry.VersionBefore}Ã¢â€ â€™v{entry.VersionAfter}");
 
         // The same node (test-doc-nodechange) was Created by parent and Patched by sub-thread.
         // Aggregation should give: min(VersionBefore), max(VersionAfter)
@@ -230,7 +229,7 @@ public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITes
         var docChange = docChanges[0];
         docChange.VersionAfter.Should().BeGreaterThan(docChange.VersionBefore ?? 0,
             "aggregated version should show progression from create to patch");
-        Output.WriteLine($"Aggregated: {docChange.Path} {docChange.Operation} v{docChange.VersionBefore}â†’v{docChange.VersionAfter}");
+        Output.WriteLine($"Aggregated: {docChange.Path} {docChange.Operation} v{docChange.VersionBefore}Ã¢â€ â€™v{docChange.VersionAfter}");
         }
         finally
         {
@@ -240,7 +239,7 @@ public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITes
 
     /// <summary>
     /// Resubmit test: after execution completes, click "Resubmit" (ArrowSync).
-    /// The HandleResubmitMessage handler must not deadlock â€” it uses
+    /// The HandleResubmitMessage handler must not deadlock Ã¢â‚¬â€ it uses
     /// meshService.CreateNode (Observable) + workspace.UpdateMeshNode (non-blocking).
     /// </summary>
     [Fact(Timeout = 60000)]
@@ -278,7 +277,7 @@ public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITes
         }
         Output.WriteLine("Initial execution complete");
 
-        // 2. Resubmit â€” sends ResubmitMessageRequest to the thread grain.
+        // 2. Resubmit Ã¢â‚¬â€ sends ResubmitMessageRequest to the thread grain.
         //    This was the original deadlock: the handler subscribed to workspace streams.
         //    Now uses Observable + workspace.UpdateMeshNode.
         // Resubmit keeps user message (index 0) + adds new response = 2 messages.
@@ -298,7 +297,7 @@ public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITes
         }, o => o.WithTarget(new Address(threadPath)));
         Output.WriteLine($"ResubmitMessageRequest delivery: {resubmitDelivery != null}");
 
-        // 3. Wait for message IDs to change â€” if deadlocked, this times out
+        // 3. Wait for message IDs to change Ã¢â‚¬â€ if deadlocked, this times out
         var newMsgIds = await resubmittedMessages;
         newMsgIds.Should().HaveCount(2,
             "resubmit should keep user message and replace response");
@@ -306,9 +305,9 @@ public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITes
         newMsgIds[1].Should().NotBe(msgIds[1], "response should be a new cell");
         Output.WriteLine($"After resubmit: [{string.Join(", ", newMsgIds)}]");
 
-        // 4. Resubmit succeeded â€” messages changed, no deadlock.
+        // 4. Resubmit succeeded Ã¢â‚¬â€ messages changed, no deadlock.
         // The execution will complete asynchronously (streaming on _Exec hub).
-        Output.WriteLine("Resubmit completed â€” messages updated, no deadlock!");
+        Output.WriteLine("Resubmit completed Ã¢â‚¬â€ messages updated, no deadlock!");
     }
 }
 
@@ -381,7 +380,7 @@ internal class ToolCallDelegatingChatClient : IChatClient
         IEnumerable<ChatMessage> messages, ChatOptions? options = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        // Delegate to non-streaming for simplicity â€” the framework handles both
+        // Delegate to non-streaming for simplicity Ã¢â‚¬â€ the framework handles both
         var response = await GetResponseAsync(messages, options, cancellationToken);
         var msg = response.Messages.First();
         var functionCalls = msg.Contents.OfType<FunctionCallContent>().ToList();
@@ -483,7 +482,7 @@ internal class PatchToolChatClient : IChatClient
 /// Factory: top-level agents (Navigator/Orchestrator/IsDefault) get
 /// <see cref="ToolCallDelegatingChatClient"/>; sub-agents (Worker/Executor/Coder)
 /// get <see cref="PatchToolChatClient"/>. Extends <see cref="ChatClientAgentFactory"/>
-/// so MeshPlugin's Create/Patch/delegate_to_agent tools are wired into every agent —
+/// so MeshPlugin's Create/Patch/delegate_to_agent tools are wired into every agent â€”
 /// otherwise the fake chat clients stream <c>FunctionCallContent</c> for tools the
 /// agent doesn't have and <c>FunctionInvokingChatClient</c> never executes them
 /// (responseMsg.ToolCalls would stay empty).
@@ -540,7 +539,7 @@ public class NodeChangePropagationSiloConfigurator : ISiloConfigurator, IHostCon
         };
         return
         [
-            // Namespace must end in "/_Access" — see SecurityService.ComputeScopeRoles.
+            // Namespace must end in "/_Access" â€” see SecurityService.ComputeScopeRoles.
             new("Public_Access", "User/_Access")
             {
                 NodeType = "AccessAssignment",
