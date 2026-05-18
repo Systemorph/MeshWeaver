@@ -377,6 +377,45 @@ public class PostgreSqlSqlGenerator
             ? whereClause[6..]
             : whereClause;
 
+        // Push-down for the routing-layer `path:a|b|c` form (PathResolutionService
+        // emits this to fetch every ancestor in one query and pick the longest
+        // by `sort:length(path)-desc limit:1`). Without an IN-list filter, the
+        // cross-schema UNION returns EVERY row in the satellite table, the outer
+        // ORDER BY picks whichever row has the longest path, and the resolver
+        // surfaces a sibling instead of the requested node. Single-schema
+        // queries don't hit this because PostgreSqlStorageAdapter.QueryAsyncInternal
+        // post-injects the IN clause; cross-schema needs the same treatment.
+        // Repro: ThreadUrlResolutionTest.ResolvePath_SatelliteByFullPath for
+        // _Access (auto-grant + user grant) failed pre-fix.
+        if (query.Paths is { Count: > 1 } && query.Scope == QueryScope.Exact)
+        {
+            var paramNames = new List<string>(query.Paths.Count);
+            for (var i = 0; i < query.Paths.Count; i++)
+            {
+                var name = $"@xspath{i}";
+                paramNames.Add(name);
+                parameters[name] = query.Paths[i].Trim('/');
+            }
+            var pathInClause = $"n.path IN ({string.Join(", ", paramNames)})";
+            whereCore = string.IsNullOrEmpty(whereCore)
+                ? pathInClause
+                : $"{pathInClause} AND {whereCore}";
+        }
+        else if (query.Paths is null or { Count: <= 1 }
+                 && !string.IsNullOrEmpty(query.Path)
+                 && query.Scope == QueryScope.Exact
+                 && !query.Path.Contains('*'))
+        {
+            // Single-path exact form goes through the same routing surface
+            // (PathResolutionService also fires path:X for trivial requests).
+            // Same logic — pin the satellite UNION to that one path.
+            parameters["@xspath0"] = query.Path.Trim('/');
+            var pathEqClause = "n.path = @xspath0";
+            whereCore = string.IsNullOrEmpty(whereCore)
+                ? pathEqClause
+                : $"{pathEqClause} AND {whereCore}";
+        }
+
         var isActivity = query.Source == QuerySource.Activity;
         var isAccessed = query.Source == QuerySource.Accessed && !string.IsNullOrEmpty(activityUserId);
 
