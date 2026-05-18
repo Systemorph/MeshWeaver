@@ -81,7 +81,7 @@ public static class McpAuthenticationExtensions
                     Resource = $"{origin}/mcp",
                     BearerMethodsSupported = { "header" },
                     ScopesSupported = { "mcp" },
-                    AuthorizationServers = { $"{origin}/connect" },
+                    AuthorizationServers = { origin },
                 };
                 return Task.CompletedTask;
             },
