@@ -68,25 +68,43 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
 
     public IObservable<AssemblyStoreLocation> PutWithLocation(string nodeTypePath, long version, byte[] assemblyBytes, byte[]? pdbBytes)
     {
+        var dir = Path.Combine(rootDirectory, Sanitize(nodeTypePath));
+        Directory.CreateDirectory(dir);
+
+        // First-write-wins for (nodeTypePath, version): if any v{version}-*.dll
+        // already exists in the directory, return its path WITHOUT writing the
+        // new bytes. The content-hash suffix is a tie-breaker for distinct
+        // historical compiles, NOT a way to fork a single (path, version) into
+        // multiple concurrent files. Two compiles for the same (path, version)
+        // happen for two reasons, both of which must resolve to the existing
+        // file:
+        //   1. Identical bytes — the hashed name collides, File.Exists short-
+        //      circuits, no IO. Optimal.
+        //   2. Different bytes — happens when a recompile lands on the same
+        //      hub-version key but the source-tree state shifted (test re-run
+        //      with an in-memory edit, framework patch version drift). The
+        //      first DLL is already ALC-loaded; overwriting it throws
+        //      IOException → CompilationStatus.Error → the NodeType is poisoned
+        //      until process restart. Skip the write and return the existing
+        //      path so the loaded ALC keeps serving consistent bytes.
+        //
+        // Lookup mirrors TryGetAssemblyPath above (newest v{version}-*.dll).
+        var existing = new DirectoryInfo(dir)
+            .EnumerateFiles($"v{version}-*.dll")
+            .OrderByDescending(f => f.LastWriteTimeUtc)
+            .FirstOrDefault();
+        if (existing is not null)
+        {
+            var existingRel = Path.GetRelativePath(rootDirectory, existing.FullName).Replace('\\', '/');
+            logger.LogDebug(
+                "Assembly already at {DllPath} — skipping write (idempotent put, first-write-wins for ALC safety)",
+                existing.FullName);
+            return Observable.Return(new AssemblyStoreLocation(existing.FullName, FileSystemCollectionName, existingRel));
+        }
+
         var dllPath = GetDllPath(nodeTypePath, version, assemblyBytes);
         var pdbPath = Path.ChangeExtension(dllPath, ".pdb");
-        Directory.CreateDirectory(Path.GetDirectoryName(dllPath)!);
         var relativeContentPath = Path.GetRelativePath(rootDirectory, dllPath).Replace('\\', '/');
-
-        // Content-hashed path: if the file already exists, the bytes are identical
-        // (same hash → same content) and skipping the write is the right thing. The
-        // file may also be ALC-locked from a prior load in the same process —
-        // skipping avoids the IOException that would otherwise bubble up as
-        // CompilationStatus.Error and strand the NodeType in a permanently-broken
-        // state. Different bytes for the same (nodeTypePath, version) land at a
-        // different hash → different path → no collision.
-        if (File.Exists(dllPath))
-        {
-            logger.LogDebug(
-                "Assembly already at {DllPath} — skipping write (content-hash hit, idempotent put)",
-                dllPath);
-            return Observable.Return(new AssemblyStoreLocation(dllPath, FileSystemCollectionName, relativeContentPath));
-        }
 
         File.WriteAllBytes(dllPath, assemblyBytes);
         if (pdbBytes is { Length: > 0 })
