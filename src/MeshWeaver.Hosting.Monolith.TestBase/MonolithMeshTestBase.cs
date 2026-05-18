@@ -758,7 +758,13 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// of hanging the whole CI run until the inactivity guard aborts. 30 seconds
     /// is generous — typical per-node-hub activation + persistence load is sub-second.
     /// </summary>
-    protected static readonly TimeSpan ReadNodeTimeout = TimeSpan.FromSeconds(30);
+    // Wall-clock cap on ReadNodeAsync. 60s matches the mesh hub's RequestTimeout
+    // bump (ConfigureMeshBase) — keeps the watchdog above the underlying
+    // hub-level Timeout so a slow-but-successful activation finishes inside
+    // the budget on CI cold starts (Linux runners commonly take 35-45s for
+    // the first per-node hub activation; the prior 30s tripped before the
+    // hub responded — symptom: FullFlow_CreateThread + similar AI tests).
+    protected static readonly TimeSpan ReadNodeTimeout = TimeSpan.FromSeconds(60);
 
     /// <summary>
     /// Same as <see cref="ReadNodeAsync(string)"/> with an explicit token for
