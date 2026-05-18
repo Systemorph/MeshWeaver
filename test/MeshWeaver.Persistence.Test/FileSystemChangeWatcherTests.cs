@@ -255,8 +255,18 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
             This file was created externally.
             """);
 
-        // Wait for file system events and debounce (increased for reliability)
-        await Task.Delay(500);
+        // Wait for file system events. inotify on Linux CI commonly takes
+        // 1-2s to deliver the first event after the watch is established;
+        // a 500ms delay would race and pass on Windows but fail on Linux.
+        // Poll for up to 5s instead of a fixed sleep.
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (DateTime.UtcNow < deadline
+            && !receivedNotifications.Any(n =>
+                n.Path.Contains("docs/readme")
+                && (n.Kind == DataChangeKind.Created || n.Kind == DataChangeKind.Updated)))
+        {
+            await Task.Delay(100);
+        }
 
         // Assert - On Windows, file creation + write may result in Created or Changed/Updated event
         receivedNotifications.Should().Contain(n =>
