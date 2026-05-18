@@ -87,6 +87,12 @@ public static class AIExtensions
             // See Doc/Architecture/RequestViaStreamUpdate.md.
             .WithType(typeof(SubmitMessageRequest), nameof(SubmitMessageRequest))
             .WithType(typeof(SubmitMessageResponse), nameof(SubmitMessageResponse))
+            // Internal triggers — registered on the wire so a remote client's
+            // ThreadSubmission.Apply* call can land on the per-thread hub.
+            .WithType(typeof(ResubmitTrigger), nameof(ResubmitTrigger))
+            .WithType(typeof(DeleteFromMessageTrigger), nameof(DeleteFromMessageTrigger))
+            .WithType(typeof(RecordSubmissionFailureTrigger), nameof(RecordSubmissionFailureTrigger))
+            .WithType(typeof(ThreadMutationAck), nameof(ThreadMutationAck))
             .WithType(typeof(ToolCallEntry), nameof(ToolCallEntry))
             .WithType(typeof(NodeChangeEntry), nameof(NodeChangeEntry))
             .WithType(typeof(ThreadExecutionContext), nameof(ThreadExecutionContext))

@@ -105,6 +105,13 @@ public static class ThreadExecution
             // stream-update path can't replicate without a side-effect watcher.
             // Migration plan tracked in tasks #10. See RequestViaStreamUpdate.md.
             .WithHandler<SubmitMessageRequest>(HandleSubmitMessage)
+            // Internal cross-hub mutation triggers — when ThreadSubmission.Apply*
+            // is invoked from a non-owner hub, it posts these so the work lands
+            // in the per-thread hub's OWN context (UpdateRemote staleness
+            // currently double-writes lists like MeshThread.Messages).
+            .WithHandler<ResubmitTrigger>(ThreadSubmission.HandleResubmitTrigger)
+            .WithHandler<DeleteFromMessageTrigger>(ThreadSubmission.HandleDeleteFromMessageTrigger)
+            .WithHandler<RecordSubmissionFailureTrigger>(ThreadSubmission.HandleRecordSubmissionFailureTrigger)
             .WithInitialization(SetThreadHubIdentity)
             .WithInitialization(RecoverStaleExecutingThread)
             .WithInitialization(WatchForExecution)

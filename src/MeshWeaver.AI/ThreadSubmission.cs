@@ -249,11 +249,29 @@ public static class ThreadSubmission
 
     /// <summary>
     /// Records a failed submission by creating an error response cell and
-    /// updating the parent thread's state in one chained operation. Replaces
-    /// the legacy <c>ThreadSubmission.ApplyRecordSubmissionFailure</c> handler — callers
-    /// invoke this directly via <c>workspace.Hub</c>.
+    /// updating the parent thread's state in one chained operation. Fans out
+    /// to the OWN-update fast path when invoked from the per-thread hub
+    /// itself, and to a posted <see cref="RecordSubmissionFailureTrigger"/>
+    /// (handled inline on the thread hub in OWN context) when invoked from
+    /// any other hub. See <c>RequestViaStreamUpdate.md</c>.
     /// </summary>
     public static void ApplyRecordSubmissionFailure(
+        IMessageHub hub,
+        string threadPath,
+        string userMessageId,
+        string userText,
+        string errorMessage)
+    {
+        if (!string.Equals(hub.Address.Path, threadPath, StringComparison.Ordinal))
+        {
+            hub.Post(new RecordSubmissionFailureTrigger(threadPath, userMessageId, userText, errorMessage),
+                o => o.WithTarget(new Address(threadPath)));
+            return;
+        }
+        ApplyRecordSubmissionFailureOwn(hub, threadPath, userMessageId, userText, errorMessage);
+    }
+
+    internal static void ApplyRecordSubmissionFailureOwn(
         IMessageHub hub,
         string threadPath,
         string userMessageId,
@@ -278,7 +296,7 @@ public static class ThreadSubmission
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.ThreadSubmission");
         meshService.CreateNode(errorCell)
-            .SelectMany(_ => workspace.GetMeshNodeStream(threadPath).Update(node =>
+            .SelectMany(_ => workspace.GetMeshNodeStream().Update(node =>
             {
                 var t = node.Content as MeshThread ?? new MeshThread();
                 var msgs = t.Messages;
@@ -310,20 +328,69 @@ public static class ThreadSubmission
     }
 
     /// <summary>
+    /// Handler for <see cref="ResubmitTrigger"/>: re-dispatches to OWN context.
+    /// Registered on the per-thread hub by <see cref="ThreadExecution.AddThreadExecution"/>.
+    /// </summary>
+    internal static IMessageDelivery HandleResubmitTrigger(
+        IMessageHub hub, IMessageDelivery<ResubmitTrigger> delivery)
+    {
+        var t = delivery.Message;
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.AI.ThreadSubmission");
+        logger?.LogInformation("[HandleResubmitTrigger] on {Hub} threadPath={ThreadPath} msg={MsgId}",
+            hub.Address, t.ThreadPath, t.UserMessageId);
+        ApplyResubmitOwn(hub, t.ThreadPath, t.UserMessageId, t.NewUserText, t.AgentName, t.ModelName);
+        hub.Post(new ThreadMutationAck(true), o => o.ResponseFor(delivery));
+        return delivery.Processed();
+    }
+
+    internal static IMessageDelivery HandleDeleteFromMessageTrigger(
+        IMessageHub hub, IMessageDelivery<DeleteFromMessageTrigger> delivery)
+    {
+        var t = delivery.Message;
+        ApplyDeleteFromMessageOwn(hub, t.ThreadPath, t.MessageId);
+        hub.Post(new ThreadMutationAck(true), o => o.ResponseFor(delivery));
+        return delivery.Processed();
+    }
+
+    internal static IMessageDelivery HandleRecordSubmissionFailureTrigger(
+        IMessageHub hub, IMessageDelivery<RecordSubmissionFailureTrigger> delivery)
+    {
+        var t = delivery.Message;
+        ApplyRecordSubmissionFailureOwn(hub, t.ThreadPath, t.UserMessageId, t.UserText, t.ErrorMessage);
+        hub.Post(new ThreadMutationAck(true), o => o.ResponseFor(delivery));
+        return delivery.Processed();
+    }
+
+    /// <summary>
     /// Truncates the thread's <see cref="MeshThread.Messages"/> at
     /// <paramref name="atMessageId"/> (exclusive — drops messageId and
-    /// everything after). Stream-update on the thread node; works from
-    /// any context (own or remote hub). Replaces the legacy
-    /// <c>ThreadSubmission.ApplyDeleteFromMessage</c> + handler.
+    /// everything after). Fans out to the OWN-update fast path when invoked
+    /// from the per-thread hub itself, and to a posted
+    /// <see cref="DeleteFromMessageTrigger"/> (handled inline on the thread
+    /// hub in OWN context) when invoked from any other hub. The trigger hop
+    /// exists because UpdateRemote currently re-runs the lambda against a
+    /// stale baseline. See <c>RequestViaStreamUpdate.md</c>.
     /// </summary>
     public static void ApplyDeleteFromMessage(
         IMessageHub hub,
         string threadPath,
         string atMessageId)
     {
+        if (!string.Equals(hub.Address.Path, threadPath, StringComparison.Ordinal))
+        {
+            hub.Post(new DeleteFromMessageTrigger(threadPath, atMessageId),
+                o => o.WithTarget(new Address(threadPath)));
+            return;
+        }
+        ApplyDeleteFromMessageOwn(hub, threadPath, atMessageId);
+    }
+
+    private static void ApplyDeleteFromMessageOwn(IMessageHub hub, string threadPath, string atMessageId)
+    {
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.ThreadSubmission");
-        hub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
+        hub.GetWorkspace().GetMeshNodeStream().Update(node =>
         {
             var t = node.Content as MeshThread ?? new MeshThread();
             var idx = t.Messages.IndexOf(atMessageId);
@@ -340,12 +407,38 @@ public static class ThreadSubmission
     }
 
     /// <summary>
-    /// Truncates the thread after <paramref name="userMessageId"/>, drops it from
-    /// IngestedMessageIds so the watcher re-dispatches a new round, and optionally
-    /// updates the user cell text. Shared by <see cref="HandleResubmitUserMessage"/>
-    /// and the legacy <see cref="ThreadSubmission.ApplyResubmit"/> shim.
+    /// Truncates the thread after <paramref name="userMessageId"/>, drops it
+    /// from IngestedMessageIds so the watcher re-dispatches a new round, and
+    /// optionally updates the user cell text. Fans out to the OWN-update fast
+    /// path when invoked from the per-thread hub itself, and to a posted
+    /// <see cref="ResubmitTrigger"/> (handled inline on the thread hub in OWN
+    /// context) when invoked from any other hub. See
+    /// <c>RequestViaStreamUpdate.md</c>.
     /// </summary>
     public static void ApplyResubmit(
+        IMessageHub hub,
+        string threadPath,
+        string userMessageId,
+        string? newUserText,
+        string? agentName,
+        string? modelName)
+    {
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.AI.ThreadSubmission");
+        if (!string.Equals(hub.Address.Path, threadPath, StringComparison.Ordinal))
+        {
+            logger?.LogInformation(
+                "[ApplyResubmit] cross-hub: posting ResubmitTrigger from {Hub} to {ThreadPath} (msg={MsgId})",
+                hub.Address, threadPath, userMessageId);
+            hub.Post(new ResubmitTrigger(threadPath, userMessageId, newUserText, agentName, modelName),
+                o => o.WithTarget(new Address(threadPath)));
+            return;
+        }
+        logger?.LogInformation("[ApplyResubmit] own-hub: running inline on {ThreadPath} (msg={MsgId})", threadPath, userMessageId);
+        ApplyResubmitOwn(hub, threadPath, userMessageId, newUserText, agentName, modelName);
+    }
+
+    internal static void ApplyResubmitOwn(
         IMessageHub hub,
         string threadPath,
         string userMessageId,
@@ -373,10 +466,7 @@ public static class ThreadSubmission
 
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.ThreadSubmission");
-        // Path-qualified stream so the same call works from any context
-        // (handler running on the thread hub OR client posting remotely).
-        // See RequestViaStreamUpdate.md.
-        hub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
+        hub.GetWorkspace().GetMeshNodeStream().Update(node =>
         {
             var t = node.Content as MeshThread ?? new MeshThread();
             var idx = t.Messages.IndexOf(userMessageId);
