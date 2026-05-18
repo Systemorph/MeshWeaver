@@ -35,6 +35,18 @@ public static class NodeTypeLayoutAreas
     public const string HubConfigEditArea = "HubConfigEdit";
     public const string ReleasesArea = "Releases";
 
+    /// <summary>
+    /// "Progress" area name on the per-NodeType hub. GUI clients data-bind here
+    /// after receiving a <see cref="MeshWeaver.Messaging.DeliveryFailure"/> with
+    /// <see cref="MeshWeaver.Messaging.ErrorType.CompilationInProgress"/>: the
+    /// area renders a live status line driven by the NodeType's own MeshNode
+    /// stream (<c>CompilationStatus</c>, <c>CompilationError</c>) and, when a
+    /// compile activity is in flight (<c>LastCompilationActivityPath</c>),
+    /// embeds <see cref="ActivityLayoutAreas.ProgressArea"/> on the activity hub
+    /// so the user sees Roslyn diagnostics line-by-line.
+    /// </summary>
+    public const string ProgressArea = "Progress";
+
     // Data keys for data section
     private const string DefinitionDataId = "definition";
     private const string CodeFileDataId = "codeFile";
@@ -76,10 +88,92 @@ public static class NodeTypeLayoutAreas
                 .WithView(HubConfigViewArea, HubConfigView)
                 .WithView(HubConfigEditArea, HubConfigEdit)
                 .WithView(ReleasesArea, Releases)
+                .WithView(ProgressArea, Progress)
                 // UCR special areas for unified content references
                 .WithView(MeshNodeLayoutAreas.DataArea, MeshNodeLayoutAreas.Data)
                 .WithView(MeshNodeLayoutAreas.SchemaArea, MeshNodeLayoutAreas.Schema)
                 .WithView(MeshNodeLayoutAreas.ModelArea, DataModelLayoutArea.DataModel));
+
+    /// <summary>
+    /// Compile-progress view for a NodeType. Subscribes to the NodeType's own
+    /// MeshNode stream and renders a status line + (when a compile activity is
+    /// in flight) an embedded <see cref="ActivityLayoutAreas.ProgressArea"/>
+    /// from the activity hub. GUI clients land here after the routing grain
+    /// returns <see cref="MeshWeaver.Messaging.ErrorType.CompilationInProgress"/>;
+    /// the area keeps updating as the NodeType's state transitions through
+    /// Pending → Compiling → Ok/Error.
+    /// </summary>
+    public static IObservable<UiControl?> Progress(LayoutAreaHost host, RenderingContext _)
+    {
+        return host.Workspace.GetMeshNodeStream()
+            .Select(node =>
+            {
+                if (node?.Content is not NodeTypeDefinition def)
+                    return (UiControl?)Controls.Markdown(
+                        "*This node has no NodeTypeDefinition — nothing to compile.*");
+
+                var (icon, header, body) = RenderProgressLines(def);
+                var stack = Controls.Stack
+                    .WithStyle("padding: 12px; gap: 8px;")
+                    .WithView(Controls.Markdown($"### {icon} {header}"));
+                if (!string.IsNullOrEmpty(body))
+                    stack = stack.WithView(Controls.Markdown(body));
+
+                // Live activity log — embed the activity hub's existing
+                // ProgressArea so Roslyn diagnostics stream in line by line.
+                // Only render while we have an activity path AND the compile
+                // hasn't terminally settled to Ok (post-success the activity
+                // is history, served via the Releases tab).
+                if (!string.IsNullOrEmpty(def.LastCompilationActivityPath)
+                    && def.CompilationStatus != CompilationStatus.Ok)
+                {
+                    stack = stack.WithView(new LayoutAreaControl(
+                            new Address(def.LastCompilationActivityPath!),
+                            new LayoutAreaReference(ActivityLayoutAreas.ProgressArea))
+                        .WithStyle("margin-top: 8px; padding: 12px; background: var(--neutral-layer-3); border-radius: 4px; min-height: 48px;"));
+                }
+                return (UiControl?)stack;
+            });
+    }
+
+    private static (string Icon, string Header, string Body) RenderProgressLines(NodeTypeDefinition def)
+    {
+        var hasSource = !string.IsNullOrWhiteSpace(def.Configuration)
+            || !string.IsNullOrWhiteSpace(def.HubConfiguration)
+            || (def.Sources is { Count: > 0 });
+
+        // Cache-hit (Status=Ok with the usable-assembly fields populated) — the
+        // routing grain re-used the existing assembly without re-running Roslyn.
+        // Surface that as a discrete state so the operator sees "we didn't burn
+        // CPU to re-prove this assembly works."
+        if (def.CompilationStatus == CompilationStatus.Ok
+            && !string.IsNullOrEmpty(def.LatestAssemblyCollection)
+            && !string.IsNullOrEmpty(def.LatestAssemblyPath))
+        {
+            var coll = def.LatestAssemblyCollection!;
+            var path = def.LatestAssemblyPath!;
+            return ("✓", "Compiled",
+                $"Using cached assembly `{coll}/{path}` (compile version `{def.LastCompiledVersion}`, framework `{def.CompiledFrameworkVersion}`).");
+        }
+
+        return def.CompilationStatus switch
+        {
+            CompilationStatus.Compiling => ("⏳", "Compiling…",
+                $"Running Roslyn against {(def.Sources?.Count ?? 0)} source binding(s). The activity log below streams diagnostics live."),
+            CompilationStatus.Pending => ("▶", "Compile queued",
+                "Initiating compilation — the per-NodeType compile watcher has flipped status to Pending and the activity hub is being created."),
+            CompilationStatus.Error => ("✗", "Compilation failed",
+                string.IsNullOrEmpty(def.CompilationError)
+                    ? "The last compile failed — no diagnostic captured. Click **Recycle** on the parent NodeType to retry."
+                    : $"```text\n{def.CompilationError}\n```"),
+            // null / Unknown — split on whether there's anything to compile at all.
+            _ => hasSource
+                ? ("…", "Waiting for compile to start",
+                   "Sources are present but no compile activity has been kicked yet. Activation will trigger one on first instance request.")
+                : ("·", "No compile required",
+                   "This NodeType has no `Configuration` / `HubConfiguration` / `Sources` — instances activate against the default node-hub config.")
+        };
+    }
 
     /// <summary>
     /// List overview for NodeType nodes - used in search results and listings.

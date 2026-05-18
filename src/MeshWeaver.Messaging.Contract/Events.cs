@@ -33,6 +33,16 @@ public record DeliveryFailure(IMessageDelivery Delivery, string? Message = null)
     public string ExceptionType { get; init; } = string.Empty;
     public string StackTrace { get; init; } = string.Empty;
 
+    /// <summary>
+    /// Path of the NodeType whose compile state caused this NACK. Populated when
+    /// <see cref="ErrorType"/> is <see cref="MeshWeaver.Messaging.ErrorType.CompilationInProgress"/>
+    /// or <see cref="MeshWeaver.Messaging.ErrorType.CompilationFailed"/>. GUI clients
+    /// data-bind to <c>LayoutAreaControl({NodeTypePath}, "Progress")</c> on the
+    /// per-NodeType hub to render compile-progress UI (which embeds the activity
+    /// log automatically when one is in flight).
+    /// </summary>
+    public string? NodeTypePath { get; init; }
+
     public static DeliveryFailure FromException(IMessageDelivery request, Exception e) =>
         new(request)
         {
@@ -52,6 +62,14 @@ public enum ErrorType
     Ignored,
     Failed,
     CompilationFailed,
+    /// <summary>
+    /// Target hub cannot activate because its NodeType is mid-compile (or has
+    /// not yet started one). The grain returns this NACK immediately instead of
+    /// blocking activation; <see cref="DeliveryFailure.NodeTypePath"/> tells the
+    /// GUI where to data-bind for progress (the per-NodeType hub's
+    /// <c>"Progress"</c> layout area, which in turn embeds the activity log).
+    /// </summary>
+    CompilationInProgress,
     StartupScriptFailed,
     RoutingLoop,
     Unauthorized,
