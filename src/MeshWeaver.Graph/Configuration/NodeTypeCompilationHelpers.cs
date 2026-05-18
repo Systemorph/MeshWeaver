@@ -335,6 +335,78 @@ internal static class NodeTypeCompilationHelpers
     }
 
     /// <summary>
+    /// Stream-update release watcher: clients flip
+    /// <see cref="NodeTypeDefinition.RequestedReleaseAt"/> (optionally with
+    /// <see cref="NodeTypeDefinition.RequestedReleaseForce"/>) on the NodeType's
+    /// own MeshNode via <c>workspace.GetMeshNodeStream(nodeTypePath).Update(...)</c>.
+    /// This watcher observes the OWN node, treats every transition where
+    /// <c>RequestedReleaseAt &gt; LastReleaseRequestHandledAt</c> as a release
+    /// trigger, and flips <see cref="NodeTypeDefinition.CompilationStatus"/>
+    /// to <see cref="CompilationStatus.Pending"/> — the existing
+    /// <see cref="InstallCompileWatcher"/> takes it from there. No bespoke
+    /// <c>CreateReleaseRequest</c> needed for new code; see
+    /// <c>RequestViaStreamUpdate.md</c>.
+    ///
+    /// <para>The lambda also stamps <c>LastReleaseRequestHandledAt</c> in the
+    /// same Update so the trigger isn't re-fired on every subsequent emission.
+    /// The Status guard inside the Update keeps a re-fire during an in-flight
+    /// Compiling/Pending window from racing the active activity.</para>
+    /// </summary>
+    public static IDisposable InstallReleaseRequestWatcher(
+        IMessageHub hub,
+        IWorkspace workspace)
+    {
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Graph.CompileWatcher");
+        var hubPath = hub.Address.Path;
+        var ownStream = workspace.GetMeshNodeStream();
+
+        return ownStream
+            .Where(node => node?.Content is NodeTypeDefinition def
+                && def.RequestedReleaseAt is { } req
+                && (def.LastReleaseRequestHandledAt is null
+                    || req > def.LastReleaseRequestHandledAt.Value))
+            .Subscribe(
+                node =>
+                {
+                    logger?.LogInformation(
+                        "[ReleaseRequestWatcher] {HubPath}: handling RequestedReleaseAt={Req} (force={Force}, lastHandled={Handled})",
+                        hubPath,
+                        (node!.Content as NodeTypeDefinition)?.RequestedReleaseAt,
+                        (node!.Content as NodeTypeDefinition)?.RequestedReleaseForce,
+                        (node!.Content as NodeTypeDefinition)?.LastReleaseRequestHandledAt);
+                    workspace.GetMeshNodeStream().Update(curr =>
+                    {
+                        if (curr.Content is not NodeTypeDefinition def) return curr;
+                        if (def.RequestedReleaseAt is null) return curr;
+                        if (def.LastReleaseRequestHandledAt is { } handled
+                            && def.RequestedReleaseAt.Value <= handled)
+                            return curr;
+                        // Stamp handled-at first so a re-emission of the same node
+                        // skips the gate above. Status guard keeps an in-flight
+                        // Pending/Compiling cycle from being re-flipped.
+                        var newStatus = def.CompilationStatus is CompilationStatus.Pending
+                                        or CompilationStatus.Compiling
+                            ? def.CompilationStatus
+                            : CompilationStatus.Pending;
+                        return curr with
+                        {
+                            Content = def with
+                            {
+                                CompilationStatus = newStatus,
+                                LastReleaseRequestHandledAt = def.RequestedReleaseAt
+                            }
+                        };
+                    }).Subscribe(
+                        _ => { },
+                        ex => logger?.LogWarning(ex,
+                            "[ReleaseRequestWatcher] {HubPath}: failed to dispatch release", hubPath));
+                },
+                ex => logger?.LogWarning(ex,
+                    "[ReleaseRequestWatcher] {HubPath}: stream faulted", hubPath));
+    }
+
+    /// <summary>
     /// The live MeshWeaver framework version — the identity a compiled NodeType
     /// release is pinned to. Two regimes, picked automatically:
     /// <list type="bullet">
