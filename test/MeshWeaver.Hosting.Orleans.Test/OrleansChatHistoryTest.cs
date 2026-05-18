@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -51,11 +51,11 @@ public class OrleansChatHistoryTest(ITestOutputHelper output) : OrleansSharedTes
             // This simulates a cold start: grains not yet activated, data in persistence.
             Output.WriteLine("Thread pre-seeded with 4 messages via AddMeshNodes");
 
-            // Submit via AppendUserMessageRequest, then wait for the response cell to settle.
-            // The new API returns Success/Error only Ã¢â‚¬â€ the agent's response text lives on the
-            // response satellite cell. Read it via the workspace stream once execution completes.
-            Output.WriteLine("Posting AppendUserMessageRequest...");
-            var workspace = client.GetWorkspace();
+            // Submit via the SAME entry point production uses (ThreadSubmission.Submit
+            // -> ThreadInput.AppendUserInput -> workspace.GetMeshNodeStream(threadPath)
+            // .Update(...)). The agent's response text lives on the response satellite
+            // cell; read it via the workspace stream once execution completes.
+            Output.WriteLine("ThreadSubmission.Submit (production entry point)...");            var workspace = client.GetWorkspace();
 
             // The thread is pre-seeded with 4 messages. Subscribe for Messages.Count >= 6
             // (4 seed + 1 user input cell + 1 agent response cell created by this submission).
@@ -71,15 +71,15 @@ public class OrleansChatHistoryTest(ITestOutputHelper output) : OrleansSharedTes
                 .FirstAsync()
                 .ToTask(ct);
 
-            var submitResp = await client.Observe(new AppendUserMessageRequest
+            // Stream-update submit - see RequestViaStreamUpdate.md.
+            MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
             {
+                Hub = client,
                 ThreadPath = ThreadPath,
-                UserMessageId = Guid.NewGuid().ToString("N")[..8],
-                UserText = "Third question Ã¢â‚¬â€ can you see history?",
+                UserText = "Third question - can you see history?",
                 ContextPath = "TestUser"
-            }, o => o.WithTarget(new Address(ThreadPath))).FirstAsync().ToTask(ct);
-            submitResp.Message.Success.Should().BeTrue(submitResp.Message.Error);
-            Output.WriteLine($"Append accepted: success={submitResp.Message.Success}");
+            });
+            Output.WriteLine("Append dispatched");
 
             // Resolve message ids â€” last id is the new agent response cell.
             var msgIds = await sixMessages;

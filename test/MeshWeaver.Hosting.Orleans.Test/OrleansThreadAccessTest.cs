@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -178,15 +178,14 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTe
 
         // 3. Submit message via AppendUserMessageRequest (like side panel SendMessageAsync)
         Output.WriteLine("Posting AppendUserMessageRequest...");
-        var submitResponse = await client.Observe(new AppendUserMessageRequest
+        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
             {
+                Hub = client,
                 ThreadPath = threadPath,
-                UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Hello from side panel test",
                 ContextPath = "TestUser"
-            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-        submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
-        Output.WriteLine("AppendUserMessageRequest succeeded");
+            });
+            Output.WriteLine("AppendUserMessageRequest succeeded");
 
         // 4. Wait for both cells to appear in stream
         var msgIds = await twoMessages;
@@ -429,16 +428,14 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTe
         var twoMessages = ObserveThreadMessages(client, threadPath)
             .Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
 
-        var submitResponse = await client.Observe(new AppendUserMessageRequest
+        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
             {
+                Hub = client,
                 ThreadPath = threadPath,
-                UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Test child nodes",
                 ContextPath = "TestUser"
-            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-        submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
-
-        var msgIds = await twoMessages;
+            });
+            var msgIds = await twoMessages;
 
         // Verify each message is at {threadPath}/{msgId}
         foreach (var msgId in msgIds)

@@ -144,15 +144,14 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
             .ToTask(ct);
 
         // 3. Submit message via AppendUserMessageRequest â€” triggers delegation via production ChatClientAgentFactory
-        var submitResponse = await client.Observe(new AppendUserMessageRequest
+        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
             {
+                Hub = client,
                 ThreadPath = threadPath,
-                UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Please delegate this research task",
                 ContextPath = "TestUser"
-            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-        submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
-        Output.WriteLine("2. Message submitted");
+            });
+            Output.WriteLine("2. Message submitted");
 
         // 4. Wait for message cells
         var msgIds = await twoMessages;
@@ -221,15 +220,14 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
             .Where(ids => ids.Count >= 2)
             .FirstAsync().ToTask(ct);
 
-        await client.Observe(new AppendUserMessageRequest
+        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
             {
+                Hub = client,
                 ThreadPath = threadPath,
-                UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Delegate something",
                 ContextPath = "TestUser"
-            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-
-        var msgIds = await twoMessages;
+            });
+            var msgIds = await twoMessages;
         Output.WriteLine($"1. Initial messages: [{string.Join(", ", msgIds)}]");
 
         // 2. Wait for execution to complete

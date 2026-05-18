@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
@@ -119,16 +119,14 @@ public class OrleansMeshChangeFeedTest(ITestOutputHelper output) : OrleansShared
             .FirstAsync()
             .ToTask(ct);
 
-        var submitResponse = await client.Observe(new AppendUserMessageRequest
+        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
             {
+                Hub = client,
                 ThreadPath = threadPath,
-                UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Test routing",
                 ContextPath = "TestUser"
-            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-        submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
-
-        var msgIds = await twoMessages;
+            });
+            var msgIds = await twoMessages;
         msgIds.Should().HaveCount(2);
         Output.WriteLine($"Messages: [{string.Join(", ", msgIds)}]");
 
@@ -149,16 +147,13 @@ public class OrleansMeshChangeFeedTest(ITestOutputHelper output) : OrleansShared
 
         // NOW submit to the sub-thread Ã¢â‚¬â€ this is where routing failed before
         // (stale cache sent the request to the parent message grain)
-        var subSubmitResponse = await client.Observe(new AppendUserMessageRequest
+        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
             {
+                Hub = client,
                 ThreadPath = subThreadPath,
-                UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Hello sub-thread",
                 ContextPath = "TestUser"
-            }, o => o.WithTarget(new Address(subThreadPath))).FirstAsync().ToTask(ct);
-
-        subSubmitResponse.Message.Success.Should().BeTrue(
-            $"Sub-thread AppendUserMessage should succeed but got: {subSubmitResponse.Message.Error}");
-        Output.WriteLine("PASSED Ã¢â‚¬â€ sub-thread AppendUserMessage routed correctly");
+            });
+            Output.WriteLine("PASSED Ã¢â‚¬â€ sub-thread AppendUserMessage routed correctly");
     }
 }

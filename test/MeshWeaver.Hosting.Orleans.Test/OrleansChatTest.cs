@@ -96,16 +96,15 @@ public class OrleansChatTest(ITestOutputHelper output) : OrleansTestBase<ChatSil
             .FirstAsync()
             .ToTask(ct);
 
-        // 3. Submit message via AppendUserMessageRequest
+        // 3. Submit message via ThreadInput.AppendUserInput — see RequestViaStreamUpdate.md.
         Output.WriteLine("Submitting message...");
-        var submitResponse = await client.Observe(new AppendUserMessageRequest
+        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
             {
+                Hub = client,
                 ThreadPath = threadPath,
-                UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Hello from Orleans",
                 ContextPath = ContextPath
-            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-        submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
+            });
         Output.WriteLine("Message submitted");
 
         // 4. Wait for 2 message IDs
