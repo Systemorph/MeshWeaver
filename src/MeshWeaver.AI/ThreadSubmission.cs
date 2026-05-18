@@ -82,12 +82,14 @@ public static class ThreadSubmission
     // ═════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Submits a user message into an existing thread by stream-updating the
-    /// thread MeshNode (adds to <see cref="MeshThread.Messages"/>,
-    /// <see cref="MeshThread.UserMessageIds"/>, and
-    /// <see cref="MeshThread.PendingUserMessages"/>). The server watcher
-    /// installed by <c>InstallSubmissionWatcher</c> dispatches the round.
-    /// No bespoke request — see <c>RequestViaStreamUpdate.md</c>.
+    /// Submits a user message into an existing thread. Routes through
+    /// <see cref="SubmitMessageRequest"/> — the last surviving thread
+    /// mutation request — because it lands on the per-thread hub in OWN
+    /// context, which is where <see cref="ThreadInput.AppendUserInput"/>
+    /// safely runs. A pure client-side stream.Update on the remote thread
+    /// path produces duplicate writes against a stale baseline
+    /// (UpdateRemote lambda re-runs per emission); SubmitMessageRequest is
+    /// kept as the sanctioned trigger until that framework issue is fixed.
     /// </summary>
     public static void Submit(SubmitContext ctx)
     {
@@ -97,21 +99,32 @@ public static class ThreadSubmission
             return;
         }
 
-        try
+        var delivery = ctx.Hub.Post(
+            new SubmitMessageRequest
+            {
+                ThreadPath = ctx.ThreadPath!,
+                UserMessageText = ctx.UserText,
+                AgentName = ctx.AgentName,
+                ModelName = ctx.ModelName,
+                ContextPath = ctx.ContextPath,
+                Attachments = ctx.Attachments
+            },
+            o => o.WithTarget(new Address(ctx.ThreadPath!)));
+
+        if (delivery == null)
         {
-            var msg = ThreadInput.CreateUserMessage(
-                ctx.UserText ?? string.Empty,
-                createdBy: ctx.CreatedBy,
-                agentName: ctx.AgentName,
-                modelName: ctx.ModelName,
-                contextPath: ctx.ContextPath,
-                attachments: ctx.Attachments);
-            ThreadInput.AppendUserInput(ctx.Hub.GetWorkspace(), ctx.ThreadPath!, msg);
+            ctx.OnError?.Invoke("Hub.Post returned null");
+            return;
         }
-        catch (Exception ex)
-        {
-            ctx.OnError?.Invoke($"Submit failed: {ex.Message}");
-        }
+
+        ctx.Hub.Observe((IMessageDelivery)delivery)
+            .Subscribe(
+                response =>
+                {
+                    if (response.Message is SubmitMessageResponse { Success: false } fail)
+                        ctx.OnError?.Invoke($"Submit failed: {fail.Error ?? "unknown"}");
+                },
+                ex => ctx.OnError?.Invoke($"Submit failed: {ex.Message}"));
     }
 
     /// <summary>
