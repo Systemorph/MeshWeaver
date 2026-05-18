@@ -82,12 +82,12 @@ public static class ThreadSubmission
     // ═════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Submits a user message into an existing thread. Posts a single
-    /// <see cref="AppendUserMessageRequest"/> to the thread hub — the handler
-    /// runs <see cref="ThreadInput.AppendUserInput"/> locally (one atomic
-    /// <c>workspace.UpdateMeshNode</c>), and the server watcher then creates the
-    /// satellite cell and dispatches the round. No separate CreateNodeRequest from
-    /// the client — that was the duplicate-dispatch source in the legacy flow.
+    /// Submits a user message into an existing thread by stream-updating the
+    /// thread MeshNode (adds to <see cref="MeshThread.Messages"/>,
+    /// <see cref="MeshThread.UserMessageIds"/>, and
+    /// <see cref="MeshThread.PendingUserMessages"/>). The server watcher
+    /// installed by <c>InstallSubmissionWatcher</c> dispatches the round.
+    /// No bespoke request — see <c>RequestViaStreamUpdate.md</c>.
     /// </summary>
     public static void Submit(SubmitContext ctx)
     {
@@ -97,33 +97,21 @@ public static class ThreadSubmission
             return;
         }
 
-        var delivery = ctx.Hub.Post(
-            new AppendUserMessageRequest
-            {
-                ThreadPath = ctx.ThreadPath!,
-                UserMessageId = Guid.NewGuid().ToString("N")[..8], // ignored by handler — kept for back-compat shape
-                UserText = ctx.UserText,
-                AgentName = ctx.AgentName,
-                ModelName = ctx.ModelName,
-                ContextPath = ctx.ContextPath,
-                Attachments = ctx.Attachments
-            },
-            o => o.WithTarget(new Address(ctx.ThreadPath!)));
-
-        if (delivery == null)
+        try
         {
-            ctx.OnError?.Invoke("Hub.Post returned null");
-            return;
+            var msg = ThreadInput.CreateUserMessage(
+                ctx.UserText ?? string.Empty,
+                createdBy: ctx.CreatedBy,
+                agentName: ctx.AgentName,
+                modelName: ctx.ModelName,
+                contextPath: ctx.ContextPath,
+                attachments: ctx.Attachments);
+            ThreadInput.AppendUserInput(ctx.Hub.GetWorkspace(), ctx.ThreadPath!, msg);
         }
-
-        ctx.Hub.Observe((IMessageDelivery)delivery)
-            .Subscribe(
-                response =>
-                {
-                    if (response.Message is AppendUserMessageResponse { Success: false } fail)
-                        ctx.OnError?.Invoke($"Submit failed: {fail.Error ?? "unknown"}");
-                },
-                ex => ctx.OnError?.Invoke($"Submit failed: {ex.Message}"));
+        catch (Exception ex)
+        {
+            ctx.OnError?.Invoke($"Submit failed: {ex.Message}");
+        }
     }
 
     /// <summary>
@@ -141,22 +129,36 @@ public static class ThreadSubmission
 
         var threadNode = ThreadNodeType.BuildThreadNode(ctx.Namespace!, ctx.UserText, ctx.CreatedBy);
 
-        // Bundle the first user message into the thread create itself. The mesh hub
-        // forwards Argument to the new thread hub fire-and-forget after persistence —
-        // one round-trip end-to-end instead of CreateNodeRequest then AppendUserMessage.
-        var initialAppend = new AppendUserMessageRequest
+        // Pre-seed the thread's PendingUserMessages with the first user
+        // message — single-write atomic state: when the thread hub activates,
+        // its OWN MeshNode already carries the queued user input, and the
+        // submission watcher dispatches without a second round-trip. No
+        // separate AppendUserMessageRequest needed. See RequestViaStreamUpdate.md.
+        var firstMessageId = Guid.NewGuid().ToString("N")[..8];
+        var firstMessage = ThreadInput.CreateUserMessage(
+            ctx.UserText,
+            createdBy: ctx.CreatedBy,
+            authorName: ctx.AuthorName,
+            agentName: ctx.AgentName,
+            modelName: ctx.ModelName,
+            contextPath: ctx.ContextPath,
+            attachments: ctx.Attachments);
+
+        var seededThread = (threadNode.Content as MeshThread ?? new MeshThread()) with
         {
-            ThreadPath = threadNode.Path!,
-            UserMessageId = Guid.NewGuid().ToString("N")[..8],
-            UserText = ctx.UserText,
-            AgentName = ctx.AgentName,
-            ModelName = ctx.ModelName,
-            ContextPath = ctx.ContextPath,
-            Attachments = ctx.Attachments
+            Messages = ImmutableList.Create(firstMessageId),
+            UserMessageIds = ImmutableList.Create(firstMessageId),
+            PendingUserMessages = ImmutableDictionary<string, ThreadMessage>.Empty
+                .SetItem(firstMessageId, firstMessage),
+            PendingAgentName = ctx.AgentName,
+            PendingModelName = ctx.ModelName,
+            PendingContextPath = ctx.ContextPath,
+            PendingAttachments = ctx.Attachments
         };
+        threadNode = threadNode with { Content = seededThread };
 
         var delivery = ctx.Hub.Post(
-            new CreateNodeRequest(threadNode) { Argument = initialAppend },
+            new CreateNodeRequest(threadNode),
             o => o.WithTarget(new Address(ctx.Namespace!)));
 
         if (delivery == null)
@@ -194,31 +196,19 @@ public static class ThreadSubmission
             return;
         }
 
-        var delivery = ctx.Hub.Post(
-            new ResubmitUserMessageRequest
-            {
-                ThreadPath = ctx.ThreadPath,
-                UserMessageId = ctx.UserMessageIdToReplay,
-                NewUserText = ctx.NewUserText,
-                AgentName = ctx.AgentName,
-                ModelName = ctx.ModelName
-            },
-            o => o.WithTarget(new Address(ctx.ThreadPath)));
-
-        if (delivery == null)
+        try
         {
-            ctx.OnError?.Invoke("Hub.Post returned null");
-            return;
+            // Direct stream.Update via the shared ApplyResubmit helper — no
+            // bespoke ResubmitUserMessageRequest. ApplyResubmit truncates
+            // Messages/IngestedMessageIds after the replayed id, optionally
+            // updates the user cell, and the server watcher re-dispatches.
+            ApplyResubmit(ctx.Hub, ctx.ThreadPath, ctx.UserMessageIdToReplay,
+                ctx.NewUserText, ctx.AgentName, ctx.ModelName);
         }
-
-        ctx.Hub.Observe((IMessageDelivery)delivery)
-            .Subscribe(
-                response =>
-                {
-                    if (response.Message is AppendUserMessageResponse { Success: false } fail)
-                        ctx.OnError?.Invoke($"Resubmit failed: {fail.Error ?? "unknown"}");
-                },
-                ex => ctx.OnError?.Invoke($"Resubmit failed: {ex.Message}"));
+        catch (Exception ex)
+        {
+            ctx.OnError?.Invoke($"Resubmit failed: {ex.Message}");
+        }
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -375,6 +365,36 @@ public static class ThreadSubmission
     }
 
     /// <summary>
+    /// Truncates the thread's <see cref="MeshThread.Messages"/> at
+    /// <paramref name="atMessageId"/> (exclusive — drops messageId and
+    /// everything after). Stream-update on the thread node; works from
+    /// any context (own or remote hub). Replaces the legacy
+    /// <c>DeleteFromMessageRequest</c> + handler.
+    /// </summary>
+    public static void ApplyDeleteFromMessage(
+        IMessageHub hub,
+        string threadPath,
+        string atMessageId)
+    {
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.AI.ThreadSubmission");
+        hub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
+        {
+            var t = node.Content as MeshThread ?? new MeshThread();
+            var idx = t.Messages.IndexOf(atMessageId);
+            if (idx < 0) return node;
+            return node with
+            {
+                Content = t with { Messages = t.Messages.Take(idx).ToImmutableList() }
+            };
+        }).Subscribe(
+            _ => { },
+            ex => logger?.LogWarning(ex,
+                "ApplyDeleteFromMessage: UpdateMeshNode failed for thread {ThreadPath} message {MessageId}",
+                threadPath, atMessageId));
+    }
+
+    /// <summary>
     /// Truncates the thread after <paramref name="userMessageId"/>, drops it from
     /// IngestedMessageIds so the watcher re-dispatches a new round, and optionally
     /// updates the user cell text. Shared by <see cref="HandleResubmitUserMessage"/>
@@ -407,7 +427,10 @@ public static class ThreadSubmission
 
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.ThreadSubmission");
-        hub.GetWorkspace().GetMeshNodeStream().Update(node =>
+        // Path-qualified stream so the same call works from any context
+        // (handler running on the thread hub OR client posting remotely).
+        // See RequestViaStreamUpdate.md.
+        hub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
         {
             var t = node.Content as MeshThread ?? new MeshThread();
             var idx = t.Messages.IndexOf(userMessageId);

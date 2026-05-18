@@ -184,13 +184,15 @@ public static class ThreadMessageLayoutAreas
                                     NodeType = ThreadMessageNodeType.NodeType, MainNode = threadPath,
                                     Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
                                 }), o => o.WithTarget(new Address(threadPath)));
-                                actx.Hub.Post(new ResubmitMessageRequest
-                                {
-                                    ThreadPath = threadPath,
-                                    MessageId = messageId,
-                                    UserMessageText = editedText ?? msg.Text ?? "",
-                                    OutputMessageId = outId
-                                }, o => o.WithTarget(new Address(threadPath)));
+                                // Stream-update: ApplyResubmit truncates Messages after
+                                // messageId, drops it from IngestedMessageIds, and stamps
+                                // the new user text — server watcher dispatches the next
+                                // round. No bespoke ResubmitMessageRequest needed. See
+                                // RequestViaStreamUpdate.md.
+                                ThreadSubmission.ApplyResubmit(
+                                    actx.Hub, threadPath, messageId,
+                                    newUserText: editedText ?? msg.Text ?? "",
+                                    agentName: null, modelName: null);
                             });
                         }));
 
@@ -253,13 +255,10 @@ public static class ThreadMessageLayoutAreas
                             }
                         }), o => o.WithTarget(new Address(threadPath)));
 
-                        host.Hub.Post(new ResubmitMessageRequest
-                        {
-                            ThreadPath = threadPath,
-                            MessageId = messageId,
-                            UserMessageText = msg.Text,
-                            OutputMessageId = outId
-                        }, o => o.WithTarget(new Address(threadPath)));
+                        // Stream-update resubmit — see RequestViaStreamUpdate.md.
+                        ThreadSubmission.ApplyResubmit(
+                            host.Hub, threadPath, messageId,
+                            newUserText: msg.Text, agentName: null, modelName: null);
                     }));
         }
 
@@ -270,11 +269,8 @@ public static class ThreadMessageLayoutAreas
                 .WithLabel("Delete from here")
                 .WithClickAction(_ =>
                 {
-                    host.Hub.Post(new DeleteFromMessageRequest
-                    {
-                        ThreadPath = threadPath,
-                        MessageId = messageId
-                    }, o => o.WithTarget(new Address(threadPath)));
+                    // Stream-update delete — see RequestViaStreamUpdate.md.
+                    ThreadSubmission.ApplyDeleteFromMessage(host.Hub, threadPath, messageId);
                 }));
 
         var container = Controls.Stack
@@ -445,11 +441,8 @@ public static class ThreadMessageLayoutAreas
                 .WithAppearance(Appearance.Neutral)
                 .WithClickAction(_ =>
                 {
-                    host.Hub.Post(new DeleteFromMessageRequest
-                    {
-                        ThreadPath = threadPath,
-                        MessageId = messageId
-                    }, o => o.WithTarget(new Address(threadPath)));
+                    // Stream-update delete — see RequestViaStreamUpdate.md.
+                    ThreadSubmission.ApplyDeleteFromMessage(host.Hub, threadPath, messageId);
                 }))
             .WithView(Controls.Button("Submit")
                 .WithAppearance(Appearance.Accent)
@@ -464,13 +457,11 @@ public static class ThreadMessageLayoutAreas
                             NodeType = ThreadMessageNodeType.NodeType, MainNode = threadPath,
                             Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
                         }), o => o.WithTarget(new Address(threadPath)));
-                        actx.Hub.Post(new ResubmitMessageRequest
-                        {
-                            ThreadPath = threadPath,
-                            MessageId = messageId,
-                            UserMessageText = editedText ?? msg.Text ?? "",
-                            OutputMessageId = outId
-                        }, o => o.WithTarget(new Address(threadPath)));
+                        // Stream-update resubmit — see RequestViaStreamUpdate.md.
+                        ThreadSubmission.ApplyResubmit(
+                            actx.Hub, threadPath, messageId,
+                            newUserText: editedText ?? msg.Text ?? "",
+                            agentName: null, modelName: null);
                     });
                 }));
 

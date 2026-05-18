@@ -114,7 +114,14 @@ public static class ThreadInput
                     $"{threadPath}/{msgId}"));
         }
 
-        workspace.GetMeshNodeStream().Update(node =>
+        // Use the path-qualified overload so the same call works for both
+        // own-update (handler running inside the thread hub) AND remote
+        // update (client/non-thread-hub caller writing to the thread). The
+        // overload routes to UpdateOwn vs UpdateRemote based on whether
+        // threadPath matches the workspace's own hub address — clients can
+        // now call AppendUserInput directly without going through a
+        // bespoke AppendUserMessageRequest. See RequestViaStreamUpdate.md.
+        workspace.GetMeshNodeStream(threadPath).Update(node =>
         {
             logger?.LogDebug(
                 "[AppendUserInput] update lambda invoked for {ThreadPath} (node.Path={NodePath} contentType={ContentType})",
