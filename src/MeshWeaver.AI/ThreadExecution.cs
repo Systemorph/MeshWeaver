@@ -100,6 +100,11 @@ public static class ThreadExecution
 
     public static MessageHubConfiguration AddThreadExecution(this MessageHubConfiguration configuration)
         => configuration
+            // SubmitMessageRequest is the LAST surviving thread-mutation request:
+            // its handler pre-allocates a CancellationTokenSource that the pure
+            // stream-update path can't replicate without a side-effect watcher.
+            // Migration plan tracked in tasks #10. See RequestViaStreamUpdate.md.
+            .WithHandler<SubmitMessageRequest>(HandleSubmitMessage)
             .WithInitialization(SetThreadHubIdentity)
             .WithInitialization(RecoverStaleExecutingThread)
             .WithInitialization(WatchForExecution)
