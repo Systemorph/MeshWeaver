@@ -94,7 +94,7 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
             .Where(ids => ids.Count >= 2)
             .FirstAsync().ToTask(ct);
 
-        // Submit via AppendUserMessageRequest
+        // Submit via ThreadInput.AppendUserInput
         MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
             {
                 Hub = client,
@@ -165,7 +165,7 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
             .FirstAsync()
             .ToTask(ct);
 
-        // Submit message via AppendUserMessageRequest
+        // Submit message via ThreadInput.AppendUserInput
         Output.WriteLine("2. Submitting message...");
         MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
             {
@@ -262,7 +262,7 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
         var threadPath = createResp.Message.Node!.Path!;
         Output.WriteLine($"1. Thread: {threadPath}");
 
-        // 2. Submit message via AppendUserMessageRequest
+        // 2. Submit message via ThreadInput.AppendUserInput
         MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
             {
                 Hub = client,

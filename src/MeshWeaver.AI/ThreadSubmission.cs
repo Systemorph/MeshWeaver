@@ -116,7 +116,7 @@ public static class ThreadSubmission
 
     /// <summary>
     /// Creates a new thread node, then submits the first user message via
-    /// <see cref="AppendUserMessageRequest"/> on the new thread.
+    /// <see cref="ThreadInput.AppendUserInput"/> on the new thread.
     /// <see cref="SubmitContext.OnThreadCreated"/> fires when the thread is confirmed.
     /// </summary>
     public static void CreateThreadAndSubmit(SubmitContext ctx)
@@ -133,7 +133,7 @@ public static class ThreadSubmission
         // message — single-write atomic state: when the thread hub activates,
         // its OWN MeshNode already carries the queued user input, and the
         // submission watcher dispatches without a second round-trip. No
-        // separate AppendUserMessageRequest needed. See RequestViaStreamUpdate.md.
+        // separate ThreadInput.AppendUserInput needed. See RequestViaStreamUpdate.md.
         var firstMessageId = Guid.NewGuid().ToString("N")[..8];
         var firstMessage = ThreadInput.CreateUserMessage(
             ctx.UserText,
@@ -199,7 +199,7 @@ public static class ThreadSubmission
         try
         {
             // Direct stream.Update via the shared ApplyResubmit helper — no
-            // bespoke ResubmitUserMessageRequest. ApplyResubmit truncates
+            // bespoke ThreadSubmission.ApplyResubmit. ApplyResubmit truncates
             // Messages/IngestedMessageIds after the replayed id, optionally
             // updates the user cell, and the server watcher re-dispatches.
             ApplyResubmit(ctx.Hub, ctx.ThreadPath, ctx.UserMessageIdToReplay,
@@ -237,7 +237,7 @@ public static class ThreadSubmission
     /// <summary>
     /// Records a failed submission by creating an error response cell and
     /// updating the parent thread's state in one chained operation. Replaces
-    /// the legacy <c>RecordSubmissionFailureRequest</c> handler — callers
+    /// the legacy <c>ThreadSubmission.ApplyRecordSubmissionFailure</c> handler — callers
     /// invoke this directly via <c>workspace.Hub</c>.
     /// </summary>
     public static void ApplyRecordSubmissionFailure(
@@ -301,7 +301,7 @@ public static class ThreadSubmission
     /// <paramref name="atMessageId"/> (exclusive — drops messageId and
     /// everything after). Stream-update on the thread node; works from
     /// any context (own or remote hub). Replaces the legacy
-    /// <c>DeleteFromMessageRequest</c> + handler.
+    /// <c>ThreadSubmission.ApplyDeleteFromMessage</c> + handler.
     /// </summary>
     public static void ApplyDeleteFromMessage(
         IMessageHub hub,
@@ -330,7 +330,7 @@ public static class ThreadSubmission
     /// Truncates the thread after <paramref name="userMessageId"/>, drops it from
     /// IngestedMessageIds so the watcher re-dispatches a new round, and optionally
     /// updates the user cell text. Shared by <see cref="HandleResubmitUserMessage"/>
-    /// and the legacy <see cref="ResubmitMessageRequest"/> shim.
+    /// and the legacy <see cref="ThreadSubmission.ApplyResubmit"/> shim.
     /// </summary>
     public static void ApplyResubmit(
         IMessageHub hub,

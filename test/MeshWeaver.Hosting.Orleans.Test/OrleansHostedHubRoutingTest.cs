@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
@@ -24,8 +24,8 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 ///
 /// <para>
 /// Goal: isolate the routing-layer round trip from any LLM dependency. We use
-/// <see cref="CancelThreadStreamRequest"/> because <see cref="ThreadExecution.AddThreadExecution"/>
-/// registers a synchronous handler for it that posts <see cref="CancelThreadStreamResponse"/>
+/// <see cref="MeshThread.RequestedCancellationAt flip"/> because <see cref="ThreadExecution.AddThreadExecution"/>
+/// registers a synchronous handler for it that posts <see cref="MeshThread.RequestedCancellationAt flip"/>
 /// straight back via <c>ResponseFor(delivery)</c>. So the test exercises:
 /// </para>
 /// <list type="number">
@@ -78,7 +78,7 @@ public class OrleansHostedHubRoutingTest(ITestOutputHelper output) : OrleansShar
 
         // 2. Post GetDataRequest at the per-thread address — generic round-trip
         //    that exercises the same routing layer and returns a response from
-        //    the per-thread grain. Replaces the legacy CancelThreadStreamRequest
+        //    the per-thread grain. Replaces the legacy MeshThread.RequestedCancellationAt flip
         //    routing test (cancellation is now stream-update only — see
         //    RequestViaStreamUpdate.md).
         Output.WriteLine($"[Act] Posting GetDataRequest to {threadPath}");
@@ -103,7 +103,7 @@ public class OrleansHostedHubRoutingTest(ITestOutputHelper output) : OrleansShar
     /// client must observe the new state.
     ///
     /// <para>
-    /// We exercise this through <see cref="AppendUserMessageRequest"/> which is registered
+    /// We exercise this through <see cref="ThreadInput.AppendUserInput"/> which is registered
     /// on the Thread hub by <see cref="ThreadExecution.AddThreadExecution"/>. The handler
     /// calls <c>UpdateMeshNode</c> to push the new message id onto <see cref="MeshThread.Messages"/>
     /// and then posts a response. After the response arrives, a fresh GetDataRequest must

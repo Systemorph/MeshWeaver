@@ -34,7 +34,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 // which the SharedOrleansFixture does not configure.
 /// <summary>
 /// End-to-end chat test on Orleans infrastructure with FileSystem persistence.
-/// Verifies CreateNodeRequest, AppendUserMessageRequest, ThreadMessages streaming,
+/// Verifies CreateNodeRequest, ThreadInput.AppendUserInput, ThreadMessages streaming,
 /// and GetDataRequest on Thread + ThreadMessage nodes.
 /// </summary>
 public class OrleansChatTest(ITestOutputHelper output) : OrleansTestBase<ChatSiloConfigurator>(output)

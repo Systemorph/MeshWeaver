@@ -1,4 +1,4 @@
-﻿using MeshWeaver.Data;
+using MeshWeaver.Data;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using MeshWeaver.Messaging.Security;
@@ -24,7 +24,7 @@ public record CreateNodeRequest(MeshNode Node) : IRequest<CreateNodeResponse>
     /// Optional initialization payload forwarded to the newly-created node's hub
     /// after persistence succeeds. Lets a single CreateNodeRequest atomically
     /// create the node AND queue the first message of work for it — e.g. a
-    /// Thread's first <c>AppendUserMessageRequest</c> —
+    /// Thread's first <c>ThreadInput.AppendUserInput</c> —
     /// without a second client round-trip. The mesh hub posts <c>Argument</c>
     /// fire-and-forget to the new node's address with the original requester's
     /// AccessContext; the target hub processes it through its normal handler

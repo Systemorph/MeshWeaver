@@ -92,7 +92,7 @@ public class OrleansMeshChangeFeedTest(ITestOutputHelper output) : OrleansShared
 
     /// <summary>
     /// The original production bug: delegation creates a sub-thread,
-    /// then AppendUserMessageRequest must route to it correctly.
+    /// then ThreadInput.AppendUserInput must route to it correctly.
     /// The path resolver cache must not serve a stale partial match.
     /// </summary>
     [Fact(Timeout = 30000)]

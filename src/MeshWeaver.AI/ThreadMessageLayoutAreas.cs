@@ -1,4 +1,4 @@
-﻿using System.Reactive.Linq;
+using System.Reactive.Linq;
 using Humanizer;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
@@ -140,7 +140,7 @@ public static class ThreadMessageLayoutAreas
     /// <summary>
     /// Renders the Edit area for a ThreadMessage node.
     /// Shows a MarkdownEditorControl with the current text and a Submit button.
-    /// Submit posts ResubmitMessageRequest (re-executes with edited text).
+    /// Submit posts ThreadSubmission.ApplyResubmit (re-executes with edited text).
     /// Cancel/Done is handled by the Blazor bubble (local isEditing toggle).
     /// </summary>
     public static IObservable<UiControl?> EditArea(LayoutAreaHost host, RenderingContext _)
@@ -187,7 +187,7 @@ public static class ThreadMessageLayoutAreas
                                 // Stream-update: ApplyResubmit truncates Messages after
                                 // messageId, drops it from IngestedMessageIds, and stamps
                                 // the new user text — server watcher dispatches the next
-                                // round. No bespoke ResubmitMessageRequest needed. See
+                                // round. No bespoke ThreadSubmission.ApplyResubmit needed. See
                                 // RequestViaStreamUpdate.md.
                                 ThreadSubmission.ApplyResubmit(
                                     actx.Hub, threadPath, messageId,

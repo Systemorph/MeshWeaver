@@ -218,7 +218,7 @@ public class InboxToolIntegrationTest : AITestBase
         queuedState.PendingUserMessages.Should().NotBeEmpty(
             "u2 must be queued in PendingUserMessages while round 1 runs");
 
-        // ESC: post CancelThreadStreamRequest.
+        // ESC: post MeshThread.RequestedCancellationAt flip.
         // Cancel via stream.Update (see RequestViaStreamUpdate.md). Awaiting
         // the post-update emission asserts the write actually landed.
         var cancelled = await client.GetWorkspace().GetMeshNodeStream(threadPath)

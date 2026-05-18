@@ -27,7 +27,7 @@ namespace MeshWeaver.Blazor.Infrastructure;
 /// Each portal opened its own remote streams (layout areas, MeshNodeReference
 /// reducers, …), each stream wired up its own 45-s <see cref="HeartBeatEvent"/>
 /// timer, and the responses to messages submitted from the portal (e.g.
-/// <c>AppendUserMessageRequest</c> from chat) routed back to whichever
+/// <c>ThreadInput.AppendUserInput</c> from chat) routed back to whichever
 /// scope-specific portal had submitted — by the time the response arrived
 /// that portal was disposed. Symptom: chat "Allocating agent…" spinner that
 /// never advances; thousands of stale heartbeats in App Insights.</para>

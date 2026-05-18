@@ -1,4 +1,4 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using MeshWeaver.Layout;
@@ -181,7 +181,7 @@ public record Thread
     /// stored CTS and propagates the same flip onto every active delegation
     /// sub-thread.
     ///
-    /// <para><b>Stream-update only — never a CancelThreadStreamRequest.</b> The
+    /// <para><b>Stream-update only — never a MeshThread.RequestedCancellationAt flip.</b> The
     /// owning thread hub serialises writes on its action block, so racing
     /// flips collapse into one observed transition. See
     /// [RequestViaStreamUpdate.md] for the rule.</para>
@@ -203,7 +203,7 @@ public record Thread
     /// satellite ThreadMessage cells from these entries and clears them once
     /// the round is dispatched. Lets us do the entire submission as a single
     /// atomic <c>stream.Update</c> on this thread node — no separate
-    /// CreateNodeRequest, no AppendUserMessageRequest.
+    /// CreateNodeRequest, no ThreadInput.AppendUserInput.
     /// </summary>
     public ImmutableDictionary<string, ThreadMessage> PendingUserMessages { get; init; }
         = ImmutableDictionary<string, ThreadMessage>.Empty;

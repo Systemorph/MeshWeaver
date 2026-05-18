@@ -1,4 +1,4 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
@@ -33,7 +33,7 @@ public static class ThreadLayoutAreas
     /// </summary>
     public static MessageHubConfiguration AddThreadLayoutAreas(this MessageHubConfiguration configuration)
         => configuration
-            // Legacy ResubmitMessageRequest / DeleteFromMessageRequest handlers
+            // Legacy ThreadSubmission.ApplyResubmit / ThreadSubmission.ApplyDeleteFromMessage handlers
             // removed — click actions now call ThreadSubmission.ApplyResubmit /
             // ApplyDeleteFromMessage directly. See RequestViaStreamUpdate.md.
             .AddDefaultMeshMenu()

@@ -223,7 +223,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         var errorTcs = new TaskCompletionSource<string>();
 
         // Simulate a failure path by invoking the production helper directly
-        // (replaces the legacy RecordSubmissionFailureRequest post + handler).
+        // (replaces the legacy ThreadSubmission.ApplyRecordSubmissionFailure post + handler).
         var fakeUserMsgId = Guid.NewGuid().ToString("N")[..8];
         MeshWeaver.AI.ThreadSubmission.ApplyRecordSubmissionFailure(
             client,

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
@@ -37,7 +37,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 ///
 /// TODO(append-migration): SubmitMessageRequest still used because this test
 /// specifically validates the dual-response (CellsCreated + ExecutionCompleted)
-/// semantic of the legacy submit pipeline. The new AppendUserMessageRequest API
+/// semantic of the legacy submit pipeline. The new ThreadInput.AppendUserInput API
 /// returns a single Success/Error response and the agent's response text lives
 /// only on the response satellite cell Ã¢â‚¬â€ there's no equivalent of the second
 /// completion response for this test to assert against. Internal production code

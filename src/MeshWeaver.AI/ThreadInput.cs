@@ -17,7 +17,7 @@ namespace MeshWeaver.AI;
 /// watcher creates the satellite cell and dispatches the next round.
 ///
 /// This replaces the legacy two-message dance (CreateNodeRequest +
-/// AppendUserMessageRequest), eliminating the duplicate-dispatch races caused
+/// ThreadInput.AppendUserInput), eliminating the duplicate-dispatch races caused
 /// by interleaved fire-and-forget posts.
 /// </summary>
 public static class ThreadInput
@@ -120,7 +120,7 @@ public static class ThreadInput
         // overload routes to UpdateOwn vs UpdateRemote based on whether
         // threadPath matches the workspace's own hub address — clients can
         // now call AppendUserInput directly without going through a
-        // bespoke AppendUserMessageRequest. See RequestViaStreamUpdate.md.
+        // bespoke ThreadInput.AppendUserInput. See RequestViaStreamUpdate.md.
         workspace.GetMeshNodeStream(threadPath).Update(node =>
         {
             logger?.LogDebug(

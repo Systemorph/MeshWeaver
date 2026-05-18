@@ -115,7 +115,7 @@ public class OrleansSubThreadRoutingTest(ITestOutputHelper output) : OrleansShar
                 UserText = "Test message for sub-thread routing",
                 ContextPath = "TestUser"
             });
-            Output.WriteLine("First AppendUserMessageRequest succeeded");
+            Output.WriteLine("First ThreadInput.AppendUserInput succeeded");
 
         var msgIds = await twoMessages;
         msgIds.Should().HaveCount(2);
@@ -157,7 +157,7 @@ public class OrleansSubThreadRoutingTest(ITestOutputHelper output) : OrleansShar
             .FirstAsync()
             .ToTask(ct);
 
-        Output.WriteLine($"Posting AppendUserMessageRequest to sub-thread: {subThreadPath}");
+        Output.WriteLine($"Posting ThreadInput.AppendUserInput to sub-thread: {subThreadPath}");
         MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
             {
                 Hub = client,
@@ -165,7 +165,7 @@ public class OrleansSubThreadRoutingTest(ITestOutputHelper output) : OrleansShar
                 UserText = "Hello from sub-thread!",
                 ContextPath = "TestUser"
             });
-            Output.WriteLine("Sub-thread AppendUserMessageRequest succeeded!");
+            Output.WriteLine("Sub-thread ThreadInput.AppendUserInput succeeded!");
 
         // 5. Wait for sub-thread cells to appear
         var subMsgIds = await subTwoMessages;

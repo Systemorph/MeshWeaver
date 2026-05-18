@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
@@ -36,7 +36,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// TODO(append-migration): SubmitMessageRequest still used because this test
 /// specifically exercises the legacy "client creates user + response cells then
 /// posts SubmitMessageRequest with both UserMessageId + ResponseMessageId" flow.
-/// The new AppendUserMessageRequest path makes the server own cell creation
+/// The new ThreadInput.AppendUserInput path makes the server own cell creation
 /// (via PendingUserMessages + the watcher), so the explicit pre-created cell ids
 /// have no equivalent. Production code (thread hub Ã¢â€ â€™ _Exec) still routes through
 /// SubmitMessageRequest with explicit ResponseMessageId, so this Orleans-level
