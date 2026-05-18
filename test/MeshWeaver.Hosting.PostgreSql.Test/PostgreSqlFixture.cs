@@ -21,6 +21,14 @@ public class PostgreSqlFixture : IAsyncLifetime
     public PostgreSqlAccessControl AccessControl { get; private set; } = null!;
     public PostgreSqlStorageOptions Options { get; private set; } = new();
 
+    // Per-schema data sources created via CreateSchemaAdapterAsync — tracked so
+    // CleanDataAsync (called between tests) can dispose them and release
+    // physical PG connections back to the container. Without this, each test
+    // leaks 1 connection per schema; CrossPartitionSearchTests + the access
+    // batches pushed past max_connections=100 even with MaxPoolSize=1.
+    private readonly System.Collections.Concurrent.ConcurrentBag<NpgsqlDataSource>
+        _trackedSchemaDataSources = new();
+
     public async ValueTask InitializeAsync()
     {
         _container = new PostgreSqlBuilder("pgvector/pgvector:pg17")
@@ -47,6 +55,7 @@ public class PostgreSqlFixture : IAsyncLifetime
 
     public async ValueTask DisposeAsync()
     {
+        DisposeTrackedSchemaDataSources();
         DataSource?.Dispose();
         if (_container != null)
             await _container.DisposeAsync();
@@ -101,7 +110,23 @@ public class PostgreSqlFixture : IAsyncLifetime
         }
 
         var adapter = new PostgreSqlStorageAdapter(schemaDs, partitionDefinition: partitionDef);
+        _trackedSchemaDataSources.Add(schemaDs);
         return (schemaDs, adapter);
+    }
+
+    /// <summary>
+    /// Disposes every per-schema NpgsqlDataSource ever returned by
+    /// <see cref="CreateSchemaAdapterAsync"/>. Call between tests so the
+    /// container doesn't run out of connections (max_connections=100).
+    /// Returned data sources can still be referenced by the caller after
+    /// dispose — they just won't pool new connections.
+    /// </summary>
+    public void DisposeTrackedSchemaDataSources()
+    {
+        while (_trackedSchemaDataSources.TryTake(out var ds))
+        {
+            try { ds.Dispose(); } catch { }
+        }
     }
 
     /// <summary>
@@ -109,6 +134,10 @@ public class PostgreSqlFixture : IAsyncLifetime
     /// </summary>
     public async Task CleanDataAsync()
     {
+        // Release per-schema pool connections first so the DELETE statements
+        // don't compete with leaked schema adapters.
+        DisposeTrackedSchemaDataSources();
+
         await using var cmd = DataSource.CreateCommand(
             """
             DELETE FROM partition_objects;
