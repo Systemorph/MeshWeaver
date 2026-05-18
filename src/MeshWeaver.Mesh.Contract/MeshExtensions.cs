@@ -1,4 +1,4 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
@@ -439,7 +439,7 @@ public static class MeshExtensions
                     // Forward the optional Argument to the new node's hub (fire-and-forget).
                     // This lets a single CreateNodeRequest atomically create the node AND
                     // queue its first piece of work — e.g. a Thread's first
-                    // AppendUserMessageRequest — without a second client round-trip. We
+                    // ThreadInput.AppendUserInput — without a second client round-trip. We
                     // preserve the original requester's AccessContext so the target hub's
                     // permission attribute checks against the user, not the mesh hub.
                     if (mode == "create" && capturedRequest.Argument is { } arg)

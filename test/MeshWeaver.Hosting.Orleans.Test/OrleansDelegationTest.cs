@@ -143,7 +143,7 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
             .FirstAsync()
             .ToTask(ct);
 
-        // 3. Submit message via AppendUserMessageRequest â€” triggers delegation via production ChatClientAgentFactory
+        // 3. Submit message via ThreadInput.AppendUserInput â€” triggers delegation via production ChatClientAgentFactory
         MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
             {
                 Hub = client,

@@ -92,7 +92,7 @@ public class OrleansDelegationFlowTest(ITestOutputHelper output) : OrleansTestBa
             .ToTask(ct);
 
         // Submit message â€” this triggers the DelegationToolFakeChatClient which calls delegate_to_agent
-        Output.WriteLine("Posting AppendUserMessageRequest (should trigger delegation)...");
+        Output.WriteLine("Posting ThreadInput.AppendUserInput (should trigger delegation)...");
         MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
             {
                 Hub = client,
@@ -100,7 +100,7 @@ public class OrleansDelegationFlowTest(ITestOutputHelper output) : OrleansTestBa
                 UserText = "Please delegate this task",
                 ContextPath = "TestUser"
             });
-            Output.WriteLine("AppendUserMessageRequest succeeded");
+            Output.WriteLine("ThreadInput.AppendUserInput succeeded");
 
         // Wait for message IDs
         var msgIds = await twoMessages;

@@ -176,8 +176,8 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTe
             .FirstAsync()
             .ToTask(ct);
 
-        // 3. Submit message via AppendUserMessageRequest (like side panel SendMessageAsync)
-        Output.WriteLine("Posting AppendUserMessageRequest...");
+        // 3. Submit message via ThreadInput.AppendUserInput (like side panel SendMessageAsync)
+        Output.WriteLine("Posting ThreadInput.AppendUserInput...");
         MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
             {
                 Hub = client,
@@ -185,7 +185,7 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTe
                 UserText = "Hello from side panel test",
                 ContextPath = "TestUser"
             });
-            Output.WriteLine("AppendUserMessageRequest succeeded");
+            Output.WriteLine("ThreadInput.AppendUserInput succeeded");
 
         // 4. Wait for both cells to appear in stream
         var msgIds = await twoMessages;
@@ -232,7 +232,7 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTe
     /// <summary>
     /// Reproduces the production identity chain failure:
     /// Simulates the Blazor GUI flow where UserContextMiddleware sets CircuitContext
-    /// on the portal hub's AccessService, then the component posts AppendUserMessageRequest.
+    /// on the portal hub's AccessService, then the component posts ThreadInput.AppendUserInput.
     /// Verifies that the user identity propagates through:
     ///   PostPipeline Ã¢â€ â€™ OrleansRoutingService Ã¢â€ â€™ MessageHubGrain Ã¢â€ â€™ AccessControlPipeline
     /// </summary>
@@ -313,7 +313,7 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTe
     }
 
     /// <summary>
-    /// Verifies that when a user lacks Thread permission, AppendUserMessageRequest
+    /// Verifies that when a user lacks Thread permission, ThreadInput.AppendUserInput
     /// returns a clear DeliveryFailure error Ã¢â‚¬â€ NOT a silent timeout/hang.
     /// Uses Viewer role which has Read+Execute but NOT Thread.
     /// </summary>

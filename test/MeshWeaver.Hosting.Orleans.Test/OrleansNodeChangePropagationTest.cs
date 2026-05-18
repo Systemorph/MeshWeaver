@@ -38,7 +38,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 ///
 /// Exercises the FULL production flow:
 /// 1. Client creates a thread (like ThreadChatView.SendMessageAsync)
-/// 2. Client submits a message (AppendUserMessageRequest Ã¢â€ â€™ thread grain)
+/// 2. Client submits a message (ThreadInput.AppendUserInput Ã¢â€ â€™ thread grain)
 /// 3. Thread grain creates user + response cells via Observable
 /// 4. Execution starts on _Exec hosted hub (streaming loop via InvokeAsync)
 /// 5. Top-level agent calls Create tool (MeshPlugin) Ã¢â€ â€™ NodeChangeEntry generated
@@ -128,7 +128,7 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
         //    Turn 1: calls Create (creates a Markdown node)
         //    Turn 2: calls delegate_to_agent (Executor)
         //    Turn 3: returns summary text after delegation completes
-        Output.WriteLine("Posting AppendUserMessageRequest (Create + Delegate chain)...");
+        Output.WriteLine("Posting ThreadInput.AppendUserInput (Create + Delegate chain)...");
         MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
             {
                 Hub = client,
@@ -136,7 +136,7 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
                 UserText = "Create a doc and delegate updates to Executor",
                 ContextPath = "TestUser"
             });
-            Output.WriteLine("AppendUserMessageRequest succeeded Ã¢â‚¬â€ submission queued");
+            Output.WriteLine("ThreadInput.AppendUserInput succeeded Ã¢â‚¬â€ submission queued");
 
         // 4. Wait for message IDs
         var msgIds = await twoMessages;
@@ -275,7 +275,7 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
         }
         Output.WriteLine("Initial execution complete");
 
-        // 2. Resubmit Ã¢â‚¬â€ sends ResubmitMessageRequest to the thread grain.
+        // 2. Resubmit Ã¢â‚¬â€ sends ThreadSubmission.ApplyResubmit to the thread grain.
         //    This was the original deadlock: the handler subscribed to workspace streams.
         //    Now uses Observable + workspace.UpdateMeshNode.
         // Resubmit keeps user message (index 0) + adds new response = 2 messages.
