@@ -47,15 +47,25 @@ internal class PathResolutionService : IPathResolver
     private readonly IMessageHub _hub;
     private readonly IMeshQueryCore _queryCore;
     private readonly ILogger<PathResolutionService>? _logger;
+    private readonly bool _hasWritablePartitionProvider;
 
     public PathResolutionService(
         IMessageHub hub,
         IMeshQueryCore queryCore,
+        IEnumerable<IPartitionStorageProvider> partitionProviders,
         ILogger<PathResolutionService>? logger = null)
     {
         _hub = hub;
         _queryCore = queryCore;
         _logger = logger;
+        // Gates the partition-root MeshNode synthesis below — we only fall back
+        // to a placeholder when at least one writable provider could plausibly
+        // own the partition (otherwise we'd activate grains for genuinely
+        // bogus paths). In tests + monolith this is typically the wildcard
+        // InMemoryPartitionStorageProvider; in prod it's the Postgres per-user
+        // schema provider. Read-only seed providers (EmbeddedResource,
+        // StaticNode) don't count — they can't accept new partitions.
+        _hasWritablePartitionProvider = partitionProviders.Any(p => !p.IsReadOnly);
     }
 
     public IObservable<AddressResolution?> ResolvePath(string path)
@@ -102,7 +112,39 @@ internal class PathResolutionService : IPathResolver
             // ObserveQuery returns Observable.Empty when no provider matches.
             // Without DefaultIfEmpty the chain dies silently on completion and
             // RoutingServiceBase's .Take(1) waits forever.
-            .DefaultIfEmpty();
+            .DefaultIfEmpty()
+            // Partition-root fallback runs AFTER DefaultIfEmpty so the empty-
+            // upstream case (no match for the requested path or any ancestor)
+            // gets a chance to synthesize. Doing this inside the upstream Select
+            // wouldn't help: when ObserveQuery emits nothing, Scan never emits,
+            // Select never runs — the only emission is the null from
+            // DefaultIfEmpty. The Select below intercepts that null.
+            //
+            // If the request is for a bare partition path (a single segment)
+            // AND there's at least one writable partition provider that could
+            // own it, synthesize a placeholder MeshNode so MessageHubGrain.
+            // OnActivateAsync sees something to bind to. The grain then
+            // activates against DefaultNodeHubConfiguration; PingRequest and
+            // other default-hub operations route normally. Without this, the
+            // routing-grain emits NotFound and the user's home page hangs the
+            // full Orleans response budget — prod symptom: /rbuergi start
+            // screen blank, 30s "Response did not arrive on time".
+            // Repro: PartitionRootActivationTest.BarePartitionPath_NoMeshNode_RespondsToPing.
+            .Select(resolution =>
+            {
+                if (resolution is not null) return resolution;
+                if (segments.Length != 1
+                    || string.IsNullOrEmpty(segments[0])
+                    || !_hasWritablePartitionProvider)
+                    return null;
+                var partitionPath = segments[0];
+                var synthetic = new MeshNode(partitionPath)
+                {
+                    Name = partitionPath,
+                    State = MeshNodeState.Active
+                };
+                return BuildResolution(partitionPath, segments, matchedSegments: 1, matchedNode: synthetic);
+            });
     }
 
     private static AddressResolution BuildResolution(
