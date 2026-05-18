@@ -172,6 +172,31 @@ internal static class NodeTypeCompilationHelpers
                     "Compile kickoff: own-stream faulted for {HubPath}", hub.Address.Path));
 
         var hubPath = hub.Address.Path;
+        // Single-flight gate: the watcher must NOT dispatch two activities for
+        // the same Pending burst. The Update-lambda's "if Status != Pending
+        // return curr" check IS atomic per call, but two concurrent calls
+        // can both run their lambdas against the framework's pre-commit `state`
+        // snapshot and BOTH observe Pending (each producing an
+        // EntityStoreAndUpdates the data source then accepts last-write-wins).
+        // Symptom: two NTCA Handles run in parallel, two Release MeshNodes
+        // land in the same millisecond, two WriteToParent DataChangeRequests
+        // pile up callbacks on the per-NodeType hub — every following request
+        // (SubscribeRequest, CreateReleaseRequest) times out 30-60 s later
+        // because the hub is wedged behind the doubled-up activity output.
+        // Repro before the gate: CodeEditRecompileTest +
+        // NodeTypeReleaseTest "left Observe subscriptions pending past
+        // Quiescing budget" (NodeTypeRelease local run 2026-05-18).
+        //
+        // The gate is reset when status leaves Compiling/Pending — i.e. when
+        // a real terminal state lands. That lets the next Pending burst fire
+        // a fresh activity, while collapsing duplicate Pending emissions
+        // within the same burst into one dispatch.
+        var dispatchInFlight = 0;
+        var resetSub = ownStream
+            .Where(node => node?.Content is NodeTypeDefinition def
+                && def.CompilationStatus is not CompilationStatus.Pending
+                                          and not CompilationStatus.Compiling)
+            .Subscribe(_ => System.Threading.Interlocked.Exchange(ref dispatchInFlight, 0));
         var watcherSub = ownStream
             .Where(node => node?.Content is NodeTypeDefinition def
                 && def.CompilationStatus == CompilationStatus.Pending
@@ -188,6 +213,16 @@ internal static class NodeTypeCompilationHelpers
             .Subscribe(
                 pendingNode =>
                 {
+                    // Coalesce duplicate Pending emissions into one activity.
+                    // First dispatcher wins; followers no-op until status
+                    // transitions out of Pending/Compiling (handled by resetSub).
+                    if (System.Threading.Interlocked.CompareExchange(ref dispatchInFlight, 1, 0) != 0)
+                    {
+                        logger?.LogDebug(
+                            "Compile watcher: dispatch already in flight for {HubPath} — coalescing this Pending emission",
+                            hubPath);
+                        return;
+                    }
                     logger?.LogInformation("Compile watcher: saw Pending for {HubPath} — attempting Pending → Compiling", hubPath);
                     // Atomic Pending → Compiling transition. CompareExchange
                     // semantics inside the Update lambda: only the caller that
@@ -219,6 +254,12 @@ internal static class NodeTypeCompilationHelpers
                                 if (!weTransitioned)
                                 {
                                     logger?.LogDebug("Compile watcher: another caller already transitioned {HubPath} out of Pending — skipping dispatch", hubPath);
+                                    // Someone else owns the transition; release the
+                                    // single-flight gate so the resetSub on the
+                                    // terminal status doesn't strand it forever
+                                    // (the terminal emission may already have fired
+                                    // before we got here).
+                                    System.Threading.Interlocked.Exchange(ref dispatchInFlight, 0);
                                     return;
                                 }
 
@@ -279,13 +320,18 @@ internal static class NodeTypeCompilationHelpers
                                             RunCompile(workspace, hub, compilationService, pendingNode!, request: null);
                                         });
                             },
-                            ex => logger?.LogWarning(ex,
-                                "Compile watcher: Pending→Compiling transition faulted for {HubPath}", hubPath));
+                            ex =>
+                            {
+                                // Release the gate so a retry can take over.
+                                System.Threading.Interlocked.Exchange(ref dispatchInFlight, 0);
+                                logger?.LogWarning(ex,
+                                    "Compile watcher: Pending→Compiling transition faulted for {HubPath}", hubPath);
+                            });
                 },
                 ex => logger?.LogWarning(ex,
                     "Compile watcher faulted for {HubPath}", hub.Address.Path));
 
-        return new CompositeDisposable(kickoffSub, watcherSub);
+        return new CompositeDisposable(kickoffSub, watcherSub, resetSub);
     }
 
     /// <summary>

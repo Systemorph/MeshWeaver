@@ -1,9 +1,21 @@
 # Requesting Work via `stream.Update()`
 
-> **Pattern**: Instead of posting a request/response message, mutate the target node's
-> state via `workspace.UpdateMeshNode(...)` and let a server-side watcher pick up the
-> change and dispatch the work. The result is published by writing back to the same
-> node — propagated cluster-wide automatically by the synchronization protocol.
+> **🚨 DEFAULT PATTERN for every mesh-node mutation.** Threads, thread messages, NodeType compile state, Code editing, satellite annotations — all of them. If you are about to write `class XxxRequest : IRequest<XxxResponse>` to mutate a node's content, **stop and read this page**.
+>
+> Mutate the target node's state via `workspace.GetMeshNodeStream(path).Update(current => modified)`. A server-side watcher on the owning hub picks up the change and dispatches any side-effect work. The result is published by writing back to the same node — propagated cluster-wide automatically by the synchronization protocol.
+>
+> **Reads use the same stream.** Server-side, [`IMeshNodeStreamCache`](xref:Hosting/MeshNodeStreamCache) hands out a single shared stream per node; client-side, the Blazor view holds an `ISynchronizationStream<MeshNode>` (see [GUI Data Binding](xref:GUI/DataBinding)). Same stream serves read + write — no parallel read API to keep coherent.
+>
+> **Why this is mandatory** (not just preferred): every recent "hub becomes unresponsive after the second operation" CI failure (CodeEditRecompile, NodeTypeRelease, LinkedInPullActions, ThreadAgentIntegration in run 26036857424) traced back to bespoke request/response handlers racing the watcher → two concurrent activities → leaked callbacks → wedged hub. The stream-based pattern is race-free by construction.
+
+## Sanctioned exceptions
+
+Use `hub.Observe(request)` ONLY for:
+
+- **Node lifecycle on the mesh hub** — `CreateNodeRequest`, `DeleteNodeRequest`, `MoveNodeRequest`. These create / destroy / re-key the node itself; they don't mutate its content.
+- **Transient queries that don't belong on any node** — e.g. autocomplete completions, one-shot diagnostic probes that aren't part of the node's state.
+
+Everything else — including every state machine, every "trigger work and observe progress" flow, every UI button that mutates a node — uses `stream.Update()`.
 
 ## Use the canonical helpers
 
@@ -227,8 +239,6 @@ workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReferen
 | Cluster propagation | Caller-targeted only | Every subscriber sees it |
 | Activation-time cost | Cross-silo round-trip | Local cache lookup (after first warm-up) |
 | Error model | DeliveryFailure / Timeout | Status field on node |
-| Use when | Single-caller transient query | Work whose result belongs on the node |
+| Use when | Node lifecycle + transient queries (see "Sanctioned exceptions" above) | **Every other mutation** — default pattern |
 
-Both patterns are valid; pick the one that matches the work's natural data shape.
-For thread execution and dynamic NodeType compilation, the work's result IS the
-node's content — `stream.Update()` is the natural fit.
+Request/response is the *exception*, not a peer pattern. The work's result almost always belongs on a node (thread, message, NodeType, satellite); making the node's own content the contract eliminates an entire class of race conditions, leaked callbacks, and hub wedges that bespoke handlers reintroduce every time.
