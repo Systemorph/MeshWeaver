@@ -37,6 +37,20 @@ public static class UserActivityLayoutAreas
         // Extract the owner ID from the hub address (e.g., "User/Alice" → "Alice")
         var nodeOwnerId = nodePath.StartsWith("User/") ? nodePath[5..] : nodePath;
 
+        // CAPTURE the viewer's AccessContext at area-handler entry. The
+        // LayoutAreaHost restores the per-subscription AccessContext during
+        // its WithInitialization hook (line ~75 of LayoutAreaHost.cs), so
+        // `accessService.Context` IS set when the `Activity(host, ctx)`
+        // method runs. But the `IObservable<UiControl?>` we return is
+        // subscribed AFTER initialization completes — by the time the
+        // Select lambda fires for each workspace-stream emission, the
+        // Context AsyncLocal has been cleared and reading it again returns
+        // null. Capturing here, before constructing the observable, locks
+        // the identity to this specific user's subscription.
+        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
+        var capturedAccessContext = accessService?.Context ?? accessService?.CircuitContext;
+        var isOwner = IsViewerOwner(capturedAccessContext, nodeOwnerId);
+
         var syncStream = host.Workspace.GetStream(new MeshNodeReference());
 
         return syncStream!.Select(change =>
@@ -44,39 +58,42 @@ public static class UserActivityLayoutAreas
             var ownerNode = change.Value;
             var ownerName = ownerNode?.Name ?? nodeOwnerId;
 
-            // Determine if the viewer is the node owner. AccessService exposes
-            // two surfaces: request-scoped <c>Context</c> (set by the inbound
-            // delivery pipeline) and the long-lived <c>CircuitContext</c>
-            // (persistent for the Blazor circuit). Layout-area handlers run
-            // off the workspace stream, NOT inside a request delivery, so
-            // <c>Context</c> is typically null and the identity is only
-            // visible via <c>CircuitContext</c>. Falling back through both
-            // is what every other access-aware handler does (see
-            // <see cref="StorageAdapterMeshQueryProvider.GetEffectiveUserId"/>).
-            var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
-            var viewerId = accessService?.Context?.ObjectId
-                           ?? accessService?.CircuitContext?.ObjectId
-                           ?? "";
-            // Allow either an exact match on the partition key (rbuergi) or
-            // the configured email — depending on auth wiring the AccessContext
-            // may carry either. Email-vs-partition-key alignment is also what
-            // CircuitAccessHandler.UsernameFromEmail builds.
-            var viewerEmail = accessService?.Context?.Email
-                              ?? accessService?.CircuitContext?.Email
-                              ?? "";
-            var viewerAlias = !string.IsNullOrEmpty(viewerEmail) && viewerEmail.Contains('@')
-                ? viewerEmail.Split('@')[0].ToLowerInvariant()
-                : "";
-
-            var isOwner =
-                string.Equals(viewerId, nodeOwnerId, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(viewerAlias, nodeOwnerId, StringComparison.OrdinalIgnoreCase);
-
             if (isOwner)
                 return (UiControl?)BuildOwnerDashboard(host, nodePath, ownerName, nodeOwnerId, ownerNode);
             else
                 return (UiControl?)BuildVisitorProfile(nodePath, ownerName, ownerNode);
         });
+    }
+
+    /// <summary>
+    /// True when the viewer's <see cref="AccessContext"/> represents the same
+    /// principal as the per-user partition key <paramref name="nodeOwnerId"/>
+    /// — the rule that gates <see cref="BuildOwnerDashboard"/> vs
+    /// <see cref="BuildVisitorProfile"/>. Accepts either:
+    /// <list type="bullet">
+    ///   <item><see cref="AccessContext.ObjectId"/> equal to the partition key
+    ///     — the canonical match when <c>CircuitAccessHandler</c> seeds
+    ///     ObjectId from the email's local part (the same rule
+    ///     <c>UserOnboardingService</c> uses to name the partition).</item>
+    ///   <item><see cref="AccessContext.Email"/>'s local part equal to the
+    ///     partition key — fallback for auth backends that leave ObjectId as
+    ///     the UPN or an Entra GUID. Mirrors
+    ///     <c>CircuitAccessHandler.UsernameFromEmail</c>.</item>
+    /// </list>
+    /// </summary>
+    internal static bool IsViewerOwner(AccessContext? viewer, string nodeOwnerId)
+    {
+        if (viewer is null || string.IsNullOrEmpty(nodeOwnerId))
+            return false;
+        if (string.Equals(viewer.ObjectId, nodeOwnerId, StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (!string.IsNullOrEmpty(viewer.Email) && viewer.Email.Contains('@'))
+        {
+            var alias = viewer.Email.Split('@')[0].ToLowerInvariant();
+            if (string.Equals(alias, nodeOwnerId, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
     }
 
     /// <summary>
