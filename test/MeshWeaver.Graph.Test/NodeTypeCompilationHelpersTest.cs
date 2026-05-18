@@ -122,13 +122,18 @@ public class NodeTypeCompilationHelpersTest
     [InlineData(CompilationStatus.Unknown)]
     [InlineData(CompilationStatus.Pending)]
     [InlineData(CompilationStatus.Compiling)]
+    [InlineData(CompilationStatus.Ok)]
     [InlineData(CompilationStatus.Error)]
-    public void HasUsableBuild_NonOkStatus_IsFalse(CompilationStatus? status)
+    public void HasUsableBuild_AssemblyFieldsPopulated_IsTrue_RegardlessOfStatus(CompilationStatus? status)
     {
-        // Only Ok can possibly be a usable build. Everything else — never
-        // compiled, queued, mid-compile (interrupted on a prior process),
-        // or failed — must (re)compile. Note even fully-populated assembly
-        // fields + matching framework cannot rescue a non-Ok status.
+        // Design (6e909188f): HasUsableBuild ignores CompilationStatus.
+        // LatestAssembly{Collection,Path} + CompiledFrameworkVersion are
+        // ONLY stamped by a successful compile write-back, so all three
+        // matching the current framework means the bytes referenced are
+        // reusable — even if a subsequent compile failed (ALC lock during
+        // cross-test re-write) and left Status=Error in the persisted JSON.
+        // Activation hydrates via IAssemblyStore; a true store miss is
+        // self-healed there, not here.
         var def = new NodeTypeDefinition
         {
             CompilationStatus = status,
@@ -137,7 +142,7 @@ public class NodeTypeCompilationHelpersTest
             CompiledFrameworkVersion = NodeTypeCompilationHelpers.FrameworkVersion
         };
         NodeTypeCompilationHelpers.HasUsableBuild(TypeNode(def), def)
-            .Should().BeFalse($"status {status?.ToString() ?? "(null)"} is not a usable build");
+            .Should().BeTrue($"all assembly fields populated + framework match → usable (status {status?.ToString() ?? "(null)"} ignored by design)");
     }
 
     [Fact]

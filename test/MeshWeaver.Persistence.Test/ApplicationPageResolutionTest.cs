@@ -92,14 +92,18 @@ public class ApplicationPageResolutionTest(ITestOutputHelper output) : MonolithM
     }
 
     /// <summary>
-    /// Verifies that truly unknown paths still return null (error case is correct).
+    /// Verifies that truly unknown DEEP paths (more than one segment, no
+    /// matching ancestor anywhere) still return null. Single-segment unknown
+    /// paths now synthesize a partition-root placeholder (e8c08ce42) so the
+    /// home-page activation for a not-yet-onboarded org/user does not hang
+    /// — covered by PartitionRootActivationTest in the Orleans suite.
     /// </summary>
     [Fact(Timeout = 10000)]
-    public async Task ResolvePathAsync_UnknownPath_ShouldReturnNull()
+    public async Task ResolvePathAsync_UnknownDeepPath_ShouldReturnNull()
     {
-        var resolution = await PathResolver.ResolvePath("CompletelyUnknownPath").FirstAsync().ToTask();
+        var resolution = await PathResolver.ResolvePath("CompletelyUnknown/Subpath").FirstAsync().ToTask();
 
-        resolution.Should().BeNull("unknown paths should return null");
+        resolution.Should().BeNull("multi-segment paths with no known ancestor should not synthesize a partition root");
     }
 }
 
