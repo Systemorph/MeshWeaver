@@ -67,11 +67,10 @@ public class PostgreSqlFixture : IAsyncLifetime
         // MaxPoolSize=100 multiplied across ~30 per-test schema activations
         // exhausts the Postgres container's max_connections=100 cap and every
         // subsequent schema-init hits `53300: sorry, too many clients
-        // already`. Previously this was capped at 2 connections per data
-        // source but CrossPartitionSearchTests' batched setup still
-        // intermittently pushed total open conns past 100 on CI under
-        // concurrent xUnit class scheduling. Drop to 1 + ConnectionIdleLifetime=1
-        // so each schema holds at most one live connection that recycles fast.
+        // already`. Drop to 1 so each schema holds at most one live connection.
+        // Npgsql requires ConnectionIdleLifetime >= ConnectionPruningInterval
+        // (default 10s) — leave it at default so we don't trip
+        // ArgumentException at DataSource build.
         //
         // Long-term: the per-(schema, table) PartitionStorageHub architecture
         // (Doc/Architecture/PartitionStorageHubs.md) replaces this entirely
@@ -79,8 +78,7 @@ public class PostgreSqlFixture : IAsyncLifetime
         var builder = new NpgsqlConnectionStringBuilder(ConnectionString)
         {
             SearchPath = $"{schemaName},public",
-            MaxPoolSize = 1,
-            ConnectionIdleLifetime = 1
+            MaxPoolSize = 1
         };
         var dsBuilder = new NpgsqlDataSourceBuilder(builder.ConnectionString);
         dsBuilder.UseVector();
