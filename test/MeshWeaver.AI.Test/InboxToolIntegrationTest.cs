@@ -427,6 +427,15 @@ public class InboxToolIntegrationTest : AITestBase
             var t = node.Content as MeshThread ?? new MeshThread();
             return node with { Content = t with { IsExecuting = isExecuting } };
         }).Take(1).ToTask(ct);
+        // Wait until the post-update value is observable via the same read path
+        // AppendUserInput uses. Update().Take(1) completes when the write commits
+        // to its own observable, but the workspace's stream-handle replay buffer
+        // can still hand out the pre-update snapshot to the next subscriber under
+        // contention (full-suite run), so AppendUserInput's lambda would see
+        // IsExecuting=false and the watcher dispatches immediately.
+        await workspace.GetMeshNodeStream()
+            .Where(n => (n.Content as MeshThread)?.IsExecuting == isExecuting)
+            .Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask(ct);
     }
 
     // ─── Fake chat client + factory ───

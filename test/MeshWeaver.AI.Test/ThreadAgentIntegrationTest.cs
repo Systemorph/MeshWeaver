@@ -47,12 +47,15 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
+        var assemblyRoot = Path.Combine(Path.GetTempPath(), "MeshWeaver.AI.Test", "assemblies",
+            Guid.NewGuid().AsString());
         return builder
             .UseMonolithMesh()
             .AddFileSystemPersistence(TestDataPath)
             .ConfigureServices(services =>
             {
                 services.AddSingleton<IChatClientFactory>(new FakeChatClientFactory());
+                services.AddFileSystemAssemblyStore(assemblyRoot);
                 return services;
             })
             .AddGraph()
