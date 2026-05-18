@@ -774,7 +774,12 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// </summary>
     protected async Task<MeshNode?> ReadNodeAsync(string path, CancellationToken ct)
     {
-        var reader = Mesh.GetHostedHub(ReadHubAddress, c => c);
+        // Match the mesh hub's 60s RequestTimeout — the framework default 30s
+        // trips before a slow per-node hub responds on CI cold starts (symptom:
+        // ThreadAgentIntegrationTest.FullFlow_CreateThread fails with
+        // 'No response received in hub test-reader/shared within 00:00:30').
+        var reader = Mesh.GetHostedHub(ReadHubAddress,
+            c => c.WithRequestTimeout(TimeSpan.FromSeconds(60)));
         // Wall-clock-bound the wait via Task.WhenAny — routing failures on a path
         // with no per-node hub don't always cancel cleanly through the inner observable.
         var requestTask = reader.Observe(new GetDataRequest(new MeshNodeReference()),
