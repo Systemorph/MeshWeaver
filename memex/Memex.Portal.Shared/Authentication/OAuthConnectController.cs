@@ -36,9 +36,9 @@ public class OAuthConnectController(
         logger.LogInformation("OAuth metadata requested from {Origin}", origin);
         return Ok(new
         {
-            issuer = $"{origin}/connect",
-            authorization_endpoint = $"{origin}/connect/authorize",
-            token_endpoint = $"{origin}/connect/token",
+            issuer = origin,
+            authorization_endpoint = $"{origin}/authorize",
+            token_endpoint = $"{origin}/token",
             registration_endpoint = $"{origin}/register",
             response_types_supported = new[] { "code" },
             grant_types_supported = new[] { "authorization_code" },
@@ -99,7 +99,7 @@ public class OAuthConnectController(
     /// OAuth Authorization Endpoint — redirects authenticated users to the client's redirect_uri
     /// with an authorization code. Unauthenticated users are sent to /login first.
     /// </summary>
-    [HttpGet("connect/authorize")]
+    [HttpGet("/authorize")]
     public IActionResult Authorize(
         [FromQuery] string response_type,
         [FromQuery] string client_id,
@@ -177,7 +177,7 @@ public class OAuthConnectController(
     /// OAuth Token Endpoint — exchanges an authorization code for an API token.
     /// The issued token is a standard mw_ API token, indistinguishable from manually created ones.
     /// </summary>
-    [HttpPost("connect/token")]
+    [HttpPost("/token")]
     [AllowAnonymous]
     public Task<IActionResult> ExchangeToken([FromForm] TokenRequest request, CancellationToken ct)
     {

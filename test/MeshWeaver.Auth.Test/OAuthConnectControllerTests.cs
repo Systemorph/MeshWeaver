@@ -84,21 +84,25 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
     }
 
     [Fact]
-    public void RouteAttribute_Authorize_IsConnectAuthorize()
+    public void RouteAttribute_Authorize_IsRootAuthorize()
     {
+        // Must match the default convention <host>/authorize that claude.ai falls back to
+        // when RFC 8414 discovery fails — and the value we now advertise in the metadata.
+        // Anchored to root (leading slash) so a future controller-level [Route] prefix
+        // can't silently shift the path.
         var method = typeof(OAuthConnectController).GetMethod(nameof(OAuthConnectController.Authorize))!;
         var attrs = method.GetCustomAttributes(typeof(HttpGetAttribute), inherit: false);
         attrs.Should().HaveCount(1);
-        ((HttpGetAttribute)attrs[0]).Template.Should().Be("connect/authorize");
+        ((HttpGetAttribute)attrs[0]).Template.Should().Be("/authorize");
     }
 
     [Fact]
-    public void RouteAttribute_ExchangeToken_IsConnectToken()
+    public void RouteAttribute_ExchangeToken_IsRootToken()
     {
         var method = typeof(OAuthConnectController).GetMethod(nameof(OAuthConnectController.ExchangeToken))!;
         var attrs = method.GetCustomAttributes(typeof(HttpPostAttribute), inherit: false);
         attrs.Should().HaveCount(1);
-        ((HttpPostAttribute)attrs[0]).Template.Should().Be("connect/token");
+        ((HttpPostAttribute)attrs[0]).Template.Should().Be("/token");
     }
 
     // ─── Metadata ────────────────────────────────────────────────────────────
@@ -115,9 +119,13 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
         var meta = result!.Value!;
         var type = meta.GetType();
         type.GetProperty("registration_endpoint")!.GetValue(meta).Should().Be("https://memex.test/register");
-        type.GetProperty("authorization_endpoint")!.GetValue(meta).Should().Be("https://memex.test/connect/authorize");
-        type.GetProperty("token_endpoint")!.GetValue(meta).Should().Be("https://memex.test/connect/token");
-        type.GetProperty("issuer")!.GetValue(meta).Should().Be("https://memex.test/connect");
+        type.GetProperty("authorization_endpoint")!.GetValue(meta).Should().Be("https://memex.test/authorize");
+        type.GetProperty("token_endpoint")!.GetValue(meta).Should().Be("https://memex.test/token");
+        // Issuer is the bare origin — RFC 8414 then locates the metadata at
+        // /.well-known/oauth-authorization-server (no path suffix), which is the
+        // route we serve. Any path on the issuer would push discovery to
+        // /.well-known/oauth-authorization-server/<path> and break claude.ai.
+        type.GetProperty("issuer")!.GetValue(meta).Should().Be("https://memex.test");
     }
 
     [Fact]
@@ -237,7 +245,7 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
         // Unauthenticated calls to /authorize must 302 to /login?returnUrl=... so the portal
         // can show the login page and bounce back.
         var controller = CreateController();  // no user
-        controller.ControllerContext.HttpContext.Request.Path = "/connect/authorize";
+        controller.ControllerContext.HttpContext.Request.Path = "/authorize";
         controller.ControllerContext.HttpContext.Request.QueryString = new QueryString(
             "?response_type=code&client_id=c1&redirect_uri=https%3A%2F%2Fclaude.ai%2Fcb&state=xyz&code_challenge=abc&code_challenge_method=S256");
 
@@ -252,7 +260,7 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
 
         result.Should().NotBeNull();
         result!.Url.Should().StartWith("/login?returnUrl=");
-        result.Url.Should().Contain(Uri.EscapeDataString("https://memex.test/connect/authorize"));
+        result.Url.Should().Contain(Uri.EscapeDataString("https://memex.test/authorize"));
         result.Url.Should().Contain(Uri.EscapeDataString("client_id=c1"));
     }
 
