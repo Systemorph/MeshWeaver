@@ -4,7 +4,8 @@ using FluentAssertions;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
-/// Pre-warms FluentAssertions' test-framework detection BEFORE any test runs.
+/// Pre-warms FluentAssertions' test-framework detection BEFORE any dynamic
+/// ALC pollutes the assembly list.
 ///
 /// <para>FluentAssertions 8.9 lazily detects the test framework on the first
 /// assertion by scanning <see cref="System.AppDomain.CurrentDomain"/> via
@@ -20,21 +21,36 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// assembly throws <c>BadImageFormatException: "Index not found."</c>, the
 /// scan aborts, and the test that triggered it dies before its body runs.
 /// Repro: <c>CreatableTypesFileSystemTest.FileSystem_VerifyDataStructure</c>
-/// on CI (Linux) when it runs after compile-heavy test classes have
+/// on Linux CI when it runs after compile-heavy test classes have
 /// accumulated zombie ALCs in the test-host process.</para>
 ///
-/// <para>Fix: trigger the detection NOW, at module load — only the test-host's
-/// own startup assemblies are loaded at this point, so the scan completes
-/// cleanly and the result is cached. Subsequent assertions reuse the cache
-/// and never re-scan, no matter how many dynamic ALCs accumulate.</para>
+/// <para>Fix: trigger the detection at module load — only the test-host's
+/// own startup assemblies are loaded then, so the scan completes cleanly
+/// and the result is cached. Subsequent assertions reuse the cache.</para>
+///
+/// <para>FluentAssertions' first call also writes its commercial-license
+/// notice to <see cref="System.System.Console.Out"/>. xUnit v3's test runner reads
+/// the test-host's stdout as JSON for discovery; the license preamble
+/// breaks JSON parsing and causes "catastrophic failure: Test process did
+/// not return valid JSON". We redirect stdout into a discarded
+/// <see cref="System.IO.TextWriter"/> for the duration of the warmup so
+/// the notice doesn't reach the parent process.</para>
 /// </summary>
 internal static class TestModuleInit
 {
     [ModuleInitializer]
     public static void Initialize()
     {
-        // Cheapest possible FluentAssertions call — forces framework detection.
-        try { 1.Should().Be(1); }
-        catch { /* defensive — we only care about the side effect (caching) */ }
+        var originalOut = System.Console.Out;
+        try
+        {
+            System.Console.SetOut(System.IO.TextWriter.Null);
+            try { 1.Should().Be(1); }
+            catch { /* defensive — we only care about the side effect (caching) */ }
+        }
+        finally
+        {
+            System.Console.SetOut(originalOut);
+        }
     }
 }
