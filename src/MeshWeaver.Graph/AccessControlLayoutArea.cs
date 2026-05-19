@@ -42,15 +42,12 @@ public static class AccessControlLayoutArea
             );
         }
 
-        // Admin check — synchronous read from the current access context. No awaits,
-        // no Query, no FromAsync. Roles are set at circuit/request time.
-        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
-        var roles = accessService?.Context?.Roles
-            ?? accessService?.CircuitContext?.Roles
-            ?? [];
-        var isAdmin = roles.Any(r =>
-            string.Equals(r, "Admin", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(r, "PlatformAdmin", StringComparison.OrdinalIgnoreCase));
+        // Admin check — reactive Delete-permission probe. Equivalent to the
+        // pre-refactor `permissions.HasFlag(Permission.Delete)` gate. Sourcing
+        // from AccessService.Context.Roles was unreliable on the per-node hub
+        // (CircuitContext lives on a different AccessService instance), so the
+        // + Add Assignment button silently never rendered.
+        var isAdminStream = PermissionHelper.CanDelete(host.Hub, hubPath);
 
         // Try to get the hub's own MeshNode stream. If the reducer isn't registered
         // (test or minimal hub configurations), fall through to a stream-less render
@@ -67,7 +64,7 @@ public static class AccessControlLayoutArea
 
         if (nodeStream is null)
         {
-            return Observable.Return<UiControl?>(BuildAccessControlPage(
+            return isAdminStream.Select(isAdmin => (UiControl?)BuildAccessControlPage(
                 host, node: null, hubPath, isAdmin,
                 inherited: [],
                 userNodeLookup: new Dictionary<string, MeshNode>(),
@@ -75,15 +72,15 @@ public static class AccessControlLayoutArea
                 activePolicy: null));
         }
 
-        return nodeStream
-            .Select(change => (UiControl?)BuildAccessControlPage(
-                host, change?.Value, hubPath, isAdmin,
-                inherited: [],
-                userNodeLookup: new Dictionary<string, MeshNode>(),
-                securityService,
-                activePolicy: null))
-            .Catch<UiControl?, Exception>(_ => Observable.Return<UiControl?>(
-                BuildAccessControlPage(
+        return nodeStream.CombineLatest(isAdminStream, (change, isAdmin)
+                => (UiControl?)BuildAccessControlPage(
+                    host, change?.Value, hubPath, isAdmin,
+                    inherited: [],
+                    userNodeLookup: new Dictionary<string, MeshNode>(),
+                    securityService,
+                    activePolicy: null))
+            .Catch<UiControl?, Exception>(_ => isAdminStream.Select(isAdmin =>
+                (UiControl?)BuildAccessControlPage(
                     host, node: null, hubPath, isAdmin,
                     inherited: [],
                     userNodeLookup: new Dictionary<string, MeshNode>(),
