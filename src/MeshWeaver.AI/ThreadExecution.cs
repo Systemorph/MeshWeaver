@@ -244,7 +244,7 @@ public static class ThreadExecution
                     LastModified = cancelledAt,
                     Content = t with
                     {
-                        IsExecuting = false,
+                        Status = ThreadExecutionStatus.Idle,
                         ExecutionStatus = null,
                         ActiveMessageId = null,
                         TokensUsed = 0,
@@ -390,14 +390,65 @@ public static class ThreadExecution
     }
 
     /// <summary>
-    /// Handles SubmitMessageRequest: updates thread state, responds immediately,
-    /// then starts execution.
-    /// - GUI flow (client provides UserMessageId + ResponseMessageId): cells already exist,
-    ///   start execution directly.
-    /// - Server flow (no IDs provided): set PendingUserMessage so WatchForExecution
-    ///   creates cells and starts execution.
+    /// Handles <see cref="SubmitMessageRequest"/> by appending the user message to
+    /// <see cref="MeshThread.PendingUserMessages"/> via
+    /// <see cref="ThreadInput.AppendUserInput"/>. The submission watcher
+    /// (<see cref="InstallSubmissionWatcher"/> → <see cref="ThreadSubmission.InstallServerWatcher"/>
+    /// → <c>DispatchRoundObs</c>) takes over: it ingests the pending entries into
+    /// <see cref="MeshThread.Messages"/>, materialises user satellite cells, allocates
+    /// a single response cell for the round, and posts to the <c>_Exec</c> hub.
+    ///
+    /// <para><b>Why not direct-dispatch.</b> A handler that allocated a response cell
+    /// and posted to <c>_Exec</c> on every <see cref="SubmitMessageRequest"/> raced
+    /// the active round's state (multiple concurrent rounds clobbered each other's
+    /// CTS / <c>ActiveMessageId</c> / <c>PendingUserMessage</c>). All ingestion goes
+    /// through the single-flight watcher path so the queue-don't-cancel semantics
+    /// hold: rapid submits pile up in <c>PendingUserMessages</c>; the watcher
+    /// dispatches them whenever <see cref="MeshThread.IsExecuting"/> is false, and
+    /// the agent's <c>check_inbox</c> tool drains them mid-round.</para>
     /// </summary>
     internal static IMessageDelivery HandleSubmitMessage(
+        IMessageHub hub,
+        IMessageDelivery<SubmitMessageRequest> delivery)
+    {
+        var request = delivery.Message;
+        var threadPath = request.ThreadPath;
+        var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
+
+        // Build the user message envelope (no cell materialisation here — the
+        // watcher / InboxTool creates the satellite cell when ingesting pending).
+        var userMessage = ThreadInput.CreateUserMessage(
+            request.UserMessageText,
+            createdBy: delivery.AccessContext?.ObjectId,
+            agentName: request.AgentName,
+            modelName: request.ModelName,
+            contextPath: request.ContextPath,
+            attachments: request.Attachments);
+
+        var msgId = ThreadInput.AppendUserInput(hub.GetWorkspace(), threadPath, userMessage);
+
+        logger?.LogInformation(
+            "[ThreadExec] HandleSubmitMessage: queued via AppendUserInput threadPath={ThreadPath} userMsgId={UserMsgId}",
+            threadPath, msgId);
+
+        hub.Post(
+            new SubmitMessageResponse
+            {
+                Success = true,
+                Messages = ImmutableList.Create(msgId)
+            },
+            o => o.ResponseFor(delivery));
+        return delivery.Processed();
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Below: legacy direct-dispatch helpers (NOT a live entry point).
+    // Retained while the surrounding sub-thread delegation code still references
+    // the response-cell / completion-callback shape; new callsites must route
+    // through AppendUserInput + the submission watcher.
+    // ────────────────────────────────────────────────────────────────────────
+#pragma warning disable IDE0051 // Remove unused private members
+    private static IMessageDelivery HandleSubmitMessageLegacy(
         IMessageHub hub,
         IMessageDelivery<SubmitMessageRequest> delivery)
     {
@@ -410,14 +461,6 @@ public static class ThreadExecution
         var responseMsgId = request.ResponseMessageId ?? Guid.NewGuid().ToString("N")[..8];
         var responsePath = $"{threadPath}/{responseMsgId}";
 
-        // 🚨 Pre-allocate the CancellationTokenSource HERE, before the
-        // SubmitMessageResponse is posted. ExecuteMessageAsync on the _Exec
-        // hub uses parentHub.Get<CancellationTokenSource>() (= this hub) and
-        // the CTS must be visible the moment IsExecuting flips to true so
-        // that an early RequestedCancellationAt flip (Stop button clicked
-        // immediately after Send) doesn't no-op against a null slot.
-        // Replacing any existing CTS so a fresh round always starts with
-        // a non-cancelled token.
         var existingCts = hub.Get<CancellationTokenSource>();
         existingCts?.Dispose();
         var executionCts = new CancellationTokenSource();
@@ -503,7 +546,7 @@ public static class ThreadExecution
                     Messages = msgs,
                     UserMessageIds = userIds,
                     IngestedMessageIds = ingested,
-                    IsExecuting = true,
+                    Status = ThreadExecutionStatus.Executing,
                     ActiveMessageId = responseMsgId,
                     ExecutionStatus = null,
                     TokensUsed = 0,
@@ -611,7 +654,7 @@ public static class ThreadExecution
             hub.GetWorkspace().GetMeshNodeStream().Update(node =>
             {
                 var t = node.Content as MeshThread ?? new MeshThread();
-                return node with { Content = t with { IsExecuting = false, ActiveMessageId = null, ExecutionStartedAt = null } };
+                return node with { Content = t with { Status = ThreadExecutionStatus.Idle, ActiveMessageId = null, ExecutionStartedAt = null } };
             }).Subscribe(
                 _ => { },
                 ex => logger?.LogWarning(ex,
@@ -659,6 +702,7 @@ public static class ThreadExecution
 
         return delivery.Processed();
     }
+#pragma warning restore IDE0051
 
     /// <summary>
     /// Async handler on the _Exec hosted hub.
@@ -1277,7 +1321,7 @@ public static class ThreadExecution
                     // Clear streaming state
                     UpdateThreadExecution(t => t with
                     {
-                        IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,
+                        Status = ThreadExecutionStatus.Idle, ExecutionStatus = null, ActiveMessageId = null,
                         ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null,
                         PendingUserMessage = null, PendingAgentName = null, PendingModelName = null,
                         PendingContextPath = null, PendingAttachments = null
@@ -1308,7 +1352,7 @@ public static class ThreadExecution
                             status: ThreadMessageStatus.Cancelled);
                         UpdateThreadExecution(t => t with
                         {
-                            IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,
+                            Status = ThreadExecutionStatus.Idle, ExecutionStatus = null, ActiveMessageId = null,
                             ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null
                         });
                         NotifyParentCompletion(parentHub, threadPath, cancelText, false, cancelNodeChanges);
@@ -1333,7 +1377,7 @@ public static class ThreadExecution
                             status: ThreadMessageStatus.Error);
                         UpdateThreadExecution(t => t with
                         {
-                            IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,
+                            Status = ThreadExecutionStatus.Idle, ExecutionStatus = null, ActiveMessageId = null,
                             ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null
                         });
                         NotifyParentCompletion(parentHub, threadPath, errorText, false, errorNodeChanges);

@@ -132,19 +132,14 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
         resultContent!.Messages.Should().BeEquivalentTo(new[] { "msg1" });
         Output.WriteLine($"After update 1: Messages=[{string.Join(", ", resultContent.Messages)}]");
 
-        // Verify back-sync: poll GetDataRequest until the hub reflects the update
-        var nodeId = threadPath.Contains('/') ? threadPath[(threadPath.LastIndexOf('/') + 1)..] : threadPath;
-        MeshThread? serverContent = null;
-        for (var i = 0; i < 20; i++)
-        {
-            var response = await client.Observe(new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId)), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-            var serverNode = response.Message.Data as MeshNode;
-            if (serverNode == null && response.Message.Data is System.Text.Json.JsonElement je)
-                serverNode = je.Deserialize<MeshNode>(Mesh.JsonSerializerOptions);
-            serverContent = serverNode?.Content as MeshThread;
-            if (serverContent?.Messages.Count >= 1) break;
-            await Task.Delay(100, ct);
-        }
+        // Verify back-sync via the canonical MeshNode stream handle — same
+        // primitive the GUI uses; no GetDataRequest polling.
+        var serverNode = await workspace.GetMeshNodeStream(threadPath)
+            .Where(n => (n.Content as MeshThread)?.Messages.Count >= 1)
+            .Take(1)
+            .Timeout(5.Seconds())
+            .ToTask(ct);
+        var serverContent = serverNode.Content as MeshThread;
         serverContent.Should().NotBeNull("server MeshNode should have Thread content");
         serverContent!.Messages.Should().BeEquivalentTo(new[] { "msg1" },
             "server should reflect the client's update (back-sync)");

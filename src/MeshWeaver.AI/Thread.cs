@@ -35,6 +35,46 @@ public record ThreadExecutionContext
 }
 
 /// <summary>
+/// Explicit lifecycle state for a thread's overall execution round. Replaces
+/// the binary <see cref="Thread.IsExecuting"/> flag with named states so the
+/// GUI can render distinct progress indicators and so test assertions can
+/// pin the transition graph.
+///
+/// <para>State graph (one execution round):
+/// <c>Idle → StartingExecution → Executing → Completing → Idle</c>. The
+/// thread can only re-enter <see cref="StartingExecution"/> from
+/// <see cref="Idle"/>; cancellation/error doesn't fork the graph — the
+/// terminal status lands on the response cell (<see cref="ThreadMessageStatus"/>),
+/// while the thread always flows through <see cref="Completing"/> back to
+/// <see cref="Idle"/>.</para>
+/// </summary>
+public enum ThreadExecutionStatus
+{
+    /// <summary>No round in flight. PendingUserMessages may still hold queued input —
+    /// the submission watcher will dispatch a new round when it observes this state.</summary>
+    Idle = 0,
+
+    /// <summary>The <c>_Exec</c> hub claimed the round: draining
+    /// <see cref="Thread.PendingUserMessages"/> into <see cref="Thread.Messages"/>,
+    /// materialising user satellite cells, allocating the response cell. No
+    /// agent tokens yet.</summary>
+    StartingExecution,
+
+    /// <summary>Agent is streaming into the active response cell. The
+    /// <c>check_inbox</c> tool may drain newly-arrived pending entries into
+    /// <see cref="Thread.Messages"/> mid-stream; the same response cell keeps
+    /// streaming.</summary>
+    Executing,
+
+    /// <summary>Stream loop has exited (normal / cancel / error). End-of-round
+    /// drain runs (any unread pending entries flush into Messages, marked
+    /// ingested so the watcher doesn't immediately re-dispatch), then the
+    /// response cell's terminal status is committed and the thread transitions
+    /// back to <see cref="Idle"/>.</summary>
+    Completing
+}
+
+/// <summary>
 /// Lifecycle state of a single ThreadMessage cell. Replaces magic-string text
 /// markers like trailing "*Cancelled*" / "*Error: ...*" with an explicit
 /// per-cell state machine.
@@ -148,10 +188,22 @@ public record Thread
     public string? CreatedBy { get; init; }
 
     /// <summary>
-    /// Whether any execution is currently active on this thread.
-    /// Set to true when a message is submitted, false when execution completes/cancels/errors.
+    /// Explicit state machine for the round currently in flight. See
+    /// <see cref="ThreadExecutionStatus"/> for the transition graph. The
+    /// submission watcher fires when <see cref="Status"/> is
+    /// <see cref="ThreadExecutionStatus.Idle"/> and
+    /// <see cref="PendingUserMessages"/> is non-empty.
     /// </summary>
-    public bool IsExecuting { get; init; }
+    public ThreadExecutionStatus Status { get; init; } = ThreadExecutionStatus.Idle;
+
+    /// <summary>
+    /// Backwards-compatible boolean shorthand for "round in flight". True for
+    /// any <see cref="Status"/> other than <see cref="ThreadExecutionStatus.Idle"/>.
+    /// New callsites should read <see cref="Status"/> directly to pick a
+    /// specific transition (e.g., StartingExecution vs Executing).
+    /// </summary>
+    [JsonIgnore]
+    public bool IsExecuting => Status != ThreadExecutionStatus.Idle;
 
     /// <summary>
     /// Current execution activity description (e.g., "Calling search_nodes...", "Delegating to Navigator...").

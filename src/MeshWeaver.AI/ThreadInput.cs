@@ -56,11 +56,28 @@ public static class ThreadInput
         };
 
     /// <summary>
-    /// Atomically appends a user message to <paramref name="threadPath"/> via a
-    /// single <c>workspace.UpdateMeshNode</c> on the thread's MeshNode. Returns
-    /// the generated message id. The server-side submission watcher creates the
-    /// satellite cell from <see cref="Thread.PendingUserMessages"/> and
-    /// dispatches the next round.
+    /// Appends a user message into <see cref="Thread.PendingUserMessages"/> on
+    /// <paramref name="threadPath"/>. Returns the generated message id.
+    ///
+    /// <para><b>Inbox pattern.</b> This call only writes the pending dict +
+    /// <see cref="Thread.UserMessageIds"/> on the thread node. It does NOT
+    /// materialise a user satellite cell and does NOT add the id to
+    /// <see cref="Thread.Messages"/> — both happen later, at ingestion time,
+    /// when the inbox drains the queue. See
+    /// <c>ThreadSubmissionServer.DispatchRound</c> (round-start ingestion)
+    /// and <see cref="InboxTool.CheckInbox"/> (mid-stream ingestion).</para>
+    ///
+    /// <para><b>GUI binding.</b> While an entry sits in
+    /// <see cref="Thread.PendingUserMessages"/> the chat view renders it as a
+    /// "queued" / "not yet submitted" cell from the dictionary directly. The
+    /// transition to a materialised cell in <see cref="Thread.Messages"/>
+    /// (the "submitted" / "picked up by inbox" state) happens when the inbox
+    /// drains.</para>
+    ///
+    /// <para>Pending-not-empty + <c>IsExecuting=false</c> wakes the submission
+    /// watcher, which dispatches a new round. While
+    /// <c>IsExecuting=true</c>, the running round's <c>check_inbox</c> tool
+    /// drains the queue into its current response cell.</para>
     /// </summary>
     public static string AppendUserInput(
         IWorkspace workspace,
@@ -73,20 +90,6 @@ public static class ThreadInput
         ArgumentNullException.ThrowIfNull(message);
 
         var msgId = NewId();
-
-        // Materialize the user cell IMMEDIATELY (Status=Queued). The GUI binds
-        // to Thread.Messages and renders one LayoutAreaControl per id; without
-        // immediate cell creation, queued messages submitted while a previous
-        // round is still running are invisible until DispatchRound runs. We
-        // ALSO update Thread.Messages + UserMessageIds + PendingUserMessages
-        // in one atomic stream Update on the thread node — DispatchRound will
-        // see the cell already exists (CreateNode there is idempotent via
-        // Catch) and transition Status=Queued → Submitted on ingest.
-        //
-        // Subscribe is mandatory on both — these are cold observables and the
-        // side effects only run on Subscribe. Without this chain,
-        // AppendUserInput is silently a no-op and the chat workflow never
-        // dispatches the message (the original "chat doesn't work" symptom).
         var logger = workspace.Hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.ThreadInput");
         logger?.LogDebug(
@@ -94,33 +97,11 @@ public static class ThreadInput
             workspace.Hub.Address, threadPath, msgId,
             message.AgentName ?? "(null)", message.ModelName ?? "(null)");
 
-        var meshService = workspace.Hub.ServiceProvider
-            .GetService<MeshWeaver.Mesh.Services.IMeshService>();
-        if (meshService != null)
-        {
-            // Resolve mainEntity: contextPath wins, fallback to threadPath.
-            var mainEntity = message.ContextPath ?? threadPath;
-            var userCell = new MeshNode(msgId, threadPath)
-            {
-                NodeType = ThreadMessageNodeType.NodeType,
-                MainNode = mainEntity,
-                Content = message
-            };
-            meshService.CreateNode(userCell).Subscribe(
-                _ => logger?.LogDebug(
-                    "[AppendUserInput] user cell created at {Path}", $"{threadPath}/{msgId}"),
-                ex => logger?.LogDebug(ex,
-                    "[AppendUserInput] user cell CreateNode returned error for {Path} (may already exist)",
-                    $"{threadPath}/{msgId}"));
-        }
-
-        // Use the path-qualified overload so the same call works for both
-        // own-update (handler running inside the thread hub) AND remote
-        // update (client/non-thread-hub caller writing to the thread). The
-        // overload routes to UpdateOwn vs UpdateRemote based on whether
-        // threadPath matches the workspace's own hub address — clients can
-        // now call AppendUserInput directly without going through a
-        // bespoke ThreadInput.AppendUserInput. See RequestViaStreamUpdate.md.
+        // Single atomic update on the thread node: add to UserMessageIds (preserves
+        // submission order for ingestion) and PendingUserMessages (the queue the
+        // inbox drains). NOT Messages — Messages is the materialised list updated
+        // by the inbox at ingestion time. Updates Pending* hints for the next
+        // round's dispatch context.
         workspace.GetMeshNodeStream(threadPath).Update(node =>
         {
             logger?.LogDebug(
@@ -128,9 +109,6 @@ public static class ThreadInput
                 threadPath, node.Path ?? "(null)",
                 node.Content?.GetType().Name ?? "(null)");
             var thread = node.Content as MeshThread ?? new MeshThread();
-            var msgs = thread.Messages.Contains(msgId)
-                ? thread.Messages
-                : thread.Messages.Add(msgId);
             var userIds = thread.UserMessageIds.Contains(msgId)
                 ? thread.UserMessageIds
                 : thread.UserMessageIds.Add(msgId);
@@ -139,7 +117,6 @@ public static class ThreadInput
             {
                 Content = thread with
                 {
-                    Messages = msgs,
                     UserMessageIds = userIds,
                     PendingUserMessages = pending,
                     PendingAgentName = message.AgentName ?? thread.PendingAgentName,
@@ -150,9 +127,8 @@ public static class ThreadInput
             };
         }).Subscribe(
             updated => logger?.LogDebug(
-                "[AppendUserInput] OnNext for {ThreadPath} msgId={MsgId} — msgs={Msgs} userIds={UserIds} pending={Pending}",
+                "[AppendUserInput] OnNext for {ThreadPath} msgId={MsgId} — userIds={UserIds} pending={Pending}",
                 threadPath, msgId,
-                (updated.Content as MeshThread)?.Messages.Count ?? -1,
                 (updated.Content as MeshThread)?.UserMessageIds.Count ?? -1,
                 (updated.Content as MeshThread)?.PendingUserMessages.Count ?? -1),
             ex => logger?.LogWarning(ex,

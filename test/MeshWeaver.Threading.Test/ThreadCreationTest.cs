@@ -242,25 +242,23 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact(Timeout = 15000)]
     public async Task GetDataRequest_ToNonExistentNode_ReturnsErrorNotEndlessMessages()
     {
-        // Arrange - Create a malformed path that mimics the bug
+        // A malformed path that mimics the bug. Posted through the CLIENT hub
+        // (same path the GUI takes) — the routing layer must reject within the
+        // timeout, not spin forever.
         var nonExistentPath = "User/Roland/User/Roland/IOvAlUVOUUubAUdRoDaPwQ";
-        var address = new Messaging.Address(nonExistentPath);
-        var hub = Mesh;
-
-        // Act - Send GetDataRequest to non-existent node.
-        // The key property: routing completes within the timeout, not spinning forever.
-        // Either we get a response OR a DeliveryFailureException — both are "completed"
-        // outcomes; the bug we're guarding against is the request never returning at all.
+        var client = GetClient();
         var cts = new CancellationTokenSource(3.Seconds());
 
         try
         {
-            var response = await hub.Observe(new Data.GetDataRequest(new Data.EntityReference(nameof(MeshNode), nonExistentPath)), o => o.WithTarget(address)).FirstAsync().ToTask(cts.Token);
+            var response = await client.Observe(
+                    new Data.GetDataRequest(new Data.EntityReference(nameof(MeshNode), nonExistentPath)),
+                    o => o.WithTarget(new Address(nonExistentPath)))
+                .FirstAsync().ToTask(cts.Token);
             Output.WriteLine($"Response completed: {response.Message?.GetType().Name}");
         }
         catch (Messaging.DeliveryFailureException ex)
         {
-            // Expected — DeliveryFailure for a non-existent node is a valid "completed" outcome.
             Output.WriteLine($"DeliveryFailure (expected): {ex.Message}");
         }
     }
@@ -268,25 +266,22 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact(Timeout = 15000)]
     public async Task GetDataRequest_ToNonExistentThread_ReturnsErrorNotEndlessMessages()
     {
-        // Arrange - Thread path that looks valid but doesn't exist
+        // Thread path that looks valid but doesn't exist. Posted through the CLIENT
+        // — routing must complete (response or DeliveryFailure) within the timeout.
         var nonExistentPath = "User/TestUser/nonexistent123";
-        var address = new Messaging.Address(nonExistentPath);
-        var hub = Mesh;
-
-        // Act - Send GetDataRequest to non-existent node.
-        // The key property: routing completes within the timeout, not spinning forever.
-        // Either we get a response OR a DeliveryFailureException — both are "completed"
-        // outcomes; the bug we're guarding against is the request never returning at all.
+        var client = GetClient();
         var cts = new CancellationTokenSource(3.Seconds());
 
         try
         {
-            var response = await hub.Observe(new Data.GetDataRequest(new Data.EntityReference(nameof(MeshNode), nonExistentPath)), o => o.WithTarget(address)).FirstAsync().ToTask(cts.Token);
+            var response = await client.Observe(
+                    new Data.GetDataRequest(new Data.EntityReference(nameof(MeshNode), nonExistentPath)),
+                    o => o.WithTarget(new Address(nonExistentPath)))
+                .FirstAsync().ToTask(cts.Token);
             Output.WriteLine($"Response completed: {response.Message?.GetType().Name}");
         }
         catch (Messaging.DeliveryFailureException ex)
         {
-            // Expected — DeliveryFailure for a non-existent node is a valid "completed" outcome.
             Output.WriteLine($"DeliveryFailure (expected): {ex.Message}");
         }
     }

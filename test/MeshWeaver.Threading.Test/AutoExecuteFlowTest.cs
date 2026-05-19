@@ -1,9 +1,9 @@
 using System;
 using System.Collections.Generic;
-using System.Collections.Immutable;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -13,7 +13,6 @@ using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -21,16 +20,16 @@ using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using MeshThread = MeshWeaver.AI.Thread;
 
-using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Threading.Test;
 
 /// <summary>
-/// Tests the portal flow 1:1:
-/// 1. Create thread via BuildThreadNode + CreateNodeRequest
-/// 2. GUI creates user + response cells via CreateNodeRequest
-/// 3. GUI sends SubmitMessageRequest with cell IDs
-/// 4. Server executes, writes response to the response cell
+/// Portal flow, end-to-end, via the canonical GUI handlers:
+/// <list type="number">
+///   <item><see cref="ThreadSubmission.CreateThreadAndSubmit"/> creates the thread
+///     with the first user message pre-seeded; the server watcher dispatches.</item>
+///   <item>State is observed via <c>client.GetWorkspace().GetMeshNodeStream(path)</c>
+///     — same reactive handle the Blazor view holds.</item>
+/// </list>
 /// </summary>
 public class AutoExecuteFlowTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -46,87 +45,37 @@ public class AutoExecuteFlowTest(ITestOutputHelper output) : MonolithMeshTestBas
             .AddAI()
             .AddSampleUsers();
 
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+    {
+        configuration.TypeRegistry.AddAITypes();
+        return base.ConfigureClient(configuration).AddData();
+    }
+
     [Fact]
     public async Task PortalFlow_CreateThread_CreateCells_Submit_ResponseWritten()
     {
         var ct = new CancellationTokenSource(30.Seconds()).Token;
         var client = GetClient();
 
-        // Step 1: Create thread (BuildThreadNode â€” no PendingUserMessage)
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, "Hello portal flow!", "TestUser");
         var threadPath = threadNode.Path!;
         Output.WriteLine($"Thread: {threadPath}");
 
-        var createResponse = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
+        var createResponse = await client.Observe(new CreateNodeRequest(threadNode),
+            o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
         createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error);
         Output.WriteLine("Thread created");
 
-        // Step 2: GUI creates cells (thread exists now)
-        var userMsgId = Guid.NewGuid().ToString("N")[..8];
-        var responseMsgId = Guid.NewGuid().ToString("N")[..8];
+        var responseMsgId = await ChatFlow.SubmitAndWaitAsync(client, threadPath,
+            "Hello portal flow!", contextPath: ContextPath, agentName: "Orchestrator",
+            timeout: 30.Seconds(), ct: ct);
+        Output.WriteLine($"Response msg id: {responseMsgId}");
 
-        client.Post(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
-            Content = new ThreadMessage
-            {
-                Role = "user", Text = "Hello portal flow!", Timestamp = DateTime.UtcNow,
-                Type = ThreadMessageType.ExecutedInput, CreatedBy = "TestUser"
-            }
-        }), o => o.WithTarget(new Address(threadPath)));
-
-        client.Post(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
-            Content = new ThreadMessage
-            {
-                Role = "assistant", Text = "", Timestamp = DateTime.UtcNow,
-                Type = ThreadMessageType.AgentResponse, AgentName = "Orchestrator"
-            }
-        }), o => o.WithTarget(new Address(threadPath)));
-
-        // Step 3: Submit with cell IDs
-        Output.WriteLine("Submitting message...");
-        var submitResp = await client.Observe(new SubmitMessageRequest
-            {
-                ThreadPath = threadPath,
-                UserMessageText = "Hello portal flow!",
-                UserMessageId = userMsgId,
-                ResponseMessageId = responseMsgId,
-                AgentName = "Orchestrator",
-                ContextPath = ContextPath
-            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-        submitResp.Message.Success.Should().BeTrue(submitResp.Message.Error);
-        Output.WriteLine($"Submit response: Messages=[{string.Join(",", submitResp.Message.Messages ?? [])}]");
-
-        // Step 4: Wait for execution to complete
-        for (var i = 0; i < 60; i++)
-        {
-            var dataResp = await client.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-            var node = dataResp.Message.Data as MeshNode;
-            if (node?.Content is JsonElement je)
-                node = node with { Content = je.Deserialize<MeshThread>(Mesh.JsonSerializerOptions) };
-            var thread = node?.Content as MeshThread;
-
-            if (thread is { IsExecuting: false })
-            {
-                Output.WriteLine($"Execution complete after {i * 500}ms");
-
-                // Verify response cell
-                var responsePath = $"{threadPath}/{responseMsgId}";
-                var responseResp = await client.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(responsePath))).FirstAsync().ToTask(ct);
-                var rNode = responseResp.Message.Data as MeshNode;
-                if (rNode?.Content is JsonElement rje)
-                    rNode = rNode with { Content = rje.Deserialize<ThreadMessage>(Mesh.JsonSerializerOptions) };
-                var responseMsg = rNode?.Content as ThreadMessage;
-                responseMsg.Should().NotBeNull();
-                responseMsg!.Text.Should().NotBeNullOrEmpty("agent should have written response");
-                Output.WriteLine($"Response: {responseMsg.Text[..Math.Min(80, responseMsg.Text.Length)]}");
-                return; // SUCCESS
-            }
-            await Task.Delay(500, ct);
-        }
-        throw new TimeoutException("Execution did not complete");
+        var response = await ChatFlow.ReadMessageAsync(client, threadPath, responseMsgId,
+            m => !string.IsNullOrEmpty(m.Text) && m.Status != ThreadMessageStatus.Streaming,
+            ct: ct);
+        response.Text.Should().NotBeNullOrEmpty("agent should have written response");
+        Output.WriteLine($"Response: {response.Text[..Math.Min(80, response.Text.Length)]}");
     }
 
     [Fact]
@@ -137,47 +86,19 @@ public class AutoExecuteFlowTest(ITestOutputHelper output) : MonolithMeshTestBas
 
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, "Test response update", "TestUser");
         var threadPath = threadNode.Path!;
+        await client.Observe(new CreateNodeRequest(threadNode),
+            o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
 
-        await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
+        var responseMsgId = await ChatFlow.SubmitAndWaitAsync(client, threadPath,
+            "Test response update", contextPath: ContextPath, timeout: 30.Seconds(), ct: ct);
 
-        var userMsgId = Guid.NewGuid().ToString("N")[..8];
-        var responseMsgId = Guid.NewGuid().ToString("N")[..8];
-        var responsePath = $"{threadPath}/{responseMsgId}";
-
-        client.Post(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
-            Content = new ThreadMessage { Role = "user", Text = "Test response update", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
-        }), o => o.WithTarget(new Address(threadPath)));
-
-        client.Post(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
-            Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-        }), o => o.WithTarget(new Address(threadPath)));
-
-        await client.Observe(new SubmitMessageRequest
-            {
-                ThreadPath = threadPath, UserMessageText = "Test response update",
-                UserMessageId = userMsgId, ResponseMessageId = responseMsgId, ContextPath = ContextPath
-            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-
-        for (var i = 0; i < 60; i++)
-        {
-            var responseResp = await client.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(responsePath))).FirstAsync().ToTask(ct);
-            var rNode = responseResp.Message.Data as MeshNode;
-            if (rNode?.Content is JsonElement rje)
-                rNode = rNode with { Content = rje.Deserialize<ThreadMessage>(Mesh.JsonSerializerOptions) };
-            var msg = rNode?.Content as ThreadMessage;
-            if (msg?.Text is { Length: > 0 } text
-                && !text.StartsWith("Allocating") && !text.StartsWith("Loading") && !text.StartsWith("Generating"))
-            {
-                Output.WriteLine($"Response cell updated: {text[..Math.Min(80, text.Length)]}");
-                return;
-            }
-            await Task.Delay(500, ct);
-        }
-        throw new TimeoutException("Response cell never got final text");
+        var response = await ChatFlow.ReadMessageAsync(client, threadPath, responseMsgId,
+            m => !string.IsNullOrEmpty(m.Text)
+                 && !m.Text.StartsWith("Allocating")
+                 && !m.Text.StartsWith("Loading")
+                 && !m.Text.StartsWith("Generating"),
+            ct: ct);
+        Output.WriteLine($"Response cell updated: {response.Text[..Math.Min(80, response.Text.Length)]}");
     }
 
     #region Echo LLM

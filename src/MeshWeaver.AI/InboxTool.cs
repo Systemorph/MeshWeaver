@@ -14,27 +14,34 @@ namespace MeshWeaver.AI;
 
 /// <summary>
 /// Result of draining the inbox — the user messages newly visible to the
-/// agent and the post-drain thread state. Pure record so the drain logic is
-/// trivially unit-testable without any hub plumbing.
+/// agent (text + id + the original <see cref="ThreadMessage"/> envelope so the
+/// caller can materialise the satellite cell), and the post-drain thread state.
+/// Pure record so the drain logic is trivially unit-testable without any hub plumbing.
 /// </summary>
 public sealed record InboxDrainResult(
     ImmutableList<string> DrainedTexts,
     ImmutableList<string> DrainedIds,
+    ImmutableList<ThreadMessage> DrainedMessages,
     MeshThread UpdatedThread);
 
 /// <summary>
-/// The <c>check_inbox</c> AI function — Claude's "should I see if the user
-/// just sent something while I was working?" hook. The tool drains
-/// <see cref="MeshThread.PendingUserMessages"/> for the current thread
-/// (atomic <c>workspace.UpdateMeshNode</c>), adds the drained ids to
-/// <see cref="MeshThread.IngestedMessageIds"/> so the server watcher
-/// won't re-dispatch them after the current turn, and returns the messages
-/// as the tool result so the agent can fold them into the in-flight reply.
-///
-/// The user satellite cells were already created by
-/// <see cref="ThreadInput.AppendUserInput"/> at submit time (they're visible
-/// in the chat as queued cells); this tool just promotes them from "queued"
-/// to "ingested + delivered to the agent".
+/// The <c>check_inbox</c> AI function — the unified ingestion point. Every
+/// transition from <see cref="MeshThread.PendingUserMessages"/> into
+/// <see cref="MeshThread.Messages"/> goes through this tool:
+/// <list type="bullet">
+///   <item>Submit (<see cref="ThreadInput.AppendUserInput"/>) writes to
+///     <c>PendingUserMessages</c> only — no satellite cell, no
+///     <c>Messages</c> update. The GUI binds to both properties and renders
+///     pending entries as "queued" cells.</item>
+///   <item><b>Round-start ingestion</b> (server watcher when
+///     <c>IsExecuting=false</c>): the watcher's <c>DispatchRound</c> drains
+///     pending, materialises the satellite cells, allocates a single response
+///     cell for the round, and posts to <c>_Exec</c>.</item>
+///   <item><b>Mid-round ingestion</b> (<c>check_inbox</c> tool fired by the
+///     agent): same drain happens — pending → Messages, materialise satellite
+///     cells, mark <see cref="MeshThread.IngestedMessageIds"/>. The current
+///     response cell continues streaming; no new response cell is created.</item>
+/// </list>
 /// </summary>
 public static class InboxTool
 {
@@ -50,10 +57,12 @@ public static class InboxTool
 
     /// <summary>
     /// Pure: given a thread state, returns the drain result + the next thread
-    /// state. <c>DrainedIds</c> is the subset of <c>UserMessageIds</c> that
-    /// was in <c>PendingUserMessages</c>, in <c>UserMessageIds</c> submission
-    /// order. The updated thread has those ids removed from <c>PendingUserMessages</c>
-    /// and added to <c>IngestedMessageIds</c> (de-duplicated).
+    /// state. <c>DrainedIds</c> is the union of <c>UserMessageIds ∩ PendingUserMessages</c>
+    /// (in submission order) plus any orphan pending ids not yet in
+    /// <c>UserMessageIds</c>. The updated thread has those ids removed from
+    /// <c>PendingUserMessages</c>, appended to <c>Messages</c> (so satellite
+    /// cells the caller materialises become rendered chat entries), and added
+    /// to <c>IngestedMessageIds</c> (de-duplicated).
     /// </summary>
     public static InboxDrainResult Drain(MeshThread thread)
     {
@@ -64,17 +73,20 @@ public static class InboxTool
             return new InboxDrainResult(
                 ImmutableList<string>.Empty,
                 ImmutableList<string>.Empty,
+                ImmutableList<ThreadMessage>.Empty,
                 thread);
         }
 
         var drainedIdsBuilder = ImmutableList.CreateBuilder<string>();
         var drainedTextsBuilder = ImmutableList.CreateBuilder<string>();
+        var drainedMessagesBuilder = ImmutableList.CreateBuilder<ThreadMessage>();
         foreach (var id in thread.UserMessageIds)
         {
             if (thread.PendingUserMessages.TryGetValue(id, out var msg))
             {
                 drainedIdsBuilder.Add(id);
                 drainedTextsBuilder.Add(msg.Text);
+                drainedMessagesBuilder.Add(msg);
             }
         }
 
@@ -86,6 +98,7 @@ public static class InboxTool
             {
                 drainedIdsBuilder.Add(id);
                 drainedTextsBuilder.Add(msg.Text);
+                drainedMessagesBuilder.Add(msg);
             }
         }
 
@@ -99,11 +112,19 @@ public static class InboxTool
             if (!ingestedAfter.Contains(id))
                 ingestedAfter = ingestedAfter.Add(id);
 
+        // Append drained ids to Messages in submission order, skipping any already present.
+        var messagesAfter = thread.Messages;
+        foreach (var id in drainedIds)
+            if (!messagesAfter.Contains(id))
+                messagesAfter = messagesAfter.Add(id);
+
         return new InboxDrainResult(
             drainedTextsBuilder.ToImmutable(),
             drainedIds,
+            drainedMessagesBuilder.ToImmutable(),
             thread with
             {
+                Messages = messagesAfter,
                 PendingUserMessages = pendingAfter,
                 IngestedMessageIds = ingestedAfter
             });
@@ -151,15 +172,19 @@ public static class InboxTool
     }
 
     /// <summary>
-    /// Reads the current thread MeshNode, computes the drain, applies it to the
-    /// thread workspace via <c>UpdateMeshNode</c>, and returns the formatted
-    /// tool result. Errors flow through .Catch and are returned as the tool result
-    /// so the agent sees a non-fatal failure message instead of throwing.
+    /// Reads the current thread MeshNode, computes the drain, materialises the
+    /// user satellite cells (one <c>CreateNode</c> per drained id — pending entries
+    /// don't have cells yet; the GUI rendered them from the dictionary), commits the
+    /// drain atomically to the thread workspace via <c>UpdateMeshNode</c>, and
+    /// returns the formatted tool result. Errors flow through <c>.Catch</c> and are
+    /// returned as the tool result so the agent sees a non-fatal failure message
+    /// instead of throwing.
     /// </summary>
     public static IObservable<string> CheckInbox(IMessageHub threadHub, ILogger? logger) =>
         Observable.Defer(() =>
         {
             var workspace = threadHub.GetWorkspace();
+            var threadPath = threadHub.Address.Path;
             // Read the current thread node once. `GetMeshNodeStream()` reads the
             // hub's OWN node (the thread).
             return workspace.GetMeshNodeStream()
@@ -172,16 +197,43 @@ public static class InboxTool
                     {
                         logger?.LogDebug(
                             "[InboxTool] thread node has no MeshThread content for {Path}",
-                            threadHub.Address.Path);
+                            threadPath);
                         return "(no new messages)";
                     }
 
                     var drain = Drain(thread);
                     if (drain.DrainedIds.IsEmpty)
                     {
-                        logger?.LogDebug("[InboxTool] inbox empty for {Path}",
-                            threadHub.Address.Path);
+                        logger?.LogDebug("[InboxTool] inbox empty for {Path}", threadPath);
                         return "(no new messages)";
+                    }
+
+                    // Materialise the satellite ThreadMessage cells the agent is
+                    // about to "see". AppendUserInput didn't create them at submit
+                    // time — the inbox is the unified ingestion point.
+                    var meshService = threadHub.ServiceProvider
+                        .GetService<Mesh.Services.IMeshService>();
+                    if (meshService != null)
+                    {
+                        for (var i = 0; i < drain.DrainedIds.Count; i++)
+                        {
+                            var id = drain.DrainedIds[i];
+                            var msg = drain.DrainedMessages[i];
+                            var mainEntity = msg.ContextPath ?? threadPath;
+                            var cell = new MeshNode(id, threadPath)
+                            {
+                                NodeType = ThreadMessageNodeType.NodeType,
+                                MainNode = mainEntity,
+                                Content = msg
+                            };
+                            meshService.CreateNode(cell).Subscribe(
+                                _ => logger?.LogDebug(
+                                    "[InboxTool] materialised user cell {Path}",
+                                    $"{threadPath}/{id}"),
+                                ex => logger?.LogDebug(ex,
+                                    "[InboxTool] user cell create error for {Path} (may already exist)",
+                                    $"{threadPath}/{id}"));
+                        }
                     }
 
                     // Apply the drain via an atomic workspace update. Subscribe is mandatory
@@ -202,10 +254,10 @@ public static class InboxTool
                         .Subscribe(
                             _ => logger?.LogInformation(
                                 "[InboxTool] drained {Count} pending messages on {Path}",
-                                drain.DrainedIds.Count, threadHub.Address.Path),
+                                drain.DrainedIds.Count, threadPath),
                             ex => logger?.LogWarning(ex,
                                 "[InboxTool] drain UpdateMeshNode failed for {Path}",
-                                threadHub.Address.Path));
+                                threadPath));
 
                     return FormatToolResult(drain);
                 });

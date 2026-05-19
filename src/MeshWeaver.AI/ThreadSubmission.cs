@@ -52,24 +52,37 @@ public static class ThreadSubmission
 
     /// <summary>
     /// Returns the next round to dispatch given the current thread state.
-    /// Returns <c>null</c> when the thread is currently executing or has no queued user messages.
+    /// Returns <c>null</c> when the thread is currently executing or has nothing
+    /// queued.
     ///
-    /// <para>One queued user message per round (Claude-Code-style turn structure):
-    /// each user submission gets its own response cell + its own agent turn. After
-    /// a turn completes (success/cancel/error), <c>IsExecuting</c> flips back to
-    /// false and the watcher fires again to dispatch the next queued message.
-    /// Multi-message batching with "---" joiners is gone.</para>
+    /// <para><b>Inbox semantics.</b> Every entry in
+    /// <see cref="MeshThread.PendingUserMessages"/> is ingested into a single
+    /// round — the inbox drains the whole queue at once, all drained ids move
+    /// into <see cref="MeshThread.Messages"/>, and exactly one response cell
+    /// is allocated for the round. Multiple inputs share one response cell;
+    /// the agent treats the drained list as a multi-message turn.</para>
     /// </summary>
     public static RoundDispatch? PlanNextRound(MeshThread thread)
     {
         if (thread.IsExecuting) return null;
-        var unprocessed = FindUnprocessedUserMessages(thread);
-        if (unprocessed.IsEmpty) return null;
+        if (thread.PendingUserMessages.IsEmpty) return null;
 
-        var nextId = unprocessed[0];
+        // Drain the entire pending queue into one round. Order follows
+        // UserMessageIds (submission order); orphan pending entries not yet in
+        // UserMessageIds are appended at the end (defensive, shouldn't happen).
+        var idsBuilder = ImmutableList.CreateBuilder<string>();
+        foreach (var id in thread.UserMessageIds)
+            if (thread.PendingUserMessages.ContainsKey(id) && !idsBuilder.Contains(id))
+                idsBuilder.Add(id);
+        foreach (var id in thread.PendingUserMessages.Keys)
+            if (!idsBuilder.Contains(id))
+                idsBuilder.Add(id);
+        var ids = idsBuilder.ToImmutable();
+        if (ids.IsEmpty) return null;
+
         var responseMessageId = Guid.NewGuid().ToString("N")[..8];
         return new RoundDispatch(
-            ImmutableList.Create(nextId),
+            ids,
             responseMessageId,
             thread.PendingAgentName,
             thread.PendingModelName,
@@ -489,7 +502,7 @@ public static class ThreadSubmission
                     Messages = keep,
                     UserMessageIds = trimmedUserIds,
                     IngestedMessageIds = ingested,
-                    IsExecuting = false,
+                    Status = ThreadExecutionStatus.Idle,
                     ActiveMessageId = null,
                     ExecutionStartedAt = null,
                     PendingUserMessage = newUserText ?? t.PendingUserMessage,
@@ -745,18 +758,22 @@ internal static class ThreadSubmissionServer
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
 
         // Step 0: materialize user satellite cells from PendingUserMessages.
-        // Only ids present in dispatch.UserMessageIds AND PendingUserMessages need creation
-        // here — legacy paths (PendingUserMessage string) create cells elsewhere.
+        // dispatch.UserMessageIds is the full set the inbox drains this round
+        // (PlanNextRound returns every entry). Each cell will be created below
+        // and committed to Messages atomically with the response cell.
         var pendingForRound = dispatch.UserMessageIds
             .Where(id => thread.PendingUserMessages.ContainsKey(id))
             .Select(id => (Id: id, Msg: thread.PendingUserMessages[id]))
             .ToImmutableList();
 
-        // Single-message round (PlanNextRound returns one id at a time). pendingForRound
-        // is empty only on the legacy auto-execute-on-creation path that uses the
-        // singular `thread.PendingUserMessage` string instead of the dictionary.
+        // The "current" user input fed to the agent is the LAST drained message —
+        // earlier drained messages already exist as user cells in Messages and
+        // load via LoadFullConversationHistory (with the last one excluded via
+        // SubmitMessageRequest.UserMessageId). Multi-message round: agent sees
+        // history's user cells consecutively, then this last one as the
+        // current turn.
         var roundUserText = pendingForRound.Count > 0
-            ? pendingForRound[0].Msg.Text
+            ? pendingForRound[^1].Msg.Text
             : (thread.PendingUserMessage ?? "");
 
         void AfterUserCellsReady()
@@ -858,7 +875,7 @@ internal static class ThreadSubmissionServer
                                 {
                                     Messages = msgs,
                                     IngestedMessageIds = ingested,
-                                    IsExecuting = true,
+                                    Status = ThreadExecutionStatus.Executing,
                                     ActiveMessageId = responseMsgId,
                                     ExecutionStartedAt = DateTime.UtcNow,
                                     TokensUsed = 0,

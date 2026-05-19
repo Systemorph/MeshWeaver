@@ -459,8 +459,10 @@ public class InboxToolIntegrationTest : AITestBase
     // ─── Fake chat client + factory ───
 
     /// <summary>
-    /// Slow fake that delays ~1.5 s in the streaming path so tests can race in
-    /// follow-up submissions and ESC during the in-flight turn.
+    /// Slow fake that delays ~5 s in the streaming path so tests can race in
+    /// follow-up submissions and ESC during the in-flight turn. 1.5 s wasn't
+    /// enough headroom on slow CI runners — the in-flight round could finish
+    /// before the test had time to submit the queued u2 + assert.
     /// </summary>
     private sealed class InboxFakeChatClient : IChatClient
     {
@@ -475,7 +477,7 @@ public class InboxToolIntegrationTest : AITestBase
             IEnumerable<ChatMessage> messages, ChatOptions? options = null,
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
-            await Task.Delay(1500, cancellationToken);
+            await Task.Delay(5000, cancellationToken);
             yield return new ChatResponseUpdate(ChatRole.Assistant, "slow ack");
         }
 

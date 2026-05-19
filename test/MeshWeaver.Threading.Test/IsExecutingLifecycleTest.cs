@@ -10,8 +10,8 @@ using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.AI;
 using MeshWeaver.Data;
-using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Graph;
+using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Agents.AI;
@@ -23,25 +23,13 @@ using MeshThread = MeshWeaver.AI.Thread;
 namespace MeshWeaver.Threading.Test;
 
 /// <summary>
-/// 🚨 The repro for "chat stuck on Generating response..." — a single end-to-end
-/// chat round that reactively asserts the full IsExecuting lifecycle:
-/// <list type="number">
-///   <item>flips to <c>true</c> shortly after SubmitMessageRequest (proves
-///         execution actually started rather than the request being silently
-///         dropped between hubs);</item>
-///   <item>flips back to <c>false</c> when the agent finishes (proves the
-///         streaming pipeline completed — not the watchdog forcing it
-///         after 5min);</item>
-///   <item>the final response cell text is the agent's real reply (not a
-///         placeholder like "Allocating agent..." or "Generating response...").</item>
-/// </list>
+/// 🚨 Repro for "chat stuck on Generating response..." — a single end-to-end
+/// chat round that reactively asserts the full IsExecuting lifecycle.
 ///
-/// <para>The Echo agent ends in &lt;100ms; if anything in
-/// <see cref="ThreadExecution.ExecuteMessageAsync"/> hangs (await foreach
-/// deadlock, missing Subscribe on a cold observable, synced query waiting on
-/// a blocked hub), the IsExecuting=false wait times out and the test fails
-/// loud — instead of returning the placeholder text and silently green like
-/// the old polling helper used to.</para>
+/// Drives the GUI handler (<see cref="ThreadSubmission.Submit"/>) and observes
+/// via <c>client.GetWorkspace().GetMeshNodeStream(path)</c> — the same reactive
+/// handle the Blazor view holds; if the streaming pipeline hangs, the
+/// IsExecuting=false wait times out and the test fails loud.
 /// </summary>
 public class IsExecutingLifecycleTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -57,82 +45,62 @@ public class IsExecutingLifecycleTest(ITestOutputHelper output) : MonolithMeshTe
             .AddAI()
             .AddSampleUsers();
 
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+    {
+        configuration.TypeRegistry.AddAITypes();
+        return base.ConfigureClient(configuration).AddData();
+    }
+
     [Fact]
     public async Task SingleMessage_IsExecuting_FlipsTrueThenFalse_WithRealResponse()
     {
         var ct = new CancellationTokenSource(60.Seconds()).Token;
         var client = GetClient();
+        var workspace = client.GetWorkspace();
 
-        // Build the thread + cells exactly like the GUI flow
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, "hello", "TestUser");
         var createDelivery = await client.Observe(new CreateNodeRequest(threadNode),
             o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
         createDelivery.Message.Success.Should().BeTrue(createDelivery.Message.Error);
         var threadPath = createDelivery.Message.Node!.Path!;
 
-        var userMsgId = Guid.NewGuid().ToString("N")[..8];
-        var responseMsgId = Guid.NewGuid().ToString("N")[..8];
-
-        await client.Observe(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
-            Content = new ThreadMessage
-            {
-                Role = "user", Text = "hello", Timestamp = DateTime.UtcNow,
-                Type = ThreadMessageType.ExecutedInput
-            }
-        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-
-        await client.Observe(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
-            Content = new ThreadMessage
-            {
-                Role = "assistant", Text = "", Timestamp = DateTime.UtcNow,
-                Type = ThreadMessageType.AgentResponse
-            }
-        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-
-        // Subscribe to the thread stream BEFORE posting the request so we
-        // never miss the IsExecuting=true→false transition. Hot replay-1
-        // semantics from GetMeshNodeStream guarantee the latest snapshot
-        // arrives even if we're "late" — but starting the subscription
-        // before the post is the safer pattern.
-        var threadStream = Mesh.GetWorkspace().GetMeshNodeStream(threadPath)
+        // Warm up the remote stream subscription BEFORE submit so the
+        // IsExecuting=true→false transition is captured. Same pattern
+        // ChatFlow.SubmitAndWaitAsync uses.
+        var baselineThread = await workspace.GetMeshNodeStream(threadPath)
             .Select(n => n.Content as MeshThread)
             .Where(t => t != null)
-            .Replay(2);
-        using var threadSub = threadStream.Connect();
-
-        await client.Observe(new SubmitMessageRequest
-        {
-            ThreadPath = threadPath,
-            UserMessageText = "hello",
-            ContextPath = ContextPath,
-            UserMessageId = userMsgId,
-            ResponseMessageId = responseMsgId,
-        }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-
-        // 1) IsExecuting must flip to true within ~10s. If this times out,
-        //    SubmitMessageRequest reached the thread hub but the
-        //    HandleSubmitMessage Update(Thread { IsExecuting = true })
-        //    never propagated.
-        var executingState = await threadStream
-            .Where(t => t!.IsExecuting)
             .Take(1)
             .Timeout(10.Seconds())
             .ToTask(ct);
+        baselineThread!.IsExecuting.Should().BeFalse("thread should not be executing yet");
+
+        // Subscribe to the executing transition BEFORE submit.
+        var executingTask = workspace.GetMeshNodeStream(threadPath)
+            .Select(n => n.Content as MeshThread)
+            .Where(t => t is { IsExecuting: true })
+            .Take(1)
+            .Timeout(10.Seconds())
+            .ToTask(ct);
+
+        ThreadSubmission.Submit(new SubmitContext
+        {
+            Hub = client,
+            ThreadPath = threadPath,
+            UserText = "hello",
+            ContextPath = ContextPath,
+        });
+
+        // 1) IsExecuting must flip to true within ~10s.
+        var executingState = await executingTask;
         executingState!.IsExecuting.Should().BeTrue();
-        executingState.ActiveMessageId.Should().Be(responseMsgId,
+        executingState.ActiveMessageId.Should().NotBeNullOrEmpty(
             "ActiveMessageId must point at the response cell during streaming");
 
-        // 2) IsExecuting must flip BACK to false within 30s. If this times
-        //    out, the Task.Run in ExecuteMessageAsync hung — most likely on
-        //    `await foreach client.GetStreamingResponseAsync(...)` blocking
-        //    forever (canonical IMeshService.QueryAsync deadlock pattern,
-        //    or a missing Subscribe on a cold observable upstream).
-        var doneState = await threadStream
-            .Where(t => !t!.IsExecuting && t.Messages.Count >= 2)
+        // 2) IsExecuting must flip BACK to false within 30s.
+        var doneState = await workspace.GetMeshNodeStream(threadPath)
+            .Select(n => n.Content as MeshThread)
+            .Where(t => t is { IsExecuting: false } && t.Messages.Count >= 2)
             .Take(1)
             .Timeout(30.Seconds())
             .ToTask(ct);
@@ -140,36 +108,18 @@ public class IsExecutingLifecycleTest(ITestOutputHelper output) : MonolithMeshTe
             "execution must terminate cleanly, not stay running until the watchdog");
         doneState.ExecutionStartedAt.Should().BeNull("started-at is cleared on completion");
 
-        // 3) Response cell must hold the agent's REAL reply on its FINAL emission.
-        //    Wait for ThreadMessage.CompletedAt to be set — ExecuteMessageAsync
-        //    only stamps that on the terminal PushToResponseMessage, so it's the
-        //    deterministic "streaming finished, text is final" signal. Beats
-        //    pattern-matching against "Allocating agent..." / "Generating
-        //    response..." placeholders, which is racy when the Echo agent
-        //    yields its single chunk faster than the placeholders flush.
-        //    The Echo reply contains the literal "I received N messages" string.
+        // 3) Final ThreadMessage.CompletedAt must be set AND text non-empty.
         var lastMsgId = doneState.Messages[^1];
-        var responseStream = Mesh.GetWorkspace().GetMeshNodeStream($"{threadPath}/{lastMsgId}");
-        var finalMessage = await responseStream
-            .Select(n => n.Content as ThreadMessage)
-            .Where(m => m is { CompletedAt: not null } && !string.IsNullOrEmpty(m.Text))
-            .Take(1)
-            .Timeout(10.Seconds())
-            .ToTask(ct);
+        var finalMessage = await ChatFlow.ReadMessageAsync(client, threadPath, lastMsgId,
+            m => m.CompletedAt != null && !string.IsNullOrEmpty(m.Text),
+            timeout: 15.Seconds(), ct: ct);
 
-        finalMessage!.Text.Should().Contain("I received",
+        finalMessage.Text.Should().Contain("I received",
             "the Echo agent's streaming reply must reach the response cell — "
             + "if this fails with the placeholder, the streaming Task.Run hung "
             + "but the parent flipped IsExecuting=false anyway, masking a real bug.");
 
-        // 4) Final ThreadMessage.Status must be Completed. ExecuteMessageAsync
-        //    pushes one last buffered Streaming snapshot when its
-        //    Subject<StreamingSnapshot>.OnCompleted() flushes the Sample(100ms)
-        //    operator, immediately followed by a Completed push. Without the
-        //    terminal-status guard in PushToResponseMessage, the late Streaming
-        //    push could land AFTER the Completed one and flip the cell back to
-        //    "still running" until the next render. This is the regression test
-        //    for that race.
+        // 4) Final ThreadMessage.Status must be Completed (terminal-status guard).
         finalMessage.Status.Should().Be(ThreadMessageStatus.Completed,
             "terminal-status guard must prevent a late Sample-flushed Streaming push "
             + "from regressing the cell from Completed back to Streaming");

@@ -1,8 +1,8 @@
 using System;
 using System.Collections.Generic;
-using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -10,10 +10,9 @@ using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.AI;
 using MeshWeaver.Data;
-using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Graph;
+using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -21,14 +20,12 @@ using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using MeshThread = MeshWeaver.AI.Thread;
 
-using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Threading.Test;
 
 /// <summary>
-/// Tests that ALL previous messages are passed to the agent on each execution.
-/// The echo agent reports how many ChatMessage objects it received.
-/// Message 1: agent sees 1 msg. Message 2: agent sees 3 msgs. Message 3: agent sees 5 msgs.
-/// History is loaded from ThreadMessage nodes via GetDataRequest, not from a cached field.
+/// Verifies ALL previous messages are passed to the agent on each execution.
+/// Submission goes through the GUI handler (<see cref="ThreadSubmission.Submit"/>);
+/// every read goes through <c>client.GetWorkspace().GetMeshNodeStream(path)</c>.
 /// </summary>
 public class ChatHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -44,6 +41,12 @@ public class ChatHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             .AddAI()
             .AddSampleUsers();
 
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+    {
+        configuration.TypeRegistry.AddAITypes();
+        return base.ConfigureClient(configuration).AddData();
+    }
+
     private async Task<string> CreateThreadAsync(IMessageHub client, string text, CancellationToken ct)
     {
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, text, "TestUser");
@@ -52,64 +55,19 @@ public class ChatHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         return response.Message.Node!.Path!;
     }
 
-    private async Task<string> SubmitAndWait(IMessageHub client, string threadPath, string text, int expectedMsgCount, CancellationToken ct)
+    private async Task<string> SubmitAndWait(IMessageHub client, string threadPath, string text, CancellationToken ct)
     {
-        // GUI flow: create cells first, then submit
-        var userMsgId = Guid.NewGuid().ToString("N")[..8];
-        var responseMsgId = Guid.NewGuid().ToString("N")[..8];
+        var responseMsgId = await ChatFlow.SubmitAndWaitAsync(client, threadPath, text,
+            contextPath: ContextPath, timeout: 60.Seconds(), ct: ct);
 
-        await client.Observe(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
-            Content = new ThreadMessage { Role = "user", Text = text, Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
-        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
+        // CompletedAt is the deterministic "streaming finished" signal — only set
+        // by the terminal PushToResponseMessage call in ExecuteMessageAsync. Beats
+        // text-pattern matching against in-flight placeholders.
+        var finalMessage = await ChatFlow.ReadMessageAsync(client, threadPath, responseMsgId,
+            m => m.CompletedAt != null && !string.IsNullOrEmpty(m.Text),
+            timeout: 60.Seconds(), ct: ct);
 
-        await client.Observe(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
-            Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-
-        await client.Observe(new SubmitMessageRequest
-        {
-            ThreadPath = threadPath, UserMessageText = text, ContextPath = ContextPath,
-            UserMessageId = userMsgId, ResponseMessageId = responseMsgId
-        }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-
-        // Reactive wait #1 — thread settles: IsExecuting=false AND BOTH the
-        // user cell and the response cell are in Messages. Using Contains
-        // (instead of Count >=) makes the wait independent of any unrelated
-        // message-count drift and ensures we're observing THIS turn's cells,
-        // not the previous turn's tail emission.
-        var threadStream = Mesh.GetWorkspace().GetMeshNodeStream(threadPath);
-        await threadStream
-            .Select(n => n.Content as MeshThread)
-            .Where(t => t is { IsExecuting: false }
-                && t.Messages.Contains(userMsgId)
-                && t.Messages.Contains(responseMsgId))
-            .Take(1)
-            .Timeout(60.Seconds())
-            .ToTask(ct);
-
-        // Reactive wait #2 — response cell has its FINAL emission, signalled
-        // by ThreadMessage.CompletedAt being set. ExecuteMessageAsync (in
-        // ThreadExecution.cs) only writes CompletedAt on the terminal
-        // PushToResponseMessage call, so this is the deterministic
-        // "streaming finished, text is final" signal. Beats text-pattern
-        // matching against in-flight UI placeholders ("Generating
-        // response...", etc.) — those are racy because the echo agent can
-        // emit its single chunk before the placeholder has been overwritten,
-        // making the test see a stale prior-turn placeholder as the "final"
-        // response.
-        var responseStream = Mesh.GetWorkspace().GetMeshNodeStream($"{threadPath}/{responseMsgId}");
-        var finalMessage = await responseStream
-            .Select(n => n.Content as ThreadMessage)
-            .Where(m => m is { CompletedAt: not null } && !string.IsNullOrEmpty(m.Text))
-            .Take(1)
-            .Timeout(60.Seconds())
-            .ToTask(ct);
-
-        return finalMessage!.Text!;
+        return finalMessage.Text!;
     }
 
     [Fact]
@@ -119,19 +77,15 @@ public class ChatHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var client = GetClient();
         var threadPath = await CreateThreadAsync(client, "History test", ct);
 
-        // Message 1: agent should see 1 message (just the user's)
-        var response1 = await SubmitAndWait(client, threadPath, "First message", 2, ct);
+        var response1 = await SubmitAndWait(client, threadPath, "First message", ct);
         Output.WriteLine($"Response 1: {response1}");
-        // ChatClientAgent adds system prompt as first message (+1 to all counts)
         response1.Should().Contain("2 messages", "first message: system + user");
 
-        // Message 2: system + user1 + assistant1 + user2 = 4
-        var response2 = await SubmitAndWait(client, threadPath, "Second message", 4, ct);
+        var response2 = await SubmitAndWait(client, threadPath, "Second message", ct);
         Output.WriteLine($"Response 2: {response2}");
         response2.Should().Contain("4 messages", "second message: system + 2 history + 1 new");
 
-        // Message 3: system + user1 + assistant1 + user2 + assistant2 + user3 = 6
-        var response3 = await SubmitAndWait(client, threadPath, "Third message", 6, ct);
+        var response3 = await SubmitAndWait(client, threadPath, "Third message", ct);
         Output.WriteLine($"Response 3: {response3}");
         response3.Should().Contain("6 messages", "third message: system + 4 history + 1 new");
     }
@@ -143,22 +97,17 @@ public class ChatHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var client = GetClient();
         var threadPath = await CreateThreadAsync(client, "Duplicate check", ct);
 
-        // Message 1: "Hello"
-        var response1 = await SubmitAndWait(client, threadPath, "Hello", 2, ct);
+        var response1 = await SubmitAndWait(client, threadPath, "Hello", ct);
         Output.WriteLine($"Response 1: {response1}");
-        // ChatClientAgent adds system prompt as first message
         response1.Should().Contain("2 messages", "first call: system prompt + user message");
 
-        // Message 2: "World"
-        var response2 = await SubmitAndWait(client, threadPath, "World", 4, ct);
+        var response2 = await SubmitAndWait(client, threadPath, "World", ct);
         Output.WriteLine($"Response 2: {response2}");
-
-        // Agent should see 4 messages: system + Hello + assistant-response + World
         response2.Should().Contain("4 messages",
             "second call: system + 2 history (user+assistant) + 1 new user = 4 total");
     }
 
-    #region Echo LLM â€” responds with message count to verify history is passed
+    #region Echo LLM — responds with message count to verify history is passed
 
     private class EchoChatClient : IChatClient
     {

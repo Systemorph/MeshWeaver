@@ -157,9 +157,12 @@ public class ThreadSubmissionIntegrationTest : AITestBase
 
         var final = await ReadThreadAsync(threadPath, ct);
         final.IngestedMessageIds.Should().HaveCount(3, "all three user messages should be ingested");
-        // All three user message ids appear as the first three in Messages.
-        var userIds = final.Messages.Take(3).ToList();
-        final.IngestedMessageIds.Should().BeEquivalentTo(userIds);
+        // Set-equal to UserMessageIds — dispatch is one user message per round
+        // (Claude-Code-style turn structure), so the response cells interleave
+        // with user cells in Messages, but UserMessageIds is the authoritative
+        // list of user-input ids and must match IngestedMessageIds as a set.
+        final.IngestedMessageIds.Should().BeEquivalentTo(final.UserMessageIds);
+        final.UserMessageIds.Should().HaveCount(3);
     }
 
     // ─── Resubmit: truncates after the replayed message, new round dispatches ───
@@ -328,29 +331,22 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         final.IngestedMessageIds.Should().HaveCount(4);
         final.IngestedMessageIds.Should().BeEquivalentTo(final.UserMessageIds);
 
-        // Per-round dispatch (Claude-Code-style single-message-per-round):
-        // each of u1..u4 produces its own response cell, queued and dispatched
-        // serially after round N completes. Actual layout reflects how
-        // AppendUserInput appends user ids to Messages IMMEDIATELY on submit
-        // (so the GUI shows queued cells), while DispatchRound appends one
-        // response id per round. Round 1 commits r1 BEFORE u2/u3/u4 are
-        // submitted; rounds 2/3/4 dispatch sequentially after round 1 ends —
-        // the user ids land between r1 and r2:
-        //   [u1, r1, u2, u3, u4, r2, r3, r4]
-        final.Messages.Should().HaveCount(8, "expected [u1, r1, u2, u3, u4, r2, r3, r4]");
+        // Inbox-pattern dispatch: every entry in PendingUserMessages is drained
+        // into a single round (one response cell per inbox drain). u1 lands while
+        // the thread is idle → round 1 drains {u1}, creates r1. u2/u3/u4 land
+        // during round 1 → they pile up in PendingUserMessages. When round 1
+        // ends, the watcher fires once and round 2 drains {u2, u3, u4} into a
+        // single response cell r2. Final shape: [u1, r1, u2, u3, u4, r2].
+        // Not every input cell gets its own response cell — the design
+        // explicitly batches mid-round submits into the next round.
+        final.Messages.Should().HaveCount(6, "4 user cells + 2 response cells");
         final.Messages[0].Should().Be(u1, "u1 first");
-        // u1 + 3 response cells occupy positions 0,1,5,6,7; u2/u3/u4 occupy 2,3,4.
         final.UserMessageIds.Should().HaveCount(4);
         final.UserMessageIds.Should().StartWith(u1);
-        // Positions 2,3,4 are users (in submission order u2, u3, u4).
-        final.UserMessageIds.Should().Contain(final.Messages[2]);
-        final.UserMessageIds.Should().Contain(final.Messages[3]);
-        final.UserMessageIds.Should().Contain(final.Messages[4]);
-        // Positions 1,5,6,7 are responses, NOT in UserMessageIds.
-        final.UserMessageIds.Should().NotContain(final.Messages[1]);
-        final.UserMessageIds.Should().NotContain(final.Messages[5]);
-        final.UserMessageIds.Should().NotContain(final.Messages[6]);
-        final.UserMessageIds.Should().NotContain(final.Messages[7]);
+        final.Messages.Should().Contain(final.UserMessageIds);
+        var responseIds = final.Messages.Except(final.UserMessageIds).ToList();
+        responseIds.Should().HaveCount(2,
+            "one response cell per inbox drain — round 1 drains {u1}, round 2 drains {u2,u3,u4}");
     }
 
     // ─── Queue-don't-cancel: new input during execution waits until round completes ───

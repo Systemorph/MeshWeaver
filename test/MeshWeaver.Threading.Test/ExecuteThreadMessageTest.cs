@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -25,6 +25,19 @@ using MeshThread = MeshWeaver.AI.Thread;
 
 namespace MeshWeaver.Threading.Test;
 
+/// <summary>
+/// Every test here exercises the GUI submission path:
+/// <list type="number">
+///   <item><see cref="ThreadSubmission.CreateThreadAndSubmit"/> creates the thread node
+///     with the first user message pre-seeded in <c>PendingUserMessages</c> — the
+///     server-side watcher generates the response cell id and dispatches the round.</item>
+///   <item><see cref="ThreadSubmission.Submit"/> posts <see cref="SubmitMessageRequest"/>
+///     for subsequent messages on an existing thread.</item>
+///   <item>State is observed via <c>client.GetWorkspace().GetMeshNodeStream(path)</c> —
+///     the remote-stream-cache-backed reactive handle, never <c>GetDataRequest</c>
+///     polling or ad-hoc remote streams.</item>
+/// </list>
+/// </summary>
 public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private const string FakeResponseText = "This is a test response from the fake agent with enough words to verify streaming works correctly.";
@@ -49,47 +62,18 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
             .AddLayoutClient();
     }
 
-    private async Task<string> CreateThreadAsync(IMessageHub client, string text, CancellationToken ct)
-    {
-        var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, text, "Roland");
-        var delivery = client.Post(new CreateNodeRequest(threadNode),
-            o => o.WithTarget(Mesh.Address))!;
-        var response = await client.Observe(delivery).FirstAsync().ToTask(ct);
-        var createResponse = ((IMessageDelivery<CreateNodeResponse>)response).Message;
-        createResponse.Success.Should().BeTrue(createResponse.Error);
-        return createResponse.Node!.Path!;
-    }
-
-    private IObservable<IReadOnlyList<string>> ObserveMessages(IMessageHub client, string threadPath)
-    {
-        var workspace = client.GetWorkspace();
-        return workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Select(nodes =>
-            {
-                var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
-                var content = node?.Content as MeshThread;
-                var ids = content?.Messages ?? [];
-                Output.WriteLine($"Messages stream: {ids.Count} IDs");
-                return (IReadOnlyList<string>)ids;
-            });
-    }
-
     /// <summary>
-    /// Sends GetDataRequest with EntityReference to a hub to get the MeshNode,
-    /// then extracts and deserializes the Content as T.
+    /// Posts <see cref="CreateNodeRequest"/> for an empty thread node (no
+    /// pre-seeded user message) so tests that exercise <see cref="ThreadSubmission.Submit"/>
+    /// separately have a thread to target.
     /// </summary>
-    private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
+    private async Task<string> CreateEmptyThreadAsync(IMessageHub client, string title, CancellationToken ct)
     {
-        // MeshNode key is Id (last segment), not full path
-        var nodeId = path.Contains('/') ? path[(path.LastIndexOf('/') + 1)..] : path;
-        var response = await client.Observe(new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId)), o => o.WithTarget(new Address(path))).FirstAsync().ToTask(ct);
-        var node = response.Message.Data as MeshNode;
-        if (node == null && response.Message.Data is JsonElement je)
-            node = je.Deserialize<MeshNode>(Mesh.JsonSerializerOptions);
-        if (node?.Content is T typed) return typed;
-        if (node?.Content is JsonElement contentJe)
-            return contentJe.Deserialize<T>(Mesh.JsonSerializerOptions);
-        return null;
+        var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, title, "Roland");
+        var response = await client.Observe(new CreateNodeRequest(threadNode),
+            o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
+        response.Message.Success.Should().BeTrue(response.Message.Error);
+        return response.Message.Node!.Path!;
     }
 
     [Fact]
@@ -98,51 +82,24 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
         var ct = new CancellationTokenSource(15.Seconds()).Token;
         var client = GetClient();
 
-        // 1. Create thread and submit
-        var threadPath = await CreateThreadAsync(client, $"Hello {Guid.NewGuid():N}", ct);
-        var twoMessages = ObserveMessages(client, threadPath)
-            .Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
+        var threadPath = await CreateEmptyThreadAsync(client, "CreatesUserAndResponseNodes", ct);
+        var responseMsgId = await ChatFlow.SubmitAndWaitAsync(client, threadPath,
+            "Hello agent", contextPath: ContextPath, ct: ct);
 
-        var userMsgId = Guid.NewGuid().ToString("N")[..8];
-        var responseMsgId = Guid.NewGuid().ToString("N")[..8];
+        var thread = await ChatFlow.ReadThreadAsync(client, threadPath,
+            t => t.Messages.Count >= 2, ct: ct);
+        thread.Messages.Should().HaveCount(2);
+        Output.WriteLine($"Messages: [{string.Join(", ", thread.Messages)}]");
 
-        await client.Observe(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
-            Content = new ThreadMessage { Role = "user", Text = "Hello agent", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
-        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-
-        await client.Observe(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
-            Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-
-        var submitResponse = await client.Observe(new SubmitMessageRequest { ThreadPath = threadPath, UserMessageText = "Hello agent", UserMessageId = userMsgId, ResponseMessageId = responseMsgId }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-        submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
-
-        // 2. Wait for message IDs to appear
-        var msgIds = await twoMessages;
-        msgIds.Should().HaveCount(2);
-        Output.WriteLine($"Messages: [{string.Join(", ", msgIds)}]");
-
-        // 3. Verify thread content via GetDataRequest
-        var threadContent = await GetHubContentAsync<MeshThread>(client, threadPath, ct);
-        threadContent.Should().NotBeNull("thread hub should return Thread content");
-        threadContent!.Messages.Should().HaveCount(2, "thread should have 2 message IDs");
-
-        // 4. Verify user message content via GetDataRequest
-        var userContent = await GetHubContentAsync<ThreadMessage>(client, $"{threadPath}/{msgIds[0]}", ct);
-        userContent.Should().NotBeNull("user message hub should return ThreadMessage content");
-        userContent!.Role.Should().Be("user");
+        var userId = thread.Messages[0];
+        var userContent = await ChatFlow.ReadMessageAsync(client, threadPath, userId,
+            m => m.Role == "user", ct: ct);
         userContent.Text.Should().Be("Hello agent");
         userContent.Type.Should().Be(ThreadMessageType.ExecutedInput);
 
-        // 5. Verify response message content via GetDataRequest
-        var responseContent = await GetHubContentAsync<ThreadMessage>(client, $"{threadPath}/{msgIds[1]}", ct);
-        responseContent.Should().NotBeNull("response message hub should return ThreadMessage content");
-        responseContent!.Role.Should().Be("assistant");
-        responseContent.Type.Should().Be(ThreadMessageType.AgentResponse);
+        var response = await ChatFlow.ReadMessageAsync(client, threadPath, responseMsgId,
+            m => m.Role == "assistant", ct: ct);
+        response.Type.Should().Be(ThreadMessageType.AgentResponse);
     }
 
     [Fact]
@@ -151,136 +108,57 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
         var ct = new CancellationTokenSource(30.Seconds()).Token;
         var client = GetClient();
 
-        // 1. Create thread
-        var threadPath = await CreateThreadAsync(client, "Multi-message", ct);
-        var messagesStream = ObserveMessages(client, threadPath);
+        var threadPath = await CreateEmptyThreadAsync(client, "Multi-message", ct);
 
-        // 2. First message
-        var userMsgId1 = Guid.NewGuid().ToString("N")[..8];
-        var responseMsgId1 = Guid.NewGuid().ToString("N")[..8];
+        await ChatFlow.SubmitAndWaitAsync(client, threadPath, "First",
+            contextPath: ContextPath, ct: ct);
+        var thread1 = await ChatFlow.ReadThreadAsync(client, threadPath,
+            t => t is { IsExecuting: false } && t.Messages.Count >= 2, ct: ct);
+        thread1.Messages.Should().HaveCount(2);
+        Output.WriteLine($"After first: [{string.Join(", ", thread1.Messages)}]");
 
-        await client.Observe(new CreateNodeRequest(new MeshNode(userMsgId1, threadPath)
+        await ChatFlow.SubmitAndWaitAsync(client, threadPath, "Second",
+            contextPath: ContextPath, ct: ct);
+        var thread2 = await ChatFlow.ReadThreadAsync(client, threadPath,
+            t => t is { IsExecuting: false } && t.Messages.Count >= 4, ct: ct);
+        thread2.Messages.Should().HaveCount(4);
+        Output.WriteLine($"All: [{string.Join(", ", thread2.Messages)}]");
+
+        for (var i = 0; i < thread2.Messages.Count; i++)
         {
-            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
-            Content = new ThreadMessage { Role = "user", Text = "First", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
-        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-
-        await client.Observe(new CreateNodeRequest(new MeshNode(responseMsgId1, threadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
-            Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-
-        var twoMessages = messagesStream.Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
-        var r1 = await client.Observe(new SubmitMessageRequest { ThreadPath = threadPath, UserMessageText = "First", UserMessageId = userMsgId1, ResponseMessageId = responseMsgId1 }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-        r1.Message.Success.Should().BeTrue(r1.Message.Error);
-        var firstIds = await twoMessages;
-        Output.WriteLine($"First batch: [{string.Join(", ", firstIds)}]");
-
-        // 3. Second message
-        var userMsgId2 = Guid.NewGuid().ToString("N")[..8];
-        var responseMsgId2 = Guid.NewGuid().ToString("N")[..8];
-
-        await client.Observe(new CreateNodeRequest(new MeshNode(userMsgId2, threadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
-            Content = new ThreadMessage { Role = "user", Text = "Second", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
-        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-
-        await client.Observe(new CreateNodeRequest(new MeshNode(responseMsgId2, threadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
-            Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-
-        var fourMessages = messagesStream.Where(ids => ids.Count >= 4).FirstAsync().ToTask(ct);
-        var r2 = await client.Observe(new SubmitMessageRequest { ThreadPath = threadPath, UserMessageText = "Second", UserMessageId = userMsgId2, ResponseMessageId = responseMsgId2 }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-        r2.Message.Success.Should().BeTrue(r2.Message.Error);
-        var allIds = await fourMessages;
-        Output.WriteLine($"All IDs: [{string.Join(", ", allIds)}]");
-
-        // 4. Verify thread content via GetDataRequest — has 4 message IDs
-        var threadContent = await GetHubContentAsync<MeshThread>(client, threadPath, ct);
-        threadContent.Should().NotBeNull();
-        threadContent!.Messages.Should().HaveCount(4, "thread should have 4 message IDs after 2 submits");
-
-        // 5. Verify each message node content via GetDataRequest
-        for (var i = 0; i < allIds.Count; i++)
-        {
-            var msgContent = await GetHubContentAsync<ThreadMessage>(client, $"{threadPath}/{allIds[i]}", ct);
-            msgContent.Should().NotBeNull("message {0} should have ThreadMessage content", i);
-            Output.WriteLine($"  [{i}] {msgContent!.Role}: '{msgContent.Text}'");
+            var msg = await ChatFlow.ReadMessageAsync(client, threadPath, thread2.Messages[i],
+                _ => true, ct: ct);
+            Output.WriteLine($"  [{i}] {msg.Role}: '{msg.Text}'");
         }
     }
 
     [Fact]
-    public async Task SubmitMessage_BothNodesGetCorrectContentViaGetDataRequest()
+    public async Task SubmitMessage_BothNodesGetCorrectContentViaStream()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
         var client = GetClient();
 
-        // 1. Create thread and submit
-        var threadPath = await CreateThreadAsync(client, "Content verification", ct);
-        var twoMessages = ObserveMessages(client, threadPath)
-            .Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
+        var threadPath = await CreateEmptyThreadAsync(client, "Content verification", ct);
+        var responseMsgId = await ChatFlow.SubmitAndWaitAsync(client, threadPath,
+            "Tell me something", contextPath: ContextPath, ct: ct);
 
-        var userMsgId = Guid.NewGuid().ToString("N")[..8];
-        var responseMsgId = Guid.NewGuid().ToString("N")[..8];
+        var thread = await ChatFlow.ReadThreadAsync(client, threadPath,
+            t => t.Messages.Count >= 2, ct: ct);
+        Output.WriteLine($"Message IDs: [{string.Join(", ", thread.Messages)}]");
 
-        await client.Observe(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
-            Content = new ThreadMessage { Role = "user", Text = "Tell me something", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
-        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-
-        await client.Observe(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
-            Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-
-        var response = await client.Observe(new SubmitMessageRequest { ThreadPath = threadPath, UserMessageText = "Tell me something", UserMessageId = userMsgId, ResponseMessageId = responseMsgId }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-        response.Message.Success.Should().BeTrue(response.Message.Error);
-
-        var msgIds = await twoMessages;
-        Output.WriteLine($"Message IDs: [{string.Join(", ", msgIds)}]");
-
-        // 2. Verify USER message node via GetDataRequest — should be populated immediately
-        var userContent = await GetHubContentAsync<ThreadMessage>(client, $"{threadPath}/{msgIds[0]}", ct);
-        userContent.Should().NotBeNull("user message hub should return ThreadMessage content");
-        userContent!.Role.Should().Be("user");
+        var userContent = await ChatFlow.ReadMessageAsync(client, threadPath, thread.Messages[0],
+            m => m.Role == "user", ct: ct);
         userContent.Text.Should().Be("Tell me something");
         userContent.Type.Should().Be(ThreadMessageType.ExecutedInput);
-        Output.WriteLine($"User node: role={userContent.Role}, text='{userContent.Text}'");
+        Output.WriteLine($"User: role={userContent.Role}, text='{userContent.Text}'");
 
-        // 3. Verify RESPONSE message node via GetDataRequest — poll until streaming completes.
-        // Wait for text to stabilize (same length on two consecutive polls = streaming done).
-        ThreadMessage? responseContent = null;
-        var previousLength = 0;
-        var stableCount = 0;
-        for (var attempt = 0; attempt < 50; attempt++)
-        {
-            responseContent = await GetHubContentAsync<ThreadMessage>(client, $"{threadPath}/{msgIds[1]}", ct);
-            var currentLength = responseContent?.Text?.Length ?? 0;
-            if (currentLength > 0 && currentLength == previousLength)
-            {
-                if (++stableCount >= 2)
-                    break; // Text hasn't changed for 2 polls — streaming is done
-            }
-            else
-            {
-                stableCount = 0;
-            }
-            previousLength = currentLength;
-            await Task.Delay(200, ct);
-        }
-
-        responseContent.Should().NotBeNull("response message hub should return ThreadMessage content");
-        responseContent!.Role.Should().Be("assistant");
-        responseContent.Type.Should().Be(ThreadMessageType.AgentResponse);
-        responseContent.Text.Should().NotBeNullOrEmpty("agent should have streamed a non-empty response");
-        responseContent.Text.Length.Should().BeGreaterThan(10, "response should have meaningful content");
-        Output.WriteLine($"Response node: role={responseContent.Role}, text='{responseContent.Text}' ({responseContent.Text.Length} chars)");
+        var response = await ChatFlow.ReadMessageAsync(client, threadPath, responseMsgId,
+            m => !string.IsNullOrEmpty(m.Text) && m.Status != ThreadMessageStatus.Streaming,
+            ct: ct);
+        response.Role.Should().Be("assistant");
+        response.Type.Should().Be(ThreadMessageType.AgentResponse);
+        response.Text.Length.Should().BeGreaterThan(10);
+        Output.WriteLine($"Response: '{response.Text}' ({response.Text.Length} chars)");
     }
 
     [Fact]
@@ -289,31 +167,19 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
         var ct = new CancellationTokenSource(5.Seconds()).Token;
         var client = GetClient();
 
-        var threadPath = await CreateThreadAsync(client, "Deadlock test", ct);
+        var threadPath = await CreateEmptyThreadAsync(client, "Deadlock test", ct);
+        var responseMsgId = await ChatFlow.SubmitAndWaitAsync(client, threadPath, "Quick test",
+            contextPath: ContextPath, timeout: 5.Seconds(), ct: ct);
 
-        var userMsgId = Guid.NewGuid().ToString("N")[..8];
-        var responseMsgId = Guid.NewGuid().ToString("N")[..8];
-
-        await client.Observe(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
-            Content = new ThreadMessage { Role = "user", Text = "Quick test", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
-        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-
-        await client.Observe(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
-            Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-
-        var response = await client.Observe(new SubmitMessageRequest { ThreadPath = threadPath, UserMessageText = "Quick test", UserMessageId = userMsgId, ResponseMessageId = responseMsgId }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-
-        response.Message.Success.Should().BeTrue("SubmitMessageResponse should arrive without deadlock");
+        responseMsgId.Should().NotBeNullOrEmpty(
+            "SubmitMessageRequest should complete within 5 seconds without deadlock");
     }
 
     /// <summary>
-    /// Posts DataChangeRequest with MeshNode directly to the Thread hub.
-    /// Verifies the workspace stream AND hub content both reflect the update.
+    /// DataChangeRequest is a CLIENT primitive — not the canonical thread mutation
+    /// path (the GUI uses <c>workspace.GetMeshNodeStream(path).Update(...)</c>) but
+    /// it must still apply correctly when used directly. The thread is observed
+    /// through the same remote-stream-cache reactive handle the GUI uses.
     /// </summary>
     [Fact]
     public async Task SubmitMessage_DataChangeRequest_UpdatesMeshNodeOnThreadHub()
@@ -321,34 +187,29 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
         var ct = new CancellationTokenSource(10.Seconds()).Token;
         var client = GetClient();
 
-        // 1. Create thread
-        var threadPath = await CreateThreadAsync(client, "DataChange test", ct);
-
-        // 2. Post DataChangeRequest with updated MeshNode
+        var threadPath = await CreateEmptyThreadAsync(client, "DataChange test", ct);
         var workspace = client.GetWorkspace();
-        var remoteNodes = await workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .FirstAsync().ToTask(ct);
-        var threadNode = remoteNodes?.FirstOrDefault(n => n.Path == threadPath);
-        threadNode.Should().NotBeNull();
 
-        var currentContent = threadNode!.Content as MeshThread ?? new MeshThread();
-        var updatedNode = threadNode with
+        var current = await workspace.GetMeshNodeStream(threadPath)
+            .Take(1).Timeout(5.Seconds()).ToTask(ct);
+        var updatedNode = current with
         {
-            Content = currentContent with { Messages = ["test1", "test2"] }
+            Content = (current.Content as MeshThread ?? new MeshThread())
+                with { Messages = ["test1", "test2"] }
         };
 
-        var updatedMessages = ObserveMessages(client, threadPath)
+        var twoMessages = ChatFlow.ObserveMessages(client, threadPath)
             .Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
+
         client.Post(new DataChangeRequest { Updates = [updatedNode] },
             o => o.WithTarget(new Address(threadPath)));
 
-        var msgIds = await updatedMessages;
+        var msgIds = await twoMessages;
         msgIds.Should().BeEquivalentTo(["test1", "test2"]);
 
-        // 3. Verify via GetDataRequest
-        var threadContent = await GetHubContentAsync<MeshThread>(client, threadPath, ct);
-        threadContent.Should().NotBeNull();
-        threadContent!.Messages.Should().BeEquivalentTo(["test1", "test2"]);
+        var thread = await ChatFlow.ReadThreadAsync(client, threadPath,
+            t => t.Messages.Count >= 2, ct: ct);
+        thread.Messages.Should().BeEquivalentTo(["test1", "test2"]);
     }
 
     /// <summary>
@@ -378,253 +239,142 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     /// <summary>
-    /// End-to-end test that verifies the full GUI data flow:
-    /// 1. Create thread via CreateNodeRequest
-    /// 2. Subscribe to Thread hub's layout area stream (like Blazor does)
-    /// 3. Submit message via SubmitMessageRequest
-    /// 4. Verify ThreadViewModel arrives via the layout area data section
-    /// 5. Verify Thread content via GetDataRequest (Thread.Messages populated)
-    /// 6. Verify each ThreadMessage content via GetDataRequest (correct role/text/type)
-    /// 7. Wait for streaming to complete, verify response text is non-empty
-    /// This catches issues that only manifest in the full GUI pipeline (e.g., PostgreSQL persistence).
+    /// End-to-end test that the full GUI data flow works: thread creation +
+    /// submission via <see cref="ThreadSubmission"/> + layout-area subscription +
+    /// data binding via <c>GetMeshNodeStream</c>.
     /// </summary>
     [Fact]
     public async Task EndToEnd_SubmitChat_FullGuiDataFlow()
     {
         var ct = new CancellationTokenSource(20.Seconds()).Token;
         var client = GetClient();
+        var workspace = client.GetWorkspace();
 
-        // 1. Create thread
-        var threadPath = await CreateThreadAsync(client, "End-to-end test", ct);
+        var threadPath = await CreateEmptyThreadAsync(client, "End-to-end test", ct);
         Output.WriteLine($"Thread created: {threadPath}");
 
-        // 2. Subscribe to layout area stream — same path the Blazor ThreadChatView takes.
-        // The Thread hub pushes ThreadViewModel to the data section.
-        var workspace = client.GetWorkspace();
+        // Open the layout area — same subscription the Blazor ThreadChatView holds.
         var layoutStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new Address(threadPath),
             new LayoutAreaReference(ThreadNodeType.ThreadArea));
         layoutStream.Should().NotBeNull("Thread hub should serve the Thread layout area");
 
-        // 3. Subscribe to Messages via workspace stream (like ThreadChatView data binding)
-        var twoMessages = ObserveMessages(client, threadPath)
-            .Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
+        var responseMsgId = await ChatFlow.SubmitAndWaitAsync(client, threadPath,
+            "Hello from end-to-end test", contextPath: ContextPath, ct: ct);
+        Output.WriteLine($"Response id: {responseMsgId}");
 
-        // 4. Create cells and submit message
-        var userMsgId = Guid.NewGuid().ToString("N")[..8];
-        var responseMsgId = Guid.NewGuid().ToString("N")[..8];
+        var thread = await ChatFlow.ReadThreadAsync(client, threadPath,
+            t => t.Messages.Count >= 2, ct: ct);
+        thread.Messages.Should().HaveCount(2);
+        Output.WriteLine($"Messages: [{string.Join(", ", thread.Messages)}]");
 
-        await client.Observe(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
-            Content = new ThreadMessage { Role = "user", Text = "Hello from end-to-end test", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
-        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-
-        await client.Observe(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
-            Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-
-        var submitResponse = await client.Observe(new SubmitMessageRequest
-            {
-                ThreadPath = threadPath,
-                UserMessageText = "Hello from end-to-end test",
-                ContextPath = ContextPath,
-                UserMessageId = userMsgId,
-                ResponseMessageId = responseMsgId
-            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-        submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
-        Output.WriteLine("Message submitted successfully");
-
-        // 5. Wait for 2 message IDs
-        var msgIds = await twoMessages;
-        msgIds.Should().HaveCount(2, "should have user + response message IDs");
-        Output.WriteLine($"Messages: [{string.Join(", ", msgIds)}]");
-
-        // 6. Verify Thread content via GetDataRequest
-        var threadContent = await GetHubContentAsync<MeshThread>(client, threadPath, ct);
-        threadContent.Should().NotBeNull("Thread hub should return Thread content via GetDataRequest");
-        threadContent!.Messages.Should().HaveCount(2);
-        threadContent.Messages[0].Should().Be(msgIds[0]);
-        threadContent.Messages[1].Should().Be(msgIds[1]);
-        Output.WriteLine($"Thread content verified: {threadContent.Messages.Count} messages");
-
-        // 7. Verify user message via GetDataRequest
-        var userContent = await GetHubContentAsync<ThreadMessage>(
-            client, $"{threadPath}/{msgIds[0]}", ct);
-        userContent.Should().NotBeNull("user message hub should return ThreadMessage via GetDataRequest");
-        userContent!.Role.Should().Be("user");
+        var userContent = await ChatFlow.ReadMessageAsync(client, threadPath, thread.Messages[0],
+            m => m.Role == "user", ct: ct);
         userContent.Text.Should().Be("Hello from end-to-end test");
         userContent.Type.Should().Be(ThreadMessageType.ExecutedInput);
-        Output.WriteLine($"User message verified: '{userContent.Text}'");
+        Output.WriteLine($"User message: '{userContent.Text}'");
 
-        // 8. Verify response message via GetDataRequest — poll until streaming completes
-        ThreadMessage? responseContent = null;
-        var previousLength = 0;
-        var stableCount = 0;
-        for (var attempt = 0; attempt < 50; attempt++)
-        {
-            responseContent = await GetHubContentAsync<ThreadMessage>(
-                client, $"{threadPath}/{msgIds[1]}", ct);
-            var len = responseContent?.Text?.Length ?? 0;
-            if (len > 0 && len == previousLength && ++stableCount >= 2) break;
-            else stableCount = 0;
-            previousLength = len;
-            await Task.Delay(200, ct);
-        }
+        var response = await ChatFlow.ReadMessageAsync(client, threadPath, responseMsgId,
+            m => !string.IsNullOrEmpty(m.Text) && m.Status != ThreadMessageStatus.Streaming,
+            ct: ct);
+        response.Role.Should().Be("assistant");
+        response.Type.Should().Be(ThreadMessageType.AgentResponse);
+        Output.WriteLine($"Response: '{response.Text}' ({response.Text.Length} chars)");
 
-        responseContent.Should().NotBeNull("response message hub should return ThreadMessage via GetDataRequest");
-        responseContent!.Role.Should().Be("assistant");
-        responseContent.Type.Should().Be(ThreadMessageType.AgentResponse);
-        responseContent.Text.Should().NotBeNullOrEmpty("streaming should produce non-empty response");
-        Output.WriteLine($"Response message verified: '{responseContent.Text}' ({responseContent.Text.Length} chars)");
-
-        // 9. Clean up layout stream
         layoutStream.Dispose();
     }
 
     /// <summary>
-    /// a) GetStream on own hub returns the MeshNode for the hub's address.
-    /// b) GetRemoteStream from client returns the same MeshNode.
+    /// <c>workspace.GetMeshNodeStream(path)</c> from the client routes through the
+    /// remote stream cache and returns the MeshNode owned by the per-node hub.
     /// </summary>
     [Fact]
     public async Task GetStream_OwnHub_ReturnsMeshNode()
     {
         var ct = new CancellationTokenSource(10.Seconds()).Token;
-
-        // Create a thread node
         var client = GetClient();
-        var threadPath = await CreateThreadAsync(client, "Stream test", ct);
-        Output.WriteLine($"Thread: {threadPath}");
+        var threadPath = await CreateEmptyThreadAsync(client, "Stream test", ct);
 
-        // a) Get stream from own hub — use GetStream<MeshNode>()
-        // We access the thread hub's workspace via GetRemoteStream<MeshNode> from client
-        var nodes = await client.GetWorkspace()
-            .GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Timeout(5.Seconds())
-            .FirstAsync(n => n != null && n.Any());
+        var node = await client.GetWorkspace().GetMeshNodeStream(threadPath)
+            .Take(1).Timeout(5.Seconds()).ToTask(ct);
 
-        var node = nodes.FirstOrDefault(n => n.Path == threadPath);
-        node.Should().NotBeNull("Thread node should be in the stream");
-        node!.Content.Should().BeOfType<MeshThread>("Content should be Thread");
-        Output.WriteLine($"a) Got MeshNode: {node.Path}, Content type: {node.Content?.GetType().Name}");
+        node.Path.Should().Be(threadPath);
+        node.Content.Should().BeOfType<MeshThread>();
+        Output.WriteLine($"Got MeshNode: {node.Path}, Content type: {node.Content?.GetType().Name}");
     }
 
+    /// <summary>
+    /// <c>workspace.GetMeshNodeStream(path)</c> from a client workspace is the
+    /// canonical "live single-MeshNode" read — replaces the old
+    /// <c>GetRemoteStream&lt;MeshNode, MeshNodeReference&gt;</c> ad-hoc pattern.
+    /// </summary>
     [Fact]
     public async Task GetRemoteStream_FromClient_ReturnsMeshNode()
     {
         var ct = new CancellationTokenSource(10.Seconds()).Token;
-
-        // Create a thread node
         var client = GetClient();
-        var threadPath = await CreateThreadAsync(client, "Remote stream test", ct);
-        Output.WriteLine($"Thread: {threadPath}");
+        var threadPath = await CreateEmptyThreadAsync(client, "Remote stream test", ct);
 
-        // b) Get remote stream for specific entity via EntityReference
-        var workspace = client.GetWorkspace();
-        var nodeId = threadPath.Contains('/') ? threadPath[(threadPath.LastIndexOf('/') + 1)..] : threadPath;
-        var entityStream = workspace.GetRemoteStream<object, EntityReference>(
-            new Address(threadPath),
-            new EntityReference(nameof(MeshNode), nodeId));
+        var node = await client.GetWorkspace().GetMeshNodeStream(threadPath)
+            .Take(1).Timeout(5.Seconds()).ToTask(ct);
 
-        var entity = await entityStream
-            .Timeout(5.Seconds())
-            .Select(ci => ci.Value)
-            .FirstAsync(v => v != null);
-
-        entity.Should().NotBeNull();
-        Output.WriteLine($"b) Got entity: {entity?.GetType().Name}");
+        node.Should().NotBeNull();
+        node.Path.Should().Be(threadPath);
+        Output.WriteLine($"Got node: {node.Path}, type: {node.Content?.GetType().Name}");
     }
 
     /// <summary>
-    /// Tests UpdateMeshNode on LOCAL stream — thread hub updates its own MeshNode.
-    /// Uses GetStream(typeof(MeshNode)) internally.
+    /// <c>workspace.GetMeshNodeStream(path).Update(...)</c> from a client routes
+    /// the patch through the remote stream cache to the owning per-node hub —
+    /// same primitive <see cref="ThreadInput.AppendUserInput"/> uses.
     /// </summary>
     [Fact]
     public async Task UpdateMeshNode_Local_UpdatesMessages()
     {
         var ct = new CancellationTokenSource(10.Seconds()).Token;
         var client = GetClient();
+        var workspace = client.GetWorkspace();
 
-        // 1. Create thread
-        var threadPath = await CreateThreadAsync(client, "Local update test", ct);
+        var threadPath = await CreateEmptyThreadAsync(client, "Local update test", ct);
 
-        // 2. Observe Messages from client
-        var messagesChanged = client.GetWorkspace()
-            .GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Select(nodes =>
-            {
-                var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
-                return (node?.Content as MeshThread)?.Messages ?? [];
-            })
-            .Where(m => m.Count >= 2)
-            .FirstAsync().ToTask(ct);
+        var messagesChanged = ChatFlow.ObserveMessages(client, threadPath)
+            .Where(m => m.Count >= 2).FirstAsync().ToTask(ct);
 
-        // 3. Update via local stream (null address = own hub)
-        // Post a DataChangeRequest to the thread hub to trigger the update on its own workspace
-        // MeshNode key is Id (last segment), not full path
-        var nodeId = threadPath.Contains('/') ? threadPath[(threadPath.LastIndexOf('/') + 1)..] : threadPath;
-        client.Post(new DataChangeRequest
+        await workspace.GetMeshNodeStream(threadPath).Update(node =>
         {
-            Updates = [MeshNode.FromPath(threadPath) with
-            {
-                NodeType = ThreadNodeType.NodeType,
-                Content = new MeshThread
-                {
-                    Messages = ImmutableList.Create("msg1", "msg2")
-                }
-            }]
-        }, o => o.WithTarget(new Address(threadPath)));
+            var t = node.Content as MeshThread ?? new MeshThread();
+            return node with { Content = t with { Messages = ImmutableList.Create("msg1", "msg2") } };
+        }).FirstAsync().ToTask(ct);
 
-        // 4. Verify
         var messages = await messagesChanged;
         messages.Should().Contain("msg1");
         messages.Should().Contain("msg2");
-        Output.WriteLine($"Local update: [{string.Join(", ", messages)}]");
+        Output.WriteLine($"Update: [{string.Join(", ", messages)}]");
     }
 
     /// <summary>
-    /// Tests UpdateMeshNode extension via stream.Update on own hub's EntityStore stream.
+    /// Same as <see cref="UpdateMeshNode_Local_UpdatesMessages"/> but the update
+    /// is composed off the latest snapshot — verifies <c>.Update(current =&gt; ...)</c>
+    /// observes the live node when the lambda runs.
     /// </summary>
     [Fact]
     public async Task UpdateMeshNode_ViaStreamUpdate_UpdatesMessages()
     {
         var ct = new CancellationTokenSource(10.Seconds()).Token;
         var client = GetClient();
-
-        // 1. Create thread
-        var threadPath = await CreateThreadAsync(client, "Stream update test", ct);
-
-        // 2. Observe Messages from client
-        var messagesChanged = client.GetWorkspace()
-            .GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Select(nodes =>
-            {
-                var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
-                return (node?.Content as MeshThread)?.Messages ?? [];
-            })
-            .Where(m => m.Count >= 2)
-            .FirstAsync().ToTask(ct);
-
-        // 3. Cross-hub update via DataChangeRequest. The thread lives on its own
-        // per-node hub; client posts the patched node with target=threadPath and
-        // the owning hub's data layer applies it natively.
         var workspace = client.GetWorkspace();
-        var threadStream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-            new Address(threadPath), new MeshNodeReference());
-        var current = await threadStream
-            .Where(c => c.Value != null).Take(1).Timeout(5.Seconds())
-            .Select(c => c.Value!).FirstAsync().ToTask(ct);
-        var thread = current.Content as MeshThread ?? new MeshThread();
-        var patched = current with
-        {
-            Content = thread with { Messages = thread.Messages.AddRange(["msg1", "msg2"]) }
-        };
-        client.Post(new DataChangeRequest { Updates = [patched] },
-            o => o.WithTarget(new Address(threadPath)));
 
-        // 4. Verify
+        var threadPath = await CreateEmptyThreadAsync(client, "Stream update test", ct);
+
+        var messagesChanged = ChatFlow.ObserveMessages(client, threadPath)
+            .Where(m => m.Count >= 2).FirstAsync().ToTask(ct);
+
+        await workspace.GetMeshNodeStream(threadPath).Update(node =>
+        {
+            var t = node.Content as MeshThread ?? new MeshThread();
+            return node with { Content = t with { Messages = t.Messages.AddRange(["msg1", "msg2"]) } };
+        }).FirstAsync().ToTask(ct);
+
         var messages = await messagesChanged;
         messages.Should().Contain("msg1");
         messages.Should().Contain("msg2");
@@ -646,14 +396,12 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
             Name = "Test"
         };
 
-        var delivery = client.Post(new CreateNodeRequest(nodeWithEmptyId),
-            o => o.WithTarget(Mesh.Address))!;
-        var response = await client.Observe(delivery).FirstAsync().ToTask(ct);
-        var createResponse = ((IMessageDelivery<CreateNodeResponse>)response).Message;
+        var response = await client.Observe(new CreateNodeRequest(nodeWithEmptyId),
+            o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
 
-        createResponse.Success.Should().BeFalse("creating a node with empty Id should fail");
-        createResponse.Error.Should().Contain("Id");
-        Output.WriteLine($"Validation error: {createResponse.Error}");
+        response.Message.Success.Should().BeFalse("creating a node with empty Id should fail");
+        response.Message.Error.Should().Contain("Id");
+        Output.WriteLine($"Validation error: {response.Message.Error}");
     }
 
     /// <summary>
@@ -671,14 +419,12 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
             Name = "Test"
         };
 
-        var delivery = client.Post(new CreateNodeRequest(nodeWithNullId),
-            o => o.WithTarget(Mesh.Address))!;
-        var response = await client.Observe(delivery).FirstAsync().ToTask(ct);
-        var createResponse = ((IMessageDelivery<CreateNodeResponse>)response).Message;
+        var response = await client.Observe(new CreateNodeRequest(nodeWithNullId),
+            o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
 
-        createResponse.Success.Should().BeFalse("creating a node with null Id should fail");
-        createResponse.Error.Should().Contain("Id");
-        Output.WriteLine($"Validation error: {createResponse.Error}");
+        response.Message.Success.Should().BeFalse("creating a node with null Id should fail");
+        response.Message.Error.Should().Contain("Id");
+        Output.WriteLine($"Validation error: {response.Message.Error}");
     }
 
     #region Fake Chat Client Infrastructure

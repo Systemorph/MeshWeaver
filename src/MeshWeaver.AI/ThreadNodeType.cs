@@ -146,7 +146,7 @@ public static class ThreadNodeType
             {
                 CreatedBy = createdBy,
                 Messages = ImmutableList.Create(userMsgId, responseMsgId),
-                IsExecuting = true,
+                Status = ThreadExecutionStatus.Executing,
                 ActiveMessageId = responseMsgId,
                 ExecutionStartedAt = DateTime.UtcNow,
                 PendingUserMessage = messageText,
