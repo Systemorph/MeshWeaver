@@ -114,6 +114,15 @@ workspace.GetQuery($"agents:{contextPath}",
     $"namespace:{contextPath} scope:selfAndAncestors nodeType:Agent");      // path-local
 ```
 
+> 🚨 **Multi-query gating rule:** every query in a single `GetQuery`
+> call MUST carry the **same** `nodeType:` filter. Vary only namespace
+> + scope. Mixing different `nodeType:` filters across queries breaks
+> the all-Initial gate — the synced collection never emits its first
+> snapshot. Canonical shape is what `AgentPickerProjection.BuildAgentQueries`
+> / `BuildModelQueries` produce: one filter, varying namespaces +
+> scopes. See [ModelProviders.md](ModelProviders.md) for a worked
+> example.
+
 ## Caching by id
 
 The `id` parameter is just a key into a per-workspace registry:
