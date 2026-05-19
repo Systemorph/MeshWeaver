@@ -254,7 +254,7 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
         // Collect synchronously and return a completed Observable.Return — no async, no scheduler.
         var parsedQuery = _parser.Parse(request.Query);
         var items = CollectStaticResults<T>(parsedQuery, request.Context);
-        _logger?.LogInformation(
+        _logger?.LogDebug(
             "[StaticNodeQueryProvider] ObserveQuery query='{Query}' parsedPath='{Path}' parsedNodeType='{NodeType}' -> {Count} item(s)",
             request.Query, parsedQuery.Path ?? "(null)",
             (parsedQuery.Filter as MeshWeaver.Mesh.QueryComparison)?.Condition.Values is { } vs

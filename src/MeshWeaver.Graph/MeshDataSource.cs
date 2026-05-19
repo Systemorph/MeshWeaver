@@ -1064,7 +1064,7 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
         // Register MeshNode in TypeRegistry for JSON serialization
         Workspace.Hub.TypeRegistry.WithType(typeof(MeshNode), nameof(MeshNode));
 
-        _logger?.LogInformation("[DIAG-MeshDataSource] WithMeshNodes hubPath='{HubPath}'", _hubPath);
+        _logger?.LogDebug("[DIAG-MeshDataSource] WithMeshNodes hubPath='{HubPath}'", _hubPath);
 
         // Routing layer (MessageHubGrain / MonolithRoutingService) already loaded
         // the node when resolving the address — and on Orleans it carries a live
@@ -1078,7 +1078,7 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
         var meshConfig = Workspace.Hub.ServiceProvider.GetService<MeshConfiguration>();
         if (meshConfig != null && meshConfig.Nodes.TryGetValue(_hubPath, out var builtInNode))
         {
-            _logger?.LogInformation("[DIAG-MeshDataSource] BUILT-IN node for hubPath='{HubPath}'", _hubPath);
+            _logger?.LogDebug("[DIAG-MeshDataSource] BUILT-IN node for hubPath='{HubPath}'", _hubPath);
             Workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
             return WithType<MeshNode>(ts => ts
                 .WithKey(n => n.Id)
@@ -1090,7 +1090,7 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
             .SelectMany(p => p.GetStaticNodes()).ToList();
         var staticNode = allStatic
             .FirstOrDefault(n => string.Equals(n.Path, _hubPath, StringComparison.OrdinalIgnoreCase));
-        _logger?.LogInformation("[DIAG-MeshDataSource] static lookup hubPath='{HubPath}', total={Total}, found={Found}",
+        _logger?.LogDebug("[DIAG-MeshDataSource] static lookup hubPath='{HubPath}', total={Total}, found={Found}",
             _hubPath, allStatic.Count, staticNode != null);
         if (staticNode != null)
         {

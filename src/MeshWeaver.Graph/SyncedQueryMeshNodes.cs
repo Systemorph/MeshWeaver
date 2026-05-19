@@ -224,7 +224,7 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
             .GetService<Microsoft.Extensions.Logging.ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.SyncedQuery");
 
-        diagLogger?.LogInformation(
+        diagLogger?.LogDebug(
             "[SyncedQuery] BuildReadStreamCore hub={HubAddress} queries=[{Queries}] core={CoreType}",
             workspace.Hub.Address,
             string.Join(" | ", queries),
