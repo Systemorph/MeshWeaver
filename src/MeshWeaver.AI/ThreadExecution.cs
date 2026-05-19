@@ -1474,11 +1474,31 @@ public static class ThreadExecution
                     // runs on thread pool). The CTS was stored on the parent
                     // thread hub via Set — the _Exec hub stored it on its parent
                     // (= this hub).
+                    //
+                    // Defensive ObjectDisposedException catch: a race window
+                    // exists where the CTS may already be disposed by the time
+                    // we reach Cancel — the round's own finally block disposes
+                    // it after Set null, and an emission from the workspace
+                    // stream that crossed that boundary can land here with a
+                    // stale reference. Swallowing the exception keeps the sync
+                    // stream healthy (SetCurrent's warning would otherwise tear
+                    // down unrelated observers via ReplaySubject failure modes).
+                    // Repro:
+                    // InboxToolIntegrationTest.Cancel_WithPendingMessages_DispatchesNextRoundAfterCleanup.
                     var cts = hub.Get<CancellationTokenSource>();
                     if (cts != null)
                     {
-                        logger?.LogInformation("[ThreadExec] Cancelling own execution for {ThreadPath}", threadPath);
-                        cts.Cancel();
+                        try
+                        {
+                            logger?.LogDebug("[ThreadExec] Cancelling own execution for {ThreadPath}", threadPath);
+                            cts.Cancel();
+                        }
+                        catch (ObjectDisposedException)
+                        {
+                            logger?.LogDebug(
+                                "[ThreadExec] Cancel: CTS already disposed for {ThreadPath} — round already torn down",
+                                threadPath);
+                        }
                     }
                 },
                 ex => logger?.LogWarning(ex,
