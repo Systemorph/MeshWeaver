@@ -92,6 +92,7 @@ public static class AIExtensions
             .WithType(typeof(ResubmitTrigger), nameof(ResubmitTrigger))
             .WithType(typeof(DeleteFromMessageTrigger), nameof(DeleteFromMessageTrigger))
             .WithType(typeof(RecordSubmissionFailureTrigger), nameof(RecordSubmissionFailureTrigger))
+            .WithType(typeof(StartExecutionTrigger), nameof(StartExecutionTrigger))
             .WithType(typeof(ThreadMutationAck), nameof(ThreadMutationAck))
             .WithType(typeof(ToolCallEntry), nameof(ToolCallEntry))
             .WithType(typeof(NodeChangeEntry), nameof(NodeChangeEntry))

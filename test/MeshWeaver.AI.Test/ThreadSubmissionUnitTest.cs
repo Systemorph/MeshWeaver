@@ -96,7 +96,7 @@ public class ThreadSubmissionUnitTest
             Messages = ImmutableList.Create("u1"),
             UserMessageIds = ImmutableList.Create("u1"),
             IngestedMessageIds = ImmutableList<string>.Empty,
-            IsExecuting = true
+            Status = ThreadExecutionStatus.Executing
         };
 
         var result = ThreadSubmission.PlanNextRound(thread);
@@ -107,11 +107,11 @@ public class ThreadSubmissionUnitTest
     [Fact]
     public void PlanNextRound_IdleWithOneQueued_ReturnsSingleItemDispatch()
     {
+        var u1 = new ThreadMessage { Role = "user", Text = "hello" };
         var thread = new MeshThread
         {
-            Messages = ImmutableList.Create("u1"),
             UserMessageIds = ImmutableList.Create("u1"),
-            IngestedMessageIds = ImmutableList<string>.Empty,
+            PendingUserMessages = ImmutableDictionary<string, ThreadMessage>.Empty.Add("u1", u1),
             PendingAgentName = "Executor",
             PendingModelName = "gpt-4"
         };
@@ -126,21 +126,24 @@ public class ThreadSubmissionUnitTest
     }
 
     [Fact]
-    public void PlanNextRound_IdleWithThreeQueued_ReturnsFirstQueuedOnly()
+    public void PlanNextRound_IdleWithThreeQueued_DrainsAllIntoOneRound()
     {
-        // Claude-Code-style: one user message per round, not batched. After
-        // this round completes the watcher fires again for u2, then u3.
+        // Inbox semantics: PlanNextRound drains the entire queue at once.
+        // All three messages share a single response cell for the round.
+        var u1 = new ThreadMessage { Role = "user", Text = "one" };
+        var u2 = new ThreadMessage { Role = "user", Text = "two" };
+        var u3 = new ThreadMessage { Role = "user", Text = "three" };
         var thread = new MeshThread
         {
-            Messages = ImmutableList.Create("u1", "u2", "u3"),
             UserMessageIds = ImmutableList.Create("u1", "u2", "u3"),
-            IngestedMessageIds = ImmutableList<string>.Empty
+            PendingUserMessages = ImmutableDictionary<string, ThreadMessage>.Empty
+                .Add("u1", u1).Add("u2", u2).Add("u3", u3)
         };
 
         var result = ThreadSubmission.PlanNextRound(thread);
 
         result.Should().NotBeNull();
-        result!.UserMessageIds.Should().ContainInOrder("u1");
+        result!.UserMessageIds.Should().ContainInOrder("u1", "u2", "u3");
         result.ResponseMessageId.Should().NotBeNullOrEmpty();
     }
 
@@ -160,23 +163,26 @@ public class ThreadSubmissionUnitTest
     }
 
     [Fact]
-    public void PlanNextRound_AfterInterruptedRound_ReturnsNextQueuedOnly()
+    public void PlanNextRound_AfterInterruptedRound_DrainsAllPending()
     {
-        // Scenario: r1 is in Messages but IsExecuting was set back to false
-        // (the agent loop finalized the round early after seeing queued inputs).
-        // u1 is already ingested; u2 is first unprocessed. Single message per
-        // round — u3 picks up on the next watcher tick.
+        // Scenario: round 1 completed (u1 ingested, r1 in Messages). u2 and u3
+        // arrived while idle (or during round 1) and sit in PendingUserMessages.
+        // Inbox semantics: PlanNextRound drains ALL pending into one round.
+        var u2 = new ThreadMessage { Role = "user", Text = "two" };
+        var u3 = new ThreadMessage { Role = "user", Text = "three" };
         var thread = new MeshThread
         {
-            Messages = ImmutableList.Create("u1", "r1", "u2", "u3"),
+            Messages = ImmutableList.Create("u1", "r1"),
             UserMessageIds = ImmutableList.Create("u1", "u2", "u3"),
             IngestedMessageIds = ImmutableList.Create("u1"),
-            IsExecuting = false
+            PendingUserMessages = ImmutableDictionary<string, ThreadMessage>.Empty
+                .Add("u2", u2).Add("u3", u3),
+            Status = ThreadExecutionStatus.Idle
         };
 
         var result = ThreadSubmission.PlanNextRound(thread);
 
         result.Should().NotBeNull();
-        result!.UserMessageIds.Should().ContainInOrder("u2");
+        result!.UserMessageIds.Should().ContainInOrder("u2", "u3");
     }
 }

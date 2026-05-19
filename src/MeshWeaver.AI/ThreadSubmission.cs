@@ -64,7 +64,12 @@ public static class ThreadSubmission
     /// </summary>
     public static RoundDispatch? PlanNextRound(MeshThread thread)
     {
-        if (thread.IsExecuting) return null;
+        // Allow planning when the thread is fully idle OR has just been claimed
+        // by HandleStartExecution (Status==StartingExecution). Reject the active
+        // phases (Executing, Completing) — they own the in-flight round.
+        if (thread.Status != ThreadExecutionStatus.Idle
+            && thread.Status != ThreadExecutionStatus.StartingExecution)
+            return null;
         if (thread.PendingUserMessages.IsEmpty) return null;
 
         // Drain the entire pending queue into one round. Order follows
@@ -341,6 +346,91 @@ public static class ThreadSubmission
     }
 
     /// <summary>
+    /// Handler for <see cref="StartExecutionTrigger"/>: the SOLE entry point
+    /// for a new execution round.
+    ///
+    /// <para>Posted by <see cref="ThreadSubmissionServer.InstallServerWatcher"/>
+    /// whenever it observes <c>Status == Idle</c> with non-empty
+    /// <c>PendingUserMessages</c>. The handler runs in the thread hub's OWN
+    /// context (action block) so the atomic claim is race-free against any
+    /// concurrent <see cref="ThreadInput.AppendUserInput"/> writes.</para>
+    ///
+    /// <para>Step A (atomic claim): if <c>Status != Idle</c> or
+    /// <c>PendingUserMessages.IsEmpty</c>, drop the trigger silently (a stale
+    /// fingerprint emission arrived after the next round had already started,
+    /// or pending drained between emission and claim). Otherwise flip
+    /// <c>Status → StartingExecution</c> and stamp
+    /// <c>ExecutionStartedAt</c>.</para>
+    ///
+    /// <para>After the claim, <see cref="ThreadSubmissionServer.DispatchAfterClaim"/>
+    /// drives Step B (drain → Messages + materialise user cells) and Step C
+    /// (allocate response cell, transition to <c>Executing</c>, post to
+    /// <c>_Exec</c>).</para>
+    /// </summary>
+    internal static IMessageDelivery HandleStartExecution(
+        IMessageHub hub, IMessageDelivery<StartExecutionTrigger> delivery)
+    {
+        var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
+        var threadPath = delivery.Message.ThreadPath;
+
+        // Sanity check: the trigger should target this hub.
+        if (!string.Equals(hub.Address.Path, threadPath, StringComparison.Ordinal))
+        {
+            logger?.LogWarning(
+                "[HandleStartExecution] trigger landed on wrong hub: hub={Hub}, threadPath={ThreadPath}",
+                hub.Address.Path, threadPath);
+            hub.Post(new ThreadMutationAck(false, "wrong hub"), o => o.ResponseFor(delivery));
+            return delivery.Processed();
+        }
+
+        // Step A: atomic claim. Returning `node` unchanged (no-op) signals
+        // "drop the trigger" — the post-update emission carries the pre-claim
+        // node so the Subscribe below checks Status and bails out.
+        hub.GetWorkspace().GetMeshNodeStream().Update(node =>
+        {
+            var t = node.Content as MeshThread ?? new MeshThread();
+            if (t.Status != ThreadExecutionStatus.Idle)
+            {
+                logger?.LogDebug(
+                    "[HandleStartExecution] claim skipped: status={Status} (already running) for {ThreadPath}",
+                    t.Status, threadPath);
+                return node;
+            }
+            if (t.PendingUserMessages.IsEmpty)
+            {
+                logger?.LogDebug(
+                    "[HandleStartExecution] claim skipped: PendingUserMessages empty for {ThreadPath}",
+                    threadPath);
+                return node;
+            }
+            logger?.LogInformation(
+                "[HandleStartExecution] CLAIMED: {ThreadPath} pending={Pending} → Status=StartingExecution",
+                threadPath, t.PendingUserMessages.Count);
+            return node with
+            {
+                Content = t with
+                {
+                    Status = ThreadExecutionStatus.StartingExecution,
+                    ExecutionStartedAt = DateTime.UtcNow
+                }
+            };
+        }).Subscribe(
+            postClaim =>
+            {
+                // Did we actually claim it? If Status didn't flip, drop.
+                if ((postClaim.Content as MeshThread)?.Status != ThreadExecutionStatus.StartingExecution)
+                    return;
+                // Hand off to Step B + C.
+                ThreadSubmissionServer.DispatchAfterClaim(hub, postClaim, logger);
+            },
+            ex => logger?.LogWarning(ex,
+                "[HandleStartExecution] claim Update failed for {ThreadPath}", threadPath));
+
+        hub.Post(new ThreadMutationAck(true), o => o.ResponseFor(delivery));
+        return delivery.Processed();
+    }
+
+    /// <summary>
     /// Handler for <see cref="ResubmitTrigger"/>: re-dispatches to OWN context.
     /// Registered on the per-thread hub by <see cref="ThreadExecution.AddThreadExecution"/>.
     /// </summary>
@@ -485,16 +575,29 @@ public static class ThreadSubmission
             var idx = t.Messages.IndexOf(userMessageId);
             if (idx < 0) return node;
 
-            var keep = t.Messages.Take(idx + 1).ToImmutableList();
-            var trimmedUserIds = t.UserMessageIds.Where(uid => keep.Contains(uid)).ToImmutableList();
-            // The watcher's NeedsDispatch fires on "UserMessageIds has at least one
-            // id not in IngestedMessageIds". HandleSubmitMessage doesn't populate
-            // UserMessageIds (it writes Messages only), so without this Add the
-            // resubmit would never trigger a new round. Adding the id is idempotent
-            // (the Where above keeps only ids already in keep).
+            // Truncate Messages strictly BEFORE the replayed id — the user
+            // message moves OUT of Messages and BACK into PendingUserMessages
+            // so the inbox re-ingests it on the next round. The paired response
+            // cell (and anything later) drops.
+            var keep = t.Messages.Take(idx).ToImmutableList();
+            var trimmedUserIds = t.UserMessageIds
+                .Where(uid => keep.Contains(uid) || uid == userMessageId)
+                .ToImmutableList();
             if (!trimmedUserIds.Contains(userMessageId))
                 trimmedUserIds = trimmedUserIds.Add(userMessageId);
             var ingested = t.IngestedMessageIds.Remove(userMessageId);
+            // Re-queue: put the replayed message back into PendingUserMessages
+            // so the watcher fires StartExecutionTrigger for the new round.
+            var replayMessage = new ThreadMessage
+            {
+                Role = "user",
+                Text = newUserText ?? "",
+                Timestamp = DateTime.UtcNow,
+                Type = ThreadMessageType.ExecutedInput,
+                AgentName = agentName,
+                ModelName = modelName
+            };
+            var pending = t.PendingUserMessages.SetItem(userMessageId, replayMessage);
             return node with
             {
                 Content = t with
@@ -502,10 +605,10 @@ public static class ThreadSubmission
                     Messages = keep,
                     UserMessageIds = trimmedUserIds,
                     IngestedMessageIds = ingested,
+                    PendingUserMessages = pending,
                     Status = ThreadExecutionStatus.Idle,
                     ActiveMessageId = null,
                     ExecutionStartedAt = null,
-                    PendingUserMessage = newUserText ?? t.PendingUserMessage,
                     PendingAgentName = agentName ?? t.PendingAgentName,
                     PendingModelName = modelName ?? t.PendingModelName
                 }
@@ -602,93 +705,101 @@ public sealed record RoundDispatch(
 /// </summary>
 internal static class ThreadSubmissionServer
 {
+    /// <summary>
+    /// Notifier-only watcher: posts <see cref="StartExecutionTrigger"/> to the
+    /// thread hub whenever it observes <c>Status == Idle</c> with a non-empty
+    /// pending queue. ALL round-state mutation happens in
+    /// <see cref="ThreadSubmission.HandleStartExecution"/> (atomic claim) and
+    /// <see cref="DispatchAfterClaim"/> (drain + cell creation). The watcher
+    /// never touches Messages, Status, or PendingUserMessages directly.
+    ///
+    /// <para>Single-flight is guaranteed by the atomic claim in the handler:
+    /// concurrent triggers (from rapid emissions or post-pile-up) all enter
+    /// the action block serially; the first claim wins and flips Status, the
+    /// rest see <c>Status != Idle</c> and drop.</para>
+    /// </summary>
     public static IDisposable InstallServerWatcher(IMessageHub threadHub)
     {
         var logger = threadHub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
-        return threadHub.WatchSubmission(
-            fingerprint:   Fingerprint,
-            needsDispatch: NeedsDispatch,
-            dispatch:      node => DispatchRoundObs(threadHub, node, logger),
-            logger:        logger);
-    }
-
-    /// <summary>
-    /// Compress the dispatchable state to a value tuple. Equality on this tuple
-    /// drives <c>DistinctUntilChanged</c> — when nothing relevant has changed,
-    /// the watcher doesn't re-dispatch.
-    /// </summary>
-    private static (bool, int, int, int) Fingerprint(MeshNode node)
-    {
-        if (node.Content is not MeshThread t) return (false, 0, 0, 0);
-        return (t.IsExecuting, t.Messages.Count, t.IngestedMessageIds.Count, t.PendingUserMessages.Count);
-    }
-
-    /// <summary>
-    /// True when this thread state warrants a new round: not executing AND
-    /// has at least one unprocessed user id or pending message.
-    /// </summary>
-    private static bool NeedsDispatch(MeshNode node)
-    {
-        if (node.Content is not MeshThread t) return false;
-        if (t.IsExecuting) return false;
-        if (t.PendingUserMessages.Count > 0) return true;
-        foreach (var id in t.UserMessageIds)
-            if (!t.IngestedMessageIds.Contains(id)) return true;
-        return false;
-    }
-
-    /// <summary>
-    /// Wrap the existing <see cref="DispatchRound"/> in <c>IObservable&lt;Unit&gt;</c>
-    /// so it composes via <c>Concat</c>. Each queued dispatch re-reads the LATEST
-    /// thread state — the upstream emission's captured <paramref name="threadNode"/>
-    /// is only used as a fallback when the workspace read fails.
-    ///
-    /// <para>Why re-read: WatchSubmission uses <c>Concat</c> to serialize dispatch
-    /// rounds. If 3 upstream fingerprint emissions queue up faster than the first
-    /// dispatch's async commit can land, each queued dispatch must re-evaluate
-    /// against current state. Otherwise the captured (IsExecuting=false) state
-    /// at upstream-emission time bypasses <see cref="PlanNextRound"/>'s
-    /// <c>IsExecuting</c> guard and we get duplicate response cells per round
-    /// (the Resubmit flake symptom).</para>
-    /// </summary>
-    private static IObservable<System.Reactive.Unit> DispatchRoundObs(
-        IMessageHub hub, MeshNode threadNode, ILogger<AgentChatClient>? logger) =>
-        System.Reactive.Linq.Observable.Defer(() =>
-            hub.GetWorkspace().GetMeshNodeStream().Take(1)
-                .Select(latest => latest ?? threadNode)
-                .SelectMany(latest =>
+        return threadHub.GetWorkspace().GetMeshNodeStream()
+            .Select(node => Fingerprint(node))
+            .DistinctUntilChanged()
+            .Where(fp => fp.NeedsDispatch)
+            .Subscribe(
+                _ =>
                 {
-                    if (latest?.Content is not MeshThread thread)
-                        return System.Reactive.Linq.Observable.Return(System.Reactive.Unit.Default);
-                    var dispatch = ThreadSubmission.PlanNextRound(thread);
-                    if (dispatch is null) // IsExecuting=true or nothing unprocessed
-                        return System.Reactive.Linq.Observable.Return(System.Reactive.Unit.Default);
+                    var threadPath = threadHub.Address.Path;
+                    logger?.LogDebug(
+                        "[SubmissionWatcher] posting StartExecutionTrigger for {ThreadPath}",
+                        threadPath);
+                    threadHub.Post(
+                        new StartExecutionTrigger(threadPath),
+                        o => o.WithTarget(threadHub.Address));
+                },
+                ex => logger?.LogWarning(ex,
+                    "[SubmissionWatcher] stream errored for {ThreadPath}",
+                    threadHub.Address.Path));
+    }
 
-                    try { DispatchRound(hub, latest!, dispatch, logger, onFailure: () => { }); }
-                    catch (Exception ex)
-                    {
-                        logger?.LogWarning(ex,
-                            "[ThreadSubmission] DispatchRoundObs failed for {ThreadPath}",
-                            hub.Address.Path);
-                        return System.Reactive.Linq.Observable.Return(System.Reactive.Unit.Default);
-                    }
+    private record struct WatcherFingerprint(
+        ThreadExecutionStatus Status,
+        int PendingCount,
+        bool NeedsDispatch);
 
-                    // Wait until OUR commit is visible — i.e. dispatch.ResponseMessageId
-                    // appears in Thread.Messages. Waiting for `IsExecuting=true` was racey:
-                    // the workspace's MeshNode cache could emit a stale IsExecuting=true
-                    // from the prior round on Subscribe, completing the wait before our
-                    // commit landed, freeing the single-flight guard, and letting the
-                    // next dispatch fire immediately. Response id check is unique to this
-                    // round so it cannot match stale state.
-                    var responseId = dispatch.ResponseMessageId;
-                    return hub.GetWorkspace().GetMeshNodeStream()
-                        .Where(n => n?.Content is MeshThread mt && mt.Messages.Contains(responseId))
-                        .Take(1)
-                        .Timeout(TimeSpan.FromSeconds(10))
-                        .Catch<MeshNode, Exception>(_ =>
-                            System.Reactive.Linq.Observable.Return<MeshNode>(null!))
-                        .Select(_ => System.Reactive.Unit.Default);
-                }));
+    /// <summary>
+    /// Compresses the dispatchable state into a value tuple that drives
+    /// <c>DistinctUntilChanged</c>. NeedsDispatch is true when the thread is
+    /// <see cref="ThreadExecutionStatus.Idle"/> and at least one entry is
+    /// queued in <c>PendingUserMessages</c>.
+    /// </summary>
+    private static WatcherFingerprint Fingerprint(MeshNode? node)
+    {
+        if (node?.Content is not MeshThread t)
+            return new WatcherFingerprint(ThreadExecutionStatus.Idle, 0, false);
+        var needs = t.Status == ThreadExecutionStatus.Idle && t.PendingUserMessages.Count > 0;
+        return new WatcherFingerprint(t.Status, t.PendingUserMessages.Count, needs);
+    }
+
+    /// <summary>
+    /// Step B + Step C of the round, called from
+    /// <see cref="ThreadSubmission.HandleStartExecution"/> after the atomic
+    /// claim succeeded (Status flipped to <see cref="ThreadExecutionStatus.StartingExecution"/>).
+    /// Drains all pending entries into <see cref="MeshThread.Messages"/>,
+    /// materialises user satellite cells, allocates a single response cell,
+    /// transitions <see cref="ThreadExecutionStatus.StartingExecution"/> →
+    /// <see cref="ThreadExecutionStatus.Executing"/>, and posts to <c>_Exec</c>
+    /// for streaming.
+    /// </summary>
+    internal static void DispatchAfterClaim(
+        IMessageHub hub, MeshNode threadNode, ILogger<AgentChatClient>? logger)
+    {
+        var thread = threadNode.Content as MeshThread;
+        if (thread is null)
+        {
+            logger?.LogWarning(
+                "[DispatchAfterClaim] thread node has no MeshThread content for {Path}",
+                hub.Address.Path);
+            return;
+        }
+        var dispatch = ThreadSubmission.PlanNextRound(thread);
+        if (dispatch is null)
+        {
+            logger?.LogDebug(
+                "[DispatchAfterClaim] nothing to dispatch (post-claim race?) for {Path} — rolling status back to Idle",
+                hub.Address.Path);
+            // Roll the claim back so the next watcher tick can re-trigger.
+            hub.GetWorkspace().GetMeshNodeStream().Update(n =>
+            {
+                var t = n.Content as MeshThread ?? new MeshThread();
+                return n with { Content = t with { Status = ThreadExecutionStatus.Idle, ExecutionStartedAt = null } };
+            }).Subscribe(
+                _ => { },
+                ex => logger?.LogWarning(ex,
+                    "[DispatchAfterClaim] rollback Update failed for {Path}", hub.Address.Path));
+            return;
+        }
+        DispatchRound(hub, threadNode, dispatch, logger);
+    }
 
     /// <summary>
     /// Creates the output cell, writes the committed round to the thread node, and
@@ -848,7 +959,9 @@ internal static class ThreadSubmissionServer
                         hub.GetWorkspace().GetMeshNodeStream().Update(node =>
                         {
                             var t = node.Content as MeshThread ?? new MeshThread();
-                            if (t.IsExecuting) return node;
+                            // We expect Status==StartingExecution (post-claim from HandleStartExecution).
+                            // Anything else is an out-of-band state change — drop the commit.
+                            if (t.Status != ThreadExecutionStatus.StartingExecution) return node;
 
                             // User ids in dispatch order, then the response id last.
                             // Contains check covers the resubmit case where u1 was already in

@@ -47,7 +47,7 @@ public class InboxToolUnitTest
             IngestedMessageIds = ImmutableList.Create("u1"),
             PendingUserMessages = ImmutableDictionary<string, ThreadMessage>.Empty
                 .Add("u2", msg),
-            IsExecuting = true
+            Status = ThreadExecutionStatus.Executing
         };
 
         var result = InboxTool.Drain(thread);
@@ -129,7 +129,7 @@ public class InboxToolUnitTest
         {
             UserMessageIds = ImmutableList.Create("u1"),
             PendingUserMessages = ImmutableDictionary<string, ThreadMessage>.Empty.Add("u1", msg),
-            IsExecuting = true,
+            Status = ThreadExecutionStatus.Executing,
             ActiveMessageId = "r1",
             CreatedBy = "user@example.com",
             SelectedAgentName = "TestAgent",
@@ -369,7 +369,7 @@ public class InboxToolUnitTest
         // currently-streaming response cell continues uninterrupted).
         var threadBefore = new MeshThread
         {
-            IsExecuting = true,
+            Status = ThreadExecutionStatus.Executing,
             ActiveMessageId = "r1",
             Messages = ImmutableList.Create("u1", "r1"),
             UserMessageIds = ImmutableList.Create("u1"),

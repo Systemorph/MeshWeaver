@@ -34,4 +34,22 @@ internal record RecordSubmissionFailureTrigger(
     string UserText,
     string ErrorMessage) : IRequest<ThreadMutationAck>;
 
+/// <summary>
+/// Watcher → <c>_Exec</c> trigger. Posted whenever the submission watcher
+/// observes <c>Thread.Status == Idle</c> with non-empty
+/// <c>Thread.PendingUserMessages</c>. The <c>_Exec</c> hosted hub's handler is
+/// the SOLE site that performs the Idle → StartingExecution → Executing →
+/// Completing → Idle round transition: atomic claim, drain pending into
+/// Messages, materialise user satellite cells, allocate the response cell,
+/// stream, end-of-round drain.
+///
+/// <para>Idempotent: if <c>Status != Idle</c> on claim, the trigger is
+/// dropped (the watcher's Concat already serialises but a stale fingerprint
+/// emission can still arrive after the next round started).</para>
+///
+/// <para>Cross-hub: posted by the watcher (thread hub) to the <c>_Exec</c>
+/// hosted hub (<c>{threadAddress}/_Exec</c>).</para>
+/// </summary>
+internal record StartExecutionTrigger(string ThreadPath) : IRequest<ThreadMutationAck>;
+
 internal record ThreadMutationAck(bool Ok, string? Error = null);

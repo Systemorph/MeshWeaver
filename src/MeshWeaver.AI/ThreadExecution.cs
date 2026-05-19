@@ -105,6 +105,11 @@ public static class ThreadExecution
             // stream-update path can't replicate without a side-effect watcher.
             // Migration plan tracked in tasks #10. See RequestViaStreamUpdate.md.
             .WithHandler<SubmitMessageRequest>(HandleSubmitMessage)
+            // Watcher → trigger → execution. The submission watcher posts this
+            // whenever it observes Status==Idle + PendingUserMessages.Count > 0;
+            // the handler atomically claims the round and drives Step A→E
+            // (Idle → StartingExecution → Executing → Completing → Idle).
+            .WithHandler<StartExecutionTrigger>(ThreadSubmission.HandleStartExecution)
             // Internal cross-hub mutation triggers — when ThreadSubmission.Apply*
             // is invoked from a non-owner hub, it posts these so the work lands
             // in the per-thread hub's OWN context (UpdateRemote staleness

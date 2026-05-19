@@ -434,16 +434,19 @@ public class InboxToolIntegrationTest : AITestBase
     }
 
     /// <summary>
-    /// Sets <see cref="MeshThread.IsExecuting"/> on the thread node directly.
+    /// Sets <see cref="MeshThread.Status"/> on the thread node directly.
     /// Used by check_inbox tests to keep the watcher from racing the tool call.
     /// </summary>
     private async Task SetIsExecutingAsync(IMessageHub threadHub, bool isExecuting, CancellationToken ct)
     {
         var workspace = threadHub.GetWorkspace();
+        var targetStatus = isExecuting
+            ? ThreadExecutionStatus.Executing
+            : ThreadExecutionStatus.Idle;
         await workspace.GetMeshNodeStream().Update(node =>
         {
             var t = node.Content as MeshThread ?? new MeshThread();
-            return node with { Content = t with { IsExecuting = isExecuting } };
+            return node with { Content = t with { Status = targetStatus } };
         }).Take(1).ToTask(ct);
         // Wait until the post-update value is observable via the same read path
         // AppendUserInput uses. Update().Take(1) completes when the write commits
