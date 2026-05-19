@@ -48,7 +48,11 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
                 AssignmentNodeFactory.UserRole("DeepUser", "Viewer", "Org/Division/Team/Project"),
                 AssignmentNodeFactory.UserRole("GlobalAdmin", "Admin"),
                 AssignmentNodeFactory.UserRole("OrgEditor", "Editor", "MyOrg"),
-                AssignmentNodeFactory.UserRole("ProjectViewer", "Viewer", "MyOrg/Project/SubFolder")
+                AssignmentNodeFactory.UserRole("ProjectViewer", "Viewer", "MyOrg/Project/SubFolder"),
+                // Default test login (TestUsers.Admin) is ObjectId="Roland". Seed
+                // a global Admin assignment so the + Add Assignment button surfaces
+                // for tests that interrogate the dialog flow.
+                AssignmentNodeFactory.UserRole(TestUsers.Admin.ObjectId, "Admin")
             );
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
@@ -203,5 +207,179 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
         Output.WriteLine($"GlobalAdmin permissions at {nestedPath}: {globalPerms}");
         Output.WriteLine($"OrgEditor permissions at {nestedPath}: {orgPerms}");
         Output.WriteLine($"ProjectViewer permissions at {nestedPath}: {projectPerms}");
+    }
+
+    /// <summary>
+    /// Walks <paramref name="stack"/> and yields every nested area whose resolved
+    /// control matches <typeparamref name="T"/>. Iterative so a deep dialog tree
+    /// (root stack → ContentArea → form stack → picker) is reachable without
+    /// per-test recursion boilerplate.
+    /// </summary>
+    private static async Task<List<(string Area, T Control)>> CollectControlsAsync<T>(
+        ISynchronizationStream<JsonElement> stream,
+        UiControl root,
+        string rootArea,
+        CancellationToken ct)
+        where T : UiControl
+    {
+        var results = new List<(string, T)>();
+        var queue = new Queue<(UiControl Control, string Area)>();
+        queue.Enqueue((root, rootArea));
+
+        while (queue.Count > 0)
+        {
+            var (control, area) = queue.Dequeue();
+            if (control is T match)
+                results.Add((area, match));
+
+            // StackControl surfaces children via Areas (NamedAreaControl list).
+            if (control is StackControl stack && stack.Areas is { } areas)
+            {
+                foreach (var named in areas)
+                {
+                    var childArea = named.Area?.ToString();
+                    if (string.IsNullOrEmpty(childArea))
+                        continue;
+                    var child = await stream.GetControlStream(childArea)
+                        .Where(c => c != null)
+                        .Timeout(5.Seconds())
+                        .FirstOrDefaultAsync()
+                        .ToTask(ct);
+                    if (child != null)
+                        queue.Enqueue((child, childArea));
+                }
+            }
+
+            // DialogControl renders Content into ContentArea — the framework
+            // mounts the actual UiControl at $Dialog/ContentArea; recurse there.
+            if (control is DialogControl dialog && dialog.ContentArea.Area is { } dlgContentArea)
+            {
+                var contentArea = dlgContentArea.ToString();
+                if (!string.IsNullOrEmpty(contentArea))
+                {
+                    var content = await stream.GetControlStream(contentArea)
+                        .Where(c => c != null)
+                        .Timeout(5.Seconds())
+                        .FirstOrDefaultAsync()
+                        .ToTask(ct);
+                    if (content != null)
+                        queue.Enqueue((content, contentArea));
+                }
+            }
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// The + Add Assignment button must be rendered for an admin viewer.
+    /// Regression guard for the pre-fix bug where the role-based isAdmin probe
+    /// always evaluated false on the per-node hub (CircuitContext lives on a
+    /// different AccessService instance), silently hiding the button.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task AccessControl_AdminViewer_RendersAddAssignmentButton()
+    {
+        var client = GetClient();
+        // DevLogin on the client hub so the SubscribeRequest's PostPipeline stamps
+        // d.AccessContext = Roland → per-node hub computes CanDelete for Roland.
+        TestUsers.DevLogin(client);
+
+        var nodeAddress = new Address(NodePath);
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask(TestTimeout);
+
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference(MeshNodeLayoutAreas.AccessControlArea);
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            nodeAddress,
+            reference);
+
+        var rootControl = (await stream.GetControlStream(reference.Area!)
+            .Where(c => c is StackControl s && s.Areas?.Count >= 4)
+            .Timeout(15.Seconds())
+            .FirstAsync()
+            .ToTask(TestTimeout))!;
+
+        var buttons = await CollectControlsAsync<ButtonControl>(stream, rootControl, reference.Area!, TestTimeout);
+        var addButton = buttons.FirstOrDefault(b =>
+            b.Control.Data?.ToString()?.Contains("Add Assignment", StringComparison.OrdinalIgnoreCase) == true);
+
+        addButton.Should().NotBe(default,
+            "the + Add Assignment button must render for an admin viewer — broken if PermissionHelper.CanDelete didn't surface the admin assignment");
+    }
+
+    /// <summary>
+    /// Clicking the + Add Assignment button opens a dialog containing two
+    /// MeshNodePickerControls: one for the Subject (user or group) and one
+    /// for the Role. Verifies the exact queries assembled by the dialog so
+    /// regressions to the AccessAssignment [MeshNode] / [MeshNodeCollection]
+    /// attributes surface in tests rather than in the running UI.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task AccessControl_AddAssignmentDialog_HasSubjectAndRolePickersWithExpectedQueries()
+    {
+        var client = GetClient();
+        TestUsers.DevLogin(client);
+
+        var nodeAddress = new Address(NodePath);
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask(TestTimeout);
+
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference(MeshNodeLayoutAreas.AccessControlArea);
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            nodeAddress,
+            reference);
+
+        var rootControl = (await stream.GetControlStream(reference.Area!)
+            .Where(c => c is StackControl s && s.Areas?.Count >= 4)
+            .Timeout(15.Seconds())
+            .FirstAsync()
+            .ToTask(TestTimeout))!;
+
+        var buttons = await CollectControlsAsync<ButtonControl>(stream, rootControl, reference.Area!, TestTimeout);
+        var (buttonArea, _) = buttons.First(b =>
+            b.Control.Data?.ToString()?.Contains("Add Assignment", StringComparison.OrdinalIgnoreCase) == true);
+
+        // Fire the click — the host invokes ShowAddAssignmentDialog which posts
+        // the DialogControl into the $Dialog area.
+        client.Post(new ClickedEvent(buttonArea, stream.StreamId), o => o.WithTarget(nodeAddress));
+
+        var dialog = await stream.GetControlStream(DialogControl.DialogArea)
+            .Where(c => c is DialogControl)
+            .Timeout(10.Seconds())
+            .FirstAsync()
+            .ToTask(TestTimeout);
+
+        var dialogControl = dialog.Should().BeOfType<DialogControl>().Which;
+        dialogControl.Title?.ToString().Should().Be("Add Assignment");
+
+        var pickers = await CollectControlsAsync<MeshNodePickerControl>(
+            stream, dialogControl, DialogControl.DialogArea, TestTimeout);
+
+        pickers.Should().HaveCount(2,
+            "the dialog renders one picker for the subject (user/group) and one for the role");
+
+        var subjectPicker = pickers.Select(p => p.Control)
+            .FirstOrDefault(p => string.Equals(
+                p.Label?.ToString(),
+                "Subject (User or Group)",
+                StringComparison.Ordinal));
+        subjectPicker.Should().NotBeNull("subject picker must be present");
+        subjectPicker!.Required.Should().BeOfType<bool>().Which.Should().BeTrue();
+        subjectPicker.Queries.Should().NotBeNull();
+        subjectPicker.Queries!.Should().Contain("nodeType:User namespace:\"\"",
+            "users live at the root namespace post-v10, so the default query must scope to namespace:\"\"");
+        subjectPicker.Queries.Should().Contain($"nodeType:Group namespace:{NodePath} scope:subtree",
+            "groups defined at the current namespace or beneath should be selectable");
+
+        var rolePicker = pickers.Select(p => p.Control)
+            .FirstOrDefault(p => string.Equals(p.Label?.ToString(), "Role", StringComparison.Ordinal));
+        rolePicker.Should().NotBeNull("role picker must be present");
+        rolePicker!.Required.Should().BeOfType<bool>().Which.Should().BeTrue();
+        rolePicker.Queries.Should().NotBeNull();
+        rolePicker.Queries!.Should().Contain("nodeType:Role namespace:\"\"",
+            "default roles live at the root namespace and must always be selectable");
+        rolePicker.Queries.Should().Contain($"nodeType:Role namespace:{NodePath} scope:selfAndAncestors",
+            "roles defined at the current namespace and any ancestor namespace must be selectable");
     }
 }
