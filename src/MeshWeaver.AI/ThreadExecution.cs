@@ -390,70 +390,14 @@ public static class ThreadExecution
     }
 
     /// <summary>
-    /// Handles SubmitMessageRequest by routing the user message through the
-    /// canonical queuing path (<see cref="ThreadInput.AppendUserInput"/>) and
-    /// letting the submission watcher (<see cref="ThreadSubmission.InstallSubmissionWatcher"/>)
-    /// drive dispatch. This is the queue-don't-cancel design: rapid Submits
-    /// while a round is in flight pile up in <c>PendingUserMessages</c>, and
-    /// each one becomes its own round once the prior round completes.
-    ///
-    /// <para><b>Why not direct-dispatch.</b> The previous shape of this
-    /// handler bypassed the watcher: it set <c>IsExecuting=true</c>, allocated
-    /// a fresh response id, and posted to <c>_Exec</c> on every call —
-    /// without checking whether a round was already running. Three rapid
-    /// Submits produced three concurrent rounds racing for the same thread
-    /// state. The watcher's <c>IsExecuting</c> guard is the single round
-    /// serialization point; sending everything through it removes the race
-    /// and matches the per-round semantics already documented on
-    /// <see cref="ThreadSubmission.PlanNextRound"/>.</para>
-    ///
-    /// <para>The completion callback path (<see cref="NotifyParentCompletion"/>
-    /// → <see cref="SubmitMessageResponse"/>) remains for sub-thread
-    /// delegation; the watcher path doesn't use it.</para>
+    /// Handles SubmitMessageRequest: updates thread state, responds immediately,
+    /// then starts execution.
+    /// - GUI flow (client provides UserMessageId + ResponseMessageId): cells already exist,
+    ///   start execution directly.
+    /// - Server flow (no IDs provided): set PendingUserMessage so WatchForExecution
+    ///   creates cells and starts execution.
     /// </summary>
     internal static IMessageDelivery HandleSubmitMessage(
-        IMessageHub hub,
-        IMessageDelivery<SubmitMessageRequest> delivery)
-    {
-        var request = delivery.Message;
-        var threadPath = request.ThreadPath;
-        var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
-
-        // Queue the user message via AppendUserInput. Watcher takes over.
-        var userMessage = new ThreadMessage
-        {
-            Role = "user",
-            Text = request.UserMessageText,
-            Timestamp = DateTime.UtcNow,
-            Type = ThreadMessageType.ExecutedInput,
-            CreatedBy = delivery.AccessContext?.ObjectId,
-            AgentName = request.AgentName,
-            ModelName = request.ModelName,
-            ContextPath = request.ContextPath,
-            Attachments = request.Attachments,
-            Status = ThreadMessageStatus.Submitted
-        };
-        var newUserMsgId = ThreadInput.AppendUserInput(hub.GetWorkspace(), threadPath, userMessage);
-
-        logger?.LogDebug(
-            "[ThreadExec] HandleSubmitMessage: queued via AppendUserInput threadPath={ThreadPath} userMsgId={UserMsgId}",
-            threadPath, newUserMsgId);
-
-        hub.Post(
-            new SubmitMessageResponse
-            {
-                Success = true,
-                Messages = ImmutableList.Create(newUserMsgId)
-            },
-            o => o.ResponseFor(delivery));
-        return delivery.Processed();
-    }
-
-    // The legacy direct-dispatch HandleSubmitMessage body is retained below
-    // as private static helpers for callsites that need the immediate
-    // SubmitMessageResponse + completion-callback shape (sub-thread
-    // delegation flow). New entry-point routes go through AppendUserInput.
-    private static IMessageDelivery HandleSubmitMessageLegacy(
         IMessageHub hub,
         IMessageDelivery<SubmitMessageRequest> delivery)
     {
