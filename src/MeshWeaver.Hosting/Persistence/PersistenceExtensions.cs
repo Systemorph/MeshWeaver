@@ -526,12 +526,25 @@ public static class PersistenceExtensions
         services.AddSingleton<IStorageAdapter>(sp =>
             new PersistenceService(sp.GetServices<IPartitionStorageProvider>()));
 
-        // Default adapter-backed query provider for backends without a native
-        // query layer. Each backend that has a native query (Postgres, Cosmos)
-        // registers its own IMeshQueryProvider separately; MeshQuery aggregates
-        // every IMeshQueryProvider singleton via sp.GetServices<>().
+        // Default adapter-backed query provider — pedestrian exact-path probes
+        // every backend needs in the IMeshQueryProvider fan-in. Native query
+        // backends (Postgres, Cosmos) register their OWN IMeshQueryProvider
+        // alongside this one; both are needed because the native provider
+        // typically short-circuits scoped queries (path:X) back to this
+        // pedestrian one for the actual row fetch.
+        //
+        // 🚨 AddSingleton, not TryAddSingleton: `TryAddSingleton<IMeshQueryProvider>`
+        // is FIRST-WINS by service-type, so a backend that registered its own
+        // IMeshQueryProvider BEFORE calling AddPartitionedCoreAndWrapperServices
+        // would silently skip this registration, leaving the fan-in without the
+        // pedestrian exact-path probe — symptom: PathResolver returns null for
+        // any path the backend doesn't handle in fan-out mode (Postgres
+        // partition-scoped path queries; repro:
+        // PartitionLifecycleTests.LazyCreate_FirstWrite_EnablesSubsequentReads).
+        // The CoreAndWrapperServicesMarker idempotency guard above guarantees
+        // we only register this once per service collection.
         services.TryAddSingleton<StorageAdapterMeshQueryProvider>();
-        services.TryAddSingleton<IMeshQueryProvider>(sp =>
+        services.AddSingleton<IMeshQueryProvider>(sp =>
             sp.GetRequiredService<StorageAdapterMeshQueryProvider>());
 
         // IMeshQueryCore — one boss for unsecured fan-out across every registered
@@ -593,7 +606,11 @@ public static class PersistenceExtensions
 
         services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
         services.TryAddSingleton<StorageAdapterMeshQueryProvider>();
-        services.TryAddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<StorageAdapterMeshQueryProvider>());
+        // 🚨 AddSingleton, not TryAddSingleton — see the same-shape comment in
+        // AddPartitionedCoreAndWrapperServices. Backends that register their own
+        // IMeshQueryProvider (Postgres, Cosmos) BEFORE this method runs would
+        // otherwise crowd the pedestrian provider out and break exact-path probes.
+        services.AddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<StorageAdapterMeshQueryProvider>());
         // IMeshQueryCore — one boss for unsecured fan-out (see comment on the
         // partitioned registration). Constructs MeshQuery over every
         // IMeshQueryProvider; null hub is OK because the IMeshQueryCore
