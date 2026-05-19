@@ -423,22 +423,70 @@ public static class ThreadExecution
         var executionCts = new CancellationTokenSource();
         hub.Set(executionCts);
 
-        // Update Thread state. Set PendingUserMessage so WatchForExecution
-        // creates cells when they don't exist (server flow, delegation flow).
+        // Atomic state-update with two outcomes:
+        //   • Fresh round (thread idle): claim it — set IsExecuting=true,
+        //     ActiveMessageId, mirror to IngestedMessageIds. Caller proceeds
+        //     to create response cell + post to _Exec.
+        //   • Queue (thread busy): append user message to PendingUserMessages
+        //     + UserMessageIds + Messages. Caller acknowledges and returns;
+        //     the submission watcher (ThreadSubmission.InstallSubmissionWatcher
+        //     → DispatchRoundObs) fires as soon as the in-flight round flips
+        //     IsExecuting=false and dispatches the queued user as its own
+        //     round.
         //
-        // Parity note: the canonical PendingUserMessages → watcher → DispatchRound
-        // path sets IngestedMessageIds + UserMessageIds when it claims a user
-        // message for a round. SubmitMessageRequest is the other entry point
-        // (Submit/Resubmit click → ThreadSubmission.Submit) and historically
-        // skipped those fields. That left `IngestedMessageIds = []` even after
-        // a successful round, breaking every consumer that uses
-        // `UserMessageIds \ IngestedMessageIds` to find unprocessed input
-        // (NeedsDispatch, ThreadInput's unprocessed-set, the 6 failing
-        // ThreadSubmissionIntegrationTest cases). Update both lists here so the
-        // data-model contract holds regardless of which entry point posted.
+        // The branch decision lives INSIDE the Update lambda so two concurrent
+        // SubmitMessageRequest deliveries see strictly sequential snapshots and
+        // pick the correct path each time. The `queued` flag is closure-
+        // captured: the lambda runs synchronously on the hub's action block
+        // (OWN update via dsStream.Update), so by the time control returns
+        // from `Update(...)` the flag is stable and the outer `if (queued)`
+        // check is race-free.
+        var queued = false;
+        var queuedUserMessage = new ThreadMessage
+        {
+            Role = "user",
+            Text = request.UserMessageText,
+            Timestamp = DateTime.UtcNow,
+            Type = ThreadMessageType.ExecutedInput,
+            CreatedBy = delivery.AccessContext?.ObjectId,
+            AgentName = request.AgentName,
+            ModelName = request.ModelName,
+            ContextPath = request.ContextPath,
+            Attachments = request.Attachments,
+            Status = ThreadMessageStatus.Submitted
+        };
         hub.GetWorkspace().GetMeshNodeStream().Update(node =>
         {
             var thread = node.Content as MeshThread ?? new MeshThread();
+            if (thread.IsExecuting)
+            {
+                // Queue path — round busy, append without claiming.
+                queued = true;
+                var qmsgs = thread.Messages.Contains(userMsgId)
+                    ? thread.Messages
+                    : thread.Messages.Add(userMsgId);
+                var qUserIds = thread.UserMessageIds.Contains(userMsgId)
+                    ? thread.UserMessageIds
+                    : thread.UserMessageIds.Add(userMsgId);
+                var qPending = thread.PendingUserMessages.SetItem(userMsgId, queuedUserMessage);
+                return node with
+                {
+                    Content = thread with
+                    {
+                        Messages = qmsgs,
+                        UserMessageIds = qUserIds,
+                        PendingUserMessages = qPending,
+                        // Preserve the queued submit's agent/model so the
+                        // next round picks them up (watcher's DispatchRound
+                        // reads thread.PendingAgentName / PendingModelName).
+                        PendingAgentName = request.AgentName ?? thread.PendingAgentName,
+                        PendingModelName = request.ModelName ?? thread.PendingModelName,
+                        PendingContextPath = request.ContextPath ?? thread.PendingContextPath
+                    }
+                };
+            }
+
+            // Direct dispatch path — thread idle, claim the round.
             var msgs = thread.Messages;
             if (!msgs.Contains(userMsgId)) msgs = msgs.Add(userMsgId);
             if (!msgs.Contains(responseMsgId)) msgs = msgs.Add(responseMsgId);
@@ -471,6 +519,39 @@ public static class ThreadExecution
             _ => { },
             ex => logger?.LogWarning(ex,
                 "HandleSubmitMessage: UpdateMeshNode failed for {ThreadPath}", threadPath));
+
+        // If we queued the user message, materialise the user satellite cell
+        // for the GUI to bind to (status=Submitted), respond with the queued
+        // id, and return. The watcher dispatches the round when the current
+        // turn ends.
+        if (queued)
+        {
+            var qMainEntity = request.ContextPath ?? threadPath;
+            var queueMeshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+            queueMeshService.CreateNode(new MeshNode(userMsgId, threadPath)
+            {
+                NodeType = ThreadMessageNodeType.NodeType,
+                MainNode = qMainEntity,
+                Content = queuedUserMessage
+            }).Subscribe(
+                _ => logger?.LogDebug("[ThreadExec] Queued user cell: {Path}", $"{threadPath}/{userMsgId}"),
+                ex => logger?.LogDebug(ex,
+                    "[ThreadExec] Queued user cell create error (may already exist): {Path}",
+                    $"{threadPath}/{userMsgId}"));
+            hub.Post(
+                new SubmitMessageResponse
+                {
+                    Success = true,
+                    Messages = ImmutableList.Create(userMsgId)
+                },
+                o => o.ResponseFor(delivery));
+            // Discard the unused CTS we pre-allocated above — the queued
+            // submission rides the current round's CTS until the watcher
+            // dispatches it, at which point _Exec's ExecuteMessageAsync
+            // creates a fresh CTS via StoreNewCts.
+            executionCts.Dispose();
+            return delivery.Processed();
+        }
 
         logger?.LogInformation("[ThreadExec] HandleSubmitMessage: state updated for {ThreadPath}, activeMsg={ActiveMsg}, clientCells={ClientCells}",
             threadPath, responseMsgId, clientProvidedCells);
@@ -1209,8 +1290,19 @@ public static class ThreadExecution
                     catch (OperationCanceledException)
                     {
                         logger.LogInformation("[ThreadExec] CANCELLED: {Time:HH:mm:ss.fff} threadPath={ThreadPath}", DateTime.UtcNow, threadPath);
-                        var cancelText = responseText.ToString();
-                        PushToResponseMessage(cancelText, toolCallLog, nodeChangeLog,
+                        // ToString must be under logLock — UpdateDelegationStatus
+                        // (sub-thread callback) can still Append concurrently after
+                        // the try body exits.
+                        string cancelText;
+                        ImmutableList<ToolCallEntry> cancelToolCalls;
+                        ImmutableList<NodeChangeEntry> cancelNodeChanges;
+                        lock (logLock)
+                        {
+                            cancelText = responseText.ToString();
+                            cancelToolCalls = toolCallLog;
+                            cancelNodeChanges = nodeChangeLog;
+                        }
+                        PushToResponseMessage(cancelText, cancelToolCalls, cancelNodeChanges,
                             request.AgentName, request.ModelName,
                             completedAt: DateTime.UtcNow,
                             status: ThreadMessageStatus.Cancelled);
@@ -1219,13 +1311,23 @@ public static class ThreadExecution
                             IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,
                             ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null
                         });
-                        NotifyParentCompletion(parentHub, threadPath, cancelText, false, nodeChangeLog);
+                        NotifyParentCompletion(parentHub, threadPath, cancelText, false, cancelNodeChanges);
                     }
                     catch (Exception ex)
                     {
                         logger.LogError(ex, "[ThreadExec] ERROR: {Time:HH:mm:ss.fff} threadPath={ThreadPath}", DateTime.UtcNow, threadPath);
-                        var errorText = (responseText.ToString() + $"\n\n*Error: {ex.Message}*").Trim();
-                        PushToResponseMessage(errorText, toolCallLog, nodeChangeLog,
+                        // Same lock-guarded snapshot as the cancellation path.
+                        string errorTextBase;
+                        ImmutableList<ToolCallEntry> errorToolCalls;
+                        ImmutableList<NodeChangeEntry> errorNodeChanges;
+                        lock (logLock)
+                        {
+                            errorTextBase = responseText.ToString();
+                            errorToolCalls = toolCallLog;
+                            errorNodeChanges = nodeChangeLog;
+                        }
+                        var errorText = (errorTextBase + $"\n\n*Error: {ex.Message}*").Trim();
+                        PushToResponseMessage(errorText, errorToolCalls, errorNodeChanges,
                             request.AgentName, request.ModelName,
                             completedAt: DateTime.UtcNow,
                             status: ThreadMessageStatus.Error);
@@ -1234,7 +1336,7 @@ public static class ThreadExecution
                             IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,
                             ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null
                         });
-                        NotifyParentCompletion(parentHub, threadPath, errorText, false, nodeChangeLog);
+                        NotifyParentCompletion(parentHub, threadPath, errorText, false, errorNodeChanges);
                     }
                     finally
                     {
