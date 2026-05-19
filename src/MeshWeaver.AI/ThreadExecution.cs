@@ -105,10 +105,16 @@ public static class ThreadExecution
             // stream-update path can't replicate without a side-effect watcher.
             // Migration plan tracked in tasks #10. See RequestViaStreamUpdate.md.
             .WithHandler<SubmitMessageRequest>(HandleSubmitMessage)
-            // Watcher → trigger → execution. The submission watcher posts this
-            // whenever it observes Status==Idle + PendingUserMessages.Count > 0;
-            // the handler atomically claims the round and drives Step A→E
-            // (Idle → StartingExecution → Executing → Completing → Idle).
+            // Two-stage round-start: the THREAD hub atomically claims the
+            // round (Status: Idle → StartingExecution) because the thread node
+            // is its own; the _Exec hosted hub (see InstallExecutionHub) takes
+            // over for the drain + cell creation + Status → Executing + stream.
+            // Both register a handler for StartExecutionTrigger:
+            //   • thread hub.HandleStartExecution — atomic claim, forward
+            //     to _Exec on success
+            //   • _Exec.HandleStartExecutionOnExec — drain pending into
+            //     Messages, materialise user cells, allocate response cell,
+            //     flip Status → Executing, post SubmitMessageRequest to self.
             .WithHandler<StartExecutionTrigger>(ThreadSubmission.HandleStartExecution)
             // Internal cross-hub mutation triggers — when ThreadSubmission.Apply*
             // is invoked from a non-owner hub, it posts these so the work lands
@@ -121,7 +127,30 @@ public static class ThreadExecution
             .WithInitialization(RecoverStaleExecutingThread)
             .WithInitialization(WatchForExecution)
             .WithInitialization(InstallCancellationWatcher)
+            .WithInitialization(InstallExecutionHub)
             .WithInitialization(InstallSubmissionWatcher);
+
+    /// <summary>
+    /// Eagerly creates the <c>_Exec</c> hosted hub at thread hub init time with
+    /// the handlers it owns: <see cref="SubmitMessageRequest"/> (streaming
+    /// entry) and <see cref="StartExecutionTrigger"/> (round-start: drain
+    /// pending into Messages, materialise user cells, allocate response cell,
+    /// then post a SubmitMessageRequest to self for the streaming pass).
+    ///
+    /// <para>Eager creation matters: the submission watcher posts directly to
+    /// <c>{threadAddress}/_Exec</c>, and the framework's hosted-hub routing
+    /// uses <see cref="HostedHubCreation.Never"/> when forwarding — so the
+    /// hub must already exist before the first watcher tick.</para>
+    /// </summary>
+    private static void InstallExecutionHub(IMessageHub threadHub)
+    {
+        threadHub.GetHostedHub(
+            new Address($"{threadHub.Address}/_Exec"),
+            config => config
+                .WithHandler<SubmitMessageRequest>(ExecuteMessageAsync)
+                .WithHandler<StartExecutionTrigger>(HandleStartExecutionOnExec),
+            HostedHubCreation.Always);
+    }
 
     /// <summary>
     /// Installs the continuous server-side watcher that ingests queued user messages
@@ -392,6 +421,88 @@ public static class ThreadExecution
             }
         });
         hub.RegisterForDisposal(sub);
+    }
+
+    /// <summary>
+    /// Handler for <see cref="StartExecutionTrigger"/> on the <c>_Exec</c>
+    /// hosted hub. Executes one full pre-stream step of the round:
+    /// drains <see cref="MeshThread.PendingUserMessages"/> into
+    /// <see cref="MeshThread.Messages"/>, materialises the user satellite cells,
+    /// allocates a single response cell for the round, transitions
+    /// <c>Status: StartingExecution → Executing</c>, then posts
+    /// <see cref="SubmitMessageRequest"/> to itself so the existing
+    /// <see cref="ExecuteMessageAsync"/> handler picks up the streaming pass.
+    ///
+    /// <para><b>Hub topology.</b> Posted by the thread hub's
+    /// <see cref="ThreadSubmission.HandleStartExecution"/> after a successful
+    /// atomic claim (Status flipped Idle → StartingExecution). The atomic claim
+    /// stays on the thread hub because writes to the thread node serialise
+    /// naturally through its single data-source action block. The drain + cell
+    /// creation runs HERE on <c>_Exec</c> — the "execution does the move from
+    /// pending to Messages" rule.</para>
+    ///
+    /// <para><b>Reads/writes go through <see cref="IMeshNodeStreamCache"/></b>,
+    /// not <c>parentHub.GetWorkspace()</c>. The cache is the canonical path for
+    /// non-owning hubs: one shared handle per path opened on the mesh hub,
+    /// routing all updates through cross-hub messaging instead of touching the
+    /// thread hub's data source synchronously. This eliminates the deadlock
+    /// risk of <c>UpdateOwn</c>-on-parent-from-a-different-hub-thread and
+    /// keeps every reader (watcher, GUI, MCP) seeing the same stream.</para>
+    /// </summary>
+    internal static IMessageDelivery HandleStartExecutionOnExec(
+        IMessageHub execHub,
+        IMessageDelivery<StartExecutionTrigger> delivery)
+    {
+        var parentHub = execHub.Configuration.ParentHub
+            ?? throw new InvalidOperationException(
+                "_Exec hosted hub has no ParentHub — cannot resolve thread path");
+        var logger = execHub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
+        var threadPath = delivery.Message.ThreadPath;
+
+        if (!string.Equals(parentHub.Address.Path, threadPath, StringComparison.Ordinal))
+        {
+            logger?.LogWarning(
+                "[HandleStartExecutionOnExec] trigger landed on wrong _Exec hub: parent={Parent} threadPath={ThreadPath}",
+                parentHub.Address.Path, threadPath);
+            return delivery.Processed();
+        }
+
+        // Read the post-claim state through the shared mesh-node cache (single
+        // source of truth across all readers). Drop the trigger if Status isn't
+        // StartingExecution — stale fingerprint emission, or claim already
+        // consumed by another _Exec invocation.
+        var cache = execHub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        cache.GetStream(threadPath)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Subscribe(
+                latest =>
+                {
+                    if (latest?.Content is not MeshThread thread)
+                    {
+                        logger?.LogWarning(
+                            "[HandleStartExecutionOnExec] thread node has no MeshThread content for {ThreadPath}",
+                            threadPath);
+                        return;
+                    }
+                    if (thread.Status != ThreadExecutionStatus.StartingExecution)
+                    {
+                        logger?.LogDebug(
+                            "[HandleStartExecutionOnExec] status={Status} (not StartingExecution) — drop trigger for {ThreadPath}",
+                            thread.Status, threadPath);
+                        return;
+                    }
+                    // Step B + C live in DispatchAfterClaim → DispatchRound,
+                    // which still uses parentHub for cross-hub Posts (cell
+                    // creation under the user's access context). Subsequent
+                    // refactor will switch the state-write within DispatchRound
+                    // to also flow through IMeshNodeStreamCache.
+                    ThreadSubmissionServer.DispatchAfterClaim(parentHub, latest, logger);
+                },
+                ex => logger?.LogWarning(ex,
+                    "[HandleStartExecutionOnExec] cache read failed for {ThreadPath}", threadPath));
+
+        return delivery.Processed();
     }
 
     /// <summary>

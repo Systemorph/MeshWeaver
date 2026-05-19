@@ -420,8 +420,17 @@ public static class ThreadSubmission
                 // Did we actually claim it? If Status didn't flip, drop.
                 if ((postClaim.Content as MeshThread)?.Status != ThreadExecutionStatus.StartingExecution)
                     return;
-                // Hand off to Step B + C.
-                ThreadSubmissionServer.DispatchAfterClaim(hub, postClaim, logger);
+                // Hand off to _Exec for Step B (drain + cells) and Step C
+                // (response cell + commit Status → Executing). The hosted hub
+                // was created eagerly at thread hub init via InstallExecutionHub;
+                // we just post here, _Exec's HandleStartExecutionOnExec runs.
+                var execAddress = new Address($"{hub.Address}/_Exec");
+                logger?.LogDebug(
+                    "[HandleStartExecution] claimed; forwarding StartExecutionTrigger to {ExecAddress}",
+                    execAddress);
+                hub.Post(
+                    new StartExecutionTrigger(threadPath),
+                    o => o.WithTarget(execAddress));
             },
             ex => logger?.LogWarning(ex,
                 "[HandleStartExecution] claim Update failed for {ThreadPath}", threadPath));
