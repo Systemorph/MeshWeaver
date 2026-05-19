@@ -92,17 +92,11 @@ public static class MemexConfiguration
         // Configure Radzen
         services.AddRadzenServices();
 
-        // AI services — thread persistence is handled via MeshNodes
-
-        // Configure AI factories (read from appsettings, including Order)
-        services.AddAzureFoundryClaude(config =>
-            builder.Configuration.GetSection("Anthropic").Bind(config));
-
-        services.AddAzureFoundry(config =>
-            builder.Configuration.GetSection("AzureAIS").Bind(config));
-
-        services.AddAzureOpenAI(config =>
-            builder.Configuration.GetSection("AzureOpenAIS").Bind(config));
+        // AI services — thread persistence is handled via MeshNodes.
+        // Anthropic / AzureFoundry / AzureOpenAI registration is now a
+        // single per-provider builder extension (.AddAnthropic() etc.)
+        // wired in ConfigureMemexMesh — that one call registers the catalog
+        // source + IOptions binding + IChatClientFactory.
 
         services.AddCopilot(config =>
             builder.Configuration.GetSection("Copilot").Bind(config));
@@ -131,6 +125,9 @@ public static class MemexConfiguration
         // Register API token service for MCP bearer auth and OAuth code store
         services.AddSingleton<ApiTokenService>();
         services.AddSingleton<OAuthCodeStore>();
+        // ModelProviderService backs the Models settings tab — users store
+        // their own AI provider credentials as MeshNodes in their namespace.
+        services.AddSingleton<Memex.Portal.Shared.Models.ModelProviderService>();
 
         // Social publishing — minimal registration for the LinkedIn connect + pull endpoints.
         // (The full hosted-service pipeline is gated behind AddSocialPublishing which needs
@@ -339,6 +336,14 @@ public static class MemexConfiguration
                 .AddOrganizationType()
                 .AddPortalType()
                 .AddAI()
+                // Each AI provider self-registers everything (catalog
+                // source + IOptions binding + IChatClientFactory) via one
+                // builder extension. The Models settings tab + the
+                // ModelProviderService read these out of the live
+                // LanguageModelCatalogOptions — no central registry.
+                .AddAnthropic()
+                .AddAzureFoundry()
+                .AddAzureOpenAI()
                 .AddSelfRegistry()
                 .AddDocumentation()
                 .AddMarkdownExport()
@@ -389,7 +394,8 @@ public static class MemexConfiguration
                         .WithHeartBeatHandler() // silently ack heartbeats on every per-node hub
                         .AddDefaultLayoutAreas()
                         .AddThreadsLayoutArea()
-                        .AddApiTokensSettingsTab();
+                        .AddApiTokensSettingsTab()
+                        .AddModelsSettingsTab();
                 })
                 // Add activity tracking to record user access patterns via ActivityLogBundler
                 .AddActivityTracking();
