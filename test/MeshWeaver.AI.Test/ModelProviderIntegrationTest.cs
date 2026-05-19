@@ -1,0 +1,178 @@
+#pragma warning disable CS1591
+
+using System;
+using System.Collections.Immutable;
+using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
+using System.Threading;
+using System.Threading.Tasks;
+using FluentAssertions;
+using FluentAssertions.Extensions;
+using MeshWeaver.AI;
+using MeshWeaver.Data;
+using MeshWeaver.Graph;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
+using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Xunit;
+
+namespace MeshWeaver.AI.Test;
+
+/// <summary>
+/// Integration tests covering the user-owned ModelProvider + LanguageModel
+/// flow against a real Monolith mesh. Exercises the same path the chat
+/// client takes: ModelDefinition.ProviderRef → ModelProvider node →
+/// (Endpoint, ApiKey) via <see cref="ChatClientCredentialResolver"/>.
+/// </summary>
+public class ModelProviderIntegrationTest : AITestBase
+{
+    public ModelProviderIntegrationTest(ITestOutputHelper output) : base(output) { }
+
+    protected override bool ShareMeshAcrossTests => false;
+
+    private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+    private IWorkspace Workspace => Mesh.GetWorkspace();
+
+    [Fact(Timeout = 30_000)]
+    public async Task UserOwnedModelProvider_ResolverFindsKeyViaProviderRef()
+    {
+        var ct = new CancellationTokenSource(20.Seconds()).Token;
+        var userId = $"user-{Guid.NewGuid():N}";
+        var providerPath = $"{userId}/_Provider/Anthropic";
+        var modelId = "claude-opus-4-7";
+        var modelPath = $"{providerPath}/{modelId}";
+        var rawKey = "sk-ant-USERKEY-1234567890";
+
+        // 1. Create the ModelProvider node in the user's namespace.
+        var providerNode = new MeshNode("Anthropic", $"{userId}/_Provider")
+        {
+            NodeType = ModelProviderNodeType.NodeType,
+            Name = "Anthropic",
+            State = MeshNodeState.Active,
+            MainNode = userId,
+            Content = new ModelProviderConfiguration
+            {
+                Provider = "Anthropic",
+                ApiKey = rawKey,
+                Endpoint = "https://api.anthropic.com/v1/messages",
+                Label = "User's key",
+                CreatedAt = DateTimeOffset.UtcNow,
+                Models = ImmutableArray.Create(modelId)
+            }
+        };
+        var providerCreated = await MeshService.CreateNode(providerNode).FirstAsync().ToTask(ct);
+        providerCreated.Path.Should().Be(providerPath);
+
+        // 2. Create the LanguageModel child that references the provider.
+        var modelNode = new MeshNode(modelId, providerPath)
+        {
+            NodeType = LanguageModelNodeType.NodeType,
+            Name = modelId,
+            State = MeshNodeState.Active,
+            MainNode = userId,
+            Content = new ModelDefinition
+            {
+                Id = modelId,
+                Provider = "Anthropic",
+                ProviderRef = providerPath,
+                Order = 1
+            }
+        };
+        await MeshService.CreateNode(modelNode).FirstAsync().ToTask(ct);
+
+        // 3. Pre-warm the resolver's snapshot via the same workspace.GetQuery
+        //    the resolver uses internally — see SyncedMeshNodeQueries.md.
+        await Workspace.GetQuery(
+                "warmup",
+                AgentPickerProjection.BuildModelQueries(currentPath: userId))
+            .Where(s => s.Any(n => n.Path == modelPath))
+            .Take(1)
+            .Timeout(15.Seconds())
+            .ToTask(ct);
+
+        // 4. Resolve and verify.
+        var resolver = Mesh.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
+        resolver.WatchPartition(userId);
+
+        // Allow the partition subscription to ingest the user nodes.
+        await Task.Delay(200, ct);
+
+        var resolution = resolver.Resolve(modelId);
+        resolution.ApiKey.Should().Be(rawKey, "resolver follows ProviderRef → ModelProvider.ApiKey");
+        resolution.Endpoint.Should().Be("https://api.anthropic.com/v1/messages");
+        resolution.Source.Should().StartWith("providerRef:");
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task Resolver_MissingProvider_ReturnsMissing()
+    {
+        var ct = new CancellationTokenSource(15.Seconds()).Token;
+        // Model node without a ProviderRef and not in any catalog should
+        // resolve to Missing — the factory then falls back to IOptions.
+        var orphanId = $"orphan-model-{Guid.NewGuid():N}";
+        var modelNode = new MeshNode(orphanId, "Model")
+        {
+            NodeType = LanguageModelNodeType.NodeType,
+            Name = orphanId,
+            Content = new ModelDefinition
+            {
+                Id = orphanId,
+                Provider = "NoSuchProvider",
+            }
+        };
+        await MeshService.CreateNode(modelNode).FirstAsync().ToTask(ct);
+
+        await Workspace.GetQuery("warm-orphan", AgentPickerProjection.BuildModelQueries())
+            .Where(s => s.Any(n => n.Path == $"Model/{orphanId}"))
+            .Take(1)
+            .Timeout(10.Seconds())
+            .ToTask(ct);
+
+        var resolver = Mesh.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
+        var resolution = resolver.Resolve(orphanId);
+
+        resolution.ApiKey.Should().BeNull();
+        resolution.Endpoint.Should().BeNull();
+        resolution.Source.Should().Be("missing");
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task Resolver_UnknownModelId_ReturnsMissing()
+    {
+        var ct = new CancellationTokenSource(5.Seconds()).Token;
+        var resolver = Mesh.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
+        // Make sure the subscription has had a chance to gate.
+        await Task.Delay(100, ct);
+        resolver.Resolve("definitely-not-a-real-model-id").Should().Be(CredentialResolution.Missing);
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task ResolverGetProviderForModel_ReturnsCachedProvider()
+    {
+        var ct = new CancellationTokenSource(15.Seconds()).Token;
+        var modelId = $"prov-{Guid.NewGuid():N}";
+        var modelNode = new MeshNode(modelId, "Model")
+        {
+            NodeType = LanguageModelNodeType.NodeType,
+            Name = modelId,
+            Content = new ModelDefinition
+            {
+                Id = modelId,
+                Provider = "Anthropic",
+            }
+        };
+        await MeshService.CreateNode(modelNode).FirstAsync().ToTask(ct);
+
+        await Workspace.GetQuery("warm-prov", AgentPickerProjection.BuildModelQueries())
+            .Where(s => s.Any(n => n.Path == $"Model/{modelId}"))
+            .Take(1)
+            .Timeout(10.Seconds())
+            .ToTask(ct);
+
+        var resolver = Mesh.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
+        resolver.GetProviderForModel(modelId).Should().Be("Anthropic");
+    }
+}

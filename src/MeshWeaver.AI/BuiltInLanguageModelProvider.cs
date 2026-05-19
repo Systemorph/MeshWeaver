@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -74,14 +75,6 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
                 continue;
             }
 
-            if (models == null || models.Length == 0)
-            {
-                logger?.LogDebug(
-                    "BuiltInLanguageModelProvider: '{Section}:Models' empty — provider {Provider} contributes nothing",
-                    source.SectionName, source.ProviderName);
-                continue;
-            }
-
             // Read driver config (Endpoint + ApiKey) from the same section
             // the legacy IOptions<...Configuration> binding read from. Stamping
             // these on the ModelDefinition makes the model MeshNode the source
@@ -97,6 +90,48 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
             }
             catch { /* malformed section — skip stamping */ }
 
+            // Parse IConfiguration into the canonical ModelProvider mesh node:
+            // every credential the system ships with becomes a node in the
+            // root catalog. ModelProvider is NOT WithPublicRead (no
+            // ConfigureNodeTypeAccess call) so only callers with
+            // Permission.Api on the root namespace see the ApiKey; ordinary
+            // user-context reads in their own partition see only their own
+            // (user-authored) ModelProvider rows. Publicly-visible LanguageModel
+            // siblings still carry NO key — that protection is intact.
+            var hasAnySignal = (models != null && models.Length > 0)
+                || !string.IsNullOrEmpty(endpoint)
+                || !string.IsNullOrEmpty(apiKey);
+            if (hasAnySignal)
+            {
+                var providerConfig = new ModelProviderConfiguration
+                {
+                    Provider = source.ProviderName,
+                    ApiKey = apiKey,
+                    Endpoint = endpoint,
+                    Label = source.ProviderName,
+                    CreatedAt = DateTimeOffset.UtcNow,
+                    Models = models is { Length: > 0 }
+                        ? models.Where(m => !string.IsNullOrWhiteSpace(m)).ToImmutableArray()
+                        : ImmutableArray<string>.Empty
+                };
+                emitted.Add(new MeshNode(source.ProviderName, ModelProviderNodeType.RootNamespace)
+                {
+                    NodeType = ModelProviderNodeType.NodeType,
+                    Name = source.ProviderName,
+                    Category = "Providers",
+                    Icon = "Key",
+                    Content = providerConfig
+                });
+            }
+
+            if (models == null || models.Length == 0)
+            {
+                logger?.LogDebug(
+                    "BuiltInLanguageModelProvider: '{Section}:Models' empty — provider {Provider} contributes nothing",
+                    source.SectionName, source.ProviderName);
+                continue;
+            }
+
             foreach (var modelId in models)
             {
                 if (string.IsNullOrWhiteSpace(modelId)) continue;
@@ -108,7 +143,17 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
                     DisplayName = modelId,
                     Provider = source.ProviderName,
                     Endpoint = endpoint,
-                    ApiKeySecretRef = apiKey,
+                    // ApiKey NEVER on a LanguageModel node — these are
+                    // WithPublicRead. The factory's IOptions fallback supplies
+                    // the system-default key for static catalog entries.
+                    ApiKeySecretRef = null,
+                    // Reference the static ModelProvider node emitted above.
+                    // Resolver follows this pointer; user-partition ModelProvider
+                    // nodes override via their own ProviderRef on child
+                    // LanguageModel nodes.
+                    ProviderRef = hasAnySignal
+                        ? $"{ModelProviderNodeType.RootNamespace}/{source.ProviderName}"
+                        : null,
                     Order = source.Order
                 };
 
@@ -181,7 +226,33 @@ public class LanguageModelCatalogOptions
 }
 
 /// <summary>
-/// One catalog source: a config section to scan for <c>Models[]</c> and
-/// the provider label to stamp on each resulting Model node.
+/// One catalog source: a config section to scan for <c>Models[]</c>, the
+/// provider label to stamp on each resulting Model node, and the
+/// provider's bootstrap profile — default endpoint, default model ids
+/// (used when a user pastes a key in the Models settings tab and
+/// <c>ModelProviderService</c> auto-creates the LanguageModel children),
+/// and whether the provider requires an API key at all (false for keyless
+/// providers like GitHub Copilot or the local Claude Code CLI).
+///
+/// <para>Each provider package registers its own source via
+/// <see cref="LanguageModelNodeType.AddLanguageModelCatalogSource{TBuilder}(TBuilder, LanguageModelCatalogSource)"/>
+/// — there is NO central registry. Consumers (Models settings tab,
+/// <c>ModelProviderService.CreateProvider</c>) enumerate the live
+/// <see cref="LanguageModelCatalogOptions.Sources"/>.</para>
 /// </summary>
-public record LanguageModelCatalogSource(string SectionName, string ProviderName, int Order = 0);
+public record LanguageModelCatalogSource(
+    string SectionName,
+    string ProviderName,
+    int Order = 0,
+    string? DisplayLabel = null,
+    string? DefaultEndpoint = null,
+    ImmutableArray<string> DefaultModelIds = default,
+    bool RequiresApiKey = true)
+{
+    /// <summary>Effective display label — falls back to <see cref="ProviderName"/> when not supplied.</summary>
+    public string EffectiveLabel => DisplayLabel ?? ProviderName;
+
+    /// <summary>Defensive default for <see cref="DefaultModelIds"/> — record syntax can leave it uninitialised.</summary>
+    public ImmutableArray<string> EffectiveModelIds =>
+        DefaultModelIds.IsDefault ? ImmutableArray<string>.Empty : DefaultModelIds;
+}

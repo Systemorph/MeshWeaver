@@ -75,6 +75,7 @@ public static class AIExtensions
         => typeRegistry.WithType(typeof(AgentConfiguration), nameof(AgentConfiguration))
             .WithType(typeof(AgentDelegation), nameof(AgentDelegation))
             .WithType(typeof(ModelDefinition), nameof(ModelDefinition))
+            .WithType(typeof(ModelProviderConfiguration), nameof(ModelProviderConfiguration))
             .WithType(typeof(AI.Thread), nameof(AI.Thread))
             .WithType(typeof(ThreadMessage), nameof(ThreadMessage))
             // MessageViewModel is not registered — handled as JsonElement on the wire.

@@ -48,10 +48,23 @@ public static class LanguageModelNodeType
     {
         builder.AddMeshNodes(CreateMeshNode());
         builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
+        // Companion NodeType: ModelProvider holds the credentials shared by
+        // all child LanguageModel nodes. Registered together so a deployment
+        // calling AddLanguageModelType wires the entire data shape (the
+        // ChatClientCredentialResolver depends on both being available).
+        builder.AddModelProviderType();
         builder.ConfigureServices(services =>
         {
             services.TryAddSingleton<LanguageModelCatalogOptions>();
             services.TryAddSingleton<BuiltInLanguageModelProvider>();
+            services.TryAddSingleton<ChatClientCredentialResolver>();
+            // ModelDiscoveryService MUST be a top-level singleton on the
+            // mesh hub — never on a per-thread / exec hub where its
+            // synced subscriptions could get stuck behind an in-flight
+            // handler. The per-thread/per-chat code paths read this
+            // service from meshHub.ServiceProvider, not from their own
+            // hub's DI scope.
+            services.TryAddSingleton<ModelDiscoveryService>();
             // ðŸš¨ Plain AddSingleton (not TryAddEnumerable): TryAddEnumerable
             // dedupes by impl-type AND ServiceLifetime AND ImplementationFactory
             // â€” combinations that occasionally suppress the registration in
@@ -71,13 +84,10 @@ public static class LanguageModelNodeType
             return services;
         });
 
-        // Seed well-known catalog sources â€” each provider's factory reads
-        // its config from the same section, so its `Models[]` is the
-        // canonical model list. Custom providers can add more via
-        // AddLanguageModelCatalogSource.
-        builder.AddLanguageModelCatalogSource("Anthropic", "Azure Claude", order: 1);
-        builder.AddLanguageModelCatalogSource("AzureFoundry", "Azure Foundry", order: 2);
-        builder.AddLanguageModelCatalogSource("OpenAI", "OpenAI", order: 3);
+        // No central seeding — each provider package registers its own
+        // catalog source via AddLanguageModelCatalogSource in its own
+        // builder extension (decentralised). See e.g.
+        // AzureFoundryExtensions.AddAzureClaudeProvider().
         return builder;
     }
 
@@ -93,11 +103,27 @@ public static class LanguageModelNodeType
     /// <c>namespace:Model</c> queries returned only the access policy
     /// because Sources was empty at provider-resolve time).</para>
     /// </summary>
+    /// <inheritdoc cref="AddLanguageModelCatalogSource{TBuilder}(TBuilder, LanguageModelCatalogSource)"/>
     public static TBuilder AddLanguageModelCatalogSource<TBuilder>(
         this TBuilder builder,
         string sectionName,
         string providerName,
         int order = 0)
+        where TBuilder : MeshBuilder
+        => builder.AddLanguageModelCatalogSource(new LanguageModelCatalogSource(sectionName, providerName, order));
+
+    /// <summary>
+    /// Adds a fully-described catalog source — same shape as the legacy
+    /// 3-arg overload but carries the provider's bootstrap profile
+    /// (display label, default endpoint, default model ids,
+    /// RequiresApiKey). Decentralised: each provider package self-
+    /// registers via its own builder extension (see e.g.
+    /// AzureFoundryExtensions.AddAzureClaudeProvider). Idempotent on
+    /// (sectionName, providerName).
+    /// </summary>
+    public static TBuilder AddLanguageModelCatalogSource<TBuilder>(
+        this TBuilder builder,
+        LanguageModelCatalogSource source)
         where TBuilder : MeshBuilder
     {
         builder.ConfigureServices(services =>
@@ -127,7 +153,7 @@ public static class LanguageModelNodeType
                 services.AddSingleton(instance);
             }
 
-            instance.Add(new LanguageModelCatalogSource(sectionName, providerName, order));
+            instance.Add(source);
             return services;
         });
         return builder;

@@ -2,6 +2,7 @@
 using Azure.AI.Inference;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -50,12 +51,6 @@ public class AzureFoundryChatClientAgentFactory(
 
     protected override IChatClient CreateChatClient(AgentConfiguration agentConfig)
     {
-        if (string.IsNullOrEmpty(configuration.Endpoint))
-            throw new InvalidOperationException("Endpoint is required in AzureFoundryConfiguration");
-
-        if (string.IsNullOrEmpty(configuration.ApiKey))
-            throw new InvalidOperationException("ApiKey is required in AzureFoundryConfiguration");
-
         // Agent's PreferredModel wins; CurrentModelName fills in only when the agent doesn't pin one.
         var modelName = !string.IsNullOrEmpty(agentConfig.PreferredModel) ? agentConfig.PreferredModel
             : !string.IsNullOrEmpty(CurrentModelName) ? CurrentModelName
@@ -64,19 +59,33 @@ public class AzureFoundryChatClientAgentFactory(
         if (string.IsNullOrEmpty(modelName))
             throw new InvalidOperationException("At least one model must be configured in AzureFoundryConfiguration.Models");
 
-        // Information-level so 401s from the inference endpoint correlate
-        // to the exact (endpoint, key-fingerprint) tuple. Fingerprint is a
-        // SHA-256 prefix — never the key itself. Confirms whether the live
-        // ApiKey in config is what's being sent on the wire.
+        // Resolver follows ModelDefinition.ProviderRef → ModelProvider node
+        // for Endpoint + ApiKey. Falls back to IOptions configuration when
+        // no provider node is present (legacy single-tenant deployments).
+        var resolver = Hub.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
+        var resolution = resolver.Resolve(modelName);
+        var endpoint = resolution.Endpoint ?? configuration.Endpoint;
+        var apiKey = resolution.ApiKey ?? configuration.ApiKey;
+        var source = resolution.Endpoint != null || resolution.ApiKey != null
+            ? resolution.Source : "IOptions";
+
+        if (string.IsNullOrEmpty(endpoint))
+            throw new InvalidOperationException(
+                $"Endpoint is missing for model '{modelName}'. Configure a ModelProvider node (Model/AzureFoundry) or set AzureFoundry:Endpoint in config.");
+
+        if (string.IsNullOrEmpty(apiKey))
+            throw new InvalidOperationException(
+                $"ApiKey is missing for model '{modelName}'. Configure a ModelProvider node (Model/AzureFoundry) or set AzureFoundry:ApiKey in config.");
+
         logger.LogInformation(
-            "[AzureFoundry] Creating chat client agent={AgentName} model={ModelName} endpoint={Endpoint} apiKeyFp={ApiKeyFingerprint}",
-            agentConfig.Id, modelName, configuration.Endpoint, Fingerprint(configuration.ApiKey));
+            "[AzureFoundry] Creating chat client agent={AgentName} model={ModelName} endpoint={Endpoint} source={Source} apiKeyFp={ApiKeyFingerprint}",
+            agentConfig.Id, modelName, endpoint, source, Fingerprint(apiKey));
 
         try
         {
             var client = new ChatCompletionsClient(
-                new Uri(configuration.Endpoint),
-                new AzureKeyCredential(configuration.ApiKey));
+                new Uri(endpoint),
+                new AzureKeyCredential(apiKey));
 
             IChatClient chatClient = client.AsIChatClient(modelName);
 

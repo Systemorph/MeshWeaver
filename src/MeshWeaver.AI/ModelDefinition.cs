@@ -57,6 +57,19 @@ public record ModelDefinition
     public string? ApiKeySecretRef { get; init; }
 
     /// <summary>
+    /// Path of the <c>nodeType:ModelProvider</c> node that owns this
+    /// model's credentials — e.g. <c>Model/Anthropic</c> for built-in
+    /// catalog entries, or <c>{userId}/Model/Anthropic</c> for
+    /// user-authored BYO models. The chat-client factory's
+    /// <see cref="ChatClientCredentialResolver"/> follows this reference
+    /// to read <see cref="ModelProviderConfiguration.ApiKey"/> /
+    /// <see cref="ModelProviderConfiguration.Endpoint"/>. Null on legacy
+    /// catalog rollouts that stamp <see cref="ApiKeySecretRef"/> /
+    /// <see cref="Endpoint"/> directly on the model node.
+    /// </summary>
+    public string? ProviderRef { get; init; }
+
+    /// <summary>
     /// Optional model-tier hint — <c>standard</c>, <c>reasoning</c>,
     /// <c>fast</c>, etc. Lets agents that declare <c>modelTier</c>
     /// frontmatter pick a matching model without naming it explicitly.

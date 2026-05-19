@@ -2,6 +2,7 @@
 using Azure.AI.OpenAI;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -38,18 +39,9 @@ public class AzureOpenAIChatClientAgentFactory(
 
     protected override IChatClient CreateChatClient(AgentConfiguration agentConfig)
     {
-        // Validate credentials
-        if (string.IsNullOrEmpty(credentials.Endpoint))
-            throw new InvalidOperationException("Azure OpenAI endpoint URL is required in AI configuration");
-        if (string.IsNullOrEmpty(credentials.ApiKey))
-            throw new InvalidOperationException("Azure OpenAI API key is required in AI configuration");
-
         // Agent's PreferredModel wins. CurrentModelName (the globally selected
         // model in the chat dropdown) is only used when the agent doesn't pin a
-        // model; first configured model fills in as a last resort. Models
-        // declared in agent definitions are the source of truth — see
-        // Doc/AI/* — so a globally selected model never overrides an
-        // agent-declared one.
+        // model; first configured model fills in as a last resort.
         var modelName = !string.IsNullOrEmpty(agentConfig.PreferredModel) ? agentConfig.PreferredModel
             : !string.IsNullOrEmpty(CurrentModelName) ? CurrentModelName
             : credentials.Models.FirstOrDefault();
@@ -57,17 +49,30 @@ public class AzureOpenAIChatClientAgentFactory(
         if (string.IsNullOrEmpty(modelName))
             throw new InvalidOperationException("No model configured for Azure OpenAI");
 
-        // Information-level so 401s from the OpenAI endpoint correlate to
-        // the (endpoint, key-fingerprint) tuple. Fingerprint is a SHA-256
-        // prefix — never the key itself.
+        // Resolver follows ModelDefinition.ProviderRef → ModelProvider node.
+        // Falls back to IOptions when no provider node has been configured.
+        var resolver = Hub.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
+        var resolution = resolver.Resolve(modelName);
+        var endpoint = resolution.Endpoint ?? credentials.Endpoint;
+        var apiKey = resolution.ApiKey ?? credentials.ApiKey;
+        var source = resolution.Endpoint != null || resolution.ApiKey != null
+            ? resolution.Source : "IOptions";
+
+        if (string.IsNullOrEmpty(endpoint))
+            throw new InvalidOperationException(
+                $"Endpoint is missing for model '{modelName}'. Configure a ModelProvider node (Model/AzureOpenAI) or set AzureOpenAI:Endpoint in config.");
+        if (string.IsNullOrEmpty(apiKey))
+            throw new InvalidOperationException(
+                $"ApiKey is missing for model '{modelName}'. Configure a ModelProvider node (Model/AzureOpenAI) or set AzureOpenAI:ApiKey in config.");
+
         logger.LogInformation(
-            "[AzureOpenAI] Creating chat client agent={AgentName} model={ModelName} endpoint={Endpoint} apiKeyFp={ApiKeyFingerprint}",
-            agentConfig.Id, modelName, credentials.Endpoint, Fingerprint(credentials.ApiKey));
+            "[AzureOpenAI] Creating chat client agent={AgentName} model={ModelName} endpoint={Endpoint} source={Source} apiKeyFp={ApiKeyFingerprint}",
+            agentConfig.Id, modelName, endpoint, source, Fingerprint(apiKey));
 
         // Create Azure OpenAI client and get chat client
         var azureClient = new AzureOpenAIClient(
-            new Uri(credentials.Endpoint),
-            new AzureKeyCredential(credentials.ApiKey));
+            new Uri(endpoint),
+            new AzureKeyCredential(apiKey));
 
         // Get the chat completion client for the model and convert it to IChatClient
         var openAIChatClient = azureClient.GetChatClient(modelName);

@@ -58,8 +58,51 @@ public static class AgentPickerProjection
         => BuildQueries(AgentNodeType.NodeType, AgentRootNamespace, currentPath, nodeTypePath);
 
     /// <inheritdoc cref="BuildAgentQueries" />
+    /// <remarks>
+    /// Returns the queries that surface every model the chat picker
+    /// (and <see cref="ChatClientCredentialResolver"/>) needs to see:
+    /// <list type="bullet">
+    ///   <item>System static catalog at <c>Model/</c> (legacy
+    ///         LanguageModel namespace) — public read.</item>
+    ///   <item>System ModelProvider satellite at <c>_Provider/</c>.</item>
+    ///   <item>The current path's <c>_Provider</c> subtree (every
+    ///         model + provider under <c>{currentPath}/_Provider/</c>) —
+    ///         direct match plus child paths via type alternation, so
+    ///         <c>{userPath}/_Provider/Anthropic</c> AND its child
+    ///         LanguageModel nodes both surface.</item>
+    /// </list>
+    /// One synced subscription per call site — same id, same cache.
+    /// </remarks>
     public static string[] BuildModelQueries(string? currentPath = null, string? nodeTypePath = null)
-        => BuildQueries(LanguageModelNodeType.NodeType, LanguageModelNodeType.RootNamespace, currentPath, nodeTypePath);
+    {
+        var typeFilter = $"{LanguageModelNodeType.NodeType}|{ModelProviderNodeType.NodeType}";
+        var queries = new List<string>
+        {
+            // Legacy catalog of LanguageModel nodes at Model/<id>.
+            $"namespace:{LanguageModelNodeType.RootNamespace} nodeType:{typeFilter}",
+            // System-default ModelProvider satellite at _Provider/<name>
+            // and its LanguageModel children at _Provider/<name>/<id>.
+            $"namespace:{ModelProviderNodeType.RootNamespace} nodeType:{typeFilter}",
+        };
+        if (!string.IsNullOrEmpty(currentPath))
+        {
+            // Ancestors of the current path (closest-wins for any
+            // path-scoped extensions).
+            queries.Add($"namespace:{currentPath} nodeType:{typeFilter} scope:selfAndAncestors");
+            // The owner's _Provider satellite subtree:
+            // {ownerPath}/_Provider/{provider} + child LanguageModel nodes
+            // at {ownerPath}/_Provider/{provider}/{modelId}. scope:descendants
+            // matches every node beneath the namespace, so both the provider
+            // and its model children surface in one subscription.
+            queries.Add($"namespace:{currentPath}/{ModelProviderNodeType.RootNamespace} nodeType:{typeFilter} scope:descendants");
+        }
+        if (!string.IsNullOrEmpty(nodeTypePath))
+        {
+            queries.Add($"namespace:{nodeTypePath} nodeType:{typeFilter} scope:selfAndAncestors");
+            queries.Add($"namespace:{nodeTypePath}/{ModelProviderNodeType.RootNamespace} nodeType:{typeFilter} scope:descendants");
+        }
+        return queries.ToArray();
+    }
 
     private static string[] BuildQueries(string nodeType, string rootNamespace, string? currentPath, string? nodeTypePath)
     {

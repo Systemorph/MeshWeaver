@@ -1,11 +1,6 @@
-﻿using System.Collections.Concurrent;
-using System.Reactive.Linq;
-using MeshWeaver.AI.Plugins;
-using MeshWeaver.Data;
-using MeshWeaver.Graph;
-using MeshWeaver.Mesh;
-using MeshWeaver.Messaging;
+﻿using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -30,41 +25,8 @@ public class AzureClaudeChatClientAgentFactory(
 {
     private readonly AzureClaudeConfiguration configuration = InitAndLog(options, logger);
 
-    /// <summary>
-    /// Live model-id → ModelDefinition cache, populated by a workspace synced
-    /// query on <c>namespace:Model nodeType:LanguageModel</c>. The factory
-    /// looks up the selected model here first to read per-model Endpoint /
-    /// ApiKeySecretRef. Subscribed lazily on first CreateChatClient call so
-    /// hub init doesn't pay the synced-query cost when no Claude agent ever
-    /// runs.
-    /// </summary>
-    private readonly ConcurrentDictionary<string, ModelDefinition> modelDefinitionsById =
-        new(StringComparer.OrdinalIgnoreCase);
-    private IDisposable? modelSubscription;
-
-    private void EnsureModelSubscription()
-    {
-        if (modelSubscription != null) return;
-        var workspace = Hub.GetWorkspace();
-        // Same named-query id ("LanguageModels") + same query strings as the
-        // chat picker UI and AgentChatClient — the workspace caches one
-        // upstream subscription keyed by id, so all three consumers share it.
-        // No more ad-hoc "azure-claude-models" id and no more inline query
-        // string literals — see AgentPickerProjection.ObserveSnapshot.
-        modelSubscription = AgentPickerProjection
-            .ObserveSnapshot(workspace, Hub,
-                AgentPickerProjection.ModelsQueryId,
-                AgentPickerProjection.BuildModelQueries())
-            .Subscribe(snapshot =>
-            {
-                modelDefinitionsById.Clear();
-                foreach (var node in snapshot)
-                {
-                    if (node.Content is ModelDefinition def && !string.IsNullOrEmpty(def.Id))
-                        modelDefinitionsById[def.Id] = def;
-                }
-            });
-    }
+    private ChatClientCredentialResolver Resolver =>
+        Hub.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
 
     private static AzureClaudeConfiguration InitAndLog(IOptions<AzureClaudeConfiguration> options, ILogger logger)
     {
@@ -85,10 +47,12 @@ public class AzureClaudeChatClientAgentFactory(
     public override int Order => configuration.Order;
 
     /// <summary>
-    /// Claude factory: serves any model name starting with "claude" (case-insensitive).
-    /// Covers claude-sonnet-4-6, claude-opus-4-7, claude-haiku-4-5, etc. without requiring
-    /// the deployed Models[] to enumerate every variant — agents can pin any Claude model
-    /// declared in their PreferredModel and routing finds this factory.
+    /// Claude factory: serves any model name starting with "claude" (case-insensitive),
+    /// regardless of whether the deployment is direct <c>api.anthropic.com</c>
+    /// or Azure-hosted Anthropic. Both use the same Messages-API wire protocol;
+    /// the endpoint (and therefore the route taken) is resolved at
+    /// <see cref="CreateChatClient"/> time from the model's
+    /// <c>ModelProvider</c> node via <see cref="ChatClientCredentialResolver"/>.
     /// </summary>
     public override bool Supports(string modelName) =>
         !string.IsNullOrEmpty(modelName)
@@ -96,8 +60,6 @@ public class AzureClaudeChatClientAgentFactory(
 
     protected override IChatClient CreateChatClient(AgentConfiguration agentConfig)
     {
-        EnsureModelSubscription();
-
         // Agent's PreferredModel wins (resolved from ModelTier in
         // ChatClientAgentFactory.CreateAgent). The chat picker should
         // auto-follow the selected agent's PreferredModel — see
@@ -111,32 +73,27 @@ public class AzureClaudeChatClientAgentFactory(
             throw new InvalidOperationException(
                 $"No model selected for agent {agentConfig.Id}. Set the agent's PreferredModel or pick one in the chat dropdown.");
 
-        // Driver config: prefer the model node's ModelDefinition (per-model
-        // Endpoint/ApiKey from the mesh) over the legacy IOptions binding.
-        modelDefinitionsById.TryGetValue(modelName, out var modelDef);
-        var endpoint = modelDef?.Endpoint ?? configuration.Endpoint;
-        var apiKey = modelDef?.ApiKeySecretRef ?? configuration.ApiKey;
-        var endpointSource = modelDef?.Endpoint != null ? "model-node" : "IOptions";
-        var apiKeySource = modelDef?.ApiKeySecretRef != null ? "model-node" : "IOptions";
+        // Driver config: resolver walks parent ModelProvider → root ModelProvider
+        // → legacy ModelDefinition fields. Fall back to IOptions if the resolver
+        // returns Missing.
+        var resolution = Resolver.Resolve(modelName);
+        var endpoint = resolution.Endpoint ?? configuration.Endpoint;
+        var apiKey = resolution.ApiKey ?? configuration.ApiKey;
+        var source = resolution.Endpoint != null || resolution.ApiKey != null
+            ? resolution.Source
+            : "IOptions";
 
         if (string.IsNullOrEmpty(endpoint))
             throw new InvalidOperationException(
-                $"Endpoint is missing for model '{modelName}'. Set it on the Model MeshNode (ModelDefinition.Endpoint) or in Anthropic:Endpoint config.");
+                $"Endpoint is missing for model '{modelName}'. Configure a ModelProvider node (e.g. Model/Anthropic) or set Anthropic:Endpoint in config.");
 
         if (string.IsNullOrEmpty(apiKey))
             throw new InvalidOperationException(
-                $"ApiKey is missing for model '{modelName}'. Set it on the Model MeshNode (ModelDefinition.ApiKeySecretRef) or in Anthropic:ApiKey config.");
+                $"ApiKey is missing for model '{modelName}'. Configure a ModelProvider node (e.g. Model/Anthropic) or set Anthropic:ApiKey in config.");
 
-        // Information-level so a 401 in prod can be correlated to the exact
-        // (endpoint, key-source, key-fingerprint) tuple the request used. The
-        // first 8 chars of a SHA-256 over the key is enough to disambiguate
-        // "stale stamped key from startup" vs "live config key" without
-        // exposing the key itself. ApiKeySecretRef is misnamed — the code
-        // uses it as the literal key — so a wrong/rotated value on a Model
-        // node propagates silently until this log shows the mismatch.
         logger.LogInformation(
-            "[AzureClaude] Creating chat client agent={AgentName} model={ModelName} endpoint={Endpoint} (endpointSource={EndpointSource}, apiKeySource={ApiKeySource}, apiKeyFp={ApiKeyFingerprint})",
-            agentConfig.Id, modelName, endpoint, endpointSource, apiKeySource, Fingerprint(apiKey));
+            "[AzureClaude] Creating chat client agent={AgentName} model={ModelName} endpoint={Endpoint} source={Source} apiKeyFp={ApiKeyFingerprint}",
+            agentConfig.Id, modelName, endpoint, source, Fingerprint(apiKey));
 
         try
         {
