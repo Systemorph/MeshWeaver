@@ -144,7 +144,29 @@ public class ModelNodeRepoRegistrationTest : AITestBase
         results.Should().Contain(n => n.Path == "Model/claude-opus-4-7");
     }
 
-    [Fact(Timeout = 30_000, Skip = "AgentPickerProjection.BuildModelQueries scope:descendants times out — needs picker-engine investigation; other tests in this class prove the underlying partition repos are correctly registered.")]
+    [Fact(Timeout = 30_000, Skip = "Repro for multi-query synced-collection deadlock: two simple queries that each work alone fail to deliver both Initial snapshots. Framework-level issue; tracked separately from this feature.")]
+    public async Task TwoQueriesAcrossPartitions_DeliverBothInitialSnapshots()
+    {
+        // Diagnostic: drive workspace.GetQuery with the exact same two
+        // queries the picker uses (no scope, no alternation) — assert
+        // both partition's Initial gates open.
+        var ct = new CancellationTokenSource(20.Seconds()).Token;
+
+        var snapshot = await Workspace.GetQuery(
+                "two-queries-diag",
+                $"namespace:{LanguageModelNodeType.RootNamespace} nodeType:{LanguageModelNodeType.NodeType}",
+                $"namespace:{ModelProviderNodeType.RootNamespace} nodeType:{ModelProviderNodeType.NodeType}")
+            .Where(s => s.Any(n => n.NodeType == LanguageModelNodeType.NodeType)
+                     && s.Any(n => n.NodeType == ModelProviderNodeType.NodeType))
+            .Take(1)
+            .Timeout(15.Seconds())
+            .ToTask(ct);
+
+        snapshot.Should().Contain(n => n.Path == "Model/claude-opus-4-7");
+        snapshot.Should().Contain(n => n.Path == "_Provider/Anthropic");
+    }
+
+    [Fact(Timeout = 30_000, Skip = "Type alternation nodeType:A|B times out in synced collection — needs investigation. Single-type queries work (asserted by other tests in this class).")]
     public async Task PickerQueries_ReturnBothLanguageModelAndModelProviderNodes()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
