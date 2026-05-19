@@ -101,9 +101,11 @@ public class OrleansUserOwnedModelTest(ITestOutputHelper output) : OrleansShared
         // 3. Verify both nodes are persisted by reading directly from the
         //    silo-side workspace via GetMeshNodeStream (authoritative
         //    per-node remote stream — see CqrsAndContentAccess.md).
-        var siloMesh = ((InProcessSiloHandle)Fixture.Cluster.Silos[0])
-            .SiloHost.Services.GetRequiredService<IMessageHub>();
-        var siloWorkspace = siloMesh.GetWorkspace();
+        // Read through the CLIENT workspace (carries the user's
+        // AccessContext via the fixture's SetCircuitContext). Reading via
+        // the silo's mesh hub would run with no identity and trip RLS
+        // on the user-partition subtree.
+        var siloWorkspace = client.GetWorkspace();
 
         var persistedProvider = await siloWorkspace.GetMeshNodeStream(providerPath)
             .Where(n => n?.Content is ModelProviderConfiguration)
@@ -171,9 +173,11 @@ public class OrleansUserOwnedModelTest(ITestOutputHelper output) : OrleansShared
         // currentPath, so a sibling subtree like {userId}/Model isn't
         // visible by default. This explicit subtree query is what
         // ChatClientCredentialResolver.WatchPartition uses internally.
-        var siloMesh = ((InProcessSiloHandle)Fixture.Cluster.Silos[0])
-            .SiloHost.Services.GetRequiredService<IMessageHub>();
-        var siloWorkspace = siloMesh.GetWorkspace();
+        // Read through the CLIENT workspace (carries the user's
+        // AccessContext via the fixture's SetCircuitContext). Reading via
+        // the silo's mesh hub would run with no identity and trip RLS
+        // on the user-partition subtree.
+        var siloWorkspace = client.GetWorkspace();
 
         var providerNs = $"{userId}/_Provider";
 
@@ -235,9 +239,11 @@ public class OrleansUserOwnedModelTest(ITestOutputHelper output) : OrleansShared
         await client.Observe(new CreateNodeRequest(modelNode), o => o.WithTarget(meshAddress))
             .FirstAsync().ToTask(ct);
 
-        var siloMesh = ((InProcessSiloHandle)Fixture.Cluster.Silos[0])
-            .SiloHost.Services.GetRequiredService<IMessageHub>();
-        var siloWorkspace = siloMesh.GetWorkspace();
+        // Read through the CLIENT workspace (carries the user's
+        // AccessContext via the fixture's SetCircuitContext). Reading via
+        // the silo's mesh hub would run with no identity and trip RLS
+        // on the user-partition subtree.
+        var siloWorkspace = client.GetWorkspace();
 
         // Read the persisted provider node before rotate.
         var pre = await siloWorkspace.GetMeshNodeStream(providerPath)

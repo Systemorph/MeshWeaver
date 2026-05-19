@@ -37,6 +37,18 @@ public class ModelProviderServiceTest : AITestBase
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
+            // Register the Anthropic catalog source so ModelProviderService.CreateProvider
+            // can look up its DefaultModelIds — the service auto-creates one
+            // LanguageModel child per default id.
+            .AddLanguageModelCatalogSource(new LanguageModelCatalogSource(
+                SectionName: "Anthropic",
+                ProviderName: "Anthropic",
+                Order: 1,
+                DisplayLabel: "Anthropic",
+                DefaultEndpoint: "https://api.anthropic.com/v1/messages",
+                DefaultModelIds: System.Collections.Immutable.ImmutableArray.Create(
+                    "claude-opus-4-7", "claude-sonnet-4-6"),
+                RequiresApiKey: true))
             .ConfigureServices(services => services.AddSingleton<ModelProviderService>());
 
     private ModelProviderService Service => Mesh.ServiceProvider.GetRequiredService<ModelProviderService>();

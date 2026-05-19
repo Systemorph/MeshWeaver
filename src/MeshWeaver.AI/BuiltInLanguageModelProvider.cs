@@ -157,7 +157,14 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
                     Order = source.Order
                 };
 
-                emitted.Add(new MeshNode(modelId, LanguageModelNodeType.RootNamespace)
+                // Static LanguageModel nodes live UNDER their provider's
+                // satellite path: _Provider/{providerName}/{modelId}. Matches
+                // the user-partition layout ({userPath}/_Provider/{providerName}/{modelId})
+                // so the picker can use ONE namespace per query path —
+                // the documented shape for synced-collection multi-query
+                // (varying scope/path, same nodeType filter).
+                var modelNamespace = $"{ModelProviderNodeType.RootNamespace}/{source.ProviderName}";
+                emitted.Add(new MeshNode(modelId, modelNamespace)
                 {
                     NodeType = LanguageModelNodeType.NodeType,
                     Name = modelId,

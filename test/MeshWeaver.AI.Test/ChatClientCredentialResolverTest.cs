@@ -57,11 +57,16 @@ public class ChatClientCredentialResolverTest : AITestBase
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
         var modelId = $"legacy-{Guid.NewGuid():N}";
+        // Place the LanguageModel under the canonical _Provider subtree —
+        // the resolver's subscription only watches _Provider/* (per
+        // AgentPickerProjection.BuildModelQueries' documented pattern).
+        var modelNs = $"{ModelProviderNodeType.RootNamespace}/Anthropic";
+        var modelPath = $"{modelNs}/{modelId}";
 
         // Legacy shape: a LanguageModel node carrying the key directly on
         // its content (no ProviderRef). The resolver's last rung —
         // "model-node" — picks this up.
-        await MeshService.CreateNode(new MeshNode(modelId, "Model")
+        await MeshService.CreateNode(new MeshNode(modelId, modelNs)
         {
             NodeType = LanguageModelNodeType.NodeType,
             Name = modelId,
@@ -79,16 +84,18 @@ public class ChatClientCredentialResolverTest : AITestBase
 
         // Pre-warm the resolver's snapshot so it sees the model.
         var workspace = Mesh.GetWorkspace();
-        await workspace.GetMeshNodeStream($"Model/{modelId}")
+        await workspace.GetMeshNodeStream(modelPath)
             .Where(n => n?.Content is ModelDefinition)
             .Take(1).Timeout(10.Seconds()).ToTask(ct);
 
         var resolver = Mesh.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
         resolver.EnsureSubscription();
-        // Allow the subscription to ingest the new node.
-        await Task.Delay(300, ct);
-
-        var resolution = resolver.Resolve(modelId);
+        // Poll the resolver's public surface — robust against OnNext
+        // ordering vs the warmup observable above.
+        var resolution = await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .Select(_ => resolver.Resolve(modelId))
+            .Where(r => r.ApiKey != null)
+            .Take(1).Timeout(10.Seconds()).ToTask(ct);
         resolution.ApiKey.Should().Be("sk-legacy-on-model-node",
             "fallback to ModelDefinition.ApiKeySecretRef when no ProviderRef is set");
         resolution.Endpoint.Should().Be("https://legacy.example/v1/messages");
@@ -100,8 +107,10 @@ public class ChatClientCredentialResolverTest : AITestBase
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
         var modelId = $"pmodel-{Guid.NewGuid():N}";
+        var modelNs = $"{ModelProviderNodeType.RootNamespace}/Anthropic";
+        var modelPath = $"{modelNs}/{modelId}";
 
-        await MeshService.CreateNode(new MeshNode(modelId, "Model")
+        await MeshService.CreateNode(new MeshNode(modelId, modelNs)
         {
             NodeType = LanguageModelNodeType.NodeType,
             Name = modelId,
@@ -114,15 +123,17 @@ public class ChatClientCredentialResolverTest : AITestBase
         }).FirstAsync().ToTask(ct);
 
         var workspace = Mesh.GetWorkspace();
-        await workspace.GetMeshNodeStream($"Model/{modelId}")
+        await workspace.GetMeshNodeStream(modelPath)
             .Where(n => n?.Content is ModelDefinition)
             .Take(1).Timeout(10.Seconds()).ToTask(ct);
 
         var resolver = Mesh.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
         resolver.EnsureSubscription();
-        await Task.Delay(300, ct);
-
-        resolver.GetProviderForModel(modelId).Should().Be("Anthropic");
+        var provider = await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .Select(_ => resolver.GetProviderForModel(modelId))
+            .Where(p => p != null)
+            .Take(1).Timeout(10.Seconds()).ToTask(ct);
+        provider.Should().Be("Anthropic");
         resolver.GetProviderForModel("does-not-exist").Should().BeNull();
     }
 }

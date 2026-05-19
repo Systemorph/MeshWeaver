@@ -74,19 +74,19 @@ public class ModelNodeRepoRegistrationTest : AITestBase
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
 
-        var node = await Workspace.GetMeshNodeStream("Model/claude-opus-4-7")
+        var node = await Workspace.GetMeshNodeStream("_Provider/Anthropic/claude-opus-4-7")
             .Where(n => n?.Content is ModelDefinition)
             .Take(1)
             .Timeout(10.Seconds())
             .ToTask(ct);
 
-        node.Should().NotBeNull("BuiltInLanguageModelProvider emits a LanguageModel for each configured model id");
+        node.Should().NotBeNull("BuiltInLanguageModelProvider emits a LanguageModel child under _Provider/{name}/{modelId}");
         node.NodeType.Should().Be(LanguageModelNodeType.NodeType);
         var def = node.Content.Should().BeOfType<ModelDefinition>().Subject;
         def.Id.Should().Be("claude-opus-4-7");
         def.Provider.Should().Be("Anthropic");
         def.ProviderRef.Should().Be("_Provider/Anthropic",
-            "ProviderRef points at the static ModelProvider so the resolver can chase the credential");
+            "ProviderRef points at the parent ModelProvider so the resolver can chase the credential");
     }
 
     [Fact(Timeout = 30_000)]
@@ -129,44 +129,22 @@ public class ModelNodeRepoRegistrationTest : AITestBase
     }
 
     [Fact(Timeout = 30_000)]
-    public async Task QueryAsync_NamespaceModel_ReturnsLanguageModels()
+    public async Task QueryAsync_NamespaceProvider_ReturnsCatalog()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
 
         var results = new System.Collections.Generic.List<MeshNode>();
         await foreach (var item in MeshService.QueryAsync(
-            new MeshQueryRequest { Query = $"namespace:{LanguageModelNodeType.RootNamespace} nodeType:{LanguageModelNodeType.NodeType}" },
+            new MeshQueryRequest { Query = $"namespace:{ModelProviderNodeType.RootNamespace} nodeType:{ModelProviderNodeType.NodeType} scope:descendants" },
             ct))
         {
             if (item is MeshNode n) results.Add(n);
         }
 
-        results.Should().Contain(n => n.Path == "Model/claude-opus-4-7");
+        results.Should().Contain(n => n.Path == "_Provider/Anthropic");
     }
 
-    [Fact(Timeout = 30_000, Skip = "Repro for multi-query synced-collection deadlock: two simple queries that each work alone fail to deliver both Initial snapshots. Framework-level issue; tracked separately from this feature.")]
-    public async Task TwoQueriesAcrossPartitions_DeliverBothInitialSnapshots()
-    {
-        // Diagnostic: drive workspace.GetQuery with the exact same two
-        // queries the picker uses (no scope, no alternation) — assert
-        // both partition's Initial gates open.
-        var ct = new CancellationTokenSource(20.Seconds()).Token;
-
-        var snapshot = await Workspace.GetQuery(
-                "two-queries-diag",
-                $"namespace:{LanguageModelNodeType.RootNamespace} nodeType:{LanguageModelNodeType.NodeType}",
-                $"namespace:{ModelProviderNodeType.RootNamespace} nodeType:{ModelProviderNodeType.NodeType}")
-            .Where(s => s.Any(n => n.NodeType == LanguageModelNodeType.NodeType)
-                     && s.Any(n => n.NodeType == ModelProviderNodeType.NodeType))
-            .Take(1)
-            .Timeout(15.Seconds())
-            .ToTask(ct);
-
-        snapshot.Should().Contain(n => n.Path == "Model/claude-opus-4-7");
-        snapshot.Should().Contain(n => n.Path == "_Provider/Anthropic");
-    }
-
-    [Fact(Timeout = 30_000, Skip = "Type alternation nodeType:A|B times out in synced collection — needs investigation. Single-type queries work (asserted by other tests in this class).")]
+    [Fact(Timeout = 30_000)]
     public async Task PickerQueries_ReturnBothLanguageModelAndModelProviderNodes()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -180,7 +158,7 @@ public class ModelNodeRepoRegistrationTest : AITestBase
             .Timeout(10.Seconds())
             .ToTask(ct);
 
-        snapshot.Should().Contain(n => n.Path == "Model/claude-opus-4-7");
+        snapshot.Should().Contain(n => n.Path == "_Provider/Anthropic/claude-opus-4-7");
         snapshot.Should().Contain(n => n.Path == "_Provider/Anthropic");
     }
 }
