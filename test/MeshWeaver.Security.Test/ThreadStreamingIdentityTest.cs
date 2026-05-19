@@ -192,6 +192,119 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
             "updates are blocked in the _Exec hub's message buffer (the bug we fixed)");
     }
 
+    /// <summary>
+    /// Verifies that streaming produces MULTIPLE distinct emissions over time with
+    /// MONOTONICALLY GROWING text — proving the response cell is patched incrementally
+    /// as chunks arrive, not in a single all-at-end write. If the framework batches
+    /// all updates into the final commit, this test catches it: only one emission
+    /// with the final text would arrive.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task SubmitMessage_StreamingProducesMultipleGrowingEmissions()
+    {
+        LoginAsChatUser();
+        var client = GetClient();
+        var ct = new CancellationTokenSource(25.Seconds()).Token;
+
+        // Create thread + submit
+        var createResponse = await client.Observe(
+            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(UserPath, "Growing emissions test")),
+            o => o.WithTarget(new Address(UserPath))).FirstAsync().ToTask(ct);
+        createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error);
+        var threadPath = createResponse.Message.Node!.Path!;
+
+        var submitResponse = await client.Observe(new SubmitMessageRequest
+        {
+            ThreadPath = threadPath,
+            UserMessageText = "Stream me growing chunks please",
+            ContextPath = UserPath
+        }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
+        submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
+
+        // Wait briefly for the response cell to be allocated.
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        string? responsePath = null;
+        for (var i = 0; i < 50 && responsePath is null; i++)
+        {
+            var descendants = await meshQuery
+                .QueryAsync<MeshNode>(
+                    $"path:{threadPath} scope:descendants nodeType:ThreadMessage")
+                .ToListAsync(ct);
+            var assistantNode = descendants
+                .FirstOrDefault(n => n.Content is ThreadMessage { Role: "assistant" });
+            if (assistantNode is not null)
+                responsePath = assistantNode.Path;
+            else
+                await Task.Delay(100, ct);
+        }
+        responsePath.Should().NotBeNull("response cell must exist for streaming to land on it");
+
+        // Subscribe to the response cell's MeshNode stream and collect emissions
+        // (timestamp + text length). Stop once we see the terminal Completed/Cancelled/Error
+        // status — or the 20 s budget elapses.
+        var workspace = client.GetWorkspace();
+        var emissions = new List<(DateTimeOffset Ts, int Len, string Text, ThreadMessageStatus? Status)>();
+        var firstEmissionDone = false;
+        using var collected = new ManualResetEventSlim(false);
+        var sub = workspace
+            .GetRemoteStream<MeshNode, MeshNodeReference>(
+                new Address(responsePath!), new MeshNodeReference())
+            .Where(c => c.Value is not null)
+            .Select(c => c.Value!.Content as ThreadMessage)
+            .Where(m => m is not null)
+            .Subscribe(m =>
+            {
+                lock (emissions)
+                {
+                    emissions.Add((DateTimeOffset.UtcNow, m!.Text.Length, m.Text, m.Status));
+                    firstEmissionDone = true;
+                    if (m.Status is ThreadMessageStatus.Completed
+                                  or ThreadMessageStatus.Cancelled
+                                  or ThreadMessageStatus.Error)
+                        collected.Set();
+                }
+            });
+
+        try
+        {
+            collected.Wait(20_000, ct);
+        }
+        finally
+        {
+            sub.Dispose();
+        }
+
+        firstEmissionDone.Should().BeTrue(
+            "the response stream must emit at least once — if it doesn't, streaming never landed on the response cell");
+
+        // The TestChatClient yields 6 words with 10 ms delays. Even allowing for
+        // sample-rate throttling we expect at least 2 distinct growing-text
+        // emissions before the terminal Completed snapshot.
+        var growingEmissions = emissions
+            .Where(e => e.Len > 0 && e.Status == ThreadMessageStatus.Streaming)
+            .ToList();
+        Output.WriteLine(
+            $"Captured {emissions.Count} emissions; {growingEmissions.Count} mid-stream growing emissions. " +
+            $"Text lengths: [{string.Join(",", emissions.Select(e => e.Len))}]");
+
+        growingEmissions.Count.Should().BeGreaterThanOrEqualTo(2,
+            "incremental streaming must produce at least 2 mid-stream emissions before the terminal " +
+            "Completed write — if there's only 1, the framework is batching all updates into the " +
+            "final commit (e.g. the throttle-Sample collapses to a single snapshot, or updates are " +
+            "blocked behind the action block). " +
+            $"Emission lengths: [{string.Join(",", emissions.Select(e => e.Len))}]");
+
+        // Monotonic growth: each successive Streaming emission's text length must
+        // be >= the previous. A drop would mean a stale snapshot overwrote a fresher one.
+        for (var i = 1; i < growingEmissions.Count; i++)
+        {
+            growingEmissions[i].Len.Should().BeGreaterThanOrEqualTo(growingEmissions[i - 1].Len,
+                $"emission #{i} length ({growingEmissions[i].Len}) regressed from #{i - 1} " +
+                $"({growingEmissions[i - 1].Len}) — a later patch shrank the text, indicating " +
+                "stale-mirror clobber.");
+        }
+    }
+
 }
 
 /// <summary>
