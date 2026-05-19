@@ -175,16 +175,18 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
         Output.WriteLine($"Delegation: path={delegateCall.DelegationPath}, success={delegateCall.IsSuccess}");
 
         // 7. Verify the Markdown node was created by the Create tool.
-        // ObserveQuery on the silo (not the client!) â€” the change feed +
-        // query providers are silo-local; the client's IMeshService aggregates
-        // client-local providers only. ObserveQuery here gives the live Added
-        // delta from the in-memory adapter on the silo, so the wait races
-        // against the actual persistence commit, not against any index lag.
-        var siloMeshService = siloHub.ServiceProvider.GetRequiredService<IMeshService>();
-        var createdNode = await siloMeshService
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:TestUser/test-doc-nodechange"))
-            .SelectMany(change => change.Items)
-            .Where(n => n.Path == "TestUser/test-doc-nodechange")
+        // Use the silo's workspace-side MeshNodeStream (NOT ObserveQuery) — per
+        // `feedback_cqrs_no_query_for_content.md`: ObserveQuery is eventually-
+        // consistent against an in-memory index that's separate from the
+        // storage adapter's commit. After 27 in-flight DataChangeRequests
+        // stack up on the response message hub during delegation streaming,
+        // the index update can lag past the 10 s budget — the storage value
+        // is already there but the query stream hasn't emitted Added yet.
+        // GetMeshNodeStream reads the authoritative per-node stream directly.
+        var siloWorkspace = siloHub.GetWorkspace();
+        var createdNode = await siloWorkspace
+            .GetMeshNodeStream("TestUser/test-doc-nodechange")
+            .Where(n => n is not null)
             .Take(1)
             .Timeout(10.Seconds())
             .FirstAsync()
