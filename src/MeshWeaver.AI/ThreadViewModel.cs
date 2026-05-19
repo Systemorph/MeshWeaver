@@ -41,12 +41,12 @@ public record ThreadViewModel
     public ImmutableList<ToolCallEntry>? StreamingToolCalls { get; init; }
 
     /// <summary>
-    /// Texts of user messages queued during the in-flight turn — i.e. entries
-    /// in <see cref="Thread.PendingUserMessages"/> that the agent has NOT yet
-    /// drained via the <c>check_inbox</c> tool. Rendered in the chat below the
-    /// "Generating response..." progress strip so the user can see what's
-    /// "still in the outbox" before the agent acknowledges it.
-    /// Empty when the queue has been drained or no follow-ups were typed.
+    /// Texts of user messages currently in <see cref="Thread.PendingUserMessages"/>
+    /// — submitted via <see cref="ThreadInput.AppendUserInput"/> but not yet
+    /// drained into <see cref="Thread.Messages"/>. Rendered inline at the end
+    /// of the chat history as "queued" cells so the user sees their submission
+    /// immediately, even before round dispatch materialises the satellite cell.
+    /// Disappears for an id once the inbox drain promotes it into Messages.
     /// Order: <see cref="Thread.UserMessageIds"/> submission order.
     /// </summary>
     public IReadOnlyList<string> PendingMessageTexts { get; init; } = [];

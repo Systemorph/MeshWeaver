@@ -131,6 +131,29 @@
     white-space: pre-wrap;
 }
 
+/* In-chat queued user message — rendered inline after the materialised
+   message cells, showing the user their just-submitted text immediately
+   (before round dispatch creates the satellite cell). Pulse animation
+   conveys "waiting to be picked up". */
+.thread-chat-pending-message {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px 14px;
+    margin: 4px 0;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--accent-fill-rest) 6%, transparent);
+    border: 1px dashed color-mix(in srgb, var(--accent-fill-rest) 35%, transparent);
+    color: var(--neutral-foreground-rest);
+    animation: thread-pending-pulse 1.6s ease-in-out infinite;
+}
+.thread-chat-pending-message-text {
+    flex: 1;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
 /* Footer: progress + input pinned at bottom */
 .thread-chat-footer {
     flex-shrink: 0;

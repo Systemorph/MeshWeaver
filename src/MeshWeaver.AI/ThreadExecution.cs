@@ -987,6 +987,7 @@ public static class ThreadExecution
                     threadPath));
         }
 
+
         // Set user access context
         var accessService = parentHub.ServiceProvider.GetService<AccessService>();
         if (delivery.AccessContext != null)
@@ -1462,7 +1463,9 @@ public static class ThreadExecution
                         inputTokens: inputTokens, outputTokens: outputTokens,
                         totalTokens: totalTokens, completedAt: DateTime.UtcNow,
                         status: ThreadMessageStatus.Completed);
-                    // Clear streaming state
+                    // Clear streaming state. Any PendingUserMessages that
+                    // arrived mid-stream stay pending — the watcher dispatches
+                    // them as a follow-up round once Status flips to Idle.
                     UpdateThreadExecution(t => t with
                     {
                         Status = ThreadExecutionStatus.Idle, ExecutionStatus = null, ActiveMessageId = null,

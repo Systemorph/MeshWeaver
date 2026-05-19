@@ -36,6 +36,10 @@ else
             {
                 <LayoutAreaView @key="@($"hdr-{threadPath}")" ViewModel="@header" Stream="@Stream" Area="@($"hdr-{threadPath}")" />
             }
+            @{
+                var pendingTexts = ThreadViewModel?.PendingMessageTexts ?? Array.Empty<string>();
+                var hasAnyMessage = ThreadMessages.Count > 0 || pendingTexts.Count > 0;
+            }
             @if (ThreadMessages.Count > 0)
             {
                 @foreach (var msgId in ThreadMessages)
@@ -47,14 +51,29 @@ else
                     }
                 }
             }
-            else if (isCreatingThread)
+            @* Queued user messages — entries that were submitted but the inbox
+               has not yet drained into Messages. Renders inline at the end of
+               the chat history so the user sees their submission immediately,
+               even before round dispatch / cell materialisation. Disappears
+               when the inbox drain promotes the id into Messages. *@
+            @if (pendingTexts.Count > 0)
+            {
+                @foreach (var pendingText in pendingTexts)
+                {
+                    <div class="thread-chat-pending-message" @key="@($"pending-{pendingText.GetHashCode()}")">
+                        <FluentIcon Value="@(new Icons.Regular.Size16.Send())" />
+                        <span class="thread-chat-pending-message-text">@pendingText</span>
+                    </div>
+                }
+            }
+            @if (!hasAnyMessage && isCreatingThread)
             {
                 <div class="empty-thread-message">
                     <FluentProgressRing />
                     <p>Creating thread...</p>
                 </div>
             }
-            else if (string.IsNullOrEmpty(threadPath))
+            else if (!hasAnyMessage && string.IsNullOrEmpty(threadPath))
             {
                 <div class="empty-thread-message">
                     <FluentIcon Value="@(new Icons.Regular.Size48.Chat())" Color="Color.Neutral" />
@@ -92,24 +111,10 @@ else
                     }
                 </div>
             }
-            @* Messages the user typed during the in-flight turn that the agent
-               has NOT yet pulled via check_inbox. Drained automatically when
-               the agent calls the tool — at which point they disappear from
-               here and stay visible only as ingested user cells in the
-               conversation. *@
-            @if (ThreadViewModel.PendingMessageTexts is { Count: > 0 })
-            {
-                <div class="thread-exec-pending-inbox">
-                    <div class="thread-exec-pending-inbox-header">
-                        <FluentIcon Value="@(new Icons.Regular.Size16.MailInbox())" />
-                        <span>@ThreadViewModel.PendingMessageTexts.Count waiting for the agent to acknowledge</span>
-                    </div>
-                    @foreach (var pendingText in ThreadViewModel.PendingMessageTexts)
-                    {
-                        <div class="thread-exec-pending-inbox-item">@TruncateText(pendingText, 200)</div>
-                    }
-                </div>
-            }
+            @* Pending-user-message rendering moved INTO the chat history (above)
+               so the user sees their submission immediately — including before
+               round dispatch starts streaming. The exec-bar no longer duplicates
+               the queue display. *@
         </div>
     }
 
