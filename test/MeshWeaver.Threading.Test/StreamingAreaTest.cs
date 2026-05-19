@@ -103,7 +103,7 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
             MainNode = "User/Roland",
             Content = new MeshThread
             {
-                IsExecuting = true,
+                Status = ThreadExecutionStatus.Executing,
                 ActiveMessageId = responseMsgId,
                 ExecutionStartedAt = DateTime.UtcNow
             }
@@ -156,7 +156,7 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
             MainNode = "User/Roland",
             Content = new MeshThread
             {
-                IsExecuting = true,
+                Status = ThreadExecutionStatus.Executing,
                 ActiveMessageId = responseMsgId,
                 ExecutionStartedAt = DateTime.UtcNow
             }
@@ -186,7 +186,7 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
             {
                 Content = thread with
                 {
-                    IsExecuting = false,
+                    Status = ThreadExecutionStatus.Idle,
                     ActiveMessageId = null,
                     ExecutionStatus = null
                 }

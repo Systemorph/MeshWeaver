@@ -268,8 +268,10 @@ public static class ThreadExecution
                     logger);
             }
 
-            // Clear thread execution state
-            workspace.GetMeshNodeStream().Update(node =>
+            // Clear thread execution state — routed through cache (one writer
+            // surface for the whole process).
+            var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+            cache.Update(threadPath, node =>
             {
                 var t = node.Content as Thread ?? new Thread();
                 var cancelledAt = DateTime.UtcNow;

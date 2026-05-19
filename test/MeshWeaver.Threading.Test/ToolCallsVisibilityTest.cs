@@ -86,7 +86,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
             MainNode = "User/Roland",
             Content = new MeshThread
             {
-                IsExecuting = true,
+                Status = ThreadExecutionStatus.Executing,
                 ActiveMessageId = responseMsgId,
                 Messages = [responseMsgId]
             }
@@ -133,7 +133,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
             MainNode = "User/Roland",
             Content = new MeshThread
             {
-                IsExecuting = true,
+                Status = ThreadExecutionStatus.Executing,
                 ActiveMessageId = responseMsgId,
                 Messages = [responseMsgId]
             }
@@ -197,7 +197,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
         {
             NodeType = ThreadNodeType.NodeType,
             MainNode = "User/Roland",
-            Content = new MeshThread { IsExecuting = true, ActiveMessageId = "sub-resp" }
+            Content = new MeshThread { Status = ThreadExecutionStatus.Executing, ActiveMessageId = "sub-resp" }
         });
 
         await NodeFactory.CreateNode(new MeshNode(responseMsgId, threadPath)
@@ -217,7 +217,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
             MainNode = "User/Roland",
             Content = new MeshThread
             {
-                IsExecuting = true, ActiveMessageId = responseMsgId, Messages = [responseMsgId]
+                Status = ThreadExecutionStatus.Executing, ActiveMessageId = responseMsgId, Messages = [responseMsgId]
             }
         });
 
@@ -261,7 +261,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
         await threadStream.Update(current =>
         {
             var t = current.Content as MeshThread ?? new MeshThread();
-            return current with { Content = t with { IsExecuting = false, ActiveMessageId = null } };
+            return current with { Content = t with { Status = ThreadExecutionStatus.Idle, ActiveMessageId = null } };
         }).FirstAsync().ToTask(ct);
 
         var idle = await threadStream
@@ -308,7 +308,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
             MainNode = "User/Roland",
             Content = new MeshThread
             {
-                IsExecuting = true,
+                Status = ThreadExecutionStatus.Executing,
                 ActiveMessageId = responseMsgId,
                 Messages = [responseMsgId]
             }

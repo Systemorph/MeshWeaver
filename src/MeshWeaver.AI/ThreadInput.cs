@@ -1,6 +1,7 @@
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -102,7 +103,13 @@ public static class ThreadInput
         // inbox drains). NOT Messages — Messages is the materialised list updated
         // by the inbox at ingestion time. Updates Pending* hints for the next
         // round's dispatch context.
-        workspace.GetMeshNodeStream(threadPath).Update(node =>
+        //
+        // Routed through IMeshNodeStreamCache — same write surface as
+        // UpdateThreadExecution / DispatchRound commit / HandleStartExecution
+        // claim. ALL thread writes funnel through the cache's single mirror so
+        // ChangeType.Full overwrites can't clobber a concurrent OWN write.
+        var cache = workspace.Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        cache.Update(threadPath, node =>
         {
             logger?.LogDebug(
                 "[AppendUserInput] update lambda invoked for {ThreadPath} (node.Path={NodePath} contentType={ContentType})",

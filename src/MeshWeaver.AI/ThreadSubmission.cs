@@ -309,12 +309,12 @@ public static class ThreadSubmission
                 Type = ThreadMessageType.AgentResponse
             }
         };
-        var workspace = hub.GetWorkspace();
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var cache = hub.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Services.IMeshNodeStreamCache>();
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.ThreadSubmission");
         meshService.CreateNode(errorCell)
-            .SelectMany(_ => workspace.GetMeshNodeStream().Update(node =>
+            .SelectMany(_ => cache.Update(threadPath, node =>
             {
                 var t = node.Content as MeshThread ?? new MeshThread();
                 var msgs = t.Messages;
@@ -505,7 +505,8 @@ public static class ThreadSubmission
     {
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.ThreadSubmission");
-        hub.GetWorkspace().GetMeshNodeStream().Update(node =>
+        var cache = hub.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Services.IMeshNodeStreamCache>();
+        cache.Update(threadPath, node =>
         {
             var t = node.Content as MeshThread ?? new MeshThread();
             var idx = t.Messages.IndexOf(atMessageId);
@@ -581,7 +582,8 @@ public static class ThreadSubmission
 
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.ThreadSubmission");
-        hub.GetWorkspace().GetMeshNodeStream().Update(node =>
+        var cache = hub.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Services.IMeshNodeStreamCache>();
+        cache.Update(threadPath, node =>
         {
             var t = node.Content as MeshThread ?? new MeshThread();
             var idx = t.Messages.IndexOf(userMessageId);
@@ -800,7 +802,8 @@ internal static class ThreadSubmissionServer
                 "[DispatchAfterClaim] nothing to dispatch (post-claim race?) for {Path} — rolling status back to Idle",
                 hub.Address.Path);
             // Roll the claim back so the next watcher tick can re-trigger.
-            hub.GetWorkspace().GetMeshNodeStream().Update(n =>
+            var rollbackCache = hub.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Services.IMeshNodeStreamCache>();
+            rollbackCache.Update(hub.Address.Path, n =>
             {
                 var t = n.Content as MeshThread ?? new MeshThread();
                 return n with { Content = t with { Status = ThreadExecutionStatus.Idle, ExecutionStartedAt = null } };
