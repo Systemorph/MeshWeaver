@@ -1,11 +1,16 @@
 ﻿using MeshWeaver.Data;
+using MeshWeaver.Graph.Security;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
 /// Provides configuration for TrackedChange nodes in the graph.
 /// TrackedChange nodes are satellite entities â€” excluded from search and create contexts.
+/// Access is delegated to the MainNode (parent) via SatelliteAccessRule.
 /// </summary>
 public static class TrackedChangeNodeType
 {
@@ -21,6 +26,12 @@ public static class TrackedChangeNodeType
     {
         builder.AddMeshNodes(CreateMeshNode());
         builder.AddAutocompleteExcludedTypes(NodeType);
+        builder.ConfigureServices(services =>
+        {
+            services.AddSingleton<INodeTypeAccessRule>(sp =>
+                new SatelliteAccessRule(NodeType, sp.GetService<ISecurityService>() ?? new NullSecurityService()));
+            return services;
+        });
         return builder;
     }
 

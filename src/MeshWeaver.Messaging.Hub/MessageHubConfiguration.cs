@@ -308,12 +308,22 @@ public record MessageHubConfiguration
                     // "mesh/{guid}" principal match AccessAssignments — deny silently.
                     // Stays fail-closed; intentional system writes from the mesh hub
                     // must wrap with AccessService.ImpersonateAsHub / ImpersonateAsSystem.
-                    logger?.LogWarning(
-                        "PostPipeline: hub={Hub}, message={MessageType} posted with no AccessContext " +
-                        "(no Context, no CircuitContext) — leaving AccessContext null so downstream " +
-                        "fails closed. Wrap intentional system writes with AccessService.ImpersonateAsHub.",
-                        syncPipeline.Hub.Address,
-                        d.Message?.GetType().Name ?? "(null)");
+                    //
+                    // Framework lifecycle messages the hub posts to itself
+                    // (InitializeHubRequest, HeartBeatEvent, ShutdownRequest,
+                    // DisposeRequest, SubscribeRequest) carry no security-relevant
+                    // payload — gate the warning on application messages only so
+                    // mesh-hub startup doesn't print warnings the developer has
+                    // no way to act on.
+                    if (!IsFrameworkLifecycleMessage(d.Message))
+                    {
+                        logger?.LogWarning(
+                            "PostPipeline: hub={Hub}, message={MessageType} posted with no AccessContext " +
+                            "(no Context, no CircuitContext) — leaving AccessContext null so downstream " +
+                            "fails closed. Wrap intentional system writes with AccessService.ImpersonateAsHub.",
+                            syncPipeline.Hub.Address,
+                            d.Message?.GetType().Name ?? "(null)");
+                    }
                 }
                 else
                 {
@@ -344,6 +354,20 @@ public record MessageHubConfiguration
             return next(d);
         });
     }
+
+    /// <summary>
+    /// True for messages the framework itself posts during a hub's lifecycle —
+    /// <see cref="InitializeHubRequest"/>, <c>HeartBeatEvent</c>,
+    /// <c>ShutdownRequest</c>, <c>DisposeRequest</c>, <c>SubscribeRequest</c>.
+    /// These carry no security-relevant payload, so the mesh hub's
+    /// "posted with no AccessContext" warning would only be developer noise
+    /// (there's no application-level Post to wrap with ImpersonateAsHub).
+    /// </summary>
+    private static bool IsFrameworkLifecycleMessage(object? message) =>
+        message is InitializeHubRequest
+            || (message is not null && message.GetType().Name is
+                "HeartBeatEvent" or "ShutdownRequest" or "DisposeRequest" or "SubscribeRequest");
+
     internal ImmutableList<Func<AsyncPipelineConfig, AsyncPipelineConfig>> DeliveryPipeline { get; set; }
     internal TimeSpan? StartupTimeout { get; init; } //= new(0, 0, 30); // Default 10 seconds
     internal TimeSpan RequestTimeout { get; init; } = new(0, 0, 30);

@@ -1,6 +1,10 @@
 ﻿using MeshWeaver.Data;
+using MeshWeaver.Graph.Security;
 using MeshWeaver.Markdown.Collaboration;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
+using Microsoft.Extensions.DependencyInjection;
 using Mesh = MeshWeaver.Mesh;
 
 namespace MeshWeaver.Graph;
@@ -29,6 +33,12 @@ public static class CommentNodeType
     {
         builder.AddMeshNodes(CreateMeshNode());
         builder.AddAutocompleteExcludedTypes(NodeType);
+        builder.ConfigureServices(services =>
+        {
+            services.AddSingleton<INodeTypeAccessRule>(sp =>
+                new SatelliteAccessRule(NodeType, sp.GetService<ISecurityService>() ?? new NullSecurityService()));
+            return services;
+        });
         // Register all comment and collaborative editing domain types
         builder.ConfigureHub(config => config
             .WithType<Mesh.Comment>(nameof(Mesh.Comment))
