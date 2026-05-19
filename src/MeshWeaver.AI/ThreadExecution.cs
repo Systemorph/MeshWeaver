@@ -492,11 +492,31 @@ public static class ThreadExecution
                             thread.Status, threadPath);
                         return;
                     }
+                    // Set the access context for this round INSIDE _Exec so
+                    // every downstream Post (cell creation, agent calls,
+                    // workspace writes via the cache) is stamped with the
+                    // right user identity. Resolve from the thread node's
+                    // CreatedBy — the watcher fires on a stream scheduler
+                    // where AsyncLocal carries no useful identity. The
+                    // delivery's AccessContext is the secondary source (set
+                    // by the framework when the thread hub posted the
+                    // trigger).
+                    var accessService = execHub.ServiceProvider.GetService<MeshWeaver.Messaging.AccessService>();
+                    var userCtx = delivery.AccessContext
+                        ?? (!string.IsNullOrEmpty(thread.CreatedBy)
+                            ? new MeshWeaver.Messaging.AccessContext { ObjectId = thread.CreatedBy!, Name = thread.CreatedBy! }
+                            : null);
+                    if (accessService != null && userCtx != null)
+                    {
+                        accessService.SetContext(userCtx);
+                        logger?.LogDebug(
+                            "[HandleStartExecutionOnExec] access context set: {User} for {ThreadPath}",
+                            userCtx.ObjectId, threadPath);
+                    }
                     // Step B + C live in DispatchAfterClaim → DispatchRound,
-                    // which still uses parentHub for cross-hub Posts (cell
-                    // creation under the user's access context). Subsequent
-                    // refactor will switch the state-write within DispatchRound
-                    // to also flow through IMeshNodeStreamCache.
+                    // which posts CreateNodeRequest for the user/response
+                    // cells under this AccessContext, and writes the commit
+                    // through IMeshNodeStreamCache.
                     ThreadSubmissionServer.DispatchAfterClaim(parentHub, latest, logger);
                 },
                 ex => logger?.LogWarning(ex,
@@ -942,29 +962,27 @@ public static class ThreadExecution
                 "[ThreadExec] responseStream.Update failed for {Path}", responsePath));
         }
 
-        // Helper: update Thread execution state. Uses parentHub.GetWorkspace()
-        // (UpdateOwn on the thread hub's workspace) — the established pattern.
-        // Routing this through IMeshNodeStreamCache adds a cross-hub round
-        // trip (cache handle lives on the mesh hub) that's too slow for the
-        // hot path of stream-state updates; the direct UpdateOwn write
-        // commits inline on the thread hub's data source and propagates to
-        // every reader (including the cache's own handle) on the same
-        // underlying stream. Reverted from a brief cache-routing attempt
-        // after it broke timing in the integration tests.
-        var threadWorkspace = parentHub.GetWorkspace();
+        // Helper: update Thread execution state. Routed through
+        // IMeshNodeStreamCache — the dsStream behind the cache lives on the
+        // mesh hub (not blocked by chat work), so writes from this _Exec
+        // handler never wait on the thread hub's action block. Fire-and-
+        // forget Subscribe; errors are logged but don't terminate the
+        // streaming task. The cache's handle is shared across all readers
+        // (watcher, GUI, MCP) — one write surface for the whole process.
+        var nodeCache = parentHub.ServiceProvider.GetRequiredService<Mesh.Services.IMeshNodeStreamCache>();
         var execLogger = parentHub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.ThreadExecution");
         void UpdateThreadExecution(Func<MeshThread, MeshThread> mutate)
         {
-            threadWorkspace.GetMeshNodeStream().Update(node =>
+            nodeCache.Update(threadPath, node =>
             {
                 var thread = node.Content as MeshThread ?? new MeshThread();
                 return node with { Content = mutate(thread) };
             }).Subscribe(
                 _ => { },
                 ex => execLogger?.LogWarning(ex,
-                    "UpdateThreadExecution: UpdateMeshNode failed for {ThreadPath}",
-                    threadWorkspace.Hub.Address.Path));
+                    "UpdateThreadExecution: cache.Update failed for {ThreadPath}",
+                    threadPath));
         }
 
         // Set user access context
@@ -1723,16 +1741,23 @@ public static class ThreadExecution
                     var thread = (MeshThread)node!.Content!;
                     lastHandledAt = thread.RequestedCancellationAt;
 
-                    // Propagate to every active delegation sub-thread.
+                    // Propagate to every active delegation sub-thread via the
+                    // canonical IMeshNodeStreamCache. The sub-thread is a
+                    // non-own path; routing through the cache keeps a single
+                    // shared handle for every reader (the sub-thread's own
+                    // cancel watcher) and avoids opening an ad-hoc remote
+                    // stream that subsequent readers wouldn't see.
                     if (thread.StreamingToolCalls is { Count: > 0 })
                     {
+                        var subCache = hub.ServiceProvider
+                            .GetRequiredService<Mesh.Services.IMeshNodeStreamCache>();
                         foreach (var tc in thread.StreamingToolCalls.Where(
                             tc => !string.IsNullOrEmpty(tc.DelegationPath) && tc.Result == null))
                         {
                             logger?.LogInformation(
                                 "[ThreadExec] Propagating cancel to sub-thread {SubThread}", tc.DelegationPath);
-                            hub.GetWorkspace().GetMeshNodeStream(tc.DelegationPath!)
-                                .Update(curr => curr?.Content is MeshThread sub
+                            subCache.Update(tc.DelegationPath!,
+                                curr => curr?.Content is MeshThread sub
                                     ? curr with { Content = sub with { RequestedCancellationAt = thread.RequestedCancellationAt } }
                                     : curr!)
                                 .Subscribe(_ => { }, ex => logger?.LogWarning(ex,

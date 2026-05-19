@@ -383,10 +383,13 @@ public static class ThreadSubmission
             return delivery.Processed();
         }
 
-        // Step A: atomic claim. Returning `node` unchanged (no-op) signals
-        // "drop the trigger" — the post-update emission carries the pre-claim
-        // node so the Subscribe below checks Status and bails out.
-        hub.GetWorkspace().GetMeshNodeStream().Update(node =>
+        // Step A: atomic claim via IMeshNodeStreamCache — every thread write
+        // funnels through the cache (per the inbox-pattern design). Returning
+        // `node` unchanged signals "drop the trigger" — the post-update
+        // emission carries the pre-claim node so the Subscribe below checks
+        // Status and bails out. Fire-and-forget Subscribe; errors logged.
+        var cache = hub.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Services.IMeshNodeStreamCache>();
+        cache.Update(threadPath, node =>
         {
             var t = node.Content as MeshThread ?? new MeshThread();
             if (t.Status != ThreadExecutionStatus.Idle)
@@ -960,12 +963,16 @@ internal static class ThreadSubmissionServer
                         // The IsExecuting check is the idempotency guard — every other watcher
                         // emission in this round skips, so this body runs exactly once per round.
                         //
-                        // Subscribe is mandatory: GetMeshNodeStream().Update returns a cold
-                        // IObservable<MeshNode>; the dsStream.Update side effect only runs on
-                        // Subscribe. The downstream UpdateResponseCell + SubmitMessageRequest
-                        // chain off the Subscribe(onNext) so they only fire after the round
-                        // commit is persisted.
-                        hub.GetWorkspace().GetMeshNodeStream().Update(node =>
+                        // Subscribe is mandatory: cache.Update returns a cold
+                        // IObservable<MeshNode>; the side effect only runs on
+                        // Subscribe. The downstream UpdateResponseCell +
+                        // SubmitMessageRequest chain off the Subscribe(onNext)
+                        // so they only fire after the round commit is persisted.
+                        // Cache routing — every thread write funnels through
+                        // the single mesh-hub-backed handle.
+                        var commitCache = hub.ServiceProvider
+                            .GetRequiredService<MeshWeaver.Mesh.Services.IMeshNodeStreamCache>();
+                        commitCache.Update(threadPath, node =>
                         {
                             var t = node.Content as MeshThread ?? new MeshThread();
                             // We expect Status==StartingExecution (post-claim from HandleStartExecution).
