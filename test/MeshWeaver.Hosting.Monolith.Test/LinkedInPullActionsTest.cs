@@ -63,22 +63,41 @@ public class LinkedInPullActionsTest(ITestOutputHelper output) : MonolithMeshTes
             }
         });
 
+        // Wait for the kickoff compile to settle BEFORE adding sources +
+        // triggering. The per-NodeType hub's `InstallCompileWatcher` runs its
+        // one-shot kickoff the moment the hub activates — long before any
+        // `CreateCodeAsync` lands, so the kickoff Roslyn compiles the
+        // Configuration string against an empty source set and either errors
+        // out or produces an assembly missing `LinkedInPullActions`.
+        //
+        // 🚨 Why this matters for the trigger: if `RequestedReleaseAt` is
+        // written while kickoff `Status == Compiling`, `ReleaseRequestWatcher`'s
+        // status guard absorbs the trigger — it stamps
+        // `LastReleaseRequestHandledAt` but keeps Status at Compiling (no
+        // fresh Pending flip), so no second compile ever fires. The
+        // watermark wait below then matches against the kickoff's release
+        // (assembly missing `LinkedInPullActions`) and `RenderAreaAsync`
+        // times out activating against a broken assembly.
+        //
+        // Gating on (Ok || Error) here is sufficient: a kickoff failure with
+        // no sources is the expected first state, and the trigger below will
+        // drive a fresh compile from Status=Error → Pending → Compiling → Ok.
+        await workspace.GetMeshNodeStream(NodeTypePath)
+            .Where(n => n.Content is NodeTypeDefinition d
+                && (d.CompilationStatus == CompilationStatus.Ok
+                    || d.CompilationStatus == CompilationStatus.Error))
+            .Take(1)
+            .Timeout(45.Seconds())
+            .ToTask(ct);
+
         await CreateCodeAsync("LinkedInProfile", LinkedInProfileSource, ct);
         await CreateCodeAsync("LinkedInPullActions", LinkedInPullActionsSource, ct);
 
-        // Trigger an explicit recompile AFTER both source nodes exist via the
-        // canonical `RequestedReleaseAt` stream-update trigger. Without this,
-        // the per-NodeType hub's kickoff watcher races source creation: on CI
-        // the kickoff compile fires before both Code MeshNodes are persisted,
-        // produces a release missing `LinkedInPullActions`, and the
-        // `PullPastPosts` layout-area binding fails at activation — the test
-        // then times out reading any control off the instance stream.
-        //
-        // `RequestedReleaseAt > LastReleaseRequestHandledAt` is observed by
-        // `InstallReleaseRequestWatcher`; combined with
-        // `RequestedReleaseForce = true` the watcher always flips to Pending
-        // and the compile pipeline produces a release that includes whatever
-        // sources are visible now (i.e. both Code nodes).
+        // Trigger an explicit recompile AFTER kickoff settled AND both source
+        // nodes exist. `RequestedReleaseAt > LastReleaseRequestHandledAt` is
+        // observed by `InstallReleaseRequestWatcher`; with Status now
+        // Ok/Error (not Compiling) the watcher flips Pending → the compile
+        // pipeline runs Roslyn against the now-visible Code sources.
         var triggerAt = DateTimeOffset.UtcNow;
         await workspace.GetMeshNodeStream(NodeTypePath).Update(curr =>
         {
