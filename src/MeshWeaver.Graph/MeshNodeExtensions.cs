@@ -256,7 +256,15 @@ public static class MeshNodeExtensions
                 // can't write. Fall through to IMeshService.CreateNode which routes via
                 // CreateNodeRequest and activates the hub. Subsequent tracks land in the
                 // Update branch above and reuse the now-warm cached stream.
-                var meshService = hub.ServiceProvider.GetService<IMeshService>();
+                //
+                // Resolve IMeshService from the MESH ROOT — IMeshService is registered
+                // AddScoped, so resolving from this hub's scope (e.g. portal/anonymous)
+                // would build a MeshService whose injected IMessageHub is the LOCAL hub,
+                // and CreateNode would target the local hub's address. That hub doesn't
+                // have a CreateNodeRequest handler → "No handler found for ... in
+                // portal/anonymous". Resolving from the mesh root makes MeshService
+                // capture the mesh hub as its target.
+                var meshService = hub.GetMeshHub().ServiceProvider.GetService<IMeshService>();
                 if (meshService != null)
                 {
                     logger?.LogDebug(

@@ -1,5 +1,9 @@
 ﻿using System.Collections.Immutable;
 using MeshWeaver.Graph;
+using MeshWeaver.Graph.Security;
+using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.AI;
 
@@ -41,6 +45,16 @@ public static class ThreadMessageNodeType
         // MeshNodeReference at activation. Same rule as Agent / User /
         // Markdown / etc.
         builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
+        // Per-instance access: ThreadMessage is a satellite of its containing
+        // Thread → which is itself a satellite of the conversation's MainNode.
+        // SatelliteAccessRule's MainNode delegation chains correctly when the
+        // message's MainNode points at the Thread's MainNode (set at creation).
+        builder.ConfigureServices(services =>
+        {
+            services.AddSingleton<INodeTypeAccessRule>(sp =>
+                new SatelliteAccessRule(NodeType, sp.GetService<ISecurityService>() ?? new NullSecurityService()));
+            return services;
+        });
         return builder;
     }
 

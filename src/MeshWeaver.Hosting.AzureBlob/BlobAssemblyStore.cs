@@ -120,8 +120,11 @@ public sealed class BlobAssemblyStore : IAssemblyStore
 
     private async Task EnsureContainerAsync()
     {
-        try { await container.CreateIfNotExistsAsync(); }
-        catch (RequestFailedException rfe) when (rfe.Status == 409) { /* already exists */ }
+        // Exists-then-Create instead of CreateIfNotExistsAsync to skip the
+        // Azure SDK's per-response "409 ContainerAlreadyExists" warning on
+        // every startup against a pre-existing container.
+        if (!await container.ExistsAsync())
+            await container.CreateAsync();
     }
 
     private string LocalPath(string nodeTypePath, long version) =>

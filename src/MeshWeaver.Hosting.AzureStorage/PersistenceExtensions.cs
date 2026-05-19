@@ -93,7 +93,11 @@ public static class PersistenceExtensions
         this IServiceCollection services,
         BlobContainerClient containerClient)
     {
-        await containerClient.CreateIfNotExistsAsync();
+        // Exists-then-Create instead of CreateIfNotExistsAsync to skip the
+        // Azure SDK's per-response "409 ContainerAlreadyExists" warning on
+        // every startup against a pre-existing container.
+        if (!await containerClient.ExistsAsync())
+            await containerClient.CreateAsync();
 
         var storageAdapter = new AzureBlobStorageAdapter(containerClient);
         return services.AddPersistence(storageAdapter);

@@ -1224,14 +1224,19 @@ public static class MeshExtensions
     /// Walks up <see cref="MessageHubConfiguration.ParentHub"/> to the topmost hub —
     /// the mesh hub, which is never torn down by its own operations and is therefore
     /// the stable place to post terminal delete replies + DisposeRequests from.
+    /// Public so callers (e.g. activity tracking) can resolve the mesh hub from
+    /// any child hub's scope when they need to target node-CRUD handlers that
+    /// live only on the root.
     /// </summary>
-    private static IMessageHub ResolveMeshHub(IMessageHub hub)
+    public static IMessageHub GetMeshHub(this IMessageHub hub)
     {
         var current = hub;
         while (current.Configuration.ParentHub is { } parent && !ReferenceEquals(parent, current))
             current = parent;
         return current;
     }
+
+    private static IMessageHub ResolveMeshHub(IMessageHub hub) => hub.GetMeshHub();
 
     /// <summary>
     /// Sync-friendly observable variant of the deletion-validator runner. Iterates

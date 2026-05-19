@@ -2,6 +2,7 @@
 using System.Text.RegularExpressions;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -191,6 +192,17 @@ public static class ThreadNodeType
         // Read permission on 'Thread'" and the chat view never loads. Matches
         // Agent, User, Code, Markdown, etc.
         builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
+        // Per-instance access: Thread is a satellite — Read requires Read on
+        // the conversation's MainNode, Create/Update/Delete require Update
+        // on the MainNode. Matches Comment / Activity / TrackedChange.
+        builder.ConfigureServices(services =>
+        {
+            services.AddSingleton<INodeTypeAccessRule>(sp =>
+                new MeshWeaver.Graph.Security.SatelliteAccessRule(
+                    NodeType,
+                    sp.GetService<ISecurityService>() ?? new NullSecurityService()));
+            return services;
+        });
         return builder;
     }
 

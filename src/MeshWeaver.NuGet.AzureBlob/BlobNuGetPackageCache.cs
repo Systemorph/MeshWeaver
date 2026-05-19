@@ -100,7 +100,11 @@ public sealed class BlobNuGetPackageCache : INuGetPackageCache
         try
         {
             if (_initialized) return;
-            await _container.CreateIfNotExistsAsync(PublicAccessType.None, cancellationToken: ct);
+            // Exists-then-Create instead of CreateIfNotExistsAsync to skip the
+            // Azure SDK's per-response "409 ContainerAlreadyExists" warning on
+            // every startup against the pre-existing nuget-cache container.
+            if (!await _container.ExistsAsync(cancellationToken: ct))
+                await _container.CreateAsync(PublicAccessType.None, cancellationToken: ct);
             _initialized = true;
         }
         finally { _initLock.Release(); }

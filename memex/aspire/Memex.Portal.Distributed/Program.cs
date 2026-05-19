@@ -50,7 +50,11 @@ builder.Services.AddDataProtection()
     {
         var blobServiceClient = sp.GetRequiredKeyedService<BlobServiceClient>("storage");
         var containerClient = blobServiceClient.GetBlobContainerClient(containerName);
-        containerClient.CreateIfNotExists();
+        // Exists() probe before Create() avoids the Azure SDK's per-response
+        // "409 ContainerAlreadyExists" warning that CreateIfNotExists() emits
+        // on every startup against a pre-existing container.
+        if (!containerClient.Exists())
+            containerClient.Create();
         return containerClient.GetBlobClient(blobName);
     });
 
