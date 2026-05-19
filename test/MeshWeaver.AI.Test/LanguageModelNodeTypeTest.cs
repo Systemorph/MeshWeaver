@@ -52,9 +52,13 @@ public class LanguageModelNodeTypeTest
             .ToList();
 
         modelNodes.Should().HaveCount(3);
+        // LanguageModel children now live under the parent ModelProvider's
+        // _Provider/{name} satellite path (mirrors the user-partition
+        // layout) — see ModelProviders.md for the path convention.
+        var expectedNs = $"{ModelProviderNodeType.RootNamespace}/Azure Claude";
         modelNodes.Should().AllSatisfy(n =>
         {
-            n.Namespace.Should().Be(LanguageModelNodeType.RootNamespace);
+            n.Namespace.Should().Be(expectedNs);
             n.Content.Should().BeOfType<ModelDefinition>();
         });
         modelNodes.Select(n => n.Id).Should().BeEquivalentTo(
