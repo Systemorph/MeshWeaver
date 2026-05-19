@@ -942,7 +942,15 @@ public static class ThreadExecution
                 "[ThreadExec] responseStream.Update failed for {Path}", responsePath));
         }
 
-        // Helper: update Thread execution state via parentHub workspace.
+        // Helper: update Thread execution state. Uses parentHub.GetWorkspace()
+        // (UpdateOwn on the thread hub's workspace) — the established pattern.
+        // Routing this through IMeshNodeStreamCache adds a cross-hub round
+        // trip (cache handle lives on the mesh hub) that's too slow for the
+        // hot path of stream-state updates; the direct UpdateOwn write
+        // commits inline on the thread hub's data source and propagates to
+        // every reader (including the cache's own handle) on the same
+        // underlying stream. Reverted from a brief cache-routing attempt
+        // after it broke timing in the integration tests.
         var threadWorkspace = parentHub.GetWorkspace();
         var execLogger = parentHub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.ThreadExecution");
