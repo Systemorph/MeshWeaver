@@ -181,6 +181,16 @@ public static class ThreadNodeType
     {
         builder.AddMeshNodes(CreateMeshNode(hubConfiguration));
         builder.AddAutocompleteExcludedTypes(NodeType);
+        // Public-read on the Thread NodeType HOST hub (address = "Thread") —
+        // grants any authenticated user Read on the type's shared metadata
+        // (layout definitions, schema). This is the type DEFINITION, not the
+        // per-instance thread data — instance access is gated by RLS on the
+        // node's mainNode/path separately. Without this, per-instance Thread
+        // hubs can't subscribe to their type's MeshNodeReference at activation,
+        // surfacing as "Access denied: user '<thread-instance-path>' lacks
+        // Read permission on 'Thread'" and the chat view never loads. Matches
+        // Agent, User, Code, Markdown, etc.
+        builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
         return builder;
     }
 

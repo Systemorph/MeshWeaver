@@ -34,6 +34,13 @@ public static class ThreadMessageNodeType
     {
         builder.AddMeshNodes(CreateMeshNode());
         builder.AddAutocompleteExcludedTypes(NodeType);
+        // Public-read on the ThreadMessage NodeType HOST hub — shared type
+        // metadata (layout definitions, schema). Per-message data access is
+        // gated by RLS on the message's mainNode/path. Without this, per-
+        // instance ThreadMessage hubs can't subscribe to their type's
+        // MeshNodeReference at activation. Same rule as Agent / User /
+        // Markdown / etc.
+        builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
         return builder;
     }
 
