@@ -359,39 +359,67 @@ public class MeshQuery : IMeshQueryCore
             // HierarchicalBrowsingTests.QueryAsync_Generic_WithPaging_ReturnsPagedResults
             // — 10 items created, Skip=3 Limit=3, got 6 = Skip+Limit instead
             // of the expected 3).
-            return observables[0].Select(change => change.ChangeType == QueryChangeType.Initial
-                ? ClipMergedInitial<T>(change.Items.ToList(), change, change.Query!, request)
-                : change);
+            //
+            // Pair items with their score (or 0 when the provider didn't
+            // score this batch — see QueryResultChange.Scores contract).
+            // Single-provider ordering is preserved when OrderBy is absent
+            // and all scores are equal, because LINQ's OrderByDescending
+            // is stable.
+            return observables[0].Select(change =>
+            {
+                if (change.ChangeType != QueryChangeType.Initial)
+                    return change;
+                var hits = new List<(T Item, double Score)>(change.Items.Count);
+                var scores = change.Scores;
+                for (var j = 0; j < change.Items.Count; j++)
+                {
+                    var score = scores is not null && j < scores.Count ? scores[j] : 0.0;
+                    hits.Add((change.Items[j], score));
+                }
+                return ClipMergedInitial<T>(hits, change, change.Query!, request);
+            });
         }
 
         return Observable.Create<QueryResultChange<T>>(observer =>
         {
-            // Initial-merge dedupes by MeshNode.Path (mirroring QueryAsync's
-            // ConcurrentDictionary<string, byte> dedup) so duplicate registrations
-            // of the same provider — or two providers that both happen to surface
-            // a static node — don't surface as duplicate rows in the GUI.
-            // For non-MeshNode T, fall back to reference identity.
+            // ────────────────────────────────────────────────────────────────
+            // Initial-emission aggregation
+            // ────────────────────────────────────────────────────────────────
+            // Each provider emits one Initial carrying its slice of the
+            // result. We:
+            //   1. Wait for every provider's Initial (gate on
+            //      initialCount == initialTarget).
+            //   2. Concatenate every (item, score) pair into one flat list,
+            //      deduping by Path (or reference identity for non-MeshNode T).
+            //   3. Hand the flat list to ClipMergedInitial, which sorts by
+            //      OrderBy first then Score desc (see that method), then
+            //      applies Skip/Limit/select.
             //
-            // Per-provider buckets — kept separate until the final emission so the
-            // merge can order writable-persistence ahead of the static catalog
-            // (otherwise a `scope:descendants limit:N` query risks the static
-            // node-type entries crowding out the actual user content).
-            var providerItems = new List<T>[observables.Count];
-            for (var k = 0; k < providerItems.Length; k++) providerItems[k] = new List<T>();
+            // No provider-priority hack. The old logic ordered
+            // "writable persistence first, static catalog last" to keep static
+            // entries from crowding out user content under a Limit clause.
+            // That heuristic is replaced by the explicit Score sort: providers
+            // that mean to win the top spot (PG with name-prefix hit,
+            // path-proximity boost, vector-similarity) set a high score; the
+            // static catalog typically sets 0 and naturally lands below
+            // user content.
+            //
+            // The (item, score) pairing is preserved across the merge by
+            // collecting into a list of tuples; converting back to parallel
+            // arrays only at the ClipMergedInitial boundary.
+            var providerHits = new List<(T Item, double Score)>[observables.Count];
+            for (var k = 0; k < providerHits.Length; k++) providerHits[k] = new();
             var initialPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var initialIdentities = new HashSet<T>();
             var initialCount = 0;
             var initialTarget = observables.Count;
             ParsedQuery? lastQuery = null;
             var gate = new object();
-            var providerIsStatic = providers
-                .Select(p => p is StaticNodeQueryProvider)
-                .ToArray();
 
-            // Live-stream dedup: track Path → ChangeType so a Removed for a path
+            // Live-stream dedup: track Path so a Removed for a path
             // we never Added is dropped, and an Added for a path that's already
-            // in the live set is dropped (same provider re-emitted, or overlapping
-            // providers both saw the change).
+            // in the live set is dropped (same provider re-emitted, or
+            // overlapping providers both saw the change).
             var liveItems = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             var subscriptions = new List<IDisposable>();
@@ -407,18 +435,27 @@ public class MeshQuery : IMeshQueryCore
                         {
                             lock (gate)
                             {
-                                foreach (var item in change.Items)
+                                // Pair items with their score (or 0 when the
+                                // provider didn't score this batch). The
+                                // contract: when Scores is non-null it MUST
+                                // have the same length as Items.
+                                var scores = change.Scores;
+                                for (var j = 0; j < change.Items.Count; j++)
                                 {
+                                    var item = change.Items[j];
+                                    var score = scores is not null && j < scores.Count
+                                        ? scores[j]
+                                        : 0.0;
                                     if (item is MeshNode node)
                                     {
                                         if (!string.IsNullOrEmpty(node.Path)
                                             && !initialPaths.Add(node.Path))
                                             continue;
-                                        providerItems[idx].Add(item);
+                                        providerHits[idx].Add((item, score));
                                     }
                                     else if (initialIdentities.Add(item))
                                     {
-                                        providerItems[idx].Add(item);
+                                        providerHits[idx].Add((item, score));
                                     }
                                 }
                                 lastQuery ??= change.Query;
@@ -428,16 +465,14 @@ public class MeshQuery : IMeshQueryCore
                                 {
                                     foreach (var path in initialPaths)
                                         liveItems.Add(path);
-                                    // Engine / writable persistence first, static catalog last,
-                                    // so request-level Limit cuts off the static tail rather
-                                    // than user content.
-                                    var ordered = new List<T>();
-                                    for (var p = 0; p < providerItems.Length; p++)
-                                        if (!providerIsStatic[p])
-                                            ordered.AddRange(providerItems[p]);
-                                    for (var p = 0; p < providerItems.Length; p++)
-                                        if (providerIsStatic[p])
-                                            ordered.AddRange(providerItems[p]);
+                                    // Flat concat across providers — no priority
+                                    // shuffle. ClipMergedInitial below performs
+                                    // the authoritative sort using OrderBy +
+                                    // Score, so the order we feed it is
+                                    // irrelevant to the final shape.
+                                    var ordered = new List<(T Item, double Score)>();
+                                    for (var p = 0; p < providerHits.Length; p++)
+                                        ordered.AddRange(providerHits[p]);
                                     var clipped = ClipMergedInitial<T>(
                                         ordered, change, lastQuery!, request);
                                     observer.OnNext(clipped);
@@ -463,38 +498,101 @@ public class MeshQuery : IMeshQueryCore
     }
 
     /// <summary>
-    /// Sort + skip + clip the merged initial set. Mirrors the post-collect
+    /// Sort + skip + clip the merged initial set. The authoritative ordering
+    /// pass for every multi-provider Initial emission. Mirrors the post-collect
     /// pipeline that <see cref="StorageAdapterMeshQueryProvider.QueryAsync"/> runs per-provider.
     /// Also applies <c>select:</c> projection: static-node providers don't
     /// project to dictionaries on their own, so merging engine projections with
     /// raw static MeshNodes left mixed-shape results for callers.
+    ///
+    /// <para><b>Sort order — the canonical contract.</b></para>
+    /// <list type="number">
+    ///   <item><see cref="ParsedQuery.OrderBy"/> when the query author
+    ///     specified <c>sort:Foo-desc</c> (or any other property). The
+    ///     <see cref="QueryEvaluator.OrderResults"/> primitive is used so the
+    ///     ordering rules match per-provider behavior (LastModified handles
+    ///     DateTime, Name is case-insensitive, …). This is the FIRST sort
+    ///     dimension — explicit user intent always wins.</item>
+    ///   <item><b>Score descending</b> within ties (or as the sole sort key
+    ///     when no <c>sort:</c> was specified). Each provider attaches a
+    ///     numeric score per item via <see cref="QueryResultChange{T}.Scores"/>;
+    ///     <see cref="MergeProviderObservables{T}"/> pairs items with their
+    ///     scores and hands them here. Higher score = stronger match.
+    ///     See <see cref="QueryResultChange{T}.Scores"/> for the per-provider
+    ///     scoring conventions.</item>
+    ///   <item>Insertion order as the final tiebreaker — preserves the
+    ///     provider's own deterministic ordering for two items at the same
+    ///     score (e.g. two PG rows tied on the prefix bonus).</item>
+    /// </list>
+    ///
+    /// <para><b>Why score sort lives here, not in each provider.</b> A single
+    /// provider can rank within itself, but the AGGREGATOR is where
+    /// cross-provider tie-breaking matters: a PG hit with name-prefix score
+    /// 100 must beat a static-catalog hit with score 0 for the same query.
+    /// Putting the score sort in <c>ClipMergedInitial</c> ensures every
+    /// downstream consumer of <see cref="ObserveQuery{T}"/> /
+    /// <see cref="QueryAsync"/> sees a single deterministic top-N regardless
+    /// of which providers contributed.</para>
     /// </summary>
     private static QueryResultChange<T> ClipMergedInitial<T>(
-        List<T> items,
+        List<(T Item, double Score)> hits,
         QueryResultChange<T> change,
         ParsedQuery parsed,
         MeshQueryRequest request)
     {
-        IEnumerable<T> merged = items;
+        IEnumerable<(T Item, double Score)> merged = hits;
         if (parsed.OrderBy is { } orderBy)
         {
-            var evaluator = new QueryEvaluator();
-            merged = evaluator.OrderResults(merged.OfType<MeshNode>(), orderBy).OfType<T>();
+            // OrderBy is the FIRST sort dimension when present — user intent
+            // beats provider scoring. Strip to items, sort, re-pair with
+            // scores (preserved by item identity). For non-MeshNode items
+            // the OrderBy is a no-op (QueryEvaluator only handles MeshNode);
+            // skip the sort to avoid mangling the score order.
+            if (typeof(T) == typeof(MeshNode) || hits.Any(h => h.Item is MeshNode))
+            {
+                var evaluator = new QueryEvaluator();
+                var scoreByItem = new Dictionary<MeshNode, double>();
+                foreach (var (item, score) in hits)
+                {
+                    if (item is MeshNode node && node.Path is not null)
+                        scoreByItem[node] = score;
+                }
+                var ordered = evaluator
+                    .OrderResults(hits.Select(h => h.Item).OfType<MeshNode>(), orderBy)
+                    .ToList();
+                merged = ordered.Select(node => ((T)(object)node,
+                    scoreByItem.TryGetValue(node, out var s) ? s : 0.0));
+            }
+        }
+        else
+        {
+            // No explicit OrderBy → score IS the sort dimension. Sort
+            // descending so the highest-relevance match lands first;
+            // insertion order is the implicit tiebreaker because
+            // OrderByDescending is stable in LINQ-to-objects.
+            merged = hits.OrderByDescending(h => h.Score);
         }
         if (request.Skip is int skip && skip > 0)
             merged = merged.Skip(skip);
         var effectiveLimit = request.Limit ?? parsed.Limit;
         if (effectiveLimit is int limit && limit > 0)
             merged = merged.Take(limit);
-        if (parsed.Select is { } select)
+        var finalList = merged.ToList();
+        var items = new List<T>(finalList.Count);
+        var scores = new List<double>(finalList.Count);
+        foreach (var (item, score) in finalList)
         {
-            // Project each MeshNode through select; for non-MeshNode inputs
-            // (already-projected dicts coming from the engine) leave alone.
-            merged = merged.Select(item => item is MeshNode node
-                ? (T)(object)ParsedQuery.ProjectToSelect(node, select)
-                : item);
+            if (parsed.Select is { } select && item is MeshNode node)
+            {
+                items.Add((T)(object)ParsedQuery.ProjectToSelect(node, select));
+            }
+            else
+            {
+                items.Add(item);
+            }
+            scores.Add(score);
         }
-        return change with { Items = merged.ToList() };
+        return change with { Items = items, Scores = scores };
     }
 
     /// <summary>
