@@ -287,9 +287,27 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             // Post PatchDataRequest to the OWNER. The owner reads its
                             // OWN current state, recursively merges the diff (RFC 7396),
                             // and commits — leaving any fields not in the diff intact.
+                            //
+                            // CRITICAL: stamp the caller's AccessContext on the
+                            // outgoing delivery. Without this, Orleans routing
+                            // delivers the request with accessContext=null, the
+                            // owner's RLS denies it, and the patch silently drops
+                            // → mirror never sees an echo → caller hangs on the
+                            // 10s post-update timeout. The PostPipeline warning
+                            // "<msg> posted with no AccessContext" surfaces this.
+                            var accessService = _workspace.Hub.ServiceProvider
+                                .GetService<MeshWeaver.Messaging.AccessService>();
+                            var capturedContext = accessService?.Context
+                                ?? accessService?.CircuitContext;
                             var delivery = _workspace.Hub.Post(
                                 new PatchDataRequest(new MeshNodeReference(), new RawJson(patchJson)),
-                                o => o.WithTarget(new Address(_path!)));
+                                o =>
+                                {
+                                    o = o.WithTarget(new Address(_path!));
+                                    return capturedContext is null
+                                        ? o
+                                        : o.WithAccessContext(capturedContext);
+                                });
                             if (delivery == null)
                             {
                                 observer.OnError(new InvalidOperationException(
