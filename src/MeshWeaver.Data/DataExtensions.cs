@@ -620,32 +620,36 @@ public static class DataExtensions
                         return;
                     }
 
+                    // Subscribe to the post-commit emission BEFORE issuing the
+                    // change so we never miss the tick. Post the response from
+                    // the subscription callback — non-blocking, no hub-thread
+                    // deadlock. Previous design used ManualResetEventSlim.Wait
+                    // which blocked the handler's action block; the reducer's
+                    // emission then couldn't be processed by the same hub →
+                    // deadlock under load. The post-commit response timing
+                    // is preserved (caller's RegisterCallback fires after the
+                    // commit lands, before any subsequent Get).
+                    var ackPosted = 0;
+                    void AckOnce(bool success, string? error = null)
+                    {
+                        if (System.Threading.Interlocked.Exchange(ref ackPosted, 1) != 0) return;
+                        var resp = new PatchDataResponse(success, hub.Version);
+                        if (error is not null) resp = resp with { Error = error };
+                        hub.Post(resp, o => o.ResponseFor(request));
+                    }
+
+                    var postSub = stream
+                        .Skip(1)
+                        .Take(1)
+                        .Timeout(TimeSpan.FromSeconds(5))
+                        .Subscribe(_ => AckOnce(true), ex => AckOnce(false, ex.Message));
+                    hub.RegisterForDisposal(postSub);
+
                     // Route via the hub's DataChangeRequest pipeline — the workspace
                     // writes through the data-source stream (which owns the typed
                     // InstanceCollection + persistence + reduction fan-out).
                     hub.GetWorkspace().RequestChange(
                         DataChangeRequest.Update([merged]), null, null);
-
-                    // RequestChange queues the update on the source stream's action
-                    // block — by the time we return from this method the reducer
-                    // hasn't necessarily emitted yet. Wait for the next stream
-                    // emission carrying the merged json (skip the current value)
-                    // before posting the response so the caller's subsequent Get
-                    // round-trip sees post-patch state. 5 s is generous; under load
-                    // this typically resolves in <50 ms.
-                    using var done = new System.Threading.ManualResetEventSlim(false);
-                    var sub = stream
-                        .Skip(1)
-                        .Take(1)
-                        .Timeout(TimeSpan.FromSeconds(5))
-                        .Subscribe(_ => done.Set(), _ => done.Set());
-                    done.Wait(TimeSpan.FromSeconds(5));
-                    sub.Dispose();
-
-                    // Response posts AFTER the commit so caller's RegisterCallback
-                    // fires on a state where a subsequent Get sees the patch.
-                    hub.Post(new PatchDataResponse(true, hub.Version),
-                        o => o.ResponseFor(request));
                 }
                 catch (Exception ex)
                 {
