@@ -260,14 +260,56 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
             (parsedQuery.Filter as MeshWeaver.Mesh.QueryComparison)?.Condition.Values is { } vs
                 ? string.Join("|", vs) : "(complex)",
             items.Count);
+        // Score the matched items when the query carries a text-search term.
+        // For pure filter / namespace / nodeType queries we leave Scores=null so
+        // the aggregator falls back to insertion order — there's no relevance
+        // signal to surface ("give me all Threads in this namespace" is
+        // unordered with respect to score).
+        var scores = ComputeScores(items, parsedQuery);
         return Observable.Return(new QueryResultChange<T>
         {
             ChangeType = QueryChangeType.Initial,
             Items = items,
+            Scores = scores,
             Query = parsedQuery,
             Version = 0,
             Timestamp = DateTimeOffset.UtcNow
         });
+    }
+
+    /// <summary>
+    /// Score the result set with <see cref="FuzzyScorer"/> when the query has
+    /// a <c>TextSearch</c> term — fzf-style ranking against the item's Name
+    /// (with Path as a fallback for items without a Name). The aggregator
+    /// (<c>MeshQuery.ClipMergedInitial</c>) sorts by these scores descending
+    /// after applying any explicit <c>OrderBy</c>, so a typed-name match
+    /// climbs above filter-only matches without the caller having to add
+    /// <c>sort:</c>. Returns <see langword="null"/> for non-MeshNode T or
+    /// non-text queries — aggregator preserves insertion order in those cases.
+    /// </summary>
+    private static IReadOnlyList<double>? ComputeScores<T>(IReadOnlyList<T> items, ParsedQuery parsed)
+    {
+        if (items.Count == 0) return null;
+        if (string.IsNullOrEmpty(parsed.TextSearch)) return null;
+        var scorer = new MeshWeaver.AI.Completion.FuzzyScorer();
+        // FuzzyScorer.Score returns ScoredItem<T> filtered to MATCHES only —
+        // it drops non-matches. For our purpose every item already matched the
+        // server-side filter; we just want the relevance score on each. Re-run
+        // scoring per-item via a one-element collection so we never lose rows.
+        var scores = new double[items.Count];
+        for (var i = 0; i < items.Count; i++)
+        {
+            var item = items[i];
+            if (item is not MeshNode node)
+            {
+                scores[i] = 0;
+                continue;
+            }
+            var text = !string.IsNullOrEmpty(node.Name) ? node.Name : (node.Path ?? string.Empty);
+            var scored = scorer.Score(new[] { node }, parsed.TextSearch, _ => text).FirstOrDefault();
+            scores[i] = scored?.Score ?? 0;
+        }
+        return scores;
     }
 
     private List<T> CollectStaticResults<T>(ParsedQuery parsed, string? requestContext)
