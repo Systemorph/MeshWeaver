@@ -60,26 +60,34 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
         {
             logger.LogDebug("MeshNodeStreamCache: opening shared stream for {Path}", p);
             var handle = meshHub.GetWorkspace().GetMeshNodeStream(p);
-            // Replay(1) + eager .Connect() inside ImpersonateAsHub: the
-            // upstream subscription opens ONCE under the mesh hub's
-            // identity, so the underlying SubscribeRequest carries a
-            // non-null AccessContext (sender + identity = mesh hub).
-            // Without this, the SubscribeRequest leaves the mesh hub with
-            // AccessContext=null (PostPipeline fails-closed for mesh hub),
-            // the owner's RLS sees userId=null and denies — even for
-            // NodeType hosts with WithPublicRead (which requires
-            // userId != empty). Wrapping the connect in an AsyncLocal
-            // ImpersonateAsHub scope plumbs the identity through to every
-            // post the JsonSynchronizationStream subscribe path makes.
+            // Replay(1) + eager .Connect() inside ImpersonateAsSystem: the
+            // upstream SubscribeRequest opens ONCE under the well-known
+            // System identity. The cache is process-wide infrastructure
+            // serving every reader (routing, NodeType activation, path-
+            // resolution, etc.) — none of them know which user triggered
+            // the read, and the cache emission fans out to subscribers
+            // who each apply their own AccessContext at consumption time
+            // (this read is system-internal, not user-attributable).
+            //
+            // ImpersonateAsHub(meshHub) was insufficient: it stamps the
+            // mesh hub's own address (mesh/{guid}) as the principal, but
+            // no AccessAssignment grants that principal access to
+            // partition nodes — owners' RLS denies with
+            //   "user 'mesh/{guid}' lacks Read permission on '{path}'"
+            // (OrleansThreadAccessTest reproduces this exactly).
+            // ImpersonateAsSystem grants Permission.All unconditionally
+            // (SecurityService whitelists WellKnownUsers.System), which
+            // matches the infrastructure nature of the cache read.
+            //
             // Eager Connect() (vs AutoConnect(1)) keeps the upstream alive
-            // for process lifetime — there's no RefCount churn, and the
-            // identity is captured deterministically at cache creation
-            // rather than at first random subscriber.
+            // for process lifetime — no RefCount churn, identity captured
+            // deterministically at cache-creation rather than at first
+            // random consumer.
             var connectable = handle.Replay(1);
             var accessService = meshHub.ServiceProvider.GetService<AccessService>();
             if (accessService is not null)
             {
-                using (accessService.ImpersonateAsHub(meshHub))
+                using (accessService.ImpersonateAsSystem())
                     connectable.Connect();
             }
             else
