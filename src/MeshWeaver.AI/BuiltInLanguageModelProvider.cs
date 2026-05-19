@@ -143,7 +143,7 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
             };
         }
 
-        logger?.LogInformation(
+        logger?.LogDebug(
             "BuiltInLanguageModelProvider: emitted {Count} Model nodes from {Sources} catalog source(s)",
             emitted.Count, options.Sources.Count);
 

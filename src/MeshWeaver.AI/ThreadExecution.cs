@@ -435,7 +435,7 @@ public static class ThreadExecution
         };
         var newUserMsgId = ThreadInput.AppendUserInput(hub.GetWorkspace(), threadPath, userMessage);
 
-        logger?.LogInformation(
+        logger?.LogDebug(
             "[ThreadExec] HandleSubmitMessage: queued via AppendUserInput threadPath={ThreadPath} userMsgId={UserMsgId}",
             threadPath, newUserMsgId);
 
@@ -689,7 +689,7 @@ public static class ThreadExecution
             DateTime? completedAt = null,
             ThreadMessageStatus? status = null)
         {
-            logger.LogInformation("[ThreadExec] PUSH_TO_MSG: responsePath={ResponsePath}, textLen={TextLen}, toolCalls={ToolCalls}, updatedNodes={UpdatedNodes}, status={Status}",
+            logger.LogDebug("[ThreadExec] PUSH_TO_MSG: responsePath={ResponsePath}, textLen={TextLen}, toolCalls={ToolCalls}, updatedNodes={UpdatedNodes}, status={Status}",
                 responsePath, text.Length, toolCalls.Count, updatedNodes.Count, status?.ToString() ?? "(preserve)");
 
             if (responseStream == null)
@@ -917,7 +917,7 @@ public static class ThreadExecution
                 client.UpdateDelegationStatus = status =>
                 {
                     currentStatus = status;
-                    logger.LogInformation("[ThreadExec] DELEGATION_STATUS: threadPath={ThreadPath}, status={Status}, delegationPaths=[{Paths}], toolCallLogSize={LogSize}",
+                    logger.LogDebug("[ThreadExec] DELEGATION_STATUS: threadPath={ThreadPath}, status={Status}, delegationPaths=[{Paths}], toolCallLogSize={LogSize}",
                         threadPath, status, string.Join(",", chatClient.DelegationPaths.Select(kv => $"{kv.Key}={kv.Value}")),
                         toolCallLog.Count);
                     // Push immediately when delegation path becomes available —
@@ -938,7 +938,7 @@ public static class ThreadExecution
                                 if (!stamped && e.Name.StartsWith("delegate_to") && e.DelegationPath == null)
                                 {
                                     stamped = true;
-                                    logger.LogInformation("[ThreadExec] DELEGATION_STAMPED: name={Name} delPath={DelPath}",
+                                    logger.LogDebug("[ThreadExec] DELEGATION_STAMPED: name={Name} delPath={DelPath}",
                                         e.Name, delPath);
                                     return e with { DelegationPath = delPath };
                                 }
@@ -965,7 +965,7 @@ public static class ThreadExecution
                     }
                     else
                     {
-                        logger.LogInformation("[ThreadExec] DELEGATION_STATUS_NO_PATH: status={Status} — no entry in DelegationPaths yet (set when ExecuteDelegationAsync runs)",
+                        logger.LogDebug("[ThreadExec] DELEGATION_STATUS_NO_PATH: status={Status} — no entry in DelegationPaths yet (set when ExecuteDelegationAsync runs)",
                             status);
                     }
                 };
@@ -1162,7 +1162,7 @@ public static class ThreadExecution
                             {
                                 var idx = toolCallLog.FindIndex(e => e.Name == originalCall.Name && e.Result == null);
                                 var existingDelegationPath = idx >= 0 ? toolCallLog[idx].DelegationPath : null;
-                                logger.LogInformation(
+                                logger.LogDebug(
                                     "[ThreadExec] TOOL_RESULT_REPLACE: name={Name} callId={CallId} idx={Idx} " +
                                     "existingDelegationPath={ExistingDelegationPath} extractedPath={ExtractedPath} logSize={LogSize}",
                                     originalCall.Name, originalCall.CallId, idx,

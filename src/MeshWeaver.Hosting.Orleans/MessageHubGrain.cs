@@ -85,18 +85,18 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 Interleave = true
             });
 
-        logger.LogInformation("[ACTIVATE] Grain {StreamId} activating", streamId);
+        logger.LogDebug("[ACTIVATE] Grain {StreamId} activating", streamId);
 
         var staticNode = TryResolveStaticNode(addressPath);
         IObservable<MeshNode> sourceStream;
         if (staticNode is { HubConfiguration: not null })
         {
-            logger.LogInformation("[ACTIVATE] Grain {StreamId}: static node found", streamId);
+            logger.LogDebug("[ACTIVATE] Grain {StreamId}: static node found", streamId);
             sourceStream = Observable.Return(staticNode);
         }
         else
         {
-            logger.LogInformation("[ACTIVATE] Grain {StreamId}: no static node with HubConfig, merging path resolver + mesh-node cache", streamId);
+            logger.LogDebug("[ACTIVATE] Grain {StreamId}: no static node with HubConfig, merging path resolver + mesh-node cache", streamId);
             // Path resolver gives a fast in-process answer (no SubscribeRequest round-trip)
             // for routable paths; the mesh-node cache backs it up for dynamic / freshly-
             // created nodes that the path resolver hasn't indexed yet.
@@ -119,7 +119,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         _activationSubscription = sourceStream
             .SelectMany(node =>
             {
-                logger.LogInformation("[ACTIVATE] Grain {StreamId}: source emitted node={Path} NodeType={NodeType} hasHubConfig={HasConfig}",
+                logger.LogDebug("[ACTIVATE] Grain {StreamId}: source emitted node={Path} NodeType={NodeType} hasHubConfig={HasConfig}",
                     streamId, node.Path, node.NodeType ?? "(null)", node.HubConfiguration != null);
                 return ResolveHubConfigurationObservable(node);
             })
@@ -174,7 +174,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 
             hub.RegisterForDisposal(_ => DeactivateOnIdle());
             _hub = hub;
-            logger.LogInformation("[ACTIVATE] Grain {StreamId} ready", streamId);
+            logger.LogDebug("[ACTIVATE] Grain {StreamId} ready", streamId);
             _hubReadyRaw.OnNext(hub);
         }
         catch (Exception ex)

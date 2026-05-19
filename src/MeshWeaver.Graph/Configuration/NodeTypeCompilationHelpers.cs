@@ -57,7 +57,7 @@ internal static class NodeTypeCompilationHelpers
             ?.CreateLogger("MeshWeaver.Graph.CompileWatcher");
 
         var installSeq = System.Threading.Interlocked.Increment(ref _watcherInstallCount);
-        logger?.LogInformation(
+        logger?.LogDebug(
             "Compile watcher: install#{Seq} on {HubPath}",
             installSeq, hub.Address.Path);
 
@@ -223,7 +223,7 @@ internal static class NodeTypeCompilationHelpers
                             hubPath);
                         return;
                     }
-                    logger?.LogInformation("Compile watcher: saw Pending for {HubPath} — attempting Pending → Compiling", hubPath);
+                    logger?.LogDebug("Compile watcher: saw Pending for {HubPath} — attempting Pending → Compiling", hubPath);
                     // Atomic Pending → Compiling transition. CompareExchange
                     // semantics inside the Update lambda: only the caller that
                     // observes status == Pending wins; others see Compiling
@@ -383,12 +383,27 @@ internal static class NodeTypeCompilationHelpers
         // written for cross-silo / restart consistency.
         DateTimeOffset? localLastDispatched = null;
 
+        // 🚨 Gate on Status being SETTLED (Ok / Error / null) — never fire
+        // while a compile is in-flight (Pending or Compiling). If we fired
+        // mid-flight and just kept Status at Compiling (the old behaviour),
+        // we'd stamp `LastReleaseRequestHandledAt` and effectively absorb
+        // the trigger — the user's intent ("compile now, with my latest
+        // edits") gets folded into a compile that may have started before
+        // those edits even landed. By gating on settled here, the trigger
+        // sits unprocessed until the in-flight compile transitions out,
+        // and the NEXT emission (with `Status = Ok` / `Error`) drives a
+        // fresh Pending flip → fresh compile. No spin loop: this
+        // post-settle emission stamps `LastReleaseRequestHandledAt`, so
+        // subsequent emissions with the same trigger fail the `req > handled`
+        // gate.
         return ownStream
             .Where(node => node?.Content is NodeTypeDefinition def
                 && def.RequestedReleaseAt is { } req
                 && (localLastDispatched is null || req > localLastDispatched.Value)
                 && (def.LastReleaseRequestHandledAt is null
-                    || req > def.LastReleaseRequestHandledAt.Value))
+                    || req > def.LastReleaseRequestHandledAt.Value)
+                && def.CompilationStatus is not CompilationStatus.Pending
+                                          and not CompilationStatus.Compiling)
             .Subscribe(
                 node =>
                 {
@@ -407,18 +422,20 @@ internal static class NodeTypeCompilationHelpers
                         if (def.LastReleaseRequestHandledAt is { } handled
                             && def.RequestedReleaseAt.Value <= handled)
                             return curr;
-                        // Stamp handled-at first so a re-emission of the same node
-                        // skips the gate above. Status guard keeps an in-flight
-                        // Pending/Compiling cycle from being re-flipped.
-                        var newStatus = def.CompilationStatus is CompilationStatus.Pending
-                                        or CompilationStatus.Compiling
-                            ? def.CompilationStatus
-                            : CompilationStatus.Pending;
+                        // Double-check inside the Update lambda — OWN's state
+                        // may have transitioned to Compiling between the
+                        // outer Where matching and this lambda running.
+                        // Returning `curr` unchanged here is safe: the
+                        // outer subscription will re-fire on the next
+                        // settled emission and the lambda will retry.
+                        if (def.CompilationStatus is CompilationStatus.Pending
+                                                  or CompilationStatus.Compiling)
+                            return curr;
                         return curr with
                         {
                             Content = def with
                             {
-                                CompilationStatus = newStatus,
+                                CompilationStatus = CompilationStatus.Pending,
                                 LastReleaseRequestHandledAt = def.RequestedReleaseAt
                             }
                         };
