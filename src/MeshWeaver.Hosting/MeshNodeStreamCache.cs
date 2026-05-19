@@ -1,9 +1,11 @@
 using System.Collections.Concurrent;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting;
@@ -58,19 +60,33 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
         {
             logger.LogDebug("MeshNodeStreamCache: opening shared stream for {Path}", p);
             var handle = meshHub.GetWorkspace().GetMeshNodeStream(p);
-            // Replay(1).AutoConnect(1): the upstream subscription opens once
-            // on the FIRST subscriber and stays live for the entire process
-            // lifetime — no RefCount tear-down when transient
-            // <c>.Take(1)</c> consumers drop their subscription. RefCount was
-            // racing every <c>EnrichWithNodeType</c> call: a per-instance hub
-            // activates, calls <c>.Take(1)</c>, count goes 1→0 → upstream
-            // tears down, then the NEXT instance arrives → RefCount opens a
-            // fresh SubscribeRequest → no cached snapshot to replay → either
-            // races a stale Initial or piles up 60+ SubscribeRequests on the
-            // owning NodeType hub. AutoConnect(1) eliminates that churn —
-            // one subscription, durable cache for every reader.
+            // Replay(1) + eager .Connect() inside ImpersonateAsHub: the
+            // upstream subscription opens ONCE under the mesh hub's
+            // identity, so the underlying SubscribeRequest carries a
+            // non-null AccessContext (sender + identity = mesh hub).
+            // Without this, the SubscribeRequest leaves the mesh hub with
+            // AccessContext=null (PostPipeline fails-closed for mesh hub),
+            // the owner's RLS sees userId=null and denies — even for
+            // NodeType hosts with WithPublicRead (which requires
+            // userId != empty). Wrapping the connect in an AsyncLocal
+            // ImpersonateAsHub scope plumbs the identity through to every
+            // post the JsonSynchronizationStream subscribe path makes.
+            // Eager Connect() (vs AutoConnect(1)) keeps the upstream alive
+            // for process lifetime — there's no RefCount churn, and the
+            // identity is captured deterministically at cache creation
+            // rather than at first random subscriber.
             var connectable = handle.Replay(1);
-            return new Entry(handle, connectable.AutoConnect(1));
+            var accessService = meshHub.ServiceProvider.GetService<AccessService>();
+            if (accessService is not null)
+            {
+                using (accessService.ImpersonateAsHub(meshHub))
+                    connectable.Connect();
+            }
+            else
+            {
+                connectable.Connect();
+            }
+            return new Entry(handle, connectable);
         });
 
     public IObservable<MeshNode> GetStream(string path) => GetEntry(path).Shared;
