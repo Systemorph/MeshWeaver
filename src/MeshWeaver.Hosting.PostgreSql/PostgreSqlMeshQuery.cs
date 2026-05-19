@@ -517,6 +517,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
                     {
                         ChangeType = QueryChangeType.Initial,
                         Items = initialItems,
+                        Scores = ComputeRowScores<T>(initialItems, firstParsed, request),
                         Query = firstParsed,
                         Version = Interlocked.Increment(ref _version),
                         Timestamp = DateTimeOffset.UtcNow
@@ -577,6 +578,12 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
         void Emit(QueryChangeType type, IReadOnlyList<T> items)
         {
             if (items.Count == 0) return;
+            // Live-delta emissions don't carry scores: the aggregator's
+            // delta-path doesn't re-sort, it just merges. Initial scoring
+            // already established the relative order — subsequent Added/
+            // Updated/Removed flow through unchanged so consumers see the
+            // event shape, not a fresh ranking. (If a re-rank is needed
+            // the consumer can re-subscribe to get a new Initial.)
             observer.OnNext(new QueryResultChange<T>
             {
                 ChangeType = type,
@@ -589,6 +596,54 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
         Emit(QueryChangeType.Added, addedItems);
         Emit(QueryChangeType.Updated, updatedItems);
         Emit(QueryChangeType.Removed, removedItems);
+    }
+
+    /// <summary>
+    /// Per-item scoring for ObserveQuery initial emissions. Composes the same
+    /// pieces <see cref="AutocompleteAsync"/> already uses — name-prefix bonus
+    /// (100, scaled by length), name-substring bonus (50), path-substring
+    /// bonus (30), <see cref="PathProximity.ComputeBoost"/> (max 40, decays
+    /// with namespace distance from the requesting hub) — so cross-provider
+    /// sort in <c>MeshQuery.ClipMergedInitial</c> ranks a PG name-prefix hit
+    /// above a <c>StaticNodeQueryProvider</c> filter-only hit on the same
+    /// query.
+    ///
+    /// <para>Returns <see langword="null"/> when there's no useful signal
+    /// (non-MeshNode T, no text-search term AND no context path) so the
+    /// aggregator falls back to insertion order rather than amplifying a
+    /// constant 0.</para>
+    /// </summary>
+    private static IReadOnlyList<double>? ComputeRowScores<T>(
+        IReadOnlyList<T> items, ParsedQuery parsed, MeshQueryRequest request)
+    {
+        if (items.Count == 0) return null;
+        var contextPath = request.Context;
+        var textSearch = parsed.TextSearch;
+        // Bail out when no scoring dimension applies. PathProximity is
+        // contextPath-driven; the text bonuses are textSearch-driven.
+        if (string.IsNullOrEmpty(textSearch) && string.IsNullOrEmpty(contextPath))
+            return null;
+        var lowerSearch = textSearch?.ToLowerInvariant();
+        var scores = new double[items.Count];
+        for (var i = 0; i < items.Count; i++)
+        {
+            if (items[i] is not MeshNode node) { scores[i] = 0; continue; }
+            double s = 0;
+            if (!string.IsNullOrEmpty(lowerSearch))
+            {
+                var name = node.Name ?? node.Id ?? node.Path ?? string.Empty;
+                if (name.StartsWith(lowerSearch, StringComparison.OrdinalIgnoreCase))
+                    s = 100 - (name.Length - lowerSearch.Length);
+                else if (name.Contains(lowerSearch, StringComparison.OrdinalIgnoreCase))
+                    s = 50;
+                else if ((node.Path ?? "").Contains(lowerSearch, StringComparison.OrdinalIgnoreCase))
+                    s = 30;
+            }
+            if (!string.IsNullOrEmpty(contextPath))
+                s += PathProximity.ComputeBoost(contextPath, node.Path);
+            scores[i] = s;
+        }
+        return scores;
     }
 
     /// <summary>
