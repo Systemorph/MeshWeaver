@@ -249,7 +249,7 @@ internal static class NodeTypeCompilationHelpers
                         })
                         .Take(1)
                         .Subscribe(
-                            _ =>
+                            compilingSnapshot =>
                             {
                                 if (!weTransitioned)
                                 {
@@ -298,6 +298,18 @@ internal static class NodeTypeCompilationHelpers
                                     "[COMPILE-TRACE] Compile watcher: starting activity for {HubPath}",
                                     hubPath);
                                 var activityEmitted = false;
+                                // Capture the post-Compiling node (the Update's
+                                // emission, which IS the just-applied OWN state)
+                                // and ship it inside RunCompileRequest. The
+                                // activity reads it directly instead of going
+                                // through the mesh-hub-cached remote stream —
+                                // race-free even when MESH's view lags the
+                                // trigger writes that produced this Pending.
+                                // Falls back to the Pending-state snapshot if
+                                // the Compiling write didn't emit a value
+                                // (defensive — shouldn't happen with Update's
+                                // contract).
+                                var snapshot = compilingSnapshot ?? pendingNode;
                                 NodeTypeCompilationActivity.Start(hub, hubPath, logger!)
                                     .Subscribe(
                                         activityPath =>
@@ -306,7 +318,7 @@ internal static class NodeTypeCompilationHelpers
                                             logger?.LogInformation(
                                                 "[COMPILE-TRACE] Compile watcher: activity created at {ActivityPath} for {HubPath} — posting RunCompileRequest",
                                                 activityPath, hubPath);
-                                            hub.Post(new RunCompileRequest(hubPath),
+                                            hub.Post(new RunCompileRequest(hubPath, snapshot),
                                                 o => o.WithTarget(new Address(activityPath)));
                                         },
                                         ex => logger?.LogWarning(ex,
