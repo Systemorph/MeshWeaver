@@ -268,10 +268,9 @@ public static class ThreadExecution
                     logger);
             }
 
-            // Clear thread execution state — routed through cache (one writer
-            // surface for the whole process).
-            var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-            cache.Update(threadPath, node =>
+            // Clear thread execution state — recovery runs on the thread hub
+            // itself, so this is an OWN write via its workspace.
+            workspace.GetMeshNodeStream().Update(node =>
             {
                 var t = node.Content as Thread ?? new Thread();
                 var cancelledAt = DateTime.UtcNow;
@@ -964,26 +963,25 @@ public static class ThreadExecution
                 "[ThreadExec] responseStream.Update failed for {Path}", responsePath));
         }
 
-        // Helper: update Thread execution state. Routed through
-        // IMeshNodeStreamCache — the dsStream behind the cache lives on the
-        // mesh hub (not blocked by chat work), so writes from this _Exec
-        // handler never wait on the thread hub's action block. Fire-and-
-        // forget Subscribe; errors are logged but don't terminate the
-        // streaming task. The cache's handle is shared across all readers
-        // (watcher, GUI, MCP) — one write surface for the whole process.
-        var nodeCache = parentHub.ServiceProvider.GetRequiredService<Mesh.Services.IMeshNodeStreamCache>();
         var execLogger = parentHub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.ThreadExecution");
+        // Write thread state from THIS HUB (parentHub = thread hub), not via
+        // the mesh-hub-backed cache. With delta-based PatchDataRequest in
+        // MeshNodeStreamHandle.UpdateRemote, concurrent writers from different
+        // mirrors no longer clobber each other — so the cache routing that
+        // forced writes through the mesh hub (losing caller identity, surfacing
+        // 'no AccessContext' warnings, sender=mesh) is obsolete. The owning
+        // per-node hub remains the source of truth.
         void UpdateThreadExecution(Func<MeshThread, MeshThread> mutate)
         {
-            nodeCache.Update(threadPath, node =>
+            parentHub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
             {
                 var thread = node.Content as MeshThread ?? new MeshThread();
                 return node with { Content = mutate(thread) };
             }).Subscribe(
                 _ => { },
                 ex => execLogger?.LogWarning(ex,
-                    "UpdateThreadExecution: cache.Update failed for {ThreadPath}",
+                    "UpdateThreadExecution: stream.Update failed for {ThreadPath}",
                     threadPath));
         }
 
@@ -1754,14 +1752,15 @@ public static class ThreadExecution
                     // stream that subsequent readers wouldn't see.
                     if (thread.StreamingToolCalls is { Count: > 0 })
                     {
-                        var subCache = hub.ServiceProvider
-                            .GetRequiredService<Mesh.Services.IMeshNodeStreamCache>();
+                        // Cancel propagation: write the RequestedCancellationAt
+                        // to each sub-thread via THIS hub's workspace — sender
+                        // is THIS hub, AccessContext flows from the caller.
                         foreach (var tc in thread.StreamingToolCalls.Where(
                             tc => !string.IsNullOrEmpty(tc.DelegationPath) && tc.Result == null))
                         {
                             logger?.LogInformation(
                                 "[ThreadExec] Propagating cancel to sub-thread {SubThread}", tc.DelegationPath);
-                            subCache.Update(tc.DelegationPath!,
+                            hub.GetWorkspace().GetMeshNodeStream(tc.DelegationPath!).Update(
                                 curr => curr?.Content is MeshThread sub
                                     ? curr with { Content = sub with { RequestedCancellationAt = thread.RequestedCancellationAt } }
                                     : curr!)

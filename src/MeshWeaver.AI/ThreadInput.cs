@@ -1,7 +1,6 @@
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -104,12 +103,14 @@ public static class ThreadInput
         // by the inbox at ingestion time. Updates Pending* hints for the next
         // round's dispatch context.
         //
-        // Routed through IMeshNodeStreamCache — same write surface as
-        // UpdateThreadExecution / DispatchRound commit / HandleStartExecution
-        // claim. ALL thread writes funnel through the cache's single mirror so
-        // ChangeType.Full overwrites can't clobber a concurrent OWN write.
-        var cache = workspace.Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-        cache.Update(threadPath, node =>
+        // Writes via the caller's own workspace handle — sender is THIS hub
+        // (portal / thread / wherever AppendUserInput is called from), and the
+        // AsyncLocal AccessContext stamps the caller's identity. With delta-
+        // based PatchDataRequest in MeshNodeStreamHandle.UpdateRemote, concurrent
+        // writes from different mirrors no longer clobber each other, so we no
+        // longer need to funnel through the mesh-hub cache (which would erase
+        // the caller's identity and surface as 'no AccessContext' warnings).
+        workspace.GetMeshNodeStream(threadPath).Update(node =>
         {
             logger?.LogDebug(
                 "[AppendUserInput] update lambda invoked for {ThreadPath} (node.Path={NodePath} contentType={ContentType})",

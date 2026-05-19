@@ -310,11 +310,10 @@ public static class ThreadSubmission
             }
         };
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-        var cache = hub.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Services.IMeshNodeStreamCache>();
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.ThreadSubmission");
         meshService.CreateNode(errorCell)
-            .SelectMany(_ => cache.Update(threadPath, node =>
+            .SelectMany(_ => hub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
             {
                 var t = node.Content as MeshThread ?? new MeshThread();
                 var msgs = t.Messages;
@@ -383,13 +382,11 @@ public static class ThreadSubmission
             return delivery.Processed();
         }
 
-        // Step A: atomic claim via IMeshNodeStreamCache — every thread write
-        // funnels through the cache (per the inbox-pattern design). Returning
+        // Step A: atomic claim via the thread hub's OWN node stream. Returning
         // `node` unchanged signals "drop the trigger" — the post-update
         // emission carries the pre-claim node so the Subscribe below checks
         // Status and bails out. Fire-and-forget Subscribe; errors logged.
-        var cache = hub.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Services.IMeshNodeStreamCache>();
-        cache.Update(threadPath, node =>
+        hub.GetWorkspace().GetMeshNodeStream().Update(node =>
         {
             var t = node.Content as MeshThread ?? new MeshThread();
             if (t.Status != ThreadExecutionStatus.Idle)
@@ -505,8 +502,7 @@ public static class ThreadSubmission
     {
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.ThreadSubmission");
-        var cache = hub.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Services.IMeshNodeStreamCache>();
-        cache.Update(threadPath, node =>
+        hub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
         {
             var t = node.Content as MeshThread ?? new MeshThread();
             var idx = t.Messages.IndexOf(atMessageId);
@@ -582,8 +578,7 @@ public static class ThreadSubmission
 
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.ThreadSubmission");
-        var cache = hub.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Services.IMeshNodeStreamCache>();
-        cache.Update(threadPath, node =>
+        hub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
         {
             var t = node.Content as MeshThread ?? new MeshThread();
             var idx = t.Messages.IndexOf(userMessageId);
@@ -802,8 +797,9 @@ internal static class ThreadSubmissionServer
                 "[DispatchAfterClaim] nothing to dispatch (post-claim race?) for {Path} — rolling status back to Idle",
                 hub.Address.Path);
             // Roll the claim back so the next watcher tick can re-trigger.
-            var rollbackCache = hub.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Services.IMeshNodeStreamCache>();
-            rollbackCache.Update(hub.Address.Path, n =>
+            // Rollback writes the thread node — `hub` here is parentHub (the
+            // thread hub), so its own GetMeshNodeStream is the OWN handle.
+            hub.GetWorkspace().GetMeshNodeStream().Update(n =>
             {
                 var t = n.Content as MeshThread ?? new MeshThread();
                 return n with { Content = t with { Status = ThreadExecutionStatus.Idle, ExecutionStartedAt = null } };
@@ -971,11 +967,11 @@ internal static class ThreadSubmissionServer
                         // Subscribe. The downstream UpdateResponseCell +
                         // SubmitMessageRequest chain off the Subscribe(onNext)
                         // so they only fire after the round commit is persisted.
-                        // Cache routing — every thread write funnels through
-                        // the single mesh-hub-backed handle.
-                        var commitCache = hub.ServiceProvider
-                            .GetRequiredService<MeshWeaver.Mesh.Services.IMeshNodeStreamCache>();
-                        commitCache.Update(threadPath, node =>
+                        // DispatchRound runs in parentHub context (hub = thread
+                        // hub). Write through THIS hub's own node stream so
+                        // sender = thread hub, AccessContext flows from the
+                        // caller's identity.
+                        hub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
                         {
                             var t = node.Content as MeshThread ?? new MeshThread();
                             // We expect Status==StartingExecution (post-claim from HandleStartExecution).
