@@ -69,23 +69,51 @@ internal static class NodeTypeCompileActivityHandler
             return request.Processed();
         }
 
-        // 1. Activity owns the "Compiling" transition. The watcher only
-        //    flipped Pending → no state on the parent until the activity
-        //    writes it. Single-writer = no race vs the watcher's previous
-        //    Compiling write.
-        WriteToParent(streamCache, parentPath, def => def with
-        {
-            CompilationStatus = CompilationStatus.Compiling,
-            LastCompileStartedAt = DateTimeOffset.UtcNow,
-            LastCompilationActivityPath = activityPath
-        }, logger, parentPath, "Compiling");
+        // 1. NO initial WriteToParent Compiling — that flip is owned by the
+        //    per-NodeType hub's `InstallCompileWatcher`, which already
+        //    transitions Pending → Compiling on OWN via `UpdateOwn` BEFORE
+        //    starting this activity. A second `WriteToParent Compiling` from
+        //    the activity hub (which is `UpdateRemote` via the mesh-hub
+        //    streamCache) computes its patch from MESH's cached view of OWN —
+        //    that view may still lag behind the caller's just-issued patch
+        //    (e.g. `ReleaseNotes + RequestedReleaseAt`). The whole-entity
+        //    EntityUpdate then clobbers OWN's just-written fields back to
+        //    their stale values — the regression reproduced by
+        //    `NodeTypeReleaseTest`: release lands with `Notes = null`.
+        //
+        //    `LastCompilationActivityPath` is set later (inside the
+        //    pendingNode-gated SelectMany below) once we know MESH's cache has
+        //    caught up to OWN's Compiling state. The terminal WriteToParent
+        //    (Ok / Error) also sets it as a safety net.
         NodeTypeCompilationActivity.AppendLog(activityHub, activityPath,
             $"Compile started for {parentPath} (activity hub: {activityHub.Address.Path})",
             logger!);
 
-        streamCache.GetStream(parentPath)
-            .Where(node => node?.Content is NodeTypeDefinition)
-            .Take(1)
+        // Prefer the snapshot the dispatcher (per-NodeType hub's CompileWatcher)
+        // captured at the moment it flipped `Compiling`. That capture IS the
+        // post-Update emission on OWN's local stream — race-free with any
+        // caller patch the watcher just absorbed (test's `ReleaseNotes +
+        // RequestedReleaseAt` write, `ReleaseRequestWatcher`'s Pending stamp,
+        // etc.). Reading from `streamCache.GetStream(parentPath)` (a mesh-hub-
+        // cached remote stream over OWN) lags those writes by DataChangedEvent
+        // fan-out — the regression reproduced by `NodeTypeReleaseTest` where
+        // the explicit-release MeshNode landed with `Notes = null` because the
+        // pendingNode read returned a stale pre-trigger snapshot.
+        //
+        // Fallback: when `ParentSnapshot` is null (legacy callers, inline-
+        // fallback compile path, etc.) wait for `Status == Compiling` on the
+        // cached stream as a best-effort watermark. The kickoff compile uses
+        // this fallback shape transparently — its dispatched Pending→Compiling
+        // happens before any caller mutation, so the cached-stream read is
+        // sufficient.
+        var snapshotObservable = request.Message.ParentSnapshot is { } providedSnapshot
+            ? Observable.Return(providedSnapshot)
+            : streamCache.GetStream(parentPath)
+                .Where(node => node?.Content is NodeTypeDefinition d
+                    && d.CompilationStatus == CompilationStatus.Compiling)
+                .Take(1);
+
+        snapshotObservable
             .Timeout(TimeSpan.FromSeconds(30))
             .SelectMany(pendingNode =>
             {
@@ -94,6 +122,19 @@ internal static class NodeTypeCompileActivityHandler
                 NodeTypeCompilationActivity.AppendLog(activityHub, activityPath,
                     $"Read NodeType MeshNode snapshot (version={pendingNode.Version}). Invoking Roslyn…",
                     logger!);
+
+                // Stamp `LastCompilationActivityPath` while the activity is
+                // running so UI bindings can link to the live compile log.
+                // Safe now that the cached stream has caught up to Compiling:
+                // `current` inside the transform has all of OWN's prior
+                // patches (test's `ReleaseNotes`, the watcher's
+                // `LastReleaseRequestHandledAt`, etc.), so the EntityUpdate
+                // carries them through instead of clobbering with stale values.
+                WriteToParent(streamCache, parentPath, def => def with
+                {
+                    LastCompileStartedAt = def.LastCompileStartedAt ?? DateTimeOffset.UtcNow,
+                    LastCompilationActivityPath = activityPath
+                }, logger, parentPath, "Compiling");
 
                 // Fetch sources via UNCACHED IMeshService.ObserveQuery — when it
                 // emits, the result is the post-write fresh source set. The

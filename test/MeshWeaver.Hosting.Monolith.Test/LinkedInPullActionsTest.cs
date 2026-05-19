@@ -43,7 +43,8 @@ public class LinkedInPullActionsTest(ITestOutputHelper output) : MonolithMeshTes
     [Fact(Timeout = 120000)]
     public async Task LinkedInPullActions_CompilesAndRendersNoCredentialBranch()
     {
-        var ct = new CancellationTokenSource(45.Seconds()).Token;
+        var ct = new CancellationTokenSource(90.Seconds()).Token;
+        var workspace = Mesh.GetWorkspace();
 
         // Register the NodeType with the PullPastPosts layout area wired in —
         // this is the exact Configuration string that lives in prod.
@@ -64,6 +65,46 @@ public class LinkedInPullActionsTest(ITestOutputHelper output) : MonolithMeshTes
 
         await CreateCodeAsync("LinkedInProfile", LinkedInProfileSource, ct);
         await CreateCodeAsync("LinkedInPullActions", LinkedInPullActionsSource, ct);
+
+        // Trigger an explicit recompile AFTER both source nodes exist via the
+        // canonical `RequestedReleaseAt` stream-update trigger. Without this,
+        // the per-NodeType hub's kickoff watcher races source creation: on CI
+        // the kickoff compile fires before both Code MeshNodes are persisted,
+        // produces a release missing `LinkedInPullActions`, and the
+        // `PullPastPosts` layout-area binding fails at activation — the test
+        // then times out reading any control off the instance stream.
+        //
+        // `RequestedReleaseAt > LastReleaseRequestHandledAt` is observed by
+        // `InstallReleaseRequestWatcher`; combined with
+        // `RequestedReleaseForce = true` the watcher always flips to Pending
+        // and the compile pipeline produces a release that includes whatever
+        // sources are visible now (i.e. both Code nodes).
+        var triggerAt = DateTimeOffset.UtcNow;
+        await workspace.GetMeshNodeStream(NodeTypePath).Update(curr =>
+        {
+            if (curr?.Content is not NodeTypeDefinition def) return curr!;
+            return curr with
+            {
+                Content = def with
+                {
+                    RequestedReleaseAt = triggerAt,
+                    RequestedReleaseForce = true,
+                }
+            };
+        }).FirstAsync().ToTask(ct);
+
+        // Wait for the compile that handled this trigger to settle on Ok with
+        // a release path. The handled-at watermark + Ok status guarantees the
+        // currently-active release was produced by THIS trigger — not the
+        // kickoff release we explicitly invalidated by re-triggering.
+        await workspace.GetMeshNodeStream(NodeTypePath)
+            .Where(n => n.Content is NodeTypeDefinition d
+                && d.LastReleaseRequestHandledAt is { } h && h >= triggerAt
+                && d.CompilationStatus == CompilationStatus.Ok
+                && !string.IsNullOrEmpty(d.LatestReleasePath))
+            .Take(1)
+            .Timeout(60.Seconds())
+            .ToTask(ct);
 
         var instancePath = $"{NodeTypePath}/test-profile";
         await NodeFactory.CreateNode(new MeshNode("test-profile", NodeTypePath)

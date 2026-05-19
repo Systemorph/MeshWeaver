@@ -57,7 +57,19 @@ public record RunTestsResponse(IReadOnlyList<string> ActivityPaths, string? Erro
 /// </summary>
 /// <param name="ParentNodeTypePath">Path of the parent NodeType MeshNode whose
 /// compile state this activity will update on completion.</param>
-public record RunCompileRequest(string ParentNodeTypePath) : IRequest<RunCompileResponse>;
+/// <param name="ParentSnapshot">Optional snapshot of the parent NodeType MeshNode
+/// captured by the dispatcher (the per-NodeType hub's CompileWatcher) at the
+/// moment it flipped <c>Compiling</c>. Carrying it here lets the activity see
+/// the trigger-time fields (<c>ReleaseNotes</c>, <c>RequestedReleaseAt</c>,
+/// <c>RequestedReleaseForce</c>) without re-reading from the mesh-hub-cached
+/// remote stream — that cache lags OWN by however long the
+/// <c>DataChangedEvent</c> fan-out takes, and a stale snapshot causes the
+/// produced release to lose the caller-authored fields (regression repro:
+/// <c>NodeTypeReleaseTest.CompilationPending_CreatesReleaseMeshNode_WithNotes</c>
+/// — release lands with <c>Notes = null</c>). When <c>null</c> the activity
+/// falls back to the cached-stream read (sufficient for kickoff compiles
+/// dispatched before any caller mutation).</param>
+public record RunCompileRequest(string ParentNodeTypePath, MeshNode? ParentSnapshot = null) : IRequest<RunCompileResponse>;
 
 /// <summary>
 /// Result of <see cref="RunCompileRequest"/>. Reports whether the compile

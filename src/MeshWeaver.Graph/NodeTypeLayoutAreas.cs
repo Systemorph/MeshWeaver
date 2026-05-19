@@ -797,9 +797,28 @@ public static class NodeTypeLayoutAreas
                 .WithIconStart(FluentIcons.Play())
                 .WithClickAction(ctx =>
                 {
-                    ctx.Host.Hub.Observe(new CreateReleaseRequest(Force: upToDate),
-                        o => o.WithTarget(ctx.Host.Hub.Address))
-                        .Subscribe(_ => { }, _ => { });
+                    // Canonical request-via-stream-update trigger — flips
+                    // `RequestedReleaseAt` + `RequestedReleaseForce` on the
+                    // NodeType's own MeshNode. The per-NodeType hub's
+                    // `InstallReleaseRequestWatcher` observes the timestamp
+                    // moving past `LastReleaseRequestHandledAt` and flips
+                    // `CompilationStatus = Pending`; `InstallCompileWatcher`
+                    // then runs Roslyn. No bespoke `CreateReleaseRequest`
+                    // round-trip — the trigger and observation flow through
+                    // the same node state every other subscriber already
+                    // watches. See `Doc/Architecture/RequestViaStreamUpdate.md`.
+                    ctx.Host.Workspace.GetMeshNodeStream(nodeTypePath).Update(curr =>
+                    {
+                        if (curr?.Content is not NodeTypeDefinition def) return curr!;
+                        return curr with
+                        {
+                            Content = def with
+                            {
+                                RequestedReleaseAt = DateTimeOffset.UtcNow,
+                                RequestedReleaseForce = upToDate,
+                            }
+                        };
+                    }).Subscribe(_ => { }, _ => { });
                     return Task.CompletedTask;
                 }));
 
