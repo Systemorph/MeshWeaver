@@ -209,6 +209,17 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             return sub;
         });
 
+    /// <summary>
+    /// Remote write — eventual-consistency path. Snapshots the local mirror's
+    /// view, applies the user lambda, computes a recursive JSON-merge-patch
+    /// (RFC 7396) DIFF between the snapshot and the result, then posts that
+    /// diff via <see cref="PatchDataRequest"/> to the owning per-node hub.
+    /// The owner merges the diff against its CURRENT authoritative state,
+    /// preserving fields touched by concurrent writers from other mirrors —
+    /// no <c>ChangeType.Full</c> overwrite, no "stale-mirror clobber".
+    /// <para>The returned observable emits the post-merge MeshNode once the
+    /// owner's response arrives, then completes.</para>
+    /// </summary>
     private IObservable<MeshNode> UpdateRemote(Func<MeshNode, MeshNode> update)
         => Observable.Create<MeshNode>(observer =>
         {
@@ -222,161 +233,148 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             var remoteStream = _workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
                 new Address(_path!), new MeshNodeReference());
 
-            // Wait for the per-node hub's initial SubscribeResponse before
-            // issuing the Update â€” racing the Update against the handshake
-            // delivers a null current to the lambda and propagates the
-            // cryptic "node not in persistence" error. The proper shape is:
-            //
-            //   1. Subscribe to the remote stream.
-            //   2. Wait for first non-null state (initial frame from owner) â€” this
-            //      is the moment ISynchronizationStream<MeshNode>.Current
-            //      transitions from null to the persisted node value.
-            //   3. Issue Update at that point; the handler then sees a
-            //      non-null Current and applies the patch.
-            //   4. Read the post-update node off the next emission past the
-            //      baseline version, complete the outer observable.
-            //
-            // A 30s outer timeout bounds the wait so a missing per-node hub
-            // (NodeType has no HubConfiguration / routing doesn't resolve)
-            // throws a TimeoutException with the path embedded â€” proper
-            // diagnostic, no silent null.
-            long? baseline = null;
-            bool updateIssued = false;
-            var sub = remoteStream
-                .Timeout(TimeSpan.FromSeconds(30))
-                .Subscribe(change =>
-                {
-                    if (!updateIssued)
-                    {
-                        diagLogger?.LogDebug(
-                            "[UpdateRemote] CHANGE-PRE-UPDATE hub={Hub} target={Path} version={Version} valueNull={ValueNull}",
-                            _workspace.Hub.Address, _path, change.Version, change.Value is null);
-                        // Wait for first non-null initial state â€” that's
-                        // when the per-node hub has delivered the persisted
-                        // node value via SubscribeResponse and SetCurrent
-                        // has populated Current.
-                        if (change.Value is null)
-                            return;
-                        baseline = change.Version;
-                        updateIssued = true;
-                        diagLogger?.LogDebug(
-                            "[UpdateRemote] INITIAL-STATE-RECEIVED hub={Hub} target={Path} baseline={Baseline}",
-                            _workspace.Hub.Address, _path, baseline);
+            var composite = new CompositeDisposable();
 
+            // Wait for the per-node hub's initial SubscribeResponse before
+            // running the user lambda — the lambda needs a non-null current
+            // to diff against. A 30 s outer timeout bounds the wait so a
+            // missing per-node hub surfaces with a precise TimeoutException.
+            var initialSub = remoteStream
+                .Timeout(TimeSpan.FromSeconds(30))
+                .Where(change => change.Value is not null)
+                .Take(1)
+                .Subscribe(
+                    change =>
+                    {
+                        var current = change.Value!;
                         try
                         {
-                            // ISynchronizationStream<MeshNode>.Update routes the patch to the owning
-                            // per-node hub via PatchDataChangeRequest. The reducer's first emission
-                            // past baseline carries the post-update node back to the subscriber above.
-                            //
-                            // No-op handling: when update(current).Equals(current), SyncStream's
-                            // SetCurrent short-circuits (no OnNext) â€” we'd hang forever waiting for
-                            // a post-update emission that never fires. Detect that here, emit the
-                            // unchanged node back synchronously, and return null so SetCurrent
-                            // skips cleanly.
-                            remoteStream.Update(current =>
+                            var updated = update(current);
+                            if (ReferenceEquals(updated, current) || Equals(updated, current))
                             {
-                                if (current is null)
-                                {
-                                    // Defensive: by construction this shouldn't fire (we waited
-                                    // for non-null state above), but a race could in principle
-                                    // wipe Current between the SubscribeResponse and this
-                                    // continuation. Surface a precise diagnostic â€” never silent.
-                                    throw new InvalidOperationException(
-                                        $"Race: Current became null between SubscribeResponse and Update for '{_path}'. " +
-                                        "The synchronization stream's Current was non-null when Update was issued, but " +
-                                        "the handler observed null â€” likely a concurrent dispose or a reset event. " +
-                                        "Re-issue the Update or investigate why the stream was reset mid-write.");
-                                }
-                                var updated = update(current);
-                                if (Equals(updated, current))
-                                {
-                                    diagLogger?.LogDebug(
-                                        "[UpdateRemote] NO-OP hub={Hub} target={Path} â€” lambda returned unchanged value; completing inline",
-                                        _workspace.Hub.Address, _path);
-                                    observer.OnNext(current);
-                                    observer.OnCompleted();
-                                    return null;
-                                }
-                                // Framework-driven Version: see UpdateOwn.
-                                updated = updated with { Version = _workspace.Hub.Version };
-                                // Identical to the 3-arg ChangeItem ctor
-                                // (ChangedBy=null, ChangeType.Full) EXCEPT it carries the
-                                // EntityUpdate payload. The owner-forwarding subscription
-                                // in CreateExternalClient converts the ChangeItem via
-                                // ToDataChangeRequest, which reads ChangeItem.Updates; a
-                                // 3-arg ChangeItem leaves Updates empty, so the
-                                // .Where(has Creations/Updates/Deletions) filter drops it
-                                // and the patch never reaches the owner (symptom: remote
-                                // RequestedStatus patches silently lost). Keep ChangeType
-                                // Full / ChangedBy null so no other consumer's behaviour
-                                // shifts â€” only the missing payload is added.
-                                return new ChangeItem<MeshNode>(
-                                    updated,
-                                    /* ChangedBy */ null,
-                                    remoteStream.StreamId,
-                                    ChangeType.Full,
-                                    remoteStream.Hub.Version,
-                                    [new EntityUpdate(nameof(MeshNode), updated.Id, updated)
-                                        { OldValue = current }]);
-                            }, observer.OnError);
+                                diagLogger?.LogDebug(
+                                    "[UpdateRemote] NO-OP hub={Hub} target={Path} — lambda returned unchanged",
+                                    _workspace.Hub.Address, _path);
+                                observer.OnNext(current);
+                                observer.OnCompleted();
+                                return;
+                            }
+
+                            var jsonOpts = _workspace.Hub.JsonSerializerOptions;
+                            var currentNode = System.Text.Json.JsonSerializer
+                                .SerializeToNode(current, jsonOpts) as System.Text.Json.Nodes.JsonObject
+                                ?? new System.Text.Json.Nodes.JsonObject();
+                            var updatedNode = System.Text.Json.JsonSerializer
+                                .SerializeToNode(updated, jsonOpts) as System.Text.Json.Nodes.JsonObject
+                                ?? new System.Text.Json.Nodes.JsonObject();
+                            var patch = ComputeMergePatchDiff(currentNode, updatedNode);
+
+                            if (patch.Count == 0)
+                            {
+                                diagLogger?.LogDebug(
+                                    "[UpdateRemote] NO-OP hub={Hub} target={Path} — diff empty after serialisation",
+                                    _workspace.Hub.Address, _path);
+                                observer.OnNext(current);
+                                observer.OnCompleted();
+                                return;
+                            }
+
+                            var patchJson = patch.ToJsonString(jsonOpts);
+                            diagLogger?.LogDebug(
+                                "[UpdateRemote] POST-PATCH hub={Hub} target={Path} keys={Keys}",
+                                _workspace.Hub.Address, _path, patch.Count);
+
+                            // Post PatchDataRequest to the OWNER. The owner reads its
+                            // OWN current state, recursively merges the diff (RFC 7396),
+                            // and commits — leaving any fields not in the diff intact.
+                            var delivery = _workspace.Hub.Post(
+                                new PatchDataRequest(new MeshNodeReference(), new RawJson(patchJson)),
+                                o => o.WithTarget(new Address(_path!)));
+                            if (delivery == null)
+                            {
+                                observer.OnError(new InvalidOperationException(
+                                    $"Post of PatchDataRequest returned null for {_path}"));
+                                return;
+                            }
+
+                            // Wait for the next non-null emission from the remote stream
+                            // — that's the owner's echo of the merged state. Complete then.
+                            var postSub = remoteStream
+                                .Skip(1)
+                                .Where(c => c.Value is not null)
+                                .Take(1)
+                                .Timeout(TimeSpan.FromSeconds(10))
+                                .Subscribe(
+                                    c =>
+                                    {
+                                        observer.OnNext(c.Value!);
+                                        observer.OnCompleted();
+                                    },
+                                    observer.OnError);
+                            composite.Add(postSub);
                         }
                         catch (Exception ex)
                         {
                             observer.OnError(ex);
                         }
-                        return;
-                    }
-
-                    // Update was issued â€” the next non-null emission carries the
-                    // post-update value back from the per-node hub. We don't
-                    // compare versions because the initial state arrives via the
-                    // synced stream (mesh hub's version counter) while the post-
-                    // update emission carries the per-node hub's OWN version
-                    // counter â€” incomparable sequences. The "updateIssued" flag
-                    // is the gate; any non-null emission after it represents the
-                    // applied update.
-                    diagLogger?.LogDebug(
-                        "[UpdateRemote] POST-UPDATE-CHANGE hub={Hub} target={Path} version={Version} baseline={Baseline}",
-                        _workspace.Hub.Address, _path, change.Version, baseline);
-                    if (change.Value is { } node)
+                    },
+                    ex =>
                     {
-                        diagLogger?.LogDebug(
-                            "[UpdateRemote] COMPLETE hub={Hub} target={Path} version={Version}",
-                            _workspace.Hub.Address, _path, change.Version);
-                        observer.OnNext(node);
-                        observer.OnCompleted();
-                    }
-                }, ex =>
-                {
-                    diagLogger?.LogWarning(ex,
-                        "[UpdateRemote] ERROR hub={Hub} target={Path} updateIssued={UpdateIssued} type={ExType}",
-                        _workspace.Hub.Address, _path, updateIssued, ex.GetType().Name);
-                    // Timeout-wrapped: a TimeoutException here means we never got
-                    // an initial state. The per-node hub either didn't activate,
-                    // didn't load the node from persistence, or doesn't have a
-                    // MeshNodeReference reducer. Repackage with the path so the
-                    // diagnostic is actionable from the log alone.
-                    if (ex is TimeoutException && !updateIssued)
-                    {
-                        observer.OnError(new TimeoutException(
-                            $"Update aborted: no initial state arrived for '{_path}' within 30s. " +
-                            "Likely causes â€” (1) RLS silently rejected the prior CreateNode (check the response's " +
-                            "Success/Error fields, not just the awaited result), (2) the path is misspelled / points " +
-                            "at a namespace no NodeType claims, (3) the node was deleted between create and update, or " +
-                            "(4) the per-node hub activated but its MeshDataSource didn't load the node from persistence " +
-                            "(verify the HubConfiguration calls AddMeshDataSource and the routing resolves a HubConfiguration " +
-                            "for this NodeType). Confirm persistence state with " +
-                            $"`mcp__memex__get @{_path}` before retrying."));
-                    }
-                    else
-                    {
-                        observer.OnError(ex);
-                    }
-                });
-
-            return sub;
+                        diagLogger?.LogWarning(ex,
+                            "[UpdateRemote] ERROR hub={Hub} target={Path} type={ExType}",
+                            _workspace.Hub.Address, _path, ex.GetType().Name);
+                        if (ex is TimeoutException)
+                        {
+                            observer.OnError(new TimeoutException(
+                                $"Update aborted: no initial state arrived for '{_path}' within 30s. " +
+                                "Likely causes — (1) RLS silently rejected the prior CreateNode, " +
+                                "(2) the path is misspelled / points at a namespace no NodeType claims, " +
+                                "(3) the node was deleted between create and update, or (4) the per-node " +
+                                "hub activated but its MeshDataSource didn't load the node from persistence."));
+                        }
+                        else
+                        {
+                            observer.OnError(ex);
+                        }
+                    });
+            composite.Add(initialSub);
+            return composite;
         });
+
+    /// <summary>
+    /// Recursive JSON-merge-patch (RFC 7396) diff between two equally-shaped
+    /// JsonObjects. The result, when applied to <paramref name="current"/>
+    /// (e.g. via <c>HandlePatchDataRequest</c>'s recursive merge), reproduces
+    /// <paramref name="updated"/>. Keys in current and missing in updated
+    /// emit <c>null</c> (RFC 7396 remove). Equal values emit nothing.
+    /// </summary>
+    private static System.Text.Json.Nodes.JsonObject ComputeMergePatchDiff(
+        System.Text.Json.Nodes.JsonObject current,
+        System.Text.Json.Nodes.JsonObject updated)
+    {
+        var patch = new System.Text.Json.Nodes.JsonObject();
+        foreach (var (key, updatedValue) in updated)
+        {
+            var currentValue = current[key];
+            if (currentValue is System.Text.Json.Nodes.JsonObject co
+                && updatedValue is System.Text.Json.Nodes.JsonObject uo)
+            {
+                var sub = ComputeMergePatchDiff(co, uo);
+                if (sub.Count > 0)
+                    patch[key] = sub;
+                continue;
+            }
+            if (!System.Text.Json.Nodes.JsonNode.DeepEquals(currentValue, updatedValue))
+                patch[key] = updatedValue?.DeepClone();
+        }
+        // Keys removed in updated → emit null per RFC 7396.
+        foreach (var (key, _) in current)
+        {
+            if (!updated.ContainsKey(key))
+                patch[key] = null;
+        }
+        return patch;
+    }
 }
 
 /// <summary>
