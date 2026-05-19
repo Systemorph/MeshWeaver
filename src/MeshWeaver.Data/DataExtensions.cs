@@ -552,6 +552,40 @@ public static class DataExtensions
     /// Subscribers to any reduced reference over the same data source see the
     /// change tick on their stream for free.
     /// </summary>
+    /// <summary>
+    /// Recursive JSON Merge Patch (RFC 7396) applied to <paramref name="current"/> in-place.
+    /// Patch semantics:
+    /// <list type="bullet">
+    ///   <item><c>null</c> in patch → remove the key from current.</item>
+    ///   <item>Object in patch AND object in current at same key → recurse (deep merge).</item>
+    ///   <item>Anything else → replace current's value with patch's value (deep clone).</item>
+    /// </list>
+    /// Crucial for eventual-consistency: a patch that only touches one nested field
+    /// (e.g. <c>{ "Content": { "RequestedCancellationAt": "..." } }</c>) leaves every
+    /// other nested field on the owner intact, instead of being overwritten by a
+    /// full-object replacement.
+    /// </summary>
+    internal static void MergePatchRecursive(
+        System.Text.Json.Nodes.JsonObject current,
+        System.Text.Json.Nodes.JsonObject patch)
+    {
+        foreach (var kvp in patch.ToArray())
+        {
+            if (kvp.Value is null)
+            {
+                current.Remove(kvp.Key);
+                continue;
+            }
+            if (kvp.Value is System.Text.Json.Nodes.JsonObject patchObj
+                && current[kvp.Key] is System.Text.Json.Nodes.JsonObject currentObj)
+            {
+                MergePatchRecursive(currentObj, patchObj);
+                continue;
+            }
+            current[kvp.Key] = kvp.Value.DeepClone();
+        }
+    }
+
     private static void ApplyJsonMergePatchAndUpdate<T>(
         ISynchronizationStream<T> stream,
         string patchText,
@@ -574,13 +608,7 @@ public static class DataExtensions
                     var patchNode = System.Text.Json.Nodes.JsonNode.Parse(patchText) as System.Text.Json.Nodes.JsonObject
                         ?? throw new InvalidOperationException("Patch must be a JSON object");
 
-                    foreach (var kvp in patchNode.ToArray())
-                    {
-                        if (kvp.Value is null)
-                            currentNode.Remove(kvp.Key);
-                        else
-                            currentNode[kvp.Key] = kvp.Value.DeepClone();
-                    }
+                    MergePatchRecursive(currentNode, patchNode);
 
                     var mergedJson = currentNode.ToJsonString(jsonOpts);
                     var merged = System.Text.Json.JsonSerializer.Deserialize<T>(mergedJson, jsonOpts);
