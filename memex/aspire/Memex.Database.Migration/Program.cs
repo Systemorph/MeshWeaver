@@ -82,6 +82,7 @@ var migrations = new IMigration[]
     new V22_ConsolidateGlobalCatalogsInAdmin(),
     new V23_PartitionChangesNotify(),
     new V24_DedupMeshNodeNotifyTrigger(),
+    new V25_MirrorAccessObjectsToUserSchema(),
 };
 
 var ctx = new MigrationContext(dataSource, connectionString, options, logger, initResult.IsFreshDb);

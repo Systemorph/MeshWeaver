@@ -19,6 +19,12 @@ public enum NavigationPhase
     Ready,
     /// <summary>Path could not be resolved after all retries were exhausted.</summary>
     NotFound,
+    /// <summary>
+    /// Path resolved but the current user lacks Read on the node. Distinct
+    /// from <see cref="NotFound"/> so the UI can show "you don't have access"
+    /// instead of "page doesn't exist" -- two very different remediations.
+    /// </summary>
+    AccessDenied,
     /// <summary>Unexpected error occurred during resolution.</summary>
     Error
 }
@@ -91,6 +97,18 @@ public sealed record NavigationStatus(NavigationPhase Phase, string Message, str
             string.IsNullOrWhiteSpace(path)
                 ? "Page not found."
                 : $"Page not found: '{path}' does not match any registered address pattern.");
+
+    /// <summary>
+    /// Path exists but the current user lacks Read on it -- the RLS layer
+    /// dropped the row from the result set. Distinct message from
+    /// <see cref="NotFound"/> so the user sees an actionable
+    /// "Access denied" instead of being told the page doesn't exist.
+    /// </summary>
+    public static NavigationStatus AccessDenied(string? path) =>
+        new(NavigationPhase.AccessDenied,
+            string.IsNullOrWhiteSpace(path)
+                ? "Access denied."
+                : $"Access denied: you don't have permission to view '{path}'.");
 
     /// <summary>Unexpected error occurred during resolution.</summary>
     public static NavigationStatus Error(string message) =>
