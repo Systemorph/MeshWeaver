@@ -333,6 +333,25 @@ consumes the QUERY stream (already-populated `MeshNode`s) and just scores
 against the prefix — it never reads paths by hand. Discovering partitions
 when `basePath` is empty is `RoutingMeshQueryProvider.AutocompleteAsync`'s job.
 
+### GUI-side single-node reads — always through `IMeshNodeStreamCache`
+
+On the server side, `workspace.GetMeshNodeStream(path)` is the canonical single-node
+read primitive (table above). On the **GUI** side (Blazor views), the equivalent
+is `IMeshNodeStreamCache.GetStream(path)` — a process-wide shared handle per
+path, opened ONCE under `ImpersonateAsSystem`, replayed and live-connected. Every
+visible Blazor view that needs the same node joins the same upstream subscription;
+writes through `cache.Update(path, fn)` propagate to all subscribers in order.
+
+Going around the cache (e.g. opening `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, ...)`
+directly inside a Blazor view) opens a SEPARATE upstream handle — writes through
+one are invisible to readers of the other, and the per-view subscription cost
+scales with N visible views. Always use the cache.
+
+The list-rendering shape (one Blazor view per id, each binding to its own cache
+stream) is documented separately: **[Item-Template + MeshNode Stream Binding](xref:GUI/ItemTemplateMeshNodeStreamBinding)**.
+The canonical example is the thread chat view — N visible messages, N cache
+subscriptions, ZERO per-message layout-area round-trips.
+
 ## One-shot reads (`GetDataRequest` + `Observe`)
 
 The canonical pattern for "give me this node's current MeshNode":
