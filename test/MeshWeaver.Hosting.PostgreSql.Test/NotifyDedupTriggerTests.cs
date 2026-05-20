@@ -87,6 +87,7 @@ public class NotifyDedupTriggerTests(IsolatedPostgreSqlFixture fixture) : IAsync
     [Fact]
     public async Task NoOpUpdate_SameContent_DoesNotFireNotify()
     {
+        var ct = TestContext.Current.CancellationToken;
         var node = new MeshNode("dedup-target", "tests")
         {
             Name = "Dedup Target",
@@ -98,13 +99,13 @@ public class NotifyDedupTriggerTests(IsolatedPostgreSqlFixture fixture) : IAsync
 
         // INSERT must fire at least one NOTIFY.
         var beforeInsert = Count();
-        await fixture.StorageAdapter.WriteAsync(node, _options);
+        await fixture.StorageAdapter.WriteAsync(node, _options, ct);
         var insertDelta = await NewNotificationsSinceAsync(beforeInsert, TimeSpan.FromSeconds(2));
         insertDelta.Should().BeGreaterThanOrEqualTo(1, "INSERT must fire NOTIFY");
 
         // Same-value UPSERT must NOT fire any NOTIFY in a quiet window.
         var beforeNoOp = Count();
-        await fixture.StorageAdapter.WriteAsync(node, _options);
+        await fixture.StorageAdapter.WriteAsync(node, _options, ct);
         var noOpDelta = await NewNotificationsAfterDelay(beforeNoOp, TimeSpan.FromMilliseconds(500));
         noOpDelta.Should().Be(0,
             "same-value UPDATE must NOT fire NOTIFY -- that's the dedup that "
@@ -114,6 +115,7 @@ public class NotifyDedupTriggerTests(IsolatedPostgreSqlFixture fixture) : IAsync
     [Fact]
     public async Task RealUpdate_DifferentContent_FiresNotify()
     {
+        var ct = TestContext.Current.CancellationToken;
         var node = new MeshNode("real-update", "tests")
         {
             Name = "First",
@@ -122,7 +124,7 @@ public class NotifyDedupTriggerTests(IsolatedPostgreSqlFixture fixture) : IAsync
             State = MeshNodeState.Active,
             Version = 1,
         };
-        await fixture.StorageAdapter.WriteAsync(node, _options);
+        await fixture.StorageAdapter.WriteAsync(node, _options, ct);
         await NewNotificationsSinceAsync(0, TimeSpan.FromSeconds(2));
 
         var beforeUpdate = Count();
@@ -131,7 +133,7 @@ public class NotifyDedupTriggerTests(IsolatedPostgreSqlFixture fixture) : IAsync
             Content = new Dictionary<string, object> { { "k", "v2" } },
             Version = 2,
         };
-        await fixture.StorageAdapter.WriteAsync(updated, _options);
+        await fixture.StorageAdapter.WriteAsync(updated, _options, ct);
         var updateDelta = await NewNotificationsSinceAsync(beforeUpdate, TimeSpan.FromSeconds(2));
         updateDelta.Should().BeGreaterThanOrEqualTo(1,
             "UPDATE with different content + version must fire NOTIFY");
@@ -140,6 +142,7 @@ public class NotifyDedupTriggerTests(IsolatedPostgreSqlFixture fixture) : IAsync
     [Fact]
     public async Task NameChange_AloneFiresNotify()
     {
+        var ct = TestContext.Current.CancellationToken;
         var node = new MeshNode("name-change", "tests")
         {
             Name = "Before",
@@ -148,12 +151,12 @@ public class NotifyDedupTriggerTests(IsolatedPostgreSqlFixture fixture) : IAsync
             State = MeshNodeState.Active,
             Version = 1,
         };
-        await fixture.StorageAdapter.WriteAsync(node, _options);
+        await fixture.StorageAdapter.WriteAsync(node, _options, ct);
         await NewNotificationsSinceAsync(0, TimeSpan.FromSeconds(2));
 
         var beforeRename = Count();
         var renamed = node with { Name = "After" };
-        await fixture.StorageAdapter.WriteAsync(renamed, _options);
+        await fixture.StorageAdapter.WriteAsync(renamed, _options, ct);
         var renameDelta = await NewNotificationsSinceAsync(beforeRename, TimeSpan.FromSeconds(2));
         renameDelta.Should().BeGreaterThanOrEqualTo(1,
             "Name-only change must still fire NOTIFY -- UI display-name "
@@ -163,6 +166,7 @@ public class NotifyDedupTriggerTests(IsolatedPostgreSqlFixture fixture) : IAsync
     [Fact]
     public async Task DeleteFiresNotify()
     {
+        var ct = TestContext.Current.CancellationToken;
         var node = new MeshNode("delete-target", "tests")
         {
             Name = "Doomed",
@@ -170,11 +174,11 @@ public class NotifyDedupTriggerTests(IsolatedPostgreSqlFixture fixture) : IAsync
             State = MeshNodeState.Active,
             Version = 1,
         };
-        await fixture.StorageAdapter.WriteAsync(node, _options);
+        await fixture.StorageAdapter.WriteAsync(node, _options, ct);
         await NewNotificationsSinceAsync(0, TimeSpan.FromSeconds(2));
 
         var beforeDelete = Count();
-        await fixture.StorageAdapter.DeleteAsync(node.Path);
+        await fixture.StorageAdapter.DeleteAsync(node.Path, ct);
         var deleteDelta = await NewNotificationsSinceAsync(beforeDelete, TimeSpan.FromSeconds(2));
         deleteDelta.Should().BeGreaterThanOrEqualTo(1, "DELETE must always fire NOTIFY");
 

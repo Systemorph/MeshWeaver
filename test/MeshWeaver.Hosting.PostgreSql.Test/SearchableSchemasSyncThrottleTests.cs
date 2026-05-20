@@ -52,7 +52,7 @@ public class SearchableSchemasSyncThrottleTests(PostgreSqlFixture fixture)
         await provider.SyncSearchableSchemasAsync(CancellationToken.None);
         provider.ActualSyncCount.Should().Be(1);
 
-        await Task.Delay(120);
+        await Task.Delay(120, TestContext.Current.CancellationToken);
 
         await provider.SyncSearchableSchemasAsync(CancellationToken.None);
         provider.ActualSyncCount.Should().Be(2,
@@ -76,7 +76,7 @@ public class SearchableSchemasSyncThrottleTests(PostgreSqlFixture fixture)
             for (int i = 0; i < burst.Length; i++)
                 burst[i] = provider.SyncSearchableSchemasAsync(CancellationToken.None);
             await Task.WhenAll(burst);
-            await Task.Delay(70);
+            await Task.Delay(70, TestContext.Current.CancellationToken);
         }
 
         provider.ActualSyncCount.Should().BeInRange(3, 4,
