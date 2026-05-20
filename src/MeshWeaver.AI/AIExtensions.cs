@@ -100,7 +100,15 @@ public static class AIExtensions
             .WithType(typeof(ThreadExecutionContext), nameof(ThreadExecutionContext))
             // ChatHistoryEntry removed — ChatHistory uses string[] to avoid $type issues
             .WithType(typeof(SaveContentRequest), nameof(SaveContentRequest))
-            .WithType(typeof(SaveContentResponse), nameof(SaveContentResponse));
+            .WithType(typeof(SaveContentResponse), nameof(SaveContentResponse))
+            // Chat-list item-template controls — see Doc/GUI/ItemTemplateMeshNodeStreamBinding.
+            // ThreadMessageItemControl is the per-item View inside the chat's ItemTemplateControl;
+            // its Blazor view subscribes to IMeshNodeStreamCache.GetStream(MessagePath) and
+            // dispatches input/output rendering off the bound ThreadMessage.Role.
+            // DelegationToolCallCardControl is invoked inline by the output branch for each
+            // tool call with a non-null DelegationPath — two cache subscriptions back the card.
+            .WithType(typeof(ThreadMessageItemControl), nameof(ThreadMessageItemControl))
+            .WithType(typeof(DelegationToolCallCardControl), nameof(DelegationToolCallCardControl));
 
     extension(IServiceCollection services)
     {

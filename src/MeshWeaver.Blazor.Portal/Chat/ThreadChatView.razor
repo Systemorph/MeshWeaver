@@ -40,30 +40,36 @@ else
                 var pendingTexts = ThreadViewModel?.PendingMessageTexts ?? Array.Empty<string>();
                 var hasAnyMessage = ThreadMessages.Count > 0 || pendingTexts.Count > 0;
             }
+            @* Chat history — one DispatchView per message id. Each renders a
+               ThreadMessageItemView which opens its own IMeshNodeStreamCache
+               subscription on the message path; the item view re-renders
+               locally on every cache emission, no per-message round-trip
+               through the per-node layout-area. See
+               Doc/GUI/ItemTemplateMeshNodeStreamBinding. *@
             @if (ThreadMessages.Count > 0)
             {
                 @foreach (var msgId in ThreadMessages)
                 {
-                    var cell = GetMessageCell(msgId);
-                    @if (cell != null)
-                    {
-                        <LayoutAreaView @key="@msgId" ViewModel="@cell" Stream="@Stream" Area="@($"msg-{msgId}")" />
-                    }
+                    <DispatchView @key="@msgId"
+                                  ViewModel="@(new ThreadMessageItemControl { MessagePath = $"{threadPath}/{msgId}" })"
+                                  Stream="@Stream"
+                                  Area="@($"msg-{msgId}")" />
                 }
             }
-            @* Queued user messages — entries that were submitted but the inbox
-               has not yet drained into Messages. Renders inline at the end of
-               the chat history so the user sees their submission immediately,
-               even before round dispatch / cell materialisation. Disappears
-               when the inbox drain promotes the id into Messages. *@
+            @* Queued user messages — entries submitted but not yet ingested
+               (no satellite cell exists yet). Same ThreadMessageItemView,
+               just with PendingText set instead of MessagePath. Once the
+               cell materialises, the id appears in ThreadMessages above and
+               this entry disappears from pendingTexts. *@
             @if (pendingTexts.Count > 0)
             {
-                @foreach (var pendingText in pendingTexts)
+                @for (var i = 0; i < pendingTexts.Count; i++)
                 {
-                    <div class="thread-chat-pending-message" @key="@($"pending-{pendingText.GetHashCode()}")">
-                        <FluentIcon Value="@(new Icons.Regular.Size16.Send())" />
-                        <span class="thread-chat-pending-message-text">@pendingText</span>
-                    </div>
+                    var pendingText = pendingTexts[i];
+                    <DispatchView @key="@($"pending-{i}-{pendingText.GetHashCode()}")"
+                                  ViewModel="@(new ThreadMessageItemControl { PendingText = pendingText })"
+                                  Stream="@Stream"
+                                  Area="@($"pending-{i}")" />
                 }
             }
             @if (!hasAnyMessage && isCreatingThread)

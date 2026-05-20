@@ -23,6 +23,8 @@ flowchart LR
 
 **Backend layout areas declare *what* to render — they never load instances and they never put concrete values into controls.** All value resolution, every read of a `MeshNode`'s content, and every write-back of user input happens on the GUI side via a per-node `GetRemoteStream<MeshNode, MeshNodeReference>` subscription.
 
+> For rendering a **list of MeshNodes** (one Blazor view per id, each holding its own `IMeshNodeStreamCache` subscription, no per-message round-trip), see **[Item-Template + MeshNode Stream Binding](xref:GUI/ItemTemplateMeshNodeStreamBinding)** — the canonical example is the thread chat view.
+
 This is non-negotiable, for three reasons:
 
 1. **No deadlocks.** Backend rendering stays purely synchronous (no `await`, no `Task<T>`, no `IAsyncEnumerable`). Every async/await/QueryAsync chain we've put in a layout area has eventually deadlocked the hub or returned stale content. Removing the backend fetch removes the entire problem class.
@@ -128,11 +130,15 @@ The framework propagates the patch to the owning hub, persists, and notifies all
 | `.Take(1)` on a display stream | View stops updating after first emission | Stay subscribed for the lifetime of the component |
 | `await PermissionHelper.GetEffectivePermissions(...).FirstAsync()` in a layout area | Hub deadlock candidate | Compose the `IObservable<Permission>` via `CombineLatest` with the rest of the layout's reactive chain; bind permissions on the GUI side via the user's permission stream |
 | `try { ... } catch { /* swallowed */ }` around backend reads | Errors disappear, debugging impossible | Propagate via `OnError`; framework handles it |
+| `foreach (var id in ids) { ... new LayoutAreaControl({thread}/{id}, area) ... }` per message | N grain activations, N round-trips on cold open of an N-message thread; no live updates without per-item refresh | `items.BindMany(i => new ItemControl { Path = i })` once; per-item Blazor view subscribes to `IMeshNodeStreamCache.GetStream(path)` locally — see [Item-Template + MeshNode Stream Binding](xref:GUI/ItemTemplateMeshNodeStreamBinding) |
+| `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, ...)` directly in a Blazor view | Opens a per-view upstream handle; bypasses `IMeshNodeStreamCache`; multiplies subscriptions; writes through the cache aren't observed by views that went around it | `Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>().GetStream(path)` — shared process-wide handle, write-coherent with the rest of the mesh |
 
 ## Where to look for working examples
 
 - **`src/MeshWeaver.Blazor/Components/CollaborativeMarkdownView.razor.cs`** — the reference for `_nodeStream` + `AddBinding` + `Update`.
 - **`src/MeshWeaver.Blazor/BlazorView.razor.cs`** — the base class. Read it once. Key API: `AddBinding`, `DataBind<T>`, `BindData()` lifecycle.
+- **`src/MeshWeaver.Blazor.Portal/Chat/ThreadMessageItemView.razor.cs`** — list-rendering reference. Each visible message holds ONE `IMeshNodeStreamCache.GetStream(MessagePath)` subscription via `AddBinding`; no per-message layout-area round-trip. Full pattern at [Item-Template + MeshNode Stream Binding](xref:GUI/ItemTemplateMeshNodeStreamBinding).
+- **`src/MeshWeaver.Blazor.Portal/Chat/DelegationToolCallCardView.razor.cs`** — multi-stream view: opens TWO cache subscriptions (the parent's response cell + the sub-thread) and composes their emissions in the same `BindData()`. Demonstrates how cache identity-stability makes joining streams cheap.
 
 
 

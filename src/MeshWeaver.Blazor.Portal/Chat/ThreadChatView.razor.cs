@@ -1314,19 +1314,6 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     }
 
     /// <summary>
-    /// Creates a LayoutAreaControl pointing to a ThreadMessage node's Overview layout area.
-    /// </summary>
-    private LayoutAreaControl? GetMessageCell(string msgId)
-    {
-        if (string.IsNullOrEmpty(threadPath))
-            return null;
-        return new LayoutAreaControl(
-            $"{threadPath}/{msgId}",
-            new LayoutAreaReference(ThreadMessageNodeType.OverviewArea))
-            .WithSpinnerType(SpinnerType.Skeleton);
-    }
-
-    /// <summary>
     /// Creates a LayoutAreaControl pointing to the thread's Header layout area
     /// (parent-thread back-link + aggregated UpdatedNodes summary). Null when the
     /// thread doesn't exist yet. Uses <see cref="SpinnerType.None"/> — the header
