@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.AI;
+using MeshWeaver.AI.AzureFoundry;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -61,7 +62,12 @@ public class AgentPickerProjectionTest : MonolithMeshTestBase
                 return services;
             })
             .ConfigureHub(c => c.AddData())
-            .AddAI();
+            .AddAI()
+            // Catalog source for the Anthropic provider — BuiltInLanguageModelProvider
+            // only emits LanguageModel nodes for providers whose source is registered
+            // via AddLanguageModelCatalogSource. AddAnthropic() is the canonical
+            // registration (same call MemexConfiguration uses in production).
+            .AddAnthropic();
     }
 
     [Fact]
@@ -104,7 +110,13 @@ public class AgentPickerProjectionTest : MonolithMeshTestBase
         models.Should().AllSatisfy(m =>
         {
             m.Name.Should().NotBeNullOrWhiteSpace();
-            m.Provider.Should().Be("Azure Claude");
+            // Provider on the projected ModelInfo is the catalog source's
+            // ProviderName (LanguageModelCatalogSource.ProviderName), which is
+            // "Anthropic" — what BuiltInLanguageModelProvider stamps onto each
+            // emitted node's ModelDefinition.Provider. "Azure Claude" is the
+            // factory NAME used at chat-client construction time, not the
+            // provider label on the catalog node.
+            m.Provider.Should().Be("Anthropic");
         });
     }
 
@@ -201,7 +213,11 @@ public class AgentPickerProjectionPartitionedTest : MonolithMeshTestBase
             // registration gap.
             .AddPartitionedInMemoryPersistence()
             .ConfigureHub(c => c.AddData())
-            .AddAI();
+            .AddAI()
+            // Catalog source for the Anthropic provider — see notes on the
+            // sibling AgentPickerProjectionTest. Without this the model nodes
+            // never surface and the combobox query times out.
+            .AddAnthropic();
     }
 
     [Fact]

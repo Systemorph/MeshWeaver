@@ -75,10 +75,15 @@ public class IsExecutingLifecycleTest(ITestOutputHelper output) : MonolithMeshTe
             .ToTask(ct);
         baselineThread!.IsExecuting.Should().BeFalse("thread should not be executing yet");
 
-        // Subscribe to the executing transition BEFORE submit.
+        // Subscribe to the executing transition BEFORE submit. Wait for the
+        // committed `Executing` state — NOT just any non-Idle state — because
+        // `IsExecuting` is true during the transient `StartingExecution`
+        // claim window where `ActiveMessageId` is still null (the responseMsgId
+        // is generated downstream by DispatchAfterClaim's commit, which flips
+        // Status → Executing AND stamps ActiveMessageId in one update).
         var executingTask = workspace.GetMeshNodeStream(threadPath)
             .Select(n => n.Content as MeshThread)
-            .Where(t => t is { IsExecuting: true })
+            .Where(t => t is { Status: ThreadExecutionStatus.Executing })
             .Take(1)
             .Timeout(10.Seconds())
             .ToTask(ct);
