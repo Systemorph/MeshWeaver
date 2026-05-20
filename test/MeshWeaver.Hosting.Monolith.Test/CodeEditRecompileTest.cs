@@ -289,9 +289,14 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             Name = "Pinned Instance",
             NodeType = pinTypePath,
         });
+        // Strict predicate: wait specifically for MARKER_V1. Loose
+        // (V1||V2) predicates snap the first HtmlControl emission, which
+        // can be a stale layout-area tick before the V1 HubConfiguration
+        // closure is fully wired into the per-instance hub. The
+        // V2-recompile test below uses the same strict-marker pattern.
         var pinnedHtml = await ReadOverviewMatchingAsync(
             $"{TestPartition}/PinType/pinnedInstance",
-            html => html.Contains("MARKER_V1") || html.Contains("MARKER_V2"),
+            html => html.Contains("MARKER_V1"),
             ct);
         pinnedHtml.Should().Contain("MARKER_V1",
             "RequestedReleasePath pins to V1 â€” instance must serve V1 even though V2 is latest");
@@ -305,12 +310,20 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             return curr with { Content = def with { RequestedReleasePath = null } };
         }).FirstAsync().ToTask(ct);
 
-        // Wait for the pin-clear to be observable on the mesh-hub-cached
-        // stream — same rationale as the pin-set wait above. Without this,
-        // unpinnedInstance activates against the pre-clear snapshot
-        // (RequestedReleasePath=v1Release) and binds to V1 instead of V2.
+        // Wait for the pin-clear AND V2 latest to be observable on the
+        // mesh-hub-cached stream. EnrichWithNodeType reads the NodeType
+        // from meshHub.GetWorkspace().GetMeshNodeStream(nodeType) at
+        // activation — if RequestedReleasePath is observed null but the
+        // assembly fields are still pre-V2 (the V2 DataChangedEvent
+        // hasn't landed on the mesh hub's cache yet), the slow-path
+        // resolves the wrong release. Gating on V2 release path +
+        // Status=Ok closes that window.
         await WaitForMeshHubViewAsync(pinTypePath,
-            n => n?.Content is NodeTypeDefinition d && d.RequestedReleasePath == null,
+            n => n?.Content is NodeTypeDefinition d
+                && d.RequestedReleasePath == null
+                && d.LatestReleasePath == v2Release
+                && d.CompilationStatus == CompilationStatus.Ok
+                && !string.IsNullOrEmpty(d.LatestAssemblyPath),
             ct);
 
         await NodeFactory.CreateNode(new MeshNode("unpinnedInstance", $"{TestPartition}/PinType")
@@ -318,12 +331,18 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             Name = "Unpinned Instance",
             NodeType = pinTypePath,
         });
+        // Strict predicate: wait specifically for MARKER_V2. See note on
+        // the pinned read above (same pattern as
+        // CodeEdit_ExplicitRelease_IsUpToDate_RecompilesOnSourceChange
+        // step 8).
         var unpinnedHtml = await ReadOverviewMatchingAsync(
             $"{TestPartition}/PinType/unpinnedInstance",
-            html => html.Contains("MARKER_V1") || html.Contains("MARKER_V2"),
+            html => html.Contains("MARKER_V2"),
             ct);
         unpinnedHtml.Should().Contain("MARKER_V2",
             "after clearing RequestedReleasePath, fresh instance must serve the latest release (V2)");
+        unpinnedHtml.Should().NotContain("MARKER_V1",
+            "stale V1 assembly must not be served after the pin is cleared");
     }
 
     /// <summary>
