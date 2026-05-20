@@ -77,6 +77,11 @@ var migrations = new IMigration[]
     new V17_EnsurePerUserSelfAssignments(),
     new V18_BackfillUserPartitionRegistry(),
     new V19_DeleteLegacyReleaseNodes(),
+    new V20_RemoveStrayLegacyUserRows(),
+    // v21 retired -- gap preserved so existing prod db_version counters stay monotonic.
+    new V22_ConsolidateGlobalCatalogsInAdmin(),
+    new V23_PartitionChangesNotify(),
+    new V24_DedupMeshNodeNotifyTrigger(),
 };
 
 var ctx = new MigrationContext(dataSource, connectionString, options, logger, initResult.IsFreshDb);

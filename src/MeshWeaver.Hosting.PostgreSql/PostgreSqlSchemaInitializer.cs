@@ -875,12 +875,34 @@ public static class PostgreSqlSchemaInitializer
             DROP FUNCTION IF EXISTS trg_access_control_changed();
 
             -- Notify function for change notifications
+            -- pg_notify dedup: suppress UPDATE that doesn't change any reactive
+            -- consumer-visible field. Without this, idempotent writes (e.g. a
+            -- workspace.Update lambda that returns the same node, or a same-
+            -- value upsert on a write-heavy code path) fire NOTIFY → every
+            -- synced-query subscriber wakes up → every subscriber re-reads →
+            -- amplification feedback loop. The check uses IS NOT DISTINCT FROM
+            -- so NULL is value-equal to NULL.  Version equality alone isn't
+            -- enough: an upsert with the same Version but a fresher
+            -- last_modified shouldn't fire either (no observable change).
+            -- Prod incident 2026-05-20.
             CREATE OR REPLACE FUNCTION notify_mesh_node_changes() RETURNS TRIGGER AS $$
             BEGIN
                 IF TG_OP = 'DELETE' THEN
                     PERFORM pg_notify('mesh_node_changes',
                         json_build_object('path', CASE WHEN OLD.namespace = '' THEN OLD.id ELSE OLD.namespace || '/' || OLD.id END, 'op', 'DELETE')::text);
                     RETURN OLD;
+                ELSIF TG_OP = 'UPDATE'
+                      AND OLD.content IS NOT DISTINCT FROM NEW.content
+                      AND OLD.name IS NOT DISTINCT FROM NEW.name
+                      AND OLD.node_type IS NOT DISTINCT FROM NEW.node_type
+                      AND OLD.state IS NOT DISTINCT FROM NEW.state
+                      AND OLD.version IS NOT DISTINCT FROM NEW.version
+                      AND OLD.desired_id IS NOT DISTINCT FROM NEW.desired_id
+                      AND OLD.main_node IS NOT DISTINCT FROM NEW.main_node THEN
+                    -- No consumer-visible change. Skip pg_notify; the row write
+                    -- still happens (we RETURN NEW so the UPDATE commits), but
+                    -- no subscriber is woken.
+                    RETURN NEW;
                 ELSE
                     PERFORM pg_notify('mesh_node_changes',
                         json_build_object('path', CASE WHEN NEW.namespace = '' THEN NEW.id ELSE NEW.namespace || '/' || NEW.id END, 'op', TG_OP)::text);
@@ -1448,12 +1470,34 @@ public static class PostgreSqlSchemaInitializer
             DROP FUNCTION IF EXISTS trg_access_control_changed();
 
             -- Notify function for change notifications
+            -- pg_notify dedup: suppress UPDATE that doesn't change any reactive
+            -- consumer-visible field. Without this, idempotent writes (e.g. a
+            -- workspace.Update lambda that returns the same node, or a same-
+            -- value upsert on a write-heavy code path) fire NOTIFY → every
+            -- synced-query subscriber wakes up → every subscriber re-reads →
+            -- amplification feedback loop. The check uses IS NOT DISTINCT FROM
+            -- so NULL is value-equal to NULL.  Version equality alone isn't
+            -- enough: an upsert with the same Version but a fresher
+            -- last_modified shouldn't fire either (no observable change).
+            -- Prod incident 2026-05-20.
             CREATE OR REPLACE FUNCTION notify_mesh_node_changes() RETURNS TRIGGER AS $$
             BEGIN
                 IF TG_OP = 'DELETE' THEN
                     PERFORM pg_notify('mesh_node_changes',
                         json_build_object('path', CASE WHEN OLD.namespace = '' THEN OLD.id ELSE OLD.namespace || '/' || OLD.id END, 'op', 'DELETE')::text);
                     RETURN OLD;
+                ELSIF TG_OP = 'UPDATE'
+                      AND OLD.content IS NOT DISTINCT FROM NEW.content
+                      AND OLD.name IS NOT DISTINCT FROM NEW.name
+                      AND OLD.node_type IS NOT DISTINCT FROM NEW.node_type
+                      AND OLD.state IS NOT DISTINCT FROM NEW.state
+                      AND OLD.version IS NOT DISTINCT FROM NEW.version
+                      AND OLD.desired_id IS NOT DISTINCT FROM NEW.desired_id
+                      AND OLD.main_node IS NOT DISTINCT FROM NEW.main_node THEN
+                    -- No consumer-visible change. Skip pg_notify; the row write
+                    -- still happens (we RETURN NEW so the UPDATE commits), but
+                    -- no subscriber is woken.
+                    RETURN NEW;
                 ELSE
                     PERFORM pg_notify('mesh_node_changes',
                         json_build_object('path', CASE WHEN NEW.namespace = '' THEN NEW.id ELSE NEW.namespace || '/' || NEW.id END, 'op', TG_OP)::text);
@@ -1566,12 +1610,34 @@ public static class PostgreSqlSchemaInitializer
             CREATE INDEX IF NOT EXISTS idx_mn_content ON mesh_nodes USING gin (content jsonb_path_ops);
 
             -- Notify function for change notifications
+            -- pg_notify dedup: suppress UPDATE that doesn't change any reactive
+            -- consumer-visible field. Without this, idempotent writes (e.g. a
+            -- workspace.Update lambda that returns the same node, or a same-
+            -- value upsert on a write-heavy code path) fire NOTIFY → every
+            -- synced-query subscriber wakes up → every subscriber re-reads →
+            -- amplification feedback loop. The check uses IS NOT DISTINCT FROM
+            -- so NULL is value-equal to NULL.  Version equality alone isn't
+            -- enough: an upsert with the same Version but a fresher
+            -- last_modified shouldn't fire either (no observable change).
+            -- Prod incident 2026-05-20.
             CREATE OR REPLACE FUNCTION notify_mesh_node_changes() RETURNS TRIGGER AS $$
             BEGIN
                 IF TG_OP = 'DELETE' THEN
                     PERFORM pg_notify('mesh_node_changes',
                         json_build_object('path', CASE WHEN OLD.namespace = '' THEN OLD.id ELSE OLD.namespace || '/' || OLD.id END, 'op', 'DELETE')::text);
                     RETURN OLD;
+                ELSIF TG_OP = 'UPDATE'
+                      AND OLD.content IS NOT DISTINCT FROM NEW.content
+                      AND OLD.name IS NOT DISTINCT FROM NEW.name
+                      AND OLD.node_type IS NOT DISTINCT FROM NEW.node_type
+                      AND OLD.state IS NOT DISTINCT FROM NEW.state
+                      AND OLD.version IS NOT DISTINCT FROM NEW.version
+                      AND OLD.desired_id IS NOT DISTINCT FROM NEW.desired_id
+                      AND OLD.main_node IS NOT DISTINCT FROM NEW.main_node THEN
+                    -- No consumer-visible change. Skip pg_notify; the row write
+                    -- still happens (we RETURN NEW so the UPDATE commits), but
+                    -- no subscriber is woken.
+                    RETURN NEW;
                 ELSE
                     PERFORM pg_notify('mesh_node_changes',
                         json_build_object('path', CASE WHEN NEW.namespace = '' THEN NEW.id ELSE NEW.namespace || '/' || NEW.id END, 'op', TG_OP)::text);

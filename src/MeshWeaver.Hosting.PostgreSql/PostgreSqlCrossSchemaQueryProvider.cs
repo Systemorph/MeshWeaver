@@ -18,6 +18,32 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
     private readonly PostgreSqlSqlGenerator _sqlGenerator = new();
     private readonly ILogger? _logger;
 
+    // SyncSearchableSchemasAsync throttle. PostgreSqlPartitionedMeshQuery
+    // calls this once per cross-schema fan-out, which under thread-render
+    // load is N times per page-load. Without throttling, each call does a
+    // SELECT FROM information_schema + DELETE + N INSERTs on
+    // public.searchable_schemas. Combined with MaxPoolSize=1 on the public
+    // connection pool, writes pile up, the DELETE-then-INSERT window briefly
+    // empties the table, and concurrent readers fall through to discover
+    // schemas from information_schema directly (picking up empty schemas
+    // like 'welcome'/'login' that have no mesh_nodes) → 42P01 cascade →
+    // /authorize and thread-load deadlock. Prod incident 2026-05-20.
+    private long _lastSyncTicks;
+    private int _syncInFlight;
+
+    /// <summary>
+    /// Minimum interval between actual <see cref="SyncSearchableSchemasAsync"/>
+    /// runs. Calls within the window are no-ops. Internal setter for tests
+    /// to force re-sync without waiting.
+    /// </summary>
+    internal TimeSpan SyncTtl { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Test hook: number of times the actual sync work executed (vs returned
+    /// early via the throttle). Used by the per-query-loop repro test.
+    /// </summary>
+    internal int ActualSyncCount;
+
     public PostgreSqlCrossSchemaQueryProvider(
         NpgsqlDataSource dataSource,
         ILogger<PostgreSqlCrossSchemaQueryProvider>? logger = null)
@@ -50,34 +76,63 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
     /// </summary>
     public async Task SyncSearchableSchemasAsync(CancellationToken ct = default)
     {
-        var schemas = new List<string>();
-        await using (var discoverCmd = _dataSource.CreateCommand("""
-            SELECT schema_name
-            FROM information_schema.schemata s
-            WHERE EXISTS (
-                SELECT 1 FROM information_schema.tables t
-                WHERE t.table_schema = s.schema_name
-                  AND t.table_name = 'mesh_nodes'
-            )
-            AND s.schema_name NOT IN ('public', 'information_schema', 'pg_catalog', 'pg_toast')
-            AND s.schema_name NOT LIKE '%\_versions' ESCAPE '\'
-            ORDER BY s.schema_name
-            """))
-        {
-            await using var reader = await discoverCmd.ExecuteReaderAsync(ct);
-            while (await reader.ReadAsync(ct))
-            {
-                var schema = reader.GetString(0);
-                if (!ExcludedSchemas.Contains(schema))
-                    schemas.Add(schema);
-            }
-        }
+        // Fast path: another sync ran within SyncTtl — skip. New partitions
+        // created in that window are invisible until the next sync, which is
+        // an acceptable trade for not melting the connection pool.
+        var lastTicks = Interlocked.Read(ref _lastSyncTicks);
+        if (lastTicks != 0 && DateTime.UtcNow.Ticks - lastTicks < SyncTtl.Ticks)
+            return;
 
-        await using var cmd = _dataSource.CreateCommand(
-            "DELETE FROM public.searchable_schemas; " +
-            string.Join(" ", schemas.Select(s =>
-                $"INSERT INTO public.searchable_schemas (schema_name) VALUES ('{s.Replace("'", "''")}') ON CONFLICT DO NOTHING;")));
-        await cmd.ExecuteNonQueryAsync(ct);
+        // Single-flight: only one sync runs at a time. Concurrent callers
+        // (every cross-schema fan-out calls this) return immediately rather
+        // than queuing on the public-schema connection.
+        if (Interlocked.CompareExchange(ref _syncInFlight, 1, 0) != 0)
+            return;
+
+        try
+        {
+            // Re-check under the flight gate: another caller may have just
+            // finished while we were CAS-ing.
+            lastTicks = Interlocked.Read(ref _lastSyncTicks);
+            if (lastTicks != 0 && DateTime.UtcNow.Ticks - lastTicks < SyncTtl.Ticks)
+                return;
+
+            var schemas = new List<string>();
+            await using (var discoverCmd = _dataSource.CreateCommand("""
+                SELECT schema_name
+                FROM information_schema.schemata s
+                WHERE EXISTS (
+                    SELECT 1 FROM information_schema.tables t
+                    WHERE t.table_schema = s.schema_name
+                      AND t.table_name = 'mesh_nodes'
+                )
+                AND s.schema_name NOT IN ('public', 'information_schema', 'pg_catalog', 'pg_toast')
+                AND s.schema_name NOT LIKE '%\_versions' ESCAPE '\'
+                ORDER BY s.schema_name
+                """))
+            {
+                await using var reader = await discoverCmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                {
+                    var schema = reader.GetString(0);
+                    if (!ExcludedSchemas.Contains(schema))
+                        schemas.Add(schema);
+                }
+            }
+
+            await using var cmd = _dataSource.CreateCommand(
+                "DELETE FROM public.searchable_schemas; " +
+                string.Join(" ", schemas.Select(s =>
+                    $"INSERT INTO public.searchable_schemas (schema_name) VALUES ('{s.Replace("'", "''")}') ON CONFLICT DO NOTHING;")));
+            await cmd.ExecuteNonQueryAsync(ct);
+
+            Interlocked.Increment(ref ActualSyncCount);
+            Interlocked.Exchange(ref _lastSyncTicks, DateTime.UtcNow.Ticks);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _syncInFlight, 0);
+        }
     }
 
     /// <summary>
