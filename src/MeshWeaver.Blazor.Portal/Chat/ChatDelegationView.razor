@@ -9,9 +9,24 @@
             </svg>
         </div>
         <div class="delegation-title">
+            @{
+                var taskSummary = DelegationContent.TaskSummary;
+                var hasTask = !string.IsNullOrEmpty(taskSummary);
+            }
             @if (DelegationContent.RequiresUserFeedback)
             {
-                <span>Requesting feedback before delegating to <strong>@@@DelegationContent.TargetAgent</strong></span>
+                if (hasTask)
+                {
+                    <span>Requesting feedback: @taskSummary <strong>(@DelegationContent.TargetAgent)</strong></span>
+                }
+                else
+                {
+                    <span>Requesting feedback before delegating to <strong>@@@DelegationContent.TargetAgent</strong></span>
+                }
+            }
+            else if (hasTask)
+            {
+                <span>@taskSummary <strong>(@DelegationContent.TargetAgent)</strong></span>
             }
             else
             {

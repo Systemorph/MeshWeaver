@@ -46,7 +46,25 @@ public static class ToolStatusFormatter
         // Strip "Agent/" prefix for cleaner display
         if (agent != null && agent.Contains('/'))
             agent = agent.Split('/').Last();
+
+        var task = GetArg(args, "task");
+        var taskSummary = SummarizeTask(task);
+
+        if (!string.IsNullOrEmpty(taskSummary))
+            return $"{taskSummary} ({agent ?? "Agent"})";
+
         return $"Delegating to {agent ?? "Agent"}...";
+    }
+
+    private static string SummarizeTask(string? task)
+    {
+        if (string.IsNullOrWhiteSpace(task))
+            return string.Empty;
+        var firstLine = task.Split('\n', 2)[0].Trim();
+        const int maxLen = 40;
+        if (firstLine.Length > maxLen)
+            firstLine = firstLine[..(maxLen - 1)] + "…";
+        return firstLine;
     }
 
     private static string FormatArg(string template, IDictionary<string, object?>? args, string key)

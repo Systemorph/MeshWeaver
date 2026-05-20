@@ -485,7 +485,53 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         {
             subThreadSub?.Dispose();
             responseCellSub?.Dispose();
-            Logger.LogInformation("[Delegation] Stream closed for sub-thread {Path}", subThreadPath);
+
+            // 🚨 Watchdog / parent-cancel must propagate to the sub-thread.
+            // Without this, the sub-thread's hub keeps running with
+            // IsExecuting=true and the user sees a perpetually-"executing"
+            // bubble (the prod symptom on 2026-05-20 with
+            // create-a-new-accessassignment-…-a618). We flip
+            // RequestedCancellationAt — the SAME primitive the GUI Stop
+            // button uses (see RequestViaStreamUpdate.md). The sub-thread's
+            // own cancellation watcher (InstallCancellationWatcher on its
+            // thread hub) reacts to this and tears down its CTS.
+            //
+            // ONLY propagate when our enumeration was actually cancelled
+            // (watchdog OR caller cancel). On clean completion the
+            // sub-thread is already settling — a redundant write here is
+            // both wasted work AND a leaked-callback risk during teardown
+            // (the parent's cancel watcher also writes via Fix #2, so on
+            // user-cancel we'd produce duplicate writes).
+            //
+            // Write goes through THIS hub's workspace (parent thread hub) —
+            // sub-hub's _Exec is blocked, but the sub-thread's THREAD hub's
+            // cancel watcher reads its own MeshNode stream which sees this
+            // update via the remote-stream-cache.
+            if (timeout.IsCancellationRequested || cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    Hub.GetWorkspace().GetMeshNodeStream(subThreadPath).Update(
+                        curr => curr?.Content is MeshThread sub
+                            ? curr with { Content = sub with { RequestedCancellationAt = DateTime.UtcNow } }
+                            : curr!)
+                        .Subscribe(_ => { }, ex => Logger.LogWarning(ex,
+                            "[Delegation] Cancel propagation to sub-thread {Path} failed", subThreadPath));
+                    Logger.LogInformation(
+                        "[Delegation] Stream closed for sub-thread {Path}; propagated RequestedCancellationAt (watchdog={Wd} / caller={Cc})",
+                        subThreadPath, timeout.IsCancellationRequested, cancellationToken.IsCancellationRequested);
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex,
+                        "[Delegation] Could not propagate cancel to sub-thread {Path}", subThreadPath);
+                }
+            }
+            else
+            {
+                Logger.LogInformation(
+                    "[Delegation] Stream closed for sub-thread {Path} (clean completion)", subThreadPath);
+            }
         }
     }
 

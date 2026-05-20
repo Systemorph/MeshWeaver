@@ -1025,9 +1025,20 @@ public static class ThreadExecution
             // synced agent collection). Wait for the first WhenInitialized
             // emission — synchronous when the synced query is warm-cached, async
             // on first cold load — before starting the streaming loop.
+            //
+            // 🚨 Fail-fast on stall: if the synced agent query never emits
+            // (root cause of the prod sub-thread deadlock on 2026-05-20 —
+            // agent subscription on the sub-thread workspace stalled silently),
+            // surface the failure within 60s. NOT a Timeout(default) fallback
+            // (that wipes state — see feedback_timeout_wipes_synced_state) —
+            // an ERROR Timeout that flips the thread back to Idle and clears
+            // ActiveMessageId so the UI unsticks instead of perpetually
+            // "executing". 60s is generous; the workspace-cached synced
+            // query should emit Initial within seconds even on cold start.
             chatClient.Initialize(request.ContextPath, request.ModelName);
             chatClient.WhenInitialized
                 .Take(1)
+                .Timeout(TimeSpan.FromSeconds(60))
                 .Subscribe(client =>
                 {
                 logger.LogDebug("[ThreadExec] Agents ready for {ThreadPath}, starting execution", threadPath);
@@ -1544,7 +1555,57 @@ public static class ThreadExecution
                     }); // end of LoadFullConversationHistory.Subscribe
                 }); // end of contextNodeObs.Subscribe
                 }, // end of WhenInitialized.Subscribe onNext
-                ex => logger.LogError(ex, "[ThreadExec] Initialize failed for {ThreadPath}", threadPath));
+                ex =>
+                {
+                    // 🚨 Agent-init stalled or errored — surface and unstick the UI.
+                    // Without this, IsExecuting stays true forever and the user sees
+                    // a perpetually-"executing" thread (prod symptom 2026-05-20).
+                    // Flips Status → Idle, clears ActiveMessageId, marks the response
+                    // cell as Error, and notifies parent (delegation tool watchdog
+                    // already handles the sub-thread side via the cancel
+                    // propagation in ChatClientAgentFactory.ExecuteDelegationAsync).
+                    logger.LogError(ex,
+                        "[ThreadExec] Initialize failed / stalled for {ThreadPath} — flipping thread to Idle",
+                        threadPath);
+
+                    parentHub.GetWorkspace().GetMeshNodeStream().Update(node =>
+                    {
+                        if (node?.Content is not MeshThread t) return node!;
+                        return node with
+                        {
+                            LastModified = DateTime.UtcNow,
+                            Content = t with
+                            {
+                                Status = ThreadExecutionStatus.Idle,
+                                ExecutionStatus = null,
+                                ActiveMessageId = null,
+                                ExecutionStartedAt = null,
+                                StreamingText = null,
+                                StreamingToolCalls = null
+                            }
+                        };
+                    }).Subscribe(_ => { }, ex2 => logger.LogWarning(ex2,
+                        "[ThreadExec] Init-stall unstick: stream.Update failed for {ThreadPath}",
+                        threadPath));
+
+                    // If the in-flight round has a response cell, stamp it with
+                    // the error so the bubble shows something instead of an empty
+                    // "Allocating agent..." placeholder.
+                    var responsePath = $"{threadPath}/{responseMsgId}";
+                    UpdateResponseCell(workspace, responsePath, threadPath, responseMsgId,
+                        mainEntity: threadPath,
+                        msg => msg with
+                        {
+                            Text = (msg.Text ?? string.Empty) +
+                                $"\n\n*Agent initialization stalled: {ex.Message}*",
+                            Status = ThreadMessageStatus.Error,
+                            CompletedAt = DateTime.UtcNow
+                        },
+                        logger);
+
+                    NotifyParentCompletion(parentHub, threadPath,
+                        $"Agent initialization stalled: {ex.Message}", success: false);
+                });
         }); // end of clientObs.Subscribe
 
         // Register subscription for disposal
@@ -1750,23 +1811,45 @@ public static class ThreadExecution
                     // shared handle for every reader (the sub-thread's own
                     // cancel watcher) and avoids opening an ad-hoc remote
                     // stream that subsequent readers wouldn't see.
+                    //
+                    // 🚨 Discover sub-thread paths from TWO sources:
+                    //  (a) thread.StreamingToolCalls — persisted via the
+                    //      streaming-loop throttle. STALE when the loop is
+                    //      blocked inside a delegate_to_agent call (which is
+                    //      exactly when we most need to cancel).
+                    //  (b) AgentChatClient.DelegationPaths — live in-memory
+                    //      registry on the parent's chat client, written
+                    //      synchronously by ExecuteDelegationAsync when each
+                    //      sub-thread is dispatched. Always current.
+                    // Union of both: never miss a hung sub-thread whose path
+                    // hasn't yet been throttle-persisted into (a).
+                    // (Repro: SubThreadHangRepro.HungSubThread_UserCancel*
+                    // demonstrated (a) alone fails to settle the sub-thread.)
+                    var subPaths = ImmutableHashSet<string>.Empty;
                     if (thread.StreamingToolCalls is { Count: > 0 })
                     {
-                        // Cancel propagation: write the RequestedCancellationAt
-                        // to each sub-thread via THIS hub's workspace — sender
-                        // is THIS hub, AccessContext flows from the caller.
                         foreach (var tc in thread.StreamingToolCalls.Where(
                             tc => !string.IsNullOrEmpty(tc.DelegationPath) && tc.Result == null))
-                        {
-                            logger?.LogInformation(
-                                "[ThreadExec] Propagating cancel to sub-thread {SubThread}", tc.DelegationPath);
-                            hub.GetWorkspace().GetMeshNodeStream(tc.DelegationPath!).Update(
-                                curr => curr?.Content is MeshThread sub
-                                    ? curr with { Content = sub with { RequestedCancellationAt = thread.RequestedCancellationAt } }
-                                    : curr!)
-                                .Subscribe(_ => { }, ex => logger?.LogWarning(ex,
-                                    "[ThreadExec] Cancel propagation failed for {SubThread}", tc.DelegationPath));
-                        }
+                            subPaths = subPaths.Add(tc.DelegationPath!);
+                    }
+                    var chat = hub.Get<AgentChatClient>();
+                    if (chat is not null)
+                    {
+                        foreach (var subPath in chat.DelegationPaths.Values)
+                            if (!string.IsNullOrEmpty(subPath))
+                                subPaths = subPaths.Add(subPath);
+                    }
+
+                    foreach (var subPath in subPaths)
+                    {
+                        logger?.LogInformation(
+                            "[ThreadExec] Propagating cancel to sub-thread {SubThread}", subPath);
+                        hub.GetWorkspace().GetMeshNodeStream(subPath).Update(
+                            curr => curr?.Content is MeshThread sub
+                                ? curr with { Content = sub with { RequestedCancellationAt = thread.RequestedCancellationAt } }
+                                : curr!)
+                            .Subscribe(_ => { }, ex => logger?.LogWarning(ex,
+                                "[ThreadExec] Cancel propagation failed for {SubThread}", subPath));
                     }
 
                     // Cancel own execution via CancellationTokenSource (streaming
