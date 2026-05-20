@@ -315,6 +315,14 @@ internal class NavigationService : INavigationService
         // round-trip is a deadlock surface; see Doc/Architecture/AsynchronousCalls.md).
         LoadNodeWithPreRenderedHtml(resolution).Subscribe(node =>
         {
+            // As soon as we have the resolved MeshNode, swap the path-only
+            // Loading message for the name-bearing one. The user sees
+            // "Loading 'Hello chat thread'…" with the path as detail,
+            // instead of staring at a raw "Loading rbuergi/_Thread/hello-2a76…"
+            // for the duration of the layout-area subscription handshake.
+            if (node != null && !string.IsNullOrWhiteSpace(node.Name))
+                _status.OnNext(NavigationStatus.LoadingNamed(resolution.Prefix, node.Name));
+
             // Satellite redirect: areas like Settings, Threads, Comments are
             // management views over the MAIN node. Landing on a satellite (a
             // thread, comment, approval, etc.) and asking for one of these

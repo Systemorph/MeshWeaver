@@ -50,9 +50,24 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
                 return;
             }
 
-            // Resolve ObjectId from mesh User node (email -> username).
-            // Without this, ObjectId stays as the email (from claims), causing permission
-            // lookups to fail since AccessAssignment nodes use the username, not the email.
+            // AccessContext.ObjectId MUST be the mesh User node's Id
+            // (e.g. "rbuergi"), never an email address or email-shaped string.
+            // The partition key is the username; using "rbuergi@systemorph.com"
+            // as ObjectId routes the user to a parallel partition that owns
+            // none of their data, bypasses every AccessAssignment tied to the
+            // canonical username, and (historically) caused stray
+            // "<email>" schemas to be created by side-effect writes.
+            //
+            // Resolution order:
+            //   1. Cache lookup by email (UserIdentityCache, fed by the
+            //      synced `nodeType:User` query).
+            //   2. If that misses but the stripped local part still looks
+            //      sane, fall back to it.
+            //   3. If we'd otherwise stamp an email-shaped ObjectId, REFUSE:
+            //      drop the context entirely so the request is treated as
+            //      anonymous. The OnboardingMiddleware / dev login will
+            //      provision the User node on a follow-up request and the
+            //      cache picks it up.
             if (!string.IsNullOrEmpty(userContext.Email))
             {
                 var meshUser = TryLoadMeshUser(userContext.Email, hub);
@@ -64,6 +79,22 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
                         Name = meshUser.Name ?? meshUser.Id
                     };
                 }
+            }
+
+            // Defence-in-depth: if anything upstream slipped an email-shaped
+            // identifier through (claims provider quirks, Bearer-token path,
+            // etc.), refuse to set it. Better anonymous than mis-partitioned.
+            if (LooksLikeEmail(userContext.ObjectId))
+            {
+                logger.LogWarning(
+                    "UserContextMiddleware: refusing email-shaped ObjectId '{ObjectId}' "
+                    + "for email {Email} (no mesh User node found yet). Treating as "
+                    + "anonymous so the request can't create a parallel "
+                    + "<email> partition. The cache will populate on the next request.",
+                    userContext.ObjectId, userContext.Email);
+                userService.SetContext(null);
+                await next(context);
+                return;
             }
 
             // Set per-request AsyncLocal only. CircuitAccessHandler handles
@@ -131,12 +162,17 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
 
         return ValidateTokenViaHub(rawToken, hub)
             .Select(response => response is { Success: true }
+                                && !string.IsNullOrEmpty(response.UserId)
+                                && response.UserId.IndexOf('@') < 0
                 ? new AccessContext
                 {
-                    // ObjectId must be the mesh User.Id (e.g. "rbuergi"), not the display name.
-                    // RLS compares context.Node.Path against `User/{ObjectId}` for self-scope access —
-                    // using UserName ("Roland Buergi") here would mismatch the `User/rbuergi/...` path.
-                    ObjectId = response.UserId ?? response.UserEmail!,
+                    // ObjectId must be the mesh User.Id (e.g. "rbuergi"), never
+                    // the email. Guarded by the `IndexOf('@') < 0` check above:
+                    // if the validated token somehow carries an email-shaped
+                    // UserId (legacy tokens, malformed records), we refuse the
+                    // token rather than fall through to UserEmail. Treating
+                    // anonymous is safer than mis-partitioning.
+                    ObjectId = response.UserId,
                     Name = response.UserName ?? "",
                     Email = response.UserEmail!,
                     // Stamp the roles captured on the ApiToken at creation time so
@@ -241,4 +277,14 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
         var at = value.IndexOf('@');
         return at > 0 ? value[..at] : value;
     }
+
+    /// <summary>
+    /// True when a string still looks like an email address (contains
+    /// <c>@</c>). Used as the final guard before stamping an
+    /// <see cref="AccessContext.ObjectId"/>; an email-shaped ObjectId is a
+    /// load-bearing bug -- it becomes the partition key and routes the
+    /// user to a parallel partition that owns none of their data.
+    /// </summary>
+    private static bool LooksLikeEmail(string? value)
+        => !string.IsNullOrEmpty(value) && value.IndexOf('@') >= 0;
 }
