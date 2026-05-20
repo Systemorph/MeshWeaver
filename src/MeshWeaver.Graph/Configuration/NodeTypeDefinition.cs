@@ -336,6 +336,69 @@ public record NodeTypeDefinition
     public IReadOnlyDictionary<string, long>? CompiledSources { get; init; }
 
     /// <summary>
+    /// Live snapshot of <c>{sourceNodePath → MeshNode.LastModified.UtcTicks}</c> for
+    /// every Code/Test node that currently feeds this NodeType. Maintained by the
+    /// per-NodeType hub's sources watcher (<c>NodeTypeCompilationHelpers.InstallSourcesWatcher</c>)
+    /// — every emission of the synced query over <see cref="Sources"/> + <see cref="Tests"/>
+    /// recomputes this dictionary against the live nodes and writes back on change.
+    ///
+    /// <para>Together with <see cref="CompiledSources"/> drives <see cref="IsDirty"/>:
+    /// they differ exactly when an edit/add/remove has landed on a dependent source
+    /// since the last successful compile.</para>
+    ///
+    /// <para>The compile reads sources by paths from this snapshot — each path
+    /// re-fetched via <c>workspace.GetMeshNodeStream(path).Take(1)</c> — so Roslyn
+    /// always sees authoritative content, not the index-lagged query result.</para>
+    /// </summary>
+    public IReadOnlyDictionary<string, long>? CurrentSourceVersions { get; init; }
+
+    /// <summary>
+    /// <c>true</c> iff <see cref="CurrentSourceVersions"/> differs from
+    /// <see cref="CompiledSources"/> — i.e. an edit / add / remove has landed on a
+    /// dependent source since the last successful compile, so the cached assembly
+    /// no longer matches the source set. <b>Computed</b> from the two snapshots —
+    /// not a persisted field — so the value can never drift out of sync with the
+    /// fields it derives from across a partial-update / patch / replay cycle.
+    /// JSON-ignored: cross-silo propagation only ships the two dictionaries, and
+    /// each subscriber recomputes <c>IsDirty</c> locally.
+    ///
+    /// <para>UI binds the Compile button's enabled state to this. Tests observe
+    /// the transition <c>edit source → IsDirty=true → recompile → IsDirty=false</c>
+    /// — by observing <see cref="CurrentSourceVersions"/> equal to
+    /// <see cref="CompiledSources"/> (i.e. <c>!IsDirty</c>).</para>
+    ///
+    /// <para>When both dictionaries are <c>null</c> (e.g. a NodeType that hasn't
+    /// been compiled yet AND has no source children) the comparison treats them
+    /// as both empty — <c>IsDirty=false</c>. The compile flow seeds
+    /// <c>CompiledSources</c> to <c>ImmutableDictionary.Empty</c> on a sourceless
+    /// success too, so the asymmetric-null states only persist for the brief
+    /// window before the sources watcher publishes its first
+    /// <c>CurrentSourceVersions</c>.</para>
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool IsDirty
+    {
+        get
+        {
+            var current = CurrentSourceVersions;
+            var compiled = CompiledSources;
+            // Both null/empty → not dirty (nothing to compile, nothing changed).
+            // One null + the other non-empty → dirty (added or removed sources).
+            var currentEmpty = current is null || current.Count == 0;
+            var compiledEmpty = compiled is null || compiled.Count == 0;
+            if (currentEmpty && compiledEmpty) return false;
+            if (currentEmpty != compiledEmpty) return true;
+            if (current!.Count != compiled!.Count) return true;
+            foreach (var kvp in current)
+            {
+                if (!compiled.TryGetValue(kvp.Key, out var v) || v != kvp.Value)
+                    return true;
+            }
+            return false;
+        }
+    }
+
+    /// <summary>
     /// The MeshWeaver framework version the most recent successful compile ran
     /// against — the semver of the <c>MeshWeaver.Graph</c> assembly
     /// (<c>AssemblyInformationalVersion</c> minus the <c>+gitSha</c> build

@@ -157,24 +157,66 @@ internal static class NodeTypeCompileActivityHandler
                 // ObserveQuery's merge is stalled. The V1→V2 freshness regression
                 // the override was added for only surfaces when a source edit
                 // happens within the same compile cycle; the kickoff-driven first
-                // compile after a fresh CreateNode is not affected, so the
-                // fallback is safe for V1 compiles.
+                // 🚨 Source-read freshness: read each source MeshNode via the
+                // per-path live stream (workspace.GetMeshNodeStream(path)),
+                // NOT via the index-backed ObserveQuery. The previous flow
+                // (meshService.ObserveQuery → IMeshQueryProvider) is gated on
+                // a Replay(1) per provider plus query-merge bookkeeping and
+                // can return PRE-UPDATE source MeshNodes for a window after
+                // a source edit lands on the owning code hub.
+                //
+                // Roslyn is deterministic: read V1 source → produce V1 bytes
+                // → upload to a "V2" filename. Activations resolve the V2
+                // metadata correctly but the bytes are V1 — the instance
+                // hub binds V1's HubConfiguration and renders V1 even
+                // though every visible state says V2 is the latest.
                 // Repro: CodeEditRecompileTest.NodeType_RequestedReleasePath_…
-                var meshService = activityHub.ServiceProvider.GetService<IMeshService>();
-                var sourcesObservable = meshService is null
-                    ? Observable.Return((IReadOnlyList<MeshNode>?)null)
-                    : meshService.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                            $"namespace:{parentPath}/Source scope:subtree nodeType:Code"))
+                //
+                // The path list itself comes from
+                // pendingNode.Content.CurrentSourceVersions — written by
+                // InstallSourcesWatcher off the SAME synced query the
+                // SOLE source of truth, so the watcher and the compile
+                // see the same set. For each path, GetMeshNodeStream
+                // returns the OWNING per-node hub's stream — authoritative
+                // content, no index lag.
+                var pendingDef = pendingNode.Content as NodeTypeDefinition;
+                IObservable<IReadOnlyList<MeshNode>?> sourcesObservable;
+                if (pendingDef?.CurrentSourceVersions is { Count: > 0 } versions)
+                {
+                    var paths = versions.Keys.ToArray();
+                    sourcesObservable = paths
+                        .Select(p => activityHub.GetWorkspace().GetMeshNodeStream(p)
+                            .Where(n => n != null)
+                            .Take(1)
+                            .Timeout(TimeSpan.FromSeconds(5))
+                            .Catch<MeshNode, Exception>(ex =>
+                            {
+                                logger?.LogWarning(
+                                    "[NTCA] live stream read for {SourcePath} faulted ({ExType}) — skipping in compile set",
+                                    p, ex.GetType().Name);
+                                return Observable.Empty<MeshNode>();
+                            }))
+                        .CombineLatest()
                         .Take(1)
-                        .Select(r => (IReadOnlyList<MeshNode>?)r.Items.ToList())
-                        .Timeout(TimeSpan.FromSeconds(5))
+                        .Select(nodes => (IReadOnlyList<MeshNode>?)nodes.Where(n => n != null).ToList())
                         .Catch<IReadOnlyList<MeshNode>?, Exception>(ex =>
                         {
                             logger?.LogWarning(
-                                "[NTCA] ObserveQuery for sources of {ParentPath} faulted ({ExType}) — falling back to cached SyncedQuery via CompileAndGetConfigurations(sourcesOverride: null)",
+                                "[NTCA] live source reads for {ParentPath} faulted ({ExType}) — falling back to cached SyncedQuery",
                                 parentPath, ex.GetType().Name);
                             return Observable.Return((IReadOnlyList<MeshNode>?)null);
                         });
+                }
+                else
+                {
+                    // No CurrentSourceVersions yet — falls back to cached
+                    // SyncedQuery via CompileAndGetConfigurations(sourcesOverride: null).
+                    // This is correct for V1 (first compile): the watcher's
+                    // first emission and the compile race, and either order
+                    // produces V1 bytes (no pre-existing source to be stale
+                    // against).
+                    sourcesObservable = Observable.Return((IReadOnlyList<MeshNode>?)null);
+                }
 
                 return sourcesObservable.SelectMany(fresh =>
                     compilationService.CompileAndGetConfigurations(pendingNode, sourcesOverride: fresh)
@@ -357,11 +399,13 @@ internal static class NodeTypeCompileActivityHandler
             })
             .Subscribe(
                 result => logger?.LogInformation(
-                    "[NTCA] WriteToParent {Transition} for {ParentPath} completed — status={Status} coll={Coll} path={Path}",
+                    "[NTCA] WriteToParent {Transition} for {ParentPath} completed — status={Status} coll={Coll} path={Path} isDirty={IsDirty} compiledSourcesCount={Count}",
                     transitionTag, parentPathForLog,
                     (result?.Content as NodeTypeDefinition)?.CompilationStatus,
                     (result?.Content as NodeTypeDefinition)?.LatestAssemblyCollection,
-                    (result?.Content as NodeTypeDefinition)?.LatestAssemblyPath),
+                    (result?.Content as NodeTypeDefinition)?.LatestAssemblyPath,
+                    (result?.Content as NodeTypeDefinition)?.IsDirty,
+                    (result?.Content as NodeTypeDefinition)?.CompiledSources?.Count ?? 0),
                 ex => logger?.LogWarning(ex,
                     "[NTCA] failed to write {Transition} state to parent {ParentPath}",
                     transitionTag, parentPathForLog));

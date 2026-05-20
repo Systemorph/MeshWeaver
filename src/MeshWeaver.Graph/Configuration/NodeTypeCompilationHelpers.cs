@@ -347,6 +347,170 @@ internal static class NodeTypeCompilationHelpers
     }
 
     /// <summary>
+    /// Subscribes (no <c>Take(1)</c>) to the shared <see cref="NodeSources.GetSources"/>
+    /// synced query for this NodeType. Every emission recomputes
+    /// <c>{path → MeshNode.LastModified.UtcTicks}</c> from the live source set
+    /// and writes <see cref="NodeTypeDefinition.CurrentSourceVersions"/> +
+    /// <see cref="NodeTypeDefinition.IsDirty"/> on the own MeshNode.
+    ///
+    /// <para><b>Source of truth</b>: the synced query is cached per NodeType
+    /// path inside the workspace, so the watcher, the compile pipeline, and
+    /// any layout-area that lists sources all observe the SAME upstream
+    /// subscription with the SAME content. No duplicate <c>SubscribeRequest</c>s,
+    /// no risk of a watcher-side view diverging from a compile-side view.</para>
+    ///
+    /// <para><b>IsDirty contract</b>: dirty iff
+    /// <see cref="NodeTypeDefinition.CurrentSourceVersions"/> differs from
+    /// <see cref="NodeTypeDefinition.CompiledSources"/>. The first synced-query
+    /// emission at hub initialization seeds <c>CurrentSourceVersions</c> —
+    /// restart-safe: a NodeType that boots up with a stale persisted
+    /// <c>CompiledSources</c> snapshot immediately flips <c>IsDirty=true</c>
+    /// on the first emission, the compile watcher's kickoff (or the user's
+    /// "Compile" button) takes it from there.</para>
+    ///
+    /// <para><b>Update lambda is idempotent</b>: when the recomputed dictionary
+    /// matches the persisted one, the lambda returns <c>curr</c> unchanged —
+    /// no Version bump, no echo, no infinite re-emission loop (the watcher
+    /// itself observes the synced query, not its own write-back; the
+    /// idempotent return is belt-and-braces).</para>
+    /// </summary>
+    public static IDisposable InstallSourcesWatcher(
+        IMessageHub hub,
+        IWorkspace workspace)
+    {
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Graph.CompileWatcher");
+        var hubPath = hub.Address.Path;
+        var ownStream = workspace.GetMeshNodeStream();
+
+        // Outer subscription: discover the source path set via the shared
+        // synced query (NodeSources.GetSources). When the path set changes
+        // (sources added / removed), we re-subscribe to per-path streams.
+        // Each per-path stream emits on EVERY update to that source MeshNode
+        // — propagated by the synchronization protocol from the owning hub's
+        // OWN stream — so the watcher sees stream.Update writes without
+        // needing the IDataChangeNotifier round-trip the synced-query
+        // change-detection layer relies on. This is the "bind by path" shape
+        // the thread-streaming view uses.
+        //
+        // Switch() disposes the previous combined per-path subscription set
+        // when the source path list changes; final outer dispose tears down
+        // everything (the returned IDisposable is registered for hub
+        // disposal in MeshDataSource).
+        return ownStream
+            .Where(node => node?.Content is NodeTypeDefinition)
+            .DistinctUntilChanged(node =>
+            {
+                var d = (NodeTypeDefinition)node!.Content!;
+                // Re-resolve only when the source-query inputs themselves
+                // change. Any other field edit (CompilationStatus,
+                // LatestReleasePath, RequestedReleaseAt, …) keeps the same
+                // path set, so don't churn the per-path subscriptions.
+                return (
+                    Sources: d.Sources is null ? "" : string.Join("|", d.Sources),
+                    Tests: d.Tests is null ? "" : string.Join("|", d.Tests));
+            })
+            .Select(node =>
+            {
+                var def = (NodeTypeDefinition)node!.Content!;
+                // Discover paths via the synced query's Initial emission.
+                // .Take(1) so we only consume the first list, then drop the
+                // synced query — we don't need its change-detection layer.
+                // The per-path streams (below) handle live updates.
+                return NodeSources.GetSources(workspace, def, hubPath)
+                    .Take(1)
+                    .SelectMany(initial =>
+                    {
+                        var initialPaths = initial
+                            .Where(n => !string.IsNullOrEmpty(n.Path))
+                            .Select(n => n.Path!)
+                            .Distinct()
+                            .ToArray();
+                        if (initialPaths.Length == 0)
+                        {
+                            // No sources → emit an empty snapshot ONCE so
+                            // CurrentSourceVersions can settle to empty and
+                            // IsDirty resolves correctly (false when
+                            // CompiledSources is also empty/null).
+                            return Observable.Return(
+                                System.Collections.Immutable.ImmutableDictionary<string, long>.Empty
+                                    as IReadOnlyDictionary<string, long>);
+                        }
+
+                        // Subscribe to each per-path stream. CombineLatest
+                        // re-emits whenever ANY path emits — the combined
+                        // emission carries the full current set, so we
+                        // always have a coherent snapshot.
+                        return initialPaths
+                            .Select(p => workspace.GetMeshNodeStream(p)
+                                .Where(n => n is not null))
+                            .CombineLatest()
+                            .Select(nodes =>
+                            {
+                                var snap = System.Collections.Immutable.ImmutableDictionary<string, long>.Empty;
+                                foreach (var n in nodes)
+                                {
+                                    if (!string.IsNullOrEmpty(n.Path))
+                                        snap = snap.SetItem(n.Path, n.LastModified.UtcTicks);
+                                }
+                                return (IReadOnlyDictionary<string, long>)snap;
+                            });
+                    });
+            })
+            .Switch()
+            .Subscribe(
+                snapshot =>
+                {
+                    workspace.GetMeshNodeStream().Update(curr =>
+                    {
+                        if (curr.Content is not NodeTypeDefinition def) return curr;
+
+                        // Idempotent: no-op when CurrentSourceVersions already
+                        // matches the just-computed snapshot. IsDirty is a
+                        // computed property — derives from CurrentSourceVersions
+                        // vs CompiledSources — so no separate flag to write.
+                        if (def.CurrentSourceVersions is not null
+                            && DictEquals(def.CurrentSourceVersions, snapshot))
+                            return curr;
+
+                        return curr with
+                        {
+                            Content = def with
+                            {
+                                CurrentSourceVersions = snapshot
+                            }
+                        };
+                    }).Subscribe(
+                        _ => { },
+                        ex => logger?.LogWarning(ex,
+                            "SourcesWatcher: failed to write CurrentSourceVersions for {HubPath}",
+                            hubPath));
+                },
+                ex => logger?.LogWarning(ex,
+                    "SourcesWatcher: per-path stream for {HubPath} faulted", hubPath));
+    }
+
+    /// <summary>
+    /// Order-insensitive equality for two source-version dictionaries.
+    /// <see cref="System.Collections.Immutable.ImmutableDictionary{TKey,TValue}"/>
+    /// doesn't override <c>Equals</c>; two dictionaries with identical
+    /// (path, ticks) pairs return false for value-equality. We need a
+    /// content-equal check so the watcher's no-op short-circuit fires.
+    /// </summary>
+    private static bool DictEquals(
+        IReadOnlyDictionary<string, long> a,
+        IReadOnlyDictionary<string, long> b)
+    {
+        if (a.Count != b.Count) return false;
+        foreach (var kvp in a)
+        {
+            if (!b.TryGetValue(kvp.Key, out var v) || v != kvp.Value)
+                return false;
+        }
+        return true;
+    }
+
+    /// <summary>
     /// Stream-update release watcher: clients flip
     /// <see cref="NodeTypeDefinition.RequestedReleaseAt"/> (optionally with
     /// <see cref="NodeTypeDefinition.RequestedReleaseForce"/>) on the NodeType's

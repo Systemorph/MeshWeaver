@@ -620,6 +620,7 @@ public static class DataExtensions
                         return;
                     }
 
+
                     // Subscribe to the post-commit emission BEFORE issuing the
                     // change so we never miss the tick. Post the response from
                     // the subscription callback — non-blocking, no hub-thread
