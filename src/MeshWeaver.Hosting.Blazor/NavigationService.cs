@@ -315,12 +315,33 @@ internal class NavigationService : INavigationService
         // round-trip is a deadlock surface; see Doc/Architecture/AsynchronousCalls.md).
         LoadNodeWithPreRenderedHtml(resolution).Subscribe(node =>
         {
+            // Null node after the load completes means one of: (a) the path
+            // genuinely doesn't exist, (b) the user's Read permission was
+            // filtered out at the RLS layer, or (c) the 15s timeout above
+            // tripped. Either way we must emit a deterministic NotFound /
+            // Error -- never silently fall through to Ready, which would
+            // hand the page to LayoutAreaView with no upstream data and
+            // the user would stare at an inner spinner forever.
+            //
+            // Distinguish denied vs missing on the RLS surface in a follow-
+            // up: today the query layer collapses both to null. The
+            // generic message at least tells the user the system gave up.
+            if (node is null)
+            {
+                IsResolving = false;
+                Context = null;
+                CurrentNamespace = null;
+                _navigationContext.OnNext(null);
+                _status.OnNext(NavigationStatus.NotFound(path));
+                return;
+            }
+
             // As soon as we have the resolved MeshNode, swap the path-only
             // Loading message for the name-bearing one. The user sees
             // "Loading 'Hello chat thread'…" with the path as detail,
             // instead of staring at a raw "Loading rbuergi/_Thread/hello-2a76…"
             // for the duration of the layout-area subscription handshake.
-            if (node != null && !string.IsNullOrWhiteSpace(node.Name))
+            if (!string.IsNullOrWhiteSpace(node.Name))
                 _status.OnNext(NavigationStatus.LoadingNamed(resolution.Prefix, node.Name));
 
             // Satellite redirect: areas like Settings, Threads, Comments are
@@ -408,6 +429,14 @@ internal class NavigationService : INavigationService
                 _hub.JsonSerializerOptions)
             .Select(change => change.Items.Count > 0 ? change.Items[0] : null)
             .Take(1)
+            // Hard deadline: the query MUST emit (even a null) within 15s.
+            // Without this, an access-denied or down-stream-hung response leaves
+            // the LayoutAreaView in its content-loading state indefinitely --
+            // the "infinite spinner" the user kept hitting. On timeout the
+            // Catch below returns null, and ProcessResolvedPath flows the node-
+            // less branch which emits Status.Error with a clear message instead
+            // of a silent hang.
+            .Timeout(TimeSpan.FromSeconds(15))
             .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
             .Select(node =>
             {
