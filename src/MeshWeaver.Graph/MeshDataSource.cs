@@ -553,6 +553,21 @@ public static class MeshDataSourceExtensions
                 var releaseReqSub = NodeTypeCompilationHelpers
                     .InstallReleaseRequestWatcher(hub, workspace);
                 hub.RegisterForDisposal(releaseReqSub);
+                // Sources / IsDirty watcher — discovers source paths via the
+                // shared NodeSources synced query (Initial only), then binds
+                // to each source path's own MeshNode stream
+                // (workspace.GetMeshNodeStream(path)). Every per-path emission
+                // (which propagates from the owning hub's OWN-stream via the
+                // synchronization protocol) recomputes
+                // CurrentSourceVersions on the NodeType's OWN MeshNode.
+                // IsDirty derives from CurrentSourceVersions vs
+                // CompiledSources at read time — UI affordances (Compile
+                // button) and tests observe staleness directly without
+                // polling and without dependence on the IDataChangeNotifier
+                // change-detection layer.
+                var sourcesSub = NodeTypeCompilationHelpers
+                    .InstallSourcesWatcher(hub, workspace);
+                hub.RegisterForDisposal(sourcesSub);
             }
         }
         catch

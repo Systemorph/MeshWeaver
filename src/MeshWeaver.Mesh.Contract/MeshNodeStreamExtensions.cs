@@ -260,6 +260,18 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                 return;
                             }
 
+                            // Auto-stamp LastModified when the lambda left it
+                            // untouched. The OWN-stream's DataChangedEvent fan-out
+                            // (which propagates a patch to remote subscribers)
+                            // includes LastModified in the diff, so consumers that
+                            // want a content-change tick can read it directly off
+                            // their MeshNode emission — no separate
+                            // IDataChangeNotifier round-trip needed.
+                            if (updated.LastModified == current.LastModified)
+                            {
+                                updated = updated with { LastModified = DateTimeOffset.UtcNow };
+                            }
+
                             var jsonOpts = _workspace.Hub.JsonSerializerOptions;
                             var currentNode = System.Text.Json.JsonSerializer
                                 .SerializeToNode(current, jsonOpts) as System.Text.Json.Nodes.JsonObject

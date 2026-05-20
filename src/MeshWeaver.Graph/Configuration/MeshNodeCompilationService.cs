@@ -268,17 +268,14 @@ internal class MeshNodeCompilationService(
     private IObservable<IEnumerable<MeshNode>> GetSourceCollection(
         NodeTypeDefinition? ntDef, string selfPath)
     {
-        var queries = CodeQueryResolver
-            .ExpandAll(ntDef?.Sources, CodeQueryResolver.DefaultSources, selfPath)
-            .Concat(CodeQueryResolver.ExpandAll(ntDef?.Tests, CodeQueryResolver.DefaultTests, selfPath))
-            .ToArray();
-
-        if (queries.Length == 0)
-            return Observable.Return(Enumerable.Empty<MeshNode>());
-
-        var workspace = hub.GetWorkspace();
-        var id = $"compile-sources:{selfPath}";
-        return workspace.GetQuery(id, queries);
+        // SHARED with the per-NodeType hub's sources/IsDirty watcher and any
+        // layout-area that lists Source/Test children. Same cache id =
+        // ONE Replay(1).RefCount() upstream subscription = "what the
+        // compile sees" === "what the watcher computes IsDirty against".
+        // If the cache keys diverged, IsDirty could disagree with whatever
+        // bytes the compile produced (the bug class CodeEditRecompileTest
+        // catches). See NodeSources.GetSources / NodeSources.CacheId.
+        return NodeSources.GetSources(hub.GetWorkspace(), ntDef, selfPath);
     }
 
     /// <summary>

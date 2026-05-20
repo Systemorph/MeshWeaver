@@ -217,6 +217,14 @@ public static class NodeTypeLayoutAreas
                 .WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host, typeDef));
             content = content.WithView(MeshNodeLayoutAreas.BuildHeader(host, node, false));
 
+            // Compile-state banner + Compile button — visible WHENEVER the
+            // NodeType has Sources that participate in compilation. Bound to
+            // NodeTypeDefinition.IsDirty (set by InstallSourcesWatcher) +
+            // CompilationStatus / CompilationError (set by the compile
+            // pipeline). One panel covers the three states the user cares
+            // about: up-to-date, dirty (needs compile), error.
+            content = content.WithView(BuildCompileStatusPanel(host, typeDef));
+
             // Markdown Description
             if (!string.IsNullOrEmpty(typeDef?.Description))
             {
@@ -1378,6 +1386,126 @@ public static class NodeTypeLayoutAreas
             .WithStyle("padding: 8px 0; border-bottom: 1px solid var(--neutral-stroke-divider);")
             .WithView(Controls.Label($"{label}:").WithStyle("width: 150px; flex-shrink: 0; font-weight: 600;"))
             .WithView(Controls.Body(value));
+    }
+
+    /// <summary>
+    /// Compile-state panel rendered at the top of <see cref="Overview"/>.
+    /// One panel; three visual states driven by the NodeType's persisted
+    /// fields (<see cref="NodeTypeDefinition.IsDirty"/>,
+    /// <see cref="NodeTypeDefinition.CompilationStatus"/>,
+    /// <see cref="NodeTypeDefinition.CompilationError"/>):
+    /// <list type="bullet">
+    ///   <item><b>Dirty</b>: amber chip + "Compile" button that flips
+    ///     <see cref="NodeTypeDefinition.RequestedReleaseAt"/> via
+    ///     <c>workspace.GetMeshNodeStream(path).Update(...)</c> — the
+    ///     per-NodeType hub's <c>InstallReleaseRequestWatcher</c> picks
+    ///     up the trigger and runs Roslyn.</item>
+    ///   <item><b>Compiling</b>: spinner with link to the live activity
+    ///     log (<see cref="NodeTypeDefinition.LastCompilationActivityPath"/>).</item>
+    ///   <item><b>Error</b>: red banner with the formatted diagnostics +
+    ///     "Compile" button so the user can retry once they've edited.</item>
+    ///   <item><b>Ok &amp; not dirty</b>: subtle "Up to date" chip with the
+    ///     release path (<see cref="NodeTypeDefinition.LatestReleasePath"/>).</item>
+    /// </list>
+    /// <para>Empty (no panel) when the NodeType has no source code yet — a
+    /// NodeType with neither <see cref="NodeTypeDefinition.Configuration"/>
+    /// nor <see cref="NodeTypeDefinition.HubConfiguration"/> nor
+    /// <see cref="NodeTypeDefinition.Sources"/> never participates in
+    /// compilation; a panel would be noise.</para>
+    /// </summary>
+    private static UiControl BuildCompileStatusPanel(LayoutAreaHost host, NodeTypeDefinition? def)
+    {
+        if (def is null) return Controls.Stack;
+
+        var hasCode = !string.IsNullOrWhiteSpace(def.Configuration)
+            || !string.IsNullOrWhiteSpace(def.HubConfiguration)
+            || (def.CurrentSourceVersions?.Count ?? 0) > 0;
+        if (!hasCode) return Controls.Stack;
+
+        var hubAddress = host.Hub.Address;
+        var hubPath = hubAddress.ToString();
+        var status = def.CompilationStatus;
+        var isDirty = def.IsDirty;
+
+        var panel = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("align-items: center; gap: 12px; padding: 12px 16px; margin: 16px 0; border-radius: 6px; border: 1px solid var(--neutral-stroke-rest);");
+
+        UiControl chip;
+        var compileButtonEnabled = true;
+        string compileButtonLabel;
+        string panelStyleSuffix;
+
+        if (status == CompilationStatus.Compiling)
+        {
+            chip = Controls.Body("Compiling…").WithStyle("font-weight: 600;");
+            compileButtonLabel = "Compile";
+            compileButtonEnabled = false;
+            panelStyleSuffix = "background: var(--neutral-fill-stealth-rest);";
+        }
+        else if (status == CompilationStatus.Error)
+        {
+            chip = Controls.Body("Compilation failed").WithStyle("font-weight: 600; color: var(--error-foreground);");
+            compileButtonLabel = "Retry compile";
+            panelStyleSuffix = "background: var(--error-fill-rest); border-color: var(--error-stroke-rest);";
+        }
+        else if (isDirty)
+        {
+            chip = Controls.Body("Source changed — needs compile")
+                .WithStyle("font-weight: 600; color: var(--warning-foreground);");
+            compileButtonLabel = "Compile";
+            panelStyleSuffix = "background: var(--warning-fill-rest); border-color: var(--warning-stroke-rest);";
+        }
+        else
+        {
+            chip = Controls.Body("Up to date").WithStyle("font-weight: 600;");
+            compileButtonLabel = "Recompile";
+            panelStyleSuffix = "background: var(--neutral-fill-stealth-rest);";
+        }
+
+        panel = panel.WithStyle("align-items: center; gap: 12px; padding: 12px 16px; margin: 16px 0; border-radius: 6px; border: 1px solid var(--neutral-stroke-rest); " + panelStyleSuffix);
+        panel = panel.WithView(chip);
+
+        // "Compile" button — flips RequestedReleaseAt to trigger the watcher.
+        // RequestedReleaseForce=true bypasses the "no source changes since last
+        // compile" short-circuit so the button always at least retries.
+        var compileButton = Controls.Button(compileButtonLabel)
+            .WithAppearance(compileButtonEnabled ? Appearance.Accent : Appearance.Stealth)
+            .WithClickAction(clickCtx =>
+            {
+                if (!compileButtonEnabled) return Task.CompletedTask;
+                var triggerAt = DateTimeOffset.UtcNow;
+                host.Hub.GetWorkspace()
+                    .GetMeshNodeStream(hubPath)
+                    .Update(curr =>
+                    {
+                        if (curr?.Content is not NodeTypeDefinition cd) return curr!;
+                        return curr with
+                        {
+                            Content = cd with
+                            {
+                                RequestedReleaseAt = triggerAt,
+                                RequestedReleaseForce = true
+                            }
+                        };
+                    })
+                    .Subscribe(_ => { }, _ => { });
+                return Task.CompletedTask;
+            });
+        panel = panel.WithView(compileButton);
+
+        // Optional: a "View latest release" link when one exists. Helps the
+        // user follow Release ↔ Activity for full build-detail traceability
+        // without leaving the Overview.
+        if (!string.IsNullOrEmpty(def.LatestReleasePath))
+        {
+            var releaseSegment = def.LatestReleasePath!.Split('/').LastOrDefault() ?? "latest";
+            panel = panel.WithView(
+                Controls.Markdown($"[{releaseSegment}](/{def.LatestReleasePath!})")
+                    .WithStyle("margin-left: auto; font-size: 12px;"));
+        }
+
+        return panel;
     }
 
     private static UiControl RenderLoading(string message)
