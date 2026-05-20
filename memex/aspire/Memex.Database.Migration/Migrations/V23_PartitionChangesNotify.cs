@@ -56,15 +56,25 @@ public sealed class V23_PartitionChangesNotify : IMigration
             await cmd.ExecuteNonQueryAsync();
         }
 
+        // PostgreSQL does not allow TG_OP in trigger WHEN clauses (only inside
+        // the trigger function body). Two triggers -- one for INSERT/UPDATE
+        // referencing NEW, one for DELETE referencing OLD -- give us the same
+        // narrowing effect without TG_OP.
         await using (var cmd = ctx.DataSource.CreateCommand("""
             DROP TRIGGER IF EXISTS trg_partition_notify ON admin.mesh_nodes;
-            CREATE TRIGGER trg_partition_notify
-            AFTER INSERT OR UPDATE OR DELETE ON admin.mesh_nodes
+            DROP TRIGGER IF EXISTS trg_partition_notify_iu ON admin.mesh_nodes;
+            DROP TRIGGER IF EXISTS trg_partition_notify_d ON admin.mesh_nodes;
+
+            CREATE TRIGGER trg_partition_notify_iu
+            AFTER INSERT OR UPDATE ON admin.mesh_nodes
             FOR EACH ROW
-            WHEN (
-                (TG_OP = 'DELETE' AND OLD.namespace = 'Admin/Partition') OR
-                (TG_OP <> 'DELETE' AND NEW.namespace = 'Admin/Partition')
-            )
+            WHEN (NEW.namespace = 'Admin/Partition')
+            EXECUTE FUNCTION admin.notify_partition_change();
+
+            CREATE TRIGGER trg_partition_notify_d
+            AFTER DELETE ON admin.mesh_nodes
+            FOR EACH ROW
+            WHEN (OLD.namespace = 'Admin/Partition')
             EXECUTE FUNCTION admin.notify_partition_change();
             """))
         {
