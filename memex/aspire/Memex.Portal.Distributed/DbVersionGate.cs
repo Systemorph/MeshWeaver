@@ -37,7 +37,7 @@ public sealed class DbVersionGate(
     /// Keep in sync with the highest Vxx_*.cs file in
     /// <c>memex/aspire/Memex.Database.Migration/Migrations/</c>.
     /// </summary>
-    public const int ExpectedDbVersion = 17;
+    public const int ExpectedDbVersion = 24;
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
