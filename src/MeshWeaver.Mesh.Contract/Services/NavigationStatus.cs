@@ -56,6 +56,17 @@ public sealed record NavigationStatus(NavigationPhase Phase, string Message, str
     public static NavigationStatus Loading(string address, string? detail = null) =>
         new(NavigationPhase.Loading, $"Loading {address}…", detail);
 
+    /// <summary>
+    /// Loading with a human-readable node name. Renders as
+    /// <c>"Loading 'Hello chat thread'…"</c> with the path under it as detail
+    /// -- much more useful than a raw path while the layout area is still
+    /// warming up. Falls back to the path-only form if no name is available.
+    /// </summary>
+    public static NavigationStatus LoadingNamed(string address, string? name) =>
+        string.IsNullOrWhiteSpace(name)
+            ? Loading(address)
+            : new(NavigationPhase.Loading, $"Loading '{name}'…", address);
+
     /// <summary>Compile of a node type is currently running.</summary>
     public static NavigationStatus Compiling(string nodeTypePath, int seconds) =>
         new(NavigationPhase.Loading,
