@@ -5,7 +5,9 @@
 @using MeshWeaver.Data.Serialization
 @using MeshWeaver.Graph
 @using MeshWeaver.Mesh
+@using MeshWeaver.Mesh.Services
 @using MeshWeaver.Messaging
+@using Microsoft.Extensions.DependencyInjection
 
 <FluentCard Class="mesh-node-thumbnail" Style="min-width: 320px; cursor: pointer; margin: 8px;" @onclick="Navigate">
     <div class="mesh-node-thumbnail-content">
@@ -103,7 +105,6 @@
     private string? Description { get; set; }
     private string? ImageUrl { get; set; }
     private string NodePath { get; set; } = string.Empty;
-    private ISynchronizationStream<MeshNode>? _nodeStream;
 
     private string Initial => !string.IsNullOrEmpty(Title) ? Title[0].ToString().ToUpper() : "?";
 
@@ -122,14 +123,14 @@
 
         // Bind to the per-node stream so the view stays live with the underlying node.
         // Backend layout areas should pass NodePath only; this subscription does the lookup.
+        // Reads go through IMeshNodeStreamCache — process-wide shared handle per path;
+        // multiple visible cards on the same node share ONE upstream subscription.
+        // See Doc/GUI/ItemTemplateMeshNodeStreamBinding.
         if (!string.IsNullOrEmpty(NodePath))
         {
-            var workspace = Hub.GetWorkspace();
-            _nodeStream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-                new Address(NodePath), new MeshNodeReference());
-            AddBinding(_nodeStream
-                .Where(change => change.Value != null)
-                .Select(change => change.Value!)
+            var cache = Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+            AddBinding(cache.GetStream(NodePath)
+                .Where(node => node is not null)
                 .DistinctUntilChanged()
                 .Subscribe(node =>
                 {

@@ -4,6 +4,7 @@ using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -28,12 +29,12 @@ public partial class ThreadMessageBubbleView : BlazorView<ThreadMessageBubbleCon
     private bool CanEdit => !string.IsNullOrEmpty(ViewModel.ThreadPath) && !string.IsNullOrEmpty(ViewModel.MessageId);
     private bool HasToolCalls => toolCalls is { Count: > 0 };
 
-    /// <summary>
-    /// Long-standing per-node MeshNode stream — the same primitive
-    /// <see cref="MeshWeaver.AI.ThreadExecution"/> writes through. Subscribed in
-    /// BindData via AddBinding so it's auto-disposed on component teardown.
-    /// </summary>
-    private ISynchronizationStream<MeshNode>? _nodeStream;
+    // Reads go through IMeshNodeStreamCache — process-wide shared handle per
+    // path. Same primitive ThreadExecution writes through (server side uses
+    // workspace.GetMeshNodeStream(path), which routes through the same cache).
+    // No view-local handle field needed: AddBinding disposes the subscription
+    // on component teardown; the upstream cache entry stays alive for the
+    // process. See Doc/GUI/ItemTemplateMeshNodeStreamBinding.
 
     /// <summary>
     /// Shape returned by <see cref="FormatToolCallDisplay"/>: tells the view how
@@ -100,9 +101,11 @@ public partial class ThreadMessageBubbleView : BlazorView<ThreadMessageBubbleCon
             return;
         }
 
-        // Canonical path: subscribe to the per-message remote stream — the same
-        // primitive ThreadExecution writes through. See
-        // Doc/Architecture/ThreadExecutionStreaming.md.
+        // Canonical path: subscribe to the per-message stream via the
+        // process-wide IMeshNodeStreamCache — the same primitive
+        // ThreadExecution writes through. See
+        // Doc/Architecture/ThreadExecutionStreaming.md +
+        // Doc/GUI/ItemTemplateMeshNodeStreamBinding.
         //
         // We do NOT reference MeshWeaver.AI.ThreadMessage strongly here — the
         // Blazor layer must not depend on the AI layer. Instead we extract
@@ -110,12 +113,11 @@ public partial class ThreadMessageBubbleView : BlazorView<ThreadMessageBubbleCon
         // whether the content arrives strongly-typed or already serialised).
         try
         {
-            _nodeStream = Hub.GetWorkspace().GetRemoteStream<MeshNode, MeshNodeReference>(
-                new Address(ViewModel.NodePath), new MeshNodeReference());
+            var cache = Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
 
-            AddBinding(_nodeStream
-                .Where(c => c.Value?.Content is not null)
-                .Select(c => ToJsonElement(c.Value!.Content!))
+            AddBinding(cache.GetStream(ViewModel.NodePath)
+                .Where(n => n?.Content is not null)
+                .Select(n => ToJsonElement(n.Content!))
                 .Subscribe(je =>
                 {
                     var changed = false;

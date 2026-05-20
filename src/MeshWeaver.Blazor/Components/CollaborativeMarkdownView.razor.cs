@@ -81,10 +81,12 @@ public partial class CollaborativeMarkdownView
     private string? _lastRenderedContent;
     private string? _lastRenderedMode;
 
-    // Long-standing per-node MeshNodeReference stream — subscribed at BindData,
-    // disposed on dispose. SaveContentAsync calls _nodeStream.Update(...) to push
-    // edits through the same stream the view is rendering from.
-    private ISynchronizationStream<MeshNode>? _nodeStream;
+    // Reads + writes go through IMeshNodeStreamCache — process-wide shared
+    // handle per path. SaveContentAsync calls _cache.Update(BoundNodePath, fn)
+    // to push edits through the same handle the read subscription is on. The
+    // cache stays alive for the process; this view just holds a reference to
+    // call Update later. See Doc/GUI/ItemTemplateMeshNodeStreamBinding.
+    private IMeshNodeStreamCache? _cache;
 
     // Comment data cache (markerId -> Comment), populated by mesh query subscription
     private Dictionary<string, Comment> commentNodes = new();
@@ -129,20 +131,19 @@ public partial class CollaborativeMarkdownView
         var accessService = Hub.ServiceProvider.GetService<AccessService>();
         CurrentAuthor = (accessService?.Context ?? accessService?.CircuitContext)?.Name ?? "";
 
-        // Long-standing subscription to the owning hub's MeshNodeReference stream.
-        // Hold the stream itself (not a snapshot) so SaveContentAsync can call
-        // _nodeStream.Update(...) to push edits through the same stream the view
-        // is rendering from.
+        // Long-standing subscription to the per-node stream via the process-wide
+        // IMeshNodeStreamCache. Hold the cache reference so SaveContentAsync can
+        // call _cache.Update(BoundNodePath, fn) — writes go through the same
+        // shared handle the read subscription is on, so every reader observes
+        // the patch in order. See Doc/GUI/ItemTemplateMeshNodeStreamBinding.
         if (!string.IsNullOrEmpty(BoundNodePath))
         {
-            var workspace = Hub.GetWorkspace();
             try
             {
-                _nodeStream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-                    new Address(BoundNodePath), new MeshNodeReference());
-                AddBinding(_nodeStream
-                    .Where(change => change.Value != null)
-                    .Select(change => MarkdownOverviewLayoutArea.GetMarkdownContent(change.Value!))
+                _cache = Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+                AddBinding(_cache.GetStream(BoundNodePath)
+                    .Where(node => node is not null)
+                    .Select(node => MarkdownOverviewLayoutArea.GetMarkdownContent(node))
                     .DistinctUntilChanged()
                     .Subscribe(content =>
                     {
@@ -156,8 +157,8 @@ public partial class CollaborativeMarkdownView
             }
             catch
             {
-                // Workspace has no MeshNodeReference reducer for this address —
-                // fall back to one-time bind from the ViewModel.
+                // Cache service unavailable — fall back to one-time bind from
+                // the ViewModel. No live updates in this mode.
                 DataBind(ViewModel.Value, x => x.RawContent, defaultValue: "");
             }
         }
@@ -407,20 +408,15 @@ public partial class CollaborativeMarkdownView
 
         try
         {
-            // Push the edit through the long-standing MeshNodeReference stream.
-            // .Update applies the patch on the owning hub via the synchronization
-            // protocol; the same subscription receives the echo and the view
-            // re-renders without an extra read.
-            if (_nodeStream == null) return Task.FromResult(false);
-            _nodeStream.Update(current =>
-            {
-                if (current == null) return null;
-                var updated = current with { Content = new MarkdownContent { Content = newContent } };
-                return new ChangeItem<MeshNode>(
-                    updated, _nodeStream.StreamId, _nodeStream.StreamId,
-                    ChangeType.Patch, _nodeStream.Hub.Version,
-                    [new EntityUpdate(nameof(MeshNode), updated.Id, updated) { OldValue = current }]);
-            });
+            // Push the edit through the process-wide IMeshNodeStreamCache.Update.
+            // The cache routes the write through the SAME shared handle the read
+            // subscription is on, so the echo flows back to this view's Subscribe
+            // and re-renders without an extra read. Other GUIs watching the same
+            // path see the patch through their own subscriptions on the same handle.
+            if (_cache == null || string.IsNullOrEmpty(BoundNodePath)) return Task.FromResult(false);
+            _cache.Update(BoundNodePath, current =>
+                current with { Content = new MarkdownContent { Content = newContent } })
+                .Subscribe(_ => { }, _ => { /* errors surface via _cache's logger */ });
             return Task.FromResult(true);
         }
         catch
