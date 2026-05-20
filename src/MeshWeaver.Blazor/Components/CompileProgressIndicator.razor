@@ -1,12 +1,4 @@
-@using System.Reactive.Linq
-@using MeshWeaver.Data
-@using MeshWeaver.Graph
-@using MeshWeaver.Graph.Configuration
-@using MeshWeaver.Mesh
-@using MeshWeaver.Mesh.Services
-@using MeshWeaver.Messaging
-@implements IDisposable
-@inject IMessageHub Hub
+@* Code-behind moved to CompileProgressIndicator.razor.cs *@
 
 @if (CompilingPath is not null)
 {
@@ -21,79 +13,4 @@
             …
         </span>
     </div>
-}
-
-@code {
-    /// <summary>
-    /// Optional: restrict the indicator to a specific NodeType path. When set,
-    /// the indicator only surfaces compilation progress for that exact path.
-    /// When null, it watches the synced <c>nodeType:NodeType</c> query and
-    /// reports the first NodeType whose
-    /// <see cref="NodeTypeDefinition.CompilationStatus"/> is
-    /// <see cref="CompilationStatus.Compiling"/>.
-    /// </summary>
-    [Parameter] public string? NodeTypePath { get; set; }
-
-    private string? CompilingPath;
-    private int Seconds;
-    private IDisposable? _statusSub;
-    private IDisposable? _tickSub;
-
-    protected override void OnInitialized()
-    {
-        var workspace = Hub.GetWorkspace();
-
-        IObservable<string?> compilingPathObs;
-        if (!string.IsNullOrEmpty(NodeTypePath))
-        {
-            // Single-NodeType mode: subscribe to that node's live stream.
-            // Compile status lives on Content as a NodeTypeDefinition.
-            compilingPathObs = workspace.GetMeshNodeStream(NodeTypePath)
-                .Select(n => (n?.Content is NodeTypeDefinition def
-                              && def.CompilationStatus == CompilationStatus.Compiling)
-                    ? NodeTypePath
-                    : null);
-        }
-        else
-        {
-            // Global mode: synced NodeType query — replaces the old 1-second
-            // INodeTypeService.GetCompilingPaths poll.
-            compilingPathObs = workspace.GetQuery("nodetypes-compiling", "nodeType:NodeType")
-                .Select(snapshot => snapshot
-                    .FirstOrDefault(n => n.Content is NodeTypeDefinition def
-                                         && def.CompilationStatus == CompilationStatus.Compiling)
-                    ?.Path);
-        }
-
-        _statusSub = compilingPathObs
-            .DistinctUntilChanged()
-            .Subscribe(
-                path =>
-                {
-                    CompilingPath = path;
-                    Seconds = 0;
-                    StartOrStopTicker(path is not null);
-                    InvokeAsync(StateHasChanged);
-                },
-                _ => { /* swallow — best-effort UI signal */ });
-    }
-
-    private void StartOrStopTicker(bool active)
-    {
-        _tickSub?.Dispose();
-        _tickSub = null;
-        if (!active) return;
-        _tickSub = Observable.Interval(TimeSpan.FromSeconds(1))
-            .Subscribe(_ =>
-            {
-                Seconds++;
-                InvokeAsync(StateHasChanged);
-            });
-    }
-
-    public void Dispose()
-    {
-        _statusSub?.Dispose();
-        _tickSub?.Dispose();
-    }
 }

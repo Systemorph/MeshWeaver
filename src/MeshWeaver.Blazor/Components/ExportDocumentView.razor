@@ -7,6 +7,8 @@
 @using MeshWeaver.Markdown.Export.Messaging
 @using MeshWeaver.Messaging
 @using MeshWeaver.Mesh
+@using MeshWeaver.Mesh.Services
+@using Microsoft.Extensions.DependencyInjection
 @using Microsoft.JSInterop
 @inherits BlazorView<ExportDocumentControl, ExportDocumentView>
 
@@ -193,8 +195,11 @@
                     return Observable.Throw<ActivityLog>(
                         new InvalidOperationException("Export handler returned no activity path"));
 
-                return Hub.GetWorkspace()
-                    .GetMeshNodeStream(msg.ActivityPath)
+                // Subscribe to the activity node via IMeshNodeStreamCache —
+                // process-wide shared handle; the export progress GUI elsewhere
+                // joins the same upstream. See Doc/GUI/ItemTemplateMeshNodeStreamBinding.
+                var cache = Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+                return cache.GetStream(msg.ActivityPath)
                     .Select(n => n?.Content as ActivityLog)
                     .Where(log => log is not null && log.Status != ActivityStatus.Running)
                     .Take(1)

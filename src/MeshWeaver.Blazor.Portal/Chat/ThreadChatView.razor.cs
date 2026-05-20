@@ -82,24 +82,29 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// Single live stream for the thread MeshNode — serves every read AND
     /// every write the chat performs (cancel, update sticky agent/model,
     /// append pending message). Held as a field so we don't re-open a fresh
-    /// remote subscription per click; <see cref="EnsureThreadStream"/>
-    /// (re)opens it when <see cref="threadPath"/> changes.
+    /// per click; we resolve the cache once and call <c>Update(threadPath, fn)</c>
+    /// on each write.
     ///
-    /// <para>This mirrors the canonical [DataBinding] pattern: hold one
-    /// stream, subscribe for reads, call <c>.Update(...)</c> for writes. No
-    /// separate <c>IRequest</c>/<c>IResponse</c> for thread mutations.</para>
+    /// <para>This mirrors the canonical [DataBinding] pattern: all reads +
+    /// writes go through <c>IMeshNodeStreamCache</c> so the patch is observed
+    /// by every reader on the same path. No per-view upstream subscription.</para>
     /// </summary>
-    private MeshNodeStreamHandle? _threadStream;
-    private string? _threadStreamPath;
+    private IMeshNodeStreamCache? _cache;
 
-    private MeshNodeStreamHandle? EnsureThreadStream()
+    private IMeshNodeStreamCache? EnsureCache()
     {
-        if (string.IsNullOrEmpty(threadPath)) return null;
-        if (_threadStream is not null && string.Equals(_threadStreamPath, threadPath, StringComparison.Ordinal))
-            return _threadStream;
-        _threadStream = Hub.GetWorkspace().GetMeshNodeStream(threadPath);
-        _threadStreamPath = threadPath;
-        return _threadStream;
+        if (_cache is not null) return _cache;
+        try
+        {
+            _cache = Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex,
+                "[ThreadChat:{InstanceId}] Failed to resolve IMeshNodeStreamCache; thread writes will fail",
+                _instanceId);
+        }
+        return _cache;
     }
 
 
@@ -810,8 +815,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         if (string.IsNullOrEmpty(threadPath) || isCancelling)
             return;
 
-        var stream = EnsureThreadStream();
-        if (stream is null)
+        var cache = EnsureCache();
+        if (cache is null || string.IsNullOrEmpty(threadPath))
         {
             isCancelling = false;
             StateHasChanged();
@@ -822,11 +827,13 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         StateHasChanged();
 
         // Stream-update cancellation: flip RequestedCancellationAt on the
-        // thread node. The thread hub's cancel watcher cancels the CTS and
-        // propagates to every active delegation sub-thread. The button clears
-        // once IsExecuting flips false via the live thread stream.
-        stream
-            .Update(curr => curr?.Content is MeshWeaver.AI.Thread t
+        // thread node through the process-wide cache. The thread hub's cancel
+        // watcher cancels the CTS and propagates to every active delegation
+        // sub-thread. The button clears once IsExecuting flips false via the
+        // live thread stream (which every other reader is subscribed to on
+        // the same shared cache handle).
+        cache
+            .Update(threadPath, curr => curr?.Content is MeshWeaver.AI.Thread t
                 ? curr with { Content = t with { RequestedCancellationAt = DateTime.UtcNow } }
                 : curr!)
             .Subscribe(
@@ -1033,11 +1040,11 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// </summary>
     private void PersistSelectionOnThread(string? agentName, string? modelName)
     {
-        var stream = EnsureThreadStream();
-        if (stream is null) return;
+        var cache = EnsureCache();
+        if (cache is null || string.IsNullOrEmpty(threadPath)) return;
         try
         {
-            stream.Update(node =>
+            cache.Update(threadPath, node =>
             {
                 var thread = node.Content as MeshWeaver.AI.Thread ?? new MeshWeaver.AI.Thread();
                 if (thread.SelectedAgentName == agentName && thread.SelectedModelName == modelName)
