@@ -292,17 +292,32 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
     }
 
     /// <summary>
-    /// Dispatches a sub-thread and yields its streaming text deltas as <see cref="IAsyncEnumerable{string}"/>.
+    /// Dispatches a sub-thread and yields its final accumulated text when the
+    /// sub-thread reaches a terminal state. While the sub-thread streams, the
+    /// PARENT projects each child emission onto its OWN response cell's
+    /// matching <see cref="ToolCallEntry"/> — <c>Result</c> carries the last
+    /// 10 lines of sub-agent output, <c>Status</c> tracks the lifecycle.
+    /// GUIs databind to that tool call for the live progress view.
     ///
-    /// The sub-thread is created fire-and-forget via <c>IMeshService.CreateNode</c> (no await on
-    /// completion). Its response-message cell is observed through a workspace remote stream; each
-    /// incremental delta is yielded up to the <see cref="FunctionInvokingChatClient"/>, and via
-    /// that — through the parent agent's streaming response — into the parent's response bubble.
+    /// <para><b>Direction is parent-observes-child.</b> Sub-thread code is
+    /// oblivious — it streams exactly as if it were a top-level thread. The
+    /// parent owns the remote subscriptions on the sub-thread's node + response
+    /// cell, computes a projection on each emission, and writes that projection
+    /// onto its OWN response cell via <c>parentWorkspace.GetMeshNodeStream(parentResponsePath).Update(...)</c>.
+    /// The parent owns <c>parentResponsePath</c>, so the write serialises on its
+    /// own data-source action block — no cross-hub race.</para>
     ///
-    /// No <see cref="Task{string}"/>, no <see cref="TaskCompletionSource{T}"/>, no
-    /// <c>ObserveQuery</c>. The only awaits here are on the channel reader which drains on
-    /// cancellation or on the sub-thread's CompletedAt flip — neither touches the hub scheduler
-    /// (both run on the Task.Run thread pool).
+    /// <para><b>Yield contract.</b> Returns an <see cref="IAsyncEnumerable{T}"/>
+    /// of <see cref="string"/>, but only yields ONCE at terminal — with the
+    /// sub-thread's full accumulated text. <see cref="Plugins.DelegationTool"/>
+    /// drains the enumerable and gives the accumulation back to FCC as the
+    /// <c>FunctionResultContent</c>; the per-tick deltas are not needed there
+    /// because the live progress has already landed on the parent's tool call.</para>
+    ///
+    /// <para><b>Watchdog stays.</b> 5-minute timeout → propagate
+    /// <c>RequestedCancellationAt</c> to the sub-thread + flip our tool call
+    /// to <see cref="ToolCallStatus.Cancelled"/>, then yield the partial text
+    /// so FCC can carry on.</para>
     /// </summary>
     private async IAsyncEnumerable<string> ExecuteDelegationAsync(
         AgentConfiguration agentConfig,
@@ -350,6 +365,9 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
             agentConfig.Id, targetId, depth, task.Length > 100 ? task[..97] + "..." : task);
 
         var meshService = Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        // The PARENT response cell — also the namespace under which the sub-thread is created.
+        // We own this path; writes through `parentWorkspace.GetMeshNodeStream(parentMsgPath).Update(...)`
+        // serialise on the parent's action block.
         var parentMsgPath = $"{threadPath}/{execCtx.ResponseMessageId}";
         var mainEntityPath = execCtx.ContextPath ?? context ?? threadPath;
 
@@ -402,138 +420,204 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
             _ => Logger.LogInformation("[Delegation] Sub-thread created at {Path}", subThreadPath),
             error => Logger.LogWarning(error, "[Delegation] Sub-thread create failed at {Path}", subThreadPath));
 
-        yield return $"\n\n**Delegating to {targetId}…**\n\n";
+        // Terminal-signal channel: completion sources (sub.IsExecuting=false /
+        // sub.CompletedAt set) write here. The reader awaits one signal then
+        // computes the final state from the latest snapshots and returns.
+        var terminalTcs = new TaskCompletionSource<TerminalSignal>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        // Open a channel fed by the sub-thread's remote streams. We yield each text
-        // delta as it arrives (computed against lastText so we never double-emit).
-        // Communication is purely via remote streams — we never await a message
-        // from the sub-thread and never post one to it. Subscribing IS the trigger.
-        var channel = System.Threading.Channels.Channel.CreateUnbounded<string>(
-            new System.Threading.Channels.UnboundedChannelOptions
+        // 🚨 All remote MeshNode reads + writes go through IMeshNodeStreamCache.
+        // Going around it (ad-hoc workspace.GetRemoteStream / GetMeshNodeStream)
+        // opens a separate handle, so writes are "lost" — never seen by the
+        // readers of the cached stream. The cache is the single shared,
+        // process-wide handle per path (see IMeshNodeStreamCache xmldoc).
+        var nodeCache = Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        // Live snapshots — written by subscriptions, read by the projector + terminal handler.
+        // Plain fields suffice: the only consumer is the projector lambda which
+        // re-reads on each emission, and we never need atomicity across both fields.
+        string lastSubText = "";
+        ThreadMessageStatus? lastSubStatus = null;
+
+        // Project the current snapshot onto the parent's matching ToolCallEntry.
+        // The parent's response cell is just another path to the cache — same
+        // shared handle for everyone, so this update is observable by every
+        // GUI that has databound to that path.
+        void ProjectOntoParentToolCall(ToolCallStatus newStatus)
+        {
+            var preview = ToolStatusFormatter.LastNLines(lastSubText, 10);
+            nodeCache.Update(parentMsgPath, curr =>
             {
-                SingleReader = true,
-                SingleWriter = false
-            });
-
-        var workspace = Hub.GetWorkspace();
-        var lastText = "";
-
-        // 1. Subscribe to the SUB-THREAD's own remote stream. This does double duty:
-        //    (a) the SubscribeRequest activates the sub-thread hub — its
-        //        WatchForExecution WithInitialization hook then auto-runs the agent
-        //        (BuildThreadWithMessages set IsExecuting=true + PendingUserMessage).
-        //        Without this subscription nothing ever addresses the sub-thread
-        //        hub, so it never activates and the delegation hangs forever.
-        //    (b) IsExecuting is the completion signal — when it flips back to false
-        //        the sub-thread's turn is done. The node is created with
-        //        IsExecuting=true, so we only treat false as "done" once we've
-        //        actually observed it running (startedExecuting guard) — the first
-        //        emission can race ahead of the initial state.
-        var startedExecuting = false;
-        var subThreadSub = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-                new Address(subThreadPath), new MeshNodeReference())
-            ?.Subscribe(
-                change =>
+                if (curr?.Content is not ThreadMessage msg) return curr!;
+                var idx = -1;
+                for (var i = 0; i < msg.ToolCalls.Count; i++)
                 {
-                    if (change.Value?.Content is not MeshThread thread) return;
+                    if (msg.ToolCalls[i].DelegationPath == subThreadPath)
+                    { idx = i; break; }
+                }
+                if (idx < 0) return curr!;
+                var existing = msg.ToolCalls[idx];
+                var updated = existing with
+                {
+                    Result = newStatus == ToolCallStatus.Streaming
+                        ? preview
+                        // On terminal, replace the truncated preview with the FULL final
+                        // text — this is what FCC will see as FunctionResultContent.
+                        : lastSubText,
+                    Status = newStatus,
+                    IsSuccess = newStatus == ToolCallStatus.Success,
+                    Timestamp = DateTime.UtcNow
+                };
+                return curr with
+                {
+                    Content = msg with { ToolCalls = msg.ToolCalls.SetItem(idx, updated) }
+                };
+            }).Subscribe(_ => { },
+                ex => Logger.LogWarning(ex,
+                    "[Delegation] Project sub-thread {Sub} state onto parent {Parent} failed",
+                    subThreadPath, parentMsgPath));
+        }
+
+        // 1. Subscribe to the SUB-THREAD via the cache. The cache opens the
+        //    SubscribeRequest under System impersonation; that activates the
+        //    sub-thread hub (its WatchForExecution hook then auto-runs the
+        //    agent — BuildThreadWithMessages set IsExecuting=true). IsExecuting
+        //    flipping false (after we've observed it run) is one terminal signal.
+        //    The first emission can race ahead of the initial state, so we gate
+        //    on `startedExecuting`.
+        var startedExecuting = false;
+        var subThreadSub = nodeCache.GetStream(subThreadPath)
+            .Subscribe(
+                node =>
+                {
+                    if (node?.Content is not MeshThread thread) return;
                     if (thread.IsExecuting)
                     {
                         startedExecuting = true;
+                        ProjectOntoParentToolCall(ToolCallStatus.Streaming);
                         return;
                     }
                     if (startedExecuting)
-                        channel.Writer.TryComplete();
+                        terminalTcs.TrySetResult(TerminalSignal.ThreadIdle);
                 },
-                ex => channel.Writer.TryComplete(ex));
+                ex => terminalTcs.TrySetException(ex));
 
-        // 2. Subscribe to the response-cell remote stream for incremental text.
-        //    CompletedAt on the cell is a secondary completion signal — covers the
-        //    case where the cell finalises before the thread node's IsExecuting=false
-        //    propagates.
-        var responseCellSub = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-                new Address(responsePath), new MeshNodeReference())
-            ?.Subscribe(
-                change =>
+        // 2. Subscribe to the response-cell via the cache for live text + per-cell
+        //    terminal status. `CompletedAt` set + cell Status is the authoritative
+        //    terminal signal — it tells us SUCCESS / CANCELLED / ERROR distinctly,
+        //    which the thread-level IsExecuting flip cannot.
+        var responseCellSub = nodeCache.GetStream(responsePath)
+            .Subscribe(
+                node =>
                 {
-                    var msg = change.Value?.Content as ThreadMessage;
-                    if (msg == null) return;
+                    if (node?.Content is not ThreadMessage msg) return;
                     var current = msg.Text ?? "";
-                    if (current.Length > lastText.Length)
-                    {
-                        var delta = current[lastText.Length..];
-                        lastText = current;
-                        channel.Writer.TryWrite(delta);
-                    }
+                    var grew = current.Length > lastSubText.Length;
+                    lastSubText = current;
+                    lastSubStatus = msg.Status;
+                    if (grew)
+                        ProjectOntoParentToolCall(ToolCallStatus.Streaming);
                     if (msg.CompletedAt is not null)
-                        channel.Writer.TryComplete();
+                        terminalTcs.TrySetResult(TerminalSignal.CellCompleted);
                 },
-                ex => channel.Writer.TryComplete(ex),
-                () => channel.Writer.TryComplete());
+                ex => terminalTcs.TrySetException(ex),
+                () => terminalTcs.TrySetResult(TerminalSignal.CellCompleted));
 
         // Safety timeout so a never-completing sub-thread can't pin this iterator forever.
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(5));
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
+        using var cancelReg = linked.Token.Register(() => terminalTcs.TrySetCanceled(linked.Token));
 
+        TerminalSignal signal;
+        Exception? terminalError = null;
+        var wasCancelled = false;
         try
         {
-            await foreach (var delta in channel.Reader.ReadAllAsync(linked.Token))
-            {
-                yield return delta;
-            }
+            signal = await terminalTcs.Task.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            wasCancelled = true;
+            signal = TerminalSignal.ThreadIdle;
+        }
+        catch (Exception ex)
+        {
+            terminalError = ex;
+            signal = TerminalSignal.ThreadIdle;
         }
         finally
         {
             subThreadSub?.Dispose();
             responseCellSub?.Dispose();
+        }
 
-            // 🚨 Watchdog / parent-cancel must propagate to the sub-thread.
-            // Without this, the sub-thread's hub keeps running with
-            // IsExecuting=true and the user sees a perpetually-"executing"
-            // bubble (the prod symptom on 2026-05-20 with
-            // create-a-new-accessassignment-…-a618). We flip
-            // RequestedCancellationAt — the SAME primitive the GUI Stop
-            // button uses (see RequestViaStreamUpdate.md). The sub-thread's
-            // own cancellation watcher (InstallCancellationWatcher on its
-            // thread hub) reacts to this and tears down its CTS.
-            //
-            // ONLY propagate when our enumeration was actually cancelled
-            // (watchdog OR caller cancel). On clean completion the
-            // sub-thread is already settling — a redundant write here is
-            // both wasted work AND a leaked-callback risk during teardown
-            // (the parent's cancel watcher also writes via Fix #2, so on
-            // user-cancel we'd produce duplicate writes).
-            //
-            // Write goes through THIS hub's workspace (parent thread hub) —
-            // sub-hub's _Exec is blocked, but the sub-thread's THREAD hub's
-            // cancel watcher reads its own MeshNode stream which sees this
-            // update via the remote-stream-cache.
-            if (timeout.IsCancellationRequested || cancellationToken.IsCancellationRequested)
-            {
-                try
+        // Map the observed terminal state → ToolCallStatus.
+        var finalStatus = wasCancelled || timeout.IsCancellationRequested || cancellationToken.IsCancellationRequested
+            ? ToolCallStatus.Cancelled
+            : terminalError is not null
+                ? ToolCallStatus.Failed
+                : lastSubStatus switch
                 {
-                    Hub.GetWorkspace().GetMeshNodeStream(subThreadPath).Update(
-                        curr => curr?.Content is MeshThread sub
-                            ? curr with { Content = sub with { RequestedCancellationAt = DateTime.UtcNow } }
-                            : curr!)
-                        .Subscribe(_ => { }, ex => Logger.LogWarning(ex,
-                            "[Delegation] Cancel propagation to sub-thread {Path} failed", subThreadPath));
-                    Logger.LogInformation(
-                        "[Delegation] Stream closed for sub-thread {Path}; propagated RequestedCancellationAt (watchdog={Wd} / caller={Cc})",
-                        subThreadPath, timeout.IsCancellationRequested, cancellationToken.IsCancellationRequested);
-                }
-                catch (Exception ex)
-                {
-                    Logger.LogWarning(ex,
-                        "[Delegation] Could not propagate cancel to sub-thread {Path}", subThreadPath);
-                }
-            }
-            else
+                    ThreadMessageStatus.Error => ToolCallStatus.Failed,
+                    ThreadMessageStatus.Cancelled => ToolCallStatus.Cancelled,
+                    _ => ToolCallStatus.Success
+                };
+
+        // Final projection — flips Status to terminal and stamps the FULL accumulated
+        // text on Result. Databound GUIs see the badge transition + the full output.
+        ProjectOntoParentToolCall(finalStatus);
+
+        // 🚨 Watchdog / parent-cancel must propagate cancel to the sub-thread.
+        // Without this, the sub-thread's hub keeps running with IsExecuting=true
+        // and the user sees a perpetually-"executing" bubble (the prod symptom
+        // on 2026-05-20). We flip RequestedCancellationAt — the SAME primitive
+        // the GUI Stop button uses. The sub-thread's own cancellation watcher
+        // reacts to this and tears down its CTS.
+        if (timeout.IsCancellationRequested || cancellationToken.IsCancellationRequested)
+        {
+            try
             {
+                nodeCache.Update(subThreadPath,
+                    curr => curr?.Content is MeshThread sub
+                        ? curr with { Content = sub with { RequestedCancellationAt = DateTime.UtcNow } }
+                        : curr!)
+                    .Subscribe(_ => { }, ex => Logger.LogWarning(ex,
+                        "[Delegation] Cancel propagation to sub-thread {Path} failed", subThreadPath));
                 Logger.LogInformation(
-                    "[Delegation] Stream closed for sub-thread {Path} (clean completion)", subThreadPath);
+                    "[Delegation] Sub-thread {Path} cancelled (watchdog={Wd} / caller={Cc}); propagated RequestedCancellationAt",
+                    subThreadPath, timeout.IsCancellationRequested, cancellationToken.IsCancellationRequested);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex,
+                    "[Delegation] Could not propagate cancel to sub-thread {Path}", subThreadPath);
             }
         }
+        else
+        {
+            Logger.LogInformation(
+                "[Delegation] Sub-thread {Path} completed (signal={Signal}, status={Status})",
+                subThreadPath, signal, finalStatus);
+        }
+
+        // Yield once with the full accumulated text — this becomes the
+        // FunctionResultContent FCC delivers back to the parent agent. FCC
+        // re-enters with that content, the parent's streaming loop resumes,
+        // and the parent writes a wrap-up response. The tool call's terminal
+        // Status flip (above) is the user-visible "delegation finished" signal.
+        if (terminalError is not null)
+            yield return $"[Delegation failed: {terminalError.Message}]";
+        else if (wasCancelled || timeout.IsCancellationRequested || cancellationToken.IsCancellationRequested)
+            yield return string.IsNullOrEmpty(lastSubText)
+                ? "[Delegation cancelled]"
+                : lastSubText + "\n\n[Delegation cancelled before completion]";
+        else
+            yield return lastSubText;
     }
+
+    /// <summary>
+    /// Distinguishes which subscription signalled terminal — purely for
+    /// diagnostic logging; both signals map to the same finalisation path.
+    /// </summary>
+    private enum TerminalSignal { ThreadIdle, CellCompleted }
 
     /// <summary>
     /// Resolves a plugin reference to AITool instances.

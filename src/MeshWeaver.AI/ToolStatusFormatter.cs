@@ -95,4 +95,20 @@ public static class ToolStatusFormatter
             return value;
         return value[..(MaxArgLength - 3)] + "...";
     }
+
+    /// <summary>
+    /// Returns the last <paramref name="n"/> lines of <paramref name="text"/>.
+    /// Used as the live progress preview on a delegation
+    /// <see cref="Layout.ToolCallEntry"/>: the parent's watcher writes this
+    /// projection on every sub-thread emission so the GUI shows a bounded,
+    /// most-recent view of sub-agent output without unbounded growth.
+    /// </summary>
+    public static string LastNLines(string? text, int n)
+    {
+        if (string.IsNullOrEmpty(text)) return string.Empty;
+        if (n <= 0) return string.Empty;
+        var lines = text.Split('\n');
+        if (lines.Length <= n) return text;
+        return string.Join('\n', lines[(lines.Length - n)..]);
+    }
 }

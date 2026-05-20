@@ -26,6 +26,31 @@ public record NodeChangeEntry
 }
 
 /// <summary>
+/// Lifecycle state of a single <see cref="ToolCallEntry"/>. Default
+/// <see cref="Success"/> so pre-existing persisted entries (loaded without a
+/// Status field) hydrate as stable history — same back-compat trick as
+/// <c>ThreadMessageStatus.Completed</c>. New writers stamp Status explicitly.
+/// </summary>
+public enum ToolCallStatus
+{
+    /// <summary>Tool call is in flight. For delegations: parent has dispatched
+    /// the sub-thread and is observing it; <c>Result</c> carries the live
+    /// progress projection (e.g., last 10 lines of sub-agent output).</summary>
+    Streaming,
+
+    /// <summary>Tool call completed successfully. For delegations: the sub-thread
+    /// reached <c>IsExecuting=false</c> with a non-error response; <c>Result</c>
+    /// carries the final accumulated text.</summary>
+    Success,
+
+    /// <summary>Tool call failed with an error. <c>Result</c> may carry the error message.</summary>
+    Failed,
+
+    /// <summary>Tool call was cancelled (user pressed Stop or watchdog tripped).</summary>
+    Cancelled
+}
+
+/// <summary>
 /// Records a completed tool call during agent execution.
 /// Persisted on ThreadMessage for post-execution inspection.
 /// Defined in Layout so Blazor views can render it without depending on AI.
@@ -46,6 +71,16 @@ public record ToolCallEntry
 
     /// <summary>Whether the tool call succeeded.</summary>
     public bool IsSuccess { get; init; } = true;
+
+    /// <summary>
+    /// Lifecycle state. Default <see cref="ToolCallStatus.Success"/> keeps
+    /// pre-existing persisted entries (loaded without a Status field) treated
+    /// as stable history. New writers stamp Status explicitly:
+    /// dispatch → <see cref="ToolCallStatus.Streaming"/>; clean completion →
+    /// <see cref="ToolCallStatus.Success"/>; cancel → <see cref="ToolCallStatus.Cancelled"/>;
+    /// error → <see cref="ToolCallStatus.Failed"/>.
+    /// </summary>
+    public ToolCallStatus Status { get; init; } = ToolCallStatus.Success;
 
     /// <summary>Sub-thread path if this was a delegation call.</summary>
     public string? DelegationPath { get; init; }
