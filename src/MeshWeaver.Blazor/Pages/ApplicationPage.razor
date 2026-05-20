@@ -32,6 +32,14 @@
             <p>Please double-check the url you have entered.</p>
         </div>
     }
+    else if (Status.Phase == NavigationPhase.AccessDenied)
+    {
+        <div class="error-container">
+            <h2>Access Denied</h2>
+            <p>@Status.Message</p>
+            <p>If you believe you should have access, ask the partition owner to grant it.</p>
+        </div>
+    }
     else if (Status.Phase == NavigationPhase.Error)
     {
         <div class="error-container">
