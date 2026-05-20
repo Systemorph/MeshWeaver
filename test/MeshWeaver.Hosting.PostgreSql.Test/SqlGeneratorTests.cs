@@ -212,6 +212,59 @@ public class SqlGeneratorTests
     }
 
     [Fact]
+    public void GenerateCrossSchemaSelectQuery_NamespaceSubtree_PushesDownPathFilter()
+    {
+        // Repro from prod (memex.meshweaver.cloud/Systemorph/Events):
+        // `namespace:Systemorph/EventCalendar/Source scope:subtree nodeType:Code`
+        // routes to the satellite `code` table → cross-schema fan-out is engaged.
+        // Before the fix, the cross-schema SQL generator dropped the path filter
+        // for any scope other than Exact, so the UNION returned every Code row
+        // across the partition (47 rows in prod, including SocialMedia/, Post/,
+        // FutuRe/Pricing/, …). The path-prefix clause MUST be pushed down.
+        var parser = new QueryParser();
+        var parsed = parser.Parse(
+            "namespace:Systemorph/EventCalendar/Source scope:subtree nodeType:Code");
+        var gen = new PostgreSqlSqlGenerator();
+
+        var (sql, parameters) = gen.GenerateCrossSchemaSelectQuery(
+            parsed, new[] { "systemorph" }, userId: null, tableName: "code");
+
+        // Subtree must produce both an equality AND a prefix LIKE — anything less
+        // is either wrong (only equality misses descendants) or wrong (only prefix
+        // misses self).
+        sql.Should().Contain("n.path = @scopePath",
+            "the cross-schema SQL must restrict to the subtree the caller asked for "
+            + "(prior bug: any scope != Exact silently dropped the path filter, "
+            + "so the UNION returned every Code row in the schema)");
+        sql.Should().Contain("n.path LIKE @scopePrefix");
+        parameters.Should().ContainKey("@scopePath")
+            .WhoseValue.Should().Be("Systemorph/EventCalendar/Source");
+        parameters.Should().ContainKey("@scopePrefix")
+            .WhoseValue.Should().Be("Systemorph/EventCalendar/Source/");
+    }
+
+    [Fact]
+    public void GenerateCrossSchemaSelectQuery_NamespaceChildrenDefault_PushesDownPathFilter()
+    {
+        // Same bug shape with the parser's DEFAULT scope for `namespace:` (Children).
+        // `namespace:partition/doc nodeType:Comment` routes to annotations (satellite),
+        // engages cross-schema, and before the fix returned every comment in the
+        // partition (or every partition).
+        var parser = new QueryParser();
+        var parsed = parser.Parse("namespace:partition/doc nodeType:Comment");
+        var gen = new PostgreSqlSqlGenerator();
+
+        var (sql, parameters) = gen.GenerateCrossSchemaSelectQuery(
+            parsed, new[] { "partition" }, userId: null, tableName: "annotations");
+
+        // Default scope for namespace: is Children → namespace equality.
+        sql.Should().Contain("n.namespace = @scopeNs",
+            "cross-schema satellite UNION must carry the namespace filter through");
+        parameters.Should().ContainKey("@scopeNs")
+            .WhoseValue.Should().Be("partition/doc");
+    }
+
+    [Fact]
     public void GenerateScopeClause_Ancestors()
     {
         var gen = new PostgreSqlSqlGenerator();

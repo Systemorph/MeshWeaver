@@ -389,6 +389,52 @@ public class SearchQueryTests : MonolithMeshTestBase
             Output.WriteLine($"  - {r.Path}: {r.Name} ({r.NodeType})");
     }
 
+    [Fact(Timeout = 10000)]
+    public async Task NamespaceQuery_NestedSourceSubtree_DoesNotLeakSiblingSubtrees()
+    {
+        // Repro from prod (memex.meshweaver.cloud/Systemorph/Events):
+        // `namespace:Systemorph/EventCalendar/Source scope:subtree nodeType:Code`
+        // returned 47 Code nodes spread across the Systemorph partition
+        // (SocialMedia/, Post/, FutuRe/Pricing/, Event/, LinkedInProfile/, …)
+        // instead of just the EventCalendarLayoutAreas node directly under
+        // Systemorph/EventCalendar/Source/. The over-match caused the NodeType
+        // compile to fail with duplicate-type / Razor-in-C# errors.
+        //
+        // Equivalent shape in ACME samples:
+        //   ACME/Project/Source/{Project, ProjectLayoutAreas, Category, Priority, Status}
+        //   ACME/Article/Source/{Article, ArticleLayoutAreas}     <-- must NOT be returned
+        //   ACME/Project/Todo/Source/{Category, Priority, Status, Todo, TodoLayoutAreas} <-- must NOT be returned
+        var request = new MeshQueryRequest
+        {
+            Query = "namespace:ACME/Project/Source scope:subtree nodeType:Code",
+            Limit = 100,
+        };
+
+        var results = await MeshQuery.QueryAsync<MeshNode>(request, null,
+            TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+
+        Output.WriteLine($"Got {results.Length} Code nodes for 'namespace:ACME/Project/Source scope:subtree nodeType:Code':");
+        foreach (var r in results)
+            Output.WriteLine($"  - {r.Path}");
+
+        results.Should().NotBeEmpty(
+            "ACME/Project/Source has Code nodes (Project, ProjectLayoutAreas, Category, Priority, Status)");
+
+        results.Should().OnlyContain(
+            n => n.Path != null && (
+                n.Path.Equals("ACME/Project/Source", StringComparison.OrdinalIgnoreCase)
+                || n.Path.StartsWith("ACME/Project/Source/", StringComparison.OrdinalIgnoreCase)),
+            "namespace + scope:subtree must restrict results to that subtree exactly — "
+            + "sibling subtrees (ACME/Article/Source, ACME/Project/Todo/Source) must NOT leak in");
+
+        results.Should().NotContain(
+            n => n.Path != null && n.Path.StartsWith("ACME/Article/Source/", StringComparison.OrdinalIgnoreCase),
+            "Article/Source is a sibling of Project/Source and must be excluded");
+        results.Should().NotContain(
+            n => n.Path != null && n.Path.StartsWith("ACME/Project/Todo/Source/", StringComparison.OrdinalIgnoreCase),
+            "Project/Todo/Source is a descendant of Project, NOT of Project/Source — must be excluded");
+    }
+
     #endregion
 
     #region @ Reference Autocomplete Pattern Tests

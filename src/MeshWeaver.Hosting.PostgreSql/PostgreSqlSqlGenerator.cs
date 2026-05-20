@@ -415,6 +415,35 @@ public class PostgreSqlSqlGenerator
                 ? pathEqClause
                 : $"{pathEqClause} AND {whereCore}";
         }
+        else if (query.Paths is null or { Count: <= 1 }
+                 && !string.IsNullOrEmpty(query.Path)
+                 && query.Scope != QueryScope.Exact
+                 && !query.Path.Contains('*'))
+        {
+            // Subtree / Children / Descendants / Hierarchy / AncestorsAndSelf —
+            // same class of bug as the Exact branch above, just one level out.
+            // Without this push-down the cross-schema UNION returns every row
+            // in the satellite table; the per-schema PostgreSqlStorageAdapter
+            // path applies the scope clause via GenerateScopeClause but the
+            // cross-schema path (engaged whenever ResolveTable != "mesh_nodes",
+            // i.e. any namespace ending in a satellite segment like /Source
+            // or any nodeType-routed satellite) did not.
+            // Repro: SqlGeneratorTests.GenerateCrossSchemaSelectQuery_NamespaceSubtree_PushesDownPathFilter.
+            // Prod symptom: namespace:Systemorph/EventCalendar/Source scope:subtree
+            // nodeType:Code returned 47 Code rows across the whole Systemorph
+            // partition (SocialMedia/, Post/, FutuRe/Pricing/, Event/, …)
+            // instead of just the EventCalendar/Source subtree, breaking
+            // NodeType compile of every page backed by EventCalendar.
+            var (scopeClause, scopeParams) = GenerateScopeClause(query.Path, query.Scope);
+            if (!string.IsNullOrEmpty(scopeClause))
+            {
+                whereCore = string.IsNullOrEmpty(whereCore)
+                    ? scopeClause
+                    : $"{scopeClause} AND {whereCore}";
+                foreach (var (k, v) in scopeParams)
+                    parameters[k] = v;
+            }
+        }
 
         var isActivity = query.Source == QuerySource.Activity;
         var isAccessed = query.Source == QuerySource.Accessed && !string.IsNullOrEmpty(activityUserId);
