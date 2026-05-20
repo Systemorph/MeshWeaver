@@ -99,7 +99,7 @@ public class OrleansPostgresFanOutTest(ITestOutputHelper output)
         {
             Query = query,
             UserId = WellKnownUsers.System,
-        }).ToListAsync(ct);
+        }, ct).ToListAsync(ct);
 
         Output.WriteLine($"Hits: [{string.Join(", ", results.Select(r => $"{r.Path} (lm={r.LastModified:O})"))}]");
 
@@ -151,7 +151,7 @@ public class OrleansPostgresFanOutTest(ITestOutputHelper output)
         {
             Query = query,
             UserId = WellKnownUsers.System,
-        }).ToListAsync(ct);
+        }, ct).ToListAsync(ct);
 
         Output.WriteLine($"Hits: [{string.Join(", ", results.Select(r => $"{r.Path} (lm={r.LastModified:O})"))}]");
 
@@ -194,7 +194,7 @@ public class OrleansPostgresFanOutTest(ITestOutputHelper output)
         {
             Query = query,
             UserId = WellKnownUsers.System,
-        }).ToListAsync(ct);
+        }, ct).ToListAsync(ct);
 
         Output.WriteLine($"Hits: [{string.Join(", ", results.Select(r => r.Path))}]");
 
@@ -231,7 +231,7 @@ public class OrleansPostgresFanOutTest(ITestOutputHelper output)
         {
             Query = query,
             UserId = WellKnownUsers.System,
-        }).ToListAsync(ct);
+        }, ct).ToListAsync(ct);
 
         Output.WriteLine($"Hits: [{string.Join(", ", results.Select(r => r.Path))}]");
 
@@ -310,7 +310,7 @@ public class OrleansPostgresFanOutTest(ITestOutputHelper output)
         {
             Query = query,
             UserId = WellKnownUsers.System,
-        }).ToListAsync(ct);
+        }, ct).ToListAsync(ct);
 
         Output.WriteLine($"Thread hits: [{string.Join(", ", threadHits.Select(r => r.Path))}]");
         threadHits.Should().Contain(n => n.Path == $"{remotePartition}/_Thread/t-{remotePartition}",
@@ -345,7 +345,7 @@ public class OrleansPostgresFanOutTest(ITestOutputHelper output)
         {
             Query = query,
             UserId = WellKnownUsers.System,
-        }).ToListAsync(ct);
+        }, ct).ToListAsync(ct);
 
         Output.WriteLine($"Hits: [{string.Join(", ", results.Select(r => r.Path))}]");
 
