@@ -667,6 +667,48 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// </summary>
     protected virtual Task SetupAccessRightsAsync() => Task.CompletedTask;
 
+    /// <summary>
+    /// 🚨 2026-05-21 — kickoff-on-grain-activation was deleted (prod EventCalendar
+    /// regression). Tests that pre-seed a dynamic NodeType and expect its
+    /// Configuration lambda to be Roslyn-compiled before the first instance hub
+    /// activates MUST trigger compile explicitly via <see cref="NodeTypeDefinition.RequestedReleaseAt"/>.
+    /// This helper performs that handshake: flip the trigger field then wait for
+    /// <see cref="CompilationStatus.Ok"/> + a non-empty <c>LatestReleasePath</c>.
+    /// Defaults to a 60 s budget — matches the Roslyn cold-cache compile time on
+    /// CI agents.
+    /// </summary>
+    protected async Task TriggerCompileForNodeTypeAsync(
+        string nodeTypePath,
+        CancellationToken ct = default,
+        TimeSpan? timeout = null)
+    {
+        var workspace = Mesh.GetWorkspace();
+        var triggerAt = DateTimeOffset.UtcNow;
+        await workspace.GetMeshNodeStream(nodeTypePath).Update(curr =>
+        {
+            if (curr?.Content is not NodeTypeDefinition def) return curr!;
+            return curr with
+            {
+                Content = def with
+                {
+                    RequestedReleaseAt = triggerAt,
+                    RequestedReleaseForce = true,
+                }
+            };
+        }).FirstAsync().ToTask(ct);
+
+        var budget = timeout ?? TimeSpan.FromSeconds(60);
+        await workspace.GetMeshNodeStream(nodeTypePath)
+            .Where(n => n.Content is NodeTypeDefinition d
+                && d.LastReleaseRequestHandledAt is { } h && h >= triggerAt
+                && d.CompilationStatus == CompilationStatus.Ok
+                && !string.IsNullOrEmpty(d.LatestReleasePath))
+            .Take(1)
+            .Timeout(budget)
+            .FirstAsync()
+            .ToTask(ct);
+    }
+
     protected IMessageHub Mesh => ServiceProvider.GetRequiredService<IMessageHub>();
     protected IRoutingService RoutingService => ServiceProvider.GetRequiredService<IRoutingService>();
 
