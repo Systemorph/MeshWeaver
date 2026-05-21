@@ -36,8 +36,19 @@ if [ -z "${AZURE_USER_PRINCIPAL_NAME:-}" ]; then
   exit 64
 fi
 
-echo "==> aspire deploy --mode $MODE (rg=$RG)"
-aspire deploy \
+# Locate the aspire CLI. On Windows + Git Bash, `dotnet tool install -g
+# Aspire.Cli` drops aspire.cmd into ~/.dotnet/tools; bash's PATH lookup
+# doesn't expand .cmd extensions, so `which aspire` returns nothing even
+# though it's installed. Resolve both names; fail loud if neither exists.
+ASPIRE=$(command -v aspire 2>/dev/null || command -v aspire.cmd 2>/dev/null \
+        || ([ -x "$HOME/.dotnet/tools/aspire.cmd" ] && echo "$HOME/.dotnet/tools/aspire.cmd"))
+if [ -z "$ASPIRE" ]; then
+  echo "❌ aspire CLI not found. Install with: dotnet tool install -g Aspire.Cli" >&2
+  exit 64
+fi
+
+echo "==> $ASPIRE deploy --mode $MODE (rg=$RG)"
+"$ASPIRE" deploy \
   --project memex/aspire/Memex.AppHost/Memex.AppHost.csproj \
   -- --mode "$MODE"
 
