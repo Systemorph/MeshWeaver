@@ -156,6 +156,17 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
         if (captured is null || string.IsNullOrEmpty(captured.ObjectId))
             return shared; // No user identity (background / system path) — pass-through.
 
+        // 🚨 Prod-2026-05-21 regression guard: posting GetPermissionRequest to
+        // an Address whose first segment is a NodeType name (e.g. "Thread",
+        // "AccessAssignment") causes PostgreSqlPathRoutingAdapter to lower-case
+        // it into a schema name and `EnsureSchemaForPartitionSync` blows up
+        // with `relation "thread.mesh_nodes" does not exist`. The cache gate
+        // only makes sense for paths that ARE real partition-rooted node
+        // paths. If the first segment is empty or matches a known NodeType
+        // name, skip the gate entirely.
+        if (LooksLikeNodeTypePath(path))
+            return shared;
+
         var key = (Path: path, UserId: captured.ObjectId);
         return Observable.Defer(() =>
         {
@@ -200,4 +211,25 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
         // the caller's user identity into the partition write. No additional
         // wrap needed here. See AccessContextPropagation.md.
         GetEntry(path).Handle.Update(update);
+
+    /// <summary>
+    /// True when <paramref name="path"/> is empty or its first segment matches
+    /// a known NodeType name (from <see cref="PartitionDefinition.NodeTypeToSuffix"/>).
+    /// Used by <see cref="GetStream"/> to skip the access-check round-trip on
+    /// non-partition-rooted paths, which previously triggered the prod
+    /// 2026-05-21 regression where <see cref="PostgreSqlPathRoutingAdapter"/>
+    /// lower-cased the segment as a schema name and blew up with
+    /// <c>relation "thread.mesh_nodes" does not exist</c>.
+    /// </summary>
+    private static bool LooksLikeNodeTypePath(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return true;
+        var slashIdx = path.IndexOf('/');
+        var firstSegment = slashIdx < 0 ? path : path[..slashIdx];
+        if (string.IsNullOrEmpty(firstSegment)) return true;
+        // NodeTypeToSuffix is the canonical registry of "this is a NodeType
+        // name, not a partition name". If the first segment is in here, the
+        // path was never going to resolve as a partition path.
+        return PartitionDefinition.NodeTypeToSuffix.ContainsKey(firstSegment);
+    }
 }
