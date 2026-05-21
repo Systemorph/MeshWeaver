@@ -81,7 +81,10 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
         _streams.GetOrAdd(path, p =>
         {
             logger.LogDebug("MeshNodeStreamCache: opening shared stream for {Path}", p);
-            var handle = meshHub.GetWorkspace().GetMeshNodeStream(p);
+            // 🚨 Bypass the cache when opening our OWN upstream — otherwise
+            // GetMeshNodeStream(workspace, path) auto-redirects back into the
+            // cache and we'd recurse forever waiting for ourselves.
+            var handle = meshHub.GetWorkspace().GetMeshNodeStreamBypassCache(p);
             // Replay(1) + eager .Connect() inside ImpersonateAsSystem: the
             // upstream SubscribeRequest opens ONCE under the well-known
             // System identity. The cache is process-wide infrastructure

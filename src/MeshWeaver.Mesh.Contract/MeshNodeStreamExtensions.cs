@@ -3,6 +3,7 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -71,11 +72,14 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
 {
     private readonly IWorkspace _workspace;
     private readonly string? _path;
+    private readonly IMeshNodeStreamCache? _cache;
 
-    internal MeshNodeStreamHandle(IWorkspace workspace, string? path = null)
+    internal MeshNodeStreamHandle(IWorkspace workspace, string? path = null,
+        IMeshNodeStreamCache? cache = null)
     {
         _workspace = workspace;
         _path = path;
+        _cache = cache;
     }
 
     private bool IsOwn => _path is null
@@ -113,6 +117,17 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     {
         try
         {
+            // 🚨 Cross-hub reads route through IMeshNodeStreamCache (when one is
+            // registered): one shared process-wide upstream subscription per
+            // path. The cache holds the upstream alive; ad-hoc GetRemoteStream
+            // here would open a separate handle, multiplying subscriptions and
+            // making writes invisible to readers of the cached stream. See
+            // Doc/GUI/ItemTemplateMeshNodeStreamBinding.
+            if (_cache is not null && !IsOwn && _path is not null)
+                return _cache.GetStream(_path)
+                    .Where(n => n is not null)
+                    .Subscribe(observer);
+
             return GetStream()
                 .Where(change => change.Value != null)
                 .Select(change => change.Value!)
@@ -150,7 +165,16 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             // emission, so a Subscribe callback that lands on a different thread
             // still observes the caller's user. See
             // AccessContextCaptureExtensions / AccessContextPropagation.md.
-            (IsOwn ? UpdateOwn(update) : UpdateRemote(update))
+            //
+            // Cross-hub writes route through IMeshNodeStreamCache (when one is
+            // registered): the cache's shared handle is what every reader is
+            // subscribed to, so the patch is observed in order. Own writes and
+            // cache-less writes fall back to the direct paths.
+            (IsOwn
+                ? UpdateOwn(update)
+                : _cache is not null && _path is not null
+                    ? _cache.Update(_path, update)
+                    : UpdateRemote(update))
                 .CarryAccessContext(_workspace.Hub.ServiceProvider),
             $"MeshNodeStreamHandle.Update(path='{_path ?? "<own>"}')",
             _workspace.Hub.ServiceProvider);
@@ -484,8 +508,14 @@ public static class MeshNodeStreamExtensions
     ///   <item><description><b>Own hub</b> â€” when <paramref name="path"/> matches the
     ///     workspace's hub address: handle reads/writes via the local
     ///     <see cref="MeshNodeReference"/> reducer + data source primary stream.</description></item>
-    ///   <item><description><b>Remote</b> â€” subscribes to and writes through the owning
-    ///     per-node hub via <c>workspace.GetRemoteStream&lt;MeshNode, MeshNodeReference&gt;</c>.</description></item>
+    ///   <item><description><b>Cross-hub via <see cref="IMeshNodeStreamCache"/></b> â€” when
+    ///     a cache is registered on the workspace's hub: routes reads through
+    ///     <c>cache.GetStream(path)</c> and writes through <c>cache.Update(path, fn)</c>.
+    ///     One shared upstream subscription process-wide; writes are observed
+    ///     by every reader on the same path.</description></item>
+    ///   <item><description><b>Remote (fallback)</b> â€” when no cache is registered:
+    ///     subscribes to and writes through the owning per-node hub via
+    ///     <c>workspace.GetRemoteStream&lt;MeshNode, MeshNodeReference&gt;</c>.</description></item>
     /// </list>
     /// Callers Subscribe (read) or call <c>.Update(update).Subscribe(...)</c> (write).
     /// If the node does not exist at <paramref name="path"/>, the per-node hub never
@@ -493,6 +523,28 @@ public static class MeshNodeStreamExtensions
     /// <c>.Take(1).Timeout(...)</c> and treat absence as "not found".
     /// </summary>
     public static MeshNodeStreamHandle GetMeshNodeStream(this IWorkspace workspace, string path)
+    {
+        // Own-hub path: no cache redirect (same data source; cache wouldn't help).
+        // Cross-hub: prefer the cache when one is registered so we share the
+        // process-wide upstream + write-coherence with every other reader/writer
+        // on the same path. The cache itself MUST NOT call this — it would
+        // recurse forever. The cache uses GetMeshNodeStreamBypassCache.
+        var ownPath = workspace.Hub.Address.Path;
+        if (string.Equals(path, ownPath, StringComparison.Ordinal)
+            || string.Equals(path, workspace.Hub.Address.ToString(), StringComparison.Ordinal))
+            return new MeshNodeStreamHandle(workspace);
+
+        var cache = workspace.Hub.ServiceProvider.GetService(typeof(IMeshNodeStreamCache))
+            as IMeshNodeStreamCache;
+        return new MeshNodeStreamHandle(workspace, path, cache);
+    }
+
+    /// <summary>
+    /// Like <see cref="GetMeshNodeStream(IWorkspace, string)"/> but bypasses the
+    /// <see cref="IMeshNodeStreamCache"/>. Used by the cache itself to open its
+    /// upstream subscription without recursing back into the cache.
+    /// </summary>
+    public static MeshNodeStreamHandle GetMeshNodeStreamBypassCache(this IWorkspace workspace, string path)
         => new(workspace, path);
 
     /// <summary>
