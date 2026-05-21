@@ -84,13 +84,31 @@ public class SatelliteRoutingExhaustiveTest
             TableMappings = PartitionDefinition.StandardTableMappings
         };
         var (ds, adapter) = await _fixture.CreateSchemaAdapterAsync("testorg", partitionDef, ct);
-        await _fixture.AccessControl.GrantAsync("TestOrg", "Anonymous", "Read",
-            isAllow: true, ct);
 
         // Seed partition root in mesh_nodes
         await adapter.WriteAsync(
             new MeshNode("TestOrg") { Name = "Test Org", NodeType = "Markdown" },
             _options, ct);
+
+        // Grant Anonymous full access on TestOrg by directly populating
+        // testorg.user_effective_permissions + public.partition_access. We
+        // bypass the rebuild proc because (a) it depends on the trigger
+        // wiring which differs across CI / local schema-init variants, and
+        // (b) this test isn't about the rebuild — it's about routing path
+        // queries to the right satellite table. The UEP row format is
+        // identical to what the rebuild would produce for an Admin
+        // AccessAssignment on TestOrg.
+        await using (var seed = ds.CreateCommand("""
+            INSERT INTO testorg.user_effective_permissions (user_id, node_path_prefix, permission, is_allow)
+            VALUES ('Anonymous', 'TestOrg', 'Read', true)
+            ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE SET is_allow = true;
+            INSERT INTO public.partition_access (user_id, partition)
+            VALUES ('Anonymous', 'testorg')
+            ON CONFLICT (user_id, partition) DO NOTHING;
+            """))
+        {
+            await seed.ExecuteNonQueryAsync(ct);
+        }
 
         // Seed satellite node — node lives at TestOrg/{suffix}/{id}, MainNode
         // is the partition root so the access clause's
