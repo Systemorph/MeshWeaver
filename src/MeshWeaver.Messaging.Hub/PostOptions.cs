@@ -24,7 +24,17 @@ public record PostOptions(Address Sender)
         this with
         {
             Target = requestDelivery.Sender,
-            PropertiesInternal = requestDelivery.Properties.ToImmutableDictionary().SetItem(RequestId, requestDelivery.Id)
+            PropertiesInternal = requestDelivery.Properties.ToImmutableDictionary().SetItem(RequestId, requestDelivery.Id),
+            // 🚨 Auto-propagate the request's AccessContext to the response.
+            // A response IS attributed to the caller who made the request —
+            // not to the hub that's now generating it. Without this, every
+            // handler that posts via `o.ResponseFor(request)` had to manually
+            // re-stamp the user identity, and most didn't — Prod App Insights
+            // (2026-05-21) showed dozens of "hub=Thread, message=GetDataResponse
+            // posted with no AccessContext" warnings + PostPipeline fail-closed
+            // dropping them. The request's AccessContext is the authoritative
+            // signal of "who is this for" — copy it forward.
+            ImpersonateContext = ImpersonateContext ?? requestDelivery.AccessContext,
         };
 
     public PostOptions WithRequestIdFrom(IMessageDelivery requestDelivery) => this with

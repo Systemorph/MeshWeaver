@@ -330,15 +330,20 @@ public record MessageHubConfiguration
     /// <summary>
     /// True for messages the framework itself posts during a hub's lifecycle —
     /// <see cref="InitializeHubRequest"/>, <c>HeartBeatEvent</c>,
-    /// <c>ShutdownRequest</c>, <c>DisposeRequest</c>, <c>SubscribeRequest</c>.
-    /// These carry no security-relevant payload, so the mesh hub's
-    /// "posted with no AccessContext" warning would only be developer noise
-    /// (there's no application-level Post to wrap with ImpersonateAsHub).
+    /// <c>ShutdownRequest</c>, <c>DisposeRequest</c>, <c>SubscribeRequest</c>,
+    /// <c>UnsubscribeRequest</c>. These carry no security-relevant payload,
+    /// so the mesh hub's "posted with no AccessContext" warning would only be
+    /// developer noise (there's no application-level Post to wrap with
+    /// ImpersonateAsHub). <b>Responses</b> (GetDataResponse, DeliveryFailure)
+    /// are NOT in this list — they auto-inherit the request's AccessContext
+    /// via <see cref="PostOptions.ResponseFor"/>, so they get proper identity
+    /// without needing an exemption.
     /// </summary>
     private static bool IsFrameworkLifecycleMessage(object? message) =>
         message is InitializeHubRequest
             || (message is not null && message.GetType().Name is
-                "HeartBeatEvent" or "ShutdownRequest" or "DisposeRequest" or "SubscribeRequest");
+                "HeartBeatEvent" or "ShutdownRequest" or "DisposeRequest"
+                or "SubscribeRequest" or "UnsubscribeRequest");
 
     internal ImmutableList<Func<AsyncPipelineConfig, AsyncPipelineConfig>> DeliveryPipeline { get; set; }
     internal TimeSpan? StartupTimeout { get; init; } //= new(0, 0, 30); // Default 10 seconds
