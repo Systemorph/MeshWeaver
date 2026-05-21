@@ -115,8 +115,11 @@ public partial class DelegationToolCallCardView : BlazorView<DelegationToolCallC
                         changed = true;
                     }
 
-                    var newBody = resultText is null ? null : LastNLines(resultText, 10);
-                    if (newBody != body) { body = newBody; changed = true; }
+                    // Body is NOT read here — it streams from the sub-thread's
+                    // response cell via subscription 2's nested sub. Parent's
+                    // ToolCallEntry.Result is only populated at terminal (= the
+                    // FCC FunctionResultContent payload) and matches the
+                    // sub-thread cell's final text, so no need to mirror it.
 
                     // Title fallback (used when sub-thread Name isn't loaded yet).
                     var displayName = match.Value.TryGetProperty("displayName", out var dn)
@@ -137,20 +140,51 @@ public partial class DelegationToolCallCardView : BlazorView<DelegationToolCallC
                 }));
         }
 
-        // Subscription 2: sub-thread — read Name for the card title.
+        // Subscription 2: sub-thread node — reads Name (for the card title)
+        // AND ActiveMessageId (to derive the path of the currently-streaming
+        // response cell, which is what we subscribe to in step 3 for live body).
+        string? lastSubResponsePath = null;
         if (!string.IsNullOrEmpty(delegationPath))
         {
             AddBinding(cache.GetStream(delegationPath)
                 .Where(n => n is not null)
                 .Subscribe(node =>
                 {
+                    var changed = false;
                     var name = node.Name;
-                    if (string.IsNullOrEmpty(name)) return;
-                    if (name != subThreadName)
+                    if (!string.IsNullOrEmpty(name) && name != subThreadName)
                     {
                         subThreadName = name;
-                        InvokeAsync(StateHasChanged);
+                        changed = true;
                     }
+
+                    // Sub-thread carries its current response cell via ActiveMessageId.
+                    // Path = {DelegationPath}/{ActiveMessageId}. As soon as it appears,
+                    // open the live body subscription so the card body streams from
+                    // the sub-thread directly (no parent-projection mirroring).
+                    var activeMsgId = (node.Content is MeshWeaver.AI.Thread t) ? t.ActiveMessageId : null;
+                    if (!string.IsNullOrEmpty(activeMsgId))
+                    {
+                        var responsePath = $"{delegationPath}/{activeMsgId}";
+                        if (responsePath != lastSubResponsePath)
+                        {
+                            lastSubResponsePath = responsePath;
+                            AddBinding(cache.GetStream(responsePath)
+                                .Where(rc => rc?.Content is not null)
+                                .Subscribe(rc =>
+                                {
+                                    var msg = rc.Content as MeshWeaver.AI.ThreadMessage;
+                                    var newBody = MeshWeaver.AI.ToolStatusFormatter.LastNLines(msg?.Text, 10);
+                                    if (newBody != body)
+                                    {
+                                        body = newBody;
+                                        InvokeAsync(StateHasChanged);
+                                    }
+                                }));
+                        }
+                    }
+
+                    if (changed) InvokeAsync(StateHasChanged);
                 }));
         }
     }

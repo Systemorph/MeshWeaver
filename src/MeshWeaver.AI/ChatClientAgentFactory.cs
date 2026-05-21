@@ -437,13 +437,19 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         string lastSubText = "";
         ThreadMessageStatus? lastSubStatus = null;
 
-        // Project the current snapshot onto the parent's matching ToolCallEntry.
-        // The parent's response cell is just another path to the cache — same
-        // shared handle for everyone, so this update is observable by every
-        // GUI that has databound to that path.
-        void ProjectOntoParentToolCall(ToolCallStatus newStatus)
+        // 🚨 The GUI's DelegationToolCallCardView reads sub-thread state DIRECTLY
+        // via cache.GetStream(DelegationPath) → its ActiveMessageId → response
+        // cell. We do NOT mirror the sub-thread's streaming text onto the parent's
+        // ToolCallEntry.Result here — that was the source of duplicates +
+        // out-of-sync displays. We only write the parent's ToolCallEntry TWICE per
+        // delegation lifecycle: once at terminal (Status flip + final Result for
+        // FCC's FunctionResultContent), and the dispatch-time stamp is the FCC
+        // streaming loop's append (it already creates the entry).
+        //
+        // Subscriptions below exist ONLY to detect terminal — body display
+        // streams from the sub-thread itself.
+        void StampTerminalOnParentToolCall(ToolCallStatus newStatus)
         {
-            var preview = ToolStatusFormatter.LastNLines(lastSubText, 10);
             nodeCache.Update(parentMsgPath, curr =>
             {
                 if (curr?.Content is not ThreadMessage msg) return curr!;
@@ -455,13 +461,10 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                 }
                 if (idx < 0) return curr!;
                 var existing = msg.ToolCalls[idx];
+                // Full accumulated text → FCC's FunctionResultContent.
                 var updated = existing with
                 {
-                    Result = newStatus == ToolCallStatus.Streaming
-                        ? preview
-                        // On terminal, replace the truncated preview with the FULL final
-                        // text — this is what FCC will see as FunctionResultContent.
-                        : lastSubText,
+                    Result = lastSubText,
                     Status = newStatus,
                     IsSuccess = newStatus == ToolCallStatus.Success,
                     Timestamp = DateTime.UtcNow
@@ -472,17 +475,17 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                 };
             }).Subscribe(_ => { },
                 ex => Logger.LogWarning(ex,
-                    "[Delegation] Project sub-thread {Sub} state onto parent {Parent} failed",
-                    subThreadPath, parentMsgPath));
+                    "[Delegation] Stamp terminal status on parent {Parent} failed",
+                    parentMsgPath));
         }
 
         // 1. Subscribe to the SUB-THREAD via the cache. The cache opens the
         //    SubscribeRequest under System impersonation; that activates the
         //    sub-thread hub (its WatchForExecution hook then auto-runs the
         //    agent — BuildThreadWithMessages set IsExecuting=true). IsExecuting
-        //    flipping false (after we've observed it run) is one terminal signal.
+        //    flipping false (after we've observed it run) is the terminal signal.
         //    The first emission can race ahead of the initial state, so we gate
-        //    on `startedExecuting`.
+        //    on `startedExecuting`. No projection write — display streams direct.
         var startedExecuting = false;
         var subThreadSub = nodeCache.GetStream(subThreadPath)
             .Subscribe(
@@ -492,7 +495,6 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                     if (thread.IsExecuting)
                     {
                         startedExecuting = true;
-                        ProjectOntoParentToolCall(ToolCallStatus.Streaming);
                         return;
                     }
                     if (startedExecuting)
@@ -500,21 +502,17 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                 },
                 ex => terminalTcs.TrySetException(ex));
 
-        // 2. Subscribe to the response-cell via the cache for live text + per-cell
-        //    terminal status. `CompletedAt` set + cell Status is the authoritative
-        //    terminal signal — it tells us SUCCESS / CANCELLED / ERROR distinctly,
-        //    which the thread-level IsExecuting flip cannot.
+        // 2. Subscribe to the response-cell via the cache JUST to capture
+        //    the final accumulated text (for FCC's FunctionResultContent) and
+        //    the per-cell terminal status (Success/Cancelled/Error). No
+        //    write here — the GUI streams its own display from this cell.
         var responseCellSub = nodeCache.GetStream(responsePath)
             .Subscribe(
                 node =>
                 {
                     if (node?.Content is not ThreadMessage msg) return;
-                    var current = msg.Text ?? "";
-                    var grew = current.Length > lastSubText.Length;
-                    lastSubText = current;
+                    lastSubText = msg.Text ?? "";
                     lastSubStatus = msg.Status;
-                    if (grew)
-                        ProjectOntoParentToolCall(ToolCallStatus.Streaming);
                     if (msg.CompletedAt is not null)
                         terminalTcs.TrySetResult(TerminalSignal.CellCompleted);
                 },
@@ -561,9 +559,10 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                     _ => ToolCallStatus.Success
                 };
 
-        // Final projection — flips Status to terminal and stamps the FULL accumulated
-        // text on Result. Databound GUIs see the badge transition + the full output.
-        ProjectOntoParentToolCall(finalStatus);
+        // Final write — flips Status to terminal and stamps the FULL accumulated
+        // sub-thread text on Result (the FunctionResultContent FCC delivers to
+        // the parent agent). One write per delegation lifecycle.
+        StampTerminalOnParentToolCall(finalStatus);
 
         // 🚨 Watchdog / parent-cancel must propagate cancel to the sub-thread.
         // Without this, the sub-thread's hub keeps running with IsExecuting=true

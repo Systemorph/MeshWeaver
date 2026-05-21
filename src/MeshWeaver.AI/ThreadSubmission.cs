@@ -780,7 +780,8 @@ internal static class ThreadSubmissionServer
     /// for streaming.
     /// </summary>
     internal static void DispatchAfterClaim(
-        IMessageHub hub, MeshNode threadNode, ILogger<AgentChatClient>? logger)
+        IMessageHub hub, MeshNode threadNode, ILogger<AgentChatClient>? logger,
+        Action? onFailure = null)
     {
         var thread = threadNode.Content as MeshThread;
         if (thread is null)
@@ -788,6 +789,7 @@ internal static class ThreadSubmissionServer
             logger?.LogWarning(
                 "[DispatchAfterClaim] thread node has no MeshThread content for {Path}",
                 hub.Address.Path);
+            onFailure?.Invoke();
             return;
         }
         var dispatch = ThreadSubmission.PlanNextRound(thread);
@@ -809,7 +811,7 @@ internal static class ThreadSubmissionServer
                     "[DispatchAfterClaim] rollback Update failed for {Path}", hub.Address.Path));
             return;
         }
-        DispatchRound(hub, threadNode, dispatch, logger);
+        DispatchRound(hub, threadNode, dispatch, logger, onFailure);
     }
 
     /// <summary>
@@ -1004,6 +1006,8 @@ internal static class ThreadSubmissionServer
                                     Messages = msgs,
                                     IngestedMessageIds = ingested,
                                     Status = ThreadExecutionStatus.Executing,
+                                    // ActiveMessageId is the canonical handle —
+                                    // full response path derives as {threadPath}/{ActiveMessageId}.
                                     ActiveMessageId = responseMsgId,
                                     ExecutionStartedAt = DateTime.UtcNow,
                                     TokensUsed = 0,
@@ -1017,8 +1021,9 @@ internal static class ThreadSubmissionServer
                         }).Subscribe(
                             _ =>
                             {
+                                var allocCache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
                                 ThreadExecution.UpdateResponseCell(
-                                    hub.GetWorkspace(), responsePath, threadPath, responseMsgId, mainEntity,
+                                    allocCache, responsePath, threadPath, responseMsgId, mainEntity,
                                     msg => msg with { Text = "Allocating agent...", Status = ThreadMessageStatus.Streaming },
                                     logger);
 
@@ -1035,7 +1040,6 @@ internal static class ThreadSubmissionServer
                                         UserMessageText = roundUserText,
                                         UserMessageId = dispatch.UserMessageIds.LastOrDefault(),
                                         ResponseMessageId = responseMsgId,
-                                        ResponsePath = responsePath,
                                         AgentName = dispatch.AgentName,
                                         ModelName = dispatch.ModelName,
                                         ContextPath = dispatch.ContextPath,

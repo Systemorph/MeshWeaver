@@ -28,12 +28,9 @@ public record SubmitMessageRequest : IRequest<SubmitMessageResponse>
     public string? UserMessageId { get; init; }
     public string? ResponseMessageId { get; init; }
 
-    /// <summary>
-    /// Set by HandleSubmitMessage after creating the response node.
-    /// The execution hub uses this to post streaming progress updates.
-    /// </summary>
-    public string? ResponsePath { get; init; }
-
+    // ResponsePath removed (2026-05-21). _Exec resolves the active response cell
+    // path by reading Thread.ActiveResponsePath from the thread node via
+    // IMeshNodeStreamCache — single source of truth, no parameter to keep in sync.
 }
 
 /// <summary>

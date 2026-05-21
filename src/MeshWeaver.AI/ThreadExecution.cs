@@ -42,11 +42,12 @@ public static class ThreadExecution
     /// regardless of local cache freshness, so the cell hub applies it correctly.
     ///
     /// Use this for one-off cell updates from outside the streaming loop
-    /// (recovery, "Allocating agent…" placeholders). The streaming loop itself
-    /// uses a long-lived <c>responseStream</c> opened once per execution.
+    /// (recovery, "Allocating agent…" placeholders). Writes via
+    /// <see cref="IMeshNodeStreamCache.Update"/> — the same shared handle the
+    /// GUI subscribers read from, so the patch is observed in order.
     /// </summary>
     internal static void UpdateResponseCell(
-        IWorkspace workspace,
+        IMeshNodeStreamCache cache,
         string responsePath,
         string threadPath,
         string responseMsgId,
@@ -54,20 +55,7 @@ public static class ThreadExecution
         Func<ThreadMessage, ThreadMessage> mutate,
         ILogger? logger)
     {
-        ISynchronizationStream<MeshNode>? stream;
-        try
-        {
-            stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-                new Address(responsePath), new MeshNodeReference());
-        }
-        catch (Exception ex)
-        {
-            logger?.LogWarning(ex,
-                "[UpdateResponseCell] could not open stream for {Path}", responsePath);
-            return;
-        }
-
-        stream.Update(node =>
+        cache.Update(responsePath, node =>
         {
             var current = node?.Content as ThreadMessage ?? new ThreadMessage
             {
@@ -77,7 +65,7 @@ public static class ThreadExecution
                 Status = ThreadMessageStatus.Streaming
             };
             var updated = mutate(current);
-            var meshNode = node != null
+            return node != null
                 ? node with { Content = updated }
                 : new MeshNode(responseMsgId, threadPath)
                 {
@@ -85,12 +73,10 @@ public static class ThreadExecution
                     MainNode = mainEntity,
                     Content = updated
                 };
-            return new ChangeItem<MeshNode>(
-                meshNode, stream.StreamId, stream.StreamId,
-                ChangeType.Patch, stream.Hub.Version,
-                [new EntityUpdate(nameof(MeshNode), meshNode.Id, meshNode) { OldValue = node }]);
-        }, ex => logger?.LogWarning(ex,
-            "[UpdateResponseCell] update failed for {Path}", responsePath));
+        }).Subscribe(
+            _ => { },
+            ex => logger?.LogWarning(ex,
+                "[UpdateResponseCell] cache.Update failed for {Path}", responsePath));
     }
 
     /// <summary>
@@ -202,6 +188,7 @@ public static class ThreadExecution
     private static void RecoverStaleExecutingThread(IMessageHub hub)
     {
         var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
+        var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
         var workspace = hub.GetWorkspace();
         var threadPath = hub.Address.Path;
 
@@ -257,7 +244,7 @@ public static class ThreadExecution
                         : tc with { Result = "Cancelled (server restarted)", IsSuccess = false })
                     .ToImmutableList() ?? ImmutableList<ToolCallEntry>.Empty;
 
-                UpdateResponseCell(workspace, responsePath, threadPath, responseMsgId, mainEntity,
+                UpdateResponseCell(cache, responsePath, threadPath, responseMsgId, mainEntity,
                     msg => msg with
                     {
                         Text = msg.Text ?? "",
@@ -365,7 +352,8 @@ public static class ThreadExecution
 
             void StartExecution()
             {
-                UpdateResponseCell(hub.GetWorkspace(), responsePath, threadPath, responseMsgId,
+                var startCache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+                UpdateResponseCell(startCache, responsePath, threadPath, responseMsgId,
                     mainEntity,
                     msg => msg with { Text = "Allocating agent...", Status = ThreadMessageStatus.Streaming },
                     logger);
@@ -381,7 +369,6 @@ public static class ThreadExecution
                     UserMessageText = thread.PendingUserMessage ?? "",
                     UserMessageId = userMsgId,
                     ResponseMessageId = responseMsgId,
-                    ResponsePath = responsePath,
                     AgentName = thread.PendingAgentName,
                     ModelName = thread.PendingModelName,
                     ContextPath = thread.PendingContextPath ?? thread.CreatedBy,
@@ -518,7 +505,43 @@ public static class ThreadExecution
                     // which posts CreateNodeRequest for the user/response
                     // cells under this AccessContext, and writes the commit
                     // through IMeshNodeStreamCache.
-                    ThreadSubmissionServer.DispatchAfterClaim(parentHub, latest, logger);
+                    //
+                    // 🚨 onFailure rolls the thread back to Status=Idle so the
+                    // submission watcher's next emission sees a clean state and
+                    // re-dispatches. Without this, ANY error in user-cell or
+                    // response-cell creation OR the round-commit UpdateMeshNode
+                    // leaves the thread stuck at Status=StartingExecution
+                    // forever (the prod symptom 2026-05-21 with the
+                    // add-markus-kleiner thread). Post-deploy silo restarts +
+                    // CreateNodeRequest delivery failures are the typical
+                    // triggers. The guard inside the Update lambda prevents
+                    // clobbering if another actor already moved Status forward.
+                    ThreadSubmissionServer.DispatchAfterClaim(parentHub, latest, logger,
+                        onFailure: () =>
+                        {
+                            logger?.LogWarning(
+                                "[HandleStartExecutionOnExec] DispatchAfterClaim failed for {ThreadPath} — rolling Status back to Idle so the submission watcher can re-dispatch",
+                                threadPath);
+                            cache.Update(threadPath, node =>
+                            {
+                                if (node?.Content is not MeshThread t
+                                    || t.Status != ThreadExecutionStatus.StartingExecution)
+                                    return node!;
+                                return node with
+                                {
+                                    Content = t with
+                                    {
+                                        Status = ThreadExecutionStatus.Idle,
+                                        ActiveMessageId = null,
+                                        ExecutionStartedAt = null
+                                    }
+                                };
+                            }).Subscribe(
+                                _ => { },
+                                ex => logger?.LogWarning(ex,
+                                    "[HandleStartExecutionOnExec] Rollback to Idle failed for {ThreadPath}",
+                                    threadPath));
+                        });
                 },
                 ex => logger?.LogWarning(ex,
                     "[HandleStartExecutionOnExec] cache read failed for {ThreadPath}", threadPath));
@@ -761,7 +784,8 @@ public static class ThreadExecution
             hub.Post(new SubmitMessageResponse { Success = true, Messages = ImmutableList.Create(userMsgId, responseMsgId) },
                 o => o.ResponseFor(delivery));
 
-            UpdateResponseCell(hub.GetWorkspace(), responsePath, threadPath, responseMsgId, mainEntity,
+            var legacyCache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+            UpdateResponseCell(legacyCache, responsePath, threadPath, responseMsgId, mainEntity,
                 msg => msg with { Text = "Allocating agent...", Status = ThreadMessageStatus.Streaming },
                 logger);
 
@@ -776,7 +800,6 @@ public static class ThreadExecution
                 UserMessageText = request.UserMessageText,
                 UserMessageId = userMsgId,
                 ResponseMessageId = responseMsgId,
-                ResponsePath = responsePath,
                 AgentName = request.AgentName,
                 ModelName = request.ModelName,
                 ContextPath = request.ContextPath,
@@ -862,31 +885,24 @@ public static class ThreadExecution
         var request = delivery.Message;
         var parentHub = hub.Configuration.ParentHub!;
         var threadPath = request.ThreadPath;
-        var responsePath = request.ResponsePath!;
-        var responseMsgId = responsePath.Split('/').Last();
         var logger = parentHub.ServiceProvider.GetRequiredService<ILogger<AgentChatClient>>();
-        var workspace = parentHub.ServiceProvider.GetRequiredService<IWorkspace>();
+        var cache = parentHub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        // 🚨 ResponsePath removed from SubmitMessageRequest (2026-05-21).
+        // The id is set by DispatchRound at post-time (= thread.ActiveMessageId
+        // at the moment of the post, never re-set during the round); the path
+        // derives as {threadPath}/{ResponseMessageId}. No cache lookup at this
+        // entry point — the request is the authoritative source for THIS round.
+        var responseMsgId = request.ResponseMessageId
+            ?? throw new InvalidOperationException(
+                $"ExecuteMessageAsync: SubmitMessageRequest for thread {threadPath} has no ResponseMessageId");
+        var responsePath = $"{threadPath}/{responseMsgId}";
 
-        // Long-lived per-message remote stream. Opened once at the start of
-        // execution; every chunk-tick / tool-result / final write goes through
-        // _responseStream.Update(...). Disposed in the Task.Run finally block.
-        // See Doc/Architecture/ThreadExecutionStreaming.md.
-        ISynchronizationStream<MeshNode>? responseStream = null;
-        try
-        {
-            responseStream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-                new Address(responsePath), new MeshNodeReference());
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "[ThreadExec] Could not open response stream for {ResponsePath} — pushes will be skipped (cell will not show streaming output)",
-                responsePath);
-        }
-
-        // Helper: push content to the response message via the long-lived remote
-        // stream. Fire-and-forget: ISynchronizationStream.Update posts an
-        // UpdateStreamRequest to the workspace hub, which forwards the patch to
-        // the owning per-message hub and broadcasts the echo to subscribers.
+        // Helper: push content to the response message via IMeshNodeStreamCache.
+        // 🚨 Same shared handle that the GUI (ThreadMessageItemView /
+        // DelegationToolCallCardView) reads from — single upstream subscription
+        // process-wide. Replaces the per-_Exec workspace.GetRemoteStream that
+        // opened a separate handle (writes through one were invisible to readers
+        // of the other). See Doc/GUI/ItemTemplateMeshNodeStreamBinding.
         var mainEntity = request.ContextPath ?? threadPath;
         void PushToResponseMessage(string text, ImmutableList<ToolCallEntry> toolCalls,
             ImmutableList<NodeChangeEntry> updatedNodes,
@@ -898,28 +914,15 @@ public static class ThreadExecution
             logger.LogDebug("[ThreadExec] PUSH_TO_MSG: responsePath={ResponsePath}, textLen={TextLen}, toolCalls={ToolCalls}, updatedNodes={UpdatedNodes}, status={Status}",
                 responsePath, text.Length, toolCalls.Count, updatedNodes.Count, status?.ToString() ?? "(preserve)");
 
-            if (responseStream == null)
-            {
-                logger.LogWarning("[ThreadExec] responseStream not opened for {ResponsePath} — skipping push (text len={TextLen})",
-                    responsePath, text.Length);
-                return;
-            }
-
-            // The lambda's `node` is null until the synchronization handshake
-            // has delivered the initial state from the per-message hub. Don't
-            // return null (that drops the patch — old "stuck at Allocating
-            // agent..." symptom). Construct a placeholder from request context
-            // — the sync protocol routes the patch by StreamId, not by local
-            // cache state, so the cell hub applies our content correctly.
-            responseStream.Update(node =>
+            cache.Update(responsePath, node =>
             {
                 var current = node?.Content as ThreadMessage ?? new ThreadMessage
-            {
-                Role = "assistant",
-                Text = "",
-                Type = ThreadMessageType.AgentResponse,
-                Status = ThreadMessageStatus.Streaming
-            };
+                {
+                    Role = "assistant",
+                    Text = "",
+                    Type = ThreadMessageType.AgentResponse,
+                    Status = ThreadMessageStatus.Streaming
+                };
                 // Status: once terminal (Completed/Cancelled/Error), no patch can
                 // regress to Streaming. Sample(100ms) emits its last buffered value
                 // on source completion (snapshots.OnCompleted), and that emission's
@@ -947,7 +950,7 @@ public static class ThreadExecution
                     CompletedAt = completedAt ?? current.CompletedAt,
                     Status = nextStatus
                 };
-                var updated = node != null
+                return node != null
                     ? node with { Content = updatedContent }
                     : new MeshNode(responseMsgId, threadPath)
                     {
@@ -955,12 +958,10 @@ public static class ThreadExecution
                         MainNode = mainEntity,
                         Content = updatedContent
                     };
-                return new ChangeItem<MeshNode>(
-                    updated, responseStream.StreamId, responseStream.StreamId,
-                    ChangeType.Patch, responseStream.Hub.Version,
-                    [new EntityUpdate(nameof(MeshNode), updated.Id, updated) { OldValue = node }]);
-            }, ex => logger.LogWarning(ex,
-                "[ThreadExec] responseStream.Update failed for {Path}", responsePath));
+            }).Subscribe(
+                _ => { },
+                ex => logger.LogWarning(ex,
+                    "[ThreadExec] cache.Update failed for {Path}", responsePath));
         }
 
         var execLogger = parentHub.ServiceProvider.GetService<ILoggerFactory>()
@@ -1050,10 +1051,9 @@ public static class ThreadExecution
                 IObservable<MeshNode?> contextNodeObs;
                 if (!string.IsNullOrEmpty(request.ContextPath))
                 {
-                    var contextStream = workspace.GetRemoteStream<MeshNode>(
-                        new Address(request.ContextPath), new MeshNodeReference());
-                    contextNodeObs = contextStream
-                        .Select(c => c.Value)
+                    // Read context node via cache (shared upstream, no per-_Exec handle).
+                    contextNodeObs = cache.GetStream(request.ContextPath)
+                        .Select(n => (MeshNode?)n)
                         .Where(v => v != null)
                         .Take(1)
                         .Timeout(TimeSpan.FromSeconds(5))
@@ -1542,14 +1542,9 @@ public static class ThreadExecution
                     {
                         parentHub.Set<CancellationTokenSource>(null!);
                         executionCts.Dispose();
-                        // Tear down the per-message remote stream now that streaming
-                        // is done. The stream stays alive for the whole run because
-                        // throttled / final / cancel / error paths all touch it.
-                        try { (responseStream as IDisposable)?.Dispose(); }
-                        catch (Exception disposeEx)
-                        {
-                            logger.LogDebug(disposeEx, "[ThreadExec] disposing responseStream for {ThreadPath} threw — non-fatal", threadPath);
-                        }
+                        // No per-_Exec stream handle to dispose — writes went through
+                        // IMeshNodeStreamCache.Update, whose upstream handle is owned
+                        // by the cache and outlives this round.
                     }
                 });
                     }); // end of LoadFullConversationHistory.Subscribe
@@ -1592,7 +1587,7 @@ public static class ThreadExecution
                     // the error so the bubble shows something instead of an empty
                     // "Allocating agent..." placeholder.
                     var responsePath = $"{threadPath}/{responseMsgId}";
-                    UpdateResponseCell(workspace, responsePath, threadPath, responseMsgId,
+                    UpdateResponseCell(cache, responsePath, threadPath, responseMsgId,
                         mainEntity: threadPath,
                         msg => msg with
                         {
@@ -1608,8 +1603,9 @@ public static class ThreadExecution
                 });
         }); // end of clientObs.Subscribe
 
-        // Register subscription for disposal
-        workspace.AddDisposable(initSub);
+        // Register subscription for disposal — use parentHub's workspace
+        // (this is the thread hub's own workspace, the natural lifetime owner).
+        parentHub.GetWorkspace().AddDisposable(initSub);
 
         return delivery.Processed();
     }

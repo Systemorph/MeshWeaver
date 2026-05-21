@@ -212,7 +212,12 @@ public record Thread
     public string? ExecutionStatus { get; init; }
 
     /// <summary>
-    /// The ID of the response message currently being generated.
+    /// The ID of the response message currently being generated. The full
+    /// response path is always <c>{threadPath}/{ActiveMessageId}</c> — every
+    /// downstream actor (_Exec streaming loop, parent's delegation watcher,
+    /// cancellation watcher, GUI status bar) derives the path that way.
+    /// Single source of truth for "where is the agent streaming right now";
+    /// no separate path-property to keep in sync with the id.
     /// </summary>
     public string? ActiveMessageId { get; init; }
 
