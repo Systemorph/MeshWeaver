@@ -90,7 +90,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
     }
 
     [Fact(Timeout = 60000)]
-    public async Task BackgroundActivation_OfDynamicNodeType_DoesNotLoopRecompiles()
+    public async Task BackgroundActivation_OfDynamicNodeType_DoesNotAutoCreateCompileActivity()
     {
         var ct = new CancellationTokenSource(50.Seconds()).Token;
 
@@ -153,51 +153,37 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
             .FirstAsync().ToTask(ct);
         Output.WriteLine($"Background activation read: Data={dataResp.Message.Data?.GetType().Name ?? "(null)"}");
 
-        // 3. Wait long enough for any kickoff-driven compile to fire and settle.
-        //    The 2026-05-21 PM first-build-only kickoff DOES fire here (one
-        //    shot, under ImpersonateAsSystem) — the test's invariant is no
-        //    longer "zero activities" but "exactly one compile activity, and
-        //    a second background read does NOT add another". That's the prod
-        //    loop-fix shape: status-guarded kickoff so the activation fan-out
-        //    can't trigger an endless recompile chain.
+        // 3. Wait long enough for any kickoff-driven compile to fire and land
+        //    its activity, then assert that NO Activity MeshNodes have appeared
+        //    under {typePath}/_Activity. The current InstallCompileWatcher
+        //    kickoff DOES fire here — the test will go red until the kickoff
+        //    is gated on an explicit user trigger (RequestedReleaseAt) or
+        //    removed entirely.
         var activityNamespace = $"{typePath}/_Activity";
-        await Task.Delay(TimeSpan.FromSeconds(15), ct);
-        var firstSnapshot = await SiloMeshService
+        await Task.Delay(TimeSpan.FromSeconds(8), ct);
+        var snapshot = await SiloMeshService
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{activityNamespace} scope:subtree"))
             .FirstAsync()
             .ToTask(ct);
-        var firstActivities = firstSnapshot.Items.ToList();
-        Output.WriteLine($"_Activity rows after first background-activation: {firstActivities.Count}");
-        foreach (var row in firstActivities)
+        var activities = snapshot.Items.ToList();
+
+        Output.WriteLine($"_Activity rows after 8s background-activation wait: {activities.Count}");
+        foreach (var row in activities)
             Output.WriteLine($"  - {row.Path} (NodeType={row.NodeType}, Name={row.Name})");
 
-        // Re-activate by a SECOND background read. If the kickoff is unguarded
-        // (the original prod bug), this would fire ANOTHER compile and the
-        // activity count would grow. With the CompilationStatus-null guard +
-        // Take(1) on the kickoff Subject, the second read MUST NOT add an
-        // activity — the same single compile from the first activation is the
-        // only one that ever runs.
-        var dataResp2 = await client
-            .Observe(new GetDataRequest(new MeshNodeReference()),
-                o => o.WithTarget(new Address(typePath)))
-            .FirstAsync().ToTask(ct);
-        await Task.Delay(TimeSpan.FromSeconds(8), ct);
-        var secondSnapshot = await SiloMeshService
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                $"namespace:{activityNamespace} scope:subtree"))
-            .FirstAsync()
-            .ToTask(ct);
-        var secondActivities = secondSnapshot.Items.ToList();
-        Output.WriteLine($"_Activity rows after SECOND background-activation: {secondActivities.Count}");
-
-        secondActivities.Count.Should().Be(firstActivities.Count,
-            "the first-build kickoff fires exactly once (status guard + Take(1)). " +
-            "A second background activation MUST NOT trigger a second compile — " +
-            "that is precisely the prod 2026-05-21 loop bug the status guard fixes. " +
-            "Prior to the guard, every grain activation re-fired the kickoff when " +
-            "HasUsableBuild was false, generating an endless stream of " +
-            "\"Access denied: user 'sync/...' lacks Create permission\" log lines.");
+        activities.Should().BeEmpty(
+            "background activation (no explicit user-driven RequestedReleaseAt flip, " +
+            "no Compile-button click) MUST NOT auto-create a compile activity. " +
+            "Recompile is an explicit user action — UI flips RequestedReleaseAt, " +
+            "AccessControl validates the user has Create permission, and only then " +
+            "does the activity land. The IsDirty computed property is informational " +
+            "only, never a trigger. Current symptom in prod: activation fan-out from " +
+            "synced-query subscribers fires the kickoff with a transient AccessContext " +
+            "that lacks Create permission on the partition, the activity Start fails " +
+            "with 'Access denied', falls through to inline RunCompile which retries " +
+            "every activation → endless background messages."
+        );
     }
 
     /// <summary>
