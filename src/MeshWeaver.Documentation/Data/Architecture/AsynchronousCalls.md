@@ -999,6 +999,25 @@ workspace.UpdateMeshNode(node =>
 });
 ```
 
+## AccessContext rides for free
+
+Every framework write primitive (`IMeshService.CreateNode/UpdateNode/DeleteNode/CopyNode`, `MeshNodeStreamHandle.Update`, `IMeshNodeStreamCache.Update`) automatically captures the caller's `AccessContext` at invocation time and re-stamps it on every emission of the returned cold pipeline. Callers don't need any per-Subscribe wrapper:
+
+```csharp
+// Handler runs with delivery.AccessContext = "alice" on AsyncLocal.
+// The Subscribe callback runs on the workspace's emission thread —
+// AsyncLocal would normally be wiped there, but the framework wrap
+// captured "alice" before returning the observable and restores it
+// before invoking the callback. The inner CreateNode therefore posts
+// CreateNodeRequest with delivery.AccessContext = "alice".
+streamCache.Update(path, fn).Subscribe(_ =>
+    meshService.CreateNode(child).Subscribe(_ => { }));
+```
+
+The mechanism is `IObservable<T>.CarryAccessContext(IServiceProvider)` in `src/MeshWeaver.Messaging.Hub/AccessContextCaptureExtensions.cs`, applied INSIDE each framework primitive (not at the callsite). Full reference: [AccessContextPropagation.md](AccessContextPropagation.md).
+
+Legitimate hub-internal writes that must bypass user identity (cache hydration, SyncStream heartbeats) opt in explicitly via `accessService.ImpersonateAsSystem()` or `accessService.ImpersonateAsHub(hub)` / `PostOptions.ImpersonateAsHub`. PostPipeline fails closed otherwise — the silent hub-self-impersonation fallback was deleted 2026-05-21.
+
 ## Rules Summary
 
 | Pattern | Safe in Handlers? | Notes |

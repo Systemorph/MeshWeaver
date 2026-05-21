@@ -126,7 +126,16 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     /// </summary>
     public IObservable<MeshNode> Update(Func<MeshNode, MeshNode> update)
         => new RequireSubscribeObservable<MeshNode>(
-            IsOwn ? UpdateOwn(update) : UpdateRemote(update),
+            // 🚨 CarryAccessContext is the cross-cutting "AccessContext survives
+            // Subscribe()" wrap. Capture happens here — synchronously — on the
+            // caller's thread where MessageHub has already set AsyncLocal from
+            // delivery.AccessContext. The captured value rides as a closure on
+            // the returned cold pipeline and re-stamps AsyncLocal on every
+            // emission, so a Subscribe callback that lands on a different thread
+            // still observes the caller's user. See
+            // AccessContextCaptureExtensions / AccessContextPropagation.md.
+            (IsOwn ? UpdateOwn(update) : UpdateRemote(update))
+                .CarryAccessContext(_workspace.Hub.ServiceProvider),
             $"MeshNodeStreamHandle.Update(path='{_path ?? "<own>"}')",
             _workspace.Hub.ServiceProvider);
 

@@ -282,63 +282,35 @@ public record MessageHubConfiguration
             }
             else
             {
-                // Two-tier fallback. The mesh hub must NEVER post on behalf of
-                // itself: it routes for everyone, so stamping
-                // `mesh/{guid}` as the principal would match no
-                // AccessAssignment and silently deny cross-partition writes —
-                // OR (worse) match a fake principal that no real seed had
-                // intended to grant. For mesh-typed hubs we fail closed and
-                // expect the caller to wrap with ImpersonateAsHub /
-                // ImpersonateAsSystem when they really do need to post.
+                // 🚨 2026-05-21 — single fail-closed branch for ALL hub kinds.
+                // Previously this had a two-tier fallback: mesh hubs failed
+                // closed, every other hub kind silently stamped its own address
+                // as principal. That fallback was the prod 2026-05-21 hot spot
+                // — background activations of dynamic NodeTypes posted
+                // CreateNode requests with no Context/CircuitContext, the
+                // pipeline stamped "sync/...", "activity/...", "node/..." as
+                // principal, AccessControl denied because those addresses match
+                // no AccessAssignment, App Insights filled with
+                //   "Access denied: user 'sync/...' lacks Create permission".
                 //
-                // Every other hub kind (`sync/`, `portal/`, `apitoken/`,
-                // `activity/`, per-node hubs, …) IS the legitimate originator
-                // of its own internal flows: SyncStream pushing
-                // SetCurrentRequest, MessageHub posting InitializeHubRequest /
-                // ShutdownRequest to itself, LayoutAreaHost firing internal
-                // bookkeeping, etc. Those have always been "the hub
-                // self-posting" — making them fail-closed broke the layout-
-                // area sync chain (blank screens / endless spinners on prod)
-                // because every SetCurrentRequest started getting rejected.
-                // For those hubs, restore hub-self-impersonation as the
-                // fallback identity. Tests pin both branches.
-                if (syncPipeline.Hub.Address.Type == AddressExtensions.MeshType)
+                // User directive (verbatim): "we should NEVER write something
+                // as hub". Legitimate hub-internal flows (SyncStream's
+                // SetCurrentRequest, framework-lifecycle messages) MUST opt in
+                // explicitly via PostOptions.ImpersonateAsHub /
+                // AccessService.ImpersonateAsHub / ImpersonateAsSystem at the
+                // callsite — see JsonSynchronizationStream.cs for the proven
+                // pattern. Framework-lifecycle messages are still exempted
+                // from the warning since they carry no security-relevant
+                // payload and routinely have no principal.
+                if (!IsFrameworkLifecycleMessage(d.Message))
                 {
-                    // mesh hubs: fabricating hub-address identity would let a bare
-                    // "mesh/{guid}" principal match AccessAssignments — deny silently.
-                    // Stays fail-closed; intentional system writes from the mesh hub
-                    // must wrap with AccessService.ImpersonateAsHub / ImpersonateAsSystem.
-                    //
-                    // Framework lifecycle messages the hub posts to itself
-                    // (InitializeHubRequest, HeartBeatEvent, ShutdownRequest,
-                    // DisposeRequest, SubscribeRequest) carry no security-relevant
-                    // payload — gate the warning on application messages only so
-                    // mesh-hub startup doesn't print warnings the developer has
-                    // no way to act on.
-                    if (!IsFrameworkLifecycleMessage(d.Message))
-                    {
-                        logger?.LogWarning(
-                            "PostPipeline: hub={Hub}, message={MessageType} posted with no AccessContext " +
-                            "(no Context, no CircuitContext) — leaving AccessContext null so downstream " +
-                            "fails closed. Wrap intentional system writes with AccessService.ImpersonateAsHub.",
-                            syncPipeline.Hub.Address,
-                            d.Message?.GetType().Name ?? "(null)");
-                    }
-                }
-                else
-                {
-                    // Every other hub kind (sync/, portal/, apitoken/, activity/, per-node, …)
-                    // IS the legitimate originator of its own internal flows. Stamp hub-self
-                    // impersonation so the message has a non-null principal — gives the hub
-                    // Read access on the data the framework streams into it (workspace
-                    // synchronization, gate-opener, internal bookkeeping). Real cross-hub
-                    // data access still goes through the source hub's AccessContext check.
-                    var hubAddress = syncPipeline.Hub.Address;
-                    d = d.SetAccessContext(new AccessContext
-                    {
-                        ObjectId = hubAddress.ToFullString(),
-                        Name = hubAddress.ToString()
-                    });
+                    logger?.LogWarning(
+                        "PostPipeline: hub={Hub}, message={MessageType} posted with no AccessContext " +
+                        "(no Context, no CircuitContext) — leaving AccessContext null so downstream " +
+                        "fails closed. Wrap intentional hub-internal writes with " +
+                        "PostOptions.ImpersonateAsHub / AccessService.ImpersonateAsSystem.",
+                        syncPipeline.Hub.Address,
+                        d.Message?.GetType().Name ?? "(null)");
                 }
             }
             // Per-message; gate on Debug so the 5 arg evaluations + boxing are

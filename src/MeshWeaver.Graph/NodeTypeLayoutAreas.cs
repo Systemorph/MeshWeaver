@@ -1426,6 +1426,21 @@ public static class NodeTypeLayoutAreas
         var hubPath = hubAddress.ToString();
         var status = def.CompilationStatus;
         var isDirty = def.IsDirty;
+        // 🚨 2026-05-21 — kickoff was deleted, so a never-compiled NodeType
+        // no longer auto-compiles on activation. The Compile button is the
+        // sole entry point; render the "Never compiled" state so the user
+        // has a visible affordance to trigger the first build. "Never
+        // compiled" = no assembly metadata persisted (no AssemblyPath /
+        // AssemblyCollection). We deliberately do NOT compare framework
+        // versions at the layout layer (that's HasUsableBuild's concern in
+        // NodeTypeCompilationHelpers); if a build exists at all, treat the
+        // state as "Up to date" until status flips Dirty/Error/Compiling.
+        var hasBuild =
+            !string.IsNullOrEmpty(def.LatestAssemblyCollection)
+            && !string.IsNullOrEmpty(def.LatestAssemblyPath);
+        var neverCompiled = !hasBuild
+            && status != CompilationStatus.Compiling
+            && status != CompilationStatus.Error;
 
         var panel = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
@@ -1448,6 +1463,13 @@ public static class NodeTypeLayoutAreas
             chip = Controls.Body("Compilation failed").WithStyle("font-weight: 600; color: var(--error-foreground);");
             compileButtonLabel = "Retry compile";
             panelStyleSuffix = "background: var(--error-fill-rest); border-color: var(--error-stroke-rest);";
+        }
+        else if (neverCompiled)
+        {
+            chip = Controls.Body("Never compiled — click Compile to build")
+                .WithStyle("font-weight: 600; color: var(--warning-foreground);");
+            compileButtonLabel = "Compile";
+            panelStyleSuffix = "background: var(--warning-fill-rest); border-color: var(--warning-stroke-rest);";
         }
         else if (isDirty)
         {

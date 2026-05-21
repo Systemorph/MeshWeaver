@@ -138,6 +138,18 @@ Canonical references:
 - [CqrsAndContentAccess.md](src/MeshWeaver.Documentation/Data/Architecture/CqrsAndContentAccess.md) — read semantics + why `QueryAsync` lags.
 - [DataBinding.md](src/MeshWeaver.Documentation/Data/GUI/DataBinding.md) — the Blazor-side mirror of the same pattern.
 
+## 🚨 Never write as hub — AccessContext propagation
+
+**Every framework write primitive (`meshService.CreateNode/UpdateNode/DeleteNode/CopyNode`, `MeshNodeStreamHandle.Update`, `IMeshNodeStreamCache.Update`) automatically carries the caller's `AccessContext` through `.Subscribe()` boundaries.** Callers keep writing the natural `.Subscribe(...)` shape; the framework guarantees the operation runs under the calling user's identity even when the emission lands on another thread.
+
+If a write must run as system/hub (legitimate infrastructure — cache hydration, SyncStream heartbeats), wrap explicitly:
+- `using (accessService.ImpersonateAsSystem()) { … }` — well-known `"system-security"` identity; `Permission.All` granted unconditionally.
+- `using (accessService.ImpersonateAsHub(hub)) { … }` or `o.ImpersonateAsHub(hub.Address)` on the post — stamps the hub's address as principal.
+
+PostPipeline fails closed when no context is set. The "silently stamp hub-self as principal" fallback was deleted 2026-05-21 — it masked the prod EventCalendar bug. Application code that needs to write MUST have a real user identity on `AccessService.Context` (set by MessageHub on every handler invocation from `delivery.AccessContext`).
+
+Canonical reference: [AccessContextPropagation.md](src/MeshWeaver.Documentation/Data/Architecture/AccessContextPropagation.md).
+
 ## 🚨 Reactive Pattern — Nothing Async Ever
 
 **No `await`, no `async`, no `Task<T>` in hub-reachable code.** All hub code is `IObservable<T>` end-to-end.

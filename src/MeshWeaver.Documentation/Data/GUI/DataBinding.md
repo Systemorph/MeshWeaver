@@ -58,6 +58,15 @@ The canonical Blazor view template — all reads go through the process-wide
 subscription; writes through `cache.Update(path, fn)` are visible to every
 reader.
 
+> **Access-checked.** `cache.GetStream(path)` is gated by the current user's
+> effective Read permission on the node — the cache asks the owning hub via
+> `GetPermissionRequest`, caches the answer per `(path, userId)` for 30 s,
+> and terminates the returned observable with
+> `UnauthorizedAccessException` if Read is not granted. Subscribers should
+> handle that error (toast, navigate to AccessDenied, render empty state)
+> rather than letting it propagate. See
+> [AccessContextPropagation.md](../Architecture/AccessContextPropagation.md).
+
 ```csharp
 public partial class MyView : BlazorView<MyControl, MyView>
 {

@@ -26,13 +26,16 @@ public static class AccessControlPipeline
     /// <summary>
     /// Adds the access control pipeline step to a per-node hub. Checks
     /// <see cref="RequiresPermissionAttribute"/> on incoming messages and rejects
-    /// unauthorized deliveries via <see cref="DeliveryFailure"/>.
-    /// (The <see cref="GetPermissionRequest"/> handler is registered on the mesh
-    /// hub itself by <see cref="SecurityServiceExtensions.AddRowLevelSecurity"/>
-    /// — see <see cref="HandleGetPermission"/>.)
+    /// unauthorized deliveries via <see cref="DeliveryFailure"/>. Also wires up
+    /// the <see cref="GetPermissionRequest"/> handler so every per-node hub
+    /// answers "what permissions does the caller have on this path?" via the
+    /// canonical message-bus path — this is what <see cref="MeshNodeStreamCache"/>
+    /// uses to gate <see cref="MeshNodeStreamCache.GetStream"/> per user.
     /// </summary>
     public static MessageHubConfiguration AddAccessControlPipeline(this MessageHubConfiguration config)
-        => config.AddDeliveryPipeline(pipeline =>
+        => config
+        .WithHandler<GetPermissionRequest>(HandleGetPermission)
+        .AddDeliveryPipeline(pipeline =>
         {
             var hub = pipeline.Hub;
             // Hub-level permission rules (e.g., WithPublicRead) read from the

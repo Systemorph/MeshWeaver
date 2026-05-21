@@ -306,6 +306,26 @@ If you find yourself reading `MeshNode.Content` out of a one-shot
 wrong layer. Wrap the query in `workspace.GetQuery` and subscribe — the
 recompile / re-render fires automatically when the underlying nodes change.
 
+## `GetStream` is access-checked
+
+`workspace.GetMeshNodeStream(path)` (server-side) and
+`IMeshNodeStreamCache.GetStream(path)` (cache-side, the canonical Blazor read
+path) both gate on the **caller's** effective Read permission. The cache
+implementation posts a `GetPermissionRequest` to the owning node hub on first
+read, caches the `Permission` flags per `(path, userId)` for 30 seconds, and
+returns an observable that fails with `UnauthorizedAccessException` when Read
+is not granted. The shared upstream subscription stays system-owned (one
+handle per path, opened under `ImpersonateAsSystem` — infrastructure-side);
+per-user enforcement happens at the subscriber boundary.
+
+Revocation propagates within the TTL window. We do not invalidate the
+permission cache reactively. Subscribers can keep listening past a
+revocation event for up to 30 s before the next `GetStream` issues a fresh
+probe and surfaces the denial.
+
+Full propagation model (capture-at-call, restore-at-emission across Subscribe
+boundaries): [AccessContextPropagation.md](AccessContextPropagation.md).
+
 ## Where scope walks live
 
 `scope:children / scope:descendants / scope:subtree / scope:hierarchy /

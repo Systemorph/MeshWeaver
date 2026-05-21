@@ -6,31 +6,35 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Fixture;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Messaging.Hub.Test;
 
 /// <summary>
 /// Pins the PostPipeline behaviour for messages posted with no ambient
-/// <c>AccessService</c> context — i.e., framework-internal flows like
+/// <see cref="AccessService"/> context — i.e., framework-internal flows like
 /// <c>SynchronizationStream.OnNext → SetCurrentRequest</c>,
 /// <c>MessageHub</c> posting <c>InitializeHubRequest</c>/<c>ShutdownRequest</c>
 /// to itself, and similar plumbing.
 ///
-/// <para><b>Background.</b> An earlier change (commit <c>08a9a27c1</c>) made
-/// PostPipeline fail-closed when no user identity was present. The intent
-/// was right for the <em>mesh hub</em> — it routes for everyone, so stamping
-/// <c>mesh/{guid}</c> as a fake principal would silently match the wrong
-/// AccessAssignments. But the same fail-closed gate ALSO triggered on every
-/// non-mesh hub's legitimate self-posts (sync/, portal/, apitoken/, …). The
-/// SyncStream's <c>SetCurrentRequest</c>, fired on every layout-area state
-/// push, started arriving with <c>AccessContext = null</c> → downstream
-/// rejected them → blank screens / endless spinners on prod.</para>
+/// <para><b>Background (2026-05-21).</b> The original prod hot spot was
+/// AccessControl denying compile-activity creates with
+/// <c>"Access denied: user 'sync/...' lacks Create permission"</c>. Root
+/// cause: when a Subscribe callback fired on a thread with no ambient
+/// AccessContext, the PostPipeline silently stamped the hub's own address
+/// as principal — that address doesn't match any AccessAssignment, so
+/// AccessControl denied. The fallback masked a real bug. The user directive:
+/// "we should NEVER write something as hub". The fallback was deleted; ALL
+/// hub kinds now fail-closed when no context is set. Legitimate hub-internal
+/// flows must opt in explicitly via <see cref="PostOptions.ImpersonateAsHub"/>
+/// / <see cref="AccessService.ImpersonateAsSystem"/>. Framework-lifecycle
+/// messages (Initialize/Heartbeat/Shutdown/Dispose/Subscribe) stay exempt
+/// from the warning because they carry no security-relevant payload.</para>
 ///
-/// <para><b>Fix pinned here.</b> PostPipeline keeps fail-closed for the
-/// mesh hub specifically, and falls back to hub-self-impersonation for every
-/// other hub kind. Two tests, one per branch, both routed via the regular
-/// HubTestBase fixture so they exercise the real PostPipeline.</para>
+/// <para>Four tests below pin the new behaviour: sub-hub fails closed, mesh
+/// hub fails closed (unchanged), explicit ImpersonateAsSystem propagates,
+/// explicit ImpersonateAsHub propagates.</para>
 /// </summary>
 public class PostPipelineAccessContextTest(ITestOutputHelper output) : HubTestBase(output)
 {
@@ -61,16 +65,18 @@ public class PostPipelineAccessContextTest(ITestOutputHelper output) : HubTestBa
 
     /// <summary>
     /// A non-mesh hub (the test client at <c>client/1</c>) posts WITHOUT
-    /// any user context set. Expectation: PostPipeline auto-impersonates the
-    /// hub itself, so the receiver sees a non-null AccessContext whose
-    /// ObjectId equals the sending hub's full-string address.
+    /// any user context set. After the 2026-05-21 cleanup, expectation:
+    /// PostPipeline fails closed — the receiver sees a NULL AccessContext.
     ///
-    /// Without the fix this test would observe <c>HasAccessContext == false</c>
-    /// (the broken prod behaviour: SyncStream-style internal posts arriving
-    /// with null context).
+    /// <para>This inverts the previous assertion: hub-self-impersonation
+    /// was deleted because it silently masked the prod EventCalendar bug
+    /// (background activations writing as <c>sync/...</c> / <c>activity/...</c>
+    /// → denied because those addresses match no AccessAssignment). Legitimate
+    /// hub-internal flows now MUST opt in explicitly — see the two
+    /// <c>ImpersonateAs...</c> tests below.</para>
     /// </summary>
     [Fact]
-    public async Task SubHub_with_no_user_context_falls_back_to_self_impersonation()
+    public async Task SubHub_with_no_user_context_leaves_context_null_and_fails_closed()
     {
         var client = GetClient();
 
@@ -79,17 +85,13 @@ public class PostPipelineAccessContextTest(ITestOutputHelper output) : HubTestBa
             .FirstAsync()
             .ToTask(new CancellationTokenSource(10.Seconds()).Token);
 
-        response.Message.HasAccessContext.Should().BeTrue(
-            because: "non-mesh hubs are legitimate self-posters for their internal flows " +
-                     "(SyncStream → SetCurrentRequest, MessageHub → ShutdownRequest, …) and " +
-                     "the PostPipeline must stamp the hub's own address as the identity when " +
-                     "no user context is ambient — anything else turns into the prod cascade " +
-                     "where SetCurrentRequest arrives with null context and downstream rejects.");
-        response.Message.ObjectId.Should().NotBeNullOrEmpty();
-        response.Message.ObjectId.Should().Contain("client",
-            because: "the post originated on the client hub, so its self-impersonation should " +
-                     "stamp the client's address — anything else means routing or PostPipeline " +
-                     "stamped the wrong hub's identity.");
+        response.Message.HasAccessContext.Should().BeFalse(
+            because: "after the 2026-05-21 cleanup the PostPipeline fails closed when no " +
+                     "ambient context is set — for ALL hub kinds, not just mesh. Legitimate " +
+                     "hub-internal flows must wrap with PostOptions.ImpersonateAsHub or " +
+                     "AccessService.ImpersonateAsSystem at the callsite. Silently stamping " +
+                     "the hub address was the silent-mask the prod EventCalendar bug " +
+                     "depended on.");
     }
 
     /// <summary>
@@ -126,5 +128,64 @@ public class PostPipelineAccessContextTest(ITestOutputHelper output) : HubTestBa
                          "when posting — that's the exact silent-mismatch the fail-closed " +
                          "branch was added to prevent (commit 08a9a27c1).");
         }
+    }
+
+    /// <summary>
+    /// An explicit <see cref="AccessService.ImpersonateAsSystem"/> scope
+    /// propagates the well-known <c>"system-security"</c> identity through
+    /// PostPipeline. This is the canonical pattern for legitimate
+    /// infrastructure writes that must bypass RLS (e.g. system bootstrap
+    /// of stream caches).
+    /// </summary>
+    [Fact]
+    public async Task ImpersonateAsSystem_scope_propagates_through_Post()
+    {
+        var client = GetClient();
+        var access = client.ServiceProvider.GetRequiredService<AccessService>();
+
+        IMessageDelivery<CaptureContextResponse> response;
+        using (access.ImpersonateAsSystem())
+        {
+            response = await client
+                .Observe(new CaptureContextRequest(), o => o.WithTarget(CreateHostAddress()))
+                .FirstAsync()
+                .ToTask(new CancellationTokenSource(10.Seconds()).Token);
+        }
+
+        response.Message.HasAccessContext.Should().BeTrue(
+            because: "ImpersonateAsSystem sets a real AccessContext on AsyncLocal; " +
+                     "PostPipeline reads it and stamps it on the outbound delivery.");
+        response.Message.ObjectId.Should().Be("system-security",
+            because: "ImpersonateAsSystem uses the well-known system identity that " +
+                     "SecurityService grants Permission.All unconditionally.");
+    }
+
+    /// <summary>
+    /// An explicit <see cref="AccessService.ImpersonateAsHub"/> scope
+    /// propagates the hub's own address as principal — the SyncStream
+    /// heartbeat pattern (JsonSynchronizationStream.cs:218, 292, 327).
+    /// </summary>
+    [Fact]
+    public async Task ImpersonateAsHub_scope_propagates_through_Post()
+    {
+        var client = GetClient();
+        var access = client.ServiceProvider.GetRequiredService<AccessService>();
+
+        IMessageDelivery<CaptureContextResponse> response;
+        using (access.ImpersonateAsHub(client))
+        {
+            response = await client
+                .Observe(new CaptureContextRequest(), o => o.WithTarget(CreateHostAddress()))
+                .FirstAsync()
+                .ToTask(new CancellationTokenSource(10.Seconds()).Token);
+        }
+
+        response.Message.HasAccessContext.Should().BeTrue(
+            because: "ImpersonateAsHub sets a real AccessContext on AsyncLocal; " +
+                     "PostPipeline reads it and stamps it on the outbound delivery.");
+        response.Message.ObjectId.Should().Be(client.Address.ToFullString(),
+            because: "ImpersonateAsHub stamps the hub's full address as principal — " +
+                     "this is the legitimate hub-self-post identity, opted in at the " +
+                     "callsite rather than the silent PostPipeline fallback.");
     }
 }

@@ -92,84 +92,38 @@ internal static class NodeTypeCompilationHelpers
         // (<see cref="HasUsableBuild"/>); everything else — null / Unknown /
         // Compiling (interrupted) / Error / Ok-but-assembly-gone — recompiles.
         //
-        // The AssemblyLocation check is sound precisely because it is gated on
-        // status == Ok. A never-compiled NodeType has a null status: enrichment
-        // stamps MeshNode.AssemblyLocation with the FRAMEWORK assembly hosting
-        // the NodeType meta-type (e.g. MeshWeaver.Graph.dll), but it never sets
-        // status to Ok — so a framework-dll AssemblyLocation can never falsely
-        // satisfy HasUsableBuild.
+        // 🚨 Kickoff deleted 2026-05-21. Previously this block subscribed to the
+        // NodeType's own MeshNode stream and, on its FIRST emission, flipped
+        // CompilationStatus = Pending whenever HasUsableBuild was false — i.e.
+        // every grain activation against a never-compiled / freshly-deployed
+        // dynamic NodeType auto-triggered a recompile. Prod 2026-05-21 trace:
+        //   "AccessControlPipeline: Access denied: user 'sync/...' lacks
+        //    Create permission on 'Systemorph/EventCalendar'"
+        //   "Compile watcher: activity start emitted EMPTY for
+        //    Systemorph/EventCalendar — running compile inline (deadlock-
+        //    fallback)"
+        // The activation fan-out (synced queries, NodeType enrichment,
+        // background grain hydration) carried whichever AccessContext happened
+        // to be on the inbound delivery — typically NOT a user with Create on
+        // the partition. The kickoff therefore drove an endless "try to create
+        // activity → denied → inline fallback → next activation reruns" loop
+        // visible in App Insights as a steady stream of "lacks Create" denials.
+        //
+        // Compile is now an EXPLICITLY user-triggered operation:
+        //   - User clicks the Compile button in NodeType's Overview panel
+        //     (NodeTypeLayoutAreas.BuildCompileStatusPanel) → the click flips
+        //     RequestedReleaseAt on the NodeType's own stream.
+        //   - InstallReleaseRequestWatcher observes the flip → promotes it to
+        //     CompilationStatus = Pending under the USER's AccessContext.
+        //   - The watcher block below picks up Pending and dispatches the
+        //     activity through NodeTypeCompilationActivity.Start — the
+        //     activity CreateNode runs with the user's identity, so
+        //     AccessControl rejects without Edit (intended) or accepts and
+        //     produces a Release attributed to the user.
+        // The IsDirty computed property on NodeTypeDefinition stays as
+        // informational state — UI uses it to enable the Compile button, but
+        // it NEVER auto-fires a recompile. Doc: AccessContextPropagation.md.
         var ownStream = workspace.GetMeshNodeStream();
-        var kicked = 0;
-        var kickoffSub = ownStream
-            .Where(node => node?.Content is NodeTypeDefinition)
-            .Take(1)
-            .Subscribe(
-                node =>
-                {
-                    if (node?.Content is not NodeTypeDefinition def) return;
-                    // Truly-static NodeTypes (registered via IStaticNodeProvider
-                    // with their HubConfiguration delegate set directly) carry a
-                    // NodeTypeDefinition for metadata but have NO source code to
-                    // compile — the framework ships their assembly. Skip kickoff
-                    // only when the in-memory HubConfiguration delegate is set
-                    // AND the definition has no source code (Configuration /
-                    // HubConfiguration / Sources all empty). A dynamic NodeType
-                    // whose source string compiled into a delegate at registration
-                    // STILL needs a real assembly emitted to the IAssemblyStore so
-                    // cross-silo activation can resolve it — only the local hub
-                    // has the delegate; remote silos see HubConfiguration=null
-                    // after serialisation and must reflect on the stored DLL.
-                    var hasSource =
-                        !string.IsNullOrWhiteSpace(def.Configuration)
-                        || !string.IsNullOrWhiteSpace(def.HubConfiguration)
-                        || (def.Sources is { Count: > 0 });
-                    if (node.HubConfiguration is not null && !hasSource)
-                    {
-                        logger?.LogInformation(
-                            "Compile kickoff: skip {HubPath} — static NodeType (HubConfiguration set, no source)",
-                            hub.Address.Path);
-                        return;
-                    }
-                    if (HasUsableBuild(node, def))
-                    {
-                        logger?.LogInformation(
-                            "Compile kickoff: skip {HubPath} — assembly reusable (status={Status}, {Collection}/{Path}, framework={FrameworkVersion})",
-                            hub.Address.Path, def.CompilationStatus,
-                            def.LatestAssemblyCollection, def.LatestAssemblyPath,
-                            def.CompiledFrameworkVersion);
-                        return;
-                    }
-                    if (System.Threading.Interlocked.CompareExchange(ref kicked, 1, 0) != 0) return;
-
-                    logger?.LogInformation(
-                        "Compile kickoff: flipping Pending for {HubPath} (status={Status}, assemblyPresent={Present})",
-                        hub.Address.Path, def.CompilationStatus,
-                        !string.IsNullOrEmpty(def.LatestAssemblyPath));
-                    // Re-kick if the persisted Status is Compiling. Reaching the
-                    // kickoff at all means the hub freshly activated — any
-                    // "in-flight" compile from a prior process instance is dead.
-                    // Without the re-kick, a previous crash that left Compiling
-                    // baked into JSON traps EVERY future activation: kickoff's
-                    // guard sees Compiling, returns curr unchanged, no Pending
-                    // emission, watcher never fires, slow path times out at
-                    // SlowPathTimeout. Pending is still gated (idempotent).
-                    workspace.GetMeshNodeStream().Update(curr =>
-                        curr.Content is NodeTypeDefinition d
-                            && !HasUsableBuild(curr, d)
-                            && d.CompilationStatus != CompilationStatus.Pending
-                            ? curr with
-                            {
-                                Content = d with { CompilationStatus = CompilationStatus.Pending }
-                            }
-                            : curr)
-                        .Subscribe(
-                            _ => { },
-                            ex => logger?.LogWarning(ex,
-                                "Compile kickoff: failed to flip Pending for {HubPath}",
-                                hub.Address.Path));
-                },
-                ex => logger?.LogWarning(ex,
-                    "Compile kickoff: own-stream faulted for {HubPath}", hub.Address.Path));
 
         var hubPath = hub.Address.Path;
         // Single-flight gate: the watcher must NOT dispatch two activities for
@@ -343,7 +297,7 @@ internal static class NodeTypeCompilationHelpers
                 ex => logger?.LogWarning(ex,
                     "Compile watcher faulted for {HubPath}", hub.Address.Path));
 
-        return new CompositeDisposable(kickoffSub, watcherSub, resetSub);
+        return new CompositeDisposable(watcherSub, resetSub);
     }
 
     /// <summary>
@@ -397,8 +351,21 @@ internal static class NodeTypeCompilationHelpers
         // when the source path list changes; final outer dispose tears down
         // everything (the returned IDisposable is registered for hub
         // disposal in MeshDataSource).
+        //
+        // 🚨 Static-only NodeTypes (HubConfiguration delegate set in-process
+        // AND no source code on the definition) ship their assembly with the
+        // framework — there is no source set to watch and nothing to
+        // recompile. Without this gate every per-node hub activation
+        // (including non-NodeType nodes like Threads / Code / Markdown that
+        // get filtered by the Where below) opens an upstream subscription
+        // that walks every partition's query provider; the network of
+        // SubscribeRequests that DefaultSources expands into
+        // (`nodeType:Code namespace:{hubPath}/Source scope:subtree`) was
+        // the dominant background traffic in prod (2026-05-21). Mirrors the
+        // skip branch in InstallCompileWatcher's kickoff at line ~122.
         return ownStream
-            .Where(node => node?.Content is NodeTypeDefinition)
+            .Where(node => node?.Content is NodeTypeDefinition def
+                && !IsStaticOnlyNodeType(node, def))
             .DistinctUntilChanged(node =>
             {
                 var d = (NodeTypeDefinition)node!.Content!;
@@ -489,6 +456,26 @@ internal static class NodeTypeCompilationHelpers
                 ex => logger?.LogWarning(ex,
                     "SourcesWatcher: per-path stream for {HubPath} faulted", hubPath));
     }
+
+    /// <summary>
+    /// True when a NodeType definition is "static-only" — the in-process
+    /// <see cref="MeshNode.HubConfiguration"/> delegate is set AND the
+    /// persisted definition carries no source code at all
+    /// (<see cref="NodeTypeDefinition.Configuration"/>,
+    /// <see cref="NodeTypeDefinition.HubConfiguration"/>,
+    /// <see cref="NodeTypeDefinition.Sources"/> all empty). Such NodeTypes
+    /// ship their assembly with the framework and have nothing to compile or
+    /// watch.
+    ///
+    /// <para>Lifted from the kickoff branch in <see cref="InstallCompileWatcher"/>
+    /// so <see cref="InstallSourcesWatcher"/> can share the same condition —
+    /// keeps the "what counts as static?" question in one place.</para>
+    /// </summary>
+    private static bool IsStaticOnlyNodeType(MeshNode node, NodeTypeDefinition def) =>
+        node.HubConfiguration is not null
+        && string.IsNullOrWhiteSpace(def.Configuration)
+        && string.IsNullOrWhiteSpace(def.HubConfiguration)
+        && (def.Sources is null || def.Sources.Count == 0);
 
     /// <summary>
     /// Order-insensitive equality for two source-version dictionaries.
