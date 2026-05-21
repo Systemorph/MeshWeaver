@@ -413,21 +413,26 @@ internal class NavigationService : INavigationService
     /// on hub round-trips (100% deadlock; see Doc/Architecture/AsynchronousCalls.md).
     /// </summary>
     private IObservable<MeshNode?> LoadNodeWithPreRenderedHtml(AddressResolution resolution) =>
-        // Navigation startup uses IMeshQueryCore.ObserveQuery — infrastructure
-        // surface, no ISecurityService dep, no hub round-trip, no awaited Rx
-        // bridge. hub.GetMeshNode is the CQRS-correct primitive for application
-        // code, but it's an extension method over IMessageHub which NSubstitute
-        // can't proxy; IMeshQueryCore is a plain interface and is mockable.
-        // Staleness doesn't matter here — we read MainNode + PreRenderedHtml at
-        // navigation startup, not for CQRS-sensitive writes.
-        _queryCore.Value
-            .ObserveQuery<MeshNode>(
-                // select: projects to only the routing-relevant fields — content
-                // is loaded only if we need to pre-render markdown below.
-                MeshQueryRequest.FromQuery(
-                    $"path:{resolution.Prefix} select:path,name,mainNode,nodeType,icon,preRenderedHtml,content"),
-                _hub.JsonSerializerOptions)
-            .Select(change => change.Items.Count > 0 ? change.Items[0] : null)
+        // 🚨 2026-05-21 — use the MeshNode that PathResolutionService already
+        // resolved (under System bypass) instead of issuing a second `path:X`
+        // query that runs as the user. The second query was the prod thread-
+        // URL hang: PathResolutionService bypassed access control to find the
+        // satellite path, returned the node, then this query re-ran as the
+        // user — whose identity was lost in the Blazor → Mesh chain, so the
+        // query saw Anonymous, returned empty, and the page reported
+        // "NotFound" even though the resolution had already succeeded.
+        // The resolution.Node carries the full MeshNode (PathResolutionService
+        // uses a select-less query); markdown pre-render below works against
+        // it directly. Falls back to a query only when Node is null (partition-
+        // root virtual matches where no concrete MeshNode exists).
+        (resolution.Node is not null
+            ? Observable.Return<MeshNode?>(resolution.Node)
+            : _queryCore.Value
+                .ObserveQuery<MeshNode>(
+                    MeshQueryRequest.FromQuery(
+                        $"path:{resolution.Prefix} select:path,name,mainNode,nodeType,icon,preRenderedHtml,content"),
+                    _hub.JsonSerializerOptions)
+                .Select(change => change.Items.Count > 0 ? change.Items[0] : null))
             .Take(1)
             // Hard deadline: the query MUST emit (even a null) within 15s.
             // Without this, an access-denied or down-stream-hung response leaves
