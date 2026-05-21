@@ -67,7 +67,7 @@ internal sealed class MeshService(
                         _ => new InvalidOperationException(r.Error ?? "Node creation failed")
                     });
                 });
-        });
+        }).CarryAccessContext(hub.ServiceProvider);
 
     public IObservable<MeshNode> UpdateNode(MeshNode node)
         => Observable.Defer(() =>
@@ -88,7 +88,7 @@ internal sealed class MeshService(
                         _ => new InvalidOperationException(r.Error ?? "Node update failed")
                     });
                 });
-        });
+        }).CarryAccessContext(hub.ServiceProvider);
 
     public IObservable<bool> DeleteNode(string path)
         => Observable.Defer(() =>
@@ -110,7 +110,7 @@ internal sealed class MeshService(
                         _ => new InvalidOperationException(r.Error ?? "Node deletion failed")
                     });
                 });
-        });
+        }).CarryAccessContext(hub.ServiceProvider);
 
     public IObservable<MeshNode> CreateTransient(MeshNode node)
     {
@@ -158,7 +158,7 @@ internal sealed class MeshService(
                         _ => new InvalidOperationException(r.Error ?? "Node copy failed")
                     });
                 });
-        });
+        }).CarryAccessContext(hub.ServiceProvider);
 
     // === Query (delegated to MeshQuery) ===
 

@@ -176,6 +176,63 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     /// <summary>
+    /// Pins the prod 2026-05-21 thread-loading invariant: a thread's chat
+    /// execution must complete under the user's <see cref="AccessContext"/>
+    /// — every message MeshNode the chat flow creates must carry the user's
+    /// identity in <c>CreatedBy</c>, NOT a hub-self-impersonated address
+    /// (<c>sync/...</c>, <c>activity/...</c>, <c>node/...</c>). Pin against the
+    /// cross-cutting <see cref="MeshWeaver.Messaging.AccessContextCaptureExtensions.CarryAccessContext"/>
+    /// wrap on every framework write primitive.
+    ///
+    /// <para>Without the wrap, the per-message-cell <c>CreateNode</c> in
+    /// <c>ChatClientAgentFactory.ExecuteAsync</c>'s Subscribe callbacks would
+    /// run on a thread where AsyncLocal AccessContext is wiped → PostPipeline
+    /// (after the 2026-05-21 hub-self-impersonation deletion) would fail closed
+    /// → the chat flow would deadlock at the first persisted write. This test
+    /// is the canonical pin against that regression.</para>
+    /// </summary>
+    [Fact]
+    public async Task SubmitMessage_PersistsMessageNodes_WithUserIdentity()
+    {
+        var ct = new CancellationTokenSource(10.Seconds()).Token;
+        var client = GetClient();
+
+        var threadPath = await CreateEmptyThreadAsync(client, "AccessContext rides", ct);
+        var responseMsgId = await ChatFlow.SubmitAndWaitAsync(client, threadPath,
+            "Identity probe", contextPath: ContextPath, ct: ct);
+
+        var thread = await ChatFlow.ReadThreadAsync(client, threadPath,
+            t => t.Messages.Count >= 2, ct: ct);
+        thread.Messages.Should().HaveCount(2,
+            "user input + assistant response must both land");
+
+        // Drill into the underlying MeshNode rows via the same cache that the
+        // GUI uses — the .CreatedBy stamping is what AccessControl would have
+        // seen at the moment of write.
+        var workspace = client.GetWorkspace();
+        foreach (var msgId in thread.Messages)
+        {
+            var msgPath = $"{threadPath}/{msgId}";
+            var node = await workspace.GetMeshNodeStream(msgPath)
+                .Take(1).Timeout(5.Seconds()).ToTask(ct);
+            Output.WriteLine($"  - {msgPath} CreatedBy={node.CreatedBy ?? "(null)"}");
+            // The critical assertion. Pre-2026-05-21, message nodes were stamped
+            // with the chat-execution hub's own address (something starting with
+            // "node/", "activity/", or "sync/"). Post-fix, every CreateNode runs
+            // under the actual user's AccessContext — Roland (the canonical
+            // test-base user from AddSampleUsers).
+            node.CreatedBy.Should().NotStartWith("node/",
+                $"message {msgPath} must not be written as a per-node hub identity");
+            node.CreatedBy.Should().NotStartWith("activity/",
+                $"message {msgPath} must not be written as an activity hub identity");
+            node.CreatedBy.Should().NotStartWith("sync/",
+                $"message {msgPath} must not be written as a Blazor sync hub identity");
+            node.CreatedBy.Should().NotStartWith("mesh/",
+                $"message {msgPath} must not be written as the mesh routing hub identity");
+        }
+    }
+
+    /// <summary>
     /// DataChangeRequest is a CLIENT primitive — not the canonical thread mutation
     /// path (the GUI uses <c>workspace.GetMeshNodeStream(path).Update(...)</c>) but
     /// it must still apply correctly when used directly. The thread is observed
