@@ -336,8 +336,17 @@ internal static class NodeTypeCompilationHelpers
             .Take(1)
             .Subscribe(node =>
             {
+                // Flip CompilationStatus directly to Pending. The watcher (above)
+                // observes the Pending transition and drives the actual compile.
+                // Crucially: do NOT touch RequestedReleaseAt. RequestedReleaseAt
+                // is the USER-DRIVEN release trigger (Compile button); a kickoff
+                // setting it would (1) misattribute the build to "user action"
+                // in audit logs, and (2) trip tests that assert
+                // `RequestedReleaseAt is null` after first-build (see
+                // CodeEditRecompileTest.PressingCompileButton_…). Kickoff is
+                // infrastructure — bypass the release trigger entirely.
                 logger?.LogDebug(
-                    "First-build kickoff: NodeType {HubPath} has CompilationStatus=null and no usable build — flipping RequestedReleaseAt",
+                    "First-build kickoff: NodeType {HubPath} has CompilationStatus=null and no usable build — flipping CompilationStatus=Pending",
                     hubPath);
                 var accessService = hub.ServiceProvider.GetService<AccessService>();
                 using var systemScope = accessService?.ImpersonateAsSystem();
@@ -352,8 +361,7 @@ internal static class NodeTypeCompilationHelpers
                     {
                         Content = def with
                         {
-                            RequestedReleaseAt = DateTimeOffset.UtcNow,
-                            RequestedReleaseForce = true,
+                            CompilationStatus = CompilationStatus.Pending,
                         }
                     };
                 }).Subscribe(_ => { },
