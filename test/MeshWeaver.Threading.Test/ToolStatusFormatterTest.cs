@@ -56,7 +56,18 @@ public class ToolStatusFormatterTest
     [Fact]
     public void DelegateToAgent_FormatsWithAgentName()
     {
+        // delegate_to_agent uses FormatDelegation which prepends the task summary
+        // when present — "task summary (Agent)". Falls back to "Delegating to
+        // Agent..." only when no task arg is supplied (see
+        // DelegateToAgent_NoTask_FallsBackToBareForm below).
         var call = MakeCall("delegate_to_agent", new() { ["agentName"] = "Researcher", ["task"] = "find info" });
+        ToolStatusFormatter.Format(call).Should().Be("find info (Researcher)");
+    }
+
+    [Fact]
+    public void DelegateToAgent_NoTask_FallsBackToBareForm()
+    {
+        var call = MakeCall("delegate_to_agent", new() { ["agentName"] = "Researcher" });
         ToolStatusFormatter.Format(call).Should().Be("Delegating to Researcher...");
     }
 

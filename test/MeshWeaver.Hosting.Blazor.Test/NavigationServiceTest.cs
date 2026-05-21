@@ -48,6 +48,37 @@ public class NavigationServiceTest
         _hubServiceProvider.GetService(typeof(ICreatableTypesProvider))
             .Returns(_creatableTypesProvider);
         _hubServiceProvider.GetService(typeof(IMeshQueryCore)).Returns(_meshQuery);
+
+        // Default stub for IMeshQueryCore.ObserveQuery — NavigationService now
+        // requires a non-null MeshNode to settle Context (commit 8a6f76b10:
+        // "null node emits NotFound immediately, never waits for timeout").
+        // Without this stub, every test's LoadNodeWithPreRenderedHtml gets an
+        // empty observable from the unconfigured mock, the 15s timeout
+        // eventually returns null, ProcessResolvedPath takes the null branch
+        // and sets Context=null. All 15 NavigationServiceTest cases hit the
+        // same path. Default to a minimal placeholder MeshNode that satisfies
+        // the LoadNodeWithPreRenderedHtml contract; individual tests override
+        // for their specific scenario.
+        _meshQuery
+            .ObserveQuery<MeshNode>(Arg.Any<MeshQueryRequest>(), Arg.Any<JsonSerializerOptions>())
+            .Returns(call =>
+            {
+                var req = call.Arg<MeshQueryRequest>();
+                // Extract the path:X portion of the query — the path is also
+                // the resolved Prefix the test set up via _pathResolver.
+                var query = req.Query ?? "";
+                var pathStart = query.IndexOf("path:", StringComparison.Ordinal);
+                var path = pathStart >= 0
+                    ? query[(pathStart + 5)..].Split(' ')[0]
+                    : "unknown";
+                var node = MeshNode.FromPath(path) with { Name = path, NodeType = "Markdown" };
+                return System.Reactive.Linq.Observable.Return(
+                    new QueryResultChange<MeshNode>
+                    {
+                        ChangeType = QueryChangeType.Initial,
+                        Items = [node]
+                    });
+            });
     }
 
     /// <summary>

@@ -79,16 +79,12 @@ public class LinkedInPullActionsTest(ITestOutputHelper output) : MonolithMeshTes
         // (assembly missing `LinkedInPullActions`) and `RenderAreaAsync`
         // times out activating against a broken assembly.
         //
-        // Gating on (Ok || Error) here is sufficient: a kickoff failure with
-        // no sources is the expected first state, and the trigger below will
-        // drive a fresh compile from Status=Error → Pending → Compiling → Ok.
-        await workspace.GetMeshNodeStream(NodeTypePath)
-            .Where(n => n.Content is NodeTypeDefinition d
-                && (d.CompilationStatus == CompilationStatus.Ok
-                    || d.CompilationStatus == CompilationStatus.Error))
-            .Take(1)
-            .Timeout(45.Seconds())
-            .ToTask(ct);
+        // The kickoff-driven auto-recompile-on-activation was deleted
+        // 2026-05-21 (prod EventCalendar regression). With no kickoff the
+        // NodeType created above sits in Status=null until the test
+        // explicitly drives a compile via RequestedReleaseAt below. No
+        // initial-state wait is needed — just plant the sources and
+        // trigger the watcher.
 
         await CreateCodeAsync("LinkedInProfile", LinkedInProfileSource, ct);
         await CreateCodeAsync("LinkedInPullActions", LinkedInPullActionsSource, ct);
