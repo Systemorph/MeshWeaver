@@ -239,6 +239,25 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                 "[UpdateRemote] BEGIN hub={Hub} target={Path}",
                 _workspace.Hub.Address, _path);
 
+            // 🚨 Capture AccessContext SYNCHRONOUSLY here, NOT inside the
+            // deferred initialSub.Subscribe callback below. The outer
+            // CarryAccessContext wrap (in Update) restores AsyncLocal on
+            // every emission of the OUTER observable, but it doesn't reach
+            // the inner Subscribe callback below — that callback fires when
+            // the remote stream's initial state arrives, often on a different
+            // thread (workspace emission scheduler) where AsyncLocal is null.
+            // Without this eager capture, the inner read at PatchDataRequest
+            // post time sees null Context and the patch goes out unattributed
+            // → "Access denied: user 'sync/...' lacks Update permission" with
+            // the hub's own address as the failing principal. Capture once
+            // here (Subscribe time = caller's thread, AsyncLocal valid because
+            // the outer CarryAccessContext just restored it) and close over
+            // it for the deferred callback.
+            var accessServiceAtEntry = _workspace.Hub.ServiceProvider
+                .GetService<MeshWeaver.Messaging.AccessService>();
+            var capturedContextAtEntry = accessServiceAtEntry?.Context
+                ?? accessServiceAtEntry?.CircuitContext;
+
             var remoteStream = _workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
                 new Address(_path!), new MeshNodeReference());
 
@@ -316,10 +335,15 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             // → mirror never sees an echo → caller hangs on the
                             // 10s post-update timeout. The PostPipeline warning
                             // "<msg> posted with no AccessContext" surfaces this.
-                            var accessService = _workspace.Hub.ServiceProvider
-                                .GetService<MeshWeaver.Messaging.AccessService>();
-                            var capturedContext = accessService?.Context
-                                ?? accessService?.CircuitContext;
+                            //
+                            // Use the eagerly-captured context from the Observable.Create
+                            // entry above — the AsyncLocal at THIS callback's
+                            // thread is unreliable (the initialSub callback can land
+                            // on the workspace emission scheduler with no context
+                            // flow). The captured value reflects the caller's
+                            // identity at the moment Update was invoked, which is
+                            // what we want stamped on the outbound patch.
+                            var capturedContext = capturedContextAtEntry;
                             var delivery = _workspace.Hub.Post(
                                 new PatchDataRequest(new MeshNodeReference(), new RawJson(patchJson)),
                                 o =>
