@@ -330,7 +330,17 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
         try
         {
-            Hub.Post(new SetCurrentRequest(value));
+            // 🚨 SetCurrentRequest is sync-stream infrastructure — it propagates
+            // state changes between hubs via the synchronization protocol. The
+            // OnNext typically fires from the Rx scheduler thread where
+            // AsyncLocal AccessContext is wiped, but the receiving side
+            // (StreamHandlers.HandleSetCurrent at SynchronizationStream.cs:496)
+            // doesn't gate on AccessControl — it's an in-protocol message, not
+            // a write request. Stamp hub-self so the post-2026-05-21
+            // PostPipeline doesn't warn + leave AccessContext null (which then
+            // spams the log on every layout-area state push). Hub-internal
+            // identity is correct for this lifecycle traffic.
+            Hub.Post(new SetCurrentRequest(value), o => o.ImpersonateAsHub(Hub.Address));
         }
         catch (Exception ex)
         {
