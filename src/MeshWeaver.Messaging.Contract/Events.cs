@@ -77,6 +77,7 @@ public enum ErrorType
 }
 
 
+[SystemMessage]
 public record DisposeRequest;
 public record PingRequest : IRequest<PingResponse>;
 

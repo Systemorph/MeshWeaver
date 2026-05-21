@@ -7,6 +7,7 @@ namespace MeshWeaver.Messaging;
 /// Emitters should stop sending after the first DeliveryFailure response to avoid
 /// periodic warning spam when the owner has no handler.
 /// </summary>
+[SystemMessage]
 public record HeartBeatEvent;
 
 /// <summary>

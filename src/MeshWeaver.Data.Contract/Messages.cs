@@ -105,6 +105,7 @@ public record SubscribeAck;
 /// <summary>
 /// Ids of the synchronization requests to be stopped (generated with request)
 /// </summary>
+[SystemMessage]
 public record UnsubscribeRequest(string StreamId) : StreamMessage(StreamId);
 
 /// <summary>
