@@ -65,22 +65,18 @@ public static class AccessContextCaptureExtensions
     {
         var access = services.GetService<AccessService>();
         if (access is null) return source;
-        // 🚨 2026-05-21 PM — capture must happen AT SUBSCRIBE TIME, NOT at chaining
-        // time. The original implementation captured here-and-now and the
-        // resulting cold observable carried that one frozen value to every
-        // subscriber — so a test that did:
-        //   await LoginWithToken(user1); await plugin.Update(...);
-        //   await LoginWithToken(user2); await plugin.Update(...);  // saw user1
-        // would see the SECOND Subscribe stamped with user1 because the chained
-        // CarryAccessContext sat between LoginWithToken(user1) and the first
-        // Subscribe and captured user1 at that exact moment. Moving capture
-        // inside Defer means each Subscribe re-reads the AsyncLocal/Circuit
-        // context at that instant — so the second Subscribe (after the
-        // user2 LoginWithToken) captures user2. Pins the McpAccessControlTests
-        // / NodeCreationAccessTest / UserAccessTests user-switch invariant.
+        // Capture at chaining (wrap) time on the caller's thread, where the
+        // AsyncLocal is correct. The framework primitive runs under THE
+        // CALLER'S identity, regardless of where Subscribe lands or what the
+        // ambient is at Subscribe time (which may be polluted by earlier
+        // wraps' SetContext side effects, see Concurrent_Wraps_Do_Not_Bleed).
+        // For chains built lazily under a user-switch pattern (e.g. plugin
+        // chains built once with no ambient, then subscribed multiple times
+        // under different users), the Subscribe-time fallback below kicks in.
+        var wrapCaptured = access.Context ?? access.CircuitContext;
         return Observable.Defer(() =>
         {
-            var captured = access.Context ?? access.CircuitContext;
+            var captured = wrapCaptured ?? access.Context ?? access.CircuitContext;
             if (captured is null) return source;
             access.SetContext(captured);
             return source.Do(_ => access.SetContext(captured));
@@ -98,9 +94,10 @@ public static class AccessContextCaptureExtensions
         this IObservable<T> source, AccessService? access)
     {
         if (access is null) return source;
+        var wrapCaptured = access.Context ?? access.CircuitContext;
         return Observable.Defer(() =>
         {
-            var captured = access.Context ?? access.CircuitContext;
+            var captured = wrapCaptured ?? access.Context ?? access.CircuitContext;
             if (captured is null) return source;
             access.SetContext(captured);
             return source.Do(_ => access.SetContext(captured));

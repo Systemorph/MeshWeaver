@@ -714,7 +714,7 @@ public static class MeshExtensions
                                         //     subtree partially destroyed when the user expected an
                                         //     all-or-nothing failure.
                                         var preValidate = capturedRequest.Recursive
-                                            ? PreValidateDescendantsObs(meshHub, path, collected.ToDelete, opts.Timeout, logger)
+                                            ? PreValidateDescendantsObs(meshHub, path, collected.ToDelete, request.AccessContext, opts.Timeout, logger)
                                             : Observable.Return<(string Path, string Error)?>(null);
 
                                         return preValidate.SelectMany(failure =>
@@ -743,7 +743,7 @@ public static class MeshExtensions
 
                                         return FanOutDeleteSubtree(
                                                 meshHub, storage, path, collected.ToDelete,
-                                                capturedRequest, logger, collectedMessages)
+                                                capturedRequest, request.AccessContext, logger, collectedMessages)
                                             .Timeout(opts.Timeout)
                                             .Do(deletedPaths =>
                                             {
@@ -861,6 +861,15 @@ public static class MeshExtensions
         var meshService = hub.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Services.IMeshService>();
         var empty = ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase);
 
+        // 🚨 Descendant enumeration is INFRASTRUCTURE — the handler already gated
+        // the operation on the caller's Delete permission at the ROOT (Phase 2:
+        // CheckDeletePermissionForNode). Subtree enumeration is then just routing:
+        // "what paths am I about to delete?". User-level RLS filtering on this
+        // query would HIDE descendants the caller can't see, making non-recursive
+        // delete proceed (HasUnlistedChildren=false) and recursive delete miss
+        // entire branches from AffectedPaths. Run the query as System; per-leaf
+        // delete checks fire at each descendant's own hub via the recursive
+        // DeleteNodeRequest fan-out.
         if (!recursive)
         {
             // Non-recursive: only delete the root if it has no children. The
@@ -868,7 +877,9 @@ public static class MeshExtensions
             // dict — use `ObserveQuery<object>` so the projected items survive
             // the type filter (a `MeshNode` cast would drop every dict).
             return meshService
-                .ObserveQuery<object>(MeshQueryRequest.FromQuery($"namespace:{path} scope:children select:path"))
+                .ObserveQuery<object>(MeshQueryRequest.FromQuery(
+                    $"namespace:{path} scope:children select:path",
+                    MeshWeaver.Mesh.Security.WellKnownUsers.System))
                 .Take(1)
                 .Select(change => (RootExists: true, empty.Add(path), change.Items.Count > 0))
                 .Timeout(timeout);
@@ -880,7 +891,9 @@ public static class MeshExtensions
         // silently drop every dict at the type filter. Root is added
         // explicitly so it is deleted last (after its subtree).
         return meshService
-            .ObserveQuery<object>(MeshQueryRequest.FromQuery($"namespace:{path} scope:descendants select:path"))
+            .ObserveQuery<object>(MeshQueryRequest.FromQuery(
+                $"namespace:{path} scope:descendants select:path",
+                MeshWeaver.Mesh.Security.WellKnownUsers.System))
             .Take(1)
             .Select(change =>
             {
@@ -921,6 +934,7 @@ public static class MeshExtensions
         string rootPath,
         ImmutableHashSet<string> descendantPaths,
         DeleteNodeRequest baseRequest,
+        AccessContext? callerAccessContext,
         ILogger logger,
         ImmutableList<LogMessage>.Builder collectedMessages)
     {
@@ -949,10 +963,17 @@ public static class MeshExtensions
 
                 // Descendant: fan-out via per-node hub. The leaf hub re-enters
                 // this same handler with Recursive=false → validates + deletes itself.
+                // Stamp the caller's AccessContext explicitly — this Observe fires
+                // from a SelectMany continuation on the workspace's emission
+                // scheduler where AsyncLocal is unreliable; without an explicit
+                // stamp, the owner's [RequiresPermission(Delete)] denies on
+                // whatever hub-self identity is ambient (`sync/<id>`).
                 logger.LogDebug("[DeleteNode] post leaf delete {Path}", path);
                 return meshHub.Observe(
                         baseRequest with { Path = path, Recursive = false },
-                        o => o.WithTarget(new Address(path)))
+                        o => callerAccessContext is null
+                            ? o.WithTarget(new Address(path))
+                            : o.WithTarget(new Address(path)).WithAccessContext(callerAccessContext))
                     .Take(1)
                     .SelectMany(delivery =>
                     {
@@ -982,6 +1003,7 @@ public static class MeshExtensions
         IMessageHub meshHub,
         string rootPath,
         ImmutableHashSet<string> allPaths,
+        AccessContext? callerAccessContext,
         TimeSpan timeout,
         ILogger logger)
     {
@@ -992,7 +1014,17 @@ public static class MeshExtensions
             return Observable.Return<(string, string)?>(null);
 
         var perPath = descendants.Select(p => meshHub
-            .Observe(new ValidateDeleteRequest(p), o => o.WithTarget(new Address(p)))
+            // 🚨 Stamp the caller's AccessContext on every ValidateDeleteRequest.
+            // This post fires from a SelectMany continuation on the workspace's
+            // emission scheduler where AsyncLocal AccessContext is unreliable —
+            // without an explicit stamp, the PostPipeline falls back to whatever
+            // hub-self impersonation is ambient (e.g. `sync/<streamId>`) and the
+            // owner's [RequiresPermission(Delete)] gate denies. The original
+            // request's AccessContext carries the caller's full identity + roles,
+            // captured at handler entry where AsyncLocal was correct.
+            .Observe(new ValidateDeleteRequest(p), o => callerAccessContext is null
+                ? o.WithTarget(new Address(p))
+                : o.WithTarget(new Address(p)).WithAccessContext(callerAccessContext))
             .Take(1)
             .Select(d =>
             {
