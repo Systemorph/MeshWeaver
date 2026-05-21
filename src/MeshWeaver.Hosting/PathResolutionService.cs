@@ -1,8 +1,10 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting;
@@ -46,6 +48,7 @@ internal class PathResolutionService : IPathResolver
 {
     private readonly IMessageHub _hub;
     private readonly IMeshQueryCore _queryCore;
+    private readonly AccessService? _accessService;
     private readonly ILogger<PathResolutionService>? _logger;
     private readonly bool _hasWritablePartitionProvider;
 
@@ -57,6 +60,7 @@ internal class PathResolutionService : IPathResolver
     {
         _hub = hub;
         _queryCore = queryCore;
+        _accessService = hub.ServiceProvider.GetService<AccessService>();
         _logger = logger;
         // Gates the partition-root MeshNode synthesis below — we only fall back
         // to a placeholder when at least one writable provider could plausibly
@@ -87,9 +91,39 @@ internal class PathResolutionService : IPathResolver
         var pathList = string.Join("|", Enumerable.Range(1, segments.Length)
             .Select(depth => string.Join("/", segments.Take(depth)))
             .Reverse());
-        var request = MeshQueryRequest.FromQuery($"path:{pathList}");
+        // 🚨 Path resolution MUST bypass access control. Mapping a URL path to
+        // an address is ROUTING, not data access. If the user lacks Read on the
+        // target, they should see "Access denied" at content-load time (the
+        // owning hub's RLS handles that), NOT "Page not found" (which suggests
+        // the URL is wrong). Prod symptom 2026-05-21:
+        //   /Systemorph/_Thread/add-markus-kleiner-as-admin-to-systemorp-c578
+        // returns NotFound because the PG cross-schema query applies
+        // BuildPerSchemaAccessClause; the user's portal hub posts the inbound
+        // request with accessContext=(null) (Blazor → Orleans flow loses
+        // identity); the access clause falls through to "user IN ('Anonymous',
+        // 'Public') AND partition='systemorph'" — no row, query returns empty,
+        // resolver emits NotFound.
+        //
+        // Bypass requires BOTH: UserId=System on the request AND an active
+        // ImpersonateAsSystem() scope on the AsyncLocal Context. The PG
+        // provider's GetEffectiveUserId checks both (defense-in-depth) —
+        // setting UserId alone wouldn't be enough to bypass, so a malicious
+        // caller can't construct a "system" query without also having
+        // AccessService access. PathResolutionService is framework-internal,
+        // so the trust boundary holds.
+        var request = MeshQueryRequest.FromQuery($"path:{pathList}") with
+        {
+            UserId = WellKnownUsers.System,
+        };
 
-        return _queryCore.ObserveQuery<MeshNode>(request, _hub.JsonSerializerOptions)
+        // Observable.Using ensures the ImpersonateAsSystem scope is opened on
+        // Subscribe AND disposed when the inner observable completes — keeping
+        // the AsyncLocal Context = system-security alive for the lifetime of
+        // the query (the PG provider may capture context lazily on its first
+        // emission, well past the chaining call).
+        return Observable.Using(
+            () => _accessService?.ImpersonateAsSystem() ?? System.Reactive.Disposables.Disposable.Empty,
+            _ => _queryCore.ObserveQuery<MeshNode>(request, _hub.JsonSerializerOptions))
             .Scan(
                 seed: ImmutableDictionary.Create<string, MeshNode>(StringComparer.OrdinalIgnoreCase),
                 accumulator: (set, change) => change.ChangeType switch

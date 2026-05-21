@@ -338,23 +338,39 @@ public class ThreadPathResolutionTest
             meshRows.Should().Be(0, "thread must NOT be duplicated in testorg.mesh_nodes");
         }
 
-        // Single-value path query (no IN-list) — does the satellite routing
-        // work in that simpler shape? If THIS also returns empty, the bug is
-        // the satellite path routing itself; if it returns the row, the bug
-        // is in the multi-value path-IN-list handling.
+        // 🚨 2026-05-21 — PathResolutionService now sets UserId = System on
+        // its query requests so path resolution bypasses access control. The
+        // PG provider sees System and passes null userId to QueryAcrossSchemas
+        // (PostgreSqlPartitionedMeshQuery.cs:323), which OMITS the access
+        // clause. The path resolves regardless of the caller's per-partition
+        // grants; the owning hub then enforces Read at content-load time.
+        //
+        // Use the same shape here so the test pins what PathResolutionService
+        // actually does. Without UserId=System the query runs as Anonymous,
+        // and Anonymous needs explicit partition_access + UEP — that's a
+        // separate concern (access-control mechanics) from path routing.
         var singlePathRequest = MeshQueryRequest.FromQuery(
-            "path:TestOrg/_Thread/add-markus-kleiner-as-admin-c578");
+            "path:TestOrg/_Thread/add-markus-kleiner-as-admin-c578") with
+        {
+            UserId = MeshWeaver.Mesh.Security.WellKnownUsers.System,
+        };
         var singleSnapshot = await query
             .ObserveQuery<MeshNode>(singlePathRequest, _options)
             .FirstAsync()
             .ToTask(ct);
         singleSnapshot.Items.Select(n => n.Path).Should().Contain(
             "TestOrg/_Thread/add-markus-kleiner-as-admin-c578",
-            "single-value path query MUST find the thread row — this is the simplest possible " +
-            "satellite-table routing test. If this fails, the bug is the satellite routing.");
+            "single-value path query under System identity MUST find the thread row — " +
+            "this pins the routing surface PathResolutionService uses (System bypass).");
 
+        // Same shape applied to the multi-value path query — what
+        // PathResolutionService actually emits when resolving a satellite URL.
+        var systemRequest = request with
+        {
+            UserId = MeshWeaver.Mesh.Security.WellKnownUsers.System,
+        };
         var snapshot = await query
-            .ObserveQuery<MeshNode>(request, _options)
+            .ObserveQuery<MeshNode>(systemRequest, _options)
             .FirstAsync()
             .ToTask(ct);
 
@@ -374,5 +390,147 @@ public class ThreadPathResolutionTest
             "the query MUST route to the satellite table by path segment (per " +
             "CLAUDE.md \"Satellite table routing by path segment\")");
         threadRow!.NodeType.Should().Be("Thread");
+    }
+
+    /// <summary>
+    /// Path-resolution coverage: a query under <c>UserId=Anonymous</c> with NO
+    /// partition_access / UEP entries — the SAME query a never-authenticated
+    /// browser session would emit — MUST still find a satellite path when the
+    /// request is stamped with <see cref="WellKnownUsers.System"/>. This is
+    /// the 2026-05-21 fix: <c>PathResolutionService</c> sets UserId=System on
+    /// every resolve so URL → address mapping is access-control-free; the
+    /// owning hub gates Read at content-load.
+    ///
+    /// <para>Without the fix this test reproduces the prod symptom — Anonymous
+    /// can't read <c>systemorph.threads</c> (no partition_access for
+    /// Anonymous on systemorph) and PathResolutionService emits NotFound.</para>
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task PathResolution_AsAnonymous_NoPartitionAccess_StillFindsSatelliteRow_UnderSystemBypass()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await _fixture.CleanDataAsync();
+
+        var partitionDef = new PartitionDefinition
+        {
+            Namespace = "PrivateOrg",
+            Schema = "privateorg",
+            TableMappings = PartitionDefinition.StandardTableMappings
+        };
+        var (ds, adapter) = await _fixture.CreateSchemaAdapterAsync("privateorg", partitionDef, ct);
+
+        // Deliberately NO partition_access for Anonymous and NO UEP entry for
+        // Anonymous. The schema is "private" by default — only explicitly
+        // granted users can read.
+        await adapter.WriteAsync(new MeshNode("PrivateOrg")
+        {
+            Name = "Private Org",
+            NodeType = "Markdown",
+        }, _options, ct);
+        await adapter.WriteAsync(new MeshNode("secret-thread", "PrivateOrg/_Thread")
+        {
+            Name = "Secret",
+            NodeType = "Thread",
+            MainNode = "PrivateOrg",
+            Content = new MeshThread { CreatedBy = "owner" }
+        }, _options, ct);
+
+        // 1. WITHOUT System bypass — Anonymous can't see the row (no access).
+        //    This is the prod symptom: query returns empty → NotFound.
+        var query = new PostgreSqlMeshQuery(adapter);
+        var anonRequest = MeshQueryRequest.FromQuery(
+            "path:PrivateOrg/_Thread/secret-thread");
+        var anonSnapshot = await query
+            .ObserveQuery<MeshNode>(anonRequest, _options)
+            .FirstAsync()
+            .ToTask(ct);
+        anonSnapshot.Items.Should().BeEmpty(
+            "Anonymous user without partition_access SHOULD be denied at the access " +
+            "clause — that's the security contract. Path resolution must bypass this.");
+
+        // 2. WITH System bypass — the row is found regardless of access.
+        //    This is what PathResolutionService now does so users see "Page found"
+        //    + content-load denial rather than "Page not found" + URL-is-wrong.
+        var systemRequest = anonRequest with
+        {
+            UserId = MeshWeaver.Mesh.Security.WellKnownUsers.System,
+        };
+        var systemSnapshot = await query
+            .ObserveQuery<MeshNode>(systemRequest, _options)
+            .FirstAsync()
+            .ToTask(ct);
+        systemSnapshot.Items.Should().ContainSingle(n =>
+            n.Path == "PrivateOrg/_Thread/secret-thread",
+            "System bypass MUST find the satellite row even when no user has " +
+            "explicit access — path resolution is routing, not data access. " +
+            "The owning hub enforces Read at content-load time (PathResolutionService " +
+            "intentionally sets UserId=System on its query requests).");
+    }
+
+    /// <summary>
+    /// Pinning the partition from the path's first segment — for a path like
+    /// <c>Systemorph/_Thread/X</c>, the resolver knows the partition is
+    /// <c>systemorph</c> and there's no reason to fan out across every
+    /// searchable schema. This test pins the no-fan-out invariant: queries for
+    /// a satellite path under a specific partition MUST be answered by that
+    /// partition's tables only.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task PathResolution_SatelliteUnderPartition_OnlyHitsThatPartition()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await _fixture.CleanDataAsync();
+
+        // Create TWO partitions, each with a thread row at the same satellite
+        // suffix. If the query fans out, both would surface; if it pins to the
+        // requested partition, only one surfaces.
+        var defA = new PartitionDefinition
+        {
+            Namespace = "OrgA", Schema = "orga",
+            TableMappings = PartitionDefinition.StandardTableMappings
+        };
+        var defB = new PartitionDefinition
+        {
+            Namespace = "OrgB", Schema = "orgb",
+            TableMappings = PartitionDefinition.StandardTableMappings
+        };
+        var (dsA, adapterA) = await _fixture.CreateSchemaAdapterAsync("orga", defA, ct);
+        var (dsB, adapterB) = await _fixture.CreateSchemaAdapterAsync("orgb", defB, ct);
+
+        await adapterA.WriteAsync(new MeshNode("OrgA") { NodeType = "Markdown" }, _options, ct);
+        await adapterA.WriteAsync(new MeshNode("t1", "OrgA/_Thread")
+        {
+            NodeType = "Thread", MainNode = "OrgA",
+            Content = new MeshThread { CreatedBy = "u" }
+        }, _options, ct);
+        await adapterB.WriteAsync(new MeshNode("OrgB") { NodeType = "Markdown" }, _options, ct);
+        await adapterB.WriteAsync(new MeshNode("t1", "OrgB/_Thread")
+        {
+            NodeType = "Thread", MainNode = "OrgB",
+            Content = new MeshThread { CreatedBy = "u" }
+        }, _options, ct);
+
+        // Query for the OrgA path — should hit OrgA only, not OrgB.
+        // Even with System bypass (the production path) the partition pin
+        // narrows the fan-out via ResolvePinnedPartition (first segment of
+        // path) — so only `orga.threads` is queried.
+        var query = new PostgreSqlMeshQuery(adapterA);
+        var request = MeshQueryRequest.FromQuery("path:OrgA/_Thread/t1") with
+        {
+            UserId = MeshWeaver.Mesh.Security.WellKnownUsers.System,
+        };
+        var snapshot = await query
+            .ObserveQuery<MeshNode>(request, _options)
+            .FirstAsync()
+            .ToTask(ct);
+
+        // Exactly one row, from OrgA. If we got OrgB's t1 too, the fan-out
+        // is over-broad — wasted cycles AND wrong (the resolver would treat
+        // a sibling partition's match as a candidate).
+        snapshot.Items.Select(n => n.Path).Should().ContainSingle()
+            .Which.Should().Be("OrgA/_Thread/t1",
+                "path's first segment IS the partition — the satellite query MUST " +
+                "scope to that partition only. PathResolutionService never resolves " +
+                "across partitions; the path always carries its partition prefix.");
     }
 }
