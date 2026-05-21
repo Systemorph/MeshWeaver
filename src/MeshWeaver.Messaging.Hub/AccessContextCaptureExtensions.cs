@@ -65,10 +65,23 @@ public static class AccessContextCaptureExtensions
     {
         var access = services.GetService<AccessService>();
         if (access is null) return source;
-        var captured = access.Context ?? access.CircuitContext;
-        if (captured is null) return source;
+        // 🚨 2026-05-21 PM — capture must happen AT SUBSCRIBE TIME, NOT at chaining
+        // time. The original implementation captured here-and-now and the
+        // resulting cold observable carried that one frozen value to every
+        // subscriber — so a test that did:
+        //   await LoginWithToken(user1); await plugin.Update(...);
+        //   await LoginWithToken(user2); await plugin.Update(...);  // saw user1
+        // would see the SECOND Subscribe stamped with user1 because the chained
+        // CarryAccessContext sat between LoginWithToken(user1) and the first
+        // Subscribe and captured user1 at that exact moment. Moving capture
+        // inside Defer means each Subscribe re-reads the AsyncLocal/Circuit
+        // context at that instant — so the second Subscribe (after the
+        // user2 LoginWithToken) captures user2. Pins the McpAccessControlTests
+        // / NodeCreationAccessTest / UserAccessTests user-switch invariant.
         return Observable.Defer(() =>
         {
+            var captured = access.Context ?? access.CircuitContext;
+            if (captured is null) return source;
             access.SetContext(captured);
             return source.Do(_ => access.SetContext(captured));
         });
@@ -85,10 +98,10 @@ public static class AccessContextCaptureExtensions
         this IObservable<T> source, AccessService? access)
     {
         if (access is null) return source;
-        var captured = access.Context ?? access.CircuitContext;
-        if (captured is null) return source;
         return Observable.Defer(() =>
         {
+            var captured = access.Context ?? access.CircuitContext;
+            if (captured is null) return source;
             access.SetContext(captured);
             return source.Do(_ => access.SetContext(captured));
         });
