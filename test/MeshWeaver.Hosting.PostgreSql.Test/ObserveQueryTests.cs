@@ -102,8 +102,12 @@ public class ObserveQueryTests : IAsyncLifetime
     [Fact]
     public async Task ObserveQuery_DetectsUpdatedNode()
     {
-        // Arrange
-        await WriteNode("Story1", "ACME/Project", "Story");
+        // Arrange — write the original, then subscribe before the update.
+        await _fixture.StorageAdapter.WriteAsync(new MeshNode("Story1", "ACME/Project")
+        {
+            Name = "Original Story",
+            NodeType = "Story"
+        }, _options, TestContext.Current.CancellationToken);
 
         var changes = new List<QueryResultChange<MeshNode>>();
         var request = MeshQueryRequest.FromQuery("namespace:ACME/Project");
@@ -113,8 +117,16 @@ public class ObserveQueryTests : IAsyncLifetime
 
         await WaitForChanges(changes, 1); // Initial
 
-        // Act: update the node
-        await WriteNode("Story1", "ACME/Project", "Story");
+        // Act: actually change the node's content. The previous shape wrote
+        // identical bytes twice — depending on Postgres trigger logic the
+        // second write may or may not fire pg_notify since no row column
+        // actually changed. Bumping Name guarantees the row body differs and
+        // the UPDATE trigger fires.
+        await _fixture.StorageAdapter.WriteAsync(new MeshNode("Story1", "ACME/Project")
+        {
+            Name = "Updated Story",
+            NodeType = "Story"
+        }, _options, TestContext.Current.CancellationToken);
 
         await WaitForChanges(changes, 2, timeout: 5000);
 
