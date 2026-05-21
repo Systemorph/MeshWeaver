@@ -1,0 +1,120 @@
+/* Per-item chat row styling. User input vs assistant output are visually
+   distinct in the Claude Code shape — user has a subtle vertical bar +
+   muted background + slightly tighter sans font; assistant uses the
+   default content typography so markdown blocks (code, tables, lists)
+   render naturally. */
+
+.chat-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 14px;
+    margin: 4px 0;
+    border-radius: 6px;
+    font-size: 0.92rem;
+    line-height: 1.5;
+}
+
+/* ─── USER input ──────────────────────────────────────────────────────── */
+
+.chat-item-user {
+    /* Left rail — the Claude-Code-style vertical accent that marks the
+       block as user-authored without dominating the chat. */
+    border-left: 3px solid var(--accent-fill-rest);
+    background: var(--neutral-fill-layer-rest);
+    padding-left: 12px;
+    /* Slightly heavier weight + tighter spacing so the user's voice reads
+       as a deliberate "prompt" rather than the assistant's longer prose. */
+    font-weight: 500;
+    color: var(--neutral-foreground-rest);
+}
+
+.chat-item-user .chat-item-author {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--accent-fill-rest);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 2px;
+}
+
+.chat-item-user .chat-item-body {
+    /* Preserve whitespace + newlines as typed — same shape Claude Code uses
+       for user prompts. Markdown is NOT rendered for user input; what you
+       typed is what appears. */
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: var(--type-ramp-base-font-family,
+        -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif);
+}
+
+/* Pending submission — same vertical-rail treatment but slightly faded
+   while we wait for the satellite cell to materialise. Background pulses
+   subtly so it's clear something's in flight without a spinner. */
+.chat-item-pending {
+    opacity: 0.75;
+    animation: chat-item-pending-pulse 1.8s ease-in-out infinite;
+}
+
+@@keyframes chat-item-pending-pulse {
+    0%, 100% { background: var(--neutral-fill-layer-rest); }
+    50%      { background: var(--neutral-fill-secondary-rest); }
+}
+
+/* ─── ASSISTANT output ────────────────────────────────────────────────── */
+
+.chat-item-assistant {
+    /* No left rail; sits in the natural reading flow. Slightly more
+       breathing room since markdown content (code, lists, headings) needs
+       it. */
+    background: transparent;
+    padding-left: 0;
+}
+
+.chat-item-assistant .chat-item-author {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--neutral-foreground-rest);
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+
+.chat-item-assistant .chat-item-model {
+    font-size: 0.7rem;
+    font-weight: 400;
+    color: var(--neutral-foreground-hint);
+    font-style: italic;
+}
+
+.chat-item-assistant .chat-item-body {
+    /* Default site typography — MarkdownView injects its own scoped
+       styling for code blocks / lists / tables. */
+    color: var(--neutral-foreground-rest);
+}
+
+/* ─── Non-delegation tool calls (compact chips) ───────────────────────── */
+
+.chat-item-toolcalls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.chat-item-toolcall {
+    font-size: 0.72rem;
+    padding: 2px 8px;
+    border-radius: 12px;
+    background: var(--neutral-fill-secondary-rest);
+    color: var(--neutral-foreground-hint);
+}
+
+.chat-item-toolcall.pending {
+    color: var(--accent-fill-rest);
+}
+
+.chat-item-toolcall.done {
+    color: var(--neutral-foreground-hint);
+}
