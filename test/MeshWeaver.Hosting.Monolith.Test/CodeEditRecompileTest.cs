@@ -483,6 +483,13 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             }
         });
 
+        // Explicitly trigger the compile via RequestedReleaseAt. Before
+        // 2026-05-21 the InstallCompileWatcher kickoff auto-triggered on
+        // grain activation; that path was deleted because it spawned
+        // recompiles under transient AccessContexts in prod. Recompile is
+        // now ALWAYS an explicit action — UI button or test trigger.
+        await TriggerRecompileAsync(typePath, DateTimeOffset.UtcNow, ct);
+
         // Wait for compile to settle (Status=Error). No release should be created.
         var failed = await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
             .Where(n => n?.Content is NodeTypeDefinition d
