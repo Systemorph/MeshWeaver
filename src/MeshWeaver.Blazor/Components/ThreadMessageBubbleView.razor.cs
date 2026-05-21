@@ -115,7 +115,21 @@ public partial class ThreadMessageBubbleView : BlazorView<ThreadMessageBubbleCon
         {
             var cache = Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
 
-            AddBinding(cache.GetStream(ViewModel.NodePath)
+            // 🚨 2026-05-21 — BindData runs inside a sync-stream emission scope
+            // where accessService.Context is stamped with the sync hub's own
+            // address (e.g. "sync/0ANs..."). The cache's RLS gate then denies
+            // ("sync/... lacks Read"), the UnauthorizedAccessException kills
+            // the Blazor circuit. Parent thread access was already enforced at
+            // navigation time — bypass with System for the message-cell read.
+            // Same pattern as ThreadMessageItemView.cs.
+            var accessService = Hub.ServiceProvider.GetService<AccessService>();
+            IObservable<MeshNode> stream;
+            using (accessService?.ImpersonateAsSystem())
+            {
+                stream = cache.GetStream(ViewModel.NodePath);
+            }
+
+            AddBinding(stream
                 .Where(n => n?.Content is not null)
                 .Select(n => ToJsonElement(n.Content!))
                 .Subscribe(je =>

@@ -100,7 +100,35 @@ public partial class ThreadMessageItemView : BlazorView<ThreadMessageItemControl
         // by flipping isPending = false on the same Blazor component (no flicker).
         isPending = !string.IsNullOrEmpty(pendingText);
 
-        AddBinding(cache.GetStream(messagePath)
+        // 🚨 2026-05-21 — BindData runs inside a sync-stream emission scope,
+        // which leaves accessService.Context stamped with the sync hub's own
+        // address (e.g. "sync/0ANs..."). The cache's RLS gate then asks
+        // "does sync/... have Read on this thread message?" and the answer is
+        // no — the sync hub isn't a user. Result: UnauthorizedAccessException
+        // killed the Blazor circuit on every chat render
+        // ("User 'sync/0ANs...' lacks Read permission on
+        // Systemorph/_Thread/.../<msg-id>").
+        //
+        // Access to the parent Thread was already enforced at navigation time
+        // (PathResolutionService + NavigationService.LoadNodeWithPreRenderedHtml
+        // ran with the user's identity). Reading the message cells from inside
+        // the already-authorized thread renderer is safe to do under System
+        // — the thread IS the access boundary, individual messages don't have
+        // independent gates.
+        //
+        // The scope is open only for the synchronous GetStream call (which
+        // captures captured-context eagerly at chaining time — see
+        // MeshNodeStreamCache.cs:155). Subscribers downstream re-stamp the
+        // captured value via CarryAccessContext; no AsyncLocal leak to other
+        // components.
+        var accessService = Hub.ServiceProvider.GetService<AccessService>();
+        IObservable<MeshNode> stream;
+        using (accessService?.ImpersonateAsSystem())
+        {
+            stream = cache.GetStream(messagePath);
+        }
+
+        AddBinding(stream
             .Where(n => n?.Content is not null)
             .Select(n => ToJsonElement(n.Content!))
             .Subscribe(je =>
