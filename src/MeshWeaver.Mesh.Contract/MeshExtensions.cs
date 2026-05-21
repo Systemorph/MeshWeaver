@@ -561,9 +561,23 @@ public static class MeshExtensions
         var meshHub = ResolveMeshHub(hub);
 
         var deleteRequest = request.Message;
+        // 🚨 Capture the caller's identity FROM THE DELIVERY at handler entry.
+        // accessService.Context is set by the delivery pipeline before this
+        // handler runs, but it gets LOST across the .SelectMany boundary into
+        // the workspace stream callback (the callback runs on the workspace's
+        // emission scheduler; AsyncLocal flow is not preserved). Reading
+        // accessService.Context inside CheckDeletePermissionForNode would
+        // therefore see null and fall through to CircuitContext (the
+        // DevLogin admin in tests) — masking the actual caller in non-test
+        // setups. Capture explicitly here and thread the userId through.
+        var senderUserId = request.AccessContext?.ObjectId
+                           ?? accessService?.Context?.ObjectId
+                           ?? accessService?.CircuitContext?.ObjectId
+                           ?? WellKnownUsers.Anonymous;
         if (string.IsNullOrEmpty(deleteRequest.DeletedBy)
-            && request.AccessContext?.ObjectId is { Length: > 0 } deleteSenderId)
-            deleteRequest = deleteRequest with { DeletedBy = deleteSenderId };
+            && !string.IsNullOrEmpty(senderUserId)
+            && senderUserId != WellKnownUsers.Anonymous)
+            deleteRequest = deleteRequest with { DeletedBy = senderUserId };
 
         var capturedRequest = deleteRequest;
         var path = capturedRequest.Path;
@@ -627,7 +641,7 @@ public static class MeshExtensions
                 //    operation). Descendants are validated by their own per-node
                 //    hub when fan-out fires a non-recursive DeleteNodeRequest at
                 //    each leaf's address — never load all descendant nodes upfront.
-                return CheckDeletePermissionForNode(securityService, accessService, rootNode, logger)
+                return CheckDeletePermissionForNode(securityService, senderUserId, rootNode, logger)
                     .SelectMany(denied =>
                     {
                         if (denied)
@@ -1011,16 +1025,12 @@ public static class MeshExtensions
     /// </summary>
     private static IObservable<bool> CheckDeletePermissionForNode(
         ISecurityService? securityService,
-        AccessService? accessService,
+        string userId,
         MeshNode node,
         ILogger logger)
     {
         if (securityService == null)
             return Observable.Return(false);
-
-        var userId = accessService?.Context?.ObjectId
-                     ?? accessService?.CircuitContext?.ObjectId
-                     ?? WellKnownUsers.Anonymous;
 
         var pathToCheck = node.MainNode ?? node.Path;
 
