@@ -297,7 +297,71 @@ internal static class NodeTypeCompilationHelpers
                 ex => logger?.LogWarning(ex,
                     "Compile watcher faulted for {HubPath}", hub.Address.Path));
 
-        return new CompositeDisposable(watcherSub, resetSub);
+        // 🚨 2026-05-21 (PM) — First-build-only kickoff (safer variant).
+        //
+        // The original kickoff was deleted because it fired on every grain
+        // activation when HasUsableBuild=false (prod EventCalendar loop). This
+        // variant is GUARDED:
+        //   1. CompilationStatus is null → truly never-compiled (any prior
+        //      compile attempt — success or failure — sets a non-null status).
+        //      After the kickoff transitions status to Pending → Compiling →
+        //      Ok/Error, subsequent grain activations don't re-fire. No loop.
+        //   2. Take(1) — explicit one-shot at the Rx layer in addition to the
+        //      status guard. Belt-and-suspenders against any churn that briefly
+        //      flips status back to null.
+        //   3. ImpersonateAsSystem — the kickoff is framework-internal first-
+        //      build, not a user action. Avoids the per-user "lacks Create"
+        //      denials that drove the prod loop (background grain activations
+        //      carried whatever AccessContext was on the inbound delivery —
+        //      typically NOT a user with Create on the partition).
+        //
+        // This restores the test-time behaviour where samples (FutuRe,
+        // Cornerstone, graph/type, …) auto-compile on first activation so
+        // ~22 dynamic-NodeType-dependent tests don't need to inline an
+        // explicit RequestedReleaseAt + wait sequence in every fixture.
+        // Per-user recompile (Compile button, dirty re-build) stays explicit
+        // via InstallReleaseRequestWatcher — that's the "compile is user-
+        // triggered" directive that the prod fix established.
+        var firstBuildKickoffSub = ownStream
+            .Where(node => node?.Content is NodeTypeDefinition def
+                && def.CompilationStatus is null
+                && !HasUsableBuild(node, def)
+                // Same truly-static exclusion as the watcher above: the
+                // HubConfiguration delegate IS the configuration; nothing to
+                // Roslyn-compile.
+                && !(node.HubConfiguration is not null
+                    && string.IsNullOrWhiteSpace(def.Configuration)
+                    && string.IsNullOrWhiteSpace(def.HubConfiguration)
+                    && (def.Sources is null || def.Sources.Count == 0)))
+            .Take(1)
+            .Subscribe(node =>
+            {
+                logger?.LogDebug(
+                    "First-build kickoff: NodeType {HubPath} has CompilationStatus=null and no usable build — flipping RequestedReleaseAt",
+                    hubPath);
+                var accessService = hub.ServiceProvider.GetService<AccessService>();
+                using var systemScope = accessService?.ImpersonateAsSystem();
+                workspace.GetMeshNodeStream().Update(curr =>
+                {
+                    if (curr?.Content is not NodeTypeDefinition def) return curr!;
+                    // Race guard: only fire if status is still null. If another
+                    // path (explicit user button, second kickoff for a Take(1)
+                    // ordering race) already set status, leave as-is.
+                    if (def.CompilationStatus is not null) return curr;
+                    return curr with
+                    {
+                        Content = def with
+                        {
+                            RequestedReleaseAt = DateTimeOffset.UtcNow,
+                            RequestedReleaseForce = true,
+                        }
+                    };
+                }).Subscribe(_ => { },
+                    ex => logger?.LogWarning(ex,
+                        "First-build kickoff: Update failed for {HubPath}", hubPath));
+            });
+
+        return new CompositeDisposable(watcherSub, resetSub, firstBuildKickoffSub);
     }
 
     /// <summary>
