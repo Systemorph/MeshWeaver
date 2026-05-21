@@ -25,6 +25,12 @@ public sealed class StaleStreamStateException : InvalidOperationException
 
 public static class JsonSynchronizationStream
 {
+    // Mirror of MeshWeaver.Mesh.Security.WellKnownUsers.System — Data sits below
+    // Mesh.Contract in the project graph and cannot reference it. Same literal
+    // recognized by AccessService.ImpersonateAsSystem and PostgreSqlMeshQuery's
+    // System-bypass short-circuit.
+    private const string SystemUserId = "system-security";
+
     private static ILogger GetLogger(IServiceProvider serviceProvider)
     {
         try
@@ -198,7 +204,6 @@ public static class JsonSynchronizationStream
 
 
         var accessService = hub.ServiceProvider.GetService<AccessService>();
-        var identity = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
         // Post from `hub` (outer hub), NOT `reduced.Hub` (inner sync hub).
         // When the outer hub is the mesh hub, HierarchicalRouting skips sender-wrapping
         // (parentHub.Address.Type == MeshType check), so posting from the inner hub
@@ -213,8 +218,23 @@ public static class JsonSynchronizationStream
         // sends the first DataChangedEvent as ResponseFor(subscribeDelivery), which causes
         // HandleCallbacks to fire and close the responseSubjects entry cleanly. Subsequent
         // DataChangedEvents flow through RouteStreamMessage as normal.
-        var observeSubscription = hub.Observe(
-                new SubscribeRequest(reduced.StreamId, reference) { Identity = identity },
+        //
+        // 🚨 SubscribeRequest is INFRASTRUCTURE — opens the underlying data-sync
+        // channel used by every cache (MeshNodeStreamCache for single nodes;
+        // SyncedQueryMeshNodes for query sets including access-rights). Run it as
+        // System: per-user enforcement happens at the CONSUMER layer (cache.GetStream's
+        // GetPermissionRequest probe, application handlers, layout-area
+        // post-render filters) — never at the sync-stream / SubscribeRequest seam.
+        // Without the System bypass, the ambient AccessContext on the emission
+        // thread (often a `sync/<streamId>` hub address, or null) leaks into
+        // SubscribeRequest.Identity / delivery.AccessContext, the owner's RLS
+        // denies because no AccessAssignment exists for those addresses, and
+        // every read appears to fail with "Access denied: user 'sync/…'".
+        IDisposable observeSubscription;
+        using (accessService?.ImpersonateAsSystem())
+        {
+            observeSubscription = hub.Observe(
+                new SubscribeRequest(reduced.StreamId, reference) { Identity = SystemUserId },
                 o => impersonateAsHub ? o.WithTarget(owner).ImpersonateAsHub(hub.Address) : o.WithTarget(owner))
             .Subscribe(
                 _ =>
@@ -240,6 +260,7 @@ public static class JsonSynchronizationStream
                         reduced.OnError(ex);
                     }
                 });
+        }
         reduced.RegisterForDisposal(observeSubscription);
         hub.RegisterForDisposal((_, _) =>
         {
@@ -282,29 +303,42 @@ public static class JsonSynchronizationStream
                     "Stream {StreamId}: owner {Owner} {Reason} — resubscribing for fresh snapshot.",
                     reduced.StreamId, owner, reason);
 
-                var resubIdentity = accessService?.Context?.ObjectId
-                                     ?? accessService?.CircuitContext?.ObjectId;
-                // Use register-before-post overload to avoid the race where the owner
-                // responds before the subject is registered in responseSubjects.
-                hub.Observe(
-                        new SubscribeRequest(reduced.StreamId, reference) { Identity = resubIdentity },
-                        o => impersonateAsHub
-                            ? o.WithTarget(owner).ImpersonateAsHub(hub.Address)
-                            : o.WithTarget(owner))
-                    .Subscribe(
-                        _ =>
-                        {
-                            // Owner's first DataChangedEvent is already routed to the
-                            // inner hub by RouteStreamMessage; just clear the flag.
-                            Interlocked.Exchange(ref resubscribing, 0);
-                        },
-                        ex =>
-                        {
-                            logger.LogWarning(ex,
-                                "Stream {StreamId}: resubscribe failed.",
-                                reduced.StreamId);
-                            Interlocked.Exchange(ref resubscribing, 0);
-                        });
+                // Resubscribe is INFRASTRUCTURE (cache refresh after owner restart).
+                // The triggering event lands on the workspace's emission scheduler
+                // where AsyncLocal AccessContext is whatever was set when the
+                // upstream change was published — often a `sync/<streamId>` hub
+                // address from the inner sync hub's own startup impersonation.
+                // Stamping a sync hub as principal on the owner-side RLS check
+                // produces "Access denied: user 'sync/…' lacks Read" because no
+                // AccessAssignment exists for sync hub addresses. Same rule as
+                // the MeshNodeStreamCache and the stale-patch refresh in
+                // SynchronizationStream: resubscribes run as System; per-user
+                // enforcement happens at the consumer layer (cache.GetStream,
+                // application handlers), not at the sync-stream seam.
+                using (accessService?.ImpersonateAsSystem())
+                {
+                    // Use register-before-post overload to avoid the race where the owner
+                    // responds before the subject is registered in responseSubjects.
+                    hub.Observe(
+                            new SubscribeRequest(reduced.StreamId, reference) { Identity = SystemUserId },
+                            o => impersonateAsHub
+                                ? o.WithTarget(owner).ImpersonateAsHub(hub.Address)
+                                : o.WithTarget(owner))
+                        .Subscribe(
+                            _ =>
+                            {
+                                // Owner's first DataChangedEvent is already routed to the
+                                // inner hub by RouteStreamMessage; just clear the flag.
+                                Interlocked.Exchange(ref resubscribing, 0);
+                            },
+                            ex =>
+                            {
+                                logger.LogWarning(ex,
+                                    "Stream {StreamId}: resubscribe failed.",
+                                    reduced.StreamId);
+                                Interlocked.Exchange(ref resubscribing, 0);
+                            });
+                }
             }
 
             var heartbeatInterval = hub.ServiceProvider

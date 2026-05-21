@@ -88,8 +88,24 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             return _workspace.GetStream(new MeshNodeReference())
                 ?? throw new InvalidOperationException(
                     "MeshNode stream is not available â€” the workspace has no MeshNodeReference reducer.");
-        return _workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-            new Address(_path!), new MeshNodeReference());
+        // 🚨 Open the remote MeshNode subscription under the system identity.
+        // Reading MeshNode content is infrastructure (routing, path resolution,
+        // permission probing, NodeType activation, satellite enumeration). The
+        // user-rights gate lives at the APPLICATION layer where the value is
+        // consumed (handlers, layout areas) — not at the sync-stream seam.
+        // Without this, the SubscribeRequest is stamped with whatever ambient
+        // identity happens to be on the thread (often `sync/<streamId>` for
+        // workspace emission threads, or null), and the owner's
+        // AccessControlPipeline denies because no AccessAssignment exists for
+        // sync hub addresses — symptom: "user 'sync/…' lacks Read permission".
+        // Matches MeshNodeStreamCache and PathResolutionService, both of which
+        // also open MeshNode reads under ImpersonateAsSystem.
+        var accessService = _workspace.Hub.ServiceProvider.GetService<AccessService>();
+        using (accessService?.ImpersonateAsSystem())
+        {
+            return _workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+                new Address(_path!), new MeshNodeReference());
+        }
     }
 
     /// <inheritdoc/>

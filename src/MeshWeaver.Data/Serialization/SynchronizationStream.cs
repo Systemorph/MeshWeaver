@@ -613,14 +613,24 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             {
                 // Local JSON cache drifted from the owner's view. Drop our cached snapshot
                 // and request a fresh Full from the owner via a new SubscribeRequest.
+                // The resubscribe is INFRASTRUCTURE (cache refresh) — stamp it as
+                // System so the owner's RLS doesn't deny on whatever ambient identity
+                // happens to be set on the emission thread (often a `sync/<id>` hub
+                // address). User-level access enforcement happens at the consumer
+                // layer, not at the sync-stream cache-refresh seam.
                 logger.LogWarning(stale,
                     "[SYNC_STREAM] Stale patch for {StreamId}; requesting fresh snapshot from {Owner}.",
                     StreamId, StreamIdentity.Owner);
                 Set<JsonElement?>(null);
                 if (Reference is WorkspaceReference wsRef)
                 {
-                    Host.Post(new SubscribeRequest(StreamId, wsRef) { Subscriber = Configuration.Subscriber! },
-                        o => o.WithTarget(StreamIdentity.Owner));
+                    var accessService = Host.ServiceProvider
+                        .GetService(typeof(AccessService)) as AccessService;
+                    using (accessService?.ImpersonateAsSystem())
+                    {
+                        Host.Post(new SubscribeRequest(StreamId, wsRef) { Subscriber = Configuration.Subscriber! },
+                            o => o.WithTarget(StreamIdentity.Owner));
+                    }
                 }
             }
             catch (Exception ex)
