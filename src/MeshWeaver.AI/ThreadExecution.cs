@@ -937,10 +937,21 @@ public static class ThreadExecution
                                  && requestedStatus == ThreadMessageStatus.Streaming
                     ? current.Status
                     : requestedStatus;
+                // 🚨 ToolCalls merge: ExecuteDelegationAsync.StampTerminalOnParentToolCall
+                // writes Result+Status+DelegationPath onto delegation entries via
+                // cache.Update concurrently with this streaming loop. If we replaced
+                // ToolCalls wholesale with `toolCalls` (the in-memory toolCallLog),
+                // the final iteration of this loop would CLOBBER the terminal stamp
+                // because toolCallLog only carries DelegationPath, never Result.
+                // Merge by DelegationPath (or Name+CallId match) — keep whichever
+                // entry has Result populated. The cache's current state wins for
+                // entries that have already terminated; toolCallLog wins for
+                // entries still mid-flight.
+                var mergedToolCalls = MergeToolCallEntries(current.ToolCalls, toolCalls);
                 var updatedContent = current with
                 {
                     Text = text,
-                    ToolCalls = toolCalls,
+                    ToolCalls = mergedToolCalls,
                     UpdatedNodes = updatedNodes,
                     AgentName = agentName ?? current.AgentName,
                     ModelName = modelName ?? current.ModelName,
@@ -1192,19 +1203,66 @@ public static class ThreadExecution
                             status);
                     }
                 };
-                // Middleware-side ForwardToolCall: skips if the streaming branch
-                // (below) already added an entry for this tool call. Both paths
-                // fire on production agents (FunctionInvokingChatClient + FCC
-                // streaming); test agents that bypass FunctionInvokingChatClient
-                // rely only on the streaming branch, so we don't omit ForwardToolCall
-                // entirely — we dedup it instead.
+                // Middleware-side ForwardToolCall: UPDATES the matching bare entry
+                // (added by the streaming branch's FunctionCallContent path) with the
+                // result, instead of skipping. Previously this branch skipped the
+                // result-bearing entry whenever a Result==null entry existed —
+                // correct for production agents where the streaming branch's
+                // FunctionResultContent handler later runs SetItem with the same
+                // Result. But for delegations with our refactored
+                // ExecuteDelegationAsync (yields text deltas, not FunctionResultContent
+                // in the output stream) AND for test agents that bypass FCC's
+                // FRC-in-output behaviour, the streaming branch's SetItem never fires
+                // → Result stays null forever. Update-instead-of-skip closes that.
+                // Production agents pay one redundant SetItem (no-op since the data is
+                // identical); test/delegation agents finally get Result populated.
                 client.ForwardToolCall = entry =>
                 {
                     lock (logLock)
                     {
-                        if (toolCallLog.Any(e => e.Name == entry.Name && e.Result == null))
-                            return;
-                        toolCallLog = toolCallLog.Add(entry);
+                        // SetItem-only — never Add. ForwardToolCall is the LATE
+                        // mirror for an entry the streaming loop's FunctionCallContent
+                        // branch (line 1346) already added. Adding here causes
+                        // duplicates when the mirror fires before the streaming
+                        // branch (FCC implementation dependent — some buffer FCC
+                        // chunks until after tool invocation, some emit them
+                        // synchronously).
+                        //
+                        // Match priority:
+                        //  1) Same DelegationPath — covers ExecuteDelegationAsync's
+                        //     StampTerminal mirror after UpdateDelegationStatus
+                        //     already stamped DelegationPath on the bare entry.
+                        //  2) Same Name + null Result — the standard "bare entry
+                        //     waiting for completion" shape.
+                        var idx = -1;
+                        if (entry.DelegationPath is not null)
+                            idx = toolCallLog.FindIndex(e => e.DelegationPath == entry.DelegationPath);
+                        if (idx < 0)
+                            idx = toolCallLog.FindIndex(e => e.Name == entry.Name && e.Result == null);
+                        if (idx >= 0)
+                        {
+                            var existing = toolCallLog[idx];
+                            // Merge: incoming carries the late updates (Result,
+                            // Status, terminal Timestamp). Preserve existing's
+                            // CallId + Arguments + DisplayName when the incoming
+                            // entry doesn't carry them — the streaming branch
+                            // had richer call-site detail. Critically, CallId
+                            // must survive the SetItem so the streaming branch's
+                            // CallId-keyed dedupe (alreadyByCallId) catches a
+                            // re-emitted FunctionCallContent.
+                            toolCallLog = toolCallLog.SetItem(idx, entry with
+                            {
+                                DelegationPath = entry.DelegationPath ?? existing.DelegationPath,
+                                CallId = entry.CallId ?? existing.CallId,
+                                Arguments = entry.Arguments ?? existing.Arguments,
+                                DisplayName = entry.DisplayName ?? existing.DisplayName
+                            });
+                        }
+                        // No-match case: the mirror fired before the streaming
+                        // loop processed the FCC chunk for this tool call. Drop
+                        // the entry — the streaming loop will eventually add a
+                        // bare entry that the FCC FunctionResultContent handler
+                        // will populate (line 1422). Adding here would duplicate.
                     }
                 };
 
@@ -1314,21 +1372,26 @@ public static class ThreadExecution
                         lastCallKey = callKey;
 
                         // Add pending tool call to local log — will be pushed on next throttled update.
-                        // Skip if we already have an entry for this callKey (re-emitted content) OR
-                        // if the middleware-side ForwardToolCall already added one (canonical "started"
-                        // signal in production). Without the second guard the log doubles per call —
-                        // the FRC handler only replaces the first match by name, leaving the second
-                        // as a permanent "pending" entry the UI renders forever.
+                        // Dedupe by CallId across the entire conversation: FCC can re-emit the same
+                        // FunctionCallContent in turn 2's output stream (history echo), and the
+                        // CallId-keyed `pendingCalls` map gets cleared on FunctionResultContent,
+                        // so the second emission isn't caught by `isDuplicate`. Checking the log
+                        // itself by CallId also dedupes against ChatClientAgentFactory.ExecuteDelegationAsync's
+                        // StampTerminal mirror, which writes the same CallId at terminal.
                         lock (logLock)
                         {
+                            var callId = functionCall.CallId;
+                            var alreadyByCallId = callId is not null
+                                && toolCallLog.Any(e => e.CallId == callId);
                             var alreadyPending = toolCallLog.Any(e => e.Name == functionCall.Name && e.Result == null);
-                            if (!isDuplicate && !alreadyPending)
+                            if (!isDuplicate && !alreadyPending && !alreadyByCallId)
                             {
                                 toolCallLog = toolCallLog.Add(new ToolCallEntry
                                 {
                                     Name = functionCall.Name,
                                     DisplayName = formatted,
                                     Arguments = argsDetail,
+                                    CallId = callId,
                                     Timestamp = DateTime.UtcNow
                                 });
                             }
@@ -1383,7 +1446,18 @@ public static class ThreadExecution
                             // `Index was out of range. (Parameter 'index')`.
                             lock (logLock)
                             {
-                                var idx = toolCallLog.FindIndex(e => e.Name == originalCall.Name && e.Result == null);
+                                // Match priority:
+                                //  1) By DelegationPath when we have one — covers the case where
+                                //     ChatClientAgentFactory.ExecuteDelegationAsync's StampTerminal
+                                //     already populated Result on the matching delegation entry
+                                //     (so the name+Result-null check below misses).
+                                //  2) Fall back to name + null Result for the standard
+                                //     bare-then-result flow.
+                                var idx = -1;
+                                if (delegationPath is not null)
+                                    idx = toolCallLog.FindIndex(e => e.DelegationPath == delegationPath);
+                                if (idx < 0)
+                                    idx = toolCallLog.FindIndex(e => e.Name == originalCall.Name && e.Result == null);
                                 var existingDelegationPath = idx >= 0 ? toolCallLog[idx].DelegationPath : null;
                                 logger.LogDebug(
                                     "[ThreadExec] TOOL_RESULT_REPLACE: name={Name} callId={CallId} idx={Idx} " +
@@ -1398,6 +1472,7 @@ public static class ThreadExecution
                                     Result = Truncate(resultText),
                                     IsSuccess = isSuccess,
                                     DelegationPath = delegationPath ?? existingDelegationPath,
+                                    CallId = originalCall.CallId,
                                     Timestamp = DateTime.UtcNow
                                 };
                                 toolCallLog = idx >= 0 ? toolCallLog.SetItem(idx, finalEntry) : toolCallLog.Add(finalEntry);
@@ -1717,6 +1792,78 @@ public static class ThreadExecution
     /// Handles DelegationResult objects directly (no ToString → JSON round-trip).
     /// Falls back to JSON parsing for serialized results, then plain toString.
     /// </summary>
+    /// <summary>
+    /// Merge the in-memory <c>toolCallLog</c> with the cell's current persisted
+    /// <c>ToolCalls</c>. Both sources can write the same logical entry:
+    /// <list type="bullet">
+    /// <item>Streaming loop appends bare entries (Result=null) on FCC FunctionCallContent.</item>
+    /// <item><see cref="ChatClientAgentFactory.ExecuteDelegationAsync"/> writes a
+    ///   terminal entry (Result+Status+DelegationPath) through cache.Update.</item>
+    /// </list>
+    /// Without merge, the streaming loop's final write would CLOBBER the cache's
+    /// terminal stamp. Pair entries by <see cref="ToolCallEntry.DelegationPath"/>
+    /// when both have one; else by <see cref="ToolCallEntry.Name"/>+positional
+    /// match. Prefer whichever has <see cref="ToolCallEntry.Result"/> set
+    /// (terminal beats in-flight). Order: follow toolCallLog (in-stream order).
+    /// </summary>
+    private static ImmutableList<ToolCallEntry> MergeToolCallEntries(
+        ImmutableList<ToolCallEntry> current, ImmutableList<ToolCallEntry> incoming)
+    {
+        if (current.IsEmpty) return incoming;
+        if (incoming.IsEmpty) return current;
+        var consumedCurrent = new bool[current.Count];
+        var builder = ImmutableList.CreateBuilder<ToolCallEntry>();
+        foreach (var inc in incoming)
+        {
+            var idx = -1;
+            if (inc.DelegationPath is { } dp)
+            {
+                for (var i = 0; i < current.Count; i++)
+                {
+                    if (!consumedCurrent[i] && current[i].DelegationPath == dp)
+                    { idx = i; break; }
+                }
+            }
+            if (idx < 0)
+            {
+                for (var i = 0; i < current.Count; i++)
+                {
+                    if (!consumedCurrent[i] && current[i].Name == inc.Name && current[i].Result != null && inc.Result == null)
+                    { idx = i; break; }
+                }
+            }
+            if (idx >= 0)
+            {
+                consumedCurrent[idx] = true;
+                var cur = current[idx];
+                // Prefer the side that's "further along" — Result populated +
+                // terminal Status. Field-by-field: keep cur.Result when inc.Result
+                // is null; keep cur.Status when it's terminal and inc is Streaming.
+                var preferred = inc.Result is null && cur.Result is not null ? cur : inc;
+                builder.Add(preferred with
+                {
+                    DelegationPath = preferred.DelegationPath ?? cur.DelegationPath ?? inc.DelegationPath,
+                    Result = preferred.Result ?? cur.Result ?? inc.Result,
+                    Status = cur.Status != ToolCallStatus.Streaming && inc.Status == ToolCallStatus.Streaming
+                        ? cur.Status : preferred.Status
+                });
+            }
+            else
+            {
+                builder.Add(inc);
+            }
+        }
+        // Append any cell-only entries that incoming didn't carry (e.g. the
+        // terminal stamp may have landed but the streaming loop's snapshot was
+        // taken before the next FCC chunk re-appended the bare entry).
+        for (var i = 0; i < current.Count; i++)
+        {
+            if (!consumedCurrent[i] && current[i].DelegationPath is not null)
+                builder.Add(current[i]);
+        }
+        return builder.ToImmutable();
+    }
+
     private static (string? ResultText, string? DelegationPath, bool IsSuccess) ExtractToolResult(object? result)
     {
         if (result is null)

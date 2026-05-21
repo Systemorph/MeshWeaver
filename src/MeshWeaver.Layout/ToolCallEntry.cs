@@ -85,6 +85,16 @@ public record ToolCallEntry
     /// <summary>Sub-thread path if this was a delegation call.</summary>
     public string? DelegationPath { get; init; }
 
+    /// <summary>
+    /// FCC call identifier (e.g. <c>"call_abc123"</c>). The dedup key across
+    /// streaming-loop and StampTerminal writers — FCC can re-emit the same
+    /// <see cref="Microsoft.Extensions.AI.FunctionCallContent"/> in turn 2's
+    /// output stream as history echo, and without an identifier the streaming
+    /// branch's append + the late-arriving mirror's update would produce
+    /// duplicate entries for the same logical call.
+    /// </summary>
+    public string? CallId { get; init; }
+
     /// <summary>When the tool call completed.</summary>
     public DateTime Timestamp { get; init; } = DateTime.UtcNow;
 }

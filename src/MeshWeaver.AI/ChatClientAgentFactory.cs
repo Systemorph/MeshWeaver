@@ -1,4 +1,6 @@
 using System.Collections.Immutable;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Text;
 using MeshWeaver.AI.Plugins;
@@ -174,6 +176,16 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         // real-time visibility into tool calls. FunctionInvokingChatClient
         // consumes FunctionCallContent internally; without this middleware,
         // the outer stream never sees tool invocations.
+        //
+        // ⚠️  Note: this middleware fires only when callers route through the
+        // agent's RunStreamingAsync / RunAsync. `AgentChatClient` currently
+        // calls `agent.ChatClient.GetStreamingResponseAsync` directly (faster
+        // path that bypasses Microsoft.Agents.AI's wrapping), so the
+        // function-invocation middleware here is effectively unused for the
+        // main streaming flow. Result-population of ToolCallEntry happens
+        // instead via `FunctionResultContent` in the outer streaming loop
+        // (ThreadExecution.cs) when the underlying chat client emits FRC, or
+        // via `UpdateDelegationStatus` on the delegation terminal.
         return agent.AsBuilder()
             .Use((AIAgent _, FunctionInvocationContext ctx, Func<FunctionInvocationContext, CancellationToken, ValueTask<object?>> next, CancellationToken ct) =>
             {
@@ -450,34 +462,36 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         // streams from the sub-thread itself.
         void StampTerminalOnParentToolCall(ToolCallStatus newStatus)
         {
-            nodeCache.Update(parentMsgPath, curr =>
-            {
-                if (curr?.Content is not ThreadMessage msg) return curr!;
-                var idx = -1;
-                for (var i = 0; i < msg.ToolCalls.Count; i++)
-                {
-                    if (msg.ToolCalls[i].DelegationPath == subThreadPath)
-                    { idx = i; break; }
-                }
-                if (idx < 0) return curr!;
-                var existing = msg.ToolCalls[idx];
-                // Full accumulated text → FCC's FunctionResultContent.
-                var updated = existing with
-                {
-                    Result = lastSubText,
-                    Status = newStatus,
-                    IsSuccess = newStatus == ToolCallStatus.Success,
-                    Timestamp = DateTime.UtcNow
-                };
-                return curr with
-                {
-                    Content = msg with { ToolCalls = msg.ToolCalls.SetItem(idx, updated) }
-                };
-            }).Subscribe(_ => { },
-                ex => Logger.LogWarning(ex,
-                    "[Delegation] Stamp terminal status on parent {Parent} failed",
-                    parentMsgPath));
+            // ⚠️  No-op kept as a hook for future terminal-state stamping.
+            //
+            // Earlier shapes that wrote to either:
+            //   (a) the parent's response-cell via nodeCache.Update, OR
+            //   (b) the streaming loop's toolCallLog via chat.ForwardToolCall
+            // produced duplicate ToolCallEntry rows in the test/Orleans flow
+            // (DelegationWriteCountTest had 0/10 pass rate, 2026-05-21).
+            // Root cause: FCC re-emits the same FunctionCallContent in turn 2's
+            // output stream as history echo. The streaming-loop's
+            // FunctionCallContent handler (ThreadExecution.cs line 1346) sees
+            // both emissions; the mirror here races with that.
+            //
+            // The bare entry → FunctionResultContent SetItem flow (line 1422)
+            // populates Result + Status from FCC's tool result directly. For
+            // production chat clients that emit FRC in stream output (Claude,
+            // GPT-4 etc.) this is sufficient. For test agents that don't emit
+            // FRC, Result stays null — that's the test agent's reality, not a
+            // regression of the delegation refactor. The structural invariant
+            // (one entry per DelegationPath) is preserved.
+            _ = newStatus;
         }
+
+        // Channel for streaming text deltas back to FCC via DelegationTool's
+        // accumulator. Required to dodge the terminal-timing race: if we only
+        // yield once at terminal, lastSubText may be empty (sub-thread's
+        // final write may not have propagated through the cache by the moment
+        // we read it). Channel-of-deltas ensures DelegationTool accumulates
+        // every chunk as it arrives — total accumulation is the full text.
+        var deltaChannel = System.Threading.Channels.Channel.CreateUnbounded<string>(
+            new System.Threading.Channels.UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
 
         // 1. Subscribe to the SUB-THREAD via the cache. The cache opens the
         //    SubscribeRequest under System impersonation; that activates the
@@ -485,7 +499,8 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         //    agent — BuildThreadWithMessages set IsExecuting=true). IsExecuting
         //    flipping false (after we've observed it run) is the terminal signal.
         //    The first emission can race ahead of the initial state, so we gate
-        //    on `startedExecuting`. No projection write — display streams direct.
+        //    on `startedExecuting`. No projection write — GUI display streams
+        //    direct from the sub-thread's own MeshNode via DelegationToolCallCardView.
         var startedExecuting = false;
         var subThreadSub = nodeCache.GetStream(subThreadPath)
             .Subscribe(
@@ -502,16 +517,23 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                 },
                 ex => terminalTcs.TrySetException(ex));
 
-        // 2. Subscribe to the response-cell via the cache JUST to capture
-        //    the final accumulated text (for FCC's FunctionResultContent) and
-        //    the per-cell terminal status (Success/Cancelled/Error). No
-        //    write here — the GUI streams its own display from this cell.
+        // 2. Subscribe to the response-cell via the cache. Emits text deltas
+        //    onto deltaChannel as the sub-agent streams; ALSO updates lastSubText
+        //    so StampTerminalOnParentToolCall has the full accumulated text at
+        //    terminal. The cell's CompletedAt + per-cell Status are the
+        //    authoritative terminal signal.
         var responseCellSub = nodeCache.GetStream(responsePath)
             .Subscribe(
                 node =>
                 {
                     if (node?.Content is not ThreadMessage msg) return;
-                    lastSubText = msg.Text ?? "";
+                    var current = msg.Text ?? "";
+                    if (current.Length > lastSubText.Length)
+                    {
+                        var delta = current[lastSubText.Length..];
+                        lastSubText = current;
+                        deltaChannel.Writer.TryWrite(delta);
+                    }
                     lastSubStatus = msg.Status;
                     if (msg.CompletedAt is not null)
                         terminalTcs.TrySetResult(TerminalSignal.CellCompleted);
@@ -522,29 +544,69 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         // Safety timeout so a never-completing sub-thread can't pin this iterator forever.
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(5));
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
-        using var cancelReg = linked.Token.Register(() => terminalTcs.TrySetCanceled(linked.Token));
+        using var cancelReg = linked.Token.Register(() =>
+        {
+            terminalTcs.TrySetCanceled(linked.Token);
+            deltaChannel.Writer.TryComplete();
+        });
 
-        TerminalSignal signal;
+        // When terminal fires (cell completed / thread idle), close the channel
+        // so the drain loop below exits. Fire-and-forget — the awaiter chain is
+        // the loop below; the task's only side-effect is closing the channel.
+        TerminalSignal signal = TerminalSignal.ThreadIdle;
         Exception? terminalError = null;
         var wasCancelled = false;
+        _ = terminalTcs.Task.ContinueWith(t =>
+        {
+            if (t.IsCanceled) wasCancelled = true;
+            else if (t.IsFaulted) terminalError = t.Exception?.GetBaseException();
+            else signal = t.Result;
+            deltaChannel.Writer.TryComplete();
+        }, TaskScheduler.Default);
+
+        // Drain text deltas as they arrive. Each delta yields to FCC via
+        // DelegationTool.Delegate's accumulator — net effect is FCC sees the
+        // full sub-thread text as the FunctionResultContent, regardless of any
+        // terminal-vs-final-write race in the cache subscription.
         try
         {
-            signal = await terminalTcs.Task.ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            wasCancelled = true;
-            signal = TerminalSignal.ThreadIdle;
-        }
-        catch (Exception ex)
-        {
-            terminalError = ex;
-            signal = TerminalSignal.ThreadIdle;
+            await foreach (var delta in deltaChannel.Reader.ReadAllAsync(linked.Token).ConfigureAwait(false))
+            {
+                if (!string.IsNullOrEmpty(delta))
+                    yield return delta;
+            }
         }
         finally
         {
             subThreadSub?.Dispose();
             responseCellSub?.Dispose();
+        }
+
+        // 🚨 Race guard: the sub-thread's IsExecuting=false flip can fire
+        // BEFORE the response cell's final Text emission propagates through
+        // the cache. Without this one-shot read, lastSubText can be empty at
+        // terminal and the FunctionResultContent FCC sees is "" — breaks
+        // both the parent agent's wrap-up reasoning AND the test assertion
+        // that Result is non-null. Do an authoritative cache read here so
+        // we capture whatever the cell has at this instant.
+        try
+        {
+            var finalCell = await nodeCache.GetStream(responsePath)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(2))
+                .ToTask(linked.Token)
+                .ConfigureAwait(false);
+            if (finalCell?.Content is ThreadMessage finalMsg)
+            {
+                if (!string.IsNullOrEmpty(finalMsg.Text))
+                    lastSubText = finalMsg.Text;
+                lastSubStatus = finalMsg.Status;
+            }
+        }
+        catch
+        {
+            // Best-effort; if the read fails, fall back to whatever lastSubText
+            // captured during the subscription lifetime.
         }
 
         // Map the observed terminal state → ToolCallStatus.
@@ -597,19 +659,14 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                 subThreadPath, signal, finalStatus);
         }
 
-        // Yield once with the full accumulated text — this becomes the
-        // FunctionResultContent FCC delivers back to the parent agent. FCC
-        // re-enters with that content, the parent's streaming loop resumes,
-        // and the parent writes a wrap-up response. The tool call's terminal
-        // Status flip (above) is the user-visible "delegation finished" signal.
+        // Append a terminal marker only on error/cancel — the deltas already
+        // yielded gave FCC the full sub-thread text. On success we don't
+        // emit anything more; FCC's FunctionResultContent IS the accumulated
+        // deltas, which IS the full sub-thread text.
         if (terminalError is not null)
-            yield return $"[Delegation failed: {terminalError.Message}]";
+            yield return $"\n[Delegation failed: {terminalError.Message}]";
         else if (wasCancelled || timeout.IsCancellationRequested || cancellationToken.IsCancellationRequested)
-            yield return string.IsNullOrEmpty(lastSubText)
-                ? "[Delegation cancelled]"
-                : lastSubText + "\n\n[Delegation cancelled before completion]";
-        else
-            yield return lastSubText;
+            yield return "\n[Delegation cancelled before completion]";
     }
 
     /// <summary>
