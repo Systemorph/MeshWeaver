@@ -84,7 +84,7 @@ public class StreamUpdateIdentityTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [HubFact]
-    public async Task StreamUpdate_WithoutAsyncLocalIdentity_DelegateSeesHubSelfIdentity()
+    public async Task StreamUpdate_WithoutAsyncLocalIdentity_FailsClosed()
     {
         var host = GetHost();
         var workspace = host.GetWorkspace();
@@ -107,18 +107,20 @@ public class StreamUpdateIdentityTest(ITestOutputHelper output) : HubTestBase(ou
 
         var seen = await insideDelegate.Task.WaitAsync(5.Seconds());
 
-        // Pipeline contract for non-mesh hubs: when no AsyncLocal / Circuit
-        // context is available, fall back to hub-self-impersonation
-        // (ObjectId = hub.Address.ToFullString()). This is load-bearing for
-        // internal flows like SyncStream pushing SetCurrentRequest, LayoutAreaHost
-        // bookkeeping, etc. — making non-mesh hubs fail-closed broke the
-        // layout-area sync chain in prod (blank screens / endless spinners).
-        // Mesh hubs are the only kind that stays fail-closed here.
-        seen.Should().NotBeNullOrEmpty(
-            "non-mesh hubs fall back to hub-self-impersonation when neither AsyncLocal nor " +
-            "CircuitContext is available — see MessageHubConfiguration.UserServicePostPipeline.");
-        seen.Should().Contain("/",
-            "the fallback identity is a hub address (e.g. sync/{guid}, portal/{guid}).");
+        // 🚨 2026-05-21 — single fail-closed branch in the PostPipeline. Per
+        // the directive "we should NEVER write something as hub", non-mesh
+        // hubs no longer fall back to stamping their own address as principal.
+        // Legitimate hub-internal flows (SyncStream SetCurrentRequest, etc.)
+        // MUST opt in explicitly via AccessService.ImpersonateAsHub /
+        // ImpersonateAsSystem at the callsite. With AsyncLocal cleared and no
+        // explicit impersonation scope, the delegate sees null Context —
+        // and any subsequent mesh write would be denied at the AccessControl
+        // pipeline. See AccessContextPropagation.md.
+        seen.Should().BeNull(
+            "with no AsyncLocal / CircuitContext and no explicit ImpersonateAsHub scope, " +
+            "the delegate must see null Context — the post-pipeline no longer fakes " +
+            "hub-self identity. Wrap intentional hub-internal writes with " +
+            "AccessService.ImpersonateAsHub() / ImpersonateAsSystem().");
     }
 
     /// <summary>
