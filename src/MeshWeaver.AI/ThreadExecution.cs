@@ -65,6 +65,17 @@ public static class ThreadExecution
                 Status = ThreadMessageStatus.Streaming
             };
             var updated = mutate(current);
+            // 🚨 Text monotonic-growth guard while streaming: callbacks like
+            // ThreadSubmission's "Allocating agent..." can race ThreadExecution's
+            // growing stream — the late "Allocating agent..." write (19 chars)
+            // would shrink a streamed-so-far text (22+ chars), producing the
+            // [22, 19, 22, ...] regression that ThreadStreamingIdentityTest.
+            // SubmitMessage_StreamingProducesMultipleGrowingEmissions catches.
+            // While Status is Streaming, refuse to shrink the text — mirror the
+            // monotonic guard PushToResponseMessage applies.
+            if (updated.Status == ThreadMessageStatus.Streaming
+                && updated.Text.Length < current.Text.Length)
+                updated = updated with { Text = current.Text };
             return node != null
                 ? node with { Content = updated }
                 : new MeshNode(responseMsgId, threadPath)
@@ -948,9 +959,23 @@ public static class ThreadExecution
                 // entries that have already terminated; toolCallLog wins for
                 // entries still mid-flight.
                 var mergedToolCalls = MergeToolCallEntries(current.ToolCalls, toolCalls);
+                // 🚨 Text monotonic-growth guard: streaming + tool-call mid-stream
+                // writes both flow through this Update path. A tool-call patch
+                // that doesn't carry the latest text (because the caller built
+                // its `text` from a stale snapshot of the streamed-so-far buffer
+                // BEFORE more tokens arrived) would shrink the field — visible
+                // to UI subscribers as a flicker / regression. While Status is
+                // terminal-locked above, Text is otherwise free to shrink. Cap:
+                // while Status is Streaming, only allow grow OR same length.
+                // Once terminal, the final text from the streaming loop's
+                // completion is the source of truth — let it through.
+                var nextText = nextStatus == ThreadMessageStatus.Streaming
+                               && text.Length < current.Text.Length
+                    ? current.Text
+                    : text;
                 var updatedContent = current with
                 {
-                    Text = text,
+                    Text = nextText,
                     ToolCalls = mergedToolCalls,
                     UpdatedNodes = updatedNodes,
                     AgentName = agentName ?? current.AgentName,
