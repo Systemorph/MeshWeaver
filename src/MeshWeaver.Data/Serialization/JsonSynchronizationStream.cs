@@ -31,6 +31,25 @@ public static class JsonSynchronizationStream
     // System-bypass short-circuit.
     private const string SystemUserId = "system-security";
 
+    // Hub-shaped principals leak from the workspace emission scheduler when an
+    // upstream notification fires under a hub's own AsyncLocal (e.g. a `sync/{guid}`
+    // inner sync hub stamped during its own initialization). Those addresses
+    // have no AccessAssignment → owner RLS denies for them with
+    // "user 'sync/…' lacks Read". When we detect one, we fall back to System
+    // (real infrastructure context with whitelisted Permission.All) instead of
+    // forwarding the hub-shape identity to the owner.
+    //
+    // ⚠️  Kept narrow on purpose: we MUST forward a real user identity through
+    // (`rbuergi`, an Entra OID GUID, an email, etc.) so the owner's per-user
+    // RLS gates correctly. This helper only neutralizes principals that are
+    // clearly mesh-internal hub addresses.
+    private static bool LooksLikeHubPrincipal(string objectId) =>
+        objectId.StartsWith("sync/", StringComparison.OrdinalIgnoreCase)
+        || objectId.StartsWith("mesh/", StringComparison.OrdinalIgnoreCase)
+        || objectId.StartsWith("node/", StringComparison.OrdinalIgnoreCase)
+        || objectId.StartsWith("activity/", StringComparison.OrdinalIgnoreCase)
+        || objectId.StartsWith("portal/", StringComparison.OrdinalIgnoreCase);
+
     private static ILogger GetLogger(IServiceProvider serviceProvider)
     {
         try
@@ -219,22 +238,29 @@ public static class JsonSynchronizationStream
         // HandleCallbacks to fire and close the responseSubjects entry cleanly. Subsequent
         // DataChangedEvents flow through RouteStreamMessage as normal.
         //
-        // 🚨 SubscribeRequest is INFRASTRUCTURE — opens the underlying data-sync
-        // channel used by every cache (MeshNodeStreamCache for single nodes;
-        // SyncedQueryMeshNodes for query sets including access-rights). Run it as
-        // System: per-user enforcement happens at the CONSUMER layer (cache.GetStream's
-        // GetPermissionRequest probe, application handlers, layout-area
-        // post-render filters) — never at the sync-stream / SubscribeRequest seam.
-        // Without the System bypass, the ambient AccessContext on the emission
-        // thread (often a `sync/<streamId>` hub address, or null) leaks into
-        // SubscribeRequest.Identity / delivery.AccessContext, the owner's RLS
-        // denies because no AccessAssignment exists for those addresses, and
-        // every read appears to fail with "Access denied: user 'sync/…'".
+        // 🚨 Identity selection: prefer the REAL user when the ambient AccessContext
+        // identifies one (the typical Blazor-circuit / API-token path — middleware
+        // set Context to the caller's identity before this Subscribe). Fall back to
+        // System ONLY when AsyncLocal carries no user — empty, anonymous, or a
+        // hub-shaped principal (`sync/`, `mesh/`, `node/`, `activity/`, …) that
+        // leaked from a workspace emission scheduler. The earlier blanket
+        // ImpersonateAsSystem here (88764f803) collapsed every Blazor LayoutArea
+        // subscription onto System, so the User-node hub's Activity area saw
+        // `system-security` instead of `rbuergi` and rendered the visitor profile
+        // for the page owner. Per-user identity must flow into the SubscribeRequest
+        // so the owner's RLS can enforce per-user reads; System fallback exists
+        // only for the bare-infrastructure paths where no user identity exists.
+        var ambient = accessService?.Context ?? accessService?.CircuitContext;
+        var isRealUser = ambient is not null
+            && !string.IsNullOrEmpty(ambient.ObjectId)
+            && !LooksLikeHubPrincipal(ambient.ObjectId);
+        var identityForSubscribe = isRealUser ? ambient!.ObjectId : SystemUserId;
         IDisposable observeSubscription;
-        using (accessService?.ImpersonateAsSystem())
+        var impersonationScope = isRealUser ? null : accessService?.ImpersonateAsSystem();
+        try
         {
             observeSubscription = hub.Observe(
-                new SubscribeRequest(reduced.StreamId, reference) { Identity = SystemUserId },
+                new SubscribeRequest(reduced.StreamId, reference) { Identity = identityForSubscribe },
                 o => impersonateAsHub ? o.WithTarget(owner).ImpersonateAsHub(hub.Address) : o.WithTarget(owner))
             .Subscribe(
                 _ =>
@@ -260,6 +286,10 @@ public static class JsonSynchronizationStream
                         reduced.OnError(ex);
                     }
                 });
+        }
+        finally
+        {
+            impersonationScope?.Dispose();
         }
         reduced.RegisterForDisposal(observeSubscription);
         hub.RegisterForDisposal((_, _) =>
