@@ -117,19 +117,17 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     {
         try
         {
-            // ⚠️  Direct-route reads — no auto-redirect through IMeshNodeStreamCache.
-            //
-            // 2026-05-22 prod incident: routing handles + every internal
-            // workspace.GetMeshNodeStream(path) consumer (auth chain,
-            // NodeType resolution, partition discovery, layout area
-            // bootstrap) went through the cache's per-(path,user)
-            // permission gate, denying System / cross-grain reads that
-            // were previously direct. Symptom: empty start screen, no
-            // query results. The cache is an opt-in optimisation:
-            // call cache.GetStream(path) / cache.Update(path, fn)
-            // when you want the shared upstream + write fan-out. Don't
-            // force every handle through it — it changes the security
-            // boundary for a lot of internal callers.
+            // 🚨 Cross-hub reads route through IMeshNodeStreamCache (when one is
+            // registered): one shared process-wide upstream subscription per
+            // path. The cache holds the upstream alive; ad-hoc GetRemoteStream
+            // here would open a separate handle, multiplying subscriptions and
+            // making writes invisible to readers of the cached stream. See
+            // Doc/GUI/ItemTemplateMeshNodeStreamBinding.
+            if (_cache is not null && !IsOwn && _path is not null)
+                return _cache.GetStream(_path)
+                    .Where(n => n is not null)
+                    .Subscribe(observer);
+
             return GetStream()
                 .Where(change => change.Value != null)
                 .Select(change => change.Value!)
@@ -168,11 +166,15 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             // still observes the caller's user. See
             // AccessContextCaptureExtensions / AccessContextPropagation.md.
             //
-            // Direct-route writes — see Subscribe() comment for why we don't
-            // auto-redirect through IMeshNodeStreamCache. Callers that need
-            // the cache's write-fanout should call cache.Update(path, fn)
-            // explicitly.
-            (IsOwn ? UpdateOwn(update) : UpdateRemote(update))
+            // Cross-hub writes route through IMeshNodeStreamCache (when one is
+            // registered): the cache's shared handle is what every reader is
+            // subscribed to, so the patch is observed in order. Own writes and
+            // cache-less writes fall back to the direct paths.
+            (IsOwn
+                ? UpdateOwn(update)
+                : _cache is not null && _path is not null
+                    ? _cache.Update(_path, update)
+                    : UpdateRemote(update))
                 .CarryAccessContext(_workspace.Hub.ServiceProvider),
             $"MeshNodeStreamHandle.Update(path='{_path ?? "<own>"}')",
             _workspace.Hub.ServiceProvider);
