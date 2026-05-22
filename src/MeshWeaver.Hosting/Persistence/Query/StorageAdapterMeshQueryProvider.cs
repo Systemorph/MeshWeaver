@@ -610,12 +610,20 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         if (nodeValidators == null)
             return Observable.Return(true);
 
-        // Always use the effective userId for the validation context.
-        // The query's explicit UserId takes precedence over session AccessContext
-        // to prevent admin context from leaking into public queries.
-        var accessContext = !string.IsNullOrEmpty(userId) && userId != WellKnownUsers.Anonymous
-            ? new AccessContext { ObjectId = userId }
-            : accessService?.Context ?? accessService?.CircuitContext;
+        // Always use the resolved userId as the validation context. The
+        // upstream GetEffectiveUserId has already produced the right value
+        // (request.UserId if explicit — including "" → Anonymous —, otherwise
+        // ambient AccessContext, defaulting to Anonymous). Building the
+        // AccessContext from userId means an explicit anonymous probe
+        // (request.UserId = "") gets validated as Anonymous, NOT silently
+        // upgraded to the test/circuit's admin context.
+        //
+        // BUG fixed 2026-05-22: the previous branch fell back to the
+        // ambient AccessService.Context when userId == Anonymous, which
+        // caused MeshQuery_AnonymousUser_FiltersRestrictedNodes to validate
+        // against Roland (the test's DevLogin admin) and see Private nodes
+        // an actual anonymous caller could not.
+        var accessContext = new AccessContext { ObjectId = userId };
 
         var context = new NodeValidationContext
         {
