@@ -8,6 +8,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -50,6 +51,20 @@ public static class UserActivityLayoutAreas
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
         var capturedAccessContext = accessService?.Context ?? accessService?.CircuitContext;
         var isOwner = IsViewerOwner(capturedAccessContext, nodeOwnerId);
+
+        var areaLogger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Graph.UserActivityLayoutAreas");
+        areaLogger?.LogDebug(
+            "[UserActivity.Activity] hubAddress={HubAddress} nodePath={NodePath} nodeOwnerId={OwnerId} " +
+            "viewer.ObjectId={ViewerObjectId} viewer.Email={ViewerEmail} viewer.IsVirtual={IsVirtual} " +
+            "isOwner={IsOwner} (Context={HasCtx}, CircuitContext={HasCircuit})",
+            host.Hub.Address, nodePath, nodeOwnerId,
+            capturedAccessContext?.ObjectId ?? "(null)",
+            capturedAccessContext?.Email ?? "(null)",
+            capturedAccessContext?.IsVirtual ?? false,
+            isOwner,
+            accessService?.Context != null,
+            accessService?.CircuitContext != null);
 
         var syncStream = host.Workspace.GetStream(new MeshNodeReference());
 
