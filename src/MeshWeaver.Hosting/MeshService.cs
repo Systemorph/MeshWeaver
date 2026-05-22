@@ -105,6 +105,8 @@ internal sealed class MeshService(
                     {
                         NodeDeletionRejectionReason.ValidationFailed =>
                             new UnauthorizedAccessException(r.Error ?? "Access denied"),
+                        NodeDeletionRejectionReason.Unauthorized =>
+                            new UnauthorizedAccessException(r.Error ?? "Access denied"),
                         NodeDeletionRejectionReason.NodeNotFound =>
                             new InvalidOperationException($"Node not found: {path}"),
                         _ => new InvalidOperationException(r.Error ?? "Node deletion failed")

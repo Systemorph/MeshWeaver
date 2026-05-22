@@ -1,9 +1,28 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Messaging;
 
 public class AccessService
 {
+    /// <summary>
+    /// Returns true if <paramref name="objectId"/> is a hub-shaped address
+    /// (sync/…, mesh/…, node/…, activity/…, portal/…). These should NEVER
+    /// be set on <see cref="AccessService.Context"/> or
+    /// <see cref="AccessService.CircuitContext"/> — hub addresses are not
+    /// user identities, and any leak into AccessContext produces the
+    /// "CreatedBy=sync/xxx" symptom the user explicitly flagged on 2026-05-22.
+    /// Used by <see cref="SetContext"/> / <see cref="SetCircuitContext"/> to
+    /// log an error + stack trace so the leak source can be hunted down.
+    /// </summary>
+    internal static bool LooksLikeHubPrincipal(string? objectId) =>
+        !string.IsNullOrEmpty(objectId)
+        && (objectId.StartsWith("sync/", StringComparison.OrdinalIgnoreCase)
+            || objectId.StartsWith("mesh/", StringComparison.OrdinalIgnoreCase)
+            || objectId.StartsWith("node/", StringComparison.OrdinalIgnoreCase)
+            || objectId.StartsWith("activity/", StringComparison.OrdinalIgnoreCase)
+            || objectId.StartsWith("portal/", StringComparison.OrdinalIgnoreCase));
+
     private readonly AsyncLocal<AccessContext?> context = new();
 
     /// <summary>
@@ -57,6 +76,11 @@ public class AccessService
     {
         var prev = context.Value?.ObjectId;
         context.Value = accessContext;
+        if (LooksLikeHubPrincipal(accessContext?.ObjectId))
+            _logger?.LogError(
+                "SetContext: hub-shaped principal {ObjectId} set as AccessContext — must never happen. " +
+                "Source stack:\n{Stack}",
+                accessContext!.ObjectId, new StackTrace(skipFrames: 1, fNeedFileInfo: true).ToString());
         if (prev != accessContext?.ObjectId)
             _logger?.LogDebug("SetContext: {Previous} -> {Current}", prev ?? "(null)", accessContext?.ObjectId ?? "(null)");
     }
@@ -78,6 +102,11 @@ public class AccessService
         // In production Blazor, CircuitAccessHandler always sets the AsyncLocal
         // per inbound activity, so the persistent fallback is never reached.
         persistentCircuitContext = accessContext;
+        if (LooksLikeHubPrincipal(accessContext?.ObjectId))
+            _logger?.LogError(
+                "SetCircuitContext: hub-shaped principal {ObjectId} set as CircuitContext — must never happen. " +
+                "Source stack:\n{Stack}",
+                accessContext!.ObjectId, new StackTrace(skipFrames: 1, fNeedFileInfo: true).ToString());
         if (prev != accessContext?.ObjectId)
             _logger?.LogDebug("SetCircuitContext: {Previous} -> {Current}", prev ?? "(null)", accessContext?.ObjectId ?? "(null)");
     }

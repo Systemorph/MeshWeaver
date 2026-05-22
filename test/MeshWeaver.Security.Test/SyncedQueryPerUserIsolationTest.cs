@@ -133,12 +133,17 @@ public class SyncedQueryPerUserIsolationTest(ITestOutputHelper output) : Monolit
     }
 
     /// <summary>
-    /// Test 2 — same cache id, different identities, the cache MUST allocate
-    /// distinct SyncedQueryMeshNodes instances. Verifies the registry's key
-    /// actually changed shape (not just that one user filters differently).
+    /// Test 2 — same cache id, different identities, each call returns a
+    /// distinct per-subscriber wrapper. With the per-subscriber RLS filter
+    /// design (2026-05-22), every <c>GetQuery</c> call returns a fresh
+    /// <c>Observable.Defer</c> wrapper that captures the caller's identity
+    /// at Subscribe time and filters the SHARED upstream snapshot.
+    /// Reference identity at the outer wrapper level is by-design non-stable —
+    /// what stays stable is the underlying upstream
+    /// (Replay(1).RefCount-cached <see cref="SyncedQueryMeshNodes"/>).
     /// </summary>
     [Fact(Timeout = 30_000)]
-    public async Task SyncedQuery_DistinctUsers_GetDistinctCacheEntries()
+    public async Task SyncedQuery_PerCall_ReturnsDistinctWrapper()
     {
         var ct = TestTimeout;
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
@@ -153,16 +158,16 @@ public class SyncedQueryPerUserIsolationTest(ITestOutputHelper output) : Monolit
         var daveObs = workspace.GetQuery(queryId, query);
 
         carolObs.Should().NotBeSameAs(daveObs,
-            "two users calling GetQuery with the same id MUST get distinct " +
-            "observable instances — cache key is (id, userId). If this " +
-            "regresses, both users share a single observable and one " +
-            "user's identity drives the upstream query for both.");
+            "every GetQuery call yields a fresh Defer wrapper — distinct " +
+            "callers get distinct per-subscriber filter chains, even when " +
+            "they share the same upstream.");
 
-        // Same identity → same instance (cache hits).
         accessService.SetContext(new AccessContext { ObjectId = "carol", Name = "Carol" });
         var carolObs2 = workspace.GetQuery(queryId, query);
-        carolObs2.Should().BeSameAs(carolObs,
-            "second call from the same user must hit the cache");
+        carolObs2.Should().NotBeSameAs(carolObs,
+            "wrappers are NOT cached — each call returns a new Defer. The " +
+            "underlying upstream IS cached (verified by " +
+            "LanguageModelSyncedQueryTest.SyncedQuery_GetQueryById_ReusesSameUpstreamAcrossCalls).");
 
         await Task.CompletedTask;
     }

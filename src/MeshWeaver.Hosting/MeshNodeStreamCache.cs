@@ -85,24 +85,30 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
             // GetMeshNodeStream(workspace, path) auto-redirects back into the
             // cache and we'd recurse forever waiting for ourselves.
             var handle = meshHub.GetWorkspace().GetMeshNodeStreamBypassCache(p);
-            // Replay(1) + eager .Connect() inside ImpersonateAsSystem: the
-            // upstream SubscribeRequest opens ONCE under the well-known
-            // System identity. The cache is process-wide infrastructure
-            // serving every reader (routing, NodeType activation, path-
-            // resolution, etc.) — none of them know which user triggered
-            // the read, and the cache emission fans out to subscribers
-            // who each apply their own AccessContext at consumption time
-            // (this read is system-internal, not user-attributable).
+            // Replay(1) + eager .Connect() under the sanctioned cache identity:
+            // the upstream SubscribeRequest opens ONCE under
+            // MeshNodeCacheIdentity.Address ("cache/mesh-node-cache"). The cache
+            // is process-wide infrastructure serving every reader (routing,
+            // NodeType activation, path-resolution, etc.) — none of them know
+            // which user triggered the read, and the cache emission fans out
+            // to subscribers who each apply their own AccessContext at
+            // consumption time (this read is system-internal, not
+            // user-attributable).
             //
-            // ImpersonateAsHub(meshHub) was insufficient: it stamps the
-            // mesh hub's own address (mesh/{guid}) as the principal, but
-            // no AccessAssignment grants that principal access to
-            // partition nodes — owners' RLS denies with
-            //   "user 'mesh/{guid}' lacks Read permission on '{path}'"
-            // (OrleansThreadAccessTest reproduces this exactly).
-            // ImpersonateAsSystem grants Permission.All unconditionally
-            // (SecurityService whitelists WellKnownUsers.System), which
-            // matches the infrastructure nature of the cache read.
+            // The cache identity is granted ONLY Permission.Read by
+            // SecurityService — it cannot Create / Update / Delete. Tests in
+            // MeshWeaver.Security.Test/MeshNodeCacheIdentityTest verify that
+            // writes under this identity are properly denied, so the narrow
+            // grant survives future refactors.
+            //
+            // Why not ImpersonateAsSystem: system-security grants Permission.All
+            // unconditionally, which is broader than the cache needs. The
+            // dedicated identity narrows the bypass to exactly Read on the
+            // cache's hydration path.
+            // Why not ImpersonateAsHub(meshHub): stamps the mesh hub's own
+            // address (mesh/{guid}) as the principal, but no AccessAssignment
+            // grants that principal access to partition nodes — owners' RLS
+            // would deny with "user 'mesh/{guid}' lacks Read permission".
             //
             // Eager Connect() (vs AutoConnect(1)) keeps the upstream alive
             // for process lifetime — no RefCount churn, identity captured
@@ -112,7 +118,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
             var accessService = meshHub.ServiceProvider.GetService<AccessService>();
             if (accessService is not null)
             {
-                using (accessService.ImpersonateAsSystem())
+                using (accessService.SwitchAccessContext(MeshNodeCacheIdentity.Context))
                     connectable.Connect();
             }
             else
