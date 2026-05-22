@@ -2,8 +2,10 @@ using System.Reactive.Linq;
 using System.Runtime.CompilerServices;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph;
 
@@ -153,6 +155,19 @@ public static class SyncedQueryDataSourceExtensions
     /// persists for the lifetime of the workspace so subsequent
     /// <c>GetQuery(id)</c> calls hit the cache even when no live
     /// subscribers exist between calls.</para>
+    ///
+    /// <para>🚨 <b>Per-user RLS:</b> the synced query is cached by
+    /// <c>(id, userId)</c>. Each user gets their own
+    /// <see cref="SyncedQueryMeshNodes"/> instance which opens its upstream
+    /// <see cref="IMeshQueryProvider.ObserveQuery"/> under the caller's
+    /// identity — the secured surface of <see cref="MeshQuery"/> then
+    /// applies per-result RLS validators at the source, so the cached
+    /// snapshot only ever contains nodes that user has Read on.
+    /// Two users sharing the same <paramref name="id"/> with different
+    /// permissions get TWO independent caches; one user can never
+    /// inherit another user's view by passing the same id. Background /
+    /// system tasks (no AsyncLocal identity) share a single System-loaded
+    /// cache keyed under the well-known <c>system-security</c> user.</para>
     /// </summary>
     public static IObservable<IEnumerable<MeshNode>> GetQuery(
         this IWorkspace workspace, object id, params string[] queries)
@@ -160,14 +175,38 @@ public static class SyncedQueryDataSourceExtensions
         if (queries is null || queries.Length == 0)
             throw new ArgumentException("At least one query string is required.", nameof(queries));
 
+        // Resolve the caller's identity at call time. ObjectId is the canonical
+        // partition key + per-user cache key; if no AsyncLocal AccessContext is
+        // set we treat the read as System infrastructure (background activations,
+        // post-deploy seeds — the synced query mirror these need works the
+        // same for everyone).
+        var accessService = workspace.Hub.ServiceProvider.GetService<AccessService>();
+        var userIdentity = accessService?.Context?.ObjectId
+                           ?? accessService?.CircuitContext?.ObjectId
+                           ?? WellKnownUsers.System;
+        var userScopedKey = new SyncedQueryKey(id, userIdentity);
+
         var registry = RegistryFor(workspace);
-        var existing = registry.Get(id);
+        var existing = registry.Get(userScopedKey);
         if (existing is not null)
             return existing;
 
-        var typeSource = new SyncedQueryMeshNodes(workspace, id, queries);
+        var typeSource = new SyncedQueryMeshNodes(workspace, userScopedKey, queries, userIdentity: userIdentity);
         var observable = typeSource.StreamUpdates();
-        registry.Register(id, typeSource, observable);
+        registry.Register(userScopedKey, typeSource, observable);
         return observable;
     }
+}
+
+/// <summary>
+/// Composite cache key for the per-user synced query registry. Both legs
+/// participate in <c>GetHashCode</c> / <c>Equals</c>; two users with the
+/// same logical query id (e.g. <c>"agents"</c>) get separate cache entries
+/// so one user's RLS-filtered snapshot never leaks into another's view.
+/// Keep this in the <c>Graph</c> namespace alongside the registry so the
+/// registry's dictionary type doesn't have to be re-keyed.
+/// </summary>
+public readonly record struct SyncedQueryKey(object Id, string UserId)
+{
+    public override string ToString() => $"{Id}@{UserId}";
 }

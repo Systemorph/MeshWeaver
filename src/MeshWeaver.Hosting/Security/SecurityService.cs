@@ -523,11 +523,27 @@ internal class SecurityService : ISecurityService, IDisposable
             // Self: narrow ObserveQuery for THIS scope's _Access subtree only.
             // No `scope:selfAndAncestors` — every level loads itself; the chain
             // is built via the parent CombineLatest below.
+            //
+            // 🚨 AccessAssignment lookup MUST run as System — otherwise we
+            // recurse: SecurityService.HasPermission(path, alice, Read)
+            // → workspace.GetQuery (per-user cache, key=…@alice)
+            // → SyncedQueryMeshNodes opens secured query for alice
+            // → secured provider applies validators per AccessAssignment node
+            // → validators call SecurityService.HasPermission again
+            // → cycle / hang. The ImpersonateAsSystem wrap pins the cache key
+            //   under "system-security" so all security queries share one
+            //   infrastructure cache and the unsecured (validator-bypassing)
+            //   provider surface lights up.
             var workspace = _hub.GetWorkspace();
+            var accessSvc = _hub.ServiceProvider.GetService<AccessService>();
             var nsQuery = string.IsNullOrEmpty(key) ? "_Access" : $"{key}/_Access";
-            var self = workspace.GetQuery(
-                $"$security-access:{key}",
-                $"namespace:{nsQuery} nodeType:{SecurityCollections.AccessAssignmentNodeType}");
+            IObservable<IEnumerable<MeshNode>> self;
+            using (accessSvc?.ImpersonateAsSystem())
+            {
+                self = workspace.GetQuery(
+                    $"$security-access:{key}",
+                    $"namespace:{nsQuery} nodeType:{SecurityCollections.AccessAssignmentNodeType}");
+            }
 
             // Parent: recursive reference to the parent scope's cached
             // observable. Root scope folds in statics instead.
@@ -732,12 +748,19 @@ internal class SecurityService : ISecurityService, IDisposable
             // a runtime policy. No `scope:selfAndAncestors` — each level
             // loads itself; the chain is built via the parent CombineLatest.
             var workspace = _hub.GetWorkspace();
+            var accessSvc = _hub.ServiceProvider.GetService<AccessService>();
             var nsFilter = string.IsNullOrEmpty(key)
                 ? "namespace: id:_Policy"
                 : $"namespace:{key} id:_Policy";
-            var self = workspace.GetQuery(
-                $"$security-policy:{key}",
-                $"{nsFilter} nodeType:{SecurityCollections.PartitionAccessPolicyNodeType}");
+            // Same System-pin as ObserveScopeAssignments — policy lookup is
+            // infrastructure; the secured surface would recurse via validators.
+            IObservable<IEnumerable<MeshNode>> self;
+            using (accessSvc?.ImpersonateAsSystem())
+            {
+                self = workspace.GetQuery(
+                    $"$security-policy:{key}",
+                    $"{nsFilter} nodeType:{SecurityCollections.PartitionAccessPolicyNodeType}");
+            }
 
             // Parent: recursive reference to parent scope's cached policy map.
             // Root scope folds in statics instead.
