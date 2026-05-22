@@ -184,7 +184,16 @@ internal sealed class MeshService(
         // prod symptom 2026-05-22). MeshService IS scoped, so its hub's
         // ServiceProvider does see the circuit's AccessService with the user
         // identity middleware set.
-        if (string.IsNullOrEmpty(request.UserId))
+        //
+        // 🚨 ONLY stamp when UserId is genuinely UNSET (null). Empty string is
+        // the explicit-Anonymous marker — tests querying as anonymous user
+        // pass UserId="" deliberately, and downstream GetEffectiveUserId
+        // (StorageAdapterMeshQueryProvider) treats "" as Anonymous (per the
+        // contract in its own xmldoc). Stamping over "" with the captured
+        // admin context (the user the test class logged in via DevLogin)
+        // caused MeshQuery_AnonymousUser_FiltersRestrictedNodes to see
+        // admin's view instead of Anonymous's view (2026-05-22 trace).
+        if (request.UserId is null)
         {
             var captured = CaptureContext();
             if (!string.IsNullOrEmpty(captured?.ObjectId))
