@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading.Channels;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reactive;
@@ -264,21 +265,44 @@ public class MeshQuery : IMeshQueryCore
     }
 
     /// <summary>
-    /// Unsecured fan-out — same merge as the secured surface, but each
-    /// provider that implements <see cref="IMeshQueryCore"/> is invoked
-    /// through that surface (skipping per-result validators). Providers
-    /// that don't implement <c>IMeshQueryCore</c> (e.g. static-node
-    /// catalogs) fall through to their regular surface because they have
-    /// no security to bypass anyway.
+    /// <para>Dispatcher for the <see cref="IMeshQueryCore"/> surface. Routes
+    /// based on <see cref="MeshQueryRequest.UserId"/>:</para>
+    /// <list type="bullet">
+    ///   <item><see cref="WellKnownUsers.System"/> (or null/empty) →
+    ///     <b>unsecured</b> fan-out: providers that implement
+    ///     <see cref="IMeshQueryCore"/> are invoked through that surface,
+    ///     skipping per-result validators. Used by infrastructure callers
+    ///     that must dodge the SecurityService → AccessAssignment query →
+    ///     SecurityService recursion (SyncedQueryMeshNodes for
+    ///     <c>_Access</c> walks, NodeType compile activities, framework
+    ///     seeds).</item>
+    ///   <item>Real user → <b>secured</b> fan-out: providers are invoked
+    ///     through the public <see cref="IMeshQueryProvider.ObserveQuery"/>
+    ///     surface where <see cref="StorageAdapterMeshQueryProvider"/>
+    ///     applies the per-result RLS validator chain for that user.
+    ///     Per-user <c>workspace.GetQuery</c> calls route here so each
+    ///     user sees only the nodes they have Read on — preventing cross-
+    ///     user leakage through a shared cache.</item>
+    /// </list>
+    /// <para>The dispatch happens at the <c>IMeshQueryCore</c> seam so
+    /// downstream consumers (<c>SyncedQueryMeshNodes</c> et al.) don't have
+    /// to know about the secured surface. Stamp <c>request.UserId</c> at
+    /// the call site and the right surface lights up.</para>
     /// </summary>
     IObservable<QueryResultChange<T>> IMeshQueryCore.ObserveQuery<T>(
         MeshQueryRequest request,
         JsonSerializerOptions options)
     {
+        var isSystem = string.IsNullOrEmpty(request.UserId)
+            || string.Equals(request.UserId, WellKnownUsers.System, StringComparison.Ordinal);
         var matched = SelectMatchingProviders(NamespacesForRequest(request));
         return MergeProviderObservables(
-            matched.Select(p => p is IMeshQueryCore core
-                ? core.ObserveQuery<T>(request, options)
+            matched.Select(p => isSystem
+                ? (p is IMeshQueryCore core
+                    ? core.ObserveQuery<T>(request, options)
+                    : p.ObserveQuery<T>(request, options))
+                // Real user: ALWAYS hit the secured provider surface
+                // (validators apply per-result RLS for request.UserId).
                 : p.ObserveQuery<T>(request, options)).ToList(),
             request);
     }

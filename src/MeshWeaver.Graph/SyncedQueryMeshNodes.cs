@@ -85,7 +85,28 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
         object dataSourceId,
         IReadOnlyList<string> queries,
         string? collectionName = null
-    ) : this(workspace, dataSourceId, queries,
+    ) : this(workspace, dataSourceId, queries, WellKnownUsers.System, collectionName)
+    {
+    }
+
+    /// <summary>
+    /// Per-user constructor: opens the upstream <see cref="IMeshQueryCore"/>
+    /// subscription under <paramref name="userIdentity"/> so the secured
+    /// surface applies that user's RLS to the cached snapshot. Two users
+    /// reading the same logical query through <c>workspace.GetQuery</c>
+    /// get TWO independent instances (one per user). Pass
+    /// <see cref="WellKnownUsers.System"/> for infrastructure callers
+    /// (SecurityService's <c>_Access</c> walks, NodeType compile activities,
+    /// post-deploy seeds) that intentionally need the validator-bypassing
+    /// surface — never use it from a user-facing read seam.
+    /// </summary>
+    public SyncedQueryMeshNodes(
+        IWorkspace workspace,
+        object dataSourceId,
+        IReadOnlyList<string> queries,
+        string userIdentity,
+        string? collectionName = null
+    ) : this(workspace, dataSourceId, queries, userIdentity,
         new BehaviorSubject<ImmutableHashSet<string>>(ImmutableHashSet<string>.Empty),
         new Subject<QueryResultChange<MeshNode>>(),
         collectionName)
@@ -96,17 +117,23 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
         IWorkspace workspace,
         object dataSourceId,
         IReadOnlyList<string> queries,
+        string userIdentity,
         BehaviorSubject<ImmutableHashSet<string>> pathSet,
         Subject<QueryResultChange<MeshNode>> externalChanges,
         string? collectionName
     ) : base(workspace, dataSourceId,
-            ws => BuildReadStream(ws, queries, pathSet, externalChanges),
+            ws => BuildReadStream(ws, queries, userIdentity, pathSet, externalChanges),
             collectionName)
     {
         Queries = queries;
+        UserIdentity = userIdentity;
         _pathSet = pathSet;
         _externalChanges = externalChanges;
     }
+
+    /// <summary>User identity used to open the upstream query. Cache key
+    /// component — synced queries cache per (id, userIdentity).</summary>
+    public string UserIdentity { get; }
 
     private readonly BehaviorSubject<ImmutableHashSet<string>> _pathSet;
 
@@ -192,6 +219,7 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
     private static IObservable<IEnumerable<MeshNode>> BuildReadStream(
         IWorkspace workspace,
         IReadOnlyList<string> queries,
+        string userIdentity,
         BehaviorSubject<ImmutableHashSet<string>> pathSet,
         Subject<QueryResultChange<MeshNode>> externalChanges)
     {
@@ -202,12 +230,13 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
         // (e.g. AccessControlPipeline's permission-check try/catch) sees it,
         // never the StreamUpdates() / GetQuery() call site that triggered
         // the build.
-        return Observable.Defer(() => BuildReadStreamCore(workspace, queries, pathSet, externalChanges));
+        return Observable.Defer(() => BuildReadStreamCore(workspace, queries, userIdentity, pathSet, externalChanges));
     }
 
     private static IObservable<IEnumerable<MeshNode>> BuildReadStreamCore(
         IWorkspace workspace,
         IReadOnlyList<string> queries,
+        string userIdentity,
         BehaviorSubject<ImmutableHashSet<string>> pathSet,
         Subject<QueryResultChange<MeshNode>> externalChanges)
     {
@@ -244,7 +273,28 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
         }
         else
         {
-            var request = MeshQueryRequest.FromQueries(queries, WellKnownUsers.System);
+            // Per-user RLS: stamp the SyncedQuery's caller identity on the
+            // MeshQueryRequest. The query providers' secured surface uses
+            // this UserId to filter per-result via validators. System-loaded
+            // synced queries (SecurityService's _Access walks, NodeType
+            // compile activities, framework seeds) still pass System here
+            // — the unsecured surface short-circuits the validator chain so
+            // we don't recurse SecurityService → AccessAssignment query →
+            // SecurityService.
+            var request = MeshQueryRequest.FromQueries(queries, userIdentity);
+            diagLogger?.LogDebug(
+                "[SyncedQuery] Opening upstream queries=[{Queries}] under userIdentity={UserIdentity}",
+                string.Join(" | ", queries), userIdentity);
+            // Dispatch lives in MeshQuery's IMeshQueryCore.ObserveQuery
+            // (Hosting layer — see git history on MeshQuery.cs): when
+            // request.UserId is System, it routes to the provider's
+            // unsecured IMeshQueryCore surface (validator-bypass for the
+            // SecurityService → AccessAssignment recursion); when it's a
+            // real user, it routes to the provider's secured surface so
+            // StorageAdapterMeshQueryProvider applies the per-result
+            // validator chain for that user. Graph stays decoupled from
+            // Hosting — we just pass userIdentity through and let the
+            // dispatch happen at the consumer.
             upstream = queryCore.ObserveQuery<MeshNode>(request, options).Do(change =>
                 diagLogger?.LogInformation(
                     "[SyncedQuery] queries=[{Queries}] change={Type} count={Count}",
