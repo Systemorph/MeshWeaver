@@ -137,7 +137,10 @@ public static class SyncedQueryDataSourceExtensions
     /// </summary>
     public static IObservable<IEnumerable<MeshNode>>? GetQuery(
         this IWorkspace workspace, object id)
-        => RegistryFor(workspace).Get(id);
+    {
+        var inner = RegistryFor(workspace).Get(id);
+        return inner is null ? null : WrapWithPerUserRls(workspace, inner);
+    }
 
     /// <summary>
     /// Get-or-create overload: returns the cached observable for
@@ -175,26 +178,64 @@ public static class SyncedQueryDataSourceExtensions
         if (queries is null || queries.Length == 0)
             throw new ArgumentException("At least one query string is required.", nameof(queries));
 
-        // Resolve the caller's identity at call time. ObjectId is the canonical
-        // partition key + per-user cache key; if no AsyncLocal AccessContext is
-        // set we treat the read as System infrastructure (background activations,
-        // post-deploy seeds — the synced query mirror these need works the
-        // same for everyone).
-        var accessService = workspace.Hub.ServiceProvider.GetService<AccessService>();
-        var userIdentity = accessService?.Context?.ObjectId
-                           ?? accessService?.CircuitContext?.ObjectId
-                           ?? WellKnownUsers.System;
-        var userScopedKey = new SyncedQueryKey(id, userIdentity);
-
         var registry = RegistryFor(workspace);
-        var existing = registry.Get(userScopedKey);
+        // Cache by raw `id` ONLY — legacy contract: same id → same observable.
+        // The cross-user-leak protection happens via the per-SUBSCRIBE RLS
+        // filter (PerUserRlsFilter below): the upstream snapshot is shared
+        // under System (cheap, one subscription per query); each subscriber
+        // gets a Where()-projected view filtered to the nodes THEIR identity
+        // can Read on. Two users sharing the same id never see each other's
+        // restricted content because the filter captures the user at Subscribe
+        // time and asks SecurityService per emission.
+        var existing = registry.Get(id);
         if (existing is not null)
-            return existing;
+            return WrapWithPerUserRls(workspace, existing);
 
-        var typeSource = new SyncedQueryMeshNodes(workspace, userScopedKey, queries, userIdentity: userIdentity);
+        var typeSource = new SyncedQueryMeshNodes(workspace, id, queries);
         var observable = typeSource.StreamUpdates();
-        registry.Register(userScopedKey, typeSource, observable);
-        return observable;
+        registry.Register(id, typeSource, observable);
+        return WrapWithPerUserRls(workspace, observable);
+    }
+
+    /// <summary>
+    /// Wraps the shared (System-loaded) synced query observable with a
+    /// per-subscriber RLS filter. The filter captures the subscriber's
+    /// AccessContext at Subscribe time and uses
+    /// <see cref="ISecurityService.HasPermission"/> to drop nodes the
+    /// subscriber can't Read on. Bypasses for System / no AsyncLocal — those
+    /// callers are infrastructure and need the full snapshot.
+    /// </summary>
+    private static IObservable<IEnumerable<MeshNode>> WrapWithPerUserRls(
+        IWorkspace workspace, IObservable<IEnumerable<MeshNode>> upstream)
+    {
+        var securityService = workspace.Hub.ServiceProvider.GetService<ISecurityService>();
+        var accessService = workspace.Hub.ServiceProvider.GetService<AccessService>();
+        if (securityService is null || accessService is null)
+            return upstream;
+
+        return Observable.Defer(() =>
+        {
+            var captured = accessService.Context ?? accessService.CircuitContext;
+            var userId = captured?.ObjectId;
+            // No identity → System infrastructure; pass through unfiltered.
+            // System itself → no filter needed.
+            if (string.IsNullOrEmpty(userId)
+                || string.Equals(userId, WellKnownUsers.System, StringComparison.Ordinal))
+                return upstream;
+
+            // Per-user filter: for each emission, filter to nodes the user
+            // has Read on. SecurityService caches per-scope so repeated
+            // checks for the same user are cheap.
+            return upstream.SelectMany(snapshot =>
+                snapshot.ToObservable()
+                    .SelectMany(node =>
+                        securityService.HasPermission(node.Path ?? string.Empty, userId, Permission.Read)
+                            .Take(1)
+                            .Where(hasPerm => hasPerm)
+                            .Select(_ => node))
+                    .ToList()
+                    .Select(filtered => (IEnumerable<MeshNode>)filtered));
+        });
     }
 }
 

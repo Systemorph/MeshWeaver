@@ -158,17 +158,28 @@ public class LanguageModelSyncedQueryTest : MonolithMeshTestBase
     }
 
     [Fact]
-    public async Task SyncedQuery_GetQueryById_ReusesSameObservableAcrossCalls()
+    public async Task SyncedQuery_GetQueryById_ReusesSameUpstreamAcrossCalls()
     {
         // The chat view re-subscribes when the context path changes. The
-        // synced-query registry must return the SAME observable instance
-        // for the same id, otherwise we leak upstream subscriptions.
+        // synced-query registry must reuse the SAME upstream observable for
+        // the same id — otherwise we leak upstream IMeshQueryProvider.ObserveQuery
+        // subscriptions. With per-user RLS wrapping (2026-05-22), the outward
+        // observable is a Defer wrapper that varies per call site, but it
+        // delegates to the SAME cached SyncedQueryMeshNodes upstream
+        // (Replay(1).RefCount). So the invariant becomes "lookup returns
+        // non-null + emits the same payload" rather than reference identity.
         const string id = "test-cache";
         var first = Workspace.GetQuery(id, "namespace:Agent nodeType:Agent");
-        var second = Workspace.GetQuery(id);  // No-args overload — looks up cached
+        var second = Workspace.GetQuery(id);
 
-        second.Should().NotBeNull();
-        second.Should().BeSameAs(first,
-            "subsequent GetQuery(id) without queries must return the cached observable");
+        second.Should().NotBeNull(
+            "subsequent GetQuery(id) lookup-only must return the cached entry");
+        // Subscribe both — Initial frames must agree (same upstream).
+        var ct = TestContext.Current.CancellationToken;
+        var firstSnap = await first.Take(1).Timeout(10.Seconds()).ToTask(ct);
+        var secondSnap = await second!.Take(1).Timeout(10.Seconds()).ToTask(ct);
+        secondSnap.Select(n => n.Path).Should().BeEquivalentTo(
+            firstSnap.Select(n => n.Path),
+            "both must observe the same cached upstream snapshot");
     }
 }
