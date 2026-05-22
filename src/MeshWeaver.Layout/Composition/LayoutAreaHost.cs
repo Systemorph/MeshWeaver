@@ -58,6 +58,17 @@ public record LayoutAreaHost : IDisposable
         // the LayoutAreaHost is cached and reused across requests (e.g., in Orleans grains).
         var accessService = workspace.Hub.ServiceProvider.GetService<AccessService>();
         var capturedAccessContext = accessService?.Context;
+        var ctorLogger = workspace.Hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Layout.LayoutAreaHost");
+        ctorLogger?.LogDebug(
+            "[LayoutAreaHost.ctor] hub={Hub} area={Area} captured AccessContext: ObjectId={ObjectId} Email={Email} IsVirtual={IsVirtual} (Context={HasContext}, CircuitContext={HasCircuit})",
+            workspace.Hub.Address,
+            reference.Area ?? "(default)",
+            capturedAccessContext?.ObjectId ?? "(null)",
+            capturedAccessContext?.Email ?? "(null)",
+            capturedAccessContext?.IsVirtual ?? false,
+            accessService?.Context != null,
+            accessService?.CircuitContext != null);
 
         configuration ??= c => c;
         // Create stream with deferred initialization to avoid circular dependency
@@ -70,6 +81,11 @@ public record LayoutAreaHost : IDisposable
             c => configuration.Invoke(c.WithDeferredInitialization())
                 .WithInitialization(async (_, _) =>
                 {
+                    ctorLogger?.LogDebug(
+                        "[LayoutAreaHost.WithInitialization] hub={Hub} area={Area} restoring AccessContext: {ObjectId} (was-captured={HadCapture})",
+                        workspace.Hub.Address, reference.Area ?? "(default)",
+                        capturedAccessContext?.ObjectId ?? "(null)",
+                        capturedAccessContext != null);
                     // Restore captured AccessContext for the rendering scope
                     if (capturedAccessContext != null)
                         accessService?.SetContext(capturedAccessContext);
