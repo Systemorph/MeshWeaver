@@ -431,17 +431,48 @@ public sealed class MessageHub : IMessageHub
                 Address, shutdownReq.RunLevel, shutdownReq.Version, Version - 1);
         }
 
-        if (rules.First != null)
+        // 🚨 Systematic AccessContext propagation: stamp this hub's AccessService
+        // AsyncLocal Context from the SENDER's delivery.AccessContext for the
+        // duration of handling. Every downstream read (SecurityService probes,
+        // workspace.GetQuery, MeshService.ObserveQuery, validator chains) and
+        // every Post made from inside the handler picks up the originating
+        // user's identity through AsyncLocal automatically — no per-callsite
+        // wiring, no per-handler delivery.AccessContext threading.
+        //
+        // Previously only AccessControlPipeline's per-attribute branch did this,
+        // and ONLY when delivery.AccessContext.Roles was non-empty. Background
+        // / system / hub-impersonated deliveries (empty Roles) left AsyncLocal
+        // at whatever the action-block thread happened to inherit — usually
+        // System or null, which then leaked into every downstream call site
+        // (the prod symptom that drove the 2026-05-22 fixes: per-circuit
+        // dashboard queries hit singleton providers under root-AccessService
+        // and got Anonymous filtering).
+        //
+        // The pair (set on entry, restore on exit) is wrapped in try/finally so
+        // even handler exceptions can't leave the action block stamped with the
+        // wrong identity for the NEXT message.
+        var prevContext = accessService.Context;
+        if (delivery.AccessContext is not null)
+            accessService.SetContext(delivery.AccessContext);
+
+        try
         {
-            if (traceEnabled)
-                logger.LogTrace("MESSAGE_FLOW: HUB_PROCESSING_RULES | {MessageType} | Hub: {Address} | MessageId: {MessageId} | RuleCount: {RuleCount}",
-                    messageTypeName, Address, delivery.Id, rules.Count);
-            delivery = await HandleMessageAsync(delivery, rules.First, cancellationToken);
+            if (rules.First != null)
+            {
+                if (traceEnabled)
+                    logger.LogTrace("MESSAGE_FLOW: HUB_PROCESSING_RULES | {MessageType} | Hub: {Address} | MessageId: {MessageId} | RuleCount: {RuleCount}",
+                        messageTypeName, Address, delivery.Id, rules.Count);
+                delivery = await HandleMessageAsync(delivery, rules.First, cancellationToken);
+            }
+            else if (traceEnabled)
+            {
+                logger.LogTrace("MESSAGE_FLOW: HUB_NO_RULES | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
+                    messageTypeName, Address, delivery.Id);
+            }
         }
-        else if (traceEnabled)
+        finally
         {
-            logger.LogTrace("MESSAGE_FLOW: HUB_NO_RULES | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-                messageTypeName, Address, delivery.Id);
+            accessService.SetContext(prevContext);
         }
 
         var result = FinishDelivery(delivery);
