@@ -378,17 +378,10 @@ public static class JsonSynchronizationStream
                 .Subscribe(_ =>
                 {
                     if (hub.RunLevel > MessageHubRunLevel.Started) return;
-                    // Heartbeat is a system-internal keep-alive (HeartBeatEvent
-                    // has no [RequiresPermission] and HandleHeartBeat in
-                    // MeshExtensions just touches GrainKeepAliveCallback).
-                    // The Subscribe callback fires on a timer scheduler where
-                    // AsyncLocal context was captured at Subscribe time — null
-                    // on the mesh hub's init, which would otherwise produce
-                    // the spammy "posted with no AccessContext" warning on
-                    // every heartbeat. ImpersonateAsHub on the posting hub
-                    // satisfies the PostPipeline without faking user identity.
-                    hub.Post(new HeartBeatEvent(),
-                        o => o.WithTarget(owner).ImpersonateAsHub(hub.Address));
+                    // HeartBeatEvent is [SystemMessage] — PostPipeline accepts
+                    // null AccessContext without warning. No identity stamp
+                    // needed; receiver doesn't gate on principal.
+                    hub.Post(new HeartBeatEvent(), o => o.WithTarget(owner));
                 });
             reduced.RegisterForDisposal(sub);
 
