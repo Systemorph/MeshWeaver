@@ -532,15 +532,16 @@ public static class MeshDataSourceExtensions
                 .Subscribe(node =>
                 {
                     if (cache.IsDeleted) return;
-                    // 🚨 Persistence sampler is legitimate hub-internal infrastructure
-                    // — it auto-persists the per-node hub's OWN MeshNode on every
-                    // change, regardless of which user triggered the change. Stamp
-                    // hub-self as principal at the post site so the receiving
-                    // SaveMeshNodeRequest handler doesn't fail-closed under the
-                    // post-2026-05-21 PostPipeline (which no longer auto-fallback
-                    // stamps hub identity). See AccessContextPropagation.md.
-                    hub.Post(new SaveMeshNodeRequest(node),
-                        o => o.ImpersonateAsHub(hub.Address));
+                    // Persistence sampler is hub-internal infrastructure: the
+                    // per-node hub auto-persists its OWN MeshNode on every
+                    // change. SaveMeshNodeRequest is now [SystemMessage], so the
+                    // PostPipeline accepts a null AccessContext without warning
+                    // and the message bypasses AccessControl on the receiver
+                    // (per-node hub self-write). No ImpersonateAsHub stamping —
+                    // hub address polluted CreatedBy on downstream writes via
+                    // the AsyncLocal leak (fixed 2026-05-22). See
+                    // AccessContextPropagation.md.
+                    hub.Post(new SaveMeshNodeRequest(node));
                 });
             hub.RegisterForDisposal(saveSub);
 

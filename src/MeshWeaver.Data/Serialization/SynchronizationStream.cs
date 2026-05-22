@@ -330,17 +330,18 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
         try
         {
-            // 🚨 SetCurrentRequest is sync-stream infrastructure — it propagates
-            // state changes between hubs via the synchronization protocol. The
-            // OnNext typically fires from the Rx scheduler thread where
-            // AsyncLocal AccessContext is wiped, but the receiving side
-            // (StreamHandlers.HandleSetCurrent at SynchronizationStream.cs:496)
-            // doesn't gate on AccessControl — it's an in-protocol message, not
-            // a write request. Stamp hub-self so the post-2026-05-21
-            // PostPipeline doesn't warn + leave AccessContext null (which then
-            // spams the log on every layout-area state push). Hub-internal
-            // identity is correct for this lifecycle traffic.
-            Hub.Post(new SetCurrentRequest(value), o => o.ImpersonateAsHub(Hub.Address));
+            // SetCurrentRequest is sync-stream protocol — receiver does not
+            // gate on AccessControl (HandleSetCurrent at
+            // SynchronizationStream.cs:496). The record is marked
+            // [SystemMessage] so the PostPipeline accepts a null AccessContext
+            // without warning. User-data flows through this method preserve
+            // user identity via the standard PostPipeline path: if AsyncLocal
+            // has a user (e.g. when a Blazor data-binding push reaches OnNext
+            // through a CarryAccessContext-wrapped chain), that user rides
+            // delivery.AccessContext naturally. No ImpersonateAsHub stamping
+            // here — hub addresses were polluting CreatedBy on user-driven
+            // writes via the AsyncLocal leak (fixed 2026-05-22).
+            Hub.Post(new SetCurrentRequest(value));
         }
         catch (Exception ex)
         {
@@ -693,7 +694,18 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     [PreventLogging]
     public record UpdateStreamRequest([property: JsonIgnore] Func<TStream?, CancellationToken, Task<ChangeItem<TStream>?>> UpdateAsync, [property: JsonIgnore] Action<Exception> ExceptionCallback);
 
+    /// <summary>
+    /// Synchronisation-protocol message that propagates a state change to the
+    /// owner. Not a user-write request — the receiver does NOT gate on
+    /// AccessControl (see <c>StreamHandlers.HandleSetCurrent</c>). Marked
+    /// <see cref="SystemMessageAttribute"/> so the PostPipeline doesn't warn
+    /// when AsyncLocal AccessContext is empty (typical on Rx scheduler hops
+    /// where the stream's <c>OnNext</c> fires). User-data carrying paths
+    /// preserve identity via the standard PostPipeline + CarryAccessContext
+    /// wrap — no ImpersonateAsHub stamping in this protocol layer.
+    /// </summary>
     [PreventLogging]
+    [SystemMessage]
     public record SetCurrentRequest(ChangeItem<TStream> Value);
 
 }
