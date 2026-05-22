@@ -613,21 +613,9 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         // Always use the effective userId for the validation context.
         // The query's explicit UserId takes precedence over session AccessContext
         // to prevent admin context from leaking into public queries.
-        //
-        // 🚨 An EXPLICIT Anonymous userId (caller passed "" or WellKnownUsers.Anonymous
-        // on the MeshQueryRequest) must stamp Anonymous on the validator's
-        // AccessContext — NOT fall through to accessService.Context. Without
-        // this, a test (or any caller) explicitly probing Anonymous visibility
-        // gets the session admin's AccessContext leaked into the validator,
-        // RlsNodeValidator's claim-based role check sees admin's Roles, every
-        // node validates as readable, and private content surfaces to a
-        // nominally-anonymous query (UserAccessTests.SecurePersistence_* +
-        // MeshQuery_AnonymousUser_FiltersRestrictedNodes regression catch).
-        // Fall back to ambient ONLY when userId is null (caller didn't supply
-        // anything — the historical session-driven path).
-        var accessContext = userId is null
-            ? accessService?.Context ?? accessService?.CircuitContext
-            : new AccessContext { ObjectId = userId };
+        var accessContext = !string.IsNullOrEmpty(userId) && userId != WellKnownUsers.Anonymous
+            ? new AccessContext { ObjectId = userId }
+            : accessService?.Context ?? accessService?.CircuitContext;
 
         var context = new NodeValidationContext
         {
