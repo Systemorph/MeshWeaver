@@ -421,14 +421,23 @@ public record MessageHubConfiguration
                     d.Message?.GetType().Name ?? "(null)",
                     accessContext?.ObjectId ?? "(no-context)",
                     d.Sender);
-            userService?.SetContext(accessContext);
+            // Only propagate USER identities to AsyncLocal. Hub-shaped principals
+            // may legitimately ride delivery.AccessContext (for AccessControl)
+            // but MUST NOT leak into AsyncLocal — see
+            // Doc/Architecture/AccessContextPropagation.md. The MessageHub.HandleMessageAsync
+            // hook applies the same guard for the rule-chain dispatch boundary.
+            var shouldStamp = accessContext is not null
+                && !AccessService.LooksLikeHubPrincipal(accessContext.ObjectId);
+            if (shouldStamp)
+                userService?.SetContext(accessContext);
             try
             {
                 return await next.Invoke(d, ct);
             }
             finally
             {
-                userService?.SetContext(null);
+                if (shouldStamp)
+                    userService?.SetContext(null);
             }
         });
     }
