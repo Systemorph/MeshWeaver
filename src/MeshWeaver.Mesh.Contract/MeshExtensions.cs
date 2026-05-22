@@ -957,8 +957,20 @@ public static class MeshExtensions
                     logger.LogDebug("[DeleteNode] storage.Delete (root) {Path}", path);
                     var changeFeed = meshHub.ServiceProvider.GetService<IMeshChangeFeed>();
                     return storage.DeleteAndPublish(path, changeFeed)
-                        .Do(_ => meshHub.ServiceProvider.GetService<IDataChangeNotifier>()?
-                            .NotifyChange(DataChangeNotification.Deleted(path, null)));
+                        .Do(_ =>
+                        {
+                            meshHub.ServiceProvider.GetService<IDataChangeNotifier>()?
+                                .NotifyChange(DataChangeNotification.Deleted(path, null));
+                            // 🚨 Invalidate the process-wide MeshNodeStreamCache so
+                            // subsequent reads of this path don't see the pre-delete
+                            // value held in the Replay(1) entry. Without this, tests
+                            // (and prod readers) get a stale ghost of the just-deleted
+                            // node — symptom: NodeCreationAccessTest.CreateNode_IdChanged
+                            // CreatesNewNodeAndDeletesTransient saw the transient after
+                            // delete.
+                            meshHub.ServiceProvider.GetService<IMeshNodeStreamCache>()?
+                                .Invalidate(path);
+                        });
                 }
 
                 // Descendant: fan-out via per-node hub. The leaf hub re-enters

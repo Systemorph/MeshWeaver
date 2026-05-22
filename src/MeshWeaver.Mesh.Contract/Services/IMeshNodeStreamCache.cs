@@ -51,4 +51,13 @@ public interface IMeshNodeStreamCache
     /// Subscribe (the side effect runs on Subscribe).
     /// </summary>
     IObservable<MeshNode> Update(string path, System.Func<MeshNode, MeshNode> update);
+
+    /// <summary>
+    /// Removes the cached <c>Replay(1)</c> entry for <paramref name="path"/>.
+    /// The per-path stream is rebuilt on the next <see cref="GetStream"/> call.
+    /// Called by <c>HandleDeleteNodeRequest</c> after the owning hub's persistence
+    /// layer confirms the delete, so subsequent reads no longer see the stale
+    /// pre-delete value. Idempotent — calling for an unknown path is a no-op.
+    /// </summary>
+    void Invalidate(string path);
 }
