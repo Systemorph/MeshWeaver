@@ -65,22 +65,33 @@ public static class AccessContextCaptureExtensions
     {
         var access = services.GetService<AccessService>();
         if (access is null) return source;
-        // Capture at chaining (wrap) time on the caller's thread, where the
-        // AsyncLocal is correct. The framework primitive runs under THE
-        // CALLER'S identity, regardless of where Subscribe lands or what the
-        // ambient is at Subscribe time (which may be polluted by earlier
-        // wraps' SetContext side effects, see Concurrent_Wraps_Do_Not_Bleed).
-        // For chains built lazily under a user-switch pattern (e.g. plugin
-        // chains built once with no ambient, then subscribed multiple times
-        // under different users), the Subscribe-time fallback below kicks in.
-        var wrapCaptured = access.Context ?? access.CircuitContext;
-        return Observable.Defer(() =>
-        {
-            var captured = wrapCaptured ?? access.Context ?? access.CircuitContext;
-            if (captured is null) return source;
-            access.SetContext(captured);
-            return source.Do(_ => access.SetContext(captured));
-        });
+
+        // 🚨 2026-05-22: this method used to set `access.SetContext(captured)`
+        // both at Subscribe time and on every emission. That mutated AsyncLocal
+        // on whatever thread Subscribe ran on (often the caller's), with NO
+        // restore — leaking the captured identity into the caller's logical
+        // execution context indefinitely.
+        //
+        // Symptom: McpUpdate tests showed user1's identity used for a request
+        // freshly authenticated as user2. Earlier user1 call → wrap set
+        // Context=user1 on the test thread → later user2 LoginWithToken set
+        // CircuitContext=user2 but Context was still user1 → CaptureContext
+        // returns Context (priority over CircuitContext) → user1 stamped on
+        // the user2 delivery.
+        //
+        // The premise that motivated the SetContext — "downstream chained
+        // operators (Select/SelectMany) re-call CaptureContext on the
+        // Subscribe thread and need AsyncLocal set" — is wrong for the
+        // common framework primitives: ConfigurePost already stamps
+        // delivery.AccessContext from the captured value, so identity rides
+        // ON the delivery and the receiver's UserServiceDeliveryPipeline
+        // sets/restores AsyncLocal under proper try/finally. Chained
+        // operators inside the framework primitives that need the identity
+        // can read it from `captured` directly in their closure.
+        //
+        // Net effect: this is now a pass-through. Kept as an extension point
+        // so callsites don't change, but it no longer mutates AsyncLocal.
+        return source;
     }
 
     /// <summary>
@@ -93,14 +104,10 @@ public static class AccessContextCaptureExtensions
     public static IObservable<T> CarryAccessContext<T>(
         this IObservable<T> source, AccessService? access)
     {
-        if (access is null) return source;
-        var wrapCaptured = access.Context ?? access.CircuitContext;
-        return Observable.Defer(() =>
-        {
-            var captured = wrapCaptured ?? access.Context ?? access.CircuitContext;
-            if (captured is null) return source;
-            access.SetContext(captured);
-            return source.Do(_ => access.SetContext(captured));
-        });
+        // See the IServiceProvider overload for the full reasoning: this method
+        // is now a pass-through. Identity rides on delivery.AccessContext via
+        // PostOptions; the receiver's UserServiceDeliveryPipeline sets/restores
+        // AsyncLocal under try/finally. Mutating AsyncLocal here leaked.
+        return source;
     }
 }
