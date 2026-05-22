@@ -222,6 +222,20 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
         GetEntry(path).Handle.Update(update);
 
     /// <summary>
+    /// Removes the cached entry for <paramref name="path"/> so the next
+    /// <see cref="GetStream"/> call rebuilds a fresh stream. Called by
+    /// <c>HandleDeleteNodeRequest</c> after the persistence delete commits —
+    /// the Replay(1) cache otherwise holds the pre-delete MeshNode forever
+    /// (the upstream observable doesn't emit "deleted" — the per-node hub is
+    /// gone). Idempotent.
+    /// </summary>
+    public void Invalidate(string path)
+    {
+        if (_streams.TryRemove(path, out _))
+            logger.LogDebug("MeshNodeStreamCache: invalidated entry for {Path}", path);
+    }
+
+    /// <summary>
     /// True when <paramref name="path"/> is empty or its first segment matches
     /// a known NodeType name (from <see cref="PartitionDefinition.NodeTypeToSuffix"/>).
     /// Used by <see cref="GetStream"/> to skip the access-check round-trip on

@@ -837,44 +837,24 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// </summary>
     protected async Task<MeshNode?> ReadNodeAsync(string path, CancellationToken ct)
     {
-        // Match the mesh hub's 60s RequestTimeout — the framework default 30s
-        // trips before a slow per-node hub responds on CI cold starts (symptom:
-        // ThreadAgentIntegrationTest.FullFlow_CreateThread fails with
-        // 'No response received in hub test-reader/shared within 00:00:30').
-        var reader = Mesh.GetHostedHub(ReadHubAddress,
-            c => c.WithRequestTimeout(TimeSpan.FromSeconds(60)));
-        // Wall-clock-bound the wait via Task.WhenAny — routing failures on a path
-        // with no per-node hub don't always cancel cleanly through the inner observable.
-        var requestTask = reader.Observe(new GetDataRequest(new MeshNodeReference()),
-                o => o.WithTarget(new Address(path)))
-            .FirstAsync().ToTask(ct);
-        var winner = await Task.WhenAny(requestTask, Task.Delay(ReadNodeTimeout, ct));
-        if (winner != requestTask)
-        {
-            throw new TimeoutException(
-                $"ReadNodeAsync('{path}') exceeded {ReadNodeTimeout.TotalSeconds:F0}s. " +
-                $"Likely cause: per-node hub for '{path}' never activated (the node " +
-                $"was never created, or routing has no entry for the address), or its " +
-                $"MeshDataSource never emitted on the MeshNodeReference reducer.");
-        }
-
-        IMessageDelivery<GetDataResponse> response;
+        // 🚨 2026-05-22: workspace.GetMeshNodeStream(path) — cache-routed.
+        // Take(1) captures the FIRST emission (null OR non-null) within budget.
+        // Tests use this both for "node should be there" (NotBeNull) and
+        // "node should be gone" (BeNull). The cache must invalidate on delete
+        // for the gone-case to return null after a recent delete — see
+        // MeshNodeStreamCache for the invalidation hook. If the cache lags,
+        // tests need a small wait or a different verification helper.
+        var workspace = Mesh.GetWorkspace();
         try
         {
-            response = await requestTask;
+            return await workspace.GetMeshNodeStream(path)
+                .Take(1)
+                .Timeout(ReadNodeTimeout)
+                .FirstAsync()
+                .ToTask(ct);
         }
-        catch (Exception ex) when (IsNotFoundFailure(ex))
-        {
-            // Routing reports NotFound (no per-node hub, or no GetDataRequest
-            // handler on the hub that does exist). Treat as absence.
-            return null;
-        }
-
-        var node = response.Message.Data as MeshNode;
-        if (node == null && response.Message.Data is System.Text.Json.JsonElement je)
-            node = je.Deserialize<MeshNode>(Mesh.JsonSerializerOptions);
-
-        return node;
+        catch (TimeoutException) { return null; }
+        catch (Exception ex) when (IsNotFoundFailure(ex)) { return null; }
     }
 
     /// <summary>
