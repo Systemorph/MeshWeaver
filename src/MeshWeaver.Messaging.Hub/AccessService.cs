@@ -102,6 +102,17 @@ public class AccessService
         // In production Blazor, CircuitAccessHandler always sets the AsyncLocal
         // per inbound activity, so the persistent fallback is never reached.
         persistentCircuitContext = accessContext;
+
+        // 🚨 2026-05-22: SetCircuitContext is an EXPLICIT identity switch
+        // (LoginWithToken, DevLogin, circuit auth). Any stale per-request
+        // Context AsyncLocal value left by a prior delivery pipeline must be
+        // dropped — otherwise CaptureContext (which reads Context ?? CircuitContext)
+        // returns the stale value and the just-switched circuit identity is
+        // ignored. Symptom: RlsIntegrationTests.UpdateNode_Anonymous_NoUpdatedBy_Fails
+        // was passing because a prior request's leaked Context=Roland survived
+        // SetCircuitContext(null) and the "anonymous" update ran as Roland.
+        context.Value = null;
+
         if (LooksLikeHubPrincipal(accessContext?.ObjectId))
             _logger?.LogError(
                 "SetCircuitContext: hub-shaped principal {ObjectId} set as CircuitContext — must never happen. " +
