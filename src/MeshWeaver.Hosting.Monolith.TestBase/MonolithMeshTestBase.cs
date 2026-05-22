@@ -71,6 +71,23 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             .AddGraph()
             .AddMeshNodes(new MeshNode(TestPartition) { Name = "Test Data", NodeType = "Markdown" })
             .ConfigureServices(s => s.AddFileSystemAssemblyStore(_assemblyStoreRoot))
+            // 🚨 Disable the legacy CompilationCacheService disk cache for tests.
+            // Default CacheDirectory (".mesh-cache" relative to assembly) is
+            // SHARED across every test in the testhost — multiple test classes
+            // compiling the same NodeType name (e.g. "BrokenType",
+            // "DynamicType") race on the same DLL file, causing test-N+1 to
+            // time out waiting on a lock held by test-N's lingering ALC.
+            // Symptom: CodeEditRecompileTest + LinkedInTelemetryImportTest
+            // timeout in full sweeps but pass in isolation (no contention
+            // when running alone). In-memory compile bypasses the file
+            // lock entirely; FileSystemAssemblyStore (above, unique per
+            // ConfigureMeshBase call via _assemblyStoreRoot) covers any
+            // disk-backed assembly storage the test actually needs.
+            // Acme tests override back to true explicitly via their own
+            // services.Configure<CompilationCacheOptions> (options pattern
+            // composes — last writer wins, base's false is overridden).
+            .ConfigureServices(s => s.Configure<CompilationCacheOptions>(o =>
+                o.EnableDiskCache = false))
             // Match the 60s RequestTimeout we apply to client hubs in
             // ConfigureClient — without this the mesh hub still defaults to 30s,
             // so any test that does Mesh.Observe(req, target=...) and waits for
