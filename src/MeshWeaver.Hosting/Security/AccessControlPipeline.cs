@@ -68,18 +68,14 @@ public static class AccessControlPipeline
 
                 var userId = ResolveIdentity(delivery, accessService);
 
-                // 🚨 2026-05-22: removed AccessControlPipeline's own SetContext
-                // call here. UserServiceDeliveryPipeline runs earlier in the
-                // same delivery pipeline and already sets accessService.Context
-                // from delivery.AccessContext (when the principal is user-shaped)
-                // WITH try/finally restore. The duplicate SetContext here had no
-                // restore, leaking the per-request AsyncLocal back into the
-                // caller's execution context — once user1 posted a request,
-                // every subsequent CaptureContext on the test thread (or any
-                // shared execution context) saw user1 even after LoginWithToken
-                // switched CircuitContext to user2. Symptom: McpUpdate tests
-                // showed "user 'user1@example.com' lacks Update" for a request
-                // freshly authenticated as user2.
+                // Restore the sender's AccessContext onto this scope's AccessService
+                // so SecurityService.GetEffectivePermissions — which reads claim-based
+                // roles from _accessService.Context.Roles — can resolve them. Trigger:
+                // delivery carries non-empty user Roles (signed claim payload).
+                if (delivery.AccessContext is { Roles: { Count: > 0 } } userCtx)
+                {
+                    accessService.SetContext(userCtx);
+                }
 
                 // Log identity resolution details for debugging access issues
                 if (string.IsNullOrEmpty(userId))
