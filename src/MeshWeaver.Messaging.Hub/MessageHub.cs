@@ -452,7 +452,14 @@ public sealed class MessageHub : IMessageHub
         // even handler exceptions can't leave the action block stamped with the
         // wrong identity for the NEXT message.
         var prevContext = accessService.Context;
-        if (delivery.AccessContext is not null)
+        // Only propagate USER identities to AsyncLocal. Hub-shaped principals
+        // (sync/, mesh/, node/, activity/, portal/) may legitimately ride
+        // delivery.AccessContext for the AccessControl check (e.g. SubscribeRequest
+        // from a hub-init data source) but MUST NOT leak into AsyncLocal — they
+        // would then propagate as fake user identity into every downstream write.
+        // See Doc/Architecture/AccessContextPropagation.md.
+        if (delivery.AccessContext is not null
+            && !AccessService.LooksLikeHubPrincipal(delivery.AccessContext.ObjectId))
             accessService.SetContext(delivery.AccessContext);
 
         try
