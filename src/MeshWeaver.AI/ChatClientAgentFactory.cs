@@ -449,14 +449,13 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         string lastSubText = "";
         ThreadMessageStatus? lastSubStatus = null;
 
-        // 🚨 The GUI's DelegationToolCallCardView reads sub-thread state DIRECTLY
-        // via cache.GetStream(DelegationPath) → its ActiveMessageId → response
-        // cell. We do NOT mirror the sub-thread's streaming text onto the parent's
-        // ToolCallEntry.Result here — that was the source of duplicates +
-        // out-of-sync displays. We only write the parent's ToolCallEntry TWICE per
-        // delegation lifecycle: once at terminal (Status flip + final Result for
-        // FCC's FunctionResultContent), and the dispatch-time stamp is the FCC
-        // streaming loop's append (it already creates the entry).
+        // 🚨 The GUI reads sub-thread state DIRECTLY via cache.GetStream(DelegationPath)
+        // → its ActiveMessageId → response cell. We do NOT mirror the sub-thread's
+        // streaming text onto the parent's ToolCallEntry.Result here — that was the
+        // source of duplicates + out-of-sync displays. We only write the parent's
+        // ToolCallEntry TWICE per delegation lifecycle: once at terminal (Status flip
+        // + final Result for FCC's FunctionResultContent), and the dispatch-time stamp
+        // is the FCC streaming loop's append (it already creates the entry).
         //
         // Subscriptions below exist ONLY to detect terminal — body display
         // streams from the sub-thread itself.
@@ -499,8 +498,8 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         //    agent — BuildThreadWithMessages set IsExecuting=true). IsExecuting
         //    flipping false (after we've observed it run) is the terminal signal.
         //    The first emission can race ahead of the initial state, so we gate
-        //    on `startedExecuting`. No projection write — GUI display streams
-        //    direct from the sub-thread's own MeshNode via DelegationToolCallCardView.
+        //    on `startedExecuting`. No projection write — the parent bubble streams
+        //    sub-thread output through an embedded sub-thread Streaming layout area.
         var startedExecuting = false;
         var subThreadSub = nodeCache.GetStream(subThreadPath)
             .Subscribe(

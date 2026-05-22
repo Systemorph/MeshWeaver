@@ -33,7 +33,7 @@ namespace MeshWeaver.Threading.Test;
 /// "sub-thread appears twice" in the GUI). The new shape writes ONCE at
 /// terminal (Status flip + final Result for FCC's FunctionResultContent);
 /// the live sub-agent body streams direct from the sub-thread cell into
-/// <c>DelegationToolCallCardView</c>.
+/// the parent bubble's embedded sub-thread Streaming area.
 ///
 /// <para>This test catches a regression that would silently re-introduce
 /// the per-tick projection write — that pattern always risks duplicates

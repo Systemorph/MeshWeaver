@@ -24,7 +24,26 @@
     width: 100%;
     overflow-y: auto;
     overflow-x: hidden;
-    padding: 16px;
+    padding: 20px 24px;
+    /* Flex column so the bubble's `align-self: flex-end` (user)
+       puts user bubbles flush right while assistant stays left. */
+    display: flex;
+    flex-direction: column;
+}
+
+/* Loading skeleton lines — shown when a message's satellite cell hasn't
+   delivered content yet through the IMeshNodeStreamCache subscription. */
+.thread-msg-skeleton-line {
+    height: 13px;
+    border-radius: 6px;
+    background: var(--neutral-stroke-rest);
+    margin: 4px 0;
+    width: 60%;
+    animation: thread-msg-skeleton-pulse 1.4s ease-in-out infinite;
+}
+@@keyframes thread-msg-skeleton-pulse {
+    0%, 100% { opacity: 0.35; }
+    50%      { opacity: 0.15; }
 }
 
 /* Execution status bar above chat input */

@@ -124,9 +124,13 @@ public static class GlobalSettingsLayoutArea
         string tabId,
         IReadOnlyList<GlobalSettingsMenuItemDefinition> items)
     {
+        // Pin a max-height + overflow-y so the tab content scrolls. `height: 100%`
+        // on a fluent-stack inside a splitter pane often resolves against
+        // natural content height, not the pane — long tabs (Data Sources with
+        // many repos) used to overflow the page instead.
         var stack = Controls.Stack
             .WithWidth("100%")
-            .WithStyle("padding: 24px; height: 100%; overflow: auto;");
+            .WithStyle("padding: 24px; max-height: calc(100vh - 100px); overflow-y: auto; overflow-x: hidden;");
 
         var matchedItem = items.FirstOrDefault(i => i.Id == tabId)
             ?? items.FirstOrDefault();

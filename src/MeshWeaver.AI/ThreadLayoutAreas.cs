@@ -157,40 +157,91 @@ public static class ThreadLayoutAreas
             .DistinctUntilChanged();
         host.RegisterForDisposal(titleStream.Subscribe(title => host.UpdateData("title", title)));
 
-        // Push context link HTML to data section
+        // Push context link HTML to data section — pill-shaped breadcrumb chip.
         host.RegisterForDisposal(vmStream.DistinctUntilChanged().Subscribe(vm =>
         {
             if (!string.IsNullOrEmpty(vm.InitialContext))
             {
                 var displayName = System.Web.HttpUtility.HtmlEncode(vm.InitialContextDisplayName ?? vm.InitialContext);
-                // Inline-flex stays for the icon + label alignment;
-                // the wrapping `display: block` + `margin-bottom` gives the
-                // breadcrumb its own row with whitespace before the icon/title
-                // row below — without it the two visually crowd into ~2px gap.
                 host.UpdateData("contextLink",
-                    $"<div style=\"display: block; margin-bottom: 16px;\">" +
-                    $"<a href=\"/{vm.InitialContext}\" style=\"font-size: 0.85rem; color: var(--accent-fill-rest); " +
-                    $"text-decoration: none; display: inline-flex; align-items: center; gap: 4px;\">" +
-                    $"<span style=\"font-size: 12px;\">&larr;</span> {displayName}</a>" +
-                    $"</div>");
+                    "<div style=\"display: block; margin-bottom: 14px;\">" +
+                    $"<a href=\"/{vm.InitialContext}\" " +
+                    "style=\"display: inline-flex; align-items: center; gap: 6px; " +
+                    "padding: 4px 12px 4px 8px; border-radius: 999px; " +
+                    "background: color-mix(in srgb, var(--accent-fill-rest) 10%, transparent); " +
+                    "border: 1px solid color-mix(in srgb, var(--accent-fill-rest) 30%, transparent); " +
+                    "font-size: 0.78rem; font-weight: 500; " +
+                    "color: var(--accent-fill-rest); text-decoration: none; " +
+                    "transition: background 150ms ease, transform 150ms ease;\" " +
+                    "onmouseover=\"this.style.background='color-mix(in srgb, var(--accent-fill-rest) 18%, transparent)'; this.style.transform='translateX(-2px)';\" " +
+                    "onmouseout=\"this.style.background='color-mix(in srgb, var(--accent-fill-rest) 10%, transparent)'; this.style.transform='translateX(0)';\">" +
+                    "<span style=\"font-size: 14px; line-height: 1;\">&larr;</span> " +
+                    $"<span>{displayName}</span></a>" +
+                    "</div>");
             }
         }));
 
-        // Header: chat icon + context link + h1 title (hidden in side panel via CSS).
-        // Outer stack uses a 12 px vertical gap so the breadcrumb (above) and the
-        // icon/title row (below) don't crowd each other.
+        // Push subtitle (message count) to the data section — reactive.
+        host.RegisterForDisposal(vmStream
+            .Select(vm => vm.Messages?.Count ?? 0)
+            .DistinctUntilChanged()
+            .Subscribe(count =>
+            {
+                var label = count switch
+                {
+                    0 => "No messages yet",
+                    1 => "1 message",
+                    _ => $"{count} messages"
+                };
+                host.UpdateData("subtitle",
+                    "<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); " +
+                    "margin-top: 4px; display: inline-flex; align-items: center; gap: 8px;\">" +
+                    "<span style=\"width: 6px; height: 6px; border-radius: 50%; " +
+                    "background: var(--accent-fill-rest); display: inline-block; " +
+                    "box-shadow: 0 0 8px var(--accent-fill-rest); animation: thread-hdr-pulse 2.4s ease-in-out infinite;\"></span>" +
+                    $"<span>{label}</span>" +
+                    "</div>" +
+                    "<style>@keyframes thread-hdr-pulse { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }</style>");
+            }));
+
+        // Hero header: gradient surface, big glowing chat icon, title + live subtitle.
         var header = Controls.Stack
             .WithClass("thread-full-header")
             .WithWidth("100%")
-            .WithStyle("padding: 16px 24px 24px 24px; margin-bottom: 24px; border-bottom: 1px solid var(--neutral-stroke-rest); gap: 12px;")
+            .WithStyle(
+                "padding: 24px 28px 22px 28px; margin-bottom: 20px; " +
+                "border-radius: 14px; gap: 10px; " +
+                "background: linear-gradient(135deg, " +
+                "color-mix(in srgb, var(--accent-fill-rest) 8%, var(--neutral-layer-1)), " +
+                "var(--neutral-layer-1) 70%); " +
+                "border: 1px solid color-mix(in srgb, var(--accent-fill-rest) 18%, var(--neutral-stroke-rest)); " +
+                "box-shadow: 0 6px 24px -8px color-mix(in srgb, var(--accent-fill-rest) 25%, transparent);")
             .WithView(Controls.Html(new JsonPointerReference(LayoutAreaReference.GetDataPointer("contextLink"))))
             .WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
-                .WithStyle("align-items: center; gap: 16px;")
+                .WithStyle("align-items: center; gap: 18px;")
                 .WithView(Controls.Html(
-                    "<img src=\"/static/NodeTypeIcons/chat.svg\" alt=\"\" style=\"width: 48px; height: 48px; border-radius: 8px; object-fit: contain;\" />"))
-                .WithView(Controls.Html(new JsonPointerReference(LayoutAreaReference.GetDataPointer("title")))
-                    .WithStyle("margin: 0; font-size: 2rem; font-weight: bold;")));
+                    "<div style=\"position: relative; width: 56px; height: 56px; flex: 0 0 56px; " +
+                    "border-radius: 50%; " +
+                    "background: linear-gradient(135deg, var(--accent-fill-rest), " +
+                    "color-mix(in srgb, var(--accent-fill-rest) 60%, #7c5cd1)); " +
+                    "display: inline-flex; align-items: center; justify-content: center; " +
+                    "box-shadow: 0 8px 20px -4px color-mix(in srgb, var(--accent-fill-rest) 55%, transparent), " +
+                    "inset 0 1px 0 rgba(255,255,255,0.25);\">" +
+                    "<img src=\"/static/NodeTypeIcons/chat.svg\" alt=\"\" " +
+                    "style=\"width: 32px; height: 32px; object-fit: contain; " +
+                    "filter: brightness(0) invert(1) drop-shadow(0 1px 2px rgba(0,0,0,0.25));\" />" +
+                    "</div>"))
+                .WithView(Controls.Stack
+                    .WithStyle("gap: 2px; min-width: 0;")
+                    .WithView(Controls.Html(new JsonPointerReference(LayoutAreaReference.GetDataPointer("title")))
+                        .WithStyle("margin: 0; font-size: 1.85rem; font-weight: 600; " +
+                                   "letter-spacing: -0.01em; line-height: 1.15; " +
+                                   "background: linear-gradient(135deg, var(--neutral-foreground-rest), " +
+                                   "color-mix(in srgb, var(--accent-fill-rest) 80%, var(--neutral-foreground-rest))); " +
+                                   "-webkit-background-clip: text; background-clip: text; " +
+                                   "-webkit-text-fill-color: transparent; color: transparent;"))
+                    .WithView(Controls.Html(new JsonPointerReference(LayoutAreaReference.GetDataPointer("subtitle"))))));
 
         // Static container — never rebuilt
         return Controls.Stack

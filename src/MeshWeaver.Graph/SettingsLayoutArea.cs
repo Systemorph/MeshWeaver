@@ -156,9 +156,14 @@ public static class SettingsLayoutArea
         string tabId,
         IReadOnlyList<SettingsMenuItemDefinition> items)
     {
+        // `height: 100%` on a fluent-stack inside a splitter pane is unreliable —
+        // the pane has a height but the stack's percentage often resolves against
+        // its natural content size. Pin a `max-height` and `overflow-y: auto`
+        // explicitly so long tabs (Metadata + many fields, Access Control,
+        // Effective Access) scroll instead of overflowing the page.
         var stack = Controls.Stack
             .WithWidth("100%")
-            .WithStyle("padding: 24px; height: 100%; overflow: auto;");
+            .WithStyle("padding: 24px; max-height: calc(100vh - 100px); overflow-y: auto; overflow-x: hidden;");
 
         var matchedItem = items.FirstOrDefault(i => i.Id == tabId)
             ?? items.FirstOrDefault();

@@ -53,8 +53,13 @@ public static class ThreadExecution
         string responseMsgId,
         string mainEntity,
         Func<ThreadMessage, ThreadMessage> mutate,
-        ILogger? logger)
+        ILogger? logger,
+        [System.Runtime.CompilerServices.CallerMemberName] string callerName = "",
+        [System.Runtime.CompilerServices.CallerLineNumber] int callerLine = 0)
     {
+        try { System.IO.File.AppendAllText(@"C:\tmp\update-trace.log",
+            $"[URC] {DateTime.Now:HH:mm:ss.fff} {responsePath} called from {callerName}@{callerLine}\n"); }
+        catch { }
         cache.Update(responsePath, node =>
         {
             var current = node?.Content as ThreadMessage ?? new ThreadMessage
@@ -65,14 +70,6 @@ public static class ThreadExecution
                 Status = ThreadMessageStatus.Streaming
             };
             var updated = mutate(current);
-            // 🚨 Text monotonic-growth guard while streaming: callbacks like
-            // ThreadSubmission's "Allocating agent..." can race ThreadExecution's
-            // growing stream — the late "Allocating agent..." write (19 chars)
-            // would shrink a streamed-so-far text (22+ chars), producing the
-            // [22, 19, 22, ...] regression that ThreadStreamingIdentityTest.
-            // SubmitMessage_StreamingProducesMultipleGrowingEmissions catches.
-            // While Status is Streaming, refuse to shrink the text — mirror the
-            // monotonic guard PushToResponseMessage applies.
             if (updated.Status == ThreadMessageStatus.Streaming
                 && updated.Text.Length < current.Text.Length)
                 updated = updated with { Text = current.Text };
@@ -909,19 +906,22 @@ public static class ThreadExecution
         var responsePath = $"{threadPath}/{responseMsgId}";
 
         // Helper: push content to the response message via IMeshNodeStreamCache.
-        // 🚨 Same shared handle that the GUI (ThreadMessageItemView /
-        // DelegationToolCallCardView) reads from — single upstream subscription
-        // process-wide. Replaces the per-_Exec workspace.GetRemoteStream that
-        // opened a separate handle (writes through one were invisible to readers
-        // of the other). See Doc/GUI/ItemTemplateMeshNodeStreamBinding.
+        // 🚨 Same shared handle that the GUI's ThreadMessageBubbleView reads from —
+        // single upstream subscription process-wide. Replaces the per-_Exec
+        // workspace.GetRemoteStream that opened a separate handle (writes through
+        // one were invisible to readers of the other).
         var mainEntity = request.ContextPath ?? threadPath;
         void PushToResponseMessage(string text, ImmutableList<ToolCallEntry> toolCalls,
             ImmutableList<NodeChangeEntry> updatedNodes,
             string? agentName, string? modelName,
             int? inputTokens = null, int? outputTokens = null, int? totalTokens = null,
             DateTime? completedAt = null,
-            ThreadMessageStatus? status = null)
+            ThreadMessageStatus? status = null,
+            [System.Runtime.CompilerServices.CallerLineNumber] int callerLine = 0)
         {
+            try { System.IO.File.AppendAllText(@"C:\tmp\update-trace.log",
+                $"[PTRM] {DateTime.Now:HH:mm:ss.fff} {responsePath} textLen={text.Length} status={status?.ToString() ?? "(preserve)"} from line {callerLine}\n"); }
+            catch { }
             logger.LogDebug("[ThreadExec] PUSH_TO_MSG: responsePath={ResponsePath}, textLen={TextLen}, toolCalls={ToolCalls}, updatedNodes={UpdatedNodes}, status={Status}",
                 responsePath, text.Length, toolCalls.Count, updatedNodes.Count, status?.ToString() ?? "(preserve)");
 

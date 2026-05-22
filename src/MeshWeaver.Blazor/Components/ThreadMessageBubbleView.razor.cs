@@ -121,7 +121,6 @@ public partial class ThreadMessageBubbleView : BlazorView<ThreadMessageBubbleCon
             // ("sync/... lacks Read"), the UnauthorizedAccessException kills
             // the Blazor circuit. Parent thread access was already enforced at
             // navigation time — bypass with System for the message-cell read.
-            // Same pattern as ThreadMessageItemView.cs.
             var accessService = Hub.ServiceProvider.GetService<AccessService>();
             IObservable<MeshNode> stream;
             using (accessService?.ImpersonateAsSystem())

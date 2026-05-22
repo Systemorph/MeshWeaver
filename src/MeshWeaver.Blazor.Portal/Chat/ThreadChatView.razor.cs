@@ -1303,8 +1303,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     }
 
     /// <summary>
-    /// Converts the data-bound ThreadViewModel to a message ID list.
-    /// GetStream&lt;object&gt; deserializes the ThreadViewModel (has $type), so we get the typed object.
+    /// Converts the data-bound ThreadViewModel to a message ID list. Also
+    /// syncs per-message cache subscriptions so the inline bubble render in
+    /// <see cref="ThreadChatView"/>'s Razor template gets live ThreadMessage
+    /// content via <see cref="messageStates"/>.
     /// </summary>
     private ThreadViewModel? ConvertThreadViewModel(object? value, ThreadViewModel? _)
     {
@@ -1317,7 +1319,209 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         };
         Logger.LogDebug("[ThreadChat:{InstanceId}] ConvertThreadViewModel: input={InputType}, msgs={MsgCount}",
             _instanceId, value?.GetType().Name ?? "null", result?.Messages?.Count ?? 0);
+        SyncMessageSubscriptions(result?.Messages ?? []);
         return result;
+    }
+
+    // ─── Inline bubble subscriptions ──────────────────────────────────────
+    // Per-message live state, keyed by message id. Populated by
+    // SyncMessageSubscriptions opening one IMeshNodeStreamCache subscription
+    // per visible id. Razor template iterates ThreadMessages and renders
+    // each bubble inline using messageStates[id].
+    private record MessageBubbleState(
+        string Role,
+        string AuthorName,
+        string? ModelName,
+        DateTime? Timestamp,
+        string? Text,
+        IReadOnlyList<ToolCallEntry>? ToolCalls,
+        IReadOnlyList<NodeChangeEntry>? UpdatedNodes);
+
+    private readonly Dictionary<string, MessageBubbleState> messageStates = new();
+    private readonly Dictionary<string, IDisposable> messageSubs = new();
+    private readonly HashSet<string> editingMessages = new();
+
+    private void SyncMessageSubscriptions(IReadOnlyList<string> messageIds)
+    {
+        if (_isDisposed || string.IsNullOrEmpty(threadPath))
+            return;
+
+        IMeshNodeStreamCache? cache;
+        try
+        {
+            cache = Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex,
+                "[ThreadChat:{InstanceId}] IMeshNodeStreamCache unavailable — bubbles will not update live",
+                _instanceId);
+            return;
+        }
+        var accessService = Hub.ServiceProvider.GetService<AccessService>();
+
+        var idSet = messageIds.ToHashSet(StringComparer.Ordinal);
+        var stale = messageSubs.Keys.Where(id => !idSet.Contains(id)).ToList();
+        foreach (var id in stale)
+        {
+            messageSubs[id].Dispose();
+            messageSubs.Remove(id);
+            messageStates.Remove(id);
+            editingMessages.Remove(id);
+        }
+
+        foreach (var id in messageIds)
+        {
+            if (messageSubs.ContainsKey(id)) continue;
+            var nodePath = $"{threadPath}/{id}";
+
+            IObservable<MeshNode> stream;
+            using (accessService?.ImpersonateAsSystem())
+            {
+                stream = cache.GetStream(nodePath);
+            }
+
+            messageSubs[id] = stream
+                .Where(n => n?.Content is not null)
+                .Subscribe(n => UpdateMessageState(id, n));
+        }
+    }
+
+    private void UpdateMessageState(string id, MeshNode node)
+    {
+        if (_isDisposed) return;
+        var je = ToJsonElement(node.Content!);
+
+        var role = je.TryGetProperty("role", out var roleProp) && roleProp.ValueKind == JsonValueKind.String
+            ? roleProp.GetString() ?? "user" : "user";
+        var explicitAuthor = je.TryGetProperty("authorName", out var aProp) && aProp.ValueKind == JsonValueKind.String
+            ? aProp.GetString() : null;
+        var agentName = je.TryGetProperty("agentName", out var agProp) && agProp.ValueKind == JsonValueKind.String
+            ? agProp.GetString() : null;
+        var author = explicitAuthor
+            ?? (role.Equals("user", StringComparison.OrdinalIgnoreCase)
+                ? "You" : (agentName ?? "Assistant"));
+        var modelName = je.TryGetProperty("modelName", out var mProp) && mProp.ValueKind == JsonValueKind.String
+            ? mProp.GetString() : null;
+        DateTime? timestamp = je.TryGetProperty("timestamp", out var tsProp) && tsProp.ValueKind == JsonValueKind.String
+            && DateTime.TryParse(tsProp.GetString(), out var parsed) ? parsed : null;
+        var text = je.TryGetProperty("text", out var textProp) && textProp.ValueKind == JsonValueKind.String
+            ? textProp.GetString() : null;
+        IReadOnlyList<ToolCallEntry>? toolCalls = je.TryGetProperty("toolCalls", out var tcProp)
+            && tcProp.ValueKind == JsonValueKind.Array
+                ? tcProp.Deserialize<List<ToolCallEntry>>(Hub.JsonSerializerOptions) : null;
+        IReadOnlyList<NodeChangeEntry>? updatedNodes = je.TryGetProperty("updatedNodes", out var unProp)
+            && unProp.ValueKind == JsonValueKind.Array
+                ? unProp.Deserialize<List<NodeChangeEntry>>(Hub.JsonSerializerOptions) : null;
+
+        var newState = new MessageBubbleState(role, author, modelName, timestamp, text, toolCalls, updatedNodes);
+        var prev = messageStates.GetValueOrDefault(id);
+        if (Equals(prev, newState)) return;
+
+        messageStates[id] = newState;
+        InvokeAsync(StateHasChanged);
+    }
+
+    private static JsonElement ToJsonElement(object content)
+        => content is JsonElement je ? je
+            : JsonSerializer.SerializeToElement(content);
+
+    private MessageBubbleState? GetMessageState(string id) => messageStates.GetValueOrDefault(id);
+
+    private bool IsEditing(string id) => editingMessages.Contains(id);
+
+    private void StartEdit(string id)
+    {
+        editingMessages.Add(id);
+        StateHasChanged();
+    }
+
+    private void CancelEdit(string id)
+    {
+        editingMessages.Remove(id);
+        StateHasChanged();
+    }
+
+    private void ResubmitMessage(string id)
+    {
+        var state = GetMessageState(id);
+        if (state == null || string.IsNullOrEmpty(threadPath)) return;
+        var outId = Guid.NewGuid().ToString("N")[..8];
+        Hub.Post(new CreateNodeRequest(new MeshNode(outId, threadPath)
+        {
+            NodeType = ThreadMessageNodeType.NodeType,
+            MainNode = threadPath,
+            Content = new ThreadMessage
+            {
+                Role = "assistant",
+                Text = "",
+                Timestamp = DateTime.UtcNow,
+                Type = ThreadMessageType.AgentResponse
+            }
+        }), o => o.WithTarget(new Address(threadPath)));
+        ThreadSubmission.ApplyResubmit(Hub, threadPath, id,
+            newUserText: state.Text ?? "", agentName: null, modelName: null);
+    }
+
+    private void DeleteFromMessage(string id)
+    {
+        if (string.IsNullOrEmpty(threadPath)) return;
+        ThreadSubmission.ApplyDeleteFromMessage(Hub, threadPath, id);
+    }
+
+    // ─── Tool-call display helpers ────────────────────────────────────────
+
+    private readonly record struct ToolCallDisplay(string Verb, string? Path, bool IsNodeModifying);
+
+    private static string FormatToolCallSummary(ToolCallEntry call)
+    {
+        var d = FormatToolCallDisplay(call);
+        return d.Path is null ? d.Verb : $"{d.Verb} {d.Path}";
+    }
+
+    private static ToolCallDisplay FormatToolCallDisplay(ToolCallEntry call)
+    {
+        if (!string.IsNullOrEmpty(call.DelegationPath))
+        {
+            var name = call.DisplayName ?? call.Name;
+            if (name.Contains("Delegating to "))
+                name = name.Replace("Delegating to ", "").TrimEnd('.', ' ');
+            return new ToolCallDisplay(name, null, false);
+        }
+        var rawArgs = call.Arguments ?? "";
+        string? path = null;
+        foreach (var line in rawArgs.Split('\n'))
+        {
+            var trimmed = line.Trim();
+            if (trimmed.StartsWith("path:", StringComparison.OrdinalIgnoreCase)) { path = trimmed["path:".Length..].Trim(); break; }
+            if (trimmed.StartsWith("url:", StringComparison.OrdinalIgnoreCase)) { path = trimmed["url:".Length..].Trim(); break; }
+            if (trimmed.StartsWith("query:", StringComparison.OrdinalIgnoreCase)) { path = trimmed["query:".Length..].Trim(); break; }
+        }
+        if (string.IsNullOrEmpty(path))
+            path = rawArgs.Split('\n').FirstOrDefault()?.Trim();
+        if (!string.IsNullOrEmpty(path) && path.StartsWith('@'))
+            path = path[1..].TrimStart('/');
+
+        return call.Name switch
+        {
+            "Get" or "get_node" => new ToolCallDisplay("Reading", path, false),
+            "Search" or "search_nodes" => new ToolCallDisplay("Searching", path, false),
+            "Create" or "create_node" => new ToolCallDisplay("Created", path, true),
+            "Update" or "update_node" => new ToolCallDisplay("Updated", path, true),
+            "Patch" or "patch_node" => new ToolCallDisplay("Patched", path, true),
+            "Delete" or "delete_node" => new ToolCallDisplay("Deleted", path, true),
+            "NavigateTo" or "navigate_to" => new ToolCallDisplay("Navigating to", path, false),
+            "SearchWeb" => new ToolCallDisplay("Searching web for", path, false),
+            "FetchWebPage" => new ToolCallDisplay("Fetching", path, false),
+            "store_plan" => new ToolCallDisplay("Stored plan", null, false),
+            _ => new ToolCallDisplay(call.DisplayName ?? call.Name, path, false)
+        };
+    }
+
+    private static NodeChangeEntry? FindChange(IReadOnlyList<NodeChangeEntry>? updatedNodes, string? path)
+    {
+        if (string.IsNullOrEmpty(path) || updatedNodes is null) return null;
+        return updatedNodes.FirstOrDefault(n => string.Equals(n.Path, path, StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -1393,6 +1597,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             agentSubscription?.Dispose();
             modelSubscription?.Dispose();
             submissionHandler.Dispose();
+            foreach (var sub in messageSubs.Values) sub.Dispose();
+            messageSubs.Clear();
+            messageStates.Clear();
             SidePanelState.OnActionRequested -= OnSidePanelAction;
         }
 

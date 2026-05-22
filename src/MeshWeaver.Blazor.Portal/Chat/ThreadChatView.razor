@@ -1,7 +1,11 @@
 @inherits BlazorView<ThreadChatControl, ThreadChatView>
+@using MeshWeaver.AI
 @using MeshWeaver.AI.Commands
+@using MeshWeaver.Data
 @using MeshWeaver.Layout
+@using MeshWeaver.Blazor.Components
 @using MeshWeaver.Blazor.Components.Monaco
+@using MeshWeaver.Messaging
 @using FluentAppearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
 @inject NavigationManager NavigationManager
 
@@ -40,36 +44,156 @@ else
                 var pendingTexts = ThreadViewModel?.PendingMessageTexts ?? Array.Empty<string>();
                 var hasAnyMessage = ThreadMessages.Count > 0 || pendingTexts.Count > 0;
             }
-            @* Chat history — one DispatchView per message id. Each renders a
-               ThreadMessageItemView which opens its own IMeshNodeStreamCache
-               subscription on the message path; the item view re-renders
-               locally on every cache emission, no per-message round-trip
-               through the per-node layout-area. See
-               Doc/GUI/ItemTemplateMeshNodeStreamBinding. *@
+            @* Chat history rendered inline per message — one
+               IMeshNodeStreamCache subscription per visible id is opened by
+               SyncMessageSubscriptions; this template just reads from the
+               messageStates dictionary. No per-message LayoutAreaView server
+               round-trip; the bubble is the chat's own DOM. *@
             @if (ThreadMessages.Count > 0)
             {
                 @foreach (var msgId in ThreadMessages)
                 {
-                    <DispatchView @key="@msgId"
-                                  ViewModel="@(new ThreadMessageItemControl { MessagePath = $"{threadPath}/{msgId}" })"
-                                  Stream="@Stream"
-                                  Area="@($"msg-{msgId}")" />
+                    var state = GetMessageState(msgId);
+                    var isUser = state?.Role?.Equals("user", StringComparison.OrdinalIgnoreCase) ?? false;
+                    var bubbleRoleClass = isUser ? "thread-msg-user" : "thread-msg-assistant";
+
+                    <div @key="@msgId" class="thread-msg-bubble @bubbleRoleClass">
+                    @if (state is null)
+                    {
+                        <div class="thread-msg-skeleton-line"></div>
+                        <div class="thread-msg-skeleton-line" style="width: 80%;"></div>
+                    }
+                    else
+                    {
+                        <div class="thread-msg-author @(isUser ? "thread-msg-author-user" : "")">@state.AuthorName</div>
+                        @if (!isUser && (!string.IsNullOrEmpty(state.ModelName) || state.Timestamp.HasValue))
+                        {
+                            <div class="thread-msg-meta">
+                                @if (!string.IsNullOrEmpty(state.ModelName))
+                                {
+                                    <span>@state.ModelName</span>
+                                }
+                                @if (state.Timestamp.HasValue)
+                                {
+                                    <span>@state.Timestamp.Value.ToString("HH:mm:ss")</span>
+                                }
+                            </div>
+                        }
+
+                        @if (IsEditing(msgId))
+                        {
+                            <LayoutAreaView ViewModel="@(new LayoutAreaControl($"{threadPath}/{msgId}", new LayoutAreaReference("Edit")))"
+                                            Stream="@Stream" Area="@($"edit-{msgId}")" />
+                            <div class="thread-msg-edit-actions">
+                                <button class="thread-msg-edit-cancel" @onclick="() => CancelEdit(msgId)">Done</button>
+                            </div>
+                        }
+                        else
+                        {
+                            @if (!string.IsNullOrEmpty(state.Text))
+                            {
+                                <MarkdownView ViewModel="@(new MarkdownControl(state.Text).WithStyle("background: transparent;"))"
+                                              Stream="@Stream" Area="@($"md-{msgId}")" />
+                            }
+                            @if (isUser)
+                            {
+                                <div class="thread-msg-inline-actions">
+                                    <button class="thread-msg-action-btn" @onclick="() => StartEdit(msgId)" title="Edit">&#9998;</button>
+                                    <button class="thread-msg-action-btn" @onclick="() => ResubmitMessage(msgId)" title="Resubmit">&#8635;</button>
+                                    <button class="thread-msg-action-btn" @onclick="() => DeleteFromMessage(msgId)" title="Delete from here">&#128465;</button>
+                                </div>
+                            }
+                        }
+
+                        @if (state.ToolCalls is { Count: > 0 })
+                        {
+                            <div class="thread-msg-tool-calls">
+                                @foreach (var call in state.ToolCalls)
+                                {
+                                    var isDelegation = !string.IsNullOrEmpty(call.DelegationPath);
+                                    var isPending = call.Result == null;
+                                    var summary = FormatToolCallSummary(call);
+
+                                    @if (isDelegation && isPending)
+                                    {
+                                        <div class="thread-msg-delegation-entry">
+                                            <div class="thread-msg-delegation-header">
+                                                <span class="thread-msg-delegation-pulse">✹</span>
+                                                <a href="/@call.DelegationPath" class="thread-msg-delegation-link">@summary</a>
+                                            </div>
+                                            <div class="thread-msg-delegation-stream">
+                                                <LayoutAreaView ViewModel="@(new LayoutAreaControl(call.DelegationPath!, new LayoutAreaReference("Streaming")).WithSpinnerType(SpinnerType.None))"
+                                                                Stream="@Stream" Area="@($"del-{msgId}-{call.DelegationPath}")" />
+                                            </div>
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        var display = FormatToolCallDisplay(call);
+                                        var change = display.IsNodeModifying ? FindChange(state.UpdatedNodes, display.Path) : null;
+
+                                        <details class="thread-msg-tool-entry @(isDelegation ? "thread-msg-delegation-entry" : "")">
+                                            <summary class="thread-msg-tool-entry-name">
+                                                <span class="thread-msg-tool-done @(call.IsSuccess ? "" : "thread-msg-tool-error")">@(call.IsSuccess ? "✓" : "✗")</span>
+                                                @if (isDelegation)
+                                                {
+                                                    <a href="/@call.DelegationPath" class="thread-msg-delegation-link" @onclick:stopPropagation>@summary</a>
+                                                }
+                                                else
+                                                {
+                                                    <span>@display.Verb</span>
+                                                    @if (!string.IsNullOrEmpty(display.Path))
+                                                    {
+                                                        <text>&nbsp;</text>
+                                                        <a href="/@display.Path" class="thread-msg-tool-path" @onclick:stopPropagation>@display.Path</a>
+                                                    }
+                                                    @if (change is not null)
+                                                    {
+                                                        @if (change.VersionBefore.HasValue && change.VersionAfter.HasValue)
+                                                        {
+                                                            <a class="thread-msg-tool-action"
+                                                               href="/@display.Path/VersionDiff?from=@(change.VersionBefore)&to=@(change.VersionAfter)"
+                                                               @onclick:stopPropagation>Diff</a>
+                                                        }
+                                                        @if (change.VersionBefore.HasValue)
+                                                        {
+                                                            <a class="thread-msg-tool-action thread-msg-tool-action-muted"
+                                                               href="/@display.Path/VersionDiff?version=@(change.VersionBefore)"
+                                                               @onclick:stopPropagation>Revert v@(change.VersionBefore)</a>
+                                                        }
+                                                    }
+                                                }
+                                            </summary>
+                                            @if (!string.IsNullOrEmpty(call.Arguments))
+                                            {
+                                                <pre class="thread-msg-tool-args">@call.Arguments</pre>
+                                            }
+                                            @if (!string.IsNullOrEmpty(call.Result))
+                                            {
+                                                <pre class="thread-msg-tool-result">@call.Result</pre>
+                                            }
+                                        </details>
+                                    }
+                                }
+                            </div>
+                        }
+                    }
+                    </div>
                 }
             }
-            @* Queued user messages — entries submitted but not yet ingested
-               (no satellite cell exists yet). Same ThreadMessageItemView,
-               just with PendingText set instead of MessagePath. Once the
-               cell materialises, the id appears in ThreadMessages above and
-               this entry disappears from pendingTexts. *@
+            @* Queued user messages — entries that were submitted but the inbox
+               has not yet drained into Messages. Renders inline at the end of
+               the chat history so the user sees their submission immediately,
+               even before round dispatch / cell materialisation. Disappears
+               when the inbox drain promotes the id into Messages. *@
             @if (pendingTexts.Count > 0)
             {
-                @for (var i = 0; i < pendingTexts.Count; i++)
+                @foreach (var pendingText in pendingTexts)
                 {
-                    var pendingText = pendingTexts[i];
-                    <DispatchView @key="@($"pending-{i}-{pendingText.GetHashCode()}")"
-                                  ViewModel="@(new ThreadMessageItemControl { PendingText = pendingText })"
-                                  Stream="@Stream"
-                                  Area="@($"pending-{i}")" />
+                    <div class="thread-chat-pending-message" @key="@($"pending-{pendingText.GetHashCode()}")">
+                        <FluentIcon Value="@(new Icons.Regular.Size16.Send())" />
+                        <span class="thread-chat-pending-message-text">@pendingText</span>
+                    </div>
                 }
             }
             @if (!hasAnyMessage && isCreatingThread)
