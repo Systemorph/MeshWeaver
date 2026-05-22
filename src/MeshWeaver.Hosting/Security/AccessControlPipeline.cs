@@ -68,26 +68,18 @@ public static class AccessControlPipeline
 
                 var userId = ResolveIdentity(delivery, accessService);
 
-                // Restore the sender's AccessContext onto this scope's AccessService
-                // so SecurityService.GetEffectivePermissions — which reads claim-based
-                // roles from _accessService.Context.Roles — can resolve them. Without
-                // this, the per-node hub processes deliveries in a fresh async flow
-                // where AsyncLocal.Context is the hub's own impersonation address
-                // (set by PostPipeline at startup) even though delivery.AccessContext
-                // is fully populated by the sender's PostPipeline with the originating
-                // user.
-                //
-                // Trigger: delivery carries non-empty user Roles. That's the only
-                // signal needed — the Roles list comes from the validated bearer
-                // token (signed) or the OAuth principal (resolved at session open),
-                // both trustworthy. Hub-to-hub deliveries set ObjectId to the hub's
-                // own address with empty Roles; we naturally skip those without a
-                // hub-identity check. This is the claim-first half of the
-                // SecurityService claim-first restructure.
-                if (delivery.AccessContext is { Roles: { Count: > 0 } } userCtx)
-                {
-                    accessService.SetContext(userCtx);
-                }
+                // 🚨 2026-05-22: removed AccessControlPipeline's own SetContext
+                // call here. UserServiceDeliveryPipeline runs earlier in the
+                // same delivery pipeline and already sets accessService.Context
+                // from delivery.AccessContext (when the principal is user-shaped)
+                // WITH try/finally restore. The duplicate SetContext here had no
+                // restore, leaking the per-request AsyncLocal back into the
+                // caller's execution context — once user1 posted a request,
+                // every subsequent CaptureContext on the test thread (or any
+                // shared execution context) saw user1 even after LoginWithToken
+                // switched CircuitContext to user2. Symptom: McpUpdate tests
+                // showed "user 'user1@example.com' lacks Update" for a request
+                // freshly authenticated as user2.
 
                 // Log identity resolution details for debugging access issues
                 if (string.IsNullOrEmpty(userId))

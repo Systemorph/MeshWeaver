@@ -660,7 +660,22 @@ public sealed class MessageHub : IMessageHub
     {
         if (capturedCtx is null)
             return source;
-        return source.Do(_ => accessService.SetContext(capturedCtx));
+        // Restore-on-Finally pattern (2026-05-22): set Context during the
+        // subscription so emission-side code (Subscribe callbacks, downstream
+        // posts) runs under the captured identity; restore the prior value
+        // when the observable completes/errors/disposes. Without this, the
+        // captured identity leaked into the caller's AsyncLocal — symptom:
+        // McpUpdate tests showed user1's identity used even after
+        // LoginWithToken switched to user2, because the earlier user1 call
+        // had set Context=user1 on the test thread and never cleared it.
+        return Observable.Defer<IMessageDelivery>(() =>
+        {
+            var prev = accessService.Context;
+            accessService.SetContext(capturedCtx);
+            return source
+                .Do(_ => accessService.SetContext(capturedCtx))
+                .Finally(() => accessService.SetContext(prev));
+        });
     }
 
     private IObservable<IMessageDelivery> ApplyTimeout(
