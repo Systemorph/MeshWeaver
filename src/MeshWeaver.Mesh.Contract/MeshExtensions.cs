@@ -963,13 +963,32 @@ public static class MeshExtensions
                                 .NotifyChange(DataChangeNotification.Deleted(path, null));
                             // 🚨 Invalidate the process-wide MeshNodeStreamCache so
                             // subsequent reads of this path don't see the pre-delete
-                            // value held in the Replay(1) entry. Without this, tests
-                            // (and prod readers) get a stale ghost of the just-deleted
-                            // node — symptom: NodeCreationAccessTest.CreateNode_IdChanged
-                            // CreatesNewNodeAndDeletesTransient saw the transient after
-                            // delete.
+                            // value held in the Replay(1) entry.
                             meshHub.ServiceProvider.GetService<IMeshNodeStreamCache>()?
                                 .Invalidate(path);
+                            // 🚨 Dispose the per-node hub at this path if one was
+                            // activated — the cache invalidate clears the
+                            // process-wide cache entry, but the hub itself retains
+                            // its own MeshNodeReference reducer state and would
+                            // re-emit the cached pre-delete value to the next
+                            // subscriber. Disposing forces routing to re-activate
+                            // a fresh hub on the next request, which reads from
+                            // (now-empty) storage and emits null.
+                            // Symptom this addresses: CreateNode_IdChanged saw the
+                            // transient after delete because the per-node hub for
+                            // the transient path still held the cached node in its
+                            // own data-source stream.
+                            try
+                            {
+                                var hostedHub = meshHub.GetHostedHub(new Address(path),
+                                    c => c, HostedHubCreation.Never);
+                                hostedHub?.Dispose();
+                            }
+                            catch (Exception ex)
+                            {
+                                logger.LogDebug(ex,
+                                    "[DeleteNode] best-effort hub disposal failed for {Path}", path);
+                            }
                         });
                 }
 
