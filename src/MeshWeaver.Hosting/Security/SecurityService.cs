@@ -488,13 +488,27 @@ internal class SecurityService : ISecurityService, IDisposable
         // tests that SetContext directly). Trusted as-is — they're either
         // signed (Bearer) or the result of an explicit middleware-driven
         // resolution (OAuth → DB → AccessContext).
-        var context = _accessService.Context ?? _accessService.CircuitContext;
-        if (context?.Roles != null
-            && !string.IsNullOrEmpty(context.ObjectId)
-            && context.ObjectId == userId)
+        //
+        // 🚨 Check BOTH Context (per-request AsyncLocal, may hold stale
+        // hub-init "system-security") AND CircuitContext (per-circuit
+        // persistent identity). The match condition `ObjectId == userId`
+        // filters out any context that doesn't represent THIS user — so
+        // hub-init's system-security AsyncLocal is harmlessly skipped when
+        // resolving a non-System user's roles. Without checking both, a
+        // request's claim-Roles can't be found if the AsyncLocal Context
+        // is contaminated by hub-init impersonations.
+        AddClaimRoles(_accessService.Context);
+        AddClaimRoles(_accessService.CircuitContext);
+
+        void AddClaimRoles(AccessContext? ctx)
         {
-            foreach (var roleName in context.Roles)
-                roleIds = roleIds.Add(roleName);
+            if (ctx?.Roles != null
+                && !string.IsNullOrEmpty(ctx.ObjectId)
+                && ctx.ObjectId == userId)
+            {
+                foreach (var roleName in ctx.Roles)
+                    roleIds = roleIds.Add(roleName);
+            }
         }
 
         return (roleIds, permissionCap);
