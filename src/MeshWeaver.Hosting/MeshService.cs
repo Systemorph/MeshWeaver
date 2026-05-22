@@ -172,7 +172,24 @@ internal sealed class MeshService(
         => _query.AutocompleteAsync(basePath, prefix, mode, limit, contextPath, context, ct);
 
     public IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request)
-        => _query.ObserveQuery<T>(request);
+    {
+        // 🚨 Stamp the caller's identity from THIS scope's AccessService onto
+        // the request BEFORE handing to the singleton MeshQuery + providers.
+        // The providers are singletons and inject the ROOT AccessService which
+        // has no per-circuit context — so a Blazor circuit asking for its own
+        // items would get GetEffectiveUserId -> Anonymous and every query
+        // would filter to Anonymous-visible only ("items + threads empty"
+        // prod symptom 2026-05-22). MeshService IS scoped, so its hub's
+        // ServiceProvider does see the circuit's AccessService with the user
+        // identity middleware set.
+        if (string.IsNullOrEmpty(request.UserId))
+        {
+            var captured = CaptureContext();
+            if (!string.IsNullOrEmpty(captured?.ObjectId))
+                request = request with { UserId = captured.ObjectId };
+        }
+        return _query.ObserveQuery<T>(request);
+    }
 
     public Task<T?> SelectAsync<T>(string path, string property, CancellationToken ct = default)
         => _query.SelectAsync<T>(path, property, ct);
