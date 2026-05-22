@@ -293,16 +293,23 @@ public class MeshQuery : IMeshQueryCore
         MeshQueryRequest request,
         JsonSerializerOptions options)
     {
-        var isSystem = string.IsNullOrEmpty(request.UserId)
-            || string.Equals(request.UserId, WellKnownUsers.System, StringComparison.Ordinal);
+        // Only the well-known System principal gets the unsecured surface
+        // (validator bypass — used by SecurityService's own AccessAssignment
+        // walks, NodeType compile activities, and other infrastructure that
+        // would otherwise cycle through SecurityService → AccessAssignment
+        // query → SecurityService). EVERY OTHER user — including Anonymous /
+        // empty UserId — goes through the secured surface so the providers
+        // apply per-result RLS validators. Empty UserId used to short-circuit
+        // to System, which leaked private content to unauthenticated readers
+        // (UserAccessTests.SecurePersistence_*  + MeshQuery_Anonymous_* trip
+        // on this).
+        var isSystem = string.Equals(request.UserId, WellKnownUsers.System, StringComparison.Ordinal);
         var matched = SelectMatchingProviders(NamespacesForRequest(request));
         return MergeProviderObservables(
             matched.Select(p => isSystem
                 ? (p is IMeshQueryCore core
                     ? core.ObserveQuery<T>(request, options)
                     : p.ObserveQuery<T>(request, options))
-                // Real user: ALWAYS hit the secured provider surface
-                // (validators apply per-result RLS for request.UserId).
                 : p.ObserveQuery<T>(request, options)).ToList(),
             request);
     }
