@@ -613,71 +613,76 @@ public class RlsNodeValidator : INodeValidator
 
 Read operations are not validated by the node validator — read filtering is handled by `SecurePersistenceServiceDecorator` which wraps `GetChildrenAsync` and `GetNodeAsync` with permission checks.
 
-# Hub Identity and ImpersonateAsHub
+# Hub identity and sanctioned dedicated identities
 
-## How Hubs Authenticate
+## How messages authenticate
 
-Every message in MeshWeaver carries an `AccessContext` that identifies the sender. The `UserServicePostPipeline` automatically attaches this context to outgoing messages:
+Every message in MeshWeaver carries an `AccessContext` that identifies the **principal** behind the operation. The `UserServicePostPipeline` decides the principal at post time:
 
-1. **User in scope** — if a user is authenticated (e.g., via Blazor circuit), their `AccessContext` is attached.
-2. **ImpersonateAsHub()** — if the message was posted with `PostOptions.ImpersonateAsHub()`, the hub's own address becomes the identity.
-3. **Hub-to-hub fallback** — if neither of the above applies, the hub's address is used as a fallback identity.
+1. **Explicit `PostOptions.WithAccessContext(...)`** — if the caller pre-set the context (e.g. via `accessService.ImpersonateAsSystem()` or a sanctioned dedicated identity), use it. Do not overwrite.
+2. **User in scope** — if an authenticated user identity is set on `AccessService.Context` (or `CircuitContext` as fallback), attach it.
+3. **Fail closed** — if neither applies, the message goes out with `null` `AccessContext`; downstream AccessControl denies. The "stamp hub-self as principal" fallback was removed 2026-05-21 because it silently masked the prod EventCalendar bug.
 
-The identity is set **per-message on the delivery**, not globally on a service. This prevents spoofing — the hub's address comes from the hub itself and cannot be overridden by callers.
+Per-message, per-delivery — the identity baton. The full propagation model is documented in [AccessContextPropagation.md](AccessContextPropagation.md); read it before adding any new impersonation callsite.
 
-## Using ImpersonateAsHub()
+## Sanctioned dedicated identities — the only sanctioned override
 
-When a hub needs to perform an operation as itself (not as the current user), use `ImpersonateAsHub()` on the post options:
+When code legitimately runs as a component (cache hydrator, redistributor hub, onboarding writer) with no user behind it, **do not** stamp the running hub's accidental address as principal. Instead:
 
-```csharp
-// Portal hub creates a VUser node as itself
-var response = await portalHub.AwaitResponse(
-    new CreateNodeRequest(vUserNode),
-    o => o.WithTarget(meshHubAddress).ImpersonateAsHub(),
-    ct);
-```
+1. **Define** a named, dedicated identity (`cache/mesh-node-cache`, `portal/onboarding`, `protocol/sync-stream`). The identity reflects the COMPONENT, not the hub.
+2. **Grant** that identity ONLY the specific operations it actually needs via per-NodeType access rules.
+3. **Test** the boundary — every misuse must yield `UnauthorizedAccessException` with a meaningful message.
 
-The hub's address (e.g., `portal/mysite`) becomes the `AccessContext.ObjectId` on the message delivery. The receiving handler uses this identity for permission checks.
-
-**Key properties:**
-
-| Property | Value |
-|----------|-------|
-| `AccessContext.ObjectId` | Hub address as full string (e.g., `portal/mysite`) |
-| `AccessContext.Name` | Hub address display name |
-| Scope | Per-message (not per-service) |
-| Spoofing | Not possible — address comes from the hub itself |
-
-## Identity Resolution in Node Operations
-
-When `HandleCreateNodeRequest` receives a message, it resolves the identity:
-
-1. If `CreateNodeRequest.CreatedBy` is explicitly set, it is used as-is.
-2. If `CreatedBy` is empty, the handler fills it from `AccessContext.ObjectId` on the message delivery.
-
-The same pattern applies to `UpdateNodeRequest.UpdatedBy` and `DeleteNodeRequest.DeletedBy`.
-
-## ImpersonateAsNode() on IMeshService
-
-`IMeshService` automatically resolves identity from `AccessService.Context.ObjectId`. When `ImpersonateAsNode()` is called, it switches to the hub's own address:
+This is the `IsPortalIdentity` pattern (User-node onboarding) generalised: every sanctioned bypass is a single, named, controlled seat — never a wildcard like "all `sync/*` get protocol perms". See [AccessContextPropagation.md → Sanctioned exceptions](AccessContextPropagation.md#sanctioned-exceptions--fine-grained-exact-controlled) for the define / grant / test contract.
 
 ```csharp
-var factory = hub.ServiceProvider.GetRequiredService<IMeshService>();
+// Pattern — define an internal constant
+internal static class MeshNodeCacheIdentity
+{
+    internal const string Address = "cache/mesh-node-cache";
+}
 
-// Normal: createdBy = AccessService.Context.ObjectId (current user)
-await factory.CreateNodeAsync(node, ct: ct);
+// Grant via per-NodeType access rule
+config.AddAccessRule(
+    [NodeOperation.Read],
+    (_, userId) => userId == MeshNodeCacheIdentity.Address);
 
-// Impersonated: createdBy = hub.Address, AccessContext = hub identity
-var impersonated = factory.ImpersonateAsNode();
-await impersonated.CreateNodeAsync(node, ct: ct);
+// Use at the point where the component acts
+using (accessService.SwitchAccessContext(new AccessContext { ObjectId = MeshNodeCacheIdentity.Address }))
+{
+    // cache hydration runs here
+}
+
+// Test that misuse fails
+[Fact]
+public async Task MeshNodeCacheIdentity_CannotWrite()
+{
+    using (accessService.SwitchAccessContext(new AccessContext { ObjectId = "cache/mesh-node-cache" }))
+    {
+        var act = () => meshService.CreateNode(someNode).ToTask();
+        await act.Should().ThrowAsync<UnauthorizedAccessException>();
+    }
+}
 ```
 
-Internally, `ImpersonateAsNode()` sets a flag on the same class — `createdBy`/`updatedBy`/`deletedBy` resolve to `hub.Address.ToFullString()` and `PostOptions.ImpersonateAsHub()` is added. The hub must have the required roles on the target namespace.
+## Identity resolution in node operations
 
-**When to use:**
-- Background jobs or automated processes without a user session
-- Hub-to-hub operations where the hub acts on its own behalf
-- System-level node management (auto-generated content, cleanup tasks)
+When `HandleCreateNodeRequest` (and `Update/Delete/CopyNodeRequest` siblings) receives a message, it resolves the identity:
+
+1. If the request's `CreatedBy` / `UpdatedBy` / `DeletedBy` is explicitly set, use it.
+2. Otherwise fill from `delivery.AccessContext.ObjectId`.
+
+So the principal that ran through the baton (Phase 2 → Phase 4 in the propagation doc) ends up on the stored row's `CreatedBy`. For user-driven writes this is the user's ObjectId. For sanctioned-identity-driven writes this is the dedicated address — auditable, visible in logs and queries.
+
+## `IMeshService.ImpersonateAsNode()` — legacy surface
+
+`IMeshService.ImpersonateAsNode()` used to switch the operation's identity to the hub's own address. This is the old "hub-as-principal" model that the 2026-05-22 cleanup deprecates. New code should prefer:
+
+- **Sanctioned dedicated identity** if there's a defined role for the operation (`cache/mesh-node-cache`, `portal/onboarding`).
+- **`accessService.ImpersonateAsSystem()`** if the operation is genuinely system infrastructure with no narrower seat.
+- **Carry the user's identity** if the operation is user-initiated and the identity-loss is a bug.
+
+Existing `ImpersonateAsNode()` callsites are tracked in `Doc/Architecture/AccessContextPropagation.md` → audit list as of 2026-05-22.
 
 # Per-Node-Type Access Rules (INodeTypeAccessRule)
 

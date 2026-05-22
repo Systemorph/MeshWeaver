@@ -212,6 +212,17 @@ internal class SecurityService : ISecurityService, IDisposable
         if (userId == WellKnownUsers.System)
             return Observable.Return(Permission.All);
 
+        // 🚨 Sanctioned dedicated identity: MeshNodeStreamCache's hydrator
+        // (Doc/Architecture/AccessContextPropagation.md → "Sanctioned exceptions").
+        // The cache subscribes to per-path streams under this identity at
+        // startup — it needs Permission.Read to receive the upstream snapshot
+        // and updates. It MUST NOT have Create / Update / Delete; writes under
+        // this identity are denied here by virtue of returning ONLY Read.
+        // Tests at MeshWeaver.Security.Test.MeshNodeCacheIdentityTest verify
+        // the boundary — writes fail with UnauthorizedAccessException.
+        if (userId == MeshNodeCacheIdentity.Address)
+            return Observable.Return(Permission.Read);
+
         // Claim-first composition: the claim-based AccessContext.Roles + the
         // static AccessAssignment seeds collected at construction time are
         // available SYNCHRONOUSLY — no observable wait, no synced-query

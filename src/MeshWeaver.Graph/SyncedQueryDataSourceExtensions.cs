@@ -204,23 +204,45 @@ public static class SyncedQueryDataSourceExtensions
     /// <see cref="ISecurityService.HasPermission"/> to drop nodes the
     /// subscriber can't Read on. Bypasses for System / no AsyncLocal — those
     /// callers are infrastructure and need the full snapshot.
+    ///
+    /// <para>🚨 Service resolution is DEFERRED to Subscribe time. Resolving
+    /// <see cref="ISecurityService"/> at wrap time recurses through Autofac
+    /// when SecurityService's own constructor calls
+    /// <c>workspace.GetQuery("Security:_Access", ...)</c> — the GetService
+    /// call back into the half-constructed SecurityService spins the resolve
+    /// pipeline ~200 levels deep before stack overflow. Defer pushes the
+    /// resolution past the constructor's GetQuery call, so by the time any
+    /// subscriber attaches, SecurityService is fully registered.</para>
     /// </summary>
     private static IObservable<IEnumerable<MeshNode>> WrapWithPerUserRls(
         IWorkspace workspace, IObservable<IEnumerable<MeshNode>> upstream)
     {
-        var securityService = workspace.Hub.ServiceProvider.GetService<ISecurityService>();
-        var accessService = workspace.Hub.ServiceProvider.GetService<AccessService>();
-        if (securityService is null || accessService is null)
+        // Wrap-time check: AccessService is resolved EAGERLY (it's a leaf service
+        // — no cycle) and its current AsyncLocal Context is read. If the caller
+        // wrapped this GetQuery in `using ImpersonateAsSystem` (as
+        // SecurityService.ObserveScopeAssignments does, by design), we see
+        // System here and short-circuit to the raw upstream — no per-user
+        // filter, no service resolution, no recursion.
+        //
+        // ISecurityService is resolved LAZILY inside Observable.Defer so the
+        // user-path resolution happens at Subscribe time (after SecurityService
+        // is fully constructed). Resolving it at wrap time would recurse:
+        // SecurityService.ctor → ObserveScopeAssignments → workspace.GetQuery →
+        // WrapWithPerUserRls → GetService<ISecurityService> → Autofac tries to
+        // create SecurityService again → ~200 deep stack overflow (2026-05-22).
+        var sp = workspace.Hub.ServiceProvider;
+        var accessService = sp.GetService<AccessService>();
+        var captured = accessService?.Context ?? accessService?.CircuitContext;
+        var userId = captured?.ObjectId;
+        if (accessService is null
+            || string.IsNullOrEmpty(userId)
+            || string.Equals(userId, WellKnownUsers.System, StringComparison.Ordinal))
             return upstream;
 
         return Observable.Defer(() =>
         {
-            var captured = accessService.Context ?? accessService.CircuitContext;
-            var userId = captured?.ObjectId;
-            // No identity → System infrastructure; pass through unfiltered.
-            // System itself → no filter needed.
-            if (string.IsNullOrEmpty(userId)
-                || string.Equals(userId, WellKnownUsers.System, StringComparison.Ordinal))
+            var securityService = sp.GetService<ISecurityService>();
+            if (securityService is null)
                 return upstream;
 
             // Per-user filter: for each emission, filter to nodes the user
