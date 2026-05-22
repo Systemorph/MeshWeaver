@@ -114,10 +114,13 @@ public static class AccessControlPipeline
                 // Subscribe — fire-and-forget for next.Invoke (its Task is not
                 // observed by anyone since downstream handlers post their own response).
                 var decided = false;
+                // 🚨 Always pass an explicit userId (defaulting to Anonymous)
+                // — never the no-arg overload that would read accessService.Context,
+                // which can hold stale "system-security" from hub-init's
+                // ImpersonateAsSystem scope. See ResolveIdentity's comment.
+                var effectiveUserId = userId ?? WellKnownUsers.Anonymous;
                 pendingChecks.ToObservable()
-                    .Select(check => (string.IsNullOrEmpty(userId)
-                            ? securityService.HasPermission(check.Path, check.Permission)
-                            : securityService.HasPermission(check.Path, userId, check.Permission))
+                    .Select(check => securityService.HasPermission(check.Path, effectiveUserId, check.Permission)
                         // HasPermission rides the live AccessAssignment synced
                         // stream — a hot, never-completing observable. Take(1)
                         // closes each inner so Concat below actually advances
@@ -233,11 +236,22 @@ public static class AccessControlPipeline
     }
 
     /// <summary>
-    /// Resolves the user identity from multiple sources in priority order:
-    /// 1. delivery.AccessContext — stamped by the sender's PostPipeline
+    /// Resolves the user identity from sources in priority order:
+    /// 1. delivery.AccessContext — stamped by the sender's PostPipeline (source of truth)
     /// 2. SubscribeRequest.Identity — explicit identity on the subscription (survives Orleans routing)
-    /// 3. accessService.Context — set by UserServiceDeliveryPipeline (may not be set yet)
-    /// 4. accessService.CircuitContext — Blazor circuit (monolith only)
+    /// 3. accessService.CircuitContext — Blazor circuit (monolith only)
+    ///
+    /// 🚨 NOT consulted: accessService.Context (the AsyncLocal). This pipeline
+    /// runs BEFORE UserServiceDeliveryPipeline (pipelines compose outside-in
+    /// via Aggregate), so the AsyncLocal at this point reflects whatever was
+    /// on the action-block thread when the hub initialized — typically
+    /// "system-security" because SecurityService ran under
+    /// `using ImpersonateAsSystem()` during its bootstrap. Trusting that
+    /// value gave Anonymous deliveries System-level permissions on every
+    /// hub whose SecurityService had initialized (symptom 2026-05-22:
+    /// UserHubAccessTest.AnonymousUser_CannotReadUserHub passed an
+    /// anonymous GetDataRequest because ResolveIdentity returned
+    /// "system-security" and System has Permission.All).
     /// </summary>
     private static string? ResolveIdentity(IMessageDelivery delivery, AccessService accessService)
     {
@@ -250,12 +264,8 @@ public static class AccessControlPipeline
         if (delivery.Message is SubscribeRequest sub && !string.IsNullOrEmpty(sub.Identity))
             return sub.Identity;
 
-        // 3. AccessService context (set by earlier pipeline steps)
-        userId = accessService.Context?.ObjectId;
-        if (!string.IsNullOrEmpty(userId))
-            return userId;
-
-        // 4. Blazor circuit context (monolith only)
+        // 3. Blazor circuit context (monolith only — set per-circuit-activity,
+        //    not contaminated by hub-init impersonations).
         return accessService.CircuitContext?.ObjectId;
     }
 
