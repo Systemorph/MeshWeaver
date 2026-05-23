@@ -574,13 +574,27 @@ public record LayoutAreaHost : IDisposable
 
     internal EntityStoreAndUpdates RenderArea(RenderingContext context, IObservable<object?> generator, EntityStore store)
     {
+        logger?.LogInformation("[LAH-RENDER-OBS] Start subscribing area={area} hub={hub} generatorType={genType}",
+            context.Area, Stream.Hub.Address, generator?.GetType().Name);
         var ret = DisposeExistingAreas(store, context);
 
         RegisterForDisposal(
             context.Area,
             generator
                 .DistinctUntilChanged()
-                .Subscribe(view => UpdateArea(context, view))
+                .Subscribe(
+                    view =>
+                    {
+                        logger?.LogInformation("[LAH-RENDER-OBS] emit area={area} type={type}",
+                            context.Area, view?.GetType().Name ?? "null");
+                        UpdateArea(context, view);
+                    },
+                    ex =>
+                    {
+                        logger?.LogWarning(ex, "[LAH-RENDER-OBS] subscribe ERROR area={area}", context.Area);
+                        FailRendering(ex);
+                    },
+                    () => logger?.LogInformation("[LAH-RENDER-OBS] completed area={area}", context.Area))
         );
         return ret;
     }
