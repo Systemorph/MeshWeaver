@@ -616,14 +616,15 @@ public static class MeshExtensions
         // top-level activity log on success.
         var collectedMessages = ImmutableList.CreateBuilder<LogMessage>();
 
-        // 1. Load the root MeshNode via the workspace's MeshNodeReference reducer
-        //    (single-node live read — never the lagged query catalog). If the path
-        //    has no owning hub, .Take(1).Timeout fires → treat as NotFound.
-        workspace.GetMeshNodeStream(path)
-            .Where(n => n is not null)
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(5))
-            .Catch<MeshNode, TimeoutException>(_ => Observable.Empty<MeshNode>())
+        // 1. Load the root MeshNode directly from persistence — avoids
+        //    activating the per-node hub at `path` (which workspace.GetMeshNodeStream
+        //    would trigger via SubscribeRequest). Per-node hub cold-start
+        //    activation can take 5-45s in CI (NodeType compile, dependency
+        //    load, JIT), causing the previous 5s Timeout to throw NodeNotFound
+        //    even when the node clearly exists in storage. The delete flow
+        //    only needs the node's content to validate + plan — it does NOT
+        //    need the live per-node hub state.
+        persistence.Read(path, hub.JsonSerializerOptions)
             .DefaultIfEmpty(null!)
             .SelectMany(rootNode =>
             {

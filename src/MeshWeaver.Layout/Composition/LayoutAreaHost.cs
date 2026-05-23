@@ -251,17 +251,30 @@ public record LayoutAreaHost : IDisposable
         var ret = DisposeExistingAreas(store, context);
         InvokeAsync(async ct =>
         {
-            logger?.LogDebug("Start rendering of {area}", context.Area);
+            logger?.LogInformation("[LAH-RENDER] Start rendering area={area} hub={hub}",
+                context.Area, Stream.Hub.Address);
             var observable = await asyncGenerator.Invoke(this, context, ct);
             RegisterForDisposal(context.Parent?.Area ?? context.Area,
                 observable
-                    .Subscribe(c => UpdateArea(context, c), FailRendering)
+                    .Subscribe(
+                        c =>
+                        {
+                            logger?.LogInformation("[LAH-RENDER] emit area={area} type={type}",
+                                context.Area, c?.GetType().Name ?? "null");
+                            UpdateArea(context, c);
+                        },
+                        ex =>
+                        {
+                            logger?.LogWarning(ex, "[LAH-RENDER] FailRendering area={area}", context.Area);
+                            FailRendering(ex);
+                        })
             );
 
-            logger?.LogDebug("End rendering of {area}", context.Area);
+            logger?.LogInformation("[LAH-RENDER] End rendering setup area={area}", context.Area);
 
         }, ex =>
         {
+            logger?.LogWarning(ex, "[LAH-RENDER] generator exception area={area}", context.Area);
             FailRendering(ex);
             return Task.CompletedTask;
         });
