@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -171,10 +172,17 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
             new Data.DataChangeRequest(),
             o => o.WithTarget(nodeAddress));
 
-        // Small delay for hub creation to complete
-        await Task.Delay(500);
-
-        var nodeHub = Mesh.GetHostedHub(nodeAddress, HostedHubCreation.Never);
+        // Stream-poll for hub creation to complete — replaces a fixed
+        // Task.Delay(500). GetHostedHub(...HostedHubCreation.Never) returns
+        // null until the per-node hub is activated, which happens lazily off
+        // the first inbound message (the Post above). Polling absorbs the
+        // activation latency without racing.
+        var nodeHub = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Select(_ => Mesh.GetHostedHub(nodeAddress, HostedHubCreation.Never))
+            .Where(h => h is not null)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(10))
+            .ToTask();
         nodeHub.Should().NotBeNull("node hub should exist after message delivery");
 
         // Resolve IMeshService from the NODE's hub (reproducing DeleteLayoutArea pattern)
