@@ -83,7 +83,7 @@ public class AgentPickerProjectionTest : MonolithMeshTestBase
         agents.Should().NotBeEmpty(
             "ObserveAgents is the EXACT pipe ThreadChatView binds to via "
             + "agentSubscription. Empty here = empty agent combobox in chat.");
-        agents.Select(a => a.Name).Should().Contain("Orchestrator");
+        agents.Select(a => a.Name).Should().Contain("Assistant");
         agents.Should().AllSatisfy(a =>
         {
             a.Name.Should().NotBeNullOrWhiteSpace(
@@ -146,7 +146,7 @@ public class AgentPickerProjectionTest : MonolithMeshTestBase
         agents.Should().NotBeEmpty(
             "the hosted sub-hub is what PortalApplication.Hub is in production. "
             + "If providers don't reach this scope, the chat agent combobox stays empty.");
-        agents.Select(a => a.Name).Should().Contain("Orchestrator");
+        agents.Select(a => a.Name).Should().Contain("Assistant");
     }
 
     [Fact]
@@ -234,7 +234,7 @@ public class AgentPickerProjectionPartitionedTest : MonolithMeshTestBase
             "AddPartitionedCoreAndWrapperServices must register MeshQueryEngine "
             + "— without it, IMeshQueryCore resolves to a failing factory and the "
             + "production chat picker stays empty even when MCP search shows agents.");
-        agents.Select(a => a.Name).Should().Contain("Orchestrator");
+        agents.Select(a => a.Name).Should().Contain("Assistant");
     }
 
     [Fact]
@@ -254,7 +254,7 @@ public class AgentPickerProjectionPartitionedTest : MonolithMeshTestBase
             .ToTask();
 
         agents.Should().NotBeEmpty();
-        agents.Select(a => a.Name).Should().Contain("Orchestrator");
+        agents.Select(a => a.Name).Should().Contain("Assistant");
     }
 
     [Fact]

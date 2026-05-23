@@ -102,8 +102,9 @@ public class AgentSyncedQueryFromHostedHubTest : MonolithMeshTestBase
         var agents = nodes.Where(n => n.NodeType == AgentNodeType.NodeType).ToList();
         agents.Should().NotBeEmpty(
             "the synced query on a hosted sub-hub must return all built-in agents");
-        agents.Select(a => a.Id).Should().Contain("Orchestrator",
-            "Orchestrator is one of the built-in agents shipped via BuiltInAgentProvider");
+        agents.Select(a => a.Id).Should().Contain("Assistant",
+            "Assistant is one of the built-in agents shipped via BuiltInAgentProvider " +
+            "(renamed from Orchestrator in commit c31fd04da).");
 
         agents.Should().AllSatisfy(n =>
         {
