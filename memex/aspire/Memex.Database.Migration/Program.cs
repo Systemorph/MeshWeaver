@@ -83,6 +83,7 @@ var migrations = new IMigration[]
     new V23_PartitionChangesNotify(),
     new V24_DedupMeshNodeNotifyTrigger(),
     new V25_MirrorAccessObjectsToUserSchema(),
+    new V26_AddNotificationsSatelliteTable(),
 };
 
 var ctx = new MigrationContext(dataSource, connectionString, options, logger, initResult.IsFreshDb);

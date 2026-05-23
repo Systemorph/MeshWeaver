@@ -130,6 +130,7 @@ public class ApprovalAndNotificationTest
         notification.Id.Should().NotBeNullOrEmpty();
         notification.Title.Should().BeEmpty();
         notification.Message.Should().BeEmpty();
+        notification.Icon.Should().BeNull();
         notification.TargetNodePath.Should().BeNull();
         notification.IsRead.Should().BeFalse();
         notification.CreatedAt.Should().BeCloseTo(DateTimeOffset.UtcNow, TimeSpan.FromSeconds(5));
@@ -138,11 +139,17 @@ public class ApprovalAndNotificationTest
     }
 
     [Fact]
-    public void Notification_IsNotSatelliteContent()
+    public void Notification_IsSatelliteOfMainEntity()
     {
-        // Notification is not satellite content - it lives independently
-        var node = new MeshNode("notif1", "User/user1") { Content = new Notification() };
-        (node.MainNode != node.Path).Should().BeFalse();
+        // Notifications are satellites of the entity they're about (thread, approval, doc).
+        // Path = {mainNodePath}/_Notification/{id}; MainNode = mainNodePath.
+        var node = new MeshNode("notif1", "ACME/_Thread/chat-abc/_Notification")
+        {
+            MainNode = "ACME/_Thread/chat-abc",
+            Content = new Notification()
+        };
+        node.MainNode.Should().NotBe(node.Path);
+        node.Path.Should().StartWith(node.MainNode + "/");
     }
 
     [Fact]
@@ -153,6 +160,7 @@ public class ApprovalAndNotificationTest
             Id = "notif-1",
             Title = "Approval Requested",
             Message = "User1 requested your approval",
+            Icon = "/static/NodeTypeIcons/bell.svg",
             TargetNodePath = "org/project/doc",
             IsRead = false,
             NotificationType = NotificationType.ApprovalRequired,
@@ -162,6 +170,7 @@ public class ApprovalAndNotificationTest
         notification.Id.Should().Be("notif-1");
         notification.Title.Should().Be("Approval Requested");
         notification.Message.Should().Be("User1 requested your approval");
+        notification.Icon.Should().Be("/static/NodeTypeIcons/bell.svg");
         notification.TargetNodePath.Should().Be("org/project/doc");
         notification.IsRead.Should().BeFalse();
         notification.NotificationType.Should().Be(NotificationType.ApprovalRequired);
