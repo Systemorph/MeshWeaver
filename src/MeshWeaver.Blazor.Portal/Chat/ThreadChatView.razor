@@ -116,10 +116,15 @@ else
 
                                     @if (isDelegation && isPending)
                                     {
+                                        var delHeader = GetDelegationHeader(call.DelegationPath);
+                                        var title = delHeader?.Title ?? summary;
+                                        var icon = delHeader?.Icon ?? "/static/NodeTypeIcons/chat.svg";
                                         <div class="thread-msg-delegation-entry">
                                             <div class="thread-msg-delegation-header">
-                                                <span class="thread-msg-delegation-pulse">✹</span>
-                                                <a href="/@call.DelegationPath" class="thread-msg-delegation-link">@summary</a>
+                                                <img src="@icon" alt="" class="thread-msg-delegation-icon" />
+                                                <a href="/@call.DelegationPath" class="thread-msg-delegation-link thread-msg-delegation-title" title="@title">@title</a>
+                                                <span class="thread-msg-delegation-agent">@summary</span>
+                                                <span class="thread-msg-delegation-pulse" title="streaming">✹</span>
                                             </div>
                                             <div class="thread-msg-delegation-stream">
                                                 <LayoutAreaView ViewModel="@(new LayoutAreaControl(call.DelegationPath!, new LayoutAreaReference("Streaming")).WithSpinnerType(SpinnerType.None))"
@@ -131,13 +136,18 @@ else
                                     {
                                         var display = FormatToolCallDisplay(call);
                                         var change = display.IsNodeModifying ? FindChange(state.UpdatedNodes, display.Path) : null;
+                                        var doneHeader = isDelegation ? GetDelegationHeader(call.DelegationPath) : null;
+                                        var doneTitle = doneHeader?.Title ?? summary;
+                                        var doneIcon = doneHeader?.Icon ?? "/static/NodeTypeIcons/chat.svg";
 
                                         <details class="thread-msg-tool-entry @(isDelegation ? "thread-msg-delegation-entry" : "")">
                                             <summary class="thread-msg-tool-entry-name">
                                                 <span class="thread-msg-tool-done @(call.IsSuccess ? "" : "thread-msg-tool-error")">@(call.IsSuccess ? "✓" : "✗")</span>
                                                 @if (isDelegation)
                                                 {
-                                                    <a href="/@call.DelegationPath" class="thread-msg-delegation-link" @onclick:stopPropagation>@summary</a>
+                                                    <img src="@doneIcon" alt="" class="thread-msg-delegation-icon" />
+                                                    <a href="/@call.DelegationPath" class="thread-msg-delegation-link thread-msg-delegation-title" @onclick:stopPropagation title="@doneTitle">@doneTitle</a>
+                                                    <span class="thread-msg-delegation-agent">@summary</span>
                                                 }
                                                 else
                                                 {
