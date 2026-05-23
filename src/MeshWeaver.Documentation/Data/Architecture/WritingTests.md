@@ -153,7 +153,7 @@ mock.Setup(s => s.CreateNode(It.IsAny<MeshNode>())).Returns(Observable.Return(mo
 
 The test passes. The migration ships. Prod breaks. Use `MonolithMeshTestBase` and let the real service do the work; if that's too slow, the service's contract is wrong — fix the contract, not the test.
 
-### ❌ Polling loops around `QueryAsync`
+### ❌ Polling loops around `QueryAsync` (or any read)
 
 ```csharp
 // WRONG — even with a sleep, the index may still lag. Wastes time, still flaky.
@@ -163,9 +163,18 @@ for (var i = 0; i < 20; i++)
     if (n is { State: MeshNodeState.Active }) break;
     await Task.Delay(100);
 }
+
+// WRONG — sleep-then-assert. 200 ms races propagation under CI load. Even when
+// it doesn't fail, the lower bound is dead time on every run.
+await client.Observe(DataChangeRequest.Update([newOrder]), o => o.WithTarget(host)).FirstAsync().ToTask();
+await Task.Delay(200);
+var result = await client.Observe(new GetDataRequest(new DataPathReference("OrderSummary")), o => o.WithTarget(host)).FirstAsync().ToTask();
+result.Should().Contain(s => s.OrderId == "O4");
 ```
 
-If you need to wait for a state change, subscribe to the stream and filter:
+The fix has two shapes depending on whether the source is already an observable.
+
+**(a) Source IS an observable (`GetRemoteStream`, `workspace.GetQuery`, a hub stream)** — subscribe and filter:
 
 ```csharp
 var workspace = Mesh.GetWorkspace();
@@ -175,6 +184,57 @@ await workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
     .Take(1)
     .Timeout(TimeSpan.FromSeconds(10))
     .ToTask(ct);
+```
+
+**(b) Source is a request/response with no stream surface (`GetDataRequest`, a `MeshQuery.QueryAsync<>().ToListAsync()` snapshot)** — wrap the re-query in `Observable.Interval(...).SelectMany(...)`, then `.Where(predicate).FirstAsync().Timeout(...)`. The interval IS the polling cadence; the `.Where` IS the condition; the `.Timeout` IS the deadline:
+
+```csharp
+var result = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+    .SelectMany(_ => Observable.FromAsync(() => client
+        .Observe(new GetDataRequest(new DataPathReference("OrderSummary")),
+                 o => o.WithTarget(host))
+        .FirstAsync().ToTask()))
+    .Select(r => (r.Message.Data as InstanceCollection)?.Instances.Values
+        .Cast<OrderSummary>().ToList() ?? new List<OrderSummary>())
+    .Where(list => list.Any(s => s.OrderId == "O4"))
+    .FirstAsync().Timeout(TimeSpan.FromSeconds(15)).ToTask(ct);
+```
+
+`.StartWith(0L)` fires the first request immediately (without waiting one interval). The whole expression evaluates to the FIRST result-set that matches the predicate — no hand-rolled `while` loop, no separate "extra delay for processing to settle".
+
+**Same shape for `MeshQuery.QueryAsync<>` polling**:
+
+```csharp
+// Wait until the synced query reflects a write that just happened.
+var match = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+    .SelectMany(_ => Observable.FromAsync(async () =>
+        await MeshQuery.QueryAsync<MeshNode>("nodeType:Story").ToListAsync()))
+    .Where(list => list.Count >= 3)
+    .FirstAsync().Timeout(TimeSpan.FromSeconds(15)).ToTask(ct);
+```
+
+### ❌ Asserting "exactly N change events"
+
+```csharp
+// WRONG — pg_notify and similar change feeds can deliver follow-up events for a
+// write that the Subscribe wired up AFTER the row already existed (initial-snapshot
+// race). Count-exact assertions flake whenever the listener is warm.
+var changes = new List<QueryResultChange<MeshNode>>();
+using var sub = _query.ObserveQuery<MeshNode>(req, _options).Subscribe(changes.Add);
+await WaitForChanges(changes, 1);
+changes.Should().HaveCount(1);                      // ← flaky
+changes[0].ChangeType.Should().Be(QueryChangeType.Initial);
+```
+
+Filter on the specific emission shape you care about, not the count:
+
+```csharp
+// RIGHT — assert the SHAPE of the Initial emission, not the absence of follow-ups.
+var initial = await _query.ObserveQuery<MeshNode>(req, _options)
+    .Where(c => c.ChangeType == QueryChangeType.Initial)
+    .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).ToTask();
+initial.Items.Should().HaveCount(1);
+initial.Items[0].Id.Should().Be("Story1");
 ```
 
 ### ❌ `async ctx =>` click actions in test-only setup code
