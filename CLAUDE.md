@@ -198,6 +198,8 @@ workspace.GetRemoteStream<MeshNode, MeshNodeReference>(new Address(path), new Me
 
 `GetRemoteStream` + `Where(...).Take(1)` is also the right primitive for **waiting for work to finish**.
 
+**Free-floating words → vector search.** When a query contains bare text tokens (`laptop nodeType:Story`) AND PG is the backend AND an `IEmbeddingProvider` is registered, `PostgreSqlMeshQuery.QueryAsync` automatically routes through the HNSW cosine index instead of ILIKE substring scan. Structured-only queries (`nodeType:Story namespace:ACME`) stay on the regular SQL path. Full reference: [VectorSearch.md](src/MeshWeaver.Documentation/Data/Architecture/VectorSearch.md).
+
 Full treatment: [CqrsAndContentAccess.md](src/MeshWeaver.Documentation/Data/Architecture/CqrsAndContentAccess.md)
 
 ## Mesh URL Shape
