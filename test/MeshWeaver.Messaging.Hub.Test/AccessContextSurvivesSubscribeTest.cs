@@ -127,12 +127,16 @@ public class AccessContextSurvivesSubscribeTest : IDisposable
     }
 
     /// <summary>
-    /// Test 4 — Context is null but CircuitContext is set. The wrap reads
-    /// Context first, falls back to CircuitContext. Subscribe callback
-    /// observes the CircuitContext.
+    /// Test 4 — the helper does NOT invent identity. With Context=null on
+    /// the emitting thread and CircuitContext set as a Blazor session value,
+    /// the Subscribe callback observes null AsyncLocal. Identity rides on
+    /// <c>delivery.AccessContext</c> via PostOptions — the receiver's
+    /// UserServiceDeliveryPipeline sets/restores AsyncLocal under try/finally.
+    /// The wrap mutating AsyncLocal at Subscribe time leaked identity into
+    /// the caller's logical execution (see commit 757d2a296).
     /// </summary>
     [Fact]
-    public async Task Capture_Reads_AccessService_Context_First_CircuitContext_Fallback_Second()
+    public async Task PassThrough_Does_Not_Synthesize_Context_From_CircuitContext()
     {
         _access.SetContext(null);
         _access.SetCircuitContext(new AccessContext { ObjectId = "bob-circuit", Name = "Bob" });
@@ -145,20 +149,27 @@ public class AccessContextSurvivesSubscribeTest : IDisposable
         await Task.Run(() => subject.OnNext(1));
         var result = await observed.Task.WaitAsync(5.Seconds());
 
-        result.Should().Be("bob-circuit",
-            because: "the wrap's capture is `Context ?? CircuitContext`; with Context null " +
-                     "it falls back to CircuitContext (the Blazor session identity).");
+        result.Should().BeNull(
+            because: "CarryAccessContext is a pass-through (757d2a296). It does NOT read " +
+                     "CircuitContext or mutate AsyncLocal on Subscribe — identity rides on " +
+                     "delivery.AccessContext via PostOptions. Context was explicitly set to " +
+                     "null on the emitting thread, so the subscriber sees null.");
     }
 
     /// <summary>
-    /// Test 5 — two concurrent wraps with different users must not bleed
-    /// each other's captured contexts. Each emission restores its own.
+    /// Test 5 — pass-through means the wrap doesn't manufacture identity per
+    /// subscriber. With ambient Context cleared before emission, both
+    /// concurrent subscribers see null on their emission thread — there is
+    /// no capture-and-restore. Pinning this prevents accidental
+    /// reintroduction of the AsyncLocal leak.
     /// </summary>
     [Fact]
-    public async Task Concurrent_Wraps_Do_Not_Bleed()
+    public async Task PassThrough_Does_Not_Restore_Captured_Identity_Per_Subscriber()
     {
-        // Two subjects, each wrapped under a different captured context.
-        // Both subscribers emit interleaved on the shared thread pool.
+        // Two subjects wrapped under different ambient values, then ambient
+        // cleared before emission. Under the OLD capture-and-restore model
+        // each subscriber would see its captured identity. Under the current
+        // pass-through model both see null.
         _access.SetContext(new AccessContext { ObjectId = "alice", Name = "Alice" });
         var aliceSubject = new Subject<int>();
         var aliceWrapped = aliceSubject.CarryAccessContext(_serviceProvider);
@@ -179,21 +190,18 @@ public class AccessContextSurvivesSubscribeTest : IDisposable
             Task.Run(() => { for (var i = 0; i < 5; i++) aliceSubject.OnNext(i); }),
             Task.Run(() => { for (var i = 0; i < 5; i++) bobSubject.OnNext(i); }));
 
-        // Stream-poll until all 10 emissions have been observed — replaces a
-        // Task.Delay(100) "let emissions drain" barrier. CarryAccessContext
-        // dispatches each OnNext via the access service, so the observed
-        // counts are the deterministic signal for "draining is done".
+        // Stream-poll until all 10 emissions have been observed.
         await Observable.Interval(TimeSpan.FromMilliseconds(20)).StartWith(0L)
             .Where(_ => aliceObserved.Count >= 5 && bobObserved.Count >= 5)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(5))
             .ToTask();
 
-        aliceObserved.Should().OnlyContain(id => id == "alice",
-            because: "alice's wrap captured 'alice' at wrap time — emissions on her subject " +
-                     "must restore that value regardless of bob's interleaved emissions.");
-        bobObserved.Should().OnlyContain(id => id == "bob",
-            because: "symmetric — captured-value-by-closure prevents cross-contamination.");
+        aliceObserved.Should().OnlyContain(id => id == null,
+            because: "pass-through doesn't restore captured identity per emission — ambient " +
+                     "Context was null on the emitting thread, so the subscriber sees null.");
+        bobObserved.Should().OnlyContain(id => id == null,
+            because: "symmetric — the wrap doesn't synthesize identity from a captured value.");
     }
 
     /// <summary>
