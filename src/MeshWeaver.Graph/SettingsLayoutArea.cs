@@ -719,12 +719,19 @@ public static class SettingsLayoutArea
                     if (updated is not MeshNodeMetadata updatedMeta)
                         return;
 
-                    var updatedNode = updatedMeta.ApplyTo(node);
-
-                    // Use UpdateNodeRequest (the routed MeshNode write path) instead of
-                    // DataChangeRequest — MeshNode has no data-source key mapping and
-                    // DataChangeRequest fails with "No key mapping is defined for type MeshNode".
-                    host.Hub.Post(new UpdateNodeRequest(updatedNode));
+                    // Write through the shared cache so every reader of the
+                    // node's stream sees the change (CLAUDE.md "NodeMutations:
+                    // stream.Update only"). updatedMeta.ApplyTo composes the
+                    // patch inside the cache.Update lambda against the live
+                    // node — applying the metadata patch on top of whichever
+                    // version the cache holds, not the stale node captured at
+                    // SetupNodeMetadataAutoSave time.
+                    if (node.Path is { Length: > 0 } metaPath)
+                    {
+                        var cache = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+                        cache.Update(metaPath, current => updatedMeta.ApplyTo(current))
+                            .Subscribe(_ => { }, _ => { });
+                    }
                 }));
     }
 

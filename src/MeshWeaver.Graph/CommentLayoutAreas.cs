@@ -310,17 +310,15 @@ public static class CommentLayoutAreas
                         {
                             var newText = data?.GetValueOrDefault("text")?.ToString() ?? "";
 
-                            host.Workspace.GetStream(new MeshNodeReference())!
-                                .Where(change => change.Value != null)
-                                .Take(1)
-                                .Subscribe(change =>
-                                {
-                                    var node = change.Value!;
-                                    var comment = node.Content as Comment ?? new Comment();
-                                    var updatedNode = node with { Content = comment with { Text = newText } };
-                                    host.Hub.Post(new UpdateNodeRequest(updatedNode));
-                                    ctx.Host.UpdateData(editStateId, false);
-                                });
+                            var ownPath = host.Hub.Address.Path;
+                            var cache = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+                            cache.Update(ownPath, n =>
+                            {
+                                var existing = n.Content as Comment ?? new Comment();
+                                return n with { Content = existing with { Text = newText } };
+                            }).Subscribe(
+                                _ => ctx.Host.UpdateData(editStateId, false),
+                                _ => ctx.Host.UpdateData(editStateId, false));
                         });
                     return Task.CompletedTask;
                 })));
@@ -382,20 +380,18 @@ public static class CommentLayoutAreas
                         {
                             var text = data?.GetValueOrDefault("text")?.ToString() ?? "";
 
-                            host.Workspace.GetMeshNodeStream(replyPath)
-                                .Where(n => n != null)
-                                .Take(1)
-                                .Subscribe(node =>
+                            var cache = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+                            cache.Update(replyPath, n =>
+                            {
+                                var replyComment = n.Content as Comment ?? new Comment();
+                                return n with
                                 {
-                                    var replyComment = node!.Content as Comment ?? new Comment();
-                                    var activeNode = node with
-                                    {
-                                        State = MeshNodeState.Active,
-                                        Content = replyComment with { Text = text }
-                                    };
-                                    host.Hub.Post(new UpdateNodeRequest(activeNode));
-                                    host.UpdateData(replyPathStateId, "");
-                                });
+                                    State = MeshNodeState.Active,
+                                    Content = replyComment with { Text = text }
+                                };
+                            }).Subscribe(
+                                _ => host.UpdateData(replyPathStateId, ""),
+                                _ => host.UpdateData(replyPathStateId, ""));
                         });
                     return Task.CompletedTask;
                 })));
@@ -451,15 +447,15 @@ public static class CommentLayoutAreas
         return Controls.Html("<span style=\"cursor: pointer; font-size: 0.8rem; color: #4ade80;\" title=\"Resolve\">✓</span>")
             .WithClickAction(_ =>
             {
-                // Resolve comment — read OWN node via the canonical reducer.
-                host.Workspace.GetMeshNodeStream()
-                    .Where(n => n != null)
-                    .Take(1)
-                    .Subscribe(node =>
-                    {
-                        var updatedNode = node! with { Content = comment with { Status = CommentStatus.Resolved } };
-                        host.Hub.Post(new UpdateNodeRequest(updatedNode));
-                    });
+                // Resolve comment — write through the shared cache so every
+                // reader of the comment's stream sees the status flip.
+                var ownPath = host.Hub.Address.Path;
+                var cache = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+                cache.Update(ownPath, n =>
+                {
+                    var c = n.Content as Comment ?? comment;
+                    return n with { Content = c with { Status = CommentStatus.Resolved } };
+                }).Subscribe(_ => { }, _ => { });
                 return Task.CompletedTask;
             });
     }

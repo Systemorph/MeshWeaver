@@ -90,13 +90,14 @@ public static class NotificationLayoutAreas
             .WithAppearance(Appearance.Neutral)
             .WithClickAction(ctx =>
             {
-                if (node != null)
+                if (node?.Path is { Length: > 0 } notificationPath)
                 {
-                    var updated = node with
+                    var cache = ctx.Host.Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+                    cache.Update(notificationPath, n =>
                     {
-                        Content = notification with { IsRead = !notification.IsRead }
-                    };
-                    ctx.Host.Hub.Post(new UpdateNodeRequest(updated));
+                        var current = n.Content as Notification ?? notification;
+                        return n with { Content = current with { IsRead = !current.IsRead } };
+                    }).Subscribe(_ => { }, _ => { });
                 }
                 return Task.CompletedTask;
             }));

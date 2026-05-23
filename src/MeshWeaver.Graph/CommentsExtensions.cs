@@ -452,19 +452,19 @@ public static class CommentsView
                         {
                             var text = data?.GetValueOrDefault("text")?.ToString() ?? "";
 
-                            host.Hub.GetMeshNode(host.Hub.Address.ToString())
-                                .Subscribe(node =>
+                            var ownPath = host.Hub.Address.Path;
+                            var cache = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+                            cache.Update(ownPath, n =>
+                            {
+                                var c = n.Content as Comment ?? new Comment();
+                                return n with
                                 {
-                                    if (node == null) return;
-                                    var comment = node.Content as Comment ?? new Comment();
-                                    var activeNode = node with
-                                    {
-                                        State = MeshNodeState.Active,
-                                        Content = comment with { Text = text }
-                                    };
-                                    host.Hub.Post(new UpdateNodeRequest(activeNode));
-                                    host.UpdateData(stateId, "");
-                                });
+                                    State = MeshNodeState.Active,
+                                    Content = c with { Text = text }
+                                };
+                            }).Subscribe(
+                                _ => host.UpdateData(stateId, ""),
+                                _ => host.UpdateData(stateId, ""));
                         });
                     return Task.CompletedTask;
                 })));

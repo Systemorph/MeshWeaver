@@ -133,15 +133,22 @@ public static class ApprovalLayoutAreas
         var currentUser = accessService?.Context?.ObjectId ?? "System";
         var currentUserName = accessService?.Context?.Name ?? currentUser;
 
-        var updated = node with
+        if (node.Path is { Length: > 0 } approvalPath)
         {
-            Content = approval with
+            var cache = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+            cache.Update(approvalPath, n =>
             {
-                Status = newStatus,
-                ApprovalDate = DateTimeOffset.UtcNow
-            }
-        };
-        host.Hub.Post(new UpdateNodeRequest(updated));
+                var a = n.Content as Approval ?? approval;
+                return n with
+                {
+                    Content = a with
+                    {
+                        Status = newStatus,
+                        ApprovalDate = DateTimeOffset.UtcNow
+                    }
+                };
+            }).Subscribe(_ => { }, _ => { });
+        }
 
         // Activity + notification — chain as Observables, no await in a click handler.
         var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
