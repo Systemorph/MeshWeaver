@@ -41,6 +41,15 @@ internal sealed class PostgreSqlPathRoutingAdapter : IStorageAdapter
         var seg = PostgreSqlPartitionStorageProvider.GetFirstSegment(path);
         if (string.IsNullOrEmpty(seg))
             return Observable.Return<PartitionState>(new PartitionState.Absent());
+        // 🚨 Prod-2026-05-21 regression guard: paths whose first segment is a
+        // NodeType name (Thread, AccessAssignment, …) MUST NOT be probed as
+        // partition namespaces. Without this, the cache probes for a schema
+        // named after the NodeType, gets PendingCreate, and AdapterForWriteState
+        // CREATE SCHEMAs it on first write — surfacing as `relation
+        // "thread.mesh_nodes" does not exist` and the SatelliteRoutingExhaustive
+        // schema-must-not-exist assertion failing for AccessAssignment.
+        if (PartitionDefinition.NodeTypeToSuffix.ContainsKey(seg))
+            return Observable.Return<PartitionState>(new PartitionState.Absent());
         return _provider.PartitionCache.GetOrProbe(seg).Take(1);
     }
 
