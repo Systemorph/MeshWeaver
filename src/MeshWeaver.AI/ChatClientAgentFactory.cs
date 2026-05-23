@@ -690,6 +690,7 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
             "Version" => new VersionPlugin(Hub).CreateTools(),
             "Collaboration" => new CollaborationPlugin(Hub, chat).CreateTools(),
             "ContentCollection" => new ContentCollectionPlugin(Hub, chat).CreateTools(),
+            "Lsp" => new LspPlugin(Hub, chat).CreateTools(),
             _ => Hub.ServiceProvider.GetServices<IAgentPlugin>()
                     .FirstOrDefault(p => string.Equals(p.Name, pluginRef.Name, StringComparison.OrdinalIgnoreCase))
                     ?.CreateTools()

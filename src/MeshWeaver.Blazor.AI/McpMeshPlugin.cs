@@ -5,6 +5,7 @@ using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.AI;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Services.LanguageServer;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
@@ -220,6 +221,118 @@ For the full source-discovery + matched-Code-paths + Roslyn trace, `get @<activi
     public Task<string> Compile(
         [Description("Path to the NodeType (e.g., @User/me/MyType or @Systemorph/SocialMedia/Profile). Must point at a NodeType definition node, not an instance.")] string path)
         => ops.Compile(path).FirstAsync().ToTask();
+
+    [McpServerTool]
+    [Description(@"PRE-FLIGHT CHECK before committing a source change to a NodeType. Runs Roslyn against the NodeType's current source set with ONE source file substituted by `proposedCode`, returns all diagnostics (errors + warnings). No emit, no Recycle, no side effects — purely speculative.
+
+Use this in the Coder edit loop: edit a Source/*.cs file in your head → `lsp_check_node` → if diagnostics, fix → repeat → only then `patch` + `compile`. Eliminates the costly blind-patch / Compile / fix cycle.
+
+Returns `{ok: true, diagnostics: []}` when the substituted source compiles cleanly, or `{ok: false, diagnostics: [{id, severity, message, sourcePath?, line?, character?}, ...]}` when it doesn't. Severity is one of `Hidden|Info|Warning|Error`. Positions are 0-based.")]
+    public Task<string> LspCheckNode(
+        [Description("Path to the NodeType (e.g., @ACME/Story).")] string nodeTypePath,
+        [Description("Path of the Source Code node being edited (e.g., @ACME/Story/Source/StoryTypes.cs). If not in the current source set, the proposed code is added as a new file.")] string sourcePath,
+        [Description("The proposed full source text for that file.")] string proposedCode)
+    {
+        var lang = rootHub.ServiceProvider.GetRequiredService<IMeshLanguageService>();
+        return lang.CheckSpeculative(
+                MeshOperations.ResolvePath(nodeTypePath),
+                MeshOperations.ResolvePath(sourcePath),
+                proposedCode ?? string.Empty)
+            .Select(diagnostics => FormatDiagnosticsJson(diagnostics, sessionHub.JsonSerializerOptions))
+            .FirstAsync().ToTask();
+    }
+
+    [McpServerTool]
+    [Description(@"Returns Roslyn diagnostics from the NodeType's CURRENT cached compilation — distinct from `GetDiagnostics` which only reports compile status (Ok/Error/Compiling). This enumerates every diagnostic in the compilation (errors + warnings + info) with source location, so you can see exactly what's wrong without re-compiling.
+
+Returns `{ok: true|false, diagnostics: [...]}` — same shape as `lsp_check_node`. Empty `diagnostics` plus `ok:true` means clean.")]
+    public Task<string> LspDiagnosticsForNode(
+        [Description("Path to the NodeType (e.g., @ACME/Story).")] string nodeTypePath)
+    {
+        var lang = rootHub.ServiceProvider.GetRequiredService<IMeshLanguageService>();
+        return lang.GetDiagnostics(MeshOperations.ResolvePath(nodeTypePath))
+            .Select(diagnostics => FormatDiagnosticsJson(diagnostics, sessionHub.JsonSerializerOptions))
+            .FirstAsync().ToTask();
+    }
+
+    [McpServerTool]
+    [Description(@"Roslyn QuickInfo (hover tooltip) at a position in a Source Code file. Returns the symbol's signature and XML doc summary as markdown, ready to display.
+
+Returns `{markdown: ""..."" }` when a symbol resolves at the position, or `{}` when nothing is there. Positions are 0-based (LSP convention) — line 0 is the first line.")]
+    public Task<string> LspHoverForNode(
+        [Description("Path to the NodeType (e.g., @ACME/Story).")] string nodeTypePath,
+        [Description("Path of the Source Code node (e.g., @ACME/Story/Source/StoryTypes.cs).")] string sourcePath,
+        [Description("0-based line number.")] int line,
+        [Description("0-based character offset within the line.")] int character)
+    {
+        var lang = rootHub.ServiceProvider.GetRequiredService<IMeshLanguageService>();
+        return lang.GetHover(
+                MeshOperations.ResolvePath(nodeTypePath),
+                MeshOperations.ResolvePath(sourcePath),
+                new SourcePosition(line, character))
+            .Select(hover => JsonSerializer.Serialize(
+                hover is null ? new { } : (object)new { markdown = hover.ContentMarkdown },
+                sessionHub.JsonSerializerOptions))
+            .FirstAsync().ToTask();
+    }
+
+    [McpServerTool]
+    [Description(@"Roslyn code completions at a position in a Source Code file. Returns up to `max` suggestions with kind / insert text / detail / sort key, sorted by Roslyn's relevance.
+
+Returns `{items: [{label, kind, insertText, detail?, sortText?}, ...]}`. `kind` is the LSP completion-item kind name (`Method`, `Class`, `Field`, etc.). Empty `items` means no completions at that position. Positions are 0-based.")]
+    public Task<string> LspCompletionsForNode(
+        [Description("Path to the NodeType (e.g., @ACME/Story).")] string nodeTypePath,
+        [Description("Path of the Source Code node (e.g., @ACME/Story/Source/StoryTypes.cs).")] string sourcePath,
+        [Description("0-based line number.")] int line,
+        [Description("0-based character offset within the line.")] int character,
+        [Description("Maximum number of completions to return. Default 20.")] int max = 20)
+    {
+        var lang = rootHub.ServiceProvider.GetRequiredService<IMeshLanguageService>();
+        return lang.GetCompletions(
+                MeshOperations.ResolvePath(nodeTypePath),
+                MeshOperations.ResolvePath(sourcePath),
+                new SourcePosition(line, character),
+                max)
+            .Select(items => JsonSerializer.Serialize(
+                new
+                {
+                    items = items.Select(i => new
+                    {
+                        label = i.Label,
+                        kind = i.Kind.ToString(),
+                        insertText = i.InsertText,
+                        detail = i.Detail,
+                        sortText = i.SortText,
+                    }).ToArray()
+                },
+                sessionHub.JsonSerializerOptions))
+            .FirstAsync().ToTask();
+    }
+
+    /// <summary>
+    /// Shared diagnostic JSON shape for the lsp_check_node + lsp_diagnostics_for_node tools.
+    /// <c>ok</c> is true when the diagnostic list has no Error-severity entries — warnings
+    /// alone don't fail the check (mirrors how a regular compile succeeds with warnings).
+    /// </summary>
+    private static string FormatDiagnosticsJson(IReadOnlyList<DiagnosticInfo> diagnostics, JsonSerializerOptions options)
+    {
+        var anyErrors = diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error);
+        return JsonSerializer.Serialize(
+            new
+            {
+                ok = !anyErrors,
+                diagnostics = diagnostics.Select(d => new
+                {
+                    id = d.Id,
+                    severity = d.Severity.ToString(),
+                    message = d.Message,
+                    sourcePath = d.Location?.SourcePath,
+                    line = d.Location?.Range.Start.Line,
+                    character = d.Location?.Range.Start.Character,
+                }).ToArray()
+            },
+            options);
+    }
 
     [McpServerTool]
     [Description("Runs an executable Code node's C# through the kernel (Microsoft.DotNet.Interactive) and returns stdout / return value / errors. The target node must have `CodeConfiguration.IsExecutable == true`. Blocks until the kernel signals completion (side-effects — e.g. mesh.CreateNode calls inside the script — have happened by the time this returns). Use to run import/test scripts from MCP without needing a UI click.")]

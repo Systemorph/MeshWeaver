@@ -1,5 +1,6 @@
 @using Microsoft.FluentUI.AspNetCore.Components
 @using Microsoft.Extensions.Logging
+@using System.Reactive.Linq
 @inject IJSRuntime JSRuntime
 @inject ILogger<MonacoEditorView> Logger
 
@@ -72,6 +73,26 @@
     /// </summary>
     [Parameter]
     public Func<string, IObservable<IReadOnlyList<CompletionItem>>>? CompletionCallback { get; set; }
+
+    /// <summary>
+    /// Optional reactive callback that supplies live diagnostics (squiggles) for the
+    /// current editor content. Called with the editor's full text on every debounced
+    /// content change. Each emission is converted to Monaco markers and rendered via
+    /// <c>monaco.editor.setModelMarkers</c>. The callback typically wraps
+    /// <c>IMeshLanguageService.CheckSpeculative</c> — see Stage-3 LSP wiring.
+    /// <see cref="DiagnosticSourcePath"/> filters emissions to diagnostics whose
+    /// location matches the file currently in the editor; null = show all.
+    /// </summary>
+    [Parameter]
+    public Func<string, IObservable<IReadOnlyList<MeshWeaver.Mesh.Services.LanguageServer.DiagnosticInfo>>>? DiagnosticsCallback { get; set; }
+
+    /// <summary>
+    /// When <see cref="DiagnosticsCallback"/> is set, restrict surfaced diagnostics to
+    /// those whose <c>SourcePath</c> matches this value. Suppresses noise from sibling
+    /// source files in the same compilation. Null = show all diagnostics regardless.
+    /// </summary>
+    [Parameter]
+    public string? DiagnosticSourcePath { get; set; }
 
     /// <summary>
     /// Show line numbers in the editor. Default is false (chat-style input).
@@ -189,6 +210,13 @@
 
             // Register completion provider if configured
             await TryRegisterCompletionProvider();
+
+            // Enable LSP-style live diagnostics if the consumer wired a callback.
+            // JS side debounces onDidChangeModelContent and invokes back to RequestDiagnostics.
+            if (DiagnosticsCallback != null)
+            {
+                await jsModule.InvokeVoidAsync("enableDiagnostics", EditorId, dotNetRef);
+            }
         }
 
         // Notify parent that editor is fully ready
@@ -367,6 +395,58 @@
             iconUrl = i.IconUrl ?? "",
             sortKey = i.SortKey ?? ""
         }).ToArray();
+
+    // Latest active subscription to the diagnostics callback. Disposed on the next
+    // RequestDiagnostics call (each keystroke window starts a fresh subscription) and
+    // on component disposal so we never leak an observable across editor lifecycles.
+    private IDisposable? _activeDiagnosticsSub;
+
+    /// <summary>
+    /// JSInvokable: the JS module's debounced onDidChangeModelContent listener calls
+    /// this with the current editor text. We invoke the consumer's
+    /// <see cref="DiagnosticsCallback"/>, take the first emission, optionally filter
+    /// to <see cref="DiagnosticSourcePath"/>, and push results to JS as Monaco markers.
+    /// </summary>
+    [JSInvokable]
+    public Task RequestDiagnostics(string currentText)
+    {
+        if (DiagnosticsCallback == null || jsModule == null)
+            return Task.CompletedTask;
+
+        _activeDiagnosticsSub?.Dispose();
+        try
+        {
+            _activeDiagnosticsSub = DiagnosticsCallback(currentText ?? string.Empty)
+                .Take(1)
+                .Subscribe(
+                    diagnostics =>
+                    {
+                        var filtered = DiagnosticSourcePath is null
+                            ? diagnostics
+                            : diagnostics.Where(d => d.Location?.SourcePath == DiagnosticSourcePath).ToList();
+                        var payload = filtered.Select(d => new
+                        {
+                            severity = (int)d.Severity,
+                            message = d.Message,
+                            id = d.Id,
+                            startLine = d.Location?.Range.Start.Line ?? 0,
+                            startCharacter = d.Location?.Range.Start.Character ?? 0,
+                            endLine = d.Location?.Range.End.Line ?? 0,
+                            endCharacter = d.Location?.Range.End.Character ?? 0,
+                        }).ToArray();
+                        // Fire-and-forget — JS event-loop preserves order; we don't block the
+                        // Subscribe handler. Errors during push surface in the JS console.
+                        if (jsModule != null)
+                            _ = jsModule.InvokeVoidAsync("pushDiagnostics", EditorId, payload).AsTask();
+                    },
+                    ex => Logger.LogError(ex, "Diagnostics callback failed for editor {EditorId}", EditorId));
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error subscribing to diagnostics callback for editor {EditorId}", EditorId);
+        }
+        return Task.CompletedTask;
+    }
 
     /// <summary>
     /// Pushes updated completion items to the editor and re-triggers the suggest widget.
@@ -663,6 +743,8 @@
 
     public async ValueTask DisposeAsync()
     {
+        _activeDiagnosticsSub?.Dispose();
+        _activeCompletionSub?.Dispose();
         if (jsModule != null)
         {
             try

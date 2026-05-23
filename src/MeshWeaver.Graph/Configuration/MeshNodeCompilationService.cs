@@ -656,6 +656,158 @@ internal class MeshNodeCompilationService(
         return Observable.Return(result);
     }
 
+    /// <summary>
+    /// Reactive: emits the assembled <see cref="CompilationInputs"/> for the NodeType — every
+    /// source as its own paired <c>(Path, Code)</c> entry, the @@-include resolution applied,
+    /// NuGet refs resolved, the skeleton (assembly attribute + generated provider class)
+    /// generated separately. Callers build their own <c>CSharpCompilation</c> or
+    /// <c>AdhocWorkspace</c> from these inputs — per-file syntax trees mean positions in
+    /// language-service queries map back to what the user is editing in Monaco.
+    /// <para>
+    /// Distinct from the emit path (<see cref="CompileCore"/>) which concatenates all sources
+    /// into one syntax tree to produce an assembly. Used by <c>MeshNodeLanguageService</c>
+    /// (hover / completion / diagnostics) and <c>SpeculativeCompilation</c> (Coder pre-flight
+    /// check). Does NOT register NuGet probing directories — that's emit-path bookkeeping.
+    /// </para>
+    /// </summary>
+    public IObservable<CompilationInputs?> GetCompilationInputsAsync(
+        MeshNode node,
+        IReadOnlyList<MeshNode>? sourcesOverride = null)
+    {
+        if (string.IsNullOrEmpty(node.NodeType))
+            return Observable.Return<CompilationInputs?>(null);
+
+        NodeTypeDefinition? selfDef = node.Content as NodeTypeDefinition;
+        IObservable<NodeTypeDefinition?> resolveDef = selfDef != null
+            ? Observable.Return<NodeTypeDefinition?>(selfDef)
+            : hub.GetMeshNode(node.NodeType, TimeSpan.FromSeconds(15))
+                .Select(typeNode => typeNode?.Content as NodeTypeDefinition);
+        string selfPath = selfDef != null ? node.Path : node.NodeType;
+
+        return resolveDef.SelectMany(ntDef =>
+            ResolveSources(ntDef, selfPath, sourcesOverride)
+                .Take(1)
+                .SelectMany(matches =>
+                {
+                    var pairs = CollectSourcePairs(matches);
+                    return ResolveIncludesForPairs(pairs)
+                        .SelectMany(resolvedPairs =>
+                            Observable.FromAsync(ct =>
+                                AssembleCompilationInputsAsync(node, ntDef, resolvedPairs, ct)));
+                }));
+    }
+
+    /// <summary>
+    /// Discovers source <c>(Path, CodeConfiguration, LastModifiedTicks)</c> triples — mirrors
+    /// the dedup + IsExecutable filter from <see cref="CompileCore"/>'s discovery step but
+    /// retains paths alongside configurations so language services can address each file.
+    /// </summary>
+    private static List<(string Path, CodeConfiguration Config, long LastModifiedTicks)>
+        CollectSourcePairs(IEnumerable<MeshNode> matches)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var pairs = new List<(string, CodeConfiguration, long)>();
+        foreach (var n in matches)
+        {
+            if (string.IsNullOrEmpty(n.Path) || !seen.Add(n.Path)) continue;
+            if (n.Content is CodeConfiguration cf
+                && !string.IsNullOrWhiteSpace(cf.Code)
+                && !cf.IsExecutable)
+            {
+                pairs.Add((n.Path, cf, n.LastModified.UtcTicks));
+            }
+        }
+        return pairs;
+    }
+
+    /// <summary>Resolves @@ includes for each source independently, preserving paths. Sequential aggregation matches <see cref="CompileCore"/>.</summary>
+    private IObservable<List<(string Path, CodeConfiguration Config, long LastModifiedTicks)>>
+        ResolveIncludesForPairs(IReadOnlyList<(string Path, CodeConfiguration Config, long LastModifiedTicks)> pairs)
+    {
+        if (pairs.Count == 0)
+            return Observable.Return(new List<(string, CodeConfiguration, long)>());
+
+        IObservable<List<(string, CodeConfiguration, long)>> chain =
+            Observable.Return(new List<(string, CodeConfiguration, long)>(pairs.Count));
+        foreach (var p in pairs)
+        {
+            var pair = p;
+            chain = chain.SelectMany(acc =>
+                ResolveCodeIncludes(pair.Config.Code!, new HashSet<string>())
+                    .Select(resolvedCode =>
+                    {
+                        var resolvedConfig = !ReferenceEquals(resolvedCode, pair.Config.Code)
+                            ? pair.Config with { Code = resolvedCode }
+                            : pair.Config;
+                        acc.Add((pair.Path, resolvedConfig, pair.LastModifiedTicks));
+                        return acc;
+                    }));
+        }
+        return chain;
+    }
+
+    private async Task<CompilationInputs?> AssembleCompilationInputsAsync(
+        MeshNode node,
+        NodeTypeDefinition? ntDef,
+        IReadOnlyList<(string Path, CodeConfiguration Config, long LastModifiedTicks)> resolvedPairs,
+        CancellationToken ct)
+    {
+        var nodeName = cacheService.SanitizeNodeName(node.Path);
+
+        // Skeleton: assembly attribute + generated provider class. Passing codeFile=null
+        // suppresses user-code emission so the skeleton stays decoupled from user sources.
+        var rawSkeleton = _attributeGenerator.GenerateAttributeSource(
+            node, codeFile: null, ntDef?.Configuration, ntDef?.ContentCollections);
+        var (skeleton, skeletonNugetRefs) = NuGetDirectiveParser.Extract(rawSkeleton);
+
+        // User #r "nuget:..." directives can sit in any source file. Aggregate across files
+        // so cross-file references resolve. (Skeleton-derived nugetRefs is normally empty —
+        // the generator doesn't emit #r — but handle them for forward-compatibility.)
+        var allNugetRefs = new List<NuGetPackageReference>(skeletonNugetRefs);
+        var strippedSources = new List<(string Path, string Code, long LastModifiedTicks)>(resolvedPairs.Count);
+        foreach (var p in resolvedPairs)
+        {
+            var (stripped, refs) = NuGetDirectiveParser.Extract(p.Config.Code ?? string.Empty);
+            allNugetRefs.AddRange(refs);
+            strippedSources.Add((p.Path, stripped, p.LastModifiedTicks));
+        }
+
+        ImmutableArray<MetadataReference> references;
+        if (allNugetRefs.Count > 0)
+        {
+            var resolved = await nugetResolver.ResolveAsync(allNugetRefs, targetFramework: null, ct);
+            references = _references
+                .Concat(resolved.AssemblyPaths.Select(p => (MetadataReference)MetadataReference.CreateFromFile(p)))
+                .ToImmutableArray();
+        }
+        else
+        {
+            references = _references.ToImmutableArray();
+        }
+
+        var parseOptions = new CSharpParseOptions(documentationMode: DocumentationMode.Diagnose);
+        var compilationOptions = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+            .WithOptimizationLevel(OptimizationLevel.Debug)
+            .WithPlatform(Platform.AnyCpu);
+
+        var sourcesArray = strippedSources
+            .Select(s => (s.Path, s.Code))
+            .ToImmutableArray();
+
+        var versions = ImmutableDictionary<string, long>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase);
+        foreach (var s in strippedSources)
+            versions = versions.SetItem(s.Path, s.LastModifiedTicks);
+
+        return new CompilationInputs(
+            AssemblyName: $"DynamicNode_{nodeName}",
+            Sources: sourcesArray,
+            SkeletonSource: skeleton,
+            References: references,
+            ParseOptions: parseOptions,
+            CompilationOptions: compilationOptions,
+            SourceVersions: versions);
+    }
+
     private NodeCompilationResult? CompileResultFromAssembly(
         MeshNode node, string assemblyLocation, ActivityLog log,
         ImmutableDictionary<string, long> compiledSources)

@@ -9,6 +9,7 @@ modelTier: heavy
 plugins:
   - Mesh
   - ContentCollection
+  - Lsp
 delegations:
   - agentPath: Agent/Researcher
     instructions: "Research existing patterns, schemas, or code before creating new types"
@@ -385,6 +386,30 @@ Child types import parent data via `AddHubSource`:
 "configuration": "config => config.WithContentType<Todo>().AddData(data => data.AddHubSource(new Address(config.Address.Segments.Take(config.Address.Segments.Length - 2).ToArray()), source => source.WithType<Status>().WithType<Category>())).AddDefaultLayoutAreas()"
 ```
 
+# 🚨 Pre-flight check: `LspCheckNode` before every `Patch`
+
+**Don't blind-patch source files and hope `Compile` is green.** Before writing any non-trivial source change, run `LspCheckNode` to get the Roslyn diagnostics for the substituted source. The cost is ~200–500ms per check; the cost of a blind-patch / `Compile` / `Recycle` / re-patch cycle is multiple seconds per round and often produces a wedged hub if the type fails to load.
+
+The pre-flight loop:
+
+1. Decide the change you want to make to a `Source/*.cs` file. Read the current source with `Get` if you don't have it.
+2. Call `LspCheckNode({nodeTypePath, sourcePath, proposedCode})`. Returns:
+   - `{"ok": true, "diagnostics": []}` → safe to commit. Move on.
+   - `{"ok": true, "diagnostics": [warnings...]}` → safe to commit, but consider addressing the warnings.
+   - `{"ok": false, "diagnostics": [errors...]}` → fix the errors *in your head*, re-call. Each diagnostic carries `id`, `severity`, `message`, `sourcePath`, `line`, `character` (0-based, LSP convention).
+3. Once `ok: true`, persist the change with `Patch` / `Update`.
+4. Run `Compile` + `GetDiagnostics` to do the real emit + status flip.
+
+**Full-substitution semantics**: `LspCheckNode` rebuilds the *whole* NodeType source set with your one proposed file substituted in. This catches the dominant failure mode where editing one source file breaks a sibling (rename a type in A, B's reference still points at the old name). Single-file isolation would miss this.
+
+**When to skip pre-flight**: trivial whitespace / comment changes, JSON-only edits (the JSON is checked by `Compile`, not by Roslyn). For any code change that touches a type signature, method signature, or namespace, run the check.
+
+**Inspecting an already-committed type without a proposed change**: `LspDiagnosticsForNode({nodeTypePath})` returns the diagnostics from the NodeType's current cached compilation — useful for "what does the compiler think of this right now" without a re-Compile.
+
+**Authoring help**: `LspHoverForNode({nodeTypePath, sourcePath, line, char})` and `LspCompletionsForNode({...})` are available too, but for an agent driving via JSON tool calls they're rarely the right shape — prefer reading the relevant types via `Get` and the framework docs. The pre-flight loop is where these tools earn their keep.
+
+**NuGet references**: source files may include `#r "nuget:PackageId, Version"` directives — the speculative compile resolves and adds those references just like the real compile does, so `LspCheckNode` against a proposed source with a new `#r` line correctly reflects what `Compile` will see.
+
 # Workflow
 
 When asked to create a node type:
@@ -396,11 +421,12 @@ When asked to create a node type:
    - Content type `.cs` with meshweaver frontmatter
    - Reference data types with `[Key]`, static instances, and `All` array
    - CSV loaders if loading external data
+   - **For every source file with non-trivial code, call `LspCheckNode` before `Create` / `Update`** — see the pre-flight section above.
 5. **Create the NodeType JSON** with the configuration lambda
 6. **Upload CSV files** to the content collection if needed
 7. **Verify compilation** — this step is NOT optional:
    - Call `GetDiagnostics('@{nodeTypePath}')` after every NodeType create/update.
-   - If `status: "Error"` → read `error`, fix the broken source or the NodeType JSON (often the fix is adding a `sources` entry pointing at another NodeType's `Source` via `$self` or an absolute path), write the fix with `Update`/`Patch`, and re-check.
+   - If `status: "Error"` → first try `LspDiagnosticsForNode('@{nodeTypePath}')` for per-location diagnostics (faster than a full re-Compile). Then read `error`, fix the broken source or the NodeType JSON (often the fix is adding a `sources` entry pointing at another NodeType's `Source` via `$self` or an absolute path), write the fix with `Update`/`Patch`, and re-check.
    - Repeat until `status: "Ok"`. Only then is the NodeType "done".
    - Alternative: a plain `Get('@{path}')` on any instance (or the NodeType itself) wraps the JSON with a `compilationError` field when the type failed to compile — useful when you want the node data and the compile status together.
 8. **Write comprehensive tests** — ALWAYS, before you consider the NodeType done:

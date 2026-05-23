@@ -692,6 +692,81 @@ export function pushCompletionUpdate(editorId, items) {
     }
 }
 
+// =============================================================================
+// LSP-style live diagnostics (Stage-3)
+// =============================================================================
+// Subscribes to debounced onDidChangeModelContent and calls back to .NET with the
+// current model text; the .NET side (RequestDiagnostics) invokes the consumer's
+// IObservable<DiagnosticInfo[]>, then pushes results here via pushDiagnostics.
+
+const DIAGNOSTICS_DEBOUNCE_MS = 300;
+const DIAGNOSTICS_MARKER_OWNER = 'meshweaver-lsp';
+
+export function enableDiagnostics(editorId, dotNetRef) {
+    const state = editorState.get(editorId);
+    if (!state || !state.editorInstance) return;
+    if (state._diagnosticsEnabled) return; // idempotent
+    state._diagnosticsEnabled = true;
+    state._diagnosticsDotNetRef = dotNetRef;
+
+    const requestNow = () => {
+        const model = state.editorInstance?.getModel();
+        if (!model) return;
+        dotNetRef.invokeMethodAsync('RequestDiagnostics', model.getValue()).catch(err => {
+            console.warn('LSP RequestDiagnostics failed:', err);
+        });
+    };
+
+    const scheduleRequest = () => {
+        if (state._diagnosticsTimer) clearTimeout(state._diagnosticsTimer);
+        state._diagnosticsTimer = setTimeout(requestNow, DIAGNOSTICS_DEBOUNCE_MS);
+    };
+
+    // Initial fetch — current saved text gets a diagnostics pass before the user types.
+    requestNow();
+
+    // Subsequent edits — debounced so we don't fire on every keystroke.
+    state._diagnosticsChangeDisposable = state.editorInstance.onDidChangeModelContent(() => {
+        scheduleRequest();
+    });
+}
+
+// Maps an LSP DiagnosticSeverity (0..3) to a Monaco MarkerSeverity (Hint=1, Info=2, Warning=4, Error=8).
+function lspSeverityToMonaco(lspSeverity) {
+    switch (lspSeverity) {
+        case 3: return 8;  // Error
+        case 2: return 4;  // Warning
+        case 1: return 2;  // Info
+        case 0: return 1;  // Hidden / Hint
+        default: return 2;
+    }
+}
+
+// Push a fresh diagnostics snapshot from .NET into Monaco's marker layer for this editor.
+// Items shape (matches RequestDiagnostics's anonymous payload):
+//   { severity, message, id, startLine, startCharacter, endLine, endCharacter }  (LSP 0-based)
+export function pushDiagnostics(editorId, items) {
+    const state = editorState.get(editorId);
+    if (!state) return;
+    const editorInstance = state.editorInstance;
+    if (!editorInstance) return;
+    const model = editorInstance.getModel();
+    if (!model) return;
+
+    const markers = (items || []).map(d => ({
+        // Monaco is 1-based; LSP is 0-based — add 1 to each coordinate.
+        startLineNumber: (d.startLine | 0) + 1,
+        startColumn: (d.startCharacter | 0) + 1,
+        endLineNumber: (d.endLine | 0) + 1,
+        endColumn: (d.endCharacter | 0) + 1,
+        message: d.message || '',
+        code: d.id || '',
+        severity: lspSeverityToMonaco(d.severity | 0),
+        source: 'Roslyn',
+    }));
+    monaco.editor.setModelMarkers(model, DIAGNOSTICS_MARKER_OWNER, markers);
+}
+
 // Set cursor position to end of content
 export function setCursorToEnd(editorId) {
     const editorInstance = editorState.get(editorId)?.editorInstance;
@@ -967,6 +1042,19 @@ export function dispose(editorId) {
     if (state) {
         if (state.completionDisposable) {
             state.completionDisposable.dispose();
+        }
+        if (state._diagnosticsChangeDisposable) {
+            state._diagnosticsChangeDisposable.dispose();
+        }
+        if (state._diagnosticsTimer) {
+            clearTimeout(state._diagnosticsTimer);
+        }
+        const editorInstance = state.editorInstance;
+        if (editorInstance) {
+            const model = editorInstance.getModel();
+            if (model) {
+                monaco.editor.setModelMarkers(model, DIAGNOSTICS_MARKER_OWNER, []);
+            }
         }
         editorState.delete(editorId);
     }

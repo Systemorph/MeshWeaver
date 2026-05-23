@@ -5,6 +5,7 @@ using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Services.LanguageServer;
 using MeshWeaver.Messaging;
 using MeshWeaver.NuGet;
 using Microsoft.Extensions.DependencyInjection;
@@ -165,6 +166,12 @@ public static class GraphConfigurationExtensions
                     // for callers that need the concrete CompileAndGetConfigurations entry point.
                     services.AddSingleton<MeshNodeCompilationService>();
                     services.AddSingleton<IMeshNodeCompilationService>(sp => sp.GetRequiredService<MeshNodeCompilationService>());
+                    // Stage-1 LSP language services over a NodeType's live CSharpCompilation
+                    // — hover, completion, diagnostics, speculative pre-flight checks. Consumed
+                    // by the Lsp* MCP tools + Coder agent's Lsp plugin. SpeculativeCompilation
+                    // needs the NuGet resolver to handle #r directives in proposed source.
+                    services.AddSingleton<SpeculativeCompilation>();
+                    services.AddSingleton<IMeshLanguageService, MeshNodeLanguageService>();
                     services.AddSingleton<INodeConfigurationResolver, NodeConfigurationResolver>();
                     services.AddSingleton<IMeshNodeHubFactory, MeshNodeHubFactory>();
                     // Synced-query / namespace-bounded creatable-types lookup.

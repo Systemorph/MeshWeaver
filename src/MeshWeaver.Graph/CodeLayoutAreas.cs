@@ -374,7 +374,19 @@ public static class CodeLayoutAreas
 
         stack = stack.WithView(displayNameRow);
 
-        // Monaco editor
+        // Monaco editor. LSP opt-in: when this Code node sits under a NodeType's Source/
+        // subtree, enable live Roslyn diagnostics (Stage-1 IMeshLanguageService). The
+        // Edit view's hub address IS the Code MeshNode path, so we can derive both the
+        // NodeType path and the source path from it. For Code nodes outside a Source/
+        // subtree (rare — typically standalone scripts), skip LSP wiring.
+        var sourcePath = host.Hub.Address.ToString();
+        var sourceMarkerIdx = sourcePath.IndexOf("/Source/", StringComparison.Ordinal);
+        CodeEditorLanguageServerConfig? lspConfig = sourceMarkerIdx > 0 && language == "csharp"
+            ? new CodeEditorLanguageServerConfig(
+                NodeTypePath: sourcePath.Substring(0, sourceMarkerIdx),
+                SourcePath: sourcePath)
+            : null;
+
         var editor = new CodeEditorControl()
             .WithLanguage(language)
             .WithHeight("500px")
@@ -385,7 +397,8 @@ public static class CodeLayoutAreas
         editor = editor with
         {
             DataContext = LayoutAreaReference.GetDataPointer(codeDataId),
-            Value = new JsonPointerReference("")
+            Value = new JsonPointerReference(""),
+            LanguageServer = lspConfig,
         };
 
         stack = stack.WithView(editor);

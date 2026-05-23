@@ -2,9 +2,11 @@
 @using MeshWeaver.Layout.Client
 @using MeshWeaver.Data
 @using MeshWeaver.Blazor.Components.Monaco
+@using MeshWeaver.Mesh.Services.LanguageServer
 @using System.Text.Json
 @using System.Reactive.Linq
 @implements IDisposable
+@inject IServiceProvider Services
 
 <MonacoEditorView @ref="editorRef"
                   Value="@BoundValue"
@@ -15,7 +17,9 @@
                   ShowLineNumbers="true"
                   ShowBorder="true"
                   CodeEditMode="true"
-                  ValueChanged="@OnValueChanged" />
+                  ValueChanged="@OnValueChanged"
+                  DiagnosticsCallback="@diagnosticsCallback"
+                  DiagnosticSourcePath="@diagnosticSourcePath" />
 
 @code {
     private MonacoEditorView? editorRef;
@@ -27,6 +31,12 @@
     private string BoundHeight = "300px";
     private bool BoundReadonly = false;
     private string BoundPlaceholder = "";
+
+    // Live-diagnostics wiring — populated by BindData when ViewModel.LanguageServer is set.
+    // Re-resolved on each OnParametersSet so a swap of CodeEditorControl (e.g., editing a
+    // different Code node in the same component lifetime) picks up the new paths.
+    private Func<string, IObservable<IReadOnlyList<DiagnosticInfo>>>? diagnosticsCallback;
+    private string? diagnosticSourcePath;
 
     // Store the data pointer for two-way binding
     private JsonPointerReference? ValuePointer;
@@ -110,6 +120,34 @@
         BoundHeight = ResolveValue<string>(ViewModel.Height) ?? "300px";
         BoundReadonly = ResolveValue<bool?>(ViewModel.Readonly) ?? false;
         BoundPlaceholder = ResolveValue<string>(ViewModel.Placeholder) ?? "";
+
+        // LSP opt-in: when the control specifies LanguageServer, resolve IMeshLanguageService
+        // from DI and build a closure that feeds the editor's current text into CheckSpeculative
+        // on each debounced change. DiagnosticSourcePath filters to this file so we don't
+        // surface diagnostics from sibling sources as squiggles in the wrong editor.
+        var lspConfig = ViewModel.LanguageServer;
+        if (lspConfig != null)
+        {
+            var languageService = Services.GetService(typeof(IMeshLanguageService)) as IMeshLanguageService;
+            if (languageService != null)
+            {
+                var nodeTypePath = lspConfig.NodeTypePath;
+                var sourcePath = lspConfig.SourcePath;
+                diagnosticsCallback = text =>
+                    languageService.CheckSpeculative(nodeTypePath, sourcePath, text ?? string.Empty);
+                diagnosticSourcePath = sourcePath;
+            }
+            else
+            {
+                diagnosticsCallback = null;
+                diagnosticSourcePath = null;
+            }
+        }
+        else
+        {
+            diagnosticsCallback = null;
+            diagnosticSourcePath = null;
+        }
     }
 
     private string? GetEffectiveDataContext()
