@@ -191,7 +191,19 @@ public class Workspace : IWorkspace
             : (ISynchronizationStream<EntityStore>)this.CreateExternalClient<EntityStore, WorkspaceReference<EntityStore>>(owner, reference, impersonateAsHub: true);
 
 
-    private readonly ConcurrentDictionary<(Address, WorkspaceReference), ISynchronizationStream> _remoteStreamCache = new();
+    // 🚨 Lazy<T> wraps the factory because check-then-act ConcurrentDictionary
+    // races would otherwise spawn duplicate upstream subscriptions: two
+    // concurrent callers each pass TryGetValue (miss), each call
+    // CreateExternalClient (which opens a SubscribeRequest to the owning hub
+    // — a real side effect), and the second `_remoteStreamCache[key] = …`
+    // overwrites the first. The orphaned stream remains subscribed and
+    // continues consuming, doubling the emissions seen on the wire.
+    // Lazy<T>(LazyThreadSafetyMode.ExecutionAndPublication) guarantees the
+    // factory body runs at most once per key, regardless of contention.
+    // Symptom this fixes: streaming-text test sequence
+    // `[0, 19, 22, 19, 22, 46]` — every patch delivered twice via the
+    // orphaned stream.
+    private readonly ConcurrentDictionary<(Address, WorkspaceReference), Lazy<ISynchronizationStream>> _remoteStreamCache = new();
 
     private ISynchronizationStream<TReduced> GetExternalClientSynchronizationStream<
         TReduced,
@@ -200,18 +212,36 @@ public class Workspace : IWorkspace
         where TReference : WorkspaceReference
     {
         var key = (address, (WorkspaceReference)reference);
-        // Check if cached stream is still alive. Hub.RunLevel alone is not
-        // sufficient because hub shutdown is async: right after stream.Dispose()
-        // is called, RunLevel is still Running even though disposal was triggered.
-        // Cast to the concrete type to access IsDisposing (not on interface).
-        if (_remoteStreamCache.TryGetValue(key, out var cached)
-            && cached.Hub?.RunLevel <= MessageHubRunLevel.Started
-            && cached.Hub is not MessageHub { IsDisposing: true })
-            return (ISynchronizationStream<TReduced>)cached;
 
-        var stream = (ISynchronizationStream)this.CreateExternalClient<TReduced, TReference>(address, reference);
-        _remoteStreamCache[key] = stream;
-        return (ISynchronizationStream<TReduced>)stream;
+        while (true)
+        {
+            // GetOrAdd with a Lazy<T> factory: the factory may run multiple
+            // times to produce candidate Lazy objects, but only ONE wins the
+            // dictionary slot and ALL callers see THAT one. The inner Lazy
+            // (ExecutionAndPublication) then runs its expensive
+            // CreateExternalClient body exactly once. Net: one stream per
+            // key, never two competing live subscriptions.
+            var lazy = _remoteStreamCache.GetOrAdd(key,
+                _ => new Lazy<ISynchronizationStream>(
+                    () => (ISynchronizationStream)this.CreateExternalClient<TReduced, TReference>(address, reference),
+                    LazyThreadSafetyMode.ExecutionAndPublication));
+
+            var stream = lazy.Value;
+
+            // Check if cached stream is still alive. Hub.RunLevel alone is not
+            // sufficient because hub shutdown is async: right after stream.Dispose()
+            // is called, RunLevel is still Running even though disposal was triggered.
+            // Cast to the concrete type to access IsDisposing (not on interface).
+            if (stream.Hub?.RunLevel <= MessageHubRunLevel.Started
+                && stream.Hub is not MessageHub { IsDisposing: true })
+                return (ISynchronizationStream<TReduced>)stream;
+
+            // Dead — remove (if still ours) and retry. The TryRemove guards
+            // against the case where another thread already replaced the
+            // entry: only the original Lazy is removed.
+            ((ICollection<KeyValuePair<(Address, WorkspaceReference), Lazy<ISynchronizationStream>>>)_remoteStreamCache)
+                .Remove(new KeyValuePair<(Address, WorkspaceReference), Lazy<ISynchronizationStream>>(key, lazy));
+        }
     }
 
 
@@ -329,7 +359,10 @@ public class Workspace : IWorkspace
             {
                 if (_remoteStreamCache.TryRemove(key, out var cached))
                 {
-                    try { cached.Dispose(); }
+                    // Skip if the Lazy was never materialised — no stream
+                    // was actually created, nothing to dispose.
+                    if (!cached.IsValueCreated) continue;
+                    try { cached.Value.Dispose(); }
                     catch (Exception ex)
                     {
                         _logger.LogDebug(ex, "Workspace {WorkspaceId} error disposing remote stream {Key}",

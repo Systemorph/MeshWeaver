@@ -53,13 +53,8 @@ public static class ThreadExecution
         string responseMsgId,
         string mainEntity,
         Func<ThreadMessage, ThreadMessage> mutate,
-        ILogger? logger,
-        [System.Runtime.CompilerServices.CallerMemberName] string callerName = "",
-        [System.Runtime.CompilerServices.CallerLineNumber] int callerLine = 0)
+        ILogger? logger)
     {
-        try { System.IO.File.AppendAllText(@"C:\tmp\update-trace.log",
-            $"[URC] {DateTime.Now:HH:mm:ss.fff} {responsePath} called from {callerName}@{callerLine}\n"); }
-        catch { }
         cache.Update(responsePath, node =>
         {
             var current = node?.Content as ThreadMessage ?? new ThreadMessage
@@ -916,12 +911,8 @@ public static class ThreadExecution
             string? agentName, string? modelName,
             int? inputTokens = null, int? outputTokens = null, int? totalTokens = null,
             DateTime? completedAt = null,
-            ThreadMessageStatus? status = null,
-            [System.Runtime.CompilerServices.CallerLineNumber] int callerLine = 0)
+            ThreadMessageStatus? status = null)
         {
-            try { System.IO.File.AppendAllText(@"C:\tmp\update-trace.log",
-                $"[PTRM] {DateTime.Now:HH:mm:ss.fff} {responsePath} textLen={text.Length} status={status?.ToString() ?? "(preserve)"} from line {callerLine}\n"); }
-            catch { }
             logger.LogDebug("[ThreadExec] PUSH_TO_MSG: responsePath={ResponsePath}, textLen={TextLen}, toolCalls={ToolCalls}, updatedNodes={UpdatedNodes}, status={Status}",
                 responsePath, text.Length, toolCalls.Count, updatedNodes.Count, status?.ToString() ?? "(preserve)");
 
