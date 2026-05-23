@@ -50,7 +50,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
     /// replay-cached read view over it. The Shared observable is the raw
     /// system-side stream; per-user access gating is applied in
     /// <see cref="GetStream"/> before each subscriber consumes it.</summary>
-    private sealed record Entry(MeshNodeStreamHandle Handle, IObservable<MeshNode> Shared);
+    private sealed record Entry(MeshNodeStreamHandle Handle, IObservable<MeshNode> Shared, IDisposable HydrationSub);
 
     /// <summary>
     /// Validity window for a cached <c>(path,user) → Permission</c> probe. A
@@ -84,6 +84,35 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
     {
         this.meshHub = meshHub;
         this.logger = logger;
+
+        // 🚨 Register cleanup so hydration subscriptions are disposed at the
+        // hub's Shutdown entry (before Quiescing). Without this, every
+        // cache.GetStream(path) opens a SubscribeRequest that dangles in
+        // mesh hub's responseSubjects forever — the test base's QuiesceTimeout
+        // leak-detection (~500ms) flags it as a leaked Observe callback and
+        // fails the test class at dispose. The dispose action runs in
+        // HandleShutdown's pre-Quiescing pass, so canceling the subscriptions
+        // here clears responseSubjects before the snapshot is taken.
+        meshHub.RegisterForDisposal(_ => DisposeHydrationSubscriptions());
+    }
+
+    private void DisposeHydrationSubscriptions()
+    {
+        foreach (var (path, lazyEntry) in _streams)
+        {
+            if (!lazyEntry.IsValueCreated) continue;
+            try
+            {
+                lazyEntry.Value.HydrationSub.Dispose();
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex,
+                    "MeshNodeStreamCache: error disposing hydration subscription for {Path}",
+                    path);
+            }
+        }
+        _streams.Clear();
     }
 
     private Entry GetEntry(string path) =>
@@ -141,11 +170,12 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
             {
                 hydrationSub = handle.Subscribe(synced);
             }
-            // We don't dispose hydrationSub here — the cache entry lives for
-            // process lifetime; the subscription is implicitly cleaned up
-            // when the mesh hub disposes.
-            _ = hydrationSub;
-            return new Entry(handle, inner.AsObservable());
+            // Store hydrationSub on the Entry so the mesh hub's pre-Quiescing
+            // disposal hook (registered in the ctor) can cancel it. Without
+            // this, every cache.GetStream(path) leaks a long-lived
+            // SubscribeRequest into the mesh hub's responseSubjects and the
+            // test base's leak detection flags it at dispose.
+            return new Entry(handle, inner.AsObservable(), hydrationSub);
         }, LazyThreadSafetyMode.ExecutionAndPublication)).Value;
 
     /// <summary>
@@ -257,8 +287,23 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
     /// </summary>
     public void Invalidate(string path)
     {
-        if (_streams.TryRemove(path, out _))
+        if (_streams.TryRemove(path, out var lazyEntry))
+        {
+            // Dispose the upstream SubscribeRequest so it doesn't dangle in
+            // mesh hub's responseSubjects after the path is deleted. Skip
+            // for Lazy<Entry> that never ran its factory (nothing to dispose).
+            if (lazyEntry.IsValueCreated)
+            {
+                try { lazyEntry.Value.HydrationSub.Dispose(); }
+                catch (Exception ex)
+                {
+                    logger.LogDebug(ex,
+                        "MeshNodeStreamCache: error disposing hydration subscription for {Path}",
+                        path);
+                }
+            }
             logger.LogDebug("MeshNodeStreamCache: invalidated entry for {Path}", path);
+        }
     }
 
     /// <summary>
