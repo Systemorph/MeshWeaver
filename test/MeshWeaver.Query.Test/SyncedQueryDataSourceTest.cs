@@ -102,8 +102,19 @@ public class SyncedQueryDataSourceTest(ITestOutputHelper output) : MonolithMeshT
             .Where(c => c.Items.Any(n => n.Path == path && n.Name == "Updated At Source"))
             .FirstAsync().Timeout(TimeSpan.FromSeconds(15)).ToTask(ct);
 
-        // Source-side ground truth.
-        var reread = await ReadNodeAsync(path);
+        // Source-side ground truth — wait for the cache to reflect the
+        // update too. ReadNodeAsync races a cache-routed stream against
+        // a one-shot GetMeshNode; when the cache emits the stale "Original"
+        // before the update propagates from the live query into the cache,
+        // ReadNodeAsync returns "Original" — a real race in CI. Poll until
+        // the read sees the updated name.
+        var reread = await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .StartWith(0L)
+            .SelectMany(_ => Observable.FromAsync(() => ReadNodeAsync(path, ct)))
+            .Where(n => n?.Name == "Updated At Source")
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(10))
+            .ToTask(ct);
         reread!.Name.Should().Be("Updated At Source");
     }
 

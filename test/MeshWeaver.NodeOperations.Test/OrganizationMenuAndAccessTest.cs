@@ -170,14 +170,24 @@ public class OrganizationMenuAndAccessTest(ITestOutputHelper output) : MonolithM
         await NodeFactory.CreateNode(
             new MeshNode("Overview", orgId) { Name = "Overview", NodeType = "Markdown" });
 
-        // Query children under the organization namespace
+        // Query children under the organization namespace. QueryAsync can race
+        // the catalog index in CI — wait deterministically via ObserveQuery for
+        // the Overview row to surface (canonical fix per WritingTests.md,
+        // replaces a one-shot QueryAsync that flakes when the change-feed lags).
         var children = await MeshQuery
-            .QueryAsync<MeshNode>($"namespace:{orgId} is:main")
-            .ToListAsync(TestTimeout);
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                $"namespace:{orgId} is:main"))
+            .Select(c => c.Items.ToList())
+            .Where(items => items.Any(c => c.NodeType == "Markdown"
+                && c.Path == $"{orgId}/Overview"))
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(15))
+            .ToTask(TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Children under {orgId}: {string.Join(", ", children.Select(c => $"{c.Path} ({c.NodeType})"))}");
 
-        // The Overview markdown page should be a child
+        // The Overview markdown page should be a child (predicate matched above;
+        // this assertion documents the contract for future readers).
         children.Should().Contain(c => c.NodeType == "Markdown" && c.Path == $"{orgId}/Overview",
             "Overview markdown page should exist as child");
 
