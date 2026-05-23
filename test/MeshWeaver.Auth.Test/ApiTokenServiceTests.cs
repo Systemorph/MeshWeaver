@@ -149,16 +149,16 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         // ApiToken nodes don't activate per-node hubs (see 1e22b3cc3), so
         // ReadNode(path).MeshNodeReference would hang. Verify revoke through
         // the production read path — ValidateToken reads via the
-        // mesh-level index that QueryAsync(path:X) uses. Poll briefly to
-        // absorb read-side index lag.
-        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10);
-        ApiToken? validated;
-        do
-        {
-            validated = await service.ValidateToken(result.RawToken).FirstAsync().ToTask(CT);
-            if (validated is null) break;
-            await Task.Delay(50, CT);
-        } while (DateTimeOffset.UtcNow < deadline);
+        // mesh-level index that QueryAsync(path:X) uses. Stream-poll the
+        // request/response on a 50 ms interval until the token reads as null,
+        // absorbing read-side index lag — replaces a hand-rolled do/while +
+        // Task.Delay(50).
+        var validated = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => service.ValidateToken(result.RawToken).FirstAsync())
+            .Where(v => v is null)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(10))
+            .ToTask(CT);
 
         validated.Should().BeNull();
     }
@@ -245,14 +245,14 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
 
         await service.DeleteToken(result.Node.Path).FirstAsync().ToTask(CT);
 
-        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10);
-        ApiToken? validated;
-        do
-        {
-            validated = await service.ValidateToken(result.RawToken).FirstAsync().ToTask(CT);
-            if (validated is null) break;
-            await Task.Delay(50, CT);
-        } while (DateTimeOffset.UtcNow < deadline);
+        // Stream-poll the request/response until null — replaces a hand-rolled
+        // do/while + Task.Delay(50) loop.
+        var validated = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => service.ValidateToken(result.RawToken).FirstAsync())
+            .Where(v => v is null)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(10))
+            .ToTask(CT);
 
         validated.Should().BeNull();
     }
@@ -301,14 +301,14 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
             "user1", "Test User", "test@example.com", "Revoke Me").FirstAsync().ToTask(CT);
         await service.RevokeToken(result.Node.Path).FirstAsync().ToTask(CT);
 
-        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10);
-        IReadOnlyList<ApiTokenInfo>? tokens = null;
-        do
-        {
-            tokens = await service.GetTokensForUser("user1").FirstAsync().ToTask(CT);
-            if (tokens.Any(t => t.IsRevoked)) break;
-            await Task.Delay(50, CT);
-        } while (DateTimeOffset.UtcNow < deadline);
+        // Stream-poll request/response — replaces a hand-rolled do/while +
+        // Task.Delay(50). Filters for the revoked token appearing in results.
+        var tokens = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => service.GetTokensForUser("user1").FirstAsync())
+            .Where(t => t.Any(x => x.IsRevoked))
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(10))
+            .ToTask(CT);
 
         tokens.Should().ContainSingle(t => t.Label == "Revoke Me" && t.IsRevoked);
     }
@@ -321,14 +321,14 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
             "user1", "Test User", "test@example.com", "Delete Me").FirstAsync().ToTask(CT);
         await service.DeleteToken(result.Node.Path).FirstAsync().ToTask(CT);
 
-        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10);
-        IReadOnlyList<ApiTokenInfo>? tokens = null;
-        do
-        {
-            tokens = await service.GetTokensForUser("user1").FirstAsync().ToTask(CT);
-            if (!tokens.Any(t => t.Label == "Delete Me")) break;
-            await Task.Delay(50, CT);
-        } while (DateTimeOffset.UtcNow < deadline);
+        // Stream-poll request/response — replaces a hand-rolled do/while +
+        // Task.Delay(50). Filters for the deleted token disappearing.
+        var tokens = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => service.GetTokensForUser("user1").FirstAsync())
+            .Where(t => !t.Any(x => x.Label == "Delete Me"))
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(10))
+            .ToTask(CT);
 
         tokens.Should().NotContain(t => t.Label == "Delete Me");
     }

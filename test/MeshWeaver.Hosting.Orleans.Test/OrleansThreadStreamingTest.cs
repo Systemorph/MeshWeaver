@@ -106,15 +106,16 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
         var responseMsgId = msgIds[1];
         Output.WriteLine($"Response message: {responseMsgId}");
 
-        // Poll for response text
-        ThreadMessage? responseMsg = null;
-        for (var i = 0; i < 50; i++)
-        {
-            responseMsg = await GetHubContentAsync<ThreadMessage>(
-                client, $"{threadPath}/{responseMsgId}", ct);
-            if (!string.IsNullOrEmpty(responseMsg?.Text)) break;
-            await Task.Delay(200, ct);
-        }
+        // Stream-wait for the response message to gain text — replaces a
+        // hand-rolled `for + GetHubContentAsync + Task.Delay(200)` polling
+        // loop. Re-issues GetHubContentAsync on a 200 ms cadence via
+        // Observable.Interval until the predicate holds or 10 s elapses.
+        var responsePath = $"{threadPath}/{responseMsgId}";
+        var responseMsg = await Observable.Interval(TimeSpan.FromMilliseconds(200)).StartWith(0L)
+            .SelectMany(_ => Observable.FromAsync(() =>
+                GetHubContentAsync<ThreadMessage>(client, responsePath, ct)))
+            .Where(m => !string.IsNullOrEmpty(m?.Text))
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).ToTask(ct);
 
         responseMsg.Should().NotBeNull();
         responseMsg!.Text.Should().NotBeNullOrEmpty("response should have streamed text");
@@ -307,15 +308,16 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
         Output.WriteLine($"5. DELEGATION APPEARED: {delegation.Name}, path={delegation.DelegationPath}");
         delegation.DelegationPath.Should().NotBeNullOrEmpty("delegation tool call must have DelegationPath set");
 
-        // 5. Wait for parent execution to complete (text appears)
+        // 5. Wait for parent execution to complete (text appears).
+        // Stream-poll the response message until non-empty text lands —
+        // replaces a hand-rolled for + GetHubContentAsync + Task.Delay(500)
+        // loop. 15 s deadline covers Orleans grain-activation cold start.
         Output.WriteLine("6. Waiting for parent to complete...");
-        ThreadMessage? completed = null;
-        for (var j = 0; j < 30; j++)
-        {
-            completed = await GetHubContentAsync<ThreadMessage>(client, responsePath, ct);
-            if (!string.IsNullOrEmpty(completed?.Text)) break;
-            await Task.Delay(500, ct);
-        }
+        var completed = await Observable.Interval(TimeSpan.FromMilliseconds(500)).StartWith(0L)
+            .SelectMany(_ => Observable.FromAsync(() =>
+                GetHubContentAsync<ThreadMessage>(client, responsePath, ct)))
+            .Where(m => !string.IsNullOrEmpty(m?.Text))
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(15)).ToTask(ct);
 
         completed!.Text.Should().NotBeNullOrEmpty("parent should have text after delegation completes");
         Output.WriteLine($"7. PARENT COMPLETE: text='{completed.Text}', toolCalls={completed.ToolCalls.Count}");
@@ -359,14 +361,13 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
         var responsePath = $"{threadPath}/{responseMsgId}";
         Output.WriteLine($"3. Response: {responseMsgId}");
 
-        // 3. Wait for execution to complete (text appears on raw entity stream)
-        ThreadMessage? completed = null;
-        for (var i = 0; i < 30; i++)
-        {
-            completed = await GetHubContentAsync<ThreadMessage>(client, responsePath, ct);
-            if (!string.IsNullOrEmpty(completed?.Text)) break;
-            await Task.Delay(500, ct);
-        }
+        // 3. Wait for execution to complete (text appears on raw entity stream).
+        // Stream-poll — replaces a hand-rolled for + Task.Delay(500) loop.
+        var completed = await Observable.Interval(TimeSpan.FromMilliseconds(500)).StartWith(0L)
+            .SelectMany(_ => Observable.FromAsync(() =>
+                GetHubContentAsync<ThreadMessage>(client, responsePath, ct)))
+            .Where(m => !string.IsNullOrEmpty(m?.Text))
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(15)).ToTask(ct);
         completed.Should().NotBeNull();
         Output.WriteLine($"4. Execution done: text={completed!.Text?.Length ?? 0}");
 
