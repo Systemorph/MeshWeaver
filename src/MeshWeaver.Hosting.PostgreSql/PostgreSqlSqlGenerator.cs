@@ -727,13 +727,20 @@ public class PostgreSqlSqlGenerator
             case QueryOperator.NotEqual:
             {
                 var paramName = NextParam();
+                // 🚨 SQL three-valued logic: NULL != 'x' evaluates to NULL,
+                // not TRUE — so a bare `{sel} != {val}` filter silently drops
+                // every row where {sel} is NULL. For negated filters this is
+                // almost never what the user wants (e.g. `-content.status:Done`
+                // should INCLUDE threads created before Done existed where
+                // content.status is absent → null). Coalesce with IS NULL so
+                // null is treated as "definitely not equal".
                 if (IsTextField(condition.Selector))
                 {
                     _parameters[paramName] = condition.Value.ToLowerInvariant();
-                    return $"LOWER({selector}) != {paramName}";
+                    return $"(LOWER({selector}) != {paramName} OR {selector} IS NULL)";
                 }
                 _parameters[paramName] = ConvertValue(condition.Value);
-                return $"{selector} != {paramName}";
+                return $"({selector} != {paramName} OR {selector} IS NULL)";
             }
 
             case QueryOperator.GreaterThan:
@@ -804,9 +811,12 @@ public class PostgreSqlSqlGenerator
                     _parameters[notInParamName] = isTextNotIn ? value.ToLowerInvariant() : ConvertValue(value);
                     notInParams.Add(notInParamName);
                 }
+                // 🚨 Same null-handling as NotEqual: NULL NOT IN (...) is NULL,
+                // not TRUE — coalesce with IS NULL so rows with null selector
+                // are not silently filtered out of negated lookups.
                 return isTextNotIn
-                    ? $"LOWER({selector}) NOT IN ({string.Join(", ", notInParams)})"
-                    : $"{selector} NOT IN ({string.Join(", ", notInParams)})";
+                    ? $"(LOWER({selector}) NOT IN ({string.Join(", ", notInParams)}) OR {selector} IS NULL)"
+                    : $"({selector} NOT IN ({string.Join(", ", notInParams)}) OR {selector} IS NULL)";
 
             default:
                 return "";

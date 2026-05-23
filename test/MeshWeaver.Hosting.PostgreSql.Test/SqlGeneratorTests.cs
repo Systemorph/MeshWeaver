@@ -155,6 +155,45 @@ public class SqlGeneratorTests
     }
 
     [Fact]
+    public void GenerateSelectQuery_NotEqualOnContentField_TolerantOfNull()
+    {
+        // 🚨 Regression: `-content.status:Done` (thread list filter) silently
+        // dropped every existing thread in prod because the threads were
+        // created before the Done state existed → content.status was null.
+        // PostgreSQL three-valued logic: `LOWER(content->>'status') != 'done'`
+        // evaluates to NULL when status is NULL, and NULL is not TRUE → the
+        // row is filtered out. The fix wraps NotEqual in an `OR sel IS NULL`
+        // clause so "field absent" counts as "not equal".
+        var gen = new PostgreSqlSqlGenerator();
+        var query = new ParsedQuery(
+            Filter: new QueryComparison(new QueryCondition("content.status", QueryOperator.NotEqual, ["Done"])),
+            TextSearch: null);
+
+        var (sql, _) = gen.GenerateSelectQuery(query);
+
+        sql.Should().Contain("IS NULL",
+            "NotEqual must coalesce with IS NULL so rows where the selector is " +
+            "NULL pass the negated filter (three-valued logic otherwise drops them)");
+        sql.Should().Contain("!=");
+    }
+
+    [Fact]
+    public void GenerateSelectQuery_NotInOperator_TolerantOfNull()
+    {
+        // Same null-handling rule for NotIn — `NULL NOT IN (...)` is NULL,
+        // not TRUE, so without the IS NULL coalesce the row gets dropped.
+        var gen = new PostgreSqlSqlGenerator();
+        var query = new ParsedQuery(
+            Filter: new QueryComparison(new QueryCondition("content.status", QueryOperator.NotIn, ["Done", "Cancelled"])),
+            TextSearch: null);
+
+        var (sql, _) = gen.GenerateSelectQuery(query);
+
+        sql.Should().Contain("NOT IN (");
+        sql.Should().Contain("IS NULL");
+    }
+
+    [Fact]
     public void GenerateSelectQuery_AndConditions()
     {
         var gen = new PostgreSqlSqlGenerator();
