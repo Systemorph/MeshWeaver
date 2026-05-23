@@ -76,6 +76,48 @@ public class NavigationProgressTest
         return list;
     }
 
+    /// <summary>
+    /// Stream-wait for the Status stream to emit a NavigationStatus matching
+    /// <paramref name="predicate"/>. Replaces fixed Task.Delay propagation
+    /// barriers — those race CI under load. A 15 s timeout surfaces a real
+    /// failure with a real stack trace instead of a stale-assertion symptom.
+    ///
+    /// NOTE: Status is a BehaviorSubject — subscribers see the current value on
+    /// subscribe and forward emissions. Most callers want to wait for "did the
+    /// pipeline ever emit a matching status?", not "is the current status a
+    /// match?". For that case use <see cref="WaitForStatusInList"/> with a
+    /// pre-existing accumulator that captured past emissions.
+    /// </summary>
+    private static Task<NavigationStatus> WaitForStatus(
+        NavigationService service,
+        Func<NavigationStatus, bool> predicate,
+        CancellationToken ct) =>
+        service.Status
+            .Where(predicate)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(15))
+            .ToTask(ct);
+
+    /// <summary>
+    /// Wait until the captured <paramref name="emissions"/> list contains any
+    /// entry matching <paramref name="predicate"/>. Replaces fixed
+    /// Task.Delay(50..200) waits where the test subscribes BEFORE the pipeline
+    /// runs and needs the pipeline to have produced the matching emission by
+    /// the time the assertions run. Polls on a 50 ms interval via
+    /// Observable.Interval — the polling cadence is the only thing fixed; the
+    /// .Where predicate is the exit condition; the 15 s Timeout is the
+    /// deadline. Compatible with the existing CaptureStatus(service) pattern.
+    /// </summary>
+    private static Task WaitForStatusInList(
+        List<NavigationStatus> emissions,
+        Func<NavigationStatus, bool> predicate,
+        CancellationToken ct) =>
+        Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Where(_ => emissions.Any(predicate))
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(15))
+            .ToTask(ct);
+
     // -- Test #1: initial subscribers see a non-empty LookingUp message. ----------
 
     [Fact]
@@ -97,15 +139,13 @@ public class NavigationProgressTest
 
         var service = CreateService();
 
-        NavigationStatus? lookingUp = null;
-        service.Status.Subscribe(s =>
-        {
-            if (s.Phase == NavigationPhase.LookingUp && s.Message.Contains("FutuRe"))
-                lookingUp = s;
-        });
-
         await service.InitializeAsync();
-        await Task.Delay(50, TestContext.Current.CancellationToken);
+        // Stream-wait for the LookingUp emission carrying the path — replaces
+        // a 50 ms propagation delay. The Status stream is a BehaviorSubject,
+        // so the .Where filter is hot on first match.
+        var lookingUp = await WaitForStatus(service,
+            s => s.Phase == NavigationPhase.LookingUp && s.Message.Contains("FutuRe"),
+            TestContext.Current.CancellationToken);
 
         lookingUp.Should().NotBeNull("after InitializeAsync the LookingUp emission must carry the path");
         lookingUp!.Message.Should().NotBeNullOrWhiteSpace("no spinner without a descriptive label");
@@ -158,7 +198,15 @@ public class NavigationProgressTest
         var emissions = CaptureStatus(service);
 
         await service.InitializeAsync();
-        await Task.Delay(50, TestContext.Current.CancellationToken);
+        // Stream-wait for the Redirecting emission to LAND IN THE LIST —
+        // replaces Task.Delay(50). The Status pipeline can run all the way
+        // through Looking→Redirecting→Loading→NotFound synchronously off the
+        // bootstrap, so a direct service.Status subscription after
+        // InitializeAsync may already see "NotFound" and miss intermediate
+        // emissions. The `emissions` accumulator captured them all; poll it.
+        await WaitForStatusInList(emissions,
+            s => s.Phase == NavigationPhase.Redirecting && s.Message.Contains("ACME/Project"),
+            TestContext.Current.CancellationToken);
 
         emissions.Should().Contain(s => s.Phase == NavigationPhase.Redirecting
                                         && s.Message.Contains("ACME/Project"),
@@ -178,7 +226,11 @@ public class NavigationProgressTest
         var emissions = CaptureStatus(service);
 
         await service.InitializeAsync();
-        await Task.Delay(50, TestContext.Current.CancellationToken);
+        // Stream-wait in the accumulator (Status is a BehaviorSubject — direct
+        // service.Status subscribe-after-init may already be on a later phase).
+        await WaitForStatusInList(emissions,
+            s => s.Phase == NavigationPhase.Redirecting && s.Message.Contains("area Dashboard"),
+            TestContext.Current.CancellationToken);
 
         emissions.Should().Contain(s => s.Phase == NavigationPhase.Redirecting
                                         && s.Message.Contains("area Dashboard"));
@@ -197,7 +249,10 @@ public class NavigationProgressTest
         var emissions = CaptureStatus(service);
 
         await service.InitializeAsync();
-        await Task.Delay(50, TestContext.Current.CancellationToken);
+        // Stream-wait in the accumulator (Status is a BehaviorSubject — direct
+        // service.Status subscribe-after-init may already be on a later phase).
+        await WaitForStatusInList(emissions, s => s.Phase == NavigationPhase.Redirecting,
+            TestContext.Current.CancellationToken);
 
         var redirecting = emissions.FirstOrDefault(s => s.Phase == NavigationPhase.Redirecting);
         redirecting.Should().NotBeNull();
@@ -224,7 +279,12 @@ public class NavigationProgressTest
 
         await service.InitializeAsync();
         _navigationManager.SimulateLocationChanged("http://localhost/does/not/exist");
-        await Task.Delay(200, TestContext.Current.CancellationToken); // > total FastRetryDelays
+        // Stream-wait for the NotFound emission — replaces a Task.Delay(200)
+        // "wait > total FastRetryDelays" barrier. NotFound is the terminal
+        // emission for the failed retry path; once we see it, the lifecycle
+        // is over and we can assert on `emissions`.
+        await WaitForStatus(service, s => s.Phase == NavigationPhase.NotFound,
+            TestContext.Current.CancellationToken);
 
         emissions.Should().NotBeEmpty();
         emissions.Should().OnlyContain(s => !string.IsNullOrWhiteSpace(s.Message),
@@ -279,10 +339,20 @@ public class NavigationProgressTest
         var emissions = CaptureStatus(service);
 
         await service.InitializeAsync();
-        await Task.Delay(50, TestContext.Current.CancellationToken);
+        // Wait for the LookingUp emission to land in the accumulator before the
+        // catalog re-emits — replaces a Task.Delay(50). Without this barrier the
+        // resolutionSubject.OnNext below could race the subscription that
+        // ProcessLocationChange wires up in response to the bootstrap path.
+        await WaitForStatusInList(emissions, s => s.Phase == NavigationPhase.LookingUp,
+            TestContext.Current.CancellationToken);
         // Catalog "learned" about the path — re-emit before the watchdog budget expires.
         resolutionSubject.OnNext(new AddressResolution("eventually/exists", null));
-        await Task.Delay(100, TestContext.Current.CancellationToken);
+        // Stream-wait for Redirecting via the accumulator — Status is a
+        // BehaviorSubject and Redirecting → Loading runs synchronously off
+        // OnNext, so by the time WaitForStatus subscribes the current is
+        // already Loading. WaitForStatusInList scans the full history.
+        await WaitForStatusInList(emissions, s => s.Phase == NavigationPhase.Redirecting,
+            TestContext.Current.CancellationToken);
 
         emissions.Should().NotContain(s => s.Phase == NavigationPhase.NotFound);
         emissions.Should().Contain(s => s.Phase == NavigationPhase.Redirecting);
@@ -319,11 +389,25 @@ public class NavigationProgressTest
 
         var nullContextCount = 0;
         var service = CreateService(retryDelays: [5, 5, 5]);
+        // Subscribe FIRST (counter), then wire the await — Rx OnNext fans out
+        // to subscribers in registration order. If the await's subscription
+        // came first, its TaskCompletionSource resolves and the test thread
+        // could resume before the counter subscription runs. Counter-first
+        // guarantees the counter is incremented before the await unblocks.
         service.NavigationContext.Subscribe(ctx => { if (ctx is null) nullContextCount++; });
+        var nullContextTask = service.NavigationContext
+            .Where(ctx => ctx is null)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(15))
+            .ToTask(TestContext.Current.CancellationToken);
         var emissions = CaptureStatus(service);
 
         await service.InitializeAsync();
-        await Task.Delay(150, TestContext.Current.CancellationToken); // > 3Ã—5ms + margin
+        // Stream-wait for the null NavigationContext — replaces a fixed
+        // Task.Delay(150) > 3×5ms barrier. The watchdog emits NotFound then
+        // null context as the terminal retry-exhausted action; awaiting null
+        // context guarantees both Status and NavigationContext have fired.
+        await nullContextTask;
 
         emissions.Should().Contain(s => s.Phase == NavigationPhase.NotFound
                                         && s.Message.Contains("does/not/exist"));
@@ -344,7 +428,10 @@ public class NavigationProgressTest
         var emissions = CaptureStatus(service);
 
         await service.InitializeAsync();
-        await Task.Delay(50, TestContext.Current.CancellationToken);
+        // Stream-wait for the Loading emission — replaces Task.Delay(50).
+        await WaitForStatus(service,
+            s => s.Phase == NavigationPhase.Loading && s.Message.Contains("ACME/Project"),
+            TestContext.Current.CancellationToken);
 
         emissions.Should().Contain(s => s.Phase == NavigationPhase.Loading
                                         && s.Message.Contains("ACME/Project"),
