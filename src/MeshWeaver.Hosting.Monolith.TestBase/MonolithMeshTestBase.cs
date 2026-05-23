@@ -837,19 +837,34 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// </summary>
     protected async Task<MeshNode?> ReadNodeAsync(string path, CancellationToken ct)
     {
-        // 🚨 2026-05-22: workspace.GetMeshNodeStream(path) — cache-routed.
-        // Take(1) captures the FIRST emission (null OR non-null) within budget.
-        // Tests use this both for "node should be there" (NotBeNull) and
-        // "node should be gone" (BeNull). The cache must invalidate on delete
-        // for the gone-case to return null after a recent delete — see
-        // MeshNodeStreamCache for the invalidation hook. If the cache lags,
-        // tests need a small wait or a different verification helper.
+        // 🚨 2026-05-23: Race two reads to handle BOTH "exists" and "deleted"
+        // cases correctly.
+        //
+        // workspace.GetMeshNodeStream(path) is cache-routed, and the
+        // MeshNodeStreamHandle filters out null emissions (it expects to
+        // surface only populated MeshNodes for live data binding). When a
+        // path has been DELETED, the per-node hub is disposed and the
+        // cache is invalidated — the next subscription opens a fresh stream
+        // whose data source loads from (empty) persistence and emits
+        // nothing populated. Take(1) then waits until ReadNodeTimeout (60s)
+        // — exceeding tests' typical 20s timeout.
+        //
+        // Strategy: race the cache stream against an explicit GetMeshNode
+        // request (one-shot GetDataRequest with its own NotFound semantics).
+        // If the node EXISTS, the cache stream typically wins first. If the
+        // node DOESN'T exist, GetMeshNode returns null after a short
+        // request-level timeout — long before ReadNodeTimeout fires.
+        // Whichever emits first is returned; both observables are bounded.
         var workspace = Mesh.GetWorkspace();
         try
         {
-            return await workspace.GetMeshNodeStream(path)
+            var streamRead = workspace.GetMeshNodeStream(path)
                 .Take(1)
                 .Timeout(ReadNodeTimeout)
+                .Catch<MeshNode, TimeoutException>(_ => Observable.Empty<MeshNode>())
+                .Select(n => (MeshNode?)n);
+            var requestRead = Mesh.GetMeshNode(path, TimeSpan.FromSeconds(5));
+            return await streamRead.Merge(requestRead)
                 .FirstAsync()
                 .ToTask(ct);
         }
