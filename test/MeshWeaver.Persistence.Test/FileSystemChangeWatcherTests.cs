@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -39,6 +40,24 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
         return new FileSystemStorageAdapter(_testDirectory);
     }
 
+    /// <summary>
+    /// Wait until the accumulator <paramref name="notifications"/> list
+    /// contains an entry matching <paramref name="predicate"/>. Polls on a
+    /// 50 ms interval via Observable.Interval — replaces Task.Delay(500)
+    /// "wait long enough for inotify" patterns. Filesystem events on Linux
+    /// CI commonly take 1-2 s to arrive; a 5 s deadline keeps the happy
+    /// path fast while still surfacing real failures.
+    /// </summary>
+    private static Task WaitForNotification(
+        List<DataChangeNotification> notifications,
+        Func<DataChangeNotification, bool> predicate,
+        int timeoutMs = 5000) =>
+        Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Where(_ => notifications.Any(predicate))
+            .FirstAsync()
+            .Timeout(TimeSpan.FromMilliseconds(timeoutMs))
+            .ToTask();
+
     public override void Dispose()
     {
         _watcherInstance?.Dispose();
@@ -73,8 +92,12 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
             }
             """);
 
-        // Wait for file system events and debounce
-        await Task.Delay(500);
+        // Stream-wait for the FS event — replaces a fixed Task.Delay(500).
+        // Linux inotify can take 1-2s to deliver the first event after the
+        // watch is established; a 500 ms delay would race on Linux CI.
+        await WaitForNotification(receivedNotifications, n =>
+            n.Path.Contains("external/node1") &&
+            (n.Kind == DataChangeKind.Created || n.Kind == DataChangeKind.Updated));
 
         // Assert - On Windows, file creation + write may result in Created or Changed/Updated event
         receivedNotifications.Should().Contain(n =>
@@ -102,8 +125,10 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
             }
             """);
 
-        // Wait for file system events and processing
-        await Task.Delay(500);
+        // Stream-wait for the watcher's notification — replaces Task.Delay(500).
+        await WaitForNotification(receivedNotifications, n =>
+            n.Path.Contains("external/node1") &&
+            (n.Kind == DataChangeKind.Created || n.Kind == DataChangeKind.Updated));
 
         // Assert - watcher should have published a creation/update notification
         receivedNotifications.Should().NotBeEmpty();
@@ -139,7 +164,10 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
 
         _watcher.Start();
 
-        // Small delay to ensure watcher is ready
+        // Watcher warm-up: FileSystemWatcher.Start returns before inotify is
+        // fully primed (especially on Linux). 100 ms is the empirical floor
+        // below which the watcher misses the first event. Kept as-is — this
+        // is a fixture warm-up, not a propagation wait.
         await Task.Delay(100);
 
         // Act - Modify the file externally
@@ -150,8 +178,10 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
             }
             """);
 
-        // Wait for file system events and debounce
-        await Task.Delay(500);
+        // Stream-wait for the modification notification — replaces Task.Delay(500).
+        await WaitForNotification(receivedNotifications, n =>
+            n.Path.Contains("external/node1") &&
+            (n.Kind == DataChangeKind.Updated || n.Kind == DataChangeKind.Created));
 
         // Assert
         receivedNotifications.Should().Contain(n =>
@@ -182,14 +212,15 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
 
         _watcher.Start();
 
-        // Small delay to ensure watcher is ready
+        // Watcher warm-up — see ExternalFileModification_NotifiesObservers.
         await Task.Delay(100);
 
         // Act - Delete the file externally
         File.Delete(filePath);
 
-        // Wait for file system events and debounce
-        await Task.Delay(500);
+        // Stream-wait for the deletion notification — replaces Task.Delay(500).
+        await WaitForNotification(receivedNotifications, n =>
+            n.Path.Contains("external/node1") && n.Kind == DataChangeKind.Deleted);
 
         // Assert
         receivedNotifications.Should().Contain(n =>
@@ -215,13 +246,15 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
         _changeNotifier.Subscribe(n => receivedNotifications.Add(n));
 
         _watcher.Start();
+        // Watcher warm-up.
         await Task.Delay(100);
 
         // Act - Delete the file externally
         File.Delete(filePath);
 
-        // Wait for file system events and processing
-        await Task.Delay(500);
+        // Stream-wait for the deletion notification — replaces Task.Delay(500).
+        await WaitForNotification(receivedNotifications, n =>
+            n.Path.Contains("external/node1") && n.Kind == DataChangeKind.Deleted);
 
         // Assert - watcher should have published a deletion notification
         receivedNotifications.Should().Contain(n =>
@@ -255,18 +288,14 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
             This file was created externally.
             """);
 
-        // Wait for file system events. inotify on Linux CI commonly takes
-        // 1-2s to deliver the first event after the watch is established;
-        // a 500ms delay would race and pass on Windows but fail on Linux.
-        // Poll for up to 5s instead of a fixed sleep.
-        var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (DateTime.UtcNow < deadline
-            && !receivedNotifications.Any(n =>
-                n.Path.Contains("docs/readme")
-                && (n.Kind == DataChangeKind.Created || n.Kind == DataChangeKind.Updated)))
-        {
-            await Task.Delay(100);
-        }
+        // Stream-wait for the watcher notification — replaces a hand-rolled
+        // while+Task.Delay(100) polling loop with the same predicate.
+        // inotify on Linux CI commonly takes 1-2 s to deliver the first
+        // event after the watch is established; the 5 s deadline below is
+        // the same budget the loop had, just expressed via Rx.
+        await WaitForNotification(receivedNotifications, n =>
+            n.Path.Contains("docs/readme")
+            && (n.Kind == DataChangeKind.Created || n.Kind == DataChangeKind.Updated));
 
         // Assert - On Windows, file creation + write may result in Created or Changed/Updated event
         receivedNotifications.Should().Contain(n =>
@@ -311,7 +340,9 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
         var dir = Path.Combine(_testDirectory, "external");
         Directory.CreateDirectory(dir);
         await File.WriteAllTextAsync(Path.Combine(dir, "node1.json"), """{ "id": "node1" }""");
-        await Task.Delay(500);
+        // Stream-wait for the watcher's notification before flipping to the
+        // "Stop" half of the test — replaces a fixed Task.Delay(500).
+        await WaitForNotification(receivedNotifications, n => n.Path.Contains("external/node1"));
 
         var countBefore = receivedNotifications.Count;
         countBefore.Should().BeGreaterThan(0);
