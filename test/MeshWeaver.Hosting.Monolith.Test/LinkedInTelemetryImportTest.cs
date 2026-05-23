@@ -69,11 +69,9 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 120000)]
     public async Task LinkedInTelemetryImport_CompilesAndRendersImportArea()
     {
-        // 90s CT (test-wide budget) — RenderAreaAsync's inner Timeout is 60s
-        // for the compile alone; the create/seed steps need their share.
-        // Previously 45s, which cancelled the CT while compilation was still
-        // running on slow CI Linux runners (40-45s for cold-start activation).
-        var ct = new CancellationTokenSource(90.Seconds()).Token;
+        // 60s CT; if 60s isn't enough then there's a real bug we need to fix
+        // (per user direction: max 60s, log out to see what's happening).
+        var ct = new CancellationTokenSource(60.Seconds()).Token;
 
         await NodeFactory.CreateNode(new MeshNode("LinkedInProfile", "Systemorph")
         {
@@ -131,20 +129,25 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
         var client = GetClient(c => c.AddData());
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(area);
+        Output.WriteLine($"[{DateTime.UtcNow:O}] RenderAreaAsync opening GetRemoteStream for {path}/{area}");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new Address(path), reference);
 
-        // CI compile cold-start + cross-process JIT pushes us past 30s on the
-        // first activation under load — local Windows runs settle in ~25s but
-        // GitHub-hosted Linux runners commonly take 40-45s for the same path.
-        // Bump to 60s so the test asserts the eventual render rather than the
-        // CI-specific timing.
+        // Diagnostic: log every emission the stream produces so we can see in
+        // CI logs whether the post-compile area render ever fires.
+        using var diagSub = stream
+            .Subscribe(
+                c => Output.WriteLine($"[{DateTime.UtcNow:O}] stream emission: kind={c.ChangeType} hasValue={c.Value.ValueKind != JsonValueKind.Undefined}"),
+                ex => Output.WriteLine($"[{DateTime.UtcNow:O}] stream ERROR: {ex.GetType().Name}: {ex.Message}"));
+
         var control = await stream
             .GetControlStream(reference.Area!)
+            .Do(c => Output.WriteLine($"[{DateTime.UtcNow:O}] GetControlStream emission: {c?.GetType().Name ?? "null"}"))
             .Timeout(60.Seconds())
             .FirstAsync(x => x is StackControl or HtmlControl or MarkdownControl)
             .ToTask(ct);
 
+        Output.WriteLine($"[{DateTime.UtcNow:O}] RenderAreaAsync resolved control: {control?.GetType().Name}");
         control.Should().NotBeNull("ImportTelemetry must emit a control before the timeout");
         return (UiControl)control!;
     }
