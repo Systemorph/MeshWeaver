@@ -569,7 +569,7 @@ public class PostgreSqlSqlGenerator
         var sql = new StringBuilder(
             "SELECT n.id, n.namespace, n.name, n.node_type, n.description, " +
             "n.category, n.icon, n.display_order, n.last_modified, n.version, n.state, n.content, " +
-            $"n.desired_id FROM {meshTable} n");
+            $"n.desired_id, n.main_node FROM {meshTable} n");
 
         var clauses = new List<string> { "n.embedding IS NOT NULL" };
 

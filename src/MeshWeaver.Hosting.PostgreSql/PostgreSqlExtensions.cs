@@ -89,16 +89,24 @@ public static class PostgreSqlExtensions
         services.AddKeyedSingleton<IStorageAdapterFactory, PostgreSqlStorageAdapterFactory>(
             PostgreSqlStorageAdapterFactory.StorageType);
 
-        // Register PostgreSqlMeshQuery so it takes priority over StorageAdapterMeshQueryProvider
-        services.AddSingleton<IMeshQueryProvider>(sp =>
+        // Register PostgreSqlMeshQuery so it takes priority over StorageAdapterMeshQueryProvider.
+        // The same instance is registered under IVectorSearchProvider so the search box /
+        // MCP find / agent tools resolve vector-search via the contract.
+        services.AddSingleton<PostgreSqlMeshQuery>(sp =>
         {
             var adapter = sp.GetRequiredService<IStorageAdapter>() as PostgreSqlStorageAdapter
                 ?? throw new InvalidOperationException(
                     "PostgreSqlMeshQuery requires PostgreSqlStorageAdapter.");
-            var changeNotifier = sp.GetService<IDataChangeNotifier>();
-            var accessService = sp.GetService<AccessService>();
-            return new PostgreSqlMeshQuery(adapter, changeNotifier, accessService);
+            return new PostgreSqlMeshQuery(
+                adapter,
+                sp.GetService<IDataChangeNotifier>(),
+                sp.GetService<AccessService>(),
+                meshConfiguration: null,
+                excludedNamespaces: null,
+                embeddingProvider: sp.GetService<IEmbeddingProvider>());
         });
+        services.AddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<PostgreSqlMeshQuery>());
+        services.AddSingleton<IVectorSearchProvider>(sp => sp.GetRequiredService<PostgreSqlMeshQuery>());
 
         return services;
     }
@@ -122,9 +130,19 @@ public static class PostgreSqlExtensions
         var embeddingProvider = services.BuildServiceProvider().GetService<IEmbeddingProvider>();
         var storageAdapter = new PostgreSqlStorageAdapter(dataSource, embeddingProvider);
 
-        // Register PostgreSqlMeshQuery BEFORE AddPersistence so TryAddSingleton picks it up
-        services.AddSingleton<IMeshQueryProvider>(sp =>
-            new PostgreSqlMeshQuery(storageAdapter, sp.GetService<IDataChangeNotifier>(), sp.GetService<AccessService>()));
+        // Register PostgreSqlMeshQuery BEFORE AddPersistence so TryAddSingleton picks it up.
+        // Same instance under IVectorSearchProvider so the search box / MCP find / agent
+        // tools route through HNSW cosine similarity when bare-text tokens are present.
+        services.AddSingleton<PostgreSqlMeshQuery>(sp =>
+            new PostgreSqlMeshQuery(
+                storageAdapter,
+                sp.GetService<IDataChangeNotifier>(),
+                sp.GetService<AccessService>(),
+                meshConfiguration: null,
+                excludedNamespaces: null,
+                embeddingProvider: embeddingProvider));
+        services.AddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<PostgreSqlMeshQuery>());
+        services.AddSingleton<IVectorSearchProvider>(sp => sp.GetRequiredService<PostgreSqlMeshQuery>());
 
         services.AddPersistence(storageAdapter);
 
@@ -156,12 +174,17 @@ public static class PostgreSqlExtensions
         // Register concrete adapter type for change listener
         services.AddSingleton(storageAdapter);
 
-        // Register PostgreSqlMeshQuery BEFORE AddPersistence so TryAddSingleton doesn't override it
-        services.AddSingleton<IMeshQueryProvider>(sp =>
+        // PostgreSqlMeshQuery + IVectorSearchProvider — same instance.
+        services.AddSingleton<PostgreSqlMeshQuery>(sp =>
             new PostgreSqlMeshQuery(
                 storageAdapter,
                 sp.GetService<IDataChangeNotifier>(),
-                sp.GetService<AccessService>()));
+                sp.GetService<AccessService>(),
+                meshConfiguration: null,
+                excludedNamespaces: null,
+                embeddingProvider: embeddingProvider));
+        services.AddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<PostgreSqlMeshQuery>());
+        services.AddSingleton<IVectorSearchProvider>(sp => sp.GetRequiredService<PostgreSqlMeshQuery>());
 
         // Register core persistence services (IStorageAdapter, IStorageService, etc.)
         services.AddPersistence(storageAdapter);

@@ -16,7 +16,7 @@ namespace MeshWeaver.Hosting.PostgreSql;
 /// PostgreSQL native implementation of IMeshQueryProvider.
 /// Translates parsed queries directly into PostgreSQL SQL via PostgreSqlStorageAdapter.
 /// </summary>
-public class PostgreSqlMeshQuery : IMeshQueryProvider
+public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
 {
     private readonly PostgreSqlStorageAdapter _adapter;
     private readonly IDataChangeNotifier? _changeNotifier;
@@ -33,12 +33,20 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
     // partition registry at DI registration time.
     private readonly HashSet<string> _excludedNamespaces;
 
+    // Optional vector-search pipeline: when present AND a query has bare-text
+    // tokens (parsed.TextSearch is non-empty), QueryAsync routes through
+    // adapter.VectorSearchAsync instead of GenerateTextSearchClause's ILIKE
+    // fallback. Same column the writer populates via GenerateEmbeddingAsync —
+    // closed loop. When null, ILIKE substring stays in effect.
+    private readonly IEmbeddingProvider? _embeddingProvider;
+
     public PostgreSqlMeshQuery(
         PostgreSqlStorageAdapter adapter,
         IDataChangeNotifier? changeNotifier = null,
         AccessService? accessService = null,
         MeshConfiguration? meshConfiguration = null,
-        IEnumerable<string>? excludedNamespaces = null)
+        IEnumerable<string>? excludedNamespaces = null,
+        IEmbeddingProvider? embeddingProvider = null)
     {
         _adapter = adapter;
         _changeNotifier = changeNotifier;
@@ -46,6 +54,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
         _meshConfiguration = meshConfiguration;
         _excludedNamespaces = (excludedNamespaces ?? Enumerable.Empty<string>())
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        _embeddingProvider = embeddingProvider;
     }
 
     /// <inheritdoc/>
@@ -119,6 +128,27 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
         return string.IsNullOrEmpty(userId) ? WellKnownUsers.Anonymous : userId;
     }
 
+    /// <inheritdoc/>
+    public async IAsyncEnumerable<MeshNode> SearchAsync(
+        string queryText,
+        JsonSerializerOptions options,
+        string? namespacePath = null,
+        string? userId = null,
+        int topK = 10,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        if (_embeddingProvider is null || string.IsNullOrWhiteSpace(queryText))
+            yield break;
+
+        var vec = await _embeddingProvider.GenerateEmbeddingAsync(queryText);
+        if (vec is null)
+            yield break;
+
+        await foreach (var node in _adapter.VectorSearchAsync(
+            vec, options, filter: null, userId, namespacePath, topK, ct))
+            yield return node;
+    }
+
     public async IAsyncEnumerable<object> QueryAsync(
         MeshQueryRequest request,
         JsonSerializerOptions options,
@@ -150,6 +180,44 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
             parsedQuery = parsedQuery with { Limit = request.Limit };
 
         parsedQuery = StripTypeFilter(parsedQuery);
+
+        // Vector-search intercept: when the query has bare-text tokens AND we
+        // have an embedding provider, route the snapshot through HNSW cosine
+        // similarity instead of the GenerateTextSearchClause ILIKE fallback.
+        // Same `embedding` column the writer populates at WriteAsync time —
+        // semantic search reads what semantic writes stored.
+        //
+        // Conditions on entering this path:
+        //   - parsed.TextSearch is non-empty (free-floating words in the query)
+        //   - _embeddingProvider is registered (NullEmbeddingProvider returns
+        //     null vectors and falls through to ILIKE)
+        //
+        // The structured-filter portion (nodeType:, namespace:, scope:, etc.)
+        // is preserved via the `filter` parameter to VectorSearchAsync, so a
+        // query like `laptop nodeType:Story namespace:ACME scope:descendants`
+        // gets cosine-ranked among Story rows in ACME's subtree.
+        if (_embeddingProvider != null && !string.IsNullOrWhiteSpace(parsedQuery.TextSearch))
+        {
+            var vec = await _embeddingProvider.GenerateEmbeddingAsync(parsedQuery.TextSearch);
+            if (vec != null)
+            {
+                var vectorUserId = GetEffectiveUserId(request);
+                if (string.IsNullOrEmpty(vectorUserId) || vectorUserId == WellKnownUsers.System)
+                    vectorUserId = null;
+                var vectorNamespace = parsedQuery.Path ?? request.DefaultPath;
+                var topK = parsedQuery.Limit ?? request.Limit ?? 50;
+                // Strip the text part from the filter so VectorSearchAsync's
+                // WHERE clause has the structured predicates only.
+                var structuralFilter = parsedQuery with { TextSearch = null };
+                await foreach (var node in _adapter.VectorSearchAsync(
+                    vec, options, structuralFilter, vectorUserId, vectorNamespace, topK, ct))
+                    yield return node;
+                yield break;
+            }
+            // GenerateEmbeddingAsync returned null (NullEmbeddingProvider, or
+            // a transient failure) — fall through to ILIKE so the user still
+            // gets some result instead of an empty page.
+        }
 
         var effectivePath = parsedQuery.Path;
         var effectiveScope = parsedQuery.Scope;
