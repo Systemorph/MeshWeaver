@@ -98,3 +98,18 @@ public interface IStorageAdapter
 
     #endregion
 }
+
+/// <summary>
+/// Marker capability: the adapter's matching <c>IMeshQueryProvider</c>
+/// (PostgreSqlMeshQuery, CosmosMeshQuery, …) answers Children / Descendants /
+/// Subtree / Hierarchy / source:activity queries with a single round-trip via
+/// a scope-clause or satellite JOIN. When the adapter implements this marker,
+/// the pedestrian <c>StorageAdapterMeshQueryProvider</c> skips its
+/// ListChildPaths-walk + per-path Read fallback for those scopes — that walk
+/// is N+1 duplicate work running in parallel with the optimized provider.
+/// <para>FileSystem / InMemory adapters do NOT implement this and continue to
+/// rely on the pedestrian walk.</para>
+/// </summary>
+public interface IScopedQueryStorageAdapter : IStorageAdapter
+{
+}
