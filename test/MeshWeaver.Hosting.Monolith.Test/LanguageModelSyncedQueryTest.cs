@@ -113,8 +113,8 @@ public class LanguageModelSyncedQueryTest : MonolithMeshTestBase
 
         // ---- Agent assertions ----
         var agents = nodes.Where(n => n.NodeType == AgentNodeType.NodeType).ToList();
-        agents.Should().NotBeEmpty("the catalog ships built-in agents (Orchestrator, Coder, ...)");
-        agents.Select(a => a.Id).Should().Contain("Orchestrator");
+        agents.Should().NotBeEmpty("the catalog ships built-in agents (Assistant, Coder, ...)");
+        agents.Select(a => a.Id).Should().Contain("Assistant");
 
         agents.Should().AllSatisfy(n =>
         {

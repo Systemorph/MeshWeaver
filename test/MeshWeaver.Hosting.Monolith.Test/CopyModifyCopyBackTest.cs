@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Reactive.Linq;
@@ -73,8 +74,18 @@ public class CopyModifyCopyBackTest(ITestOutputHelper output) : MonolithMeshTest
         };
         await meshService.UpdateNode(modifiedB);
 
-        // Verify the modification took effect
-        var verifyB = await ReadNodeAsync($"{CopyNs}/Orig/B");
+        // Verify the modification took effect. Poll because ReadNodeAsync goes
+        // through the cache-routed stream, which may emit the pre-update value
+        // before the sync propagation lands. Under CI load the cache lag is
+        // visible as a 2s race; locally <100ms. The poll fails loud at 10s
+        // if the update truly never propagates.
+        var verifyB = await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .StartWith(0L)
+            .SelectMany(_ => Observable.FromAsync(() => ReadNodeAsync($"{CopyNs}/Orig/B")))
+            .Where(n => n?.Name == "Node B Modified")
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(10))
+            .ToTask(TestContext.Current.CancellationToken);
         verifyB!.Name.Should().Be("Node B Modified");
 
         // 3. Copy back from CopyNs/Orig to OrigNs with force=true (overwrite)
@@ -88,8 +99,15 @@ public class CopyModifyCopyBackTest(ITestOutputHelper output) : MonolithMeshTest
         // 4. Verify: Node B at OrigNs should have modified content
         // The copy back creates OrigNs/Orig (root) and OrigNs/Orig/A, B, C
         // But the original B is at OrigNs/B which is untouched.
-        // The new B is at OrigNs/Orig/B
-        var resultOrigB = await ReadNodeAsync($"{OrigNs}/Orig/B");
+        // The new B is at OrigNs/Orig/B. Poll for the same cache-lag reason
+        // as the verifyB poll above.
+        var resultOrigB = await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .StartWith(0L)
+            .SelectMany(_ => Observable.FromAsync(() => ReadNodeAsync($"{OrigNs}/Orig/B")))
+            .Where(n => n?.Name == "Node B Modified")
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(10))
+            .ToTask(TestContext.Current.CancellationToken);
         resultOrigB.Should().NotBeNull("copied-back B should exist");
         resultOrigB!.Name.Should().Be("Node B Modified", "B should have the modified name");
         (resultOrigB.Content as MarkdownContent)?.Content.Should().Be("Modified content of B",
