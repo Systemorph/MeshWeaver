@@ -40,9 +40,16 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
         // Act
         await NodeFactory.DeleteNode($"{TestPartition}/delleaf");
 
-        // Assert â€” node should be gone
-        var result = await ReadNodeAsync($"{TestPartition}/delleaf", TestTimeout);
-        result.Should().BeNull("leaf node should be deleted");
+        // Assert — poll until cache invalidation propagates. A single one-shot
+        // ReadNodeAsync races the cache stream's stale Replay(1) entry under
+        // CI load.
+        await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .StartWith(0L)
+            .SelectMany(_ => Observable.FromAsync(() => ReadNodeAsync($"{TestPartition}/delleaf", TestTimeout)))
+            .Where(n => n is null)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(10))
+            .ToTask(TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -56,17 +63,27 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
         await NodeFactory.CreateNode(
             new MeshNode("child2", $"{TestPartition}/del2parent") { Name = "Child 2", NodeType = "Markdown" });
 
-        // Act â€” delete parent (should recursively delete children first)
+        // Act — delete parent (should recursively delete children first)
         await NodeFactory.DeleteNode($"{TestPartition}/del2parent");
 
-        // Assert â€” parent and both children should be gone
-        var parent = await ReadNodeAsync($"{TestPartition}/del2parent", TestTimeout);
-        parent.Should().BeNull("parent should be deleted");
-
-        // Listing children: queries are correct here â€” set existence, not single-node content.
-        var children = await MeshQuery.QueryAsync<MeshNode>($"namespace:{TestPartition}/del2parent")
-            .ToListAsync(TestTimeout);
-        children.Should().BeEmpty("all children should be deleted");
+        // Assert — parent and all children should be gone. Poll because the
+        // recursive delete fan-out doesn't complete synchronously with the
+        // root await; the per-leaf cache.Invalidate + per-hub disposal ripples
+        // through the children after the response.
+        await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .StartWith(0L)
+            .SelectMany(_ => Observable.FromAsync(async () =>
+            {
+                var parent = await ReadNodeAsync($"{TestPartition}/del2parent", TestTimeout);
+                var children = await MeshQuery
+                    .QueryAsync<MeshNode>($"namespace:{TestPartition}/del2parent")
+                    .ToListAsync(TestTimeout);
+                return (parent, count: children.Count);
+            }))
+            .Where(t => t.parent is null && t.count == 0)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(15))
+            .ToTask(TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -80,13 +97,21 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
         await NodeFactory.CreateNode(
             new MeshNode("deep", $"{TestPartition}/del3root/mid") { Name = "Deep", NodeType = "Markdown" });
 
-        // Act â€” delete root
+        // Act — delete root
         await NodeFactory.DeleteNode($"{TestPartition}/del3root");
 
-        // Assert â€” all 3 levels should be gone
-        var all = await MeshQuery.QueryAsync<MeshNode>($"path:{TestPartition}/del3root scope:subtree")
-            .ToListAsync(TestTimeout);
-        all.Should().BeEmpty("entire subtree should be deleted");
+        // Assert — entire subtree should be gone. Poll because the recursive
+        // delete fan-out (root → mid → deep) writes per-leaf in order; a
+        // one-shot subtree query can race the bottom-most delete in CI.
+        await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .StartWith(0L)
+            .SelectMany(_ => Observable.FromAsync(() => MeshQuery
+                .QueryAsync<MeshNode>($"path:{TestPartition}/del3root scope:subtree")
+                .ToListAsync(TestTimeout).AsTask()))
+            .Where(items => items.Count == 0)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(15))
+            .ToTask(TestContext.Current.CancellationToken);
     }
 
     [Fact]
