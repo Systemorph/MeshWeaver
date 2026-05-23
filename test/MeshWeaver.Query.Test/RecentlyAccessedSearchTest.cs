@@ -1,6 +1,10 @@
+using System;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using FluentAssertions;
+using FluentAssertions.Extensions;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -60,13 +64,18 @@ public class RecentlyAccessedSearchTest(ITestOutputHelper output) : MonolithMesh
         // Access Alpha again (most recent now)
         Mesh.Post(new TrackActivityRequest("p1/doc-a", userId, "Alpha Doc", "Markdown", "p1"));
 
-        // Give the async activity handler time to persist
-        await Task.Delay(500);
-
-        // Act: same query the SearchHub uses for empty-input (recently accessed)
-        var results = await MeshQuery
-            .QueryAsync<MeshNode>("source:accessed scope:descendants is:main sort:LastModified-desc context:search limit:10")
-            .ToListAsync();
+        // Poll the query until all 4 tracked activities have persisted (3 distinct
+        // nodes — p1/doc-a tracked twice). Replaces a 500 ms fixed wait that
+        // races propagation under load.
+        var results = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => Observable.FromAsync(async () => await MeshQuery
+                .QueryAsync<MeshNode>("source:accessed scope:descendants is:main sort:LastModified-desc context:search limit:10")
+                .ToListAsync()))
+            .Where(list => list.Count >= 3
+                && list.Any(n => n.Path == "p1/doc-a")
+                && list.Any(n => n.Path == "p2/doc-b")
+                && list.Any(n => n.Path == "p1/doc-c"))
+            .FirstAsync().Timeout(15.Seconds()).ToTask();
 
         Output.WriteLine($"Results: {results.Count}");
         foreach (var r in results)
