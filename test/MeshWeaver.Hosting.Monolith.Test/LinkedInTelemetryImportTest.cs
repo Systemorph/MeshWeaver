@@ -69,7 +69,11 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 120000)]
     public async Task LinkedInTelemetryImport_CompilesAndRendersImportArea()
     {
-        var ct = new CancellationTokenSource(45.Seconds()).Token;
+        // 90s CT (test-wide budget) — RenderAreaAsync's inner Timeout is 60s
+        // for the compile alone; the create/seed steps need their share.
+        // Previously 45s, which cancelled the CT while compilation was still
+        // running on slow CI Linux runners (40-45s for cold-start activation).
+        var ct = new CancellationTokenSource(90.Seconds()).Token;
 
         await NodeFactory.CreateNode(new MeshNode("LinkedInProfile", "Systemorph")
         {

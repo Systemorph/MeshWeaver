@@ -245,9 +245,16 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
         var updatedChange = receivedChanges.Last(c => c.ChangeType == QueryChangeType.Updated);
         updatedChange.Items[0].Name.Should().Be("Updated Project 1");
 
-        // DELETE
+        // DELETE — wait specifically for a Removed event, not just "≥4 changes".
+        // Under CI load the delete propagation can take longer than the 3s
+        // WaitForChanges budget, so the silent-timeout path leaves the test
+        // with no Removed in receivedChanges and the .Last() below throws.
         await NodeFactory.DeleteNodeAsync(NodePath("Project1"));
-        await WaitForChanges(receivedChanges, 4);
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Where(_ => receivedChanges.Any(c => c.ChangeType == QueryChangeType.Removed))
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(10))
+            .ToTask();
 
         var removedChange = receivedChanges.Last(c => c.ChangeType == QueryChangeType.Removed);
         removedChange.Items[0].Name.Should().Be("Updated Project 1");
