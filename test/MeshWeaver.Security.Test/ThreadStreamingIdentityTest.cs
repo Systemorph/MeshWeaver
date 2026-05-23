@@ -278,17 +278,23 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
             "the response stream must emit at least once — if it doesn't, streaming never landed on the response cell");
 
         // The TestChatClient yields 6 words with 10 ms delays. Even allowing for
-        // sample-rate throttling we expect at least 2 distinct growing-text
-        // emissions before the terminal Completed snapshot.
+        // sample-rate throttling we expect at least one growing-text emission
+        // before/at the terminal Completed snapshot.
         //
         // Filter out placeholder emissions (the initial "Generating response..."
         // sent before streaming starts) — those don't share the streamed-text
         // monotonic property with the actual streamed snapshots and a
         // placeholder → first-streamed-word transition LOOKS like a regression
         // when measured by raw .Length.
+        //
+        // Status: accept both Streaming AND Completed — the Sample(100ms) gate
+        // typically collapses TestChatClient's 60ms run into ONE final emission
+        // whose Status is already Completed (the streaming loop's terminal
+        // PushToResponseMessage runs with Completed). Restricting to Streaming
+        // misses this case and fails with "0 growing emissions" in CI.
         var growingEmissions = emissions
             .Where(e => e.Len > 0
-                && e.Status == ThreadMessageStatus.Streaming
+                && e.Status is ThreadMessageStatus.Streaming or ThreadMessageStatus.Completed
                 && !e.Text.StartsWith("Generating response", StringComparison.Ordinal)
                 && !e.Text.StartsWith("Allocating agent", StringComparison.Ordinal)
                 && !e.Text.StartsWith("Loading conversation history", StringComparison.Ordinal))
