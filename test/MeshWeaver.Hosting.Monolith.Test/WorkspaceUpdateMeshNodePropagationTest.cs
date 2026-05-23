@@ -73,10 +73,12 @@ public class WorkspaceUpdateMeshNodePropagationTest(ITestOutputHelper output) : 
             .Where(change => change.Value != null)
             .Subscribe(change => emissions.Add(change.Value!));
 
-        // Initial snapshot.
-        var deadline1 = DateTime.UtcNow.AddSeconds(5);
-        while (emissions.Count == 0 && DateTime.UtcNow < deadline1)
-            await Task.Delay(50, ct);
+        // Initial snapshot — stream-poll until the first emission lands.
+        // Replaces a hand-rolled while + Task.Delay(50) loop with the same
+        // 5 s budget but a deterministic Where + FirstAsync exit condition.
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Where(_ => emissions.Count > 0)
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(5)).ToTask(ct);
         emissions.Should().NotBeEmpty("subscriber must receive initial MeshNode snapshot");
         emissions[^1].Name.Should().Be("initial");
         Output.WriteLine($"Initial snapshot OK: {emissions.Count} emission(s)");
@@ -95,12 +97,11 @@ public class WorkspaceUpdateMeshNodePropagationTest(ITestOutputHelper output) : 
         // 6. The subscriber MUST receive the new state. This is the propagation
         //    contract — without the resolver fix, the subscriber received the
         //    initial snapshot but no update emission and this assertion timed out.
-        var deadline2 = DateTime.UtcNow.AddSeconds(5);
-        while (DateTime.UtcNow < deadline2)
-        {
-            if (emissions.Any(n => n.Name == marker)) break;
-            await Task.Delay(50, ct);
-        }
+        // Stream-poll the accumulator on a 50 ms interval — replaces a
+        // hand-rolled while + Task.Delay(50) loop.
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Where(_ => emissions.Any(n => n.Name == marker))
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(5)).ToTask(ct);
 
         Output.WriteLine($"After UpdateMeshNode: emissions={emissions.Count}, " +
                          $"marker={marker}, latest.Name='{emissions[^1].Name}'");
