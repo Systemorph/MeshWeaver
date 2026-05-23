@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -22,6 +23,29 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
     protected override bool ShareMeshAcrossTests => true;
 
     private IMeshService Query => MeshQuery;
+
+    /// <summary>
+    /// Wait until <paramref name="changes"/> has at least <paramref name="expectedMinCount"/>
+    /// items, polling on a 50 ms interval. Replaces Task.Delay(200..300)
+    /// propagation waits. Silent on timeout — caller asserts on the post-call
+    /// list size, matching the helper shape used in ObserveQueryTests /
+    /// FileSystemObservableQueryTests.
+    /// </summary>
+    private static async Task WaitForChanges<T>(
+        List<T> changes,
+        int expectedMinCount,
+        int timeoutMs = 3000)
+    {
+        try
+        {
+            await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+                .Where(_ => changes.Count >= expectedMinCount)
+                .FirstAsync()
+                .Timeout(TimeSpan.FromMilliseconds(timeoutMs))
+                .ToTask();
+        }
+        catch (TimeoutException) { /* silent — caller asserts via list count */ }
+    }
 
     [Fact]
     public async Task ObserveQuery_EmitsAddedOnNewTodo()
@@ -43,7 +67,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
                 $"path:{basePath} nodeType:Markdown state:Active scope:subtree"))
             .Subscribe(change => receivedChanges.Add(change));
 
-        await Task.Delay(200);
+        await WaitForChanges(receivedChanges, 1);
 
         // Assert initial
         receivedChanges.Should().HaveCount(1);
@@ -59,7 +83,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
             Content = new { Id = "task2", Title = "Task 2", Status = "Pending" }
         });
 
-        await Task.Delay(300);
+        await WaitForChanges(receivedChanges, 2);
 
         // Assert - Added notification
         receivedChanges.Should().HaveCount(2);
@@ -90,7 +114,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
                 $"path:{basePath} nodeType:Markdown state:Active scope:subtree"))
             .Subscribe(change => receivedChanges.Add(change));
 
-        await Task.Delay(200);
+        await WaitForChanges(receivedChanges, 1);
 
         // Assert initial
         receivedChanges.Should().HaveCount(1);
@@ -105,7 +129,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
             Content = new { Id = "task1", Title = "Task 1", Status = "Pending" }
         });
 
-        await Task.Delay(300);
+        await WaitForChanges(receivedChanges, 2);
 
         // Assert - Removed notification (no longer matches state:Active filter)
         receivedChanges.Should().HaveCount(2);
@@ -136,7 +160,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
                 $"path:{basePath} nodeType:Markdown state:Active scope:subtree"))
             .Subscribe(change => receivedChanges.Add(change));
 
-        await Task.Delay(200);
+        await WaitForChanges(receivedChanges, 1);
 
         // Assert initial
         receivedChanges.Should().HaveCount(1);
@@ -150,7 +174,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
             Content = new { Id = "task1", Title = "Task 1", Status = "Completed" }
         });
 
-        await Task.Delay(300);
+        await WaitForChanges(receivedChanges, 2);
 
         // Assert - Updated notification
         receivedChanges.Should().HaveCount(2);
@@ -181,7 +205,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
                 $"path:{basePath} nodeType:Markdown state:Deleted scope:subtree"))
             .Subscribe(change => deletedChanges.Add(change));
 
-        await Task.Delay(200);
+        await WaitForChanges(deletedChanges, 1);
 
         // Assert initial - no deleted items
         deletedChanges.Should().HaveCount(1);
@@ -197,7 +221,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
             Content = new { Id = "task1", Title = "Task 1", Status = "Pending" }
         });
 
-        await Task.Delay(300);
+        await WaitForChanges(deletedChanges, 2);
 
         // Assert - Added notification in deleted query
         deletedChanges.Should().HaveCount(2);
@@ -242,7 +266,9 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
                 $"path:{basePath} nodeType:Markdown state:Deleted scope:subtree"))
             .Subscribe(change => deletedChanges.Add(change));
 
-        await Task.Delay(200);
+        // Wait for BOTH initial emissions (one per query subscription).
+        await WaitForChanges(activeChanges, 1);
+        await WaitForChanges(deletedChanges, 1);
 
         // Assert initial states
         activeChanges.Should().HaveCount(1);
@@ -259,7 +285,9 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
             Content = new { Id = "task1", Title = "Task 1", Status = "Pending" }
         });
 
-        await Task.Delay(300);
+        // Wait for the restore to propagate to BOTH streams.
+        await WaitForChanges(activeChanges, 2);
+        await WaitForChanges(deletedChanges, 2);
 
         // Assert - Active query gets Added, Deleted query gets Removed
         activeChanges.Should().HaveCount(2);
@@ -354,7 +382,15 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
             .CombineLatest(deletedStream, (active, deleted) => (active, deleted))
             .Subscribe(result => combinedResults.Add(result));
 
-        await Task.Delay(300);
+        // Wait until the combined accumulator reflects the seeded state
+        // (1 active + 1 deleted) — replaces a fixed Task.Delay(300).
+        // LastOrDefault on a value-tuple list returns default(tuple) whose
+        // fields are null, so check Count > 0 before reading members.
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Where(_ => combinedResults.Count > 0
+                && combinedResults[^1].Active?.Count == 1
+                && combinedResults[^1].Deleted?.Count == 1)
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(5)).ToTask();
 
         // Assert initial combined state
         combinedResults.Should().NotBeEmpty();
@@ -371,7 +407,13 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
             Content = new { Id = "task3", Title = "New Active Task", Status = "InProgress" }
         });
 
-        await Task.Delay(300);
+        // Wait until the combined accumulator reflects the new active task —
+        // replaces a fixed Task.Delay(300).
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Where(_ => combinedResults.Count > 0
+                && combinedResults[^1].Active?.Count == 2
+                && combinedResults[^1].Deleted?.Count == 1)
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(5)).ToTask();
 
         // Assert - Combined result updated
         lastResult = combinedResults.Last();
