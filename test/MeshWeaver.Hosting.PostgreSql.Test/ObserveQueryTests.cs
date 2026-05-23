@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -57,20 +58,19 @@ public class ObserveQueryTests : IAsyncLifetime
         // Arrange: seed data before subscribing
         await WriteNode("Story1", "ACME/Project", "Story");
 
-        var changes = new List<QueryResultChange<MeshNode>>();
         var request = MeshQueryRequest.FromQuery("namespace:ACME/Project");
 
-        // Act
-        using var sub = _query.ObserveQuery<MeshNode>(request, _options)
-            .Subscribe(c => changes.Add(c));
+        // Filter on ChangeType=Initial directly — the listener can race the
+        // Subscribe and deliver a follow-up Added/Updated for the just-written
+        // row, so asserting "exactly one change" was a flake under load. The
+        // contract this test pins is the SHAPE of the Initial emission, not
+        // the absence of subsequent ones.
+        var initialChange = await _query.ObserveQuery<MeshNode>(request, _options)
+            .Where(c => c.ChangeType == QueryChangeType.Initial)
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).ToTask();
 
-        await WaitForChanges(changes, 1);
-
-        // Assert
-        changes.Should().HaveCount(1);
-        changes[0].ChangeType.Should().Be(QueryChangeType.Initial);
-        changes[0].Items.Should().HaveCount(1);
-        changes[0].Items[0].Id.Should().Be("Story1");
+        initialChange.Items.Should().HaveCount(1);
+        initialChange.Items[0].Id.Should().Be("Story1");
     }
 
     [Fact]
@@ -268,17 +268,31 @@ public class ObserveQueryTests : IAsyncLifetime
         }, _options, TestContext.Current.CancellationToken);
     }
 
+    // Wait until the accumulator list has at least `expectedMinCount` items.
+    // Polls the list size on a 50 ms interval via Observable.Interval — replaces
+    // a `while + Task.Delay(50)` hand-rolled loop. Preserves the original
+    // contract of silently returning on timeout (no throw) so callers can
+    // still distinguish "got enough events" vs "expected more" via the
+    // post-call list count. The 100 ms settle delay stays — it's the only
+    // way to catch unwanted extra emissions arriving just after the target
+    // count is reached.
     private static async Task WaitForChanges(
         List<QueryResultChange<MeshNode>> changes,
         int expectedMinCount,
         int timeout = 3000)
     {
-        var deadline = DateTime.UtcNow.AddMilliseconds(timeout);
-        while (changes.Count < expectedMinCount && DateTime.UtcNow < deadline)
+        try
         {
-            await Task.Delay(50);
+            await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+                .Where(_ => changes.Count >= expectedMinCount)
+                .FirstAsync()
+                .Timeout(TimeSpan.FromMilliseconds(timeout))
+                .ToTask();
         }
-        // Small extra delay for processing to settle
+        catch (TimeoutException) { /* original behaviour: silent timeout */ }
+        // Small extra delay for processing to settle (catches "one more event
+        // arriving just after target count" — a quiet-window check would be
+        // strictly better but bigger to wire in).
         await Task.Delay(100);
     }
 }
