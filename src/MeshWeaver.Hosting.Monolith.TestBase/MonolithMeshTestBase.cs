@@ -837,34 +837,30 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// </summary>
     protected async Task<MeshNode?> ReadNodeAsync(string path, CancellationToken ct)
     {
-        // 🚨 2026-05-23: Race two reads to handle BOTH "exists" and "deleted"
-        // cases correctly.
+        // 🚨 2026-05-23 (revised): use request/response only — DO NOT race
+        // the cache stream.
         //
-        // workspace.GetMeshNodeStream(path) is cache-routed, and the
-        // MeshNodeStreamHandle filters out null emissions (it expects to
-        // surface only populated MeshNodes for live data binding). When a
-        // path has been DELETED, the per-node hub is disposed and the
-        // cache is invalidated — the next subscription opens a fresh stream
-        // whose data source loads from (empty) persistence and emits
-        // nothing populated. Take(1) then waits until ReadNodeTimeout (60s)
-        // — exceeding tests' typical 20s timeout.
+        // The earlier shape merged `workspace.GetMeshNodeStream(path).Take(1)`
+        // (cache-routed) with `Mesh.GetMeshNode(...)` and returned whichever
+        // emitted first. The cache stream is backed by a `Replay(1)` subject
+        // populated by a single SubscribeRequest the cache opens on first
+        // access; subsequent owner-hub writes don't always propagate back
+        // through to that Replay buffer. The cache wins the race every time
+        // (instant emission from the buffer), so polling loops like
+        // `WaitForThreadAsync` saw the SAME stale snapshot on every
+        // iteration even after the watcher had moved Messages forward.
+        // Symptom: every `ThreadSubmissionIntegrationTest.Submit_*` and the
+        // `InboxToolIntegrationTest.CheckInbox_*` polls hung on the initial
+        // buffered MeshThread. Bisected to commit 02dbf1630.
         //
-        // Strategy: race the cache stream against an explicit GetMeshNode
-        // request (one-shot GetDataRequest with its own NotFound semantics).
-        // If the node EXISTS, the cache stream typically wins first. If the
-        // node DOESN'T exist, GetMeshNode returns null after a short
-        // request-level timeout — long before ReadNodeTimeout fires.
-        // Whichever emits first is returned; both observables are bounded.
-        var workspace = Mesh.GetWorkspace();
+        // Tests need *authoritative* per-poll reads, so go through the
+        // owner-hub round-trip every call. `Mesh.GetMeshNode` returns null
+        // after its own short timeout when the node doesn't exist —
+        // sufficient for the "deleted" case the previous shape was trying
+        // to handle, without the staleness trade-off.
         try
         {
-            var streamRead = workspace.GetMeshNodeStream(path)
-                .Take(1)
-                .Timeout(ReadNodeTimeout)
-                .Catch<MeshNode, TimeoutException>(_ => Observable.Empty<MeshNode>())
-                .Select(n => (MeshNode?)n);
-            var requestRead = Mesh.GetMeshNode(path, TimeSpan.FromSeconds(5));
-            return await streamRead.Merge(requestRead)
+            return await Mesh.GetMeshNode(path, ReadNodeTimeout)
                 .FirstAsync()
                 .ToTask(ct);
         }
