@@ -59,8 +59,9 @@ public class AccessContextSurvivesSubscribeTest : IDisposable
         var observed = new TaskCompletionSource<string?>();
         wrapped.Subscribe(_ => observed.TrySetResult(_access.Context?.ObjectId));
 
-        await Task.Run(() => subject.OnNext(1));
-        var result = await observed.Task.WaitAsync(5.Seconds());
+        var ct = TestContext.Current.CancellationToken;
+        await Task.Run(() => subject.OnNext(1), ct);
+        var result = await observed.Task.WaitAsync(5.Seconds(), ct);
 
         result.Should().Be("alice",
             because: "CarryAccessContext captured AsyncLocal at wrap time on the test thread " +
@@ -86,14 +87,15 @@ public class AccessContextSurvivesSubscribeTest : IDisposable
         var observed = new TaskCompletionSource<string?>();
         wrapped.Subscribe(_ => observed.TrySetResult(_access.Context?.ObjectId));
 
+        var ct = TestContext.Current.CancellationToken;
         await Task.Run(() =>
         {
             using (ExecutionContext.SuppressFlow())
             {
                 subject.OnNext(1);
             }
-        });
-        var result = await observed.Task.WaitAsync(5.Seconds());
+        }, ct);
+        var result = await observed.Task.WaitAsync(5.Seconds(), ct);
 
         result.Should().Be("alice",
             because: "even with ExecutionContext.SuppressFlow, the wrap re-stamps AsyncLocal " +
@@ -117,7 +119,7 @@ public class AccessContextSurvivesSubscribeTest : IDisposable
         wrapped.Subscribe(observed.SetResult);
 
         subject.OnNext(42);
-        var result = await observed.Task.WaitAsync(5.Seconds());
+        var result = await observed.Task.WaitAsync(5.Seconds(), TestContext.Current.CancellationToken);
 
         result.Should().Be(42,
             because: "with no ambient context the wrap returns the source unchanged " +
@@ -146,8 +148,9 @@ public class AccessContextSurvivesSubscribeTest : IDisposable
         var observed = new TaskCompletionSource<string?>();
         wrapped.Subscribe(_ => observed.TrySetResult(_access.Context?.ObjectId));
 
-        await Task.Run(() => subject.OnNext(1));
-        var result = await observed.Task.WaitAsync(5.Seconds());
+        var ct = TestContext.Current.CancellationToken;
+        await Task.Run(() => subject.OnNext(1), ct);
+        var result = await observed.Task.WaitAsync(5.Seconds(), ct);
 
         result.Should().BeNull(
             because: "CarryAccessContext is a pass-through (757d2a296). It does NOT read " +
@@ -186,16 +189,17 @@ public class AccessContextSurvivesSubscribeTest : IDisposable
         aliceWrapped.Subscribe(_ => aliceObserved.Add(_access.Context?.ObjectId));
         bobWrapped.Subscribe(_ => bobObserved.Add(_access.Context?.ObjectId));
 
+        var ct = TestContext.Current.CancellationToken;
         await Task.WhenAll(
-            Task.Run(() => { for (var i = 0; i < 5; i++) aliceSubject.OnNext(i); }),
-            Task.Run(() => { for (var i = 0; i < 5; i++) bobSubject.OnNext(i); }));
+            Task.Run(() => { for (var i = 0; i < 5; i++) aliceSubject.OnNext(i); }, ct),
+            Task.Run(() => { for (var i = 0; i < 5; i++) bobSubject.OnNext(i); }, ct));
 
         // Stream-poll until all 10 emissions have been observed.
         await Observable.Interval(TimeSpan.FromMilliseconds(20)).StartWith(0L)
             .Where(_ => aliceObserved.Count >= 5 && bobObserved.Count >= 5)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(5))
-            .ToTask();
+            .ToTask(ct);
 
         aliceObserved.Should().OnlyContain(id => id == null,
             because: "pass-through doesn't restore captured identity per emission — ambient " +
@@ -225,10 +229,16 @@ public class AccessContextSurvivesSubscribeTest : IDisposable
         var observed = new TaskCompletionSource<string?>();
         composed.Subscribe(_ => observed.TrySetResult(_access.Context?.ObjectId));
 
-        await Task.Run(() => outer.OnNext(1));
-        await Task.Delay(50); // let SelectMany subscribe to inner
-        await Task.Run(() => inner.OnNext(2));
-        var result = await observed.Task.WaitAsync(5.Seconds());
+        var ct = TestContext.Current.CancellationToken;
+        await Task.Run(() => outer.OnNext(1), ct);
+        // Wait until SelectMany has actually subscribed to inner before emitting.
+        await Observable.Interval(TimeSpan.FromMilliseconds(20)).StartWith(0L)
+            .Where(_ => inner.HasObservers)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(5))
+            .ToTask(ct);
+        await Task.Run(() => inner.OnNext(2), ct);
+        var result = await observed.Task.WaitAsync(5.Seconds(), ct);
 
         result.Should().Be("alice",
             because: "both wraps captured 'alice' at construction time on the test thread; " +
