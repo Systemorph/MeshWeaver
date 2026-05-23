@@ -63,6 +63,14 @@ public class SubThreadHangRepro(ITestOutputHelper output) : MonolithMeshTestBase
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
+            // The hanging sub-thread leaves DataChangeRequests pending on the
+            // sub-thread hub (it's hung in IChatClient, can't process writes).
+            // After user-initiated cancel propagates, those messages drain via
+            // the sub-thread hub's own dispose, but the parent mesh hub's
+            // 500ms Quiescing budget can fire first. Give them 15s here —
+            // long enough for the cancel-propagated dispose chain to flush
+            // through all sub-thread sync hubs.
+            .ConfigureHub(c => c.WithQuiesceTimeout(TimeSpan.FromSeconds(15)))
             .ConfigureServices(services =>
             {
                 services.AddSingleton<IChatClientFactory, HangingSubAgentFactory>();
@@ -161,6 +169,17 @@ public class SubThreadHangRepro(ITestOutputHelper output) : MonolithMeshTestBase
             "the sub-thread MeshNode the same way the GUI Stop button does. After " +
             "the fix, invert this assertion to BeFalse.");
         Output.WriteLine("Confirmed: hung sub-thread does NOT self-recover.");
+
+        // Clean shutdown: cancel via stream.Update on the parent so the hung
+        // sub-thread propagation watcher unwinds before dispose. Without this
+        // the hung sub-thread leaves DataChangeRequests pending past the
+        // Quiescing budget and dispose fails with a leaked-callback exception.
+        // Fire-and-forget — dispose's hosted-hub teardown completes the rest.
+        workspace.GetMeshNodeStream(parentPath)
+            .Update(curr => curr?.Content is MeshThread t
+                ? curr with { Content = t with { RequestedCancellationAt = DateTime.UtcNow } }
+                : curr!)
+            .Subscribe(_ => { }, _ => { });
     }
 
     /// <summary>

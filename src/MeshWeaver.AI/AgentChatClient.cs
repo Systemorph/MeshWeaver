@@ -258,40 +258,36 @@ public class AgentChatClient : IAgentChat
 
     /// <summary>
     /// Updates the Thread MeshNode with PersistentThreadId and ProviderType if they were newly set.
+    /// Routes the update through the IMeshNodeStreamCache so the patch lands on
+    /// the owning per-thread hub's stream — no separate DataChangeRequest →
+    /// owner round-trip that can dangle as a pending callback if the owner
+    /// is mid-streaming (the SubThreadHangRepro tests caught this exact leak).
     /// </summary>
-    private async Task UpdateThreadPersistentIdAsync(string threadNodePath)
+    private Task UpdateThreadPersistentIdAsync(string threadNodePath)
     {
-        try
-        {
-            var factory = GetFactoryForModel(currentModelName);
-            // Single-op write to a remote MeshNode — read current via GetDataRequest
-            // (one-shot, no lingering subscription), apply the transform, post
-            // DataChangeRequest to the owning hub.
-            hub.GetMeshNode(threadNodePath, TimeSpan.FromSeconds(10))
-                .Subscribe(node =>
+        var factory = GetFactoryForModel(currentModelName);
+        var workspace = hub.GetWorkspace();
+        workspace.GetMeshNodeStream(threadNodePath)
+            .Update(node =>
+            {
+                if (node?.Content is not Thread threadContent) return node!;
+                if (!string.IsNullOrEmpty(threadContent.PersistentThreadId)) return node;
+                return node with
                 {
-                    if (node?.Content is not Thread threadContent) return;
-                    if (!string.IsNullOrEmpty(threadContent.PersistentThreadId)) return;
-                    var newNode = node with
+                    Content = threadContent with
                     {
-                        Content = threadContent with
-                        {
-                            PersistentThreadId = persistentThreadId,
-                            ProviderType = factory?.Name
-                        }
-                    };
-                    hub.Post(
-                        new Data.DataChangeRequest { Updates = [newNode] },
-                        o => o.WithTarget(new Messaging.Address(threadNodePath)));
-                });
-
-            logger.LogInformation("Updated thread {Path} with PersistentThreadId={PersistentThreadId}",
-                threadNodePath, persistentThreadId);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Failed to update PersistentThreadId on thread {Path}", threadNodePath);
-        }
+                        PersistentThreadId = persistentThreadId,
+                        ProviderType = factory?.Name
+                    }
+                };
+            })
+            .Subscribe(
+                _ => logger.LogInformation(
+                    "Updated thread {Path} with PersistentThreadId={PersistentThreadId}",
+                    threadNodePath, persistentThreadId),
+                ex => logger.LogWarning(ex,
+                    "Failed to update PersistentThreadId on thread {Path}", threadNodePath));
+        return Task.CompletedTask;
     }
 
     /// <summary>
