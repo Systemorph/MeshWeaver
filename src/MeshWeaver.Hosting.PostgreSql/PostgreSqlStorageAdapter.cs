@@ -17,7 +17,7 @@ namespace MeshWeaver.Hosting.PostgreSql;
 /// When a PartitionDefinition with TableMappings is provided, satellite nodes are routed
 /// to their dedicated tables based on path pattern matching.
 /// </summary>
-public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
+public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
 {
     private readonly NpgsqlDataSource _dataSource;
     private readonly IEmbeddingProvider _embeddingProvider;

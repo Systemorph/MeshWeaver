@@ -138,6 +138,12 @@ public class PostgreSqlFixture : IAsyncLifetime
         // don't compete with leaked schema adapters.
         DisposeTrackedSchemaDataSources();
 
+        // 7 DELETEs in one round-trip. TRUNCATE looks tempting but is ~3× slower
+        // here: tests use tiny tables (a handful of rows each), so DELETE's
+        // per-row cost is below TRUNCATE's fixed per-call overhead (ACCESS
+        // EXCLUSIVE lock acquisition + new heap file allocation × 7 tables).
+        // Verified 2026-05-23: 5.6s → 17.2s on QueryTests when this was
+        // TRUNCATE.
         await using var cmd = DataSource.CreateCommand(
             """
             DELETE FROM partition_objects;

@@ -376,6 +376,13 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         // source:activity is exclusive — bypass the normal walk/exact-probe.
         if (parsedQuery.Source == QuerySource.Activity)
         {
+            // Skip the walk-derive-MainNode-then-Read pattern when the adapter's
+            // own provider already handles source:activity via a satellite JOIN
+            // (PostgreSqlMeshQuery does this in one round-trip). Otherwise the
+            // pedestrian walk is N+1 duplicate work running in parallel.
+            if (persistence is IScopedQueryStorageAdapter)
+                return Observable.Empty<object>();
+
             const string activitySegment = "/_activity/";
             var seenMains = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             return WalkAdapter(basePath, QueryScope.Subtree)
@@ -457,6 +464,18 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             or QueryScope.Hierarchy
             or QueryScope.Subtree
             or QueryScope.AncestorsAndSelf))
+        {
+            return exactPathNodes.Cast<object>();
+        }
+
+        // 🚨 When the adapter answers scoped queries with one round-trip
+        // (PostgreSqlMeshQuery / CosmosMeshQuery), our ListChildPaths-walk +
+        // per-path Read is pure N+1 duplicate work running in parallel with the
+        // optimized provider. Skip the walk entirely — the dedicated
+        // IMeshQueryProvider for that backend already contributes the rows.
+        // The exact-path probes (above) still run for Ancestors/AncestorsAndSelf/
+        // multi-path cases that GetPathsForScope populated.
+        if (persistence is IScopedQueryStorageAdapter)
         {
             return exactPathNodes.Cast<object>();
         }

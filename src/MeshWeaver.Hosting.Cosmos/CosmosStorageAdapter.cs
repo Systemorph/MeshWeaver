@@ -11,7 +11,7 @@ namespace MeshWeaver.Hosting.Cosmos;
 /// Cosmos DB implementation of IStorageAdapter.
 /// Stores MeshNodes and partition objects in Cosmos DB containers.
 /// </summary>
-public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
+public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
 {
     private readonly Container _nodesContainer;
     private readonly Container _partitionsContainer;
