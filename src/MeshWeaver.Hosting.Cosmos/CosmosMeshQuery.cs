@@ -48,12 +48,53 @@ public class CosmosMeshQuery : IMeshQueryProvider
         return false;
     }
 
+    /// <summary>
+    /// True when every namespace the request targets is owned by a static
+    /// partition — Cosmos has nothing to contribute and should yield break
+    /// instead of issuing a query. See PostgreSqlMeshQuery for the matching
+    /// pattern; the duplication is intentional because the aggregator
+    /// (MeshQuery.SelectMatchingProviders) doesn't pre-filter by Matches().
+    /// </summary>
+    private bool OnlyTargetsExcludedNamespaces(MeshQueryRequest request)
+    {
+        if (request.Queries is { Count: > 0 } queries)
+        {
+            foreach (var q in queries)
+                if (!QueryIsExcludedOnly(q)) return false;
+            return true;
+        }
+        return QueryIsExcludedOnly(request.Query);
+    }
+
+    private bool QueryIsExcludedOnly(string? query)
+    {
+        if (string.IsNullOrEmpty(query)) return false;
+        var parsed = _parser.Parse(query);
+        var namespaces = parsed.ExtractNamespaces();
+        var firstSegment = string.IsNullOrEmpty(parsed.Path) ? null : parsed.Path.Split('/', 2)[0];
+        if (namespaces.Count == 0 && string.IsNullOrEmpty(firstSegment))
+            return false;
+        for (var i = 0; i < namespaces.Count; i++)
+            if (!_excludedNamespaces.Contains(namespaces[i]))
+                return false;
+        if (!string.IsNullOrEmpty(firstSegment) && !_excludedNamespaces.Contains(firstSegment))
+            return false;
+        return true;
+    }
+
     /// <inheritdoc />
     public async IAsyncEnumerable<object> QueryAsync(
         MeshQueryRequest request,
         JsonSerializerOptions options,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
+        // Self-filter — MeshQuery's aggregator fans every provider out for
+        // every query regardless of Matches(). When the request only targets
+        // static-owned namespaces, we'd otherwise round-trip to Cosmos for a
+        // guaranteed-empty query.
+        if (_excludedNamespaces.Count > 0 && OnlyTargetsExcludedNamespaces(request))
+            yield break;
+
         var parsedQuery = _parser.Parse(request.Query);
 
         // Override limit from request if provided
@@ -255,6 +296,21 @@ public class CosmosMeshQuery : IMeshQueryProvider
     /// <inheritdoc />
     public IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request, JsonSerializerOptions options)
     {
+        // Self-filter: when the request only targets static-owned namespaces,
+        // emit an empty Initial and exit — the static-node provider contributes
+        // the rows. Without this, Cosmos would set up a watcher and issue an
+        // initial query for guaranteed-empty results. Empty Initial is required
+        // (MergeProviderObservables in MeshQuery gates merged Initial on every
+        // provider emitting it).
+        if (_excludedNamespaces.Count > 0 && OnlyTargetsExcludedNamespaces(request))
+        {
+            return Observable.Return(new QueryResultChange<T>
+            {
+                ChangeType = QueryChangeType.Initial,
+                Items = Array.Empty<T>()
+            });
+        }
+
         return Observable.Create<QueryResultChange<T>>(async (observer, ct) =>
         {
             var parsedQuery = _parser.Parse(request.Query);
