@@ -79,10 +79,10 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
             .FirstAsync(x => x!.DisplayName != oldName);
         loadedInstance.Should().Be(businessUnit);
 
-        // data sync is happening async in order not to block the client ==> we need to give it
-        // some grace time for the sync to happen
-        await Task.Delay(100);
-
+        // The host workspace's stream surfaces the synced update reactively —
+        // FirstAsync(predicate) with a 3 s timeout waits for the DisplayName
+        // change to land. No grace-period Task.Delay needed (was a holdover
+        // from a non-reactive era).
         var hostWorkspace = GetHost().ServiceProvider.GetRequiredService<IWorkspace>();
         loadedInstance = await hostWorkspace
             .GetObservable<BusinessUnit>(businessUnit.SystemName)

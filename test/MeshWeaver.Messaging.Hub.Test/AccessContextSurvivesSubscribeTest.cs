@@ -179,7 +179,15 @@ public class AccessContextSurvivesSubscribeTest : IDisposable
             Task.Run(() => { for (var i = 0; i < 5; i++) aliceSubject.OnNext(i); }),
             Task.Run(() => { for (var i = 0; i < 5; i++) bobSubject.OnNext(i); }));
 
-        await Task.Delay(100); // let emissions drain
+        // Stream-poll until all 10 emissions have been observed — replaces a
+        // Task.Delay(100) "let emissions drain" barrier. CarryAccessContext
+        // dispatches each OnNext via the access service, so the observed
+        // counts are the deterministic signal for "draining is done".
+        await Observable.Interval(TimeSpan.FromMilliseconds(20)).StartWith(0L)
+            .Where(_ => aliceObserved.Count >= 5 && bobObserved.Count >= 5)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(5))
+            .ToTask();
 
         aliceObserved.Should().OnlyContain(id => id == "alice",
             because: "alice's wrap captured 'alice' at wrap time — emissions on her subject " +

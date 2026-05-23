@@ -126,18 +126,18 @@ public record Post
         // Profile's compile queries `namespace:type/Post/Source scope:subtree`.
         // The compilation service uses QueryAsync which goes through the
         // eventually-consistent catalog — on cold-start CI, the just-created
-        // Code node for Post takes 200-2000ms to appear there. Poll until visible
-        // so the cross-NodeType source pull is deterministic.
+        // Code node for Post takes 200-2000ms to appear there. Stream-poll
+        // the re-query on a 100 ms cadence — replaces a hand-rolled while +
+        // Task.Delay(100) loop. Pattern (b) from WritingTests.md.
         var ct = TestContext.Current.CancellationToken;
-        var indexDeadline = DateTime.UtcNow.AddSeconds(15);
-        while (DateTime.UtcNow < indexDeadline)
-        {
-            var indexed = await MeshService
+        await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
+            .SelectMany(_ => Observable.FromAsync(() => MeshService
                 .QueryAsync<MeshNode>("namespace:type/Post/Source scope:subtree nodeType:Code", ct: ct)
-                .ToListAsync(ct);
-            if (indexed.Any(n => n.Path == "type/Post/Source/code")) break;
-            await Task.Delay(100, ct);
-        }
+                .ToListAsync(ct).AsTask()))
+            .Where(list => list.Any(n => n.Path == "type/Post/Source/code"))
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(15))
+            .ToTask(ct);
 
         // Profile NodeType references Platform via cross-NodeType Sources.
         var response = await CreateAndCompile("Profile",
