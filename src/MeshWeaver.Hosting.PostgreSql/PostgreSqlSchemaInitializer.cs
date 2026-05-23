@@ -309,6 +309,13 @@ public static class PostgreSqlSchemaInitializer
                 CREATE INDEX IF NOT EXISTS "idx_{{tableName}}_main_node" ON "{{tableName}}" (main_node);
                 CREATE INDEX IF NOT EXISTS "idx_{{tableName}}_node_type" ON "{{tableName}}" (node_type);
                 CREATE INDEX IF NOT EXISTS "idx_{{tableName}}_last_modified" ON "{{tableName}}" (last_modified DESC);
+                -- Functional LOWER() indexes — SQL generator case-folds every
+                -- text equality (LOWER(n.namespace) = $1 etc.); without these
+                -- the plain indexes above don't match and Postgres falls back
+                -- to sequential scan on satellite tables.
+                CREATE INDEX IF NOT EXISTS "idx_{{tableName}}_namespace_lower" ON "{{tableName}}" (LOWER(namespace));
+                CREATE INDEX IF NOT EXISTS "idx_{{tableName}}_node_type_lower" ON "{{tableName}}" (LOWER(node_type));
+                CREATE INDEX IF NOT EXISTS "idx_{{tableName}}_main_node_lower" ON "{{tableName}}" (LOWER(main_node));
 
                 -- pg_notify trigger on the satellite table — mirrors the one
                 -- installed on mesh_nodes by GetSchemaScript. Without this,
@@ -399,6 +406,17 @@ public static class PostgreSqlSchemaInitializer
             CREATE INDEX IF NOT EXISTS idx_mn_path_prefix ON mesh_nodes (path text_pattern_ops);
             CREATE INDEX IF NOT EXISTS idx_mn_namespace ON mesh_nodes (namespace);
             CREATE INDEX IF NOT EXISTS idx_mn_node_type ON mesh_nodes (node_type);
+            -- Functional indexes for case-insensitive equality: the SQL generator
+            -- emits `LOWER(n.namespace) = $1` / `LOWER(n.node_type) = $1` for every
+            -- text-field equality (PostgreSqlSqlGenerator.GenerateComparisonClause
+            -- case-folds via ToLowerInvariant). Without the LOWER() expression
+            -- indexes, Postgres falls back to sequential scan because the plain
+            -- (namespace) / (node_type) indexes don't match the function
+            -- expression. Add them alongside (not in place of) so any future
+            -- case-sensitive query path still has support.
+            CREATE INDEX IF NOT EXISTS idx_mn_namespace_lower ON mesh_nodes (LOWER(namespace));
+            CREATE INDEX IF NOT EXISTS idx_mn_node_type_lower ON mesh_nodes (LOWER(node_type));
+            CREATE INDEX IF NOT EXISTS idx_mn_path_lower ON mesh_nodes (LOWER(path));
             CREATE INDEX IF NOT EXISTS idx_mn_content ON mesh_nodes USING gin (content jsonb_path_ops);
             CREATE INDEX IF NOT EXISTS idx_mn_text_search ON mesh_nodes USING gin (
                 to_tsvector('english', COALESCE(name,'') || ' ' || COALESCE(description,'') || ' ' || COALESCE(node_type,''))
@@ -685,6 +703,10 @@ public static class PostgreSqlSchemaInitializer
             CREATE INDEX IF NOT EXISTS idx_access_main_node ON access (main_node);
             CREATE INDEX IF NOT EXISTS idx_access_node_type ON access (node_type);
             CREATE INDEX IF NOT EXISTS idx_access_last_modified ON access (last_modified DESC);
+            -- Functional LOWER() indexes — SQL generator case-folds text equality.
+            CREATE INDEX IF NOT EXISTS idx_access_namespace_lower ON access (LOWER(namespace));
+            CREATE INDEX IF NOT EXISTS idx_access_node_type_lower ON access (LOWER(node_type));
+            CREATE INDEX IF NOT EXISTS idx_access_main_node_lower ON access (LOWER(main_node));
 
             -- Per-user permission rebuild: concurrent-safe, only touches one user's rows.
             CREATE OR REPLACE FUNCTION rebuild_user_permissions_for(p_user_id TEXT) RETURNS void AS $$
@@ -1009,6 +1031,17 @@ public static class PostgreSqlSchemaInitializer
             CREATE INDEX IF NOT EXISTS idx_mn_path_prefix ON mesh_nodes (path text_pattern_ops);
             CREATE INDEX IF NOT EXISTS idx_mn_namespace ON mesh_nodes (namespace);
             CREATE INDEX IF NOT EXISTS idx_mn_node_type ON mesh_nodes (node_type);
+            -- Functional indexes for case-insensitive equality: the SQL generator
+            -- emits `LOWER(n.namespace) = $1` / `LOWER(n.node_type) = $1` for every
+            -- text-field equality (PostgreSqlSqlGenerator.GenerateComparisonClause
+            -- case-folds via ToLowerInvariant). Without the LOWER() expression
+            -- indexes, Postgres falls back to sequential scan because the plain
+            -- (namespace) / (node_type) indexes don't match the function
+            -- expression. Add them alongside (not in place of) so any future
+            -- case-sensitive query path still has support.
+            CREATE INDEX IF NOT EXISTS idx_mn_namespace_lower ON mesh_nodes (LOWER(namespace));
+            CREATE INDEX IF NOT EXISTS idx_mn_node_type_lower ON mesh_nodes (LOWER(node_type));
+            CREATE INDEX IF NOT EXISTS idx_mn_path_lower ON mesh_nodes (LOWER(path));
             CREATE INDEX IF NOT EXISTS idx_mn_content ON mesh_nodes USING gin (content jsonb_path_ops);
             CREATE INDEX IF NOT EXISTS idx_mn_text_search ON mesh_nodes USING gin (
                 to_tsvector('english', COALESCE(name,'') || ' ' || COALESCE(description,'') || ' ' || COALESCE(node_type,''))
@@ -1301,6 +1334,10 @@ public static class PostgreSqlSchemaInitializer
             CREATE INDEX IF NOT EXISTS idx_access_main_node ON access (main_node);
             CREATE INDEX IF NOT EXISTS idx_access_node_type ON access (node_type);
             CREATE INDEX IF NOT EXISTS idx_access_last_modified ON access (last_modified DESC);
+            -- Functional LOWER() indexes — SQL generator case-folds text equality.
+            CREATE INDEX IF NOT EXISTS idx_access_namespace_lower ON access (LOWER(namespace));
+            CREATE INDEX IF NOT EXISTS idx_access_node_type_lower ON access (LOWER(node_type));
+            CREATE INDEX IF NOT EXISTS idx_access_main_node_lower ON access (LOWER(main_node));
 
             -- Per-user permission rebuild: concurrent-safe, only touches one user's rows.
             CREATE OR REPLACE FUNCTION rebuild_user_permissions_for(p_user_id TEXT) RETURNS void AS $$
