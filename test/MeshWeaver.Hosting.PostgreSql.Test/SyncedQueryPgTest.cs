@@ -148,23 +148,31 @@ public class SyncedQueryPgTest : IAsyncLifetime
         await WriteNode("Story1", "ACME/Project", "Story");
         await WriteNode("Story2", "ACME/Project", "Story");
 
-        // Publish() + Connect() so multiple .Where().FirstAsync() consumers
-        // share a single upstream subscription — otherwise each Where chain
-        // re-subscribes and the second one races the Delete.
+        // Replay(1).RefCount() instead of Publish()+Connect():
+        // Publish loses any emission fired before subscribers attach —
+        // the previous Connect()-then-Subscribe() shape raced the Initial
+        // emission and intermittently missed it under CI load.
+        // Replay(1) buffers the latest emission so a late subscriber still
+        // sees it; RefCount starts the upstream on the first subscriber.
+        // The Removed predicate ignores the buffered Initial — only the
+        // post-delete Removed event matches.
         var stream = _query
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("namespace:ACME/Project"), _options)
-            .Publish();
-        using var connection = stream.Connect();
+            .Replay(1)
+            .RefCount();
 
-        // Wait for the Initial emission, then assert delete behaviour.
+        // Wait for the Initial emission deterministically — first subscriber
+        // triggers the upstream pull; Replay(1) ensures we won't miss it even
+        // if another concurrent subscriber attaches first.
         var initial = await stream
             .Where(c => c.ChangeType == QueryChangeType.Initial)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(5)).ToTask(ct);
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(15)).ToTask(ct);
         initial.ChangeType.Should().Be(QueryChangeType.Initial);
 
-        // Pre-subscribe to Removed BEFORE issuing the delete, so we never miss
-        // the emission. .FirstAsync() returns a hot Task that will complete
-        // when the next Removed emission arrives.
+        // Pre-subscribe to Removed BEFORE issuing the delete. The hot Task
+        // completes when the next Removed emission arrives — Replay(1)'s
+        // buffer holds Initial (not Removed), so this filter only matches
+        // the post-delete event.
         var removedTask = stream
             .Where(c => c.ChangeType == QueryChangeType.Removed)
             .FirstAsync().Timeout(TimeSpan.FromSeconds(15)).ToTask(ct);
