@@ -1,4 +1,7 @@
+using System;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -157,15 +160,26 @@ public class UserActivityTrackingTests(ITestOutputHelper output) : MonolithMeshT
     /// fast; this poll re-queries every 200ms to surface the entry that
     /// the activity handler's asynchronous create/update produced.
     /// </summary>
+    // Stream-based poll: re-issue the MeshQuery on a 50 ms interval until at
+    // least one node matches, capped by the caller's cancellation. Replaces
+    // a `while + Task.Delay(200)` loop with an Observable.Interval + Where +
+    // FirstAsync — the cancellation token threads through ToTask, so the
+    // operation cleanly cancels when the test framework's timeout fires.
     private async Task<MeshNode?> PollForFirstAsync(string query, CancellationToken cancellationToken)
     {
-        while (!cancellationToken.IsCancellationRequested)
+        try
         {
-            var hits = await MeshQuery.QueryAsync<MeshNode>(query).ToListAsync();
-            if (hits.Count > 0)
-                return hits[0];
-            await Task.Delay(200, cancellationToken);
+            return await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+                .SelectMany(_ => Observable.FromAsync(async () =>
+                    await MeshQuery.QueryAsync<MeshNode>(query).ToListAsync()))
+                .Where(list => list.Count > 0)
+                .Select(list => list[0])
+                .FirstAsync()
+                .ToTask(cancellationToken);
         }
-        return null;
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
     }
 }
