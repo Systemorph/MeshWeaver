@@ -65,7 +65,16 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
 
     private readonly IMessageHub meshHub;
     private readonly ILogger<MeshNodeStreamCache> logger;
-    private readonly ConcurrentDictionary<string, Entry> _streams = new();
+
+    // 🚨 Lazy<Entry> wraps the factory because ConcurrentDictionary.GetOrAdd
+    // is NOT threadsafe for compound operations: under contention the factory
+    // delegate runs more than once, the losing values are discarded, but any
+    // side effects (here: opening an upstream SubscribeRequest +
+    // ReplaySubject.Connect()) have already fired. The losing Entry's
+    // subscription is orphaned and silently keeps consuming from the source.
+    // Lazy<T>(ThreadSafety.ExecutionAndPublication) guarantees the factory
+    // runs at most once per key, even when multiple GetOrAdd calls race.
+    private readonly ConcurrentDictionary<string, Lazy<Entry>> _streams = new();
     private readonly ConcurrentDictionary<(string Path, string UserId), AccessEntry> _access = new();
 
     /// <summary>Cached effective-permission probe with expiry.</summary>
@@ -78,7 +87,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
     }
 
     private Entry GetEntry(string path) =>
-        _streams.GetOrAdd(path, p =>
+        _streams.GetOrAdd(path, p => new Lazy<Entry>(() =>
         {
             logger.LogDebug("MeshNodeStreamCache: opening shared stream for {Path}", p);
             // 🚨 Bypass the cache when opening our OWN upstream — otherwise
@@ -114,19 +123,30 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
             // for process lifetime — no RefCount churn, identity captured
             // deterministically at cache-creation rather than at first
             // random consumer.
-            var connectable = handle.Replay(1);
+            // Build the cached subject explicitly so we can wrap it with
+            // Subject.Synchronize — RX subjects are NOT threadsafe across
+            // multiple producers (and even with one producer, race between
+            // OnNext and Subscribe can be observed). Subject.Synchronize
+            // gives a single per-subject gate that the framework relies on.
+            var inner = new System.Reactive.Subjects.ReplaySubject<MeshNode>(1);
+            var synced = System.Reactive.Subjects.Subject.Synchronize(inner);
             var accessService = meshHub.ServiceProvider.GetService<AccessService>();
+            IDisposable hydrationSub;
             if (accessService is not null)
             {
                 using (accessService.SwitchAccessContext(MeshNodeCacheIdentity.Context))
-                    connectable.Connect();
+                    hydrationSub = handle.Subscribe(synced);
             }
             else
             {
-                connectable.Connect();
+                hydrationSub = handle.Subscribe(synced);
             }
-            return new Entry(handle, connectable);
-        });
+            // We don't dispose hydrationSub here — the cache entry lives for
+            // process lifetime; the subscription is implicitly cleaned up
+            // when the mesh hub disposes.
+            _ = hydrationSub;
+            return new Entry(handle, inner.AsObservable());
+        }, LazyThreadSafetyMode.ExecutionAndPublication)).Value;
 
     /// <summary>
     /// Returns a per-user access-gated view of the cached shared stream. The
@@ -219,6 +239,12 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
         // CarryAccessContext, so writes through the cache automatically carry
         // the caller's user identity into the partition write. No additional
         // wrap needed here. See AccessContextPropagation.md.
+        //
+        // Concurrency: serialization happens at the OWNING HUB, not here. The
+        // hub for `path` is single-threaded — its action block processes
+        // UpdateNodeRequest deliveries in order, so concurrent cache.Update
+        // calls reach the same hub and are naturally serialized. No semaphore
+        // or lock at this layer.
         GetEntry(path).Handle.Update(update);
 
     /// <summary>
