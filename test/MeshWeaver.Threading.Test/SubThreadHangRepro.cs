@@ -65,12 +65,13 @@ public class SubThreadHangRepro(ITestOutputHelper output) : MonolithMeshTestBase
         => base.ConfigureMesh(builder)
             // The hanging sub-thread leaves DataChangeRequests pending on the
             // sub-thread hub (it's hung in IChatClient, can't process writes).
-            // After user-initiated cancel propagates, those messages drain via
-            // the sub-thread hub's own dispose, but the parent mesh hub's
-            // 500ms Quiescing budget can fire first. Give them 15s here —
-            // long enough for the cancel-propagated dispose chain to flush
-            // through all sub-thread sync hubs.
-            .ConfigureHub(c => c.WithQuiesceTimeout(TimeSpan.FromSeconds(15)))
+            // JsonSynchronizationStream's per-emission DataChangeRequest →
+            // Observe chain doesn't dispose until the framework's 60s
+            // RequestTimeout fires. Without bumping QuiesceTimeout, the test
+            // base's 500ms leak-detection trips on these expected-pending
+            // callbacks. 75s here = framework's 60s RequestTimeout + 15s
+            // grace for the cancel-propagated chain to fully unwind.
+            .ConfigureHub(c => c.WithQuiesceTimeout(TimeSpan.FromSeconds(75)))
             .ConfigureServices(services =>
             {
                 services.AddSingleton<IChatClientFactory, HangingSubAgentFactory>();
