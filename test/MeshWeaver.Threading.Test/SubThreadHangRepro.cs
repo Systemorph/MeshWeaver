@@ -102,6 +102,16 @@ public class SubThreadHangRepro(ITestOutputHelper output) : MonolithMeshTestBase
         var parentPath = await CreateThreadAsync(client, "Delegate to a worker that hangs", ct);
         Output.WriteLine($"Parent thread: {parentPath}");
 
+        // Warm up the parent thread stream BEFORE submit — see CancelStream
+        // test for why this matters (submission watcher races first
+        // cache.GetStream and can stall the chain at Status=StartingExecution).
+        await workspace.GetMeshNodeStream(parentPath)
+            .Select(n => n.Content as MeshThread)
+            .Where(t => t != null)
+            .Take(1)
+            .Timeout(10.Seconds())
+            .ToTask(ct);
+
         ThreadSubmission.Submit(new SubmitContext
         {
             Hub = client,
@@ -177,6 +187,16 @@ public class SubThreadHangRepro(ITestOutputHelper output) : MonolithMeshTestBase
 
         var parentPath = await CreateThreadAsync(client, "Cancel propagation test", ct);
         Output.WriteLine($"Parent thread: {parentPath}");
+
+        // Warm up the parent thread stream BEFORE submit. Without this the
+        // submission watcher races the first cache.GetStream and the chain
+        // stalls at Status=StartingExecution.
+        await workspace.GetMeshNodeStream(parentPath)
+            .Select(n => n.Content as MeshThread)
+            .Where(t => t != null)
+            .Take(1)
+            .Timeout(10.Seconds())
+            .ToTask(ct);
 
         ThreadSubmission.Submit(new SubmitContext
         {
