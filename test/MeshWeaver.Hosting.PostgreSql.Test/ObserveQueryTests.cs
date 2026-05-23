@@ -236,6 +236,7 @@ public class ObserveQueryTests : IAsyncLifetime
     public async Task ObserveQuery_MultipleRapidChanges_AreBatched()
     {
         // Arrange
+        var ct = TestContext.Current.CancellationToken;
         var changes = new List<QueryResultChange<MeshNode>>();
         var request = MeshQueryRequest.FromQuery("namespace:ACME/Project");
 
@@ -249,8 +250,21 @@ public class ObserveQueryTests : IAsyncLifetime
         await WriteNode("Story2", "ACME/Project", "Story");
         await WriteNode("Story3", "ACME/Project", "Story");
 
-        // Wait for debounce + processing
-        await Task.Delay(2000, TestContext.Current.CancellationToken);
+        // Wait until the accumulator captured all 3 Story IDs through Added
+        // emissions (possibly batched into one). Replaces a fixed 2s Task.Delay
+        // — the actual time-to-batch under load is variable; polling the
+        // accumulator with Observable.Interval is both faster on the happy
+        // path and gives us a 15 s deadline that surfaces a real test failure
+        // instead of hiding the symptom under a generous fixed wait.
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Where(_ => changes.Where(c => c.ChangeType == QueryChangeType.Added)
+                .SelectMany(c => c.Items)
+                .Select(n => n.Id)
+                .Distinct()
+                .Count() >= 3)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(15))
+            .ToTask(ct);
 
         // Assert: all 3 nodes should appear as Added (possibly batched into one emission)
         var addedChanges = changes.Where(c => c.ChangeType == QueryChangeType.Added).ToList();

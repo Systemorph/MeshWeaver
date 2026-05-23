@@ -148,26 +148,30 @@ public class SyncedQueryPgTest : IAsyncLifetime
         await WriteNode("Story1", "ACME/Project", "Story");
         await WriteNode("Story2", "ACME/Project", "Story");
 
-        var changes = new List<QueryResultChange<MeshNode>>();
-        using var sub = _query
+        // Publish() + Connect() so multiple .Where().FirstAsync() consumers
+        // share a single upstream subscription — otherwise each Where chain
+        // re-subscribes and the second one races the Delete.
+        var stream = _query
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("namespace:ACME/Project"), _options)
-            .Subscribe(c => changes.Add(c));
+            .Publish();
+        using var connection = stream.Connect();
 
-        // Wait for Initial.
-        var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (changes.Count < 1 && DateTime.UtcNow < deadline)
-            await Task.Delay(50, ct);
-        changes.Should().NotBeEmpty();
-        changes[0].ChangeType.Should().Be(QueryChangeType.Initial);
+        // Wait for the Initial emission, then assert delete behaviour.
+        var initial = await stream
+            .Where(c => c.ChangeType == QueryChangeType.Initial)
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(5)).ToTask(ct);
+        initial.ChangeType.Should().Be(QueryChangeType.Initial);
+
+        // Pre-subscribe to Removed BEFORE issuing the delete, so we never miss
+        // the emission. .FirstAsync() returns a hot Task that will complete
+        // when the next Removed emission arrives.
+        var removedTask = stream
+            .Where(c => c.ChangeType == QueryChangeType.Removed)
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(15)).ToTask(ct);
 
         await _fixture.StorageAdapter.DeleteAsync("ACME/Project/Story1", ct);
 
-        // Wait for Removed.
-        deadline = DateTime.UtcNow.AddSeconds(15);
-        while (!changes.Any(c => c.ChangeType == QueryChangeType.Removed) && DateTime.UtcNow < deadline)
-            await Task.Delay(50, ct);
-
-        var removed = changes.FirstOrDefault(c => c.ChangeType == QueryChangeType.Removed);
+        var removed = await removedTask;
         removed.Should().NotBeNull("PG ObserveQuery must emit Removed after delete");
         var removedItem = removed!.Items.SingleOrDefault();
         removedItem.Should().NotBeNull();
