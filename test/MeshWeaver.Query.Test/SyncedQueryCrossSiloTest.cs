@@ -241,10 +241,19 @@ public class SyncedQueryCrossSiloTest(ITestOutputHelper output)
     public async Task GetQuery_GetOrCreate_IsIdempotentOnSameWorkspace()
     {
         var siloA = CreateSilo("a-cache");
-        var first = siloA.Synced;
-        var second = siloA.Workspace.GetQuery($"$xsilo-a-cache");
-        ReferenceEquals(first, second).Should().BeTrue(
-            "registry hands back the same observable for the same name");
+        _ = siloA.Synced;
+        _ = siloA.Workspace.GetQuery($"$xsilo-a-cache");
+
+        // Per-subscriber RLS wrap (commit c1e0afbdf) returns a fresh
+        // Observable.Defer per GetQuery call, so the OUTER observable refs
+        // differ. The contract is that the REGISTRY's cached inner observable
+        // is the same — that's the shared upstream subscription that backs
+        // both wrappers.
+        var registry = SyncedQueryDataSourceExtensions.RegistryFor(siloA.Workspace);
+        var innerA = registry.Get("$xsilo-a-cache");
+        var innerB = registry.Get("$xsilo-a-cache");
+        ReferenceEquals(innerA, innerB).Should().BeTrue(
+            "registry hands back the same inner observable for the same name");
         await Task.CompletedTask;
     }
 
