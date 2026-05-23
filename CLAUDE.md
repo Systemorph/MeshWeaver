@@ -286,6 +286,10 @@ Before building NodeTypes, data models, layout areas, or CSV loaders — read [C
 **Always `run_in_background: true`** for test runs (they take minutes).  
 **Never `--verbosity minimal`** when tests may fail — it hides stack traces.
 
+**Never `Task.Delay` to wait for propagation.** A fixed sleep races CI load: too short → flakes, too long → wastes minutes across the suite. Wait on the actual condition via `stream.Where(...).FirstAsync().Timeout(...)`. When the source is request/response (not an observable), wrap the re-query in `Observable.Interval(50.Milliseconds()).StartWith(0L).SelectMany(...).Where(predicate).FirstAsync().Timeout(...)`. Hand-rolled `while + Task.Delay(50)` poll loops are forbidden. Sanctioned `Task.Delay` uses: forcing distinct timestamps for sort assertions, and "wait to confirm nothing happened" negative tests where there's no positive signal to filter for. See WritingTests.md → "Polling loops around QueryAsync" for the full pattern.
+
+**Never assert "exactly N change events"** on a stream backed by pg_notify or any change feed that can race the initial-snapshot path. Filter on the emission shape (e.g. `.Where(c => c.ChangeType == QueryChangeType.Initial)`), not the count.
+
 xUnit v3 config (`xunit.runner.json`): `parallelizeAssembly: false`, `maxParallelThreads: 1`, `methodTimeout: 60000ms`.
 
 Full guidance: [WritingTests.md](src/MeshWeaver.Documentation/Data/Architecture/WritingTests.md)
