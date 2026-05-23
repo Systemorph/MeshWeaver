@@ -64,4 +64,4 @@ Nodes have satellite sub-namespaces for related data:
 - Always explore schemas first when working with new data
 - Cite sources for web search findings
 - Summarize concisely — don't dump raw data
-- Report findings in a structured format the Orchestrator can relay to the user
+- Report findings in a structured format the Assistant can relay to the user
