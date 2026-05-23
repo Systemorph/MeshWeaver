@@ -55,20 +55,29 @@ public record LayoutDefinition(IMessageHub Hub)
         RenderingContext context,
         EntityStore store)
     {
+        var defLogger = Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("LayoutDefinition");
+        defLogger?.LogInformation("[LD-RENDER] RenderAsync entered area={area} hub={hub} namedRenderers=[{named}] asyncRenderers={asyncCount}",
+            context.Area, host.Hub.Address, string.Join(",", NamedRenderers.Keys), AsyncRenderers.Count);
         var result = new EntityStoreAndUpdates(store, [], host.Stream.StreamId);
         var hasContent = false;
 
         // Execute named renderer if one exists for this area
         if (NamedRenderers.TryGetValue(context.Area, out var namedRenderer))
         {
+            defLogger?.LogInformation("[LD-RENDER] invoking named renderer area={area}", context.Area);
             var ret = await namedRenderer.Invoke(host, context, result.Store);
             result = ret with { Updates = result.Updates.Concat(ret.Updates) };
             hasContent = true;
+        }
+        else
+        {
+            defLogger?.LogInformation("[LD-RENDER] NO named renderer for area={area}", context.Area);
         }
 
         // Execute predicate-based renderers (existing behavior)
         await foreach (var x in AsyncRenderers.ToAsyncEnumerable().Where(r => r.Filter(context)))
         {
+            defLogger?.LogInformation("[LD-RENDER] invoking predicate renderer area={area}", context.Area);
             var ret = await x.Renderer.Invoke(host, context, result.Store);
             result = ret with { Updates = result.Updates.Concat(ret.Updates) };
             hasContent = true;
