@@ -134,6 +134,32 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
             );
     }
 
+    // Polling helpers: re-issue GetDataRequest on a 50ms interval until the
+    // virtual data source reflects the expected post-change state. Replaces the
+    // brittle "Task.Delay(200) then check once" pattern — under load 200ms
+    // races with propagation, and even when it doesn't fail the lower bound
+    // is wasted wait. Caller supplies the predicate; the helper handles the
+    // re-query loop. Filter via .Where(...).FirstAsync().Timeout(...).
+    private IObservable<OrderSummary> PollOrderSummary(IMessageHub client, string orderId)
+        => Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => Observable.FromAsync(() => client
+                .Observe(new GetDataRequest(new DataPathReference("OrderSummary")),
+                         o => o.WithTarget(CreateHostAddress()))
+                .FirstAsync().ToTask()))
+            .Select(r => (r.Message.Data as InstanceCollection)?.Instances.Values
+                .Cast<OrderSummary>().FirstOrDefault(s => s.OrderId == orderId))
+            .Where(s => s != null)
+            .Select(s => s!);
+
+    private IObservable<List<OrderSummary>> PollOrderSummaries(IMessageHub client)
+        => Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => Observable.FromAsync(() => client
+                .Observe(new GetDataRequest(new DataPathReference("OrderSummary")),
+                         o => o.WithTarget(CreateHostAddress()))
+                .FirstAsync().ToTask()))
+            .Select(r => (r.Message.Data as InstanceCollection)?.Instances.Values
+                .Cast<OrderSummary>().ToList() ?? new List<OrderSummary>());
+
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
     {
         return base.ConfigureClient(configuration)
@@ -309,17 +335,12 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
         var updatedOrder = new Order("O1", "C1", 500.00m, "Modified");
         await client.Observe(DataChangeRequest.Update([updatedOrder]), o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask();
 
-        // Allow some time for the virtual data source to update
-        await Task.Delay(200, TestContext.Current.CancellationToken);
+        // Wait actively for the virtual data source to reflect the change
+        // (a fixed Task.Delay races against propagation latency under load).
+        var updatedO1Summary = await PollOrderSummary(client, "O1")
+            .Where(s => s.Amount == 500.00m && s.Status == "Modified")
+            .FirstAsync().Timeout(15.Seconds()).ToTask(TestContext.Current.CancellationToken);
 
-        // Assert - Verify virtual data source reflects the change
-        var updatedResponse = await client.Observe(new GetDataRequest(new DataPathReference("OrderSummary")), o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask();
-
-        updatedResponse.Message.Error.Should().BeNull();
-        var updatedSummaries = (updatedResponse.Message.Data as InstanceCollection)!
-            .Instances.Values.Cast<OrderSummary>().ToList();
-
-        var updatedO1Summary = updatedSummaries.First(s => s.OrderId == "O1");
         updatedO1Summary.Amount.Should().Be(500.00m);
         updatedO1Summary.Status.Should().Be("Modified");
     }
@@ -344,14 +365,10 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
         var newOrder = new Order("O4", "C3", 300.00m, "New");
         await client.Observe(DataChangeRequest.Update([newOrder]), o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask();
 
-        // Allow time for propagation
-        await Task.Delay(200, TestContext.Current.CancellationToken);
-
-        // Assert - Verify virtual data source has the new entity
-        var updatedResponse = await client.Observe(new GetDataRequest(new DataPathReference("OrderSummary")), o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask();
-
-        var updatedSummaries = (updatedResponse.Message.Data as InstanceCollection)!
-            .Instances.Values.Cast<OrderSummary>().ToList();
+        // Wait actively for the virtual data source to surface the new entity.
+        var updatedSummaries = await PollOrderSummaries(client)
+            .Where(list => list.Count == 4 && list.Any(s => s.OrderId == "O4" && s.Amount == 300.00m))
+            .FirstAsync().Timeout(15.Seconds()).ToTask(TestContext.Current.CancellationToken);
 
         updatedSummaries.Should().HaveCount(4);
         updatedSummaries.Should().Contain(s =>
@@ -384,14 +401,10 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
         var updatedCustomer = new Customer("C1", "Alice Johnson", "alice.johnson@example.com");
         await client.Observe(DataChangeRequest.Update([updatedCustomer]), o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask();
 
-        // Allow time for propagation
-        await Task.Delay(200, TestContext.Current.CancellationToken);
-
-        // Assert - Verify virtual data source reflects customer update
-        var updatedResponse = await client.Observe(new GetDataRequest(new DataPathReference("OrderSummary")), o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask();
-
-        var updatedSummaries = (updatedResponse.Message.Data as InstanceCollection)!
-            .Instances.Values.Cast<OrderSummary>().ToList();
+        // Wait actively for the virtual data source to reflect the customer update.
+        var updatedSummaries = await PollOrderSummaries(client)
+            .Where(list => list.Where(s => s.CustomerId == "C1").All(s => s.CustomerName == "Alice Johnson"))
+            .FirstAsync().Timeout(15.Seconds()).ToTask(TestContext.Current.CancellationToken);
 
         // Orders for C1 should now show the updated customer name
         updatedSummaries.Where(s => s.CustomerId == "C1")
