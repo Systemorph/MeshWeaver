@@ -126,6 +126,18 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
         if (parsed.Source is QuerySource.Activity or QuerySource.Accessed)
             yield break;
 
+        // Self-filter: the aggregator (MeshQuery.SelectMatchingProviders) fans
+        // every query out to every provider regardless of Matches(). When the
+        // query scopes to a namespace we don't own (no static provider node
+        // and no MeshConfiguration seed node has that first-segment), the
+        // foreach-and-filter loops below are guaranteed-empty work. Unscoped
+        // queries (no namespace, no path) intentionally bypass this gate —
+        // the contract is "give me everything matching" and we honour it by
+        // scanning every node.
+        var nsCandidates = MergeNamespaceCandidates(parsed);
+        if (nsCandidates.Count > 0 && !_matches(nsCandidates))
+            yield break;
+
         // Short-circuit: if query has a nodeType filter that doesn't match any static node type
         var nodeTypeFilter = GetNodeTypeFilterValue(parsed.Filter);
         if (nodeTypeFilter != null && !_nodeTypes.Contains(nodeTypeFilter))
@@ -365,6 +377,25 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
             }
         }
         return items;
+    }
+
+    // namespace candidates a query targets = ExtractNamespaces + first segment
+    // of Path. Mirrors MeshQuery.MergeQueryNamespaces (internal there) so the
+    // self-filter in QueryAsync sees the same shape the aggregator's predicate
+    // would have, were it to call Matches().
+    private static IReadOnlyList<string> MergeNamespaceCandidates(ParsedQuery parsed)
+    {
+        var fromFilter = parsed.ExtractNamespaces();
+        var firstSegment = string.IsNullOrEmpty(parsed.Path) ? null : parsed.Path.Split('/', 2)[0];
+        if (string.IsNullOrEmpty(firstSegment))
+            return fromFilter;
+        if (fromFilter.Count == 0)
+            return new[] { firstSegment };
+        var combined = new List<string>(fromFilter.Count + 1);
+        combined.AddRange(fromFilter);
+        if (!combined.Contains(firstSegment, StringComparer.OrdinalIgnoreCase))
+            combined.Add(firstSegment);
+        return combined;
     }
 
     /// <summary>
