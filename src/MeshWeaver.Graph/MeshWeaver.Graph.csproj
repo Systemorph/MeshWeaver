@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="MeshWeaver.Graph.Test" />
+    <InternalsVisibleTo Include="MeshWeaver.Query.Test" />
   </ItemGroup>
 
   <ItemGroup>
