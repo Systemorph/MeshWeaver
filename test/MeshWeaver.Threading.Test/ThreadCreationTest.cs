@@ -557,16 +557,16 @@ public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBa
         // SetupAccessRightsAsync created the AccessAssignment for AdminUserId, but
         // SecurityService loads assignments via SyncedQuery which is eventually
         // consistent. On cold-start CI, the first HasPermissionAsync call can
-        // return false before the synced query catches up. Poll until admin has
-        // Create permission.
-        var permDeadline = DateTime.UtcNow.AddSeconds(10);
-        var hasCreate = false;
-        while (DateTime.UtcNow < permDeadline)
-        {
-            hasCreate = await Mesh.HasPermissionAsync("SecureProject", AdminUserId, Permission.Create, ct);
-            if (hasCreate) break;
-            await Task.Delay(100, ct);
-        }
+        // return false before the synced query catches up. Stream-poll until
+        // admin has Create permission — replaces a hand-rolled while +
+        // Task.Delay(100) loop.
+        var hasCreate = await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
+            .SelectMany(_ => Observable.FromAsync(() =>
+                Mesh.HasPermissionAsync("SecureProject", AdminUserId, Permission.Create, ct)))
+            .Where(b => b)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(10))
+            .ToTask(ct);
         hasCreate.Should().BeTrue("admin should have Create on SecureProject after SetupAccessRightsAsync");
 
         // Create context node
@@ -590,14 +590,15 @@ public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBa
         TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = AdminUserId, Name = "Admin" });
 
         // Wait for the admin AccessAssignment from SetupAccessRightsAsync to land
-        // through SyncedQuery — same eventually-consistent race as the sibling test.
-        var permDeadline = DateTime.UtcNow.AddSeconds(10);
-        while (DateTime.UtcNow < permDeadline)
-        {
-            if (await Mesh.HasPermissionAsync("SecureProject", AdminUserId, Permission.Create, ct))
-                break;
-            await Task.Delay(100, ct);
-        }
+        // through SyncedQuery — same eventually-consistent race as the sibling
+        // test. Stream-poll until admin has Create permission.
+        await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
+            .SelectMany(_ => Observable.FromAsync(() =>
+                Mesh.HasPermissionAsync("SecureProject", AdminUserId, Permission.Create, ct)))
+            .Where(b => b)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(10))
+            .ToTask(ct);
 
         await NodeFactory.CreateNode(
             new MeshNode("SecureProject") { Name = "Secure Project", NodeType = "Markdown" });
