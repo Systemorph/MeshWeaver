@@ -76,6 +76,11 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         return (ns, id);
     }
 
+    // null Select → caller didn't project → fetch all columns (existing behavior).
+    // non-null Select → caller opted into projection → fetch column only if listed.
+    private static bool SelectorAsksFor(IReadOnlyList<string>? select, string column)
+        => select is null || select.Any(s => s.Equals(column, StringComparison.OrdinalIgnoreCase));
+
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
         => Observable.FromAsync(ct => ReadAsyncCore(path, options, ct));
 
@@ -89,7 +94,7 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
 
         var table = ResolveTable(normalizedPath);
         await using var cmd = _dataSource.CreateCommand(
-            $"SELECT id, namespace, name, node_type, category, icon, display_order, " +
+            $"SELECT id, namespace, name, description, node_type, category, icon, display_order, " +
             $"last_modified, version, state, content, desired_id, main_node " +
             $"FROM {table} WHERE namespace = $1 AND id = $2");
         cmd.Parameters.AddWithValue(ns);
@@ -122,11 +127,12 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         var table = ResolveTable(node.Path, node.NodeType);
         await using var cmd = _dataSource.CreateCommand(
             $"""
-            INSERT INTO {table} (namespace, id, name, node_type, category, icon, display_order,
+            INSERT INTO {table} (namespace, id, name, description, node_type, category, icon, display_order,
                                     last_modified, version, state, content, desired_id, embedding, main_node)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15)
             ON CONFLICT (namespace, id) DO UPDATE SET
                 name = EXCLUDED.name,
+                description = EXCLUDED.description,
                 node_type = EXCLUDED.node_type,
                 category = EXCLUDED.category,
                 icon = EXCLUDED.icon,
@@ -143,6 +149,7 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         cmd.Parameters.AddWithValue(ns);
         cmd.Parameters.AddWithValue(node.Id);
         cmd.Parameters.AddWithValue((object?)node.Name ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)node.Description ?? DBNull.Value);
         cmd.Parameters.AddWithValue((object?)node.NodeType ?? DBNull.Value);
         cmd.Parameters.AddWithValue((object?)node.Category ?? DBNull.Value);
         cmd.Parameters.AddWithValue((object?)node.Icon ?? DBNull.Value);
@@ -247,7 +254,7 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         // Ordered by path length descending to get the deepest (most specific) match first.
         var table = ResolveTable(normalizedPath);
         await using var cmd = _dataSource.CreateCommand(
-            $"SELECT id, namespace, name, node_type, category, icon, display_order, " +
+            $"SELECT id, namespace, name, description, node_type, category, icon, display_order, " +
             $"last_modified, version, state, content, desired_id, main_node " +
             $"FROM {table} WHERE $1 = path OR $1 LIKE path || '/%' " +
             $"ORDER BY LENGTH(path) DESC LIMIT 1");
@@ -304,7 +311,7 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
                 ? $"\"{t}\""
                 : $"\"{_schemaName}\".\"{t}\"";
             unionBranches.Add(
-                $"SELECT id, namespace, name, node_type, category, icon, display_order, " +
+                $"SELECT id, namespace, name, description, node_type, category, icon, display_order, " +
                 $"last_modified, version, state, content, desired_id, main_node " +
                 $"FROM {qualified} " +
                 $"WHERE $1 = path OR $1 LIKE path || '/%'");
@@ -546,8 +553,9 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         // Create a fresh generator per call — the generator has mutable state (_paramIndex, _parameters)
         // and is NOT thread-safe. Concurrent fan-out queries share the same adapter.
         var generator = new PostgreSqlSqlGenerator { SchemaName = _schemaName };
+        var includeContent = SelectorAsksFor(query.Select, "content");
         var (sql, parameters) = generator.GenerateSelectQuery(query, userId, activityUserId, tableName,
-            activityTable, userActivityTable, excludedNodeTypes);
+            activityTable, userActivityTable, excludedNodeTypes, includeContent);
         if (!string.IsNullOrEmpty(effectivePath) || (query.Paths is { Count: > 1 }))
         {
             // Multi-value `path:a|b|c` push-down → `n.path IN (...)`. Routing-layer
@@ -641,10 +649,17 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         var unionedSelects = new List<string>(queries.Count);
         var unionedParams = new Dictionary<string, object>(StringComparer.Ordinal);
 
+        // UNION ALL requires column shape to match across all branches, so the
+        // content-skip optimization is all-or-nothing: every query's Select must
+        // be set and exclude "content" before we can emit NULL::jsonb instead of
+        // n.content. A single query with Select=null (or with "content" listed)
+        // forces the full column for the whole union.
+        var includeContent = queries.Any(q => SelectorAsksFor(q.Select, "content"));
+
         for (var qi = 0; qi < queries.Count; qi++)
         {
             var (perSql, perParams) = BuildSingleQuerySql(
-                queries[qi], options, userId, basePath, activityUserId, excludedNodeTypes);
+                queries[qi], options, userId, basePath, activityUserId, excludedNodeTypes, includeContent);
             // Disambiguate param names across the union: rename every @<name> token
             // referenced in this per-query SQL to @qI_<name>. We use a single regex
             // pass keyed on the param-name word boundary so we don't mangle adjacent
@@ -707,7 +722,8 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         string? userId,
         string? basePath,
         string? activityUserId,
-        IReadOnlyCollection<string>? excludedNodeTypes)
+        IReadOnlyCollection<string>? excludedNodeTypes,
+        bool includeContent = true)
     {
         var effectivePath = query.Path ?? basePath;
         string rawTable;
@@ -732,7 +748,7 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
 
         var generator = new PostgreSqlSqlGenerator { SchemaName = _schemaName };
         var (sql, parameters) = generator.GenerateSelectQuery(query, userId, activityUserId, tableName,
-            activityTable, userActivityTable, excludedNodeTypes);
+            activityTable, userActivityTable, excludedNodeTypes, includeContent);
         if (!string.IsNullOrEmpty(effectivePath) || (query.Paths is { Count: > 1 }))
         {
             var (scopeClause, scopeParams) = query.Paths is { Count: > 1 }
@@ -851,6 +867,7 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         return new MeshNode(id, string.IsNullOrEmpty(ns) ? null : ns)
         {
             Name = reader.IsDBNull(reader.GetOrdinal("name")) ? null : reader.GetString(reader.GetOrdinal("name")),
+            Description = reader.IsDBNull(reader.GetOrdinal("description")) ? null : reader.GetString(reader.GetOrdinal("description")),
             NodeType = reader.IsDBNull(reader.GetOrdinal("node_type")) ? null : reader.GetString(reader.GetOrdinal("node_type")),
             Category = reader.IsDBNull(reader.GetOrdinal("category")) ? null : reader.GetString(reader.GetOrdinal("category")),
             Icon = reader.IsDBNull(reader.GetOrdinal("icon")) ? null : reader.GetString(reader.GetOrdinal("icon")),

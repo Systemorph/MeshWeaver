@@ -198,15 +198,22 @@ public class PostgreSqlSqlGenerator
         string tableName = "mesh_nodes",
         string activityTable = "activities",
         string userActivityTable = "user_activities",
-        IReadOnlyCollection<string>? excludedNodeTypes = null)
+        IReadOnlyCollection<string>? excludedNodeTypes = null,
+        bool includeContent = true)
     {
         var (whereClause, parameters) = GenerateWhereClause(query, userId, excludedNodeTypes);
 
         var isAccessedQuery = query.Source == QuerySource.Accessed && !string.IsNullOrEmpty(activityUserId);
         var isActivityQuery = query.Source == QuerySource.Activity;
 
+        // n.content is a JSONB column that can be many KB. When the caller projects via
+        // `select:` and didn't ask for "content", emit NULL::jsonb AS content so the
+        // result-set shape is unchanged (ReadMeshNode still finds the column) but the
+        // planner avoids the heap fetch + de-tuple of large blobs.
+        var contentColumn = includeContent ? "n.content" : "NULL::jsonb AS content";
+
         var sql = new StringBuilder("SELECT n.id, n.namespace, n.name, n.node_type, n.description, " +
-            "n.category, n.icon, n.display_order, n.last_modified, n.version, n.state, n.content, " +
+            $"n.category, n.icon, n.display_order, n.last_modified, n.version, n.state, {contentColumn}, " +
             $"n.desired_id, n.main_node FROM {tableName} n");
 
         if (isAccessedQuery)

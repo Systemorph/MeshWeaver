@@ -53,6 +53,45 @@ public class SqlGeneratorTests
     }
 
     [Fact]
+    public void GenerateSelectQuery_NoSelect_FetchesContent()
+    {
+        var gen = new PostgreSqlSqlGenerator();
+        var (sql, _) = gen.GenerateSelectQuery(ParsedQuery.Empty);
+
+        sql.Should().Contain("n.content,").And.NotContain("NULL::jsonb AS content");
+    }
+
+    [Fact]
+    public void GenerateSelectQuery_SelectExcludesContent_SkipsJsonbFetch()
+    {
+        // "Is this up-to-date?" callers ask for select:path,version — fetching the
+        // JSONB content column is pure waste. The result-set shape stays the same
+        // (NULL::jsonb keeps ordinal lookup intact) but the planner skips the heap
+        // fetch + de-tuple of large blobs.
+        var gen = new PostgreSqlSqlGenerator();
+        var query = ParsedQuery.Empty with { Select = ["path", "version"] };
+
+        var includeContent = query.Select is null
+            || query.Select.Any(s => s.Equals("content", System.StringComparison.OrdinalIgnoreCase));
+        var (sql, _) = gen.GenerateSelectQuery(query, includeContent: includeContent);
+
+        sql.Should().Contain("NULL::jsonb AS content").And.NotContain("n.content,");
+    }
+
+    [Fact]
+    public void GenerateSelectQuery_SelectIncludesContent_FetchesContent()
+    {
+        var gen = new PostgreSqlSqlGenerator();
+        var query = ParsedQuery.Empty with { Select = ["path", "name", "content"] };
+
+        var includeContent = query.Select is null
+            || query.Select.Any(s => s.Equals("content", System.StringComparison.OrdinalIgnoreCase));
+        var (sql, _) = gen.GenerateSelectQuery(query, includeContent: includeContent);
+
+        sql.Should().Contain("n.content,").And.NotContain("NULL::jsonb AS content");
+    }
+
+    [Fact]
     public void GenerateSelectQuery_WithLimit()
     {
         var gen = new PostgreSqlSqlGenerator();

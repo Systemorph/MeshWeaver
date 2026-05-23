@@ -367,6 +367,33 @@ public class CosmosSqlGeneratorTests
     }
 
     [Fact]
+    public void GenerateSelectQuery_SelectExcludesContent_OmitsContentFromProjection()
+    {
+        // select:path,version → caller opts into projection without "content".
+        // Generator emits explicit field list (camelCase to match MeshNode's
+        // Cosmos JSON shape) — `content` is omitted, so the wire payload skips
+        // the (potentially large) content blob.
+        var query = ParsedQuery.Empty with { Select = ["path", "version"] };
+
+        var (sql, _) = _generator.GenerateSelectQuery(query, includeContent: false);
+
+        sql.Should().StartWith("SELECT c.id, c.namespace");
+        sql.Should().Contain("c.path");
+        sql.Should().NotContain("c.content");
+        sql.Should().NotContain("SELECT *");
+    }
+
+    [Fact]
+    public void GenerateSelectQuery_DefaultIncludesContent_KeepsSelectStar()
+    {
+        // No `select:` → status quo. SELECT * keeps every field including content
+        // so existing callers see no behavior change.
+        var (sql, _) = _generator.GenerateSelectQuery(ParsedQuery.Empty);
+
+        sql.Should().Be("SELECT * FROM c");
+    }
+
+    [Fact]
     public void GenerateSelectQuery_WithOrderByAscending_IncludesOrderBy()
     {
         var query = new ParsedQuery(

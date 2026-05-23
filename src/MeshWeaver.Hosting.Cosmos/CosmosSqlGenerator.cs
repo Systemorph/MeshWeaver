@@ -59,7 +59,8 @@ public class CosmosSqlGenerator
     /// <returns>The complete SQL query and parameters</returns>
     public (string Sql, Dictionary<string, object> Parameters) GenerateSelectQuery(
         ParsedQuery query,
-        string alias = "c")
+        string alias = "c",
+        bool includeContent = true)
     {
         var (whereClause, parameters) = GenerateWhereClause(query, alias);
 
@@ -69,7 +70,20 @@ public class CosmosSqlGenerator
         if (query.Limit.HasValue)
             sql.Append($" TOP {query.Limit.Value}");
 
-        sql.Append($" * FROM {alias}");
+        // When the caller projects via `select:` and didn't ask for "content",
+        // emit an explicit field list so Cosmos trims `content` off the wire.
+        // Field names mirror the camelCase JSON shape Cosmos stores MeshNode in
+        // (same casing as `c.lastModified`, `c.path` already used in the
+        // adapter). MeshNode deserialises missing fields to defaults — so
+        // omitting `content` from the projection makes the result-node's
+        // Content == null without breaking the model contract.
+        if (includeContent)
+            sql.Append($" * FROM {alias}");
+        else
+            sql.Append($" {alias}.id, {alias}.namespace, {alias}.mainNode, {alias}.name, " +
+                $"{alias}.description, {alias}.nodeType, {alias}.category, {alias}.icon, " +
+                $"{alias}.order, {alias}.lastModified, {alias}.lastModifiedBy, {alias}.version, " +
+                $"{alias}.state, {alias}.desiredId, {alias}.path FROM {alias}");
 
         if (!string.IsNullOrEmpty(whereClause))
             sql.Append($" {whereClause}");

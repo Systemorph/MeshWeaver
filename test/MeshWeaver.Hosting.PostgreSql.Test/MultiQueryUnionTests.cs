@@ -132,6 +132,53 @@ public class MultiQueryUnionTests
     }
 
     [Fact]
+    public async Task MultiQuery_SelectExcludesContent_SkipsJsonbFetch()
+    {
+        // select:path on every branch → adapter emits NULL::jsonb AS content in
+        // the SELECT, so returned MeshNodes have Content=null even though the
+        // rows have non-trivial JSONB content in the DB. Proves the optimization
+        // fires end-to-end through the multi-query UNION ALL path.
+        await SeedTwoNamespacesAsync();
+        var adapter = _fixture.StorageAdapter;
+
+        // Re-write Orchestrator with explicit content so at least one row has a
+        // non-null content blob in the DB (the seed path writes Content=null).
+        await adapter.WriteAsync(new MeshNode("Orchestrator", "Agent")
+        {
+            Name = "Orchestrator", NodeType = "Agent",
+            Content = JsonSerializer.Deserialize<object>("""{"role":"primary"}""", _options)
+        }, _options, TestContext.Current.CancellationToken);
+
+        var parser = new QueryParser();
+        var parsed = new[]
+        {
+            parser.Parse("namespace:Agent nodeType:Agent select:path"),
+            parser.Parse("namespace:User/Roland nodeType:Agent select:path"),
+        };
+
+        var results = new List<MeshNode>();
+        await foreach (var node in adapter.QueryNodesAsync(parsed, _options, ct: TestContext.Current.CancellationToken))
+            results.Add(node);
+
+        results.Should().NotBeEmpty();
+        results.Should().AllSatisfy(n => n.Content.Should().BeNull(
+            "select:path → adapter MUST NOT fetch the JSONB content column"));
+
+        // Sanity: without select:, content IS fetched (proves the optimization is
+        // conditional, not accidental).
+        var parsedWithContent = new[]
+        {
+            parser.Parse("namespace:Agent nodeType:Agent"),
+            parser.Parse("namespace:User/Roland nodeType:Agent"),
+        };
+        var withContent = new List<MeshNode>();
+        await foreach (var node in adapter.QueryNodesAsync(parsedWithContent, _options, ct: TestContext.Current.CancellationToken))
+            withContent.Add(node);
+
+        withContent.Should().Contain(n => n.Path == "Agent/Orchestrator" && n.Content != null);
+    }
+
+    [Fact]
     public async Task SingleQuery_StillRoutesThroughLegacyPath()
     {
         await SeedTwoNamespacesAsync();

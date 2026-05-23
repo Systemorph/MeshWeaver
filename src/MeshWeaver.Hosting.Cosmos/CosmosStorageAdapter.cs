@@ -70,6 +70,11 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
     private static string NormalizePath(string? path) =>
         path?.Trim('/') ?? "";
 
+    // null Select → caller didn't project → return all columns (existing behavior).
+    // non-null Select → caller opted into projection → include column only if listed.
+    private static bool SelectorAsksFor(IReadOnlyList<string>? select, string column)
+        => select is null || select.Any(s => s.Equals(column, StringComparison.OrdinalIgnoreCase));
+
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
         => Observable.FromAsync(ct => ReadAsyncCore(path, options, ct));
 
@@ -349,7 +354,8 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
         string? basePath = null,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        var (sql, parameters) = _sqlGenerator.GenerateSelectQuery(query);
+        var includeContent = SelectorAsksFor(query.Select, "content");
+        var (sql, parameters) = _sqlGenerator.GenerateSelectQuery(query, includeContent: includeContent);
 
         // Integrate scope-based path filtering if path is specified
         var effectivePath = query.Path ?? basePath;
