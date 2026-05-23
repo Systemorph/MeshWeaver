@@ -58,6 +58,45 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
     }
 
     /// <summary>
+    /// True when every namespace the request targets is owned by a static
+    /// partition (Agent, Model, Role, …) — Postgres has nothing to contribute,
+    /// so QueryAsync should yield break instead of issuing SQL. Unscoped
+    /// requests (no namespace anywhere) return false: we still need to fan out
+    /// to the writable mesh.
+    /// </summary>
+    private bool OnlyTargetsExcludedNamespaces(MeshQueryRequest request)
+    {
+        if (request.Queries is { Count: > 0 } queries)
+        {
+            // Multi-query union: skip only when EVERY branch is excluded-only.
+            // Any single branch that hits writable storage forces the SQL.
+            foreach (var q in queries)
+                if (!QueryIsExcludedOnly(q)) return false;
+            return true;
+        }
+        return QueryIsExcludedOnly(request.Query);
+    }
+
+    // namespaces a single query targets = ExtractNamespaces + first segment of
+    // Path. Mirrors MeshQuery.MergeQueryNamespaces (internal to Hosting). Returns
+    // true when at least one namespace candidate exists and every one is static.
+    private bool QueryIsExcludedOnly(string? query)
+    {
+        if (string.IsNullOrEmpty(query)) return false;
+        var parsed = _parser.Parse(query);
+        var namespaces = parsed.ExtractNamespaces();
+        var firstSegment = string.IsNullOrEmpty(parsed.Path) ? null : parsed.Path.Split('/', 2)[0];
+        if (namespaces.Count == 0 && string.IsNullOrEmpty(firstSegment))
+            return false;
+        for (var i = 0; i < namespaces.Count; i++)
+            if (!_excludedNamespaces.Contains(namespaces[i]))
+                return false;
+        if (!string.IsNullOrEmpty(firstSegment) && !_excludedNamespaces.Contains(firstSegment))
+            return false;
+        return true;
+    }
+
+    /// <summary>
     /// Exposes the underlying adapter for cross-schema queries.
     /// </summary>
     public PostgreSqlStorageAdapter Adapter => _adapter;
@@ -85,6 +124,14 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
         JsonSerializerOptions options,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
+        // Self-filter — MeshQuery's aggregator deliberately doesn't pre-filter
+        // by Matches() ("let each provider own the 'is this mine?' decision in
+        // one place" — MeshQuery.SelectMatchingProviders). So when a query
+        // targets only excluded (static-owned) namespaces, we'd otherwise
+        // round-trip to Postgres for guaranteed-empty SELECTs.
+        if (_excludedNamespaces.Count > 0 && OnlyTargetsExcludedNamespaces(request))
+            yield break;
+
         // Multi-query union: push UNION down to PostgreSQL via the adapter so
         // the database does the dedup-by-path in a single round-trip. The
         // first query's sort/limit/skip apply to the unioned result set;
@@ -387,6 +434,23 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
 
     public IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request, JsonSerializerOptions options)
     {
+        // Self-filter: when the request only targets static-owned namespaces,
+        // emit an empty Initial and exit — the static-node provider contributes
+        // the real rows. Without this short-circuit we'd set up a change-notifier
+        // subscription and an initial SQL probe for queries Postgres has nothing
+        // to say about. The empty Initial is required because
+        // MergeProviderObservables in MeshQuery gates the merged Initial on
+        // every provider emitting it; returning Observable.Empty would hang
+        // the consumer.
+        if (_excludedNamespaces.Count > 0 && OnlyTargetsExcludedNamespaces(request))
+        {
+            return Observable.Return(new QueryResultChange<T>
+            {
+                ChangeType = QueryChangeType.Initial,
+                Items = Array.Empty<T>()
+            });
+        }
+
         // Use the synchronous Observable.Create overload so no TaskScheduler is captured
         // at subscribe-time. Observable.Create(async ...) captures the caller's scheduler;
         // when that caller is an Orleans grain handler the continuation deadlocks against
