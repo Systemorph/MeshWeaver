@@ -1577,6 +1577,7 @@ public static class ThreadExecution
                     // Must post on the _Exec hub (hub) — the SubmitMessageResponse handler
                     // is registered there and forwards to the thread hub via ResponseFor.
                     NotifyParentCompletion(parentHub, threadPath, finalText, true, aggregatedChanges);
+                    EmitCompletionNotification(parentHub, threadPath, finalText, request.AgentName);
                     }
                     catch (OperationCanceledException)
                     {
@@ -1735,6 +1736,46 @@ public static class ThreadExecution
         {
             logger.LogWarning("[ThreadExec] No completion callback for {ThreadPath}", threadPath);
         }
+    }
+
+    /// <summary>
+    /// Posts a <see cref="Notification"/> satellite under the thread on
+    /// successful round completion. The notification stores in the
+    /// <c>notifications</c> table (satellite routing via
+    /// <see cref="PartitionDefinition.StandardTableMappings"/>) and shows up
+    /// in the user's bell — clicking it navigates to the thread.
+    /// Fire-and-forget; failures are logged but don't fail the round.
+    /// </summary>
+    private static void EmitCompletionNotification(
+        IMessageHub hub, string threadPath, string responseText, string? agentName)
+    {
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.AI.ThreadExecution");
+        var meshService = hub.ServiceProvider.GetService<IMeshService>();
+        if (meshService == null)
+        {
+            logger?.LogDebug("[ThreadExec] EmitCompletionNotification: no IMeshService — skipping");
+            return;
+        }
+
+        var threadName = (hub.GetWorkspace().GetStream(new MeshNodeReference())
+            as ISynchronizationStream<MeshNode>)?.Current?.Value?.Name ?? "Thread";
+        var preview = Truncate(responseText, 120) ?? "";
+
+        NotificationService.CreateNotification(
+            meshService,
+            mainNodePath: threadPath,
+            title: $"\"{threadName}\" is ready",
+            message: preview,
+            type: NotificationType.General,
+            targetNodePath: threadPath,
+            createdBy: agentName ?? "agent",
+            icon: "/static/NodeTypeIcons/chat.svg")
+            .Subscribe(
+                _ => { },
+                ex => logger?.LogWarning(ex,
+                    "[ThreadExec] Failed to create completion notification for {ThreadPath}",
+                    threadPath));
     }
 
     /// <summary>

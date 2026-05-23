@@ -71,7 +71,14 @@ public enum ThreadExecutionStatus
     /// ingested so the watcher doesn't immediately re-dispatch), then the
     /// response cell's terminal status is committed and the thread transitions
     /// back to <see cref="Idle"/>.</summary>
-    Completing
+    Completing,
+
+    /// <summary>User-marked terminal state — the thread is finished and
+    /// hidden from default catalogs (queries default to
+    /// <c>-content.status:Done</c>). A new <c>SubmitMessageRequest</c>
+    /// implicitly transitions back to <see cref="Idle"/> so the user can
+    /// reopen a conversation by typing.</summary>
+    Done
 }
 
 /// <summary>
@@ -198,12 +205,18 @@ public record Thread
 
     /// <summary>
     /// Backwards-compatible boolean shorthand for "round in flight". True for
-    /// any <see cref="Status"/> other than <see cref="ThreadExecutionStatus.Idle"/>.
+    /// <see cref="ThreadExecutionStatus.StartingExecution"/>,
+    /// <see cref="ThreadExecutionStatus.Executing"/>, and
+    /// <see cref="ThreadExecutionStatus.Completing"/>. Idle + Done are not
+    /// executing — Done is the user-marked terminal state.
     /// New callsites should read <see cref="Status"/> directly to pick a
-    /// specific transition (e.g., StartingExecution vs Executing).
+    /// specific transition.
     /// </summary>
     [JsonIgnore]
-    public bool IsExecuting => Status != ThreadExecutionStatus.Idle;
+    public bool IsExecuting
+        => Status is ThreadExecutionStatus.StartingExecution
+                  or ThreadExecutionStatus.Executing
+                  or ThreadExecutionStatus.Completing;
 
     /// <summary>
     /// Current execution activity description (e.g., "Calling search_nodes...", "Delegating to Navigator...").

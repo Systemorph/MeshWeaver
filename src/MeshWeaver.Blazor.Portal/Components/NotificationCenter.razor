@@ -1,66 +1,73 @@
 @using Microsoft.FluentUI.AspNetCore.Components.Icons.Regular
+@using MeshWeaver.Mesh
+@using MeshWeaver.Mesh.Services
 @implements IDisposable
 @inject IDialogService DialogService
-@inject IMessageService MessageService
 
-<FluentButton BackgroundColor="transparent" OnClick="OpenNotificationCenterAsync" Title="Notification center">
-    @if (MessageService.Count(PortalConstants.MessagesNotificationCenter) > 0)
-{
-        <FluentCounterBadge Count="@MessageService.Count(PortalConstants.MessagesNotificationCenter)"
-                        Max="9"
-                        ShowOverflow="true"
-                        BackgroundColor="@Color.Error"
-                        Color="Color.Fill"
-                        Appearance="Appearance.Accent">
-        <ChildContent>
-            @NotificationIcon()
-        </ChildContent>
-    </FluentCounterBadge>
-}
-else
-{
-    @NotificationIcon()
-}
+<FluentButton BackgroundColor="transparent" OnClick="OpenNotificationCenterAsync" Title="Notifications">
+    @if (unreadCount > 0)
+    {
+        <FluentCounterBadge Count="@unreadCount"
+                            Max="99"
+                            ShowOverflow="true"
+                            BackgroundColor="@Color.Error"
+                            Color="Color.Fill"
+                            Appearance="Appearance.Accent">
+            <ChildContent>
+                @NotificationIcon()
+            </ChildContent>
+        </FluentCounterBadge>
+    }
+    else
+    {
+        @NotificationIcon()
+    }
 </FluentButton>
 
 @code {
     private IDialogReference? Dialog;
+    private int unreadCount;
+    private IDisposable? subscription;
+
+    [Inject] private IMeshService MeshQuery { get; set; } = null!;
 
     protected override void OnInitialized()
     {
-        MessageService.OnMessageItemsUpdated += UpdateCount;
-    }
-
-    private void UpdateCount()
-    {
-        InvokeAsync(StateHasChanged);
+        // Live count of unread notifications visible to this user. RLS gates
+        // which notifications are returned — the user sees notifications
+        // whose main entity (thread, approval, doc) they can read. Notification
+        // node type routes to the `notifications` table via the satellite
+        // mapping; the query hits that table directly.
+        subscription = MeshQuery.ObserveQuery<MeshNode>(
+                MeshQueryRequest.FromQuery("nodeType:Notification sort:CreatedAt-desc"))
+            .Subscribe(change =>
+            {
+                var items = change.Items ?? Array.Empty<MeshNode>();
+                var newCount = items.Count(n =>
+                    (n.Content as Notification)?.IsRead == false);
+                if (newCount != unreadCount)
+                {
+                    unreadCount = newCount;
+                    InvokeAsync(StateHasChanged);
+                }
+            });
     }
 
     private RenderFragment NotificationIcon() =>
-        @<FluentIcon Value="@(new Size20.Alert())" Color="Color.Neutral"  Title="Notification center" />;
+        @<FluentIcon Value="@(new Size20.Alert())" Color="Color.Neutral" Title="Notifications" />;
 
     private async Task OpenNotificationCenterAsync()
     {
-
         Dialog = await DialogService.ShowPanelAsync<NotificationCenterPanel>(new DialogParameters<GlobalState>()
-            {
-                Alignment = HorizontalAlignment.Right,
-                Title = $"Notifications",
-                PrimaryAction = null,
-                SecondaryAction = null,
-                ShowDismiss = true
-            });
-        DialogResult result = await Dialog.Result;
-        HandlePanel(result);
+        {
+            Alignment = HorizontalAlignment.Right,
+            Title = "Notifications",
+            PrimaryAction = null,
+            SecondaryAction = null,
+            ShowDismiss = true
+        });
+        await Dialog.Result;
     }
 
-    private static void HandlePanel(DialogResult result)
-    {
-    }
-
-    public void Dispose()
-    {
-        MessageService.OnMessageItemsUpdated -= UpdateCount;
-    }
-
+    public void Dispose() => subscription?.Dispose();
 }

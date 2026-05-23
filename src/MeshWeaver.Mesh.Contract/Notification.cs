@@ -17,8 +17,11 @@ public enum NotificationType
 }
 
 /// <summary>
-/// Represents a notification for a user.
-/// Notifications live under User/{userId} independently — not satellite content.
+/// Represents a notification about a main entity (a thread, an approval, a job).
+/// Notifications are <b>satellites</b> of their main entity: the notification node
+/// has <c>MainNode = mainEntityPath</c> and its own path lives under
+/// <c>{mainEntityPath}/_Notification/{id}</c>. Storage routes through the
+/// <c>notifications</c> table via <see cref="PartitionDefinition.StandardTableMappings"/>.
 /// </summary>
 public record Notification
 {
@@ -38,13 +41,22 @@ public record Notification
     public string Message { get; init; } = string.Empty;
 
     /// <summary>
-    /// Path to the related node (e.g., the approval or document).
+    /// Optional icon path or URL for the notification (e.g.,
+    /// <c>/static/NodeTypeIcons/chat.svg</c>). When unset, the
+    /// <see cref="NotificationType"/> drives the default icon.
+    /// </summary>
+    [Browsable(false)]
+    public string? Icon { get; init; }
+
+    /// <summary>
+    /// Path to the related node (e.g., the approval or document). The bell
+    /// list navigates here on click.
     /// </summary>
     [Browsable(false)]
     public string? TargetNodePath { get; init; }
 
     /// <summary>
-    /// Whether the notification has been read.
+    /// Whether the notification has been read. The bell flips this on click.
     /// </summary>
     [Browsable(false)]
     public bool IsRead { get; init; }

@@ -63,6 +63,14 @@ public static class ThreadNodeType
     public const string HeaderArea = "Header";
 
     /// <summary>
+    /// Layout area showing the aggregated list of nodes modified across every
+    /// message of the thread, with version-before / version-after, Diff link,
+    /// per-row Revert, and a bulk "Revert All" action. Surfaced through the
+    /// node menu (Changes).
+    /// </summary>
+    public const string ChangesArea = "Changes";
+
+    /// <summary>
     /// Generates a human-readable speaking ID from message text.
     /// Takes the first few words, lowercases, replaces non-alphanumeric with hyphens,
     /// and appends a short unique suffix.

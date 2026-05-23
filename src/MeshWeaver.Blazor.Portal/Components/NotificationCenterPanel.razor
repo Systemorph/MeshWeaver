@@ -1,21 +1,232 @@
 @implements IDialogContentComponent<GlobalState>
-@inject IMessageService MessageService
+@implements IDisposable
+@using MeshWeaver.Mesh
+@using MeshWeaver.Mesh.Services
+@using Microsoft.FluentUI.AspNetCore.Components
+@inject IMeshService MeshQuery
+@inject IMeshNodeStreamCache StreamCache
+@inject NavigationManager NavigationManager
 
-<div>
-
-    <FluentStack>
+<div class="notification-panel">
+    <FluentStack VerticalAlignment="VerticalAlignment.Center" Style="margin-bottom: 8px;">
         <FluentSpacer />
-        <FluentAnchor Appearance="@Appearance.Hypertext" Href="" OnClick="@(e => MessageService.Clear(PortalConstants.MessagesNotificationCenter) )">
-            Dismiss all
+        <FluentAnchor Appearance="Appearance.Hypertext" Href="javascript:void(0)" OnClick="MarkAllRead">
+            Mark all read
         </FluentAnchor>
     </FluentStack>
 
-    <br />
-
-    <FluentMessageBarProvider Section="@PortalConstants.MessagesNotificationCenter" MaxMessageCount="-1" Type="@MessageType.Notification" />
+    @if (notifications.Count == 0)
+    {
+        <div class="notification-empty">
+            <FluentIcon Value="@(new Icons.Regular.Size32.Alert())" Color="Color.Neutral" />
+            <p>You're all caught up.</p>
+        </div>
+    }
+    else
+    {
+        <div class="notification-list">
+            @foreach (var node in notifications)
+            {
+                var notif = node.Content as Notification;
+                if (notif == null) continue;
+                var isRead = notif.IsRead;
+                var targetPath = !string.IsNullOrEmpty(notif.TargetNodePath)
+                    ? notif.TargetNodePath
+                    : node.MainNode;
+                <button class="notification-item @(isRead ? "is-read" : "is-unread")"
+                        @onclick="() => OnNotificationClick(node, notif, targetPath)" type="button">
+                    <div class="notification-icon">
+                        @if (!string.IsNullOrEmpty(notif.Icon))
+                        {
+                            <img src="@notif.Icon" alt="" />
+                        }
+                        else
+                        {
+                            <FluentIcon Value="@DefaultIconFor(notif.NotificationType)" Color="Color.Accent" />
+                        }
+                    </div>
+                    <div class="notification-body">
+                        <div class="notification-title">@notif.Title</div>
+                        @if (!string.IsNullOrEmpty(notif.Message))
+                        {
+                            <div class="notification-message">@notif.Message</div>
+                        }
+                        <div class="notification-meta">
+                            <span>@FormatTime(notif.CreatedAt)</span>
+                            @if (!string.IsNullOrEmpty(notif.CreatedBy))
+                            {
+                                <span>· @notif.CreatedBy</span>
+                            }
+                        </div>
+                    </div>
+                    @if (!isRead)
+                    {
+                        <div class="notification-unread-dot" title="Unread"></div>
+                    }
+                </button>
+            }
+        </div>
+    }
 </div>
 
+<style>
+    .notification-panel {
+        display: flex;
+        flex-direction: column;
+        min-width: 360px;
+        max-width: 480px;
+        max-height: 70vh;
+    }
+    .notification-empty {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 8px;
+        padding: 32px;
+        color: var(--neutral-foreground-hint);
+    }
+    .notification-list {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        overflow-y: auto;
+        padding-right: 4px;
+    }
+    .notification-item {
+        all: unset;
+        cursor: pointer;
+        display: grid;
+        grid-template-columns: 28px 1fr auto;
+        gap: 12px;
+        align-items: start;
+        padding: 10px 12px;
+        border: 1px solid var(--neutral-stroke-rest);
+        border-radius: 8px;
+        background: var(--neutral-layer-1);
+        transition: background 120ms ease, transform 120ms ease, border-color 120ms ease;
+    }
+    .notification-item:hover, .notification-item:focus-visible {
+        background: var(--neutral-fill-stealth-hover);
+        border-color: color-mix(in srgb, var(--accent-fill-rest) 30%, var(--neutral-stroke-rest));
+        transform: translateY(-1px);
+        outline: none;
+    }
+    .notification-item.is-unread {
+        background: color-mix(in srgb, var(--accent-fill-rest) 6%, var(--neutral-layer-1));
+        border-left: 3px solid var(--accent-fill-rest);
+        padding-left: 9px;
+    }
+    .notification-icon {
+        width: 28px;
+        height: 28px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        background: color-mix(in srgb, var(--accent-fill-rest) 12%, transparent);
+    }
+    .notification-icon img {
+        width: 18px;
+        height: 18px;
+        object-fit: contain;
+    }
+    .notification-body {
+        min-width: 0;
+    }
+    .notification-title {
+        font-weight: 600;
+        font-size: 0.9rem;
+        line-height: 1.25;
+        margin-bottom: 2px;
+    }
+    .notification-message {
+        font-size: 0.82rem;
+        color: var(--neutral-foreground-rest);
+        line-height: 1.35;
+        overflow: hidden;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+    }
+    .notification-meta {
+        font-size: 0.72rem;
+        color: var(--neutral-foreground-hint);
+        margin-top: 4px;
+        display: flex;
+        gap: 4px;
+    }
+    .notification-unread-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--accent-fill-rest);
+        margin-top: 6px;
+    }
+</style>
+
 @code {
-    [Parameter]
-    public GlobalState Content { get; set; } = default!;
+    [Parameter] public GlobalState Content { get; set; } = default!;
+
+    private IReadOnlyList<MeshNode> notifications = Array.Empty<MeshNode>();
+    private IDisposable? subscription;
+
+    protected override void OnInitialized()
+    {
+        subscription = MeshQuery.ObserveQuery<MeshNode>(
+                MeshQueryRequest.FromQuery("nodeType:Notification sort:CreatedAt-desc"))
+            .Subscribe(change =>
+            {
+                notifications = (IReadOnlyList<MeshNode>?)change.Items?.ToList() ?? Array.Empty<MeshNode>();
+                InvokeAsync(StateHasChanged);
+            });
+    }
+
+    private void OnNotificationClick(MeshNode node, Notification notif, string? targetPath)
+    {
+        if (!notif.IsRead)
+            MarkRead(node, notif);
+        if (!string.IsNullOrEmpty(targetPath))
+            NavigationManager.NavigateTo($"/{targetPath}");
+    }
+
+    private void MarkRead(MeshNode node, Notification notif)
+    {
+        // stream.Update is the canonical mutation primitive. Cross-hub Updates
+        // for a scalar property like IsRead are race-safe — no satellite-list
+        // staleness concerns.
+        StreamCache.Update(node.Path, n =>
+        {
+            if (n.Content is not Notification current || current.IsRead) return n;
+            return n with { Content = current with { IsRead = true } };
+        }).Subscribe(_ => { }, _ => { });
+    }
+
+    private void MarkAllRead()
+    {
+        foreach (var n in notifications)
+        {
+            if (n.Content is Notification notif && !notif.IsRead)
+                MarkRead(n, notif);
+        }
+    }
+
+    private static string FormatTime(DateTimeOffset ts)
+    {
+        var delta = DateTimeOffset.UtcNow - ts;
+        if (delta.TotalSeconds < 60) return "just now";
+        if (delta.TotalMinutes < 60) return $"{(int)delta.TotalMinutes}m ago";
+        if (delta.TotalHours < 24) return $"{(int)delta.TotalHours}h ago";
+        if (delta.TotalDays < 7) return $"{(int)delta.TotalDays}d ago";
+        return ts.LocalDateTime.ToString("MMM d, HH:mm");
+    }
+
+    private static Icon DefaultIconFor(NotificationType type) => type switch
+    {
+        NotificationType.ApprovalRequired => new Icons.Regular.Size20.ShieldQuestion(),
+        NotificationType.ApprovalGiven => new Icons.Regular.Size20.ShieldCheckmark(),
+        NotificationType.ApprovalRejected => new Icons.Regular.Size20.ShieldDismiss(),
+        _ => new Icons.Regular.Size20.Info()
+    };
+
+    public void Dispose() => subscription?.Dispose();
 }

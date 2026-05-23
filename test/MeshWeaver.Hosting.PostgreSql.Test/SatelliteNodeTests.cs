@@ -290,6 +290,83 @@ public class SatelliteNodeTests : IAsyncLifetime
 
     #endregion
 
+    #region Notification satellite (→ notifications)
+
+    [Fact(Timeout = 30000)]
+    public async Task Notification_WriteAndRead_RoutesToNotificationsTable()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifAdapter = AdapterFor("_Notification", "notifications");
+
+        var notification = new MeshNode("notif-1", "ACME/_Thread/chat-abc/_Notification")
+        {
+            Name = "Thread ready",
+            NodeType = "Notification",
+            MainNode = "ACME/_Thread/chat-abc",
+            Content = new
+            {
+                Title = "\"chat-abc\" is ready",
+                Message = "Response complete.",
+                NotificationType = "General",
+                IsRead = false,
+                CreatedAt = DateTimeOffset.UtcNow,
+                TargetNodePath = "ACME/_Thread/chat-abc"
+            }
+        };
+        await notifAdapter.WriteAsync(notification, _options, ct);
+
+        // Lands in the dedicated notifications table.
+        await using var cmd = _schemaDs.CreateCommand(
+            "SELECT COUNT(*) FROM notifications WHERE id = 'notif-1'");
+        var count = (long)(await cmd.ExecuteScalarAsync(ct))!;
+        count.Should().Be(1);
+
+        // NOT in mesh_nodes (would indicate a routing regression).
+        await using var mnCmd = _schemaDs.CreateCommand(
+            "SELECT COUNT(*) FROM mesh_nodes WHERE id = 'notif-1' AND namespace = 'ACME/_Thread/chat-abc/_Notification'");
+        var mnCount = (long)(await mnCmd.ExecuteScalarAsync(ct))!;
+        mnCount.Should().Be(0);
+
+        // Read back via the adapter.
+        var read = await notifAdapter.ReadAsync(
+            "ACME/_Thread/chat-abc/_Notification/notif-1", _options, ct);
+        read.Should().NotBeNull();
+        read!.NodeType.Should().Be("Notification");
+        read.MainNode.Should().Be("ACME/_Thread/chat-abc");
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task Notification_NotInAnnotationsTable_ProvesDedicatedRouting()
+    {
+        // Defensive: confirms a Notification doesn't accidentally land in the
+        // annotations table (which Comment/Tracking/Approval share). If the
+        // _Notification → notifications mapping is removed from
+        // PartitionDefinition.StandardTableMappings, the longest-suffix
+        // resolver could fall back to annotations or mesh_nodes — this catches
+        // that regression.
+        var ct = TestContext.Current.CancellationToken;
+        var notifAdapter = AdapterFor("_Notification", "notifications");
+
+        await notifAdapter.WriteAsync(new MeshNode("notif-isolated",
+            "ACME/Docs/spec/_Notification")
+        {
+            Name = "Isolated check",
+            NodeType = "Notification",
+            MainNode = "ACME/Docs/spec",
+            Content = new { Title = "Test", Message = "" }
+        }, _options, ct);
+
+        await using var anCmd = _schemaDs.CreateCommand(
+            "SELECT COUNT(*) FROM annotations WHERE id = 'notif-isolated'");
+        ((long)(await anCmd.ExecuteScalarAsync(ct))!).Should().Be(0);
+
+        await using var nfCmd = _schemaDs.CreateCommand(
+            "SELECT COUNT(*) FROM notifications WHERE id = 'notif-isolated'");
+        ((long)(await nfCmd.ExecuteScalarAsync(ct))!).Should().Be(1);
+    }
+
+    #endregion
+
     #region Code content (Source and Test â†’ code table)
 
     [Fact(Timeout = 30000)]

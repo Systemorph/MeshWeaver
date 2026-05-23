@@ -39,6 +39,7 @@ public static class ThreadLayoutAreas
             .AddDefaultMeshMenu()
             .AddNodeMenuItems("SidePanel", SidePanelMenuProvider)
             .AddNodeMenuItems(DelegationsMenuProvider)
+            .AddNodeMenuItems(ChangesMenuProvider)
             .AddLayout(layout => layout
                 .WithDefaultArea(ThreadNodeType.ThreadArea)
                 .WithView(ThreadNodeType.ThreadArea, ThreadView)
@@ -47,6 +48,7 @@ public static class ThreadLayoutAreas
                 .WithView(ThreadNodeType.StreamingArea, StreamingView)
                 .WithView(ThreadNodeType.HistoryArea, HistoryView)
                 .WithView(ThreadNodeType.HeaderArea, HeaderView)
+                .WithView(ThreadNodeType.ChangesArea, ChangesAreaView)
                 .WithView(MeshNodeLayoutAreas.ThumbnailArea, Thumbnail)
                 .WithView(MeshNodeLayoutAreas.ThreadsArea, ThreadsCatalog));
 
@@ -72,6 +74,18 @@ public static class ThreadLayoutAreas
         var hubPath = host.Hub.Address.ToString();
         yield return new("Delegations", ThreadNodeType.HistoryArea, Order: 12,
             Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ThreadNodeType.HistoryArea));
+    }
+
+    /// <summary>
+    /// Main menu item: Changes (aggregated node modifications + bulk revert).
+    /// </summary>
+    private static async IAsyncEnumerable<NodeMenuItemDefinition> ChangesMenuProvider(
+        LayoutAreaHost host, RenderingContext ctx)
+    {
+        await Task.CompletedTask;
+        var hubPath = host.Hub.Address.ToString();
+        yield return new("Changes", ThreadNodeType.ChangesArea, Order: 13,
+            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ThreadNodeType.ChangesArea));
     }
 
     private static string GetContextDisplayName(string path)
@@ -101,7 +115,9 @@ public static class ThreadLayoutAreas
                     .WithIconStart(FluentIcons.Add())
                     .WithNavigateToHref(createUrl)))
             .WithView(Controls.MeshSearch
-                .WithHiddenQuery($"namespace:{hubPath}/{ThreadNodeType.ThreadPartition} nodeType:{ThreadNodeType.NodeType} sort:lastModified-desc")
+                // -content.status:Done hides finished threads from the catalog;
+                // user can type `content.status:Done` in the search box to surface them.
+                .WithHiddenQuery($"namespace:{hubPath}/{ThreadNodeType.ThreadPartition} nodeType:{ThreadNodeType.NodeType} -content.status:Done sort:lastModified-desc")
                 .WithPlaceholder("Search threads...")
                 .WithRenderMode(MeshSearchRenderMode.Flat)
                 .WithMaxColumns(3));
@@ -219,7 +235,7 @@ public static class ThreadLayoutAreas
             .WithView(Controls.Html(new JsonPointerReference(LayoutAreaReference.GetDataPointer("contextLink"))))
             .WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
-                .WithStyle("align-items: center; gap: 18px;")
+                .WithStyle("align-items: center; gap: 18px; flex: 1; min-width: 0;")
                 .WithView(Controls.Html(
                     "<div style=\"position: relative; width: 56px; height: 56px; flex: 0 0 56px; " +
                     "border-radius: 50%; " +
@@ -233,7 +249,7 @@ public static class ThreadLayoutAreas
                     "filter: brightness(0) invert(1) drop-shadow(0 1px 2px rgba(0,0,0,0.25));\" />" +
                     "</div>"))
                 .WithView(Controls.Stack
-                    .WithStyle("gap: 2px; min-width: 0;")
+                    .WithStyle("gap: 2px; min-width: 0; flex: 1;")
                     .WithView(Controls.Html(new JsonPointerReference(LayoutAreaReference.GetDataPointer("title")))
                         .WithStyle("margin: 0; font-size: 1.85rem; font-weight: 600; " +
                                    "letter-spacing: -0.01em; line-height: 1.15; " +
@@ -241,7 +257,26 @@ public static class ThreadLayoutAreas
                                    "color-mix(in srgb, var(--accent-fill-rest) 80%, var(--neutral-foreground-rest))); " +
                                    "-webkit-background-clip: text; background-clip: text; " +
                                    "-webkit-text-fill-color: transparent; color: transparent;"))
-                    .WithView(Controls.Html(new JsonPointerReference(LayoutAreaReference.GetDataPointer("subtitle"))))));
+                    .WithView(Controls.Html(new JsonPointerReference(LayoutAreaReference.GetDataPointer("subtitle")))))
+                // Mark Done / Reopen toggle — reactive. Hidden while the
+                // thread is executing (MarkThreadDone's CAS guard would
+                // refuse anyway, but hiding the button is cleaner UX).
+                .WithView((h, _) => h.Workspace.GetMeshNodeStream()
+                    .Select(node =>
+                    {
+                        var t = node?.Content as MeshThread;
+                        if (t is null || t.IsExecuting) return (UiControl?)null;
+                        var isDone = t.Status == ThreadExecutionStatus.Done;
+                        var label = isDone ? "Reopen" : "Mark Done";
+                        var icon = isDone
+                            ? FluentIcons.ArrowUndo(IconSize.Size16)
+                            : FluentIcons.Checkmark(IconSize.Size16);
+                        return (UiControl?)Controls.Button(label)
+                            .WithAppearance(isDone ? Appearance.Neutral : Appearance.Accent)
+                            .WithIconStart(icon)
+                            .WithClickAction(_ =>
+                                ThreadSubmission.MarkThreadDone(h.Hub, hubPath, !isDone));
+                    })));
 
         // Static container — never rebuilt
         return Controls.Stack
@@ -554,7 +589,8 @@ public static class ThreadLayoutAreas
     {
         var nodePath = host.Hub.Address.ToString();
         return Controls.MeshSearch
-            .WithHiddenQuery($"nodeType:Thread namespace:{nodePath}/{ThreadNodeType.ThreadPartition}")
+            // -content.status:Done hides finished threads from the node-scoped Threads view.
+            .WithHiddenQuery($"nodeType:Thread namespace:{nodePath}/{ThreadNodeType.ThreadPartition} -content.status:Done")
             .WithNamespace(nodePath)
             .WithRenderMode(MeshSearchRenderMode.Flat)
             .WithCreateNodeType("Thread");
@@ -594,6 +630,95 @@ public static class ThreadLayoutAreas
             .Select(updates => BuildHeader(parentLink, updates, threadPath));
 
         return initial.Concat(aggregated);
+    }
+
+    /// <summary>
+    /// Full-page Changes view. Reuses the header's <see cref="CollectUpdatedNodes"/>
+    /// aggregation + <see cref="BuildModifiedNodesHtml"/> grid, plus a
+    /// "Revert All" bulk action that posts one
+    /// <c>RollbackNodeRequest</c> per entry sequentially (order-sensitive to
+    /// avoid parent-deleted-before-child issues).
+    /// </summary>
+    public static IObservable<UiControl?> ChangesAreaView(LayoutAreaHost host, RenderingContext _)
+    {
+        var threadPath = host.Hub.Address.ToString();
+        var stream = host.Workspace.GetStream(new MeshNodeReference());
+        if (stream is null)
+            return Observable.Return<UiControl?>(BuildChangesEmpty());
+
+        var aggregated = stream
+            .Select(change => (change.Value?.Content as MeshThread)?.Messages ?? ImmutableList<string>.Empty)
+            .DistinctUntilChanged(ids => string.Join("|", ids))
+            .Select(ids => ids.IsEmpty
+                ? Observable.Return(ImmutableList<NodeChangeEntry>.Empty)
+                : CollectUpdatedNodes(host.Hub, threadPath, ids))
+            .Switch();
+
+        return aggregated.Select(updates => BuildChangesPage(host.Hub, threadPath, updates));
+    }
+
+    private static UiControl BuildChangesEmpty()
+        => Controls.Html(
+            "<div style=\"padding:24px; color:var(--neutral-foreground-hint); text-align:center;\">" +
+            "<p style=\"margin:0;\">No node changes recorded for this thread.</p></div>");
+
+    private static UiControl BuildChangesPage(
+        IMessageHub hub, string threadPath, ImmutableList<NodeChangeEntry> updates)
+    {
+        var container = Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("padding:24px; gap:16px;");
+
+        // Header row: title + count + Revert All button.
+        var headerStyle = "display:flex; align-items:center; gap:12px;";
+        var titleHtml =
+            "<h2 style=\"margin:0; font-size:1.5rem; font-weight:600;\">Changes</h2>" +
+            $"<span style=\"color:var(--neutral-foreground-hint); font-size:0.9rem;\">" +
+            $"{updates.Count} node{(updates.Count == 1 ? "" : "s")} modified</span>";
+
+        var headerRow = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle(headerStyle)
+            .WithView(Controls.Html(
+                $"<div style=\"display:flex; align-items:center; gap:12px; flex:1;\">{titleHtml}</div>"));
+
+        // Revert All button — only enabled when there's something to revert.
+        var revertable = updates.Where(e => e.VersionBefore.HasValue).ToImmutableList();
+        if (revertable.Count > 0)
+        {
+            headerRow = headerRow.WithView(Controls.Button($"Revert all ({revertable.Count})")
+                .WithAppearance(Appearance.Neutral)
+                .WithIconStart(FluentIcons.ArrowUndo(IconSize.Size16))
+                .WithClickAction(_ => RevertAllChanges(hub, revertable)));
+        }
+        container = container.WithView(headerRow);
+
+        if (updates.IsEmpty)
+        {
+            container = container.WithView(BuildChangesEmpty());
+            return container;
+        }
+
+        // Reuse the same git-like grid as the header summary — single source of truth
+        // for path / version chips / Diff / per-row Restore links.
+        container = container.WithView(Controls.Html(BuildModifiedNodesHtml(updates, threadPath)));
+        return container;
+    }
+
+    /// <summary>
+    /// Posts <see cref="RollbackNodeRequest"/> for every entry with a
+    /// <see cref="NodeChangeEntry.VersionBefore"/>, in sequence. Sequential
+    /// (not parallel) so dependent ordering (parent-before-child for creates,
+    /// child-before-parent for deletes) stays predictable. Fire-and-forget per
+    /// request; failures are independent.
+    /// </summary>
+    private static void RevertAllChanges(IMessageHub hub, ImmutableList<NodeChangeEntry> entries)
+    {
+        foreach (var entry in entries)
+        {
+            if (!entry.VersionBefore.HasValue) continue;
+            hub.Post(new RollbackNodeRequest(entry.Path, entry.VersionBefore.Value));
+        }
     }
 
     /// <summary>

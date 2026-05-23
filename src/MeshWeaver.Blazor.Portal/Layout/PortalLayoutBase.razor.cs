@@ -26,6 +26,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     [Inject] protected INavigationService NavigationService { get; set; } = null!;
     [Inject] protected IMenuItemsProvider MenuItemsProvider { get; set; } = null!;
     [Inject] protected IPathResolver PathResolver { get; set; } = null!;
+    [Inject] protected AccessService AccessService { get; set; } = null!;
 
     [CascadingParameter]
     protected Task<AuthenticationState>? AuthStateTask { get; set; }
@@ -168,6 +169,20 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
             ? $"/{GlobalSettingsLayoutArea.GlobalSettingsArea}"
             : $"/{ns}/Settings";
         NavigationManager.NavigateTo(url);
+    }
+
+    /// <summary>
+    /// Navigates to the current user's Activity dashboard — the canonical
+    /// "all my threads" surface (Latest Threads section already filters out
+    /// Done threads by default; type <c>content.status:Done</c> in the search
+    /// box to surface them).
+    /// </summary>
+    private void NavigateToThreads()
+    {
+        var userId = AccessService?.Context?.ObjectId;
+        if (string.IsNullOrEmpty(userId))
+            return;
+        NavigationManager.NavigateTo($"/User/{userId}/Activity");
     }
 
     /// <summary>

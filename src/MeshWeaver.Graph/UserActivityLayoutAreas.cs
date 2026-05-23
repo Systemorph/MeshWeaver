@@ -335,7 +335,9 @@ public static class UserActivityLayoutAreas
     {
         return Controls.MeshSearch
             .WithTitle("Latest Threads")
-            .WithHiddenQuery($"nodeType:Thread namespace:*/_Thread content.createdBy:{nodeOwnerId} sort:LastModified-desc")
+            // -content.status:Done hides threads the user explicitly marked
+            // finished. Type `content.status:Done` in the search box to surface them.
+            .WithHiddenQuery($"nodeType:Thread namespace:*/_Thread content.createdBy:{nodeOwnerId} -content.status:Done sort:LastModified-desc")
             .WithRenderMode(MeshSearchRenderMode.Flat)
             .WithCollapsibleSections(false)
             .WithSectionCounts(false)

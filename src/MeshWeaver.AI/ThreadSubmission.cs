@@ -475,6 +475,43 @@ public static class ThreadSubmission
     }
 
     /// <summary>
+    /// Marks the thread as <see cref="ThreadExecutionStatus.Done"/> (terminal
+    /// user-controlled state) or reopens it by flipping back to
+    /// <see cref="ThreadExecutionStatus.Idle"/>. Hidden from default catalogs
+    /// (queries default to <c>-content.status:Done</c>). Scalar property —
+    /// no trigger hop needed; UpdateRemote handles it cleanly.
+    ///
+    /// <para>Refuses to act while a round is in flight (StartingExecution /
+    /// Executing / Completing). The CAS-safe check lives in the Update lambda
+    /// so a click that races a round dispatch can't end up clobbering an
+    /// active state. The UI also disables the button while executing — this
+    /// is belt-and-suspenders.</para>
+    /// </summary>
+    public static void MarkThreadDone(IMessageHub hub, string threadPath, bool done)
+    {
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.AI.ThreadSubmission");
+        hub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
+        {
+            var t = node.Content as MeshThread ?? new MeshThread();
+            if (t.IsExecuting)
+            {
+                logger?.LogInformation(
+                    "MarkThreadDone: ignored — thread {ThreadPath} is executing (Status={Status})",
+                    threadPath, t.Status);
+                return node;
+            }
+            var newStatus = done ? ThreadExecutionStatus.Done : ThreadExecutionStatus.Idle;
+            if (t.Status == newStatus) return node;
+            return node with { Content = t with { Status = newStatus } };
+        }).Subscribe(
+            _ => { },
+            ex => logger?.LogWarning(ex,
+                "MarkThreadDone: UpdateMeshNode failed for thread {ThreadPath} done={Done}",
+                threadPath, done));
+    }
+
+    /// <summary>
     /// Truncates the thread's <see cref="MeshThread.Messages"/> at
     /// <paramref name="atMessageId"/> (exclusive — drops messageId and
     /// everything after). Fans out to the OWN-update fast path when invoked

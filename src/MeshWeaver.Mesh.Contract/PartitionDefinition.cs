@@ -88,6 +88,7 @@ public record PartitionDefinition
         ["_Tracking"] = "annotations",
         ["_Approval"] = "annotations",
         ["_Comment"] = "annotations",
+        ["_Notification"] = "notifications",
         ["Source"] = "code",
         ["Test"] = "code",
     };
@@ -127,6 +128,7 @@ public record PartitionDefinition
         ["Comment"] = "_Comment",
         ["TrackedChange"] = "_Tracking",
         ["Approval"] = "_Approval",
+        ["Notification"] = "_Notification",
     };
 
     /// <summary>

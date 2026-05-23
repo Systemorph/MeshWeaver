@@ -1375,15 +1375,22 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             if (messageSubs.ContainsKey(id)) continue;
             var nodePath = $"{threadPath}/{id}";
 
-            IObservable<MeshNode> stream;
+            // 🚨 Subscribe INSIDE the ImpersonateAsSystem scope.
+            // `cache.GetStream` returns a cold IObservable whose RLS gate
+            // resolves at Subscribe-time (not at GetStream-time). The
+            // framework carries the AccessContext captured at Subscribe
+            // through to the gate via CarryAccessContext. If we subscribe
+            // after the using block closes, the gate sees the Blazor
+            // circuit's identity in a sync-emission scope and silently
+            // rejects every emission — symptom: empty skeleton bars.
+            // Same pattern UserActivityLayoutAreas.cs:42-67 documents.
             using (accessService?.ImpersonateAsSystem())
             {
-                stream = cache.GetStream(nodePath);
+                var stream = cache.GetStream(nodePath);
+                messageSubs[id] = stream
+                    .Where(n => n?.Content is not null)
+                    .Subscribe(n => UpdateMessageState(id, n));
             }
-
-            messageSubs[id] = stream
-                .Where(n => n?.Content is not null)
-                .Subscribe(n => UpdateMessageState(id, n));
         }
     }
 
