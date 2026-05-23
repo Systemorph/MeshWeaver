@@ -410,7 +410,16 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
             .Timeout(TimeSpan.FromSeconds(45))
             .FirstAsync();
 
-        final!.Status.Should().Be(ActivityStatus.Succeeded,
+        // Diagnostic: dump activity messages so a Failed status shows WHY
+        // (NuGet resolver errors, compile errors, runtime errors) instead of
+        // just "expected Succeeded got Failed". Removed once stable.
+        if (final!.Status != ActivityStatus.Succeeded)
+        {
+            Output.WriteLine($"Activity Status={final.Status}, {final.Messages.Count} messages:");
+            foreach (var msg in final.Messages)
+                Output.WriteLine($"  [{msg.LogLevel}] {msg.Message}");
+        }
+        final.Status.Should().Be(ActivityStatus.Succeeded,
             "MeshWeaver.Application.Styles must resolve from dist/packages and the script must compile + run");
         final.Messages.Select(m => m.Message)
             .Should().Contain(m => m.Contains("icon-id:") || m.Contains("Resolved icon"),

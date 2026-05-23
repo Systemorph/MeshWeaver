@@ -63,6 +63,20 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
     /// </summary>
     private static readonly TimeSpan AccessTtl = TimeSpan.FromSeconds(30);
 
+    /// <summary>
+    /// Maximum time we wait for the owning per-node hub to answer
+    /// <see cref="GetPermissionRequest"/>. The handler is synchronous
+    /// (`AccessControlPipeline.HandleGetPermission` resolves the local
+    /// <see cref="ISecurityService"/> and posts a response immediately),
+    /// so 3s is generous — anything beyond that means the hub is stuck
+    /// (corrupted MeshNode load, hung security walk, mesh-hub backlog).
+    /// On timeout we treat the answer as <see cref="Permission.None"/> and
+    /// cache it for <see cref="AccessTtl"/> so we don't retry every
+    /// emission. Prevents a single stuck per-node hub from wedging the
+    /// chat view / any other consumer that subscribes to multiple paths.
+    /// </summary>
+    private static readonly TimeSpan PermissionRequestTimeout = TimeSpan.FromSeconds(3);
+
     private readonly IMessageHub meshHub;
     private readonly ILogger<MeshNodeStreamCache> logger;
 
@@ -241,11 +255,30 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
             // on every per-node hub by AddAccessControlPipeline (called from
             // AddRowLevelSecurity). Without RLS the gate doesn't fire at all
             // — see the no-AccessService bail-out at the top of GetStream.
+            //
+            // 🚨 Timeout is non-negotiable. The owning hub MUST respond fast,
+            // but real failure modes (corrupted MeshNode in storage, missing
+            // ancestor in the security walk, mesh-hub backlog) can leave the
+            // request unanswered. Without a timeout EVERY subscriber to this
+            // path's bubble waits forever — the prod 2026-05-23 thread-page
+            // deadlock: one stuck ThreadMessage with a broken delegationPath
+            // wedged the entire chat view. On timeout we cache None (= deny,
+            // not crash) so the gated observable terminates cleanly with the
+            // standard UnauthorizedAccessException the chat view already
+            // handles. Better a denied bubble than a frozen page.
             return meshHub.Observe(
                     new GetPermissionRequest(),
                     o => o.WithTarget(new Address(path)).WithAccessContext(captured))
                 .Select(d => (d.Message as GetPermissionResponse)?.Permissions ?? Permission.None)
                 .Take(1)
+                .Timeout(PermissionRequestTimeout, Observable.Defer(() =>
+                {
+                    logger.LogWarning(
+                        "GetPermissionRequest timed out after {Timeout} for {Path} (user={User}) — gating as None. " +
+                        "Owning hub did not respond; check for stuck per-node hub or corrupted ancestor.",
+                        PermissionRequestTimeout, path, captured.ObjectId);
+                    return Observable.Return(Permission.None);
+                }))
                 .SelectMany(perms =>
                 {
                     _access[key] = new AccessEntry(perms,

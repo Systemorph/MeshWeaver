@@ -22,9 +22,20 @@ internal sealed class MeshService(
 
     /// <summary>
     /// The mesh hub address where CRUD handlers (CreateNode, UpdateNode, DeleteNode) are registered.
-    /// This is the address of the injected <see cref="IMessageHub"/> — the mesh root.
+    /// MUST walk up to the root mesh hub via <see cref="MeshExtensions.GetMeshHub"/> — the previous
+    /// `hub.Address` shortcut assumed MeshService was only ever instantiated on the mesh hub itself,
+    /// but the Scoped DI registration (PersistenceExtensions.AddCoreAndWrapperServices) gives every
+    /// child hub (Blazor circuit, MCP child hub, kernel hub, …) its own scoped instance with that
+    /// child's `IMessageHub`. From a child hub, `hub.Address` returns the child — UpdateNodeRequest
+    /// then targets the child, which has no handler → "No handler found for message type
+    /// UpdateNodeRequest" (prod 2026-05-23 broke every MCP write). Walking ParentHub up to the mesh
+    /// root is the documented contract — see <see cref="MeshExtensions.GetMeshHub"/>'s comment.
+    ///
+    /// Cached on first access: the parent chain is stable for the lifetime of this scoped service,
+    /// and GetMeshHub walks ParentHub on every call, so caching avoids the walk per CRUD request.
     /// </summary>
-    private Address MeshAddress => hub.Address;
+    private Address? _meshAddress;
+    private Address MeshAddress => _meshAddress ??= hub.GetMeshHub().Address;
 
     private AccessContext? CaptureContext()
     {

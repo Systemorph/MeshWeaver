@@ -99,6 +99,115 @@ public class PostgreSqlPartitionedMeshQueryMappingTests
         table.Should().Be(expectedTable);
     }
 
+    // ─── Deep satellite paths — the "_Thread switches in, we stay there" rule ────
+    //
+    // Once a path contains a satellite segment (e.g. `_Thread`), every
+    // descendant of that segment lives in the same satellite table — there
+    // is no per-segment re-routing as the path deepens. This locks in the
+    // prod 2026-05-23 sub-thread case
+    //   Systemorph/_Thread/<thread>/<msg-id>/<sub-thread>/<sub-msg>
+    // which must resolve to `threads` at every depth, not silently fall
+    // back to `mesh_nodes` for the deeply-nested message ID. Missing one
+    // of these cases is how "no messages showing here" started: the
+    // satellite lookup walks the wrong table, returns null, and the chat
+    // bubble subscribes to a stream that never emits content.
+
+    [Theory]
+    // Thread path itself
+    [InlineData("path:Systemorph/_Thread/my-thread", "threads")]
+    [InlineData("namespace:Systemorph/_Thread", "threads")]
+    // ThreadMessage under a thread
+    [InlineData("path:Systemorph/_Thread/my-thread/msg-id", "threads")]
+    [InlineData("namespace:Systemorph/_Thread/my-thread", "threads")]
+    // Delegated sub-thread under a message
+    [InlineData("path:Systemorph/_Thread/my-thread/msg-id/sub-thread", "threads")]
+    [InlineData("namespace:Systemorph/_Thread/my-thread/msg-id", "threads")]
+    // Message under a delegated sub-thread (the prod 2026-05-23 path shape)
+    [InlineData("path:Systemorph/_Thread/parent-thread/8721bdff/sub-thread/sub-msg-id", "threads")]
+    [InlineData("namespace:Systemorph/_Thread/parent-thread/8721bdff/sub-thread", "threads")]
+    // Even deeper (sub-sub-thread chain)
+    [InlineData("path:Systemorph/_Thread/t1/m1/t2/m2/t3/m3", "threads")]
+    // Other satellite types at depth
+    [InlineData("path:Systemorph/_Activity/run-id/step-id/substep", "activities")]
+    [InlineData("path:Systemorph/_Access/user_Access/scope-detail", "access")]
+    [InlineData("path:Systemorph/_UserActivity/rbuergi/2026-05-23/entry-id", "user_activities")]
+    [InlineData("path:Systemorph/_Comment/c1/replies/r1", "annotations")]
+    public void ResolveTable_DeepSatellitePath_StaysInSatelliteTable(string query, string expectedTable)
+    {
+        var parsed = _parser.Parse(query);
+        var table = PostgreSqlPartitionedMeshQuery.ResolveTable(parsed);
+        table.Should().Be(expectedTable,
+            "the satellite segment in the path must continue to route to its " +
+            "table at every depth — there is no re-routing back to mesh_nodes " +
+            "for deeply nested descendants. Breaking this rule produces the " +
+            "'no messages showing' symptom: the satellite walk goes to the " +
+            "wrong table, returns null, and consumers (chat bubbles, etc.) " +
+            "subscribe to a stream that never emits.");
+    }
+
+    [Theory]
+    // ResolveTable on PartitionDefinition operates on full paths (no `path:` prefix).
+    // These exercise the boundary check in PathContainsSegment for deep paths.
+    [InlineData("Systemorph/_Thread/parent", "threads")]
+    [InlineData("Systemorph/_Thread/parent/msg-id", "threads")]
+    [InlineData("Systemorph/_Thread/parent/msg-id/sub-thread", "threads")]
+    [InlineData("Systemorph/_Thread/parent/msg-id/sub-thread/sub-msg-id", "threads")]
+    [InlineData("Systemorph/_Activity/run/step/substep", "activities")]
+    [InlineData("Systemorph/_UserActivity/rbuergi/2026-05-23/entry-id", "user_activities")]
+    [InlineData("Systemorph/_Access/user_Access/role-detail", "access")]
+    [InlineData("Systemorph/_Comment/c1/replies/r1", "annotations")]
+    [InlineData("Systemorph/_Approval/a1/votes/v1", "annotations")]
+    [InlineData("Systemorph/_Tracking/change-id/details/depth", "annotations")]
+    [InlineData("Systemorph/_Notification/n1/follow-up", "notifications")]
+    public void PartitionDefinition_ResolveTable_DeepPath_StaysInSatellite(string path, string expectedTable)
+    {
+        var def = new PartitionDefinition
+        {
+            Namespace = "Systemorph",
+            Schema = "systemorph",
+            Table = "mesh_nodes",
+            TableMappings = PartitionDefinition.StandardTableMappings
+        };
+        var table = def.ResolveTable(path);
+        table.Should().Be(expectedTable);
+    }
+
+    [Fact]
+    public void PartitionDefinition_ResolveTable_PlainPath_NoSatellite_FallsBackToMeshNodes()
+    {
+        var def = new PartitionDefinition
+        {
+            Namespace = "Systemorph",
+            Schema = "systemorph",
+            Table = "mesh_nodes",
+            TableMappings = PartitionDefinition.StandardTableMappings
+        };
+
+        def.ResolveTable("Systemorph").Should().Be("mesh_nodes");
+        def.ResolveTable("Systemorph/Project").Should().Be("mesh_nodes");
+        def.ResolveTable("Systemorph/Project/Doc/Page").Should().Be("mesh_nodes");
+    }
+
+    [Theory]
+    // _ThreadMessage is longer than _Thread and must NOT be confused with
+    // it. A path containing `_ThreadMessage` resolves to threads (same
+    // table, kept for legacy paths); a path with only `_Thread` also
+    // resolves to threads. The longest-suffix-wins ordering inside
+    // ResolveTable prevents accidental misrouting between similar segments.
+    [InlineData("Systemorph/_ThreadMessage/m1", "threads")]
+    [InlineData("Systemorph/_ThreadMessage/m1/payload/depth", "threads")]
+    public void PartitionDefinition_ResolveTable_ThreadMessageSegment_StaysInThreads(string path, string expectedTable)
+    {
+        var def = new PartitionDefinition
+        {
+            Namespace = "Systemorph",
+            Schema = "systemorph",
+            Table = "mesh_nodes",
+            TableMappings = PartitionDefinition.StandardTableMappings
+        };
+        def.ResolveTable(path).Should().Be(expectedTable);
+    }
+
     // ─── ResolvePinnedPartition ────────────────────────────────────────
 
     [Theory]
