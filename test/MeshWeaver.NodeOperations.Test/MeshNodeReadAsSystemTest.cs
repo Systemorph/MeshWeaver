@@ -78,19 +78,19 @@ public class MeshNodeReadAsSystemTest(ITestOutputHelper output) : MonolithMeshTe
 
     /// <summary>
     /// Reads of a remote MeshNode via <c>workspace.GetMeshNodeStream(path)</c>
-    /// MUST succeed even when the ambient <see cref="AccessService.Context"/>
-    /// belongs to a user with NO read permission on the path. The handle
-    /// opens the underlying remote subscription under
-    /// <see cref="AccessService.ImpersonateAsSystem"/>, so the
-    /// <c>SubscribeRequest</c> bypasses RLS at the owner.
+    /// route through <see cref="IMeshNodeStreamCache.GetStream"/>, which
+    /// applies a per-user RLS gate (a <see cref="GetPermissionRequest"/> probe
+    /// against the owning hub). The cache's UPSTREAM remote subscription is
+    /// opened under <see cref="AccessService.ImpersonateAsSystem"/>, but the
+    /// gate runs the ambient user's identity — so an unprivileged caller is
+    /// denied at the cache boundary, not at the sync-stream seam.
     ///
-    /// <para>Application-layer access control (e.g. the
-    /// <see cref="IMeshNodeStreamCache.GetStream"/> gate that probes
-    /// <see cref="GetPermissionRequest"/>) is what enforces user-level RLS —
-    /// the sync-stream seam is system infrastructure.</para>
+    /// <para>This test pins that contract: ambient user without Read MUST
+    /// surface <see cref="UnauthorizedAccessException"/> from the cache gate.
+    /// The architectural split is "upstream = System / gate = caller".</para>
     /// </summary>
     [Fact(Timeout = 30_000)]
-    public async Task GetMeshNodeStream_RemotePath_UsesSystemIdentity_NotAmbientUser()
+    public async Task GetMeshNodeStream_UnprivilegedUser_GetsUnauthorized()
     {
         var ct = TestContext.Current.CancellationToken;
         var nodeId = $"Md_{Guid.NewGuid().AsString()}";
@@ -106,11 +106,6 @@ public class MeshNodeReadAsSystemTest(ITestOutputHelper output) : MonolithMeshTe
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var workspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
 
-        // Set ambient context to a user with no granted permissions anywhere.
-        // Without the System bypass on the read path, the SubscribeRequest
-        // would carry this user's identity (or fall back to a sync/<id> hub
-        // address on the emission thread), the owner's RLS would deny, and
-        // the stream would emit nothing within the timeout.
         accessService.SetContext(new AccessContext
         {
             ObjectId = "unprivileged-reader",
@@ -119,20 +114,17 @@ public class MeshNodeReadAsSystemTest(ITestOutputHelper output) : MonolithMeshTe
 
         try
         {
-            var node = await workspace.GetMeshNodeStream(nodePath)
+            var act = async () => await workspace.GetMeshNodeStream(nodePath)
                 .Take(1)
                 .Timeout(10.Seconds())
                 .FirstAsync()
                 .ToTask(ct);
 
-            node.Should().NotBeNull(
-                because: "MeshNode reads are infrastructure — the handle opens the " +
-                         "underlying remote subscription under ImpersonateAsSystem so " +
-                         "the SubscribeRequest bypasses the owner's RLS check. Per-user " +
-                         "enforcement lives at the consumer layer (cache.GetStream / " +
-                         "application handlers), not at the sync-stream seam.");
-            node.Path.Should().Be(nodePath);
-            node.Name.Should().Be("System-read probe node");
+            await act.Should().ThrowAsync<UnauthorizedAccessException>(
+                because: "the cache's per-user RLS gate denies the read for an " +
+                         "unprivileged ambient identity. The upstream remote subscription " +
+                         "is system-impersonated, but the cache layer enforces per-user " +
+                         "Read via GetPermissionRequest before exposing the stream.");
         }
         finally
         {
@@ -182,15 +174,19 @@ public class MeshNodeReadAsSystemTest(ITestOutputHelper output) : MonolithMeshTe
 
     /// <summary>
     /// The query-set cache (<c>workspace.GetQuery</c> / SyncedQueryMeshNodes)
-    /// also runs as System — its <see cref="MeshQueryRequest"/> is constructed
-    /// with <see cref="WellKnownUsers.System"/> identity so the upstream
-    /// query mirror doesn't go through per-user RLS. This is critical for e.g.
-    /// the SecurityService's own access-assignment mirror: the live view of
-    /// WHO has access must NOT itself depend on per-user access (chicken-and-
-    /// egg).
+    /// loads its UPSTREAM as System (a single shared mirror per query id), but
+    /// wraps each subscriber with a per-user RLS filter
+    /// (<c>WrapWithPerUserRls</c>). The filter captures the subscriber's
+    /// AccessContext at Subscribe time and uses
+    /// <see cref="ISecurityService.HasPermission"/> to drop nodes the
+    /// subscriber can't Read.
+    ///
+    /// <para>So: ambient privileged user (Admin) sees the full set; ambient
+    /// unprivileged user sees a filtered (empty) view. This test pins both
+    /// halves of that contract.</para>
     /// </summary>
     [Fact(Timeout = 30_000)]
-    public async Task WorkspaceGetQuery_RunsAsSystem_EmitsResultsRegardlessOfAmbientUser()
+    public async Task WorkspaceGetQuery_AppliesPerUserRlsFilter()
     {
         var ct = TestContext.Current.CancellationToken;
         var workspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
@@ -204,16 +200,14 @@ public class MeshNodeReadAsSystemTest(ITestOutputHelper output) : MonolithMeshTe
         await NodeFactory.CreateNode(
             new MeshNode(nodeId2, "QueryCacheProbe") { Name = "Second", NodeType = "Markdown" });
 
-        // Switch to an unprivileged user — the query cache's upstream is
-        // system-impersonated, so its result is independent of ambient
-        // identity. (Consumer-side filtering, if any, is a separate concern.)
-        accessService.SetContext(new AccessContext { ObjectId = "no-rights", Name = "No Rights" });
+        var queryId = $"system-read-probe:{Guid.NewGuid()}";
 
+        // Privileged user (Admin, set up by SetupAccessRightsAsync) sees both rows.
+        accessService.SetContext(TestUsers.Admin);
         try
         {
             var collection = workspace.GetQuery(
-                $"system-read-probe:{Guid.NewGuid()}",
-                "namespace:QueryCacheProbe nodeType:Markdown");
+                queryId, "namespace:QueryCacheProbe nodeType:Markdown");
 
             var snapshot = await collection
                 .Where(items => items.Count() >= 2)
@@ -222,9 +216,7 @@ public class MeshNodeReadAsSystemTest(ITestOutputHelper output) : MonolithMeshTe
                 .FirstAsync()
                 .ToTask(ct);
 
-            snapshot.Should().Contain(n => n.Id == nodeId1,
-                because: "workspace.GetQuery's upstream runs with WellKnownUsers.System; " +
-                         "results are not filtered by the calling thread's ambient identity.");
+            snapshot.Should().Contain(n => n.Id == nodeId1);
             snapshot.Should().Contain(n => n.Id == nodeId2);
         }
         finally
