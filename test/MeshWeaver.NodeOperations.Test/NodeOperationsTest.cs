@@ -287,11 +287,20 @@ public class NodeOperationsTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Act - delete parent (NodeFactory.DeleteNodeAsync uses recursive by default)
         await NodeFactory.DeleteNode("recursive/RecursiveParent");
 
-        // Assert - Verify both parent and child are gone
-        var deletedParent = await ReadNodeAsync("recursive/RecursiveParent");
-        var deletedChild = await ReadNodeAsync("recursive/RecursiveParent/RecursiveChild");
-        deletedParent.Should().BeNull();
-        deletedChild.Should().BeNull();
+        // Assert - Verify both parent and child are gone. Use Observable.Interval
+        // polling so we wait for cache invalidation + descendant-delete
+        // propagation to settle (recursive delete dispatches per-leaf deletes
+        // which clear the cache + dispose hubs in turn; under CI load this is
+        // not synchronous with the parent's await-return).
+        await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .StartWith(0L)
+            .SelectMany(_ => Observable.FromAsync(async () =>
+                (await ReadNodeAsync("recursive/RecursiveParent"),
+                 await ReadNodeAsync("recursive/RecursiveParent/RecursiveChild"))))
+            .Where(t => t.Item1 is null && t.Item2 is null)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(10))
+            .ToTask(TestContext.Current.CancellationToken);
     }
 
     [Fact]
