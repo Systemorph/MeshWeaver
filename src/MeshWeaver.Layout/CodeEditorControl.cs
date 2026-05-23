@@ -57,6 +57,15 @@ public record CodeEditorControl() : UiControl<CodeEditorControl>(ModuleSetup.Mod
     /// </summary>
     public object? ExtraTypeDefinitions { get; init; }
 
+    /// <summary>
+    /// Opt-in: enables Roslyn-backed live diagnostics in Monaco when set. The renderer
+    /// resolves <c>IMeshLanguageService</c> from DI and pushes per-keystroke (debounced)
+    /// diagnostics for the substituted source via <c>CheckSpeculative</c>. Both fields
+    /// reference the NodeType + source MeshNode paths the editor is bound to so the
+    /// service can locate the right cached compilation. Null = no LSP wiring (default).
+    /// </summary>
+    public CodeEditorLanguageServerConfig? LanguageServer { get; init; }
+
     public CodeEditorControl WithValue(string value) => this with { Value = value };
     public CodeEditorControl WithLanguage(string language) => this with { Language = language };
     public CodeEditorControl WithTheme(string theme) => this with { Theme = theme };
@@ -67,4 +76,13 @@ public record CodeEditorControl() : UiControl<CodeEditorControl>(ModuleSetup.Mod
     public CodeEditorControl WithWordWrap(bool enabled) => this with { WordWrap = enabled };
     public CodeEditorControl WithPlaceholder(string placeholder) => this with { Placeholder = placeholder };
     public CodeEditorControl WithExtraTypeDefinitions(string definitions) => this with { ExtraTypeDefinitions = definitions };
+    public CodeEditorControl WithLanguageServer(string nodeTypePath, string sourcePath) =>
+        this with { LanguageServer = new CodeEditorLanguageServerConfig(nodeTypePath, sourcePath) };
 }
+
+/// <summary>
+/// Opt-in configuration for Roslyn-backed live diagnostics in <see cref="CodeEditorControl"/>.
+/// </summary>
+/// <param name="NodeTypePath">Path of the NodeType whose <c>CSharpCompilation</c> hosts the source (e.g. <c>type/MyType</c>).</param>
+/// <param name="SourcePath">Path of the Code MeshNode being edited (e.g. <c>type/MyType/Source/MyType.cs</c>).</param>
+public sealed record CodeEditorLanguageServerConfig(string NodeTypePath, string SourcePath);
