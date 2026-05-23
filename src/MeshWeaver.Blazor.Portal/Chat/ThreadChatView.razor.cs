@@ -149,6 +149,14 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 }
             }
 
+            // Open per-message cache subscriptions AFTER threadPath is set —
+            // DataBind invokes the value converter BEFORE this setter runs, so
+            // calling SyncMessageSubscriptions from inside the converter sees
+            // an empty threadPath on the first emission and bails. Result was
+            // 9 skeleton bubbles forever when the upstream didn't push a
+            // second time. Call here, where threadPath is guaranteed current.
+            SyncMessageSubscriptions(value?.Messages ?? []);
+
             // If messages changed, force re-render and release submission handler
             if (!Equals(old, value))
             {
@@ -1319,7 +1327,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         };
         Logger.LogDebug("[ThreadChat:{InstanceId}] ConvertThreadViewModel: input={InputType}, msgs={MsgCount}",
             _instanceId, value?.GetType().Name ?? "null", result?.Messages?.Count ?? 0);
-        SyncMessageSubscriptions(result?.Messages ?? []);
+        // SyncMessageSubscriptions runs in the property setter (below) — calling
+        // here is too early: threadPath is set by the setter AFTER conversion.
         return result;
     }
 
@@ -1397,7 +1406,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private void UpdateMessageState(string id, MeshNode node)
     {
         if (_isDisposed) return;
-        var je = ToJsonElement(node.Content!);
+        var je = ToJsonElement(node.Content!, Hub.JsonSerializerOptions);
 
         var role = je.TryGetProperty("role", out var roleProp) && roleProp.ValueKind == JsonValueKind.String
             ? roleProp.GetString() ?? "user" : "user";
@@ -1429,9 +1438,14 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         InvokeAsync(StateHasChanged);
     }
 
-    private static JsonElement ToJsonElement(object content)
+    // Use the hub's options (camelCase property naming) so the field-name
+    // lookups below ("role", "text", "agentName" …) match what the wire
+    // serializer produced. With default options the serialiser emits "Role"
+    // / "Text" and every TryGetProperty miss falls through to defaults —
+    // symptom: every bubble labelled "You" with no message text.
+    private static JsonElement ToJsonElement(object content, JsonSerializerOptions options)
         => content is JsonElement je ? je
-            : JsonSerializer.SerializeToElement(content);
+            : JsonSerializer.SerializeToElement(content, options);
 
     private MessageBubbleState? GetMessageState(string id) => messageStates.GetValueOrDefault(id);
 

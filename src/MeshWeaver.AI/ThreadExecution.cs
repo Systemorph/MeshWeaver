@@ -459,11 +459,26 @@ public static class ThreadExecution
         }
 
         // Read the post-claim state through the shared mesh-node cache (single
-        // source of truth across all readers). Drop the trigger if Status isn't
-        // StartingExecution — stale fingerprint emission, or claim already
-        // consumed by another _Exec invocation.
+        // source of truth across all readers). The cache hydrates from the
+        // thread hub's stream via the mesh hub's workspace — one async hop
+        // behind the thread hub's own emissions. Without the Where guard,
+        // .Take(1) races and routinely returns the PRE-claim snapshot
+        // (Status=Idle) — the post-claim StartingExecution state hasn't yet
+        // propagated to the mesh-hub cache. The old code then bailed on the
+        // status check ("status=Idle — drop trigger") and the watcher had
+        // no reason to re-fire (Status was non-Idle on the thread hub),
+        // wedging the thread in StartingExecution forever. Symptom: every
+        // ThreadSubmissionIntegrationTest.Submit_* test hangs with
+        // IsExecuting=true / Messages=[].
+        //
+        // Fix: wait for the cache to receive an emission whose Status is one
+        // of the post-claim states. StartingExecution is the expected one
+        // (set by HandleStartExecution's claim). Executing / Completing /
+        // Idle / Done are not — they'd be a stale or out-of-order emission
+        // that the bail check should still drop.
         var cache = execHub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
         cache.GetStream(threadPath)
+            .Where(n => (n?.Content as MeshThread)?.Status == ThreadExecutionStatus.StartingExecution)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(10))
             .Subscribe(
@@ -476,6 +491,9 @@ public static class ThreadExecution
                             threadPath);
                         return;
                     }
+                    // Where filter guarantees Status==StartingExecution; redundant
+                    // assert kept for defensive logging if the predicate is ever
+                    // changed and a stale snapshot slips through.
                     if (thread.Status != ThreadExecutionStatus.StartingExecution)
                     {
                         logger?.LogDebug(

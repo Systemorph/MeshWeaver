@@ -576,20 +576,20 @@ public class MeshPluginTest : MonolithMeshTestBase
     }
 
     [Fact]
-    public async Task WriteToolWiring_OrchestratorAgent_DoesNotGetWriteTools()
+    public async Task WriteToolWiring_AssistantAgent_DescriptionDoesNotMentionCreateOrDelete()
     {
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
         await chatClient.Initialize("ACME/ProductLaunch").WhenInitialized.FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         var agents = await chatClient.GetOrderedAgentsAsync();
 
-        var orchestrator = agents.FirstOrDefault(a => a.Name == "Orchestrator");
-        orchestrator.Should().NotBeNull("Orchestrator agent should be loaded from test data");
-        orchestrator!.AgentConfiguration.Should().NotBeNull();
-        // Orchestrator description says "Understands user intent, navigates the mesh, and delegates"
-        // which does NOT contain create/update/delete
-        orchestrator.AgentConfiguration!.Description.Should().NotContain("create");
-        orchestrator.AgentConfiguration!.Description.Should().NotContain("delete");
+        var assistant = agents.FirstOrDefault(a => a.Name == "Assistant");
+        assistant.Should().NotBeNull("Assistant agent should be loaded from test data");
+        assistant!.AgentConfiguration.Should().NotBeNull();
+        // Assistant description focuses on "owning the conversation's red line"
+        // and intentionally does not list write verbs in the description copy.
+        assistant.AgentConfiguration!.Description.Should().NotContain("create");
+        assistant.AgentConfiguration!.Description.Should().NotContain("delete");
     }
 
     #endregion

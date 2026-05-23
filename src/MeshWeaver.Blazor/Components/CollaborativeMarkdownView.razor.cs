@@ -579,18 +579,16 @@ public partial class CollaborativeMarkdownView
 
     private void ResolveComment(string markerId)
     {
-        if (!commentPaths.TryGetValue(markerId, out var path) || string.IsNullOrEmpty(BoundHubAddress))
+        if (!commentPaths.TryGetValue(markerId, out var path))
             return;
-        // Reactive read — Subscribe, never await on a hub round-trip (100% deadlock;
-        // see Doc/Architecture/AsynchronousCalls.md).
-        Hub.GetMeshNode(path, TimeSpan.FromSeconds(10)).Subscribe(node =>
+        // Write through the shared cache — the lambda fires against the live
+        // MeshNode the cache holds, no separate Read → Post round-trip needed.
+        var cache = Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        cache.Update(path, n =>
         {
-            if (node?.Content is Comment comment)
-            {
-                var updated = node with { Content = comment with { Status = CommentStatus.Resolved } };
-                Hub.Post(new UpdateNodeRequest(updated), o => o.WithTarget(new Address(BoundHubAddress)));
-            }
-        });
+            if (n.Content is not Comment c) return n;
+            return n with { Content = c with { Status = CommentStatus.Resolved } };
+        }).Subscribe(_ => { }, _ => { });
     }
 
     private void DeleteComment(string markerId)

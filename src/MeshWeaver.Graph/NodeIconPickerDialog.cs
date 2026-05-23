@@ -7,6 +7,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph;
@@ -156,8 +157,13 @@ public static class NodeIconPickerDialog
             .Subscribe(data =>
             {
                 var newIcon = data?.GetValueOrDefault("icon")?.ToString() ?? "";
-                var updatedNode = node with { Icon = string.IsNullOrWhiteSpace(newIcon) ? null : newIcon };
-                ctx.Host.Hub.Post(new UpdateNodeRequest(updatedNode));
+                if (node.Path is { Length: > 0 } iconPath)
+                {
+                    var cache = ctx.Host.Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+                    cache.Update(iconPath, n =>
+                        n with { Icon = string.IsNullOrWhiteSpace(newIcon) ? null : newIcon })
+                        .Subscribe(_ => { }, _ => { });
+                }
                 ctx.Host.UpdateArea(DialogControl.DialogArea, null);
             });
         return Task.CompletedTask;

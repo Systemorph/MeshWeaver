@@ -595,26 +595,42 @@ public static class ThreadSubmission
         string? agentName,
         string? modelName)
     {
-        // Optionally update the user cell text. Target the thread address
-        // (not the caller's own address — the cell lives under the thread).
-        if (!string.IsNullOrEmpty(newUserText))
-        {
-            var updatedCell = new MeshNode(userMessageId, threadPath)
-            {
-                NodeType = ThreadMessageNodeType.NodeType,
-                Content = new ThreadMessage
-                {
-                    Role = "user",
-                    Text = newUserText,
-                    Timestamp = DateTime.UtcNow,
-                    Type = ThreadMessageType.ExecutedInput
-                }
-            };
-            hub.Post(new UpdateNodeRequest(updatedCell), o => o.WithTarget(new Address(threadPath)));
-        }
-
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.ThreadSubmission");
+
+        // Optionally update the user cell text. Goes through the shared
+        // IMeshNodeStreamCache so the write reaches the per-message hub via
+        // the same handle every reader uses (CLAUDE.md "NodeMutations: stream.Update
+        // only — never request/response"). The earlier shape — posting
+        // UpdateNodeRequest with a freshly-built MeshNode — both violated the
+        // rule and clobbered the cell's CreatedBy / original timestamp.
+        if (!string.IsNullOrEmpty(newUserText))
+        {
+            var cellPath = $"{threadPath}/{userMessageId}";
+            var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+            cache.Update(cellPath, node =>
+            {
+                var existing = node.Content as ThreadMessage;
+                var nextContent = existing is not null
+                    ? existing with { Text = newUserText, Timestamp = DateTime.UtcNow }
+                    : new ThreadMessage
+                    {
+                        Role = "user",
+                        Text = newUserText,
+                        Timestamp = DateTime.UtcNow,
+                        Type = ThreadMessageType.ExecutedInput
+                    };
+                return node with
+                {
+                    NodeType = node.NodeType ?? ThreadMessageNodeType.NodeType,
+                    Content = nextContent
+                };
+            }).Subscribe(
+                _ => { },
+                ex => logger?.LogWarning(ex,
+                    "[ApplyResubmit] cell-text Update failed for {CellPath}", cellPath));
+        }
+
         hub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
         {
             var t = node.Content as MeshThread ?? new MeshThread();

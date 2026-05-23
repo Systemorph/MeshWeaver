@@ -455,11 +455,21 @@ internal class NavigationService : INavigationService
                 if (html == null) return node;
 
                 node = node with { PreRenderedHtml = html };
-                try { _hub.Post(new UpdateNodeRequest(node), o => o.WithTarget(_hub.Address)); }
-                catch (Exception ex)
+                if (node.Path is { Length: > 0 } prerenderedPath)
                 {
-                    _hub.ServiceProvider.GetService<ILogger<NavigationService>>()
-                        ?.LogWarning(ex, "Failed to persist PreRenderedHtml for {Path}", node.Path);
+                    try
+                    {
+                        var cache = _hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+                        cache.Update(prerenderedPath, current => current with { PreRenderedHtml = html })
+                            .Subscribe(_ => { }, ex =>
+                                _hub.ServiceProvider.GetService<ILogger<NavigationService>>()
+                                    ?.LogWarning(ex, "Failed to persist PreRenderedHtml for {Path}", prerenderedPath));
+                    }
+                    catch (Exception ex)
+                    {
+                        _hub.ServiceProvider.GetService<ILogger<NavigationService>>()
+                            ?.LogWarning(ex, "Failed to resolve cache for PreRenderedHtml save on {Path}", prerenderedPath);
+                    }
                 }
                 return node;
             });
