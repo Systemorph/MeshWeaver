@@ -77,6 +77,7 @@ public class NodeTypeEnrichmentDoubleCallTest
         }
         public IObservable<MeshNode> Update(string path, Func<MeshNode, MeshNode> update)
             => Observable.Never<MeshNode>();
+        public void Invalidate(string path) { }
     }
 
     private static (IMessageHub Hub, HangingStreamCache Cache) BuildMeshHub()
