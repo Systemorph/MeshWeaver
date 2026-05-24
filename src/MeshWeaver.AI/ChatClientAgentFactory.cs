@@ -382,96 +382,134 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         var parentMsgPath = $"{threadPath}/{execCtx.ResponseMessageId}";
         var mainEntityPath = execCtx.ContextPath ?? context ?? threadPath;
 
-        // Deterministically pre-compute the sub-thread path (GenerateSpeakingId
-        // is pure of the task text). The thread-hub handler will derive the SAME
-        // path inside BuildThreadWithMessages — so we can stamp it on the
-        // parent's tool-call entry RIGHT NOW via the Dispatched event without
-        // waiting for the round-trip to the handler.
-        var subThreadPath = $"{parentMsgPath}/{MeshWeaver.AI.ThreadNodeType.GenerateSpeakingId(task)}";
+        // Build the full sub-thread node + ids ONCE. GenerateSpeakingId appends
+        // a random suffix, so calling BuildThreadWithMessages twice produces
+        // DIFFERENT paths. Single source of truth.
+        var (preSubThreadNode, userMsgId, responseMsgId) =
+            MeshWeaver.AI.ThreadNodeType.BuildThreadWithMessages(
+                parentMsgPath, task,
+                createdBy: execCtx.UserAccessContext?.ObjectId,
+                agentName: targetId);
+        var subThreadNode = preSubThreadNode with { MainNode = mainEntityPath };
+        var subThreadPath = subThreadNode.Path!;
+        var responsePath = $"{subThreadPath}/{responseMsgId}";
         var callId = Guid.NewGuid().ToString("N")[..8];
 
         // Emit Dispatched onto chat.Delegations. AgentChatClient.EmitDelegationEvent
-        // also updates the ActiveDelegationPaths snapshot that the cancel watcher
-        // and the streaming-loop's stamp pass read. Single source of truth.
+        // also updates ActiveDelegationPaths which the cancel watcher + streaming-
+        // loop stamp pass read.
         if (chat is AgentChatClient agentChat)
             agentChat.EmitDelegationEvent(
                 new MeshWeaver.AI.Delegation.DelegationEvent(callId, subThreadPath,
                     MeshWeaver.AI.Delegation.DelegationLifecycle.Dispatched));
 
-        // Resolve the _Exec hub we're running on (FCC dispatches us from
-        // ExecuteMessageAsync, which runs on _Exec) and its DelegationRegistry.
-        // Hub here is the FACTORY's hub (typically the mesh hub) — that's NOT
-        // _Exec. Get _Exec from the threadHub's hosted-hub cache.
-        var threadHubAddress = new Address(threadPath);
-        var execHubAddress = new Address($"{threadPath}/_Exec");
-        var threadHub = Hub.GetHostedHub(threadHubAddress, HostedHubCreation.Never)
-            ?? throw new InvalidOperationException(
-                $"Thread hub at {threadHubAddress} not found for delegation");
-        var execHub = threadHub.GetHostedHub(execHubAddress, HostedHubCreation.Never)
-            ?? throw new InvalidOperationException(
-                $"_Exec hub at {execHubAddress} not found for delegation");
-        var registry = execHub.ServiceProvider.GetRequiredService<MeshWeaver.AI.Delegation.DelegationRegistry>();
+        var meshService = Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var nodeCache = Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
 
-        // Per-CallId channel that drives this IAsyncEnumerable. Writer is fed
-        // exclusively by HandleSubThreadStateChanged on _Exec's action block —
-        // single-writer guarantee without locks.
-        var channel = System.Threading.Channels.Channel.CreateUnbounded<MeshWeaver.AI.Delegation.DelegationFrame>(
+        // Single channel — writer is the cache subscription; SINGLE READER is
+        // the `await foreach` below on the FCC invocation thread. Delta
+        // accumulation + terminal detection run single-threaded in the reader.
+        var channel = System.Threading.Channels.Channel.CreateUnbounded<DelegationObservation>(
             new System.Threading.Channels.UnboundedChannelOptions
             { SingleReader = true, SingleWriter = false });
 
-        var entry = new MeshWeaver.AI.Delegation.DelegationEntry
+        // Fire-and-forget parallel creates — same shape as legacy code. The
+        // sub-thread's own WatchForExecution would auto-materialise the cells
+        // from PendingUserMessage too, but creating them explicitly here makes
+        // the cache subscription below see the response cell faster on the
+        // first emission. Cell create OnErrors are benign (likely "node already
+        // exists" if WatchForExecution beat us to it) — debug-log + move on.
+        meshService.CreateNode(subThreadNode).Subscribe(
+            _ => Logger.LogInformation("[Delegation] sub-thread created at {Path}", subThreadPath),
+            ex => Logger.LogWarning(ex, "[Delegation] sub-thread create failed at {Path}", subThreadPath));
+        meshService.CreateNode(new MeshNode(userMsgId, subThreadPath)
         {
-            CallId = callId,
-            SubThreadPath = subThreadPath,
-            ResponseMsgId = "", // populated by HandleDelegationSubThreadCreated when the handler computes it
-            Writer = channel.Writer,
-        };
-        registry.Active[callId] = entry;
-
-        // Best-effort cleanup if the caller (FCC turn) gets cancelled mid-flight.
-        using var cleanup = cancellationToken.Register(() =>
-        {
-            if (registry.Active.TryRemove(callId, out var e))
+            NodeType = ThreadMessageNodeType.NodeType,
+            MainNode = mainEntityPath,
+            Content = new ThreadMessage
             {
-                e.Subscription?.Dispose();
-                e.Writer.TryComplete();
+                Role = "user", Text = task, Timestamp = DateTime.UtcNow,
+                Type = ThreadMessageType.ExecutedInput,
+                CreatedBy = execCtx.UserAccessContext?.ObjectId
             }
-        });
+        }).Subscribe(_ => { },
+            ex => Logger.LogDebug(ex, "[Delegation] user cell create benign error at {Path}", subThreadPath));
+        meshService.CreateNode(new MeshNode(responseMsgId, subThreadPath)
+        {
+            NodeType = ThreadMessageNodeType.NodeType,
+            MainNode = mainEntityPath,
+            Content = new ThreadMessage
+            {
+                Role = "assistant", Text = "", Timestamp = DateTime.UtcNow,
+                Type = ThreadMessageType.AgentResponse, AgentName = targetId
+            }
+        }).Subscribe(_ => { },
+            ex => Logger.LogDebug(ex, "[Delegation] response cell create benign error at {Path}", subThreadPath));
 
-        // Post the lifecycle kickoff. The thread-hub handler sequences the three
-        // CreateNode observables (.Concat), then posts DelegationSubThreadCreated
-        // back to _Exec, which installs THE single observation subscription.
-        // From here, every state change flows through _Exec's action block as
-        // a SubThreadStateChanged message — no race, no rogue subscriptions on
-        // the mesh-hub scheduler.
-        threadHub.Post(
-            new MeshWeaver.AI.Delegation.CreateDelegationSubThread(
-                CallId: callId,
-                ParentMsgPath: parentMsgPath,
-                TargetAgentId: targetId,
-                Task: task,
-                MainEntityPath: mainEntityPath));
+        // Resilient cache streams — `cache.GetStream(path)` OnError's with
+        // "No node found" until the create-roundtrip + cache invalidation
+        // window closes. Catch+Repeat(delay) absorbs those early errors so
+        // the CombineLatest below sees the FIRST successful emission once the
+        // node materialises. Without this the subscription dies on the first
+        // OnError and the delegation hangs.
+        IObservable<MeshNode?> ResilientStream(string path) =>
+            System.Reactive.Linq.Observable.Defer(() =>
+                    nodeCache.GetStream(path).Select(n => (MeshNode?)n))
+                .Catch<MeshNode?, Exception>(_ =>
+                    System.Reactive.Linq.Observable.Empty<MeshNode?>()
+                        .Delay(TimeSpan.FromMilliseconds(200)))
+                .Repeat();
 
-        // Drain frames until terminal. Each Delta is yielded to FCC's
-        // FunctionResultContent accumulator — sub-thread streaming text reaches
-        // the parent agent intact. The terminal frame carries the final
-        // ThreadMessageStatus / error message.
+        // ONE cache subscription. Lambda's ONLY job is channel.Writer.TryWrite
+        // — schedulerless, lock-free. State-machine logic runs single-threaded
+        // in the reader below.
+        using var cacheSub = System.Reactive.Linq.Observable.CombineLatest(
+                ResilientStream(subThreadPath),
+                ResilientStream(responsePath),
+                (threadNode, cellNode) => (threadNode, cellNode))
+            .Subscribe(
+                tup => channel.Writer.TryWrite(new DelegationObservation(
+                    Thread: tup.threadNode?.Content as MeshThread,
+                    Cell: tup.cellNode?.Content as ThreadMessage,
+                    Error: null)),
+                ex => channel.Writer.TryWrite(new DelegationObservation(
+                    Thread: null, Cell: null, Error: ex.Message)));
+
+        // Close the channel when the caller cancels the FCC turn.
+        using var cancelReg = cancellationToken.Register(() => channel.Writer.TryComplete());
+
+        // Single-reader drain. AccumulatedText, startedExecuting, finalStatus —
+        // all mutated only here, no locks needed.
+        var accumulatedText = "";
+        var startedExecuting = false;
         ThreadMessageStatus? finalStatus = null;
         string? terminalError = null;
-        await foreach (var frame in channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+        await foreach (var obs in channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
         {
-            if (!string.IsNullOrEmpty(frame.Delta))
-                yield return frame.Delta;
-            if (frame.Terminal)
+            if (obs.Error is not null) { terminalError = obs.Error; break; }
+
+            // Text deltas — yield only the new portion.
+            if (obs.Cell?.Text is { Length: > 0 } text && text.Length > accumulatedText.Length)
             {
-                finalStatus = frame.FinalStatus;
-                terminalError = frame.ErrorMessage;
+                var delta = text[accumulatedText.Length..];
+                accumulatedText = text;
+                yield return delta;
+            }
+
+            // Terminal detection. Cell completion is authoritative; thread-idle
+            // is the fallback for cases where the cell never gets a CompletedAt
+            // (e.g. cancelled before first token).
+            if (obs.Thread is { IsExecuting: true }) startedExecuting = true;
+            var cellDone = obs.Cell?.CompletedAt is not null;
+            var threadIdle = obs.Thread is { IsExecuting: false };
+            if (cellDone || (startedExecuting && threadIdle))
+            {
+                finalStatus = obs.Cell?.Status;
                 break;
             }
         }
 
-        // Emit Terminal onto chat.Delegations so subscribers (cancel watcher,
-        // tool-call stamper) can drop their per-CallId state.
+        // Emit Terminal so the cancel watcher + stamper drop this delegation.
         if (chat is AgentChatClient agentChat2)
             agentChat2.EmitDelegationEvent(
                 new MeshWeaver.AI.Delegation.DelegationEvent(callId, subThreadPath,
@@ -481,14 +519,17 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
             "[Delegation] Sub-thread {Path} settled (status={Status}, error={Error})",
             subThreadPath, finalStatus, terminalError ?? "(none)");
 
-        // Terminal marker only on error/cancel. On success the deltas already
-        // delivered the full sub-thread text to FCC's FunctionResultContent.
         if (terminalError is not null)
             yield return $"\n[Delegation failed: {terminalError}]";
         else if (cancellationToken.IsCancellationRequested
                  || finalStatus == ThreadMessageStatus.Cancelled)
             yield return "\n[Delegation cancelled before completion]";
     }
+
+    private readonly record struct DelegationObservation(
+        MeshThread? Thread,
+        ThreadMessage? Cell,
+        string? Error);
 
     /// <summary>
     /// Distinguishes which subscription signalled terminal — purely for

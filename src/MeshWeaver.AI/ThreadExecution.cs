@@ -112,14 +112,12 @@ public static class ThreadExecution
             .WithHandler<ResubmitTrigger>(ThreadSubmission.HandleResubmitTrigger)
             .WithHandler<DeleteFromMessageTrigger>(ThreadSubmission.HandleDeleteFromMessageTrigger)
             .WithHandler<RecordSubmissionFailureTrigger>(ThreadSubmission.HandleRecordSubmissionFailureTrigger)
-            // Delegation lifecycle: race-free, hub-serialized via Hub.Post.
-            // CreateDelegationSubThread builds the sub-thread node + cells in
-            // a sequenced .Concat() chain on this thread hub's action block;
-            // CancelDelegationSubThread propagates RequestedCancellationAt
-            // to the named sub-thread (heartbeat-driven or user-driven).
-            // See Doc/Architecture/AsynchronousCalls.md + plan cozy-napping-parrot.
-            .WithHandler<MeshWeaver.AI.Delegation.CreateDelegationSubThread>(
-                MeshWeaver.AI.Delegation.DelegationHandlers.HandleCreateDelegationSubThread)
+            // Delegation heartbeat: scans this thread's chat.ActiveDelegationPaths
+            // every HeartbeatInterval. Stale sub-threads get a CancelDelegationSubThread
+            // (heartbeat-driven). Same handler also processes user-Stop-button
+            // propagation when the parent thread's cancel watcher fans out.
+            .WithHandler<MeshWeaver.AI.Delegation.HeartbeatTick>(
+                MeshWeaver.AI.Delegation.DelegationHandlers.HandleHeartbeatTick)
             .WithHandler<MeshWeaver.AI.Delegation.CancelDelegationSubThread>(
                 MeshWeaver.AI.Delegation.DelegationHandlers.HandleCancelDelegationSubThread)
             .WithInitialization(SetThreadHubIdentity)
@@ -127,7 +125,8 @@ public static class ThreadExecution
             .WithInitialization(WatchForExecution)
             .WithInitialization(InstallCancellationWatcher)
             .WithInitialization(InstallExecutionHub)
-            .WithInitialization(InstallSubmissionWatcher);
+            .WithInitialization(InstallSubmissionWatcher)
+            .WithInitialization(InstallHeartbeatTicker);
 
     /// <summary>
     /// Eagerly creates the <c>_Exec</c> hosted hub at thread hub init time with
@@ -146,50 +145,32 @@ public static class ThreadExecution
         threadHub.GetHostedHub(
             new Address($"{threadHub.Address}/_Exec"),
             config => config
-                .WithServices(s =>
-                {
-                    // Per-_Exec-hub registry of in-flight delegations.
-                    // Accessed ONLY from the hub's handlers, which are
-                    // serialized on the action block — logically single-
-                    // threaded. ConcurrentDictionary is used inside only
-                    // for the lock-free TryAdd/TryRemove during startup/
-                    // shutdown windows.
-                    s.AddSingleton<MeshWeaver.AI.Delegation.DelegationRegistry>();
-                    return s;
-                })
                 .WithHandler<SubmitMessageRequest>(ExecuteMessageAsync)
-                .WithHandler<StartExecutionTrigger>(HandleStartExecutionOnExec)
-                // Delegation observation handlers — see DelegationHandlers.cs.
-                .WithHandler<MeshWeaver.AI.Delegation.DelegationSubThreadCreated>(
-                    MeshWeaver.AI.Delegation.DelegationHandlers.HandleDelegationSubThreadCreated)
-                .WithHandler<MeshWeaver.AI.Delegation.SubThreadStateChanged>(
-                    MeshWeaver.AI.Delegation.DelegationHandlers.HandleSubThreadStateChanged)
-                .WithHandler<MeshWeaver.AI.Delegation.HeartbeatTick>(
-                    MeshWeaver.AI.Delegation.DelegationHandlers.HandleHeartbeatTick)
-                .WithInitialization(InstallHeartbeatTicker),
+                .WithHandler<StartExecutionTrigger>(HandleStartExecutionOnExec),
             HostedHubCreation.Always);
     }
 
     /// <summary>
     /// Installs the periodic <see cref="MeshWeaver.AI.Delegation.HeartbeatTick"/>
-    /// emitter on the <c>_Exec</c> hub. Every 5 s posts a tick to self;
-    /// <see cref="MeshWeaver.AI.Delegation.DelegationHandlers.HandleHeartbeatTick"/>
-    /// scans the registry for stale entries and posts
-    /// <see cref="MeshWeaver.AI.Delegation.CancelDelegationSubThread"/> to the
-    /// parent thread hub for any sub-thread that hasn't reported activity in
-    /// <see cref="MeshWeaver.AI.Delegation.DelegationHandlers.DefaultHeartbeatTimeout"/>.
+    /// emitter on the PARENT THREAD hub. Every <c>HeartbeatInterval</c> posts a
+    /// tick to self; <see cref="MeshWeaver.AI.Delegation.DelegationHandlers.HandleHeartbeatTick"/>
+    /// walks <c>chat.ActiveDelegationPaths</c> (cached on this hub via
+    /// <c>parentHub.Set&lt;AgentChatClient&gt;</c>), reads each sub-thread's
+    /// MeshNode via the process-wide cache, and posts
+    /// <see cref="MeshWeaver.AI.Delegation.CancelDelegationSubThread"/> for
+    /// any sub-thread whose <see cref="MeshThread.LastActivityAt"/> is older
+    /// than its <see cref="MeshThread.HeartbeatTimeout"/>. Replaces the hard
+    /// 5-min watchdog inside <c>ExecuteDelegationAsync</c>.
     ///
-    /// <para>Uses <c>Observable.Interval</c> + <c>Subscribe</c> with
-    /// disposal registered against the hub so the timer dies cleanly with the
-    /// hub. The tick handler short-circuits on an empty registry — negligible
-    /// cost when no delegations are in flight.</para>
+    /// <para>The tick handler short-circuits when <c>ActiveDelegationPaths</c>
+    /// is empty — negligible cost when no delegations are in flight.</para>
     /// </summary>
-    private static void InstallHeartbeatTicker(IMessageHub execHub)
+    private static void InstallHeartbeatTicker(IMessageHub threadHub)
     {
         var sub = System.Reactive.Linq.Observable
             .Interval(MeshWeaver.AI.Delegation.DelegationHandlers.HeartbeatInterval)
-            .Subscribe(_ => execHub.Post(new MeshWeaver.AI.Delegation.HeartbeatTick()));
-        execHub.RegisterForDisposal(_ => sub.Dispose());
+            .Subscribe(_ => threadHub.Post(new MeshWeaver.AI.Delegation.HeartbeatTick()));
+        threadHub.RegisterForDisposal(_ => sub.Dispose());
     }
 
     /// <summary>
