@@ -50,6 +50,24 @@ internal sealed class PostgreSqlPathRoutingAdapter : IStorageAdapter
         // schema-must-not-exist assertion failing for AccessAssignment.
         if (PartitionDefinition.NodeTypeToSuffix.ContainsKey(seg))
             return Observable.Return<PartitionState>(new PartitionState.Absent());
+        // 🚨 Global satellite namespaces (`_Access`, `_Activity`, `_Thread`,
+        // `_UserActivity`) are managed by DefaultPartitionProvider with explicit
+        // schemas (`system_access`, `system_activity`, etc.) — the schema is NOT
+        // the lowercased namespace. The cache's probe queries information_schema
+        // for `_access` which doesn't exist (real schema is `system_access`), so
+        // probe returns PendingCreate. If we let AdapterForWriteState lazy-create
+        // from that, we'd build a competing `_access` schema. Instead, demote
+        // PendingCreate → Absent for `_`-prefixed segments: writes are accepted
+        // only when the static-partition path has populated the cache with the
+        // real Exists(def with Schema="system_access").
+        if (seg.StartsWith('_'))
+        {
+            return _provider.PartitionCache.GetOrProbe(seg)
+                .Take(1)
+                .Select(state => state is PartitionState.Exists
+                    ? state
+                    : (PartitionState)new PartitionState.Absent());
+        }
         return _provider.PartitionCache.GetOrProbe(seg).Take(1);
     }
 

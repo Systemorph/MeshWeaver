@@ -391,9 +391,52 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         foreach (var (name, value) in parameters)
             cmd.Parameters.Add(new NpgsqlParameter(name, value ?? DBNull.Value));
 
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
+        // "Relation does not exist" (42P01) — the satellite table hasn't been
+        // created in one of the targeted schemas yet (typical for partition-
+        // pinned satellite queries that race the lazy-create path, or for a
+        // newly-discovered schema where CreateSatelliteTables hasn't run).
+        // The error can surface at ExecuteReaderAsync (when PG eagerly plans)
+        // or at the first ReadAsync (when PG defers). Catch at both seams and
+        // treat as no rows; the next query will see the now-existing table
+        // after the write commits.
+        await foreach (var node in EnumerateReaderOrEmptyOnMissingRelationAsync(
+            cmd, options, schemas, tableName, ct).WithCancellation(ct))
         {
+            yield return node;
+        }
+    }
+
+    private async IAsyncEnumerable<MeshNode> EnumerateReaderOrEmptyOnMissingRelationAsync(
+        Npgsql.NpgsqlCommand cmd,
+        JsonSerializerOptions options,
+        IReadOnlyList<string> schemas,
+        string tableName,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        Npgsql.NpgsqlDataReader reader;
+        try { reader = await cmd.ExecuteReaderAsync(ct); }
+        catch (Npgsql.PostgresException ex) when (ex.SqlState == "42P01")
+        {
+            _logger?.LogDebug(
+                "[CrossSchema] Skipping satellite query — {Schemas} schemas missing {Table}: {Error}",
+                schemas.Count, tableName, ex.Message);
+            yield break;
+        }
+
+        await using var _disposeReader = reader;
+        while (true)
+        {
+            bool hasNext;
+            try { hasNext = await reader.ReadAsync(ct); }
+            catch (Npgsql.PostgresException ex) when (ex.SqlState == "42P01")
+            {
+                _logger?.LogDebug(
+                    "[CrossSchema] Skipping satellite query mid-stream — {Table} missing in some schema: {Error}",
+                    tableName, ex.Message);
+                yield break;
+            }
+            if (!hasNext) break;
+
             MeshNode? node;
             try { node = ReadMeshNode(reader, options); }
             catch (Exception ex)

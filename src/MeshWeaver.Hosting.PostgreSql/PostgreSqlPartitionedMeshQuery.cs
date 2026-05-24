@@ -457,6 +457,15 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
         {
             var first = FirstSegment(parsed.Path);
             if (string.IsNullOrEmpty(first) || first == "*") return null;
+            // 🚨 GLOBAL SATELLITE NAMESPACES (`_Access`, `_Activity`,
+            // `_UserActivity`, `_Thread`) are registered with explicit Schema
+            // names (`system_access`, `system_activity`, …) — the schema is
+            // NOT the lowercased namespace. We don't have the partition cache
+            // here to look up the actual schema, so fall through to the
+            // GetSchemasWithTableAsync fan-out path which discovers schemas
+            // via information_schema. Cost: one extra round-trip on these
+            // satellite queries; correctness wins.
+            if (first.StartsWith('_')) return null;
             return first.ToLowerInvariant();
         }
 
@@ -473,7 +482,11 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
             var stopIdx = trimmed.IndexOfAny(new[] { '/', '%', '*' });
             var first = stopIdx < 0 ? trimmed : trimmed[..stopIdx];
             if (!string.IsNullOrEmpty(first) && !first.Contains('*') && !first.Contains('%'))
+            {
+                // Same satellite-namespace guard as the path-based path.
+                if (first.StartsWith('_')) return null;
                 return first.ToLowerInvariant();
+            }
         }
         return null;
     }
