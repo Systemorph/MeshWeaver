@@ -395,7 +395,17 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 .Where(mainPath => mainPath != null && seenMains.Add(mainPath))
                 .SelectMany(mainPath => persistence.Read(mainPath!, options)
                     .Take(1)
-                    .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null)))
+                    .Catch<MeshNode?, Exception>(ex =>
+                    {
+                        // Surface as warning so silent swallow-and-return-null
+                        // doesn't make TimeoutException disappear into "node
+                        // dropped by Where(!= null)" — visible cause when a
+                        // query mysteriously returns fewer rows than expected.
+                        logger?.LogWarning(ex,
+                            "[SourceActivity.ReadMain] swallowed for path={Path}; returning null",
+                            mainPath);
+                        return Observable.Return<MeshNode?>(null);
+                    }))
                 .Where(node => node != null)
                 .Select(node => node!)
                 .Where(node => _evaluator.Matches(node, parsedQuery)
@@ -511,7 +521,16 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             .SelectMany(path =>
                 persistence.Read(path, options)
                     .Take(1)
-                    .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null)))
+                    .Catch<MeshNode?, Exception>(ex =>
+                    {
+                        // Surface swallowed read errors at warning level so a
+                        // timeout / RLS-deny / corrupt-row doesn't silently
+                        // drop the node out of the result set.
+                        logger?.LogWarning(ex,
+                            "[MatchScope.Read] swallowed for path={Path}; returning null",
+                            path);
+                        return Observable.Return<MeshNode?>(null);
+                    }))
             .Where(node => node != null)
             .Select(node => node!)
             .Where(node => _evaluator.Matches(node, parsedQuery)

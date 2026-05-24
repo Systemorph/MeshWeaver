@@ -58,9 +58,13 @@ public static class SampleDataExtensions
     public static TBuilder AddTypeData<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
         => builder.IncludePartition("Type");
 
-    /// <summary>Includes the User data partition.</summary>
+    /// <summary>
+    /// Includes the central Auth data partition (formerly "User"; renamed in
+    /// V27 / DefaultPartitionProvider to reflect its broader scope as the
+    /// User / Group / Role / VUser / ApiToken mirror).
+    /// </summary>
     public static TBuilder AddUserData<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
-        => builder.IncludePartition("User");
+        => builder.IncludePartition("Auth");
 
     /// <summary>Includes the VUser (virtual user) data partition.</summary>
     public static TBuilder AddVUser<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder

@@ -1240,8 +1240,19 @@ public static class ThreadExecution
                         excludeResponseMessageId: responseMsgId,
                         logger)
                     .Take(1)
-                    .Timeout(TimeSpan.FromSeconds(5),
-                        Observable.Return<IReadOnlyList<ChatMessage>>(Array.Empty<ChatMessage>()))
+                    .Timeout(TimeSpan.FromSeconds(5))
+                    .Catch<IReadOnlyList<ChatMessage>, Exception>(ex =>
+                    {
+                        // 🚨 LOUD log — history-load failure means the agent sees
+                        // truncated context (or nothing) for this round. Continue with
+                        // empty so the round doesn't wedge, but surface the failure so
+                        // CI surfaces the actual cause (per-cell timeout / stream error)
+                        // instead of producing a wrong-content assertion downstream.
+                        logger.LogError(ex,
+                            "[ThreadExec] HISTORY_LOAD_FAILED threadPath={ThreadPath} — proceeding with EMPTY history; agent will see only the new user message",
+                            threadPath);
+                        return Observable.Return<IReadOnlyList<ChatMessage>>(Array.Empty<ChatMessage>());
+                    })
                     .Subscribe(history =>
                 {
                     var chatHistory = history.ToImmutableList();
@@ -1859,7 +1870,11 @@ public static class ThreadExecution
         }
         else
         {
-            logger.LogWarning("[ThreadExec] No completion callback for {ThreadPath}", threadPath);
+            // Expected for non-delegated threads (the user's top-level submit, not a
+            // sub-thread). Only delegation child threads have a parent callback registered
+            // by HandleSubmitMessage. Don't log at Warning — every regular chat round
+            // would emit it and drown the trace.
+            logger.LogDebug("[ThreadExec] No completion callback for {ThreadPath}", threadPath);
         }
     }
 
@@ -2224,8 +2239,9 @@ public static class ThreadExecution
     /// </summary>
     internal static IObservable<IReadOnlyList<ChatMessage>> LoadFullConversationHistoryFromMesh(
         IMessageHub hub, string threadPath, string? excludeUserMessageId, string? excludeResponseMessageId,
-        ILogger logger)
+        ILogger logger, TimeSpan? cellTimeout = null)
     {
+        var perCellTimeout = cellTimeout ?? TimeSpan.FromSeconds(5);
         // 🚨 Read thread + each cell from IMeshNodeStreamCache — the hot, shared,
         // path-keyed Replay(1) handle every consumer subscribes to. The same cache
         // that the per-node hub's writes flow through, so reads here observe the
@@ -2246,33 +2262,66 @@ public static class ThreadExecution
                 if (cellIds.Count == 0)
                     return Observable.Return<IReadOnlyList<ChatMessage>>(Array.Empty<ChatMessage>());
 
-                var cellLookups = cellIds.Select(id =>
-                    cache.GetStream($"{threadPath}/{id}")
-                        .Take(1)
-                        .Timeout(TimeSpan.FromSeconds(5))
-                        .Catch<MeshNode, Exception>(_ => Observable.Empty<MeshNode>()));
+                // 🚨 Fan out cell reads in PARALLEL via CombineLatest — each
+                // `cache.GetStream(path)` is its own hot Replay(1), so they all
+                // subscribe / receive content concurrently. The serial `.Concat()`
+                // shape was waiting up to N × budget when cells were cold.
+                // Per-cell semantics: wait for content with text (cache may emit a
+                // pre-text shell first), Take(1), then Timeout(perCellTimeout). On
+                // per-cell failure → emit a sentinel null so CombineLatest still fires
+                // — the projector filters nulls and the caller decides what to do
+                // (warn + proceed with partial / throw if zero loaded).
+                var cellLookups = cellIds
+                    .Select(id =>
+                        cache.GetStream($"{threadPath}/{id}")
+                            .Where(n => n.Content is ThreadMessage m && !string.IsNullOrEmpty(m.Text))
+                            .Take(1)
+                            .Timeout(perCellTimeout)
+                            .Select(n => (MeshNode?)n)
+                            .Catch<MeshNode?, Exception>(ex =>
+                            {
+                                logger.LogWarning(ex,
+                                    "[ThreadExec] HISTORY_CELL_DROP threadPath={ThreadPath} cellId={CellId} — cell unreadable within budget; will be omitted",
+                                    threadPath, id);
+                                return Observable.Return<MeshNode?>(null);
+                            }))
+                    .ToList();
 
-                return cellLookups.Concat()
-                    .ToList()
-                    .Select(nodes => (IReadOnlyList<ChatMessage>)nodes
-                        .Select(n => n.Content as ThreadMessage)
-                        .Where(m => m != null && !string.IsNullOrEmpty(m.Text))
-                        .OrderBy(m => m!.Timestamp)
-                        .Select(m =>
-                        {
-                            var role = string.Equals(m!.Role, "user", StringComparison.OrdinalIgnoreCase)
-                                ? ChatRole.User
-                                : ChatRole.Assistant;
-                            return new ChatMessage(role, m.Text);
-                        })
-                        .ToList());
-            })
-            .Catch<IReadOnlyList<ChatMessage>, Exception>(ex =>
-            {
-                logger.LogWarning(ex,
-                    "[ThreadExec] LoadFullConversationHistory: failed/timed out for {ThreadPath} — empty history",
-                    threadPath);
-                return Observable.Return<IReadOnlyList<ChatMessage>>(Array.Empty<ChatMessage>());
+                return Observable.CombineLatest(cellLookups)
+                    .Take(1)
+                    .Select(nodes =>
+                    {
+                        var messages = nodes
+                            .Where(n => n is not null)
+                            .Select(n => (ThreadMessage)n!.Content!)
+                            .OrderBy(m => m.Timestamp)
+                            .Select(m =>
+                            {
+                                var role = string.Equals(m.Role, "user", StringComparison.OrdinalIgnoreCase)
+                                    ? ChatRole.User
+                                    : ChatRole.Assistant;
+                                return new ChatMessage(role, m.Text);
+                            })
+                            .ToList();
+
+                        // 🚨 Hard failure if every cell dropped despite expecting some:
+                        // submitting an EMPTY history when the thread has prior turns
+                        // would silently corrupt the agent's context (ChatHistoryTest
+                        // would assert "5 messages" instead of "4"). Surface as a
+                        // TimeoutException so the round fails loud instead of producing
+                        // a misleading assertion downstream.
+                        if (cellIds.Count > 0 && messages.Count == 0)
+                            throw new TimeoutException(
+                                $"LoadFullConversationHistoryFromMesh: expected {cellIds.Count} prior cells " +
+                                $"for {threadPath} but ALL timed out / lacked text. Refusing to submit empty history.");
+
+                        if (messages.Count < cellIds.Count)
+                            logger.LogWarning(
+                                "[ThreadExec] HISTORY_PARTIAL threadPath={ThreadPath} loaded={Loaded}/{Expected} — proceeding with partial history",
+                                threadPath, messages.Count, cellIds.Count);
+
+                        return (IReadOnlyList<ChatMessage>)messages;
+                    });
             });
     }
 
