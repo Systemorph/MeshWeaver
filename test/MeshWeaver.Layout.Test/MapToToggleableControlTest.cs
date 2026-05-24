@@ -483,17 +483,23 @@ public class EditPersistenceTest(ITestOutputHelper output) : HubTestBase(output)
     {
         string? initialJson = null;
 
+        // 🚨 Debounce queues a timer that fires AFTER the subscriber may already
+        // have been disposed by host.RegisterForDisposal — and AFTER the test
+        // method has exited. The previous shape used `Output.WriteLine` (which
+        // throws InvalidOperationException once xunit invalidates the test's
+        // ITestOutputHelper) and `await ... .FirstAsync().ToTask()` (forbidden
+        // in src per AsynchronousCalls.md, and leaks past dispose here). Switch
+        // to Subscribe-only with no test-context dependency.
         host.RegisterForDisposal($"autosave_{dataId}",
             host.Stream.GetDataStream<PersistableEntity>(dataId)
                 .Debounce(TimeSpan.FromMilliseconds(100))
-                .Subscribe(async entity =>
+                .Subscribe(entity =>
                 {
                     if (entity == null)
                         return;
 
                     var currentJson = JsonSerializer.Serialize(entity, host.Hub.JsonSerializerOptions);
 
-                    // Skip initial value
                     if (initialJson == null)
                     {
                         initialJson = currentJson;
@@ -503,11 +509,12 @@ public class EditPersistenceTest(ITestOutputHelper output) : HubTestBase(output)
                     if (currentJson == initialJson)
                         return;
 
-                    Output.WriteLine($"Auto-save: Detected change, persisting entity with Title={entity.Title}");
                     initialJson = currentJson;
 
-                    // Persist via DataChangeRequest
-                    await host.Hub.Observe<DataChangeResponse>(new DataChangeRequest().WithUpdates(entity), o => o.WithTarget(host.Hub.Address)).FirstAsync().ToTask();
+                    host.Hub.Observe<DataChangeResponse>(
+                            new DataChangeRequest().WithUpdates(entity),
+                            o => o.WithTarget(host.Hub.Address))
+                        .Subscribe(_ => { }, _ => { });
                 }));
     }
 
