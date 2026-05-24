@@ -139,9 +139,9 @@ public interface IMeshQueryProvider
     /// <see cref="Query"/>. Aggregator wraps each provider's stream with
     /// <c>.StartWith(empty)</c> so <c>CombineLatest</c> emits partial results as
     /// soon as ANY provider produces (slow providers don't gate the UI).
-    /// <para>Default impl bridges to the legacy
-    /// <see cref="AutocompleteAsync(string, string, JsonSerializerOptions, AutocompleteMode, int, string?, string?, CancellationToken)"/>
-    /// by draining the async-enumerable into a single snapshot list.</para>
+    /// <para>Default impl bridges to
+    /// <see cref="AutocompleteAsync(string, string, JsonSerializerOptions, AutocompleteMode, int, string?, string?)"/>
+    /// by accumulating its emissions into a single snapshot list.</para>
     /// </summary>
     IObservable<IReadOnlyList<QueryResult>> Autocomplete(
         string basePath, string prefix, JsonSerializerOptions options,
