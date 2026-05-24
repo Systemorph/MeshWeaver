@@ -395,16 +395,44 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         var responsePath = $"{subThreadPath}/{responseMsgId}";
         var callId = Guid.NewGuid().ToString("N")[..8];
 
+        var meshService = Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var workspace = Hub.GetWorkspace();
+
+        // 🚨 AWAIT the sub-thread create BEFORE emitting Dispatched or
+        // subscribing to its streams. meshService.CreateNode emits OnNext when
+        // the CreateNodeRequest's response lands — the node IS in storage by
+        // then (see MeshService.cs:62). Emitting Dispatched too early lets
+        // the heartbeat scanner (which reads cache.GetStream over
+        // ActiveDelegationPaths) hit the cache before the node exists,
+        // poisoning the shared entry.
+        string? createError = null;
+        try
+        {
+            await meshService.CreateNode(subThreadNode)
+                .Timeout(TimeSpan.FromSeconds(10))
+                .FirstAsync()
+                .ToTask(cancellationToken)
+                .ConfigureAwait(false);
+            Logger.LogInformation("[Delegation] sub-thread created at {Path}", subThreadPath);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "[Delegation] sub-thread create failed at {Path}", subThreadPath);
+            createError = ex.Message;
+        }
+        if (createError is not null)
+        {
+            yield return $"\n[Delegation failed: {createError}]";
+            yield break;
+        }
+
         // Emit Dispatched onto chat.Delegations. AgentChatClient.EmitDelegationEvent
-        // also updates ActiveDelegationPaths which the cancel watcher + streaming-
-        // loop stamp pass read.
+        // also updates ActiveDelegationPaths which the cancel watcher +
+        // streaming-loop stamp pass read.
         if (chat is AgentChatClient agentChat)
             agentChat.EmitDelegationEvent(
                 new MeshWeaver.AI.Delegation.DelegationEvent(callId, subThreadPath,
                     MeshWeaver.AI.Delegation.DelegationLifecycle.Dispatched));
-
-        var meshService = Hub.ServiceProvider.GetRequiredService<IMeshService>();
-        var workspace = Hub.GetWorkspace();
 
         // Single channel — writer is the stream subscription; SINGLE READER
         // is the `await foreach` below on the FCC invocation thread. Delta
@@ -412,16 +440,6 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         var channel = System.Threading.Channels.Channel.CreateUnbounded<DelegationObservation>(
             new System.Threading.Channels.UnboundedChannelOptions
             { SingleReader = true, SingleWriter = false });
-
-        // Fire-and-forget parallel creates — same shape as legacy code. The
-        // sub-thread's own WatchForExecution would auto-materialise the cells
-        // from PendingUserMessage too, but creating them explicitly here makes
-        // the cache subscription below see the response cell faster on the
-        // first emission. Cell create OnErrors are benign (likely "node already
-        // exists" if WatchForExecution beat us to it) — debug-log + move on.
-        meshService.CreateNode(subThreadNode).Subscribe(
-            _ => Logger.LogInformation("[Delegation] sub-thread created at {Path}", subThreadPath),
-            ex => Logger.LogWarning(ex, "[Delegation] sub-thread create failed at {Path}", subThreadPath));
         meshService.CreateNode(new MeshNode(userMsgId, subThreadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
@@ -451,28 +469,31 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         // path and its ReplaySubject permanently captures OnError. Subscribing
         // before the sub-thread create completes would poison that shared
         // entry for every other consumer (heartbeat scanner, GUI, MCP). The
-        // bypass opens a fresh per-call subscription via the workspace,
-        // wrapped in Defer + Catch + Repeat(200ms) so the create-roundtrip
-        // window doesn't kill the stream.
-        IObservable<MeshNode?> ResilientStream(string path) =>
-            System.Reactive.Linq.Observable.Defer(() =>
-                    workspace.GetMeshNodeStreamBypassCache(path).Select(n => (MeshNode?)n))
-                .Catch<MeshNode?, Exception>(_ =>
-                    System.Reactive.Linq.Observable.Empty<MeshNode?>()
+        // bypass opens a fresh per-call subscription via the workspace; the
+        // handle stays an UPDATABLE MeshNodeStreamHandle (read + write) so
+        // future hooks can also write through it. Wrapped in Defer + Catch +
+        // Repeat(200ms) so the create-roundtrip window doesn't kill the stream.
+        var subThreadHandle = workspace.GetMeshNodeStreamBypassCache(subThreadPath);
+        var responseCellHandle = workspace.GetMeshNodeStreamBypassCache(responsePath);
+
+        IObservable<MeshNode> ResilientStream(MeshNodeStreamHandle handle) =>
+            System.Reactive.Linq.Observable.Defer(() => (IObservable<MeshNode>)handle)
+                .Catch<MeshNode, Exception>(_ =>
+                    System.Reactive.Linq.Observable.Empty<MeshNode>()
                         .Delay(TimeSpan.FromMilliseconds(200)))
                 .Repeat();
 
-        // ONE cache subscription. Lambda's ONLY job is channel.Writer.TryWrite
-        // — schedulerless, lock-free. State-machine logic runs single-threaded
+        // ONE subscription. Lambda's ONLY job is channel.Writer.TryWrite —
+        // schedulerless, lock-free. State-machine logic runs single-threaded
         // in the reader below.
         using var cacheSub = System.Reactive.Linq.Observable.CombineLatest(
-                ResilientStream(subThreadPath),
-                ResilientStream(responsePath),
+                ResilientStream(subThreadHandle),
+                ResilientStream(responseCellHandle),
                 (threadNode, cellNode) => (threadNode, cellNode))
             .Subscribe(
                 tup => channel.Writer.TryWrite(new DelegationObservation(
-                    Thread: tup.threadNode?.Content as MeshThread,
-                    Cell: tup.cellNode?.Content as ThreadMessage,
+                    Thread: tup.threadNode.Content as MeshThread,
+                    Cell: tup.cellNode.Content as ThreadMessage,
                     Error: null)),
                 ex => channel.Writer.TryWrite(new DelegationObservation(
                     Thread: null, Cell: null, Error: ex.Message)));
