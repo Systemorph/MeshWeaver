@@ -2,6 +2,7 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Reactive.Threading.Tasks;
 using System.Text;
 using System.Text.Json;
 using MeshWeaver.AI.Plugins;
@@ -968,7 +969,13 @@ public static class ThreadExecution
         // visible to the scanner before its next tick.
         var lastActivityStamped = DateTime.MinValue;
         var heartbeatStampInterval = TimeSpan.FromSeconds(1);
-        void PushToResponseMessage(string text, ImmutableList<ToolCallEntry> toolCalls,
+        // Returns the cache.Update IObservable so terminal-status callers can
+        // AWAIT the write before signalling round completion — without this,
+        // the test base's quiesce phase trips on the in-flight DataChangeRequest
+        // Observe callbacks ("9 pending callback(s) after 0.50s" in
+        // DelegationWriteCountTest). Streaming-chunk callers still
+        // Subscribe(...) fire-and-forget for perf.
+        IObservable<MeshNode> PushToResponseMessage(string text, ImmutableList<ToolCallEntry> toolCalls,
             ImmutableList<NodeChangeEntry> updatedNodes,
             string? agentName, string? modelName,
             int? inputTokens = null, int? outputTokens = null, int? totalTokens = null,
@@ -978,7 +985,7 @@ public static class ThreadExecution
             logger.LogDebug("[ThreadExec] PUSH_TO_MSG: responsePath={ResponsePath}, textLen={TextLen}, toolCalls={ToolCalls}, updatedNodes={UpdatedNodes}, status={Status}",
                 responsePath, text.Length, toolCalls.Count, updatedNodes.Count, status?.ToString() ?? "(preserve)");
 
-            cache.Update(responsePath, node =>
+            var updateObs = cache.Update(responsePath, node =>
             {
                 var current = node?.Content as ThreadMessage ?? new ThreadMessage
                 {
@@ -1047,7 +1054,11 @@ public static class ThreadExecution
                         MainNode = mainEntity,
                         Content = updatedContent
                     };
-            }).Subscribe(
+            });
+
+            // Streaming hot-path callers Subscribe(...) fire-and-forget; the
+            // hot observable lets terminal-status callers await via FirstAsync.
+            updateObs.Subscribe(
                 _ => { },
                 ex => logger.LogWarning(ex,
                     "[ThreadExec] cache.Update failed for {Path}", responsePath));
@@ -1071,6 +1082,8 @@ public static class ThreadExecution
                     ex => logger.LogDebug(ex,
                         "[ThreadExec] LastActivityAt stamp failed for {Path}", threadPath));
             }
+
+            return updateObs;
         }
 
         var execLogger = parentHub.ServiceProvider.GetService<ILoggerFactory>()
@@ -1082,18 +1095,29 @@ public static class ThreadExecution
         // forced writes through the mesh hub (losing caller identity, surfacing
         // 'no AccessContext' warnings, sender=mesh) is obsolete. The owning
         // per-node hub remains the source of truth.
-        void UpdateThreadExecution(Func<MeshThread, MeshThread> mutate)
-        {
+        // 🚨 IObservable surface (no internal Subscribe). Cold — the
+        // stream.Update side effect runs once per Subscribe. Callers MUST
+        // Subscribe (the void-style fire-and-forget callsites Subscribe with
+        // a default `(_ => {}, ex => log)`; terminal-phase callers chain via
+        // SelectMany / continuation to wait for the commit before signalling
+        // round completion). Per AsynchronousCalls.md: never bridge to Task,
+        // always compose into the observable chain.
+        IObservable<MeshNode> UpdateThreadExecution(Func<MeshThread, MeshThread> mutate) =>
             parentHub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
             {
-                var thread = node.Content as MeshThread ?? new MeshThread();
+                // 🚨 No silent fallback. This Update runs on the parent thread
+                // hub's own action block; by the time this lambda fires, the
+                // node MUST be initialized (the hub's data source loaded it
+                // before processing the patch). A null Content here means the
+                // hub was processing this write before its node hydrated —
+                // surface loudly so the load order is fixed at the source.
+                if (node.Content is not MeshThread thread)
+                    throw new InvalidOperationException(
+                        $"UpdateThreadExecution: thread node {threadPath} has Content of type "
+                        + $"{node.Content?.GetType().Name ?? "<null>"}, not MeshThread. "
+                        + "The hub must be fully initialized before terminal-state writes.");
                 return node with { Content = mutate(thread) };
-            }).Subscribe(
-                _ => { },
-                ex => execLogger?.LogWarning(ex,
-                    "UpdateThreadExecution: stream.Update failed for {ThreadPath}",
-                    threadPath));
-        }
+            });
 
 
         // Set user access context
@@ -1656,7 +1680,11 @@ public static class ThreadExecution
                         ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null,
                         PendingUserMessage = null, PendingAgentName = null, PendingModelName = null,
                         PendingContextPath = null, PendingAttachments = null
-                    });
+                    }).Subscribe(
+                        _ => { },
+                        ex => execLogger?.LogWarning(ex,
+                            "UpdateThreadExecution(Idle/Completed): stream.Update failed for {ThreadPath}",
+                            threadPath));
                     // Notify parent via SubmitMessageResponse so delegation callback resolves.
                     // Must post on the _Exec hub (hub) — the SubmitMessageResponse handler
                     // is registered there and forwards to the thread hub via ResponseFor.
@@ -1686,7 +1714,11 @@ public static class ThreadExecution
                         {
                             Status = ThreadExecutionStatus.Idle, ExecutionStatus = null, ActiveMessageId = null,
                             ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null
-                        });
+                        }).Subscribe(
+                            _ => { },
+                            ex => execLogger?.LogWarning(ex,
+                                "UpdateThreadExecution(Idle/Cancelled): stream.Update failed for {ThreadPath}",
+                                threadPath));
                         NotifyParentCompletion(parentHub, threadPath, cancelText, false, cancelNodeChanges);
                     }
                     catch (Exception ex)
@@ -1703,15 +1735,23 @@ public static class ThreadExecution
                             errorNodeChanges = nodeChangeLog;
                         }
                         var errorText = (errorTextBase + $"\n\n*Error: {ex.Message}*").Trim();
-                        PushToResponseMessage(errorText, errorToolCalls, errorNodeChanges,
+                        // Await the error write before flipping Status=Idle —
+                        // see comment on the Completed-status await above.
+                        await PushToResponseMessage(errorText, errorToolCalls, errorNodeChanges,
                             request.AgentName, request.ModelName,
                             completedAt: DateTime.UtcNow,
-                            status: ThreadMessageStatus.Error);
+                            status: ThreadMessageStatus.Error)
+                            .Timeout(TimeSpan.FromSeconds(10))
+                            .FirstAsync().ToTask();
                         UpdateThreadExecution(t => t with
                         {
                             Status = ThreadExecutionStatus.Idle, ExecutionStatus = null, ActiveMessageId = null,
                             ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null
-                        });
+                        }).Subscribe(
+                            _ => { },
+                            ex => execLogger?.LogWarning(ex,
+                                "UpdateThreadExecution(Idle/Error): stream.Update failed for {ThreadPath}",
+                                threadPath));
                         NotifyParentCompletion(parentHub, threadPath, errorText, false, errorNodeChanges);
                     }
                     finally
@@ -2186,15 +2226,14 @@ public static class ThreadExecution
         IMessageHub hub, string threadPath, string? excludeUserMessageId, string? excludeResponseMessageId,
         ILogger logger)
     {
-        // 🚨 Walk the LIVE thread node's Messages list and resolve each cell
-        // via GetMeshNodeStream (per-node hub) — this picks up writes that
-        // haven't yet propagated to IMeshQueryCore's persistence layer.
-        // Querying via IMeshQueryCore against the same thread can return
-        // stale-empty or missing cells when a prior round's
-        // responseStream.Update committed to the per-cell hub but the
-        // persistence-side index hasn't caught up.
-        var workspace = hub.GetWorkspace();
-        return workspace.GetMeshNodeStream(threadPath)
+        // 🚨 Read thread + each cell from IMeshNodeStreamCache — the hot, shared,
+        // path-keyed Replay(1) handle every consumer subscribes to. The same cache
+        // that the per-node hub's writes flow through, so reads here observe the
+        // exact post-write state without going through IMeshQueryCore (which lags).
+        // Walk the thread's Messages property for the cell IDs (authoritative ordered
+        // list of cells in this thread).
+        var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        return cache.GetStream(threadPath)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(10))
             .Select(threadNode => threadNode.Content as MeshThread)
@@ -2207,9 +2246,8 @@ public static class ThreadExecution
                 if (cellIds.Count == 0)
                     return Observable.Return<IReadOnlyList<ChatMessage>>(Array.Empty<ChatMessage>());
 
-                // Fetch each cell once via its per-node hub (live state).
                 var cellLookups = cellIds.Select(id =>
-                    workspace.GetMeshNodeStream($"{threadPath}/{id}")
+                    cache.GetStream($"{threadPath}/{id}")
                         .Take(1)
                         .Timeout(TimeSpan.FromSeconds(5))
                         .Catch<MeshNode, Exception>(_ => Observable.Empty<MeshNode>()));
@@ -2251,8 +2289,8 @@ public static class ThreadExecution
     private static IObservable<IReadOnlyList<ThreadMessage>> LoadPriorUserMessagesFromMesh(
         IMessageHub hub, string threadPath, string? excludeMessageId, ILogger<AgentChatClient> logger)
     {
-        var workspace = hub.GetWorkspace();
-        return workspace.GetMeshNodeStream(threadPath)
+        var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        return cache.GetStream(threadPath)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(10))
             .Select(threadNode => threadNode.Content as MeshThread)
@@ -2266,7 +2304,7 @@ public static class ThreadExecution
                     return Observable.Return<IReadOnlyList<ThreadMessage>>(Array.Empty<ThreadMessage>());
 
                 var cellLookups = cellIds.Select(id =>
-                    workspace.GetMeshNodeStream($"{threadPath}/{id}")
+                    cache.GetStream($"{threadPath}/{id}")
                         .Take(1)
                         .Timeout(TimeSpan.FromSeconds(5))
                         .Catch<MeshNode, Exception>(_ => Observable.Empty<MeshNode>()));

@@ -46,6 +46,15 @@ public class DelegationWriteCountTest(ITestOutputHelper output) : MonolithMeshTe
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
+            // 🚨 The test waits for cell.Status terminal; subsequent
+            // completion writes (thread.Status=Idle, parent NotifyParentCompletion,
+            // EmitCompletionNotification) are fire-and-forget and land AFTER
+            // the test exits. The default 500 ms quiesce budget is too tight
+            // for streaming-heavy rounds — observed 9 in-flight DataChangeRequests
+            // at dispose ("X pending callback(s) after 0.50s" failure mode).
+            // Bump per-class; we still fail hard if writes don't drain within
+            // the longer window.
+            .ConfigureHub(c => c.WithQuiesceTimeout(TimeSpan.FromSeconds(5)))
             .ConfigureServices(services =>
             {
                 services.AddSingleton<IChatClientFactory, CountingDelegationFactory>();
