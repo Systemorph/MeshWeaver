@@ -395,6 +395,10 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         var responsePath = $"{subThreadPath}/{responseMsgId}";
         var callId = Guid.NewGuid().ToString("N")[..8];
 
+        Logger.LogDebug(
+            "[Delegation:{CallId}] ENTER sub={SubPath} target={Target} parentResp={ParentResp}",
+            callId, subThreadPath, targetId, parentMsgPath);
+
         var meshService = Hub.ServiceProvider.GetRequiredService<IMeshService>();
         var workspace = Hub.GetWorkspace();
 
@@ -405,6 +409,7 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         // the heartbeat scanner (which reads cache.GetStream over
         // ActiveDelegationPaths) hit the cache before the node exists,
         // poisoning the shared entry.
+        Logger.LogDebug("[Delegation:{CallId}] CREATE_BEGIN sub-thread", callId);
         string? createError = null;
         try
         {
@@ -413,11 +418,12 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                 .FirstAsync()
                 .ToTask(cancellationToken)
                 .ConfigureAwait(false);
-            Logger.LogInformation("[Delegation] sub-thread created at {Path}", subThreadPath);
+            Logger.LogDebug("[Delegation:{CallId}] CREATE_OK sub={Path}", callId, subThreadPath);
         }
         catch (Exception ex)
         {
-            Logger.LogWarning(ex, "[Delegation] sub-thread create failed at {Path}", subThreadPath);
+            Logger.LogWarning(ex,
+                "[Delegation:{CallId}] CREATE_FAIL sub={Path}", callId, subThreadPath);
             createError = ex.Message;
         }
         if (createError is not null)
@@ -430,9 +436,13 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         // also updates ActiveDelegationPaths which the cancel watcher +
         // streaming-loop stamp pass read.
         if (chat is AgentChatClient agentChat)
+        {
+            Logger.LogDebug(
+                "[Delegation:{CallId}] EMIT_DISPATCHED sub={Path}", callId, subThreadPath);
             agentChat.EmitDelegationEvent(
                 new MeshWeaver.AI.Delegation.DelegationEvent(callId, subThreadPath,
                     MeshWeaver.AI.Delegation.DelegationLifecycle.Dispatched));
+        }
 
         // Single channel — writer is the stream subscription; SINGLE READER
         // is the `await foreach` below on the FCC invocation thread. Delta
@@ -486,6 +496,8 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         // ONE subscription. Lambda's ONLY job is channel.Writer.TryWrite —
         // schedulerless, lock-free. State-machine logic runs single-threaded
         // in the reader below.
+        Logger.LogDebug("[Delegation:{CallId}] CACHE_SUB_INSTALL sub={Path} resp={Path2}",
+            callId, subThreadPath, responsePath);
         using var cacheSub = System.Reactive.Linq.Observable.CombineLatest(
                 ResilientStream(subThreadHandle),
                 ResilientStream(responseCellHandle),
@@ -495,21 +507,45 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                     Thread: tup.threadNode.Content as MeshThread,
                     Cell: tup.cellNode.Content as ThreadMessage,
                     Error: null)),
-                ex => channel.Writer.TryWrite(new DelegationObservation(
-                    Thread: null, Cell: null, Error: ex.Message)));
+                ex =>
+                {
+                    Logger.LogWarning(ex,
+                        "[Delegation:{CallId}] CACHE_SUB_ERROR sub={Path}", callId, subThreadPath);
+                    channel.Writer.TryWrite(new DelegationObservation(
+                        Thread: null, Cell: null, Error: ex.Message));
+                });
 
         // Close the channel when the caller cancels the FCC turn.
-        using var cancelReg = cancellationToken.Register(() => channel.Writer.TryComplete());
+        using var cancelReg = cancellationToken.Register(() =>
+        {
+            Logger.LogDebug("[Delegation:{CallId}] CANCEL_REQ_CALLER_TOKEN sub={Path}",
+                callId, subThreadPath);
+            channel.Writer.TryComplete();
+        });
 
         // Single-reader drain. AccumulatedText, startedExecuting, finalStatus —
         // all mutated only here, no locks needed.
         var accumulatedText = "";
         var startedExecuting = false;
+        var obsCount = 0;
         ThreadMessageStatus? finalStatus = null;
         string? terminalError = null;
         await foreach (var obs in channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
         {
-            if (obs.Error is not null) { terminalError = obs.Error; break; }
+            obsCount++;
+            if (obs.Error is not null)
+            {
+                Logger.LogDebug(
+                    "[Delegation:{CallId}] OBS_ERROR #{Count} err={Err}",
+                    callId, obsCount, obs.Error);
+                terminalError = obs.Error;
+                break;
+            }
+            Logger.LogDebug(
+                "[Delegation:{CallId}] OBS #{Count} threadStatus={ThreadStatus} cellStatus={CellStatus} cellTextLen={Len} cellCompleted={Done}",
+                callId, obsCount,
+                obs.Thread?.Status, obs.Cell?.Status, obs.Cell?.Text?.Length ?? 0,
+                obs.Cell?.CompletedAt is not null);
 
             // Text deltas — yield only the new portion.
             if (obs.Cell?.Text is { Length: > 0 } text && text.Length > accumulatedText.Length)
@@ -528,9 +564,15 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
             if (cellDone || (startedExecuting && threadIdle))
             {
                 finalStatus = obs.Cell?.Status;
+                Logger.LogDebug(
+                    "[Delegation:{CallId}] TERMINAL final={Final} cellDone={CellDone} threadIdle={Idle}",
+                    callId, finalStatus, cellDone, threadIdle);
                 break;
             }
         }
+        Logger.LogDebug(
+            "[Delegation:{CallId}] DRAIN_EXIT obs={Count} terminalError={Err} finalStatus={Status}",
+            callId, obsCount, terminalError, finalStatus);
 
         // Emit Terminal so the cancel watcher + stamper drop this delegation.
         if (chat is AgentChatClient agentChat2)
