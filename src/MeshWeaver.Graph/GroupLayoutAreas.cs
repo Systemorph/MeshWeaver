@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
@@ -189,11 +190,17 @@ public static class GroupLayoutAreas
         var meshQuery = ctx.Hub.ServiceProvider.GetService<IMeshService>();
         if (meshQuery != null)
         {
-            await foreach (var suggestion in meshQuery.AutocompleteAsync(groupPath, "", limit: 50))
-            {
-                if (suggestion.NodeType is "User" or "Group")
-                    options.Add(new Option<string>(suggestion.Path, $"{suggestion.Name} ({suggestion.Path})"));
-            }
+            // Subscribe to the IObservable surface — collect into options list.
+            // No await foreach (the producer is IObservable now).
+            await meshQuery.AutocompleteAsync(groupPath, "", limit: 50)
+                .Do(suggestion =>
+                {
+                    if (suggestion.NodeType is "User" or "Group")
+                        options.Add(new Option<string>(suggestion.Path, $"{suggestion.Name} ({suggestion.Path})"));
+                })
+                .DefaultIfEmpty()
+                .LastOrDefaultAsync()
+                .ToTask();
         }
         ctx.Host.UpdateData(optionsId, options.ToArray());
 

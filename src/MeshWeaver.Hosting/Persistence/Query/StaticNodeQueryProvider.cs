@@ -185,16 +185,18 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
         }
     }
 
-    public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
+    public IObservable<QuerySuggestion> AutocompleteAsync(
         string basePath, string prefix, JsonSerializerOptions options,
-        int limit = 10, CancellationToken ct = default)
-        => AutocompleteAsync(basePath, prefix, options, AutocompleteMode.PathFirst, limit, null, null, ct);
+        int limit = 10)
+        => AutocompleteAsync(basePath, prefix, options, AutocompleteMode.PathFirst, limit, null, null);
 
-    public async IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
+    public IObservable<QuerySuggestion> AutocompleteAsync(
         string basePath, string prefix, JsonSerializerOptions options,
         AutocompleteMode mode, int limit = 10, string? contextPath = null,
-        string? context = null, [EnumeratorCancellation] CancellationToken ct = default)
+        string? context = null)
     {
+        // Static nodes are pure in-memory — no async I/O. Compute the suggestions
+        // synchronously and return as a finite IObservable. No async, no Task.
         var normalizedPrefix = (prefix ?? "").ToLowerInvariant();
         var suggestions = new List<QuerySuggestion>();
 
@@ -205,7 +207,6 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
             if (IsExcludedByContext(node, context))
                 continue;
 
-            // Check path scope: node must be a descendant of basePath (or basePath is empty)
             if (!string.IsNullOrEmpty(basePath))
             {
                 var nodePath = node.Path ?? "";
@@ -218,25 +219,15 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
             double score = 0;
 
             if (string.IsNullOrEmpty(normalizedPrefix))
-            {
                 score = 1;
-            }
             else if (name.StartsWith(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
-            {
                 score = 100 - (name.Length - normalizedPrefix.Length);
-            }
             else if (name.Contains(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
-            {
                 score = 50;
-            }
             else if ((node.Path ?? "").Contains(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
-            {
                 score = 30;
-            }
             else
-            {
                 continue;
-            }
 
             score += PathProximity.ComputeBoost(contextPath, node.Path);
             suggestions.Add(new QuerySuggestion(node.Path ?? "", name, node.NodeType, score, node.Icon));
@@ -254,10 +245,7 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
                 .ThenBy(s => s.Name)
         };
 
-        foreach (var suggestion in ordered.Take(limit))
-            yield return suggestion;
-
-        await Task.CompletedTask; // Satisfy async requirement
+        return ordered.Take(limit).ToObservable();
     }
 
     public IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request, JsonSerializerOptions options)

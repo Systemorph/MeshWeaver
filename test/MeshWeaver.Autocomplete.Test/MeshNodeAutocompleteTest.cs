@@ -74,7 +74,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
             prefix: "",
             mode: AutocompleteMode.RelevanceFirst,
             limit: 20
-        ).ToListAsync();
+        ).ToList().ToTask();
 
         // Assert
         Output.WriteLine($"Got {suggestions.Count} suggestions for empty prefix:");
@@ -95,7 +95,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
             prefix: "Sys",
             mode: AutocompleteMode.RelevanceFirst,
             limit: 10
-        ).ToListAsync();
+        ).ToList().ToTask();
 
         // Assert
         Output.WriteLine($"Got {suggestions.Count} suggestions for 'Sys':");
@@ -118,7 +118,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
             prefix: "sys",
             mode: AutocompleteMode.RelevanceFirst,
             limit: 10
-        ).ToListAsync();
+        ).ToList().ToTask();
 
         // Assert
         Output.WriteLine($"Got {suggestions.Count} suggestions for 'sys' (lowercase):");
@@ -140,7 +140,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
             prefix: "",
             mode: AutocompleteMode.RelevanceFirst,
             limit: 20
-        ).ToListAsync();
+        ).ToList().ToTask();
 
         // Assert
         Output.WriteLine($"Got {suggestions.Count} suggestions within 'Systemorph':");
@@ -165,7 +165,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
             prefix: "Mark",
             mode: AutocompleteMode.RelevanceFirst,
             limit: 10
-        ).ToListAsync();
+        ).ToList().ToTask();
 
         // Assert
         Output.WriteLine($"Got {suggestions.Count} suggestions for 'Mark' (RelevanceFirst):");
@@ -260,7 +260,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
         var ct = TestContext.Current.CancellationToken;
 
         // First, find a node type that exists
-        var allSuggestions = await MeshQuery.AutocompleteAsync("", "", AutocompleteMode.RelevanceFirst, 50).ToListAsync();
+        var allSuggestions = await MeshQuery.AutocompleteAsync("", "", AutocompleteMode.RelevanceFirst, 50).ToList().ToTask();
 
         Output.WriteLine($"All suggestions: {allSuggestions.Count}");
 
@@ -323,7 +323,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
         var ct = TestContext.Current.CancellationToken;
 
         // Get a node that has creatable types
-        var suggestions = await MeshQuery.AutocompleteAsync("", "", AutocompleteMode.RelevanceFirst, 20).ToListAsync();
+        var suggestions = await MeshQuery.AutocompleteAsync("", "", AutocompleteMode.RelevanceFirst, 20).ToList().ToTask();
         QuerySuggestion? nodeWithTypes = null;
         IReadOnlyList<CreatableTypeInfo> nodeCreatableTypes = [];
 
@@ -360,7 +360,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
     {
         // Arrange
         var ct = TestContext.Current.CancellationToken;
-        var suggestions = await MeshQuery.AutocompleteAsync("", "", AutocompleteMode.RelevanceFirst, 10).ToListAsync();
+        var suggestions = await MeshQuery.AutocompleteAsync("", "", AutocompleteMode.RelevanceFirst, 10).ToList().ToTask();
         var firstSuggestion = suggestions.FirstOrDefault();
 
         if (firstSuggestion == null)
@@ -409,7 +409,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
             prefix: "",
             mode: AutocompleteMode.RelevanceFirst,
             limit: 10
-        ).ToListAsync();
+        ).ToList().ToTask();
 
         Output.WriteLine($"Total suggestions: {allSuggestions.Count}");
 

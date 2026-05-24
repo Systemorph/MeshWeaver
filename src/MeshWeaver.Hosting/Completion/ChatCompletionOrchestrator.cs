@@ -130,7 +130,6 @@ internal sealed class ChatCompletionOrchestrator(
     private IObservable<CompletionBatch> ProducePartitionDrillDown(string partition, string filter)
     {
         return meshService.AutocompleteAsync(partition, filter, 20)
-            .ToObservableSequence()
             .Select(s => SuggestionToItem(s, PartitionDrillDownPriority, "Items"))
             .ToArray()
             .Select(items =>
@@ -295,7 +294,6 @@ internal sealed class ChatCompletionOrchestrator(
 
         return meshService.AutocompleteAsync(
                 partition, searchText, AutocompleteMode.RelevanceFirst, 20, currentNamespace)
-            .ToObservableSequence()
             .Where(s => seenPaths.TryAdd(s.Path, 0))
             .Select(s => SuggestionToItem(s, PartitionSearchPriority, "Partition"))
             .ToArray()
