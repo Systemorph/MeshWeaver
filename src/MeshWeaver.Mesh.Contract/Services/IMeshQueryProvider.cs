@@ -160,33 +160,32 @@ public interface IMeshQueryProvider
         string? contextPath = null,
         string? context = null)
     {
-        return System.Reactive.Linq.Observable.Create<IReadOnlyList<QueryResult>>(observer =>
+        // 🚨 Pure-IObservable bridge — no Task.Run. Observable.Create's async
+        // overload runs the iteration on the subscriber's scheduler (which
+        // SubscribeOn at the call site can move off the hub).
+        return System.Reactive.Linq.Observable.Create<IReadOnlyList<QueryResult>>(async (observer, ct) =>
         {
-            var cts = new CancellationTokenSource();
-            _ = System.Threading.Tasks.Task.Run(async () =>
+            try
             {
-                try
+                var rows = new List<QueryResult>();
+                var providerName = Name;
+                await foreach (var s in AutocompleteAsync(basePath, prefix, options, mode, limit, contextPath, context, ct).ConfigureAwait(false))
                 {
-                    var rows = new List<QueryResult>();
-                    await foreach (var s in AutocompleteAsync(basePath, prefix, options, mode, limit, contextPath, context, cts.Token))
+                    rows.Add(new QueryResult
                     {
-                        rows.Add(new QueryResult
-                        {
-                            Path = s.Path,
-                            Name = s.Name,
-                            NodeType = s.NodeType,
-                            Icon = s.Icon,
-                            Score = s.Score,
-                            ProviderName = Name,
-                        });
-                    }
-                    observer.OnNext(rows);
-                    observer.OnCompleted();
+                        Path = s.Path,
+                        Name = s.Name,
+                        NodeType = s.NodeType,
+                        Icon = s.Icon,
+                        Score = s.Score,
+                        ProviderName = providerName,
+                    });
                 }
-                catch (OperationCanceledException) { observer.OnCompleted(); }
-                catch (Exception ex) { observer.OnError(ex); }
-            }, cts.Token);
-            return System.Reactive.Disposables.Disposable.Create(() => cts.Cancel());
+                observer.OnNext(rows);
+                observer.OnCompleted();
+            }
+            catch (OperationCanceledException) { observer.OnCompleted(); }
+            catch (Exception ex) { observer.OnError(ex); }
         });
     }
 
