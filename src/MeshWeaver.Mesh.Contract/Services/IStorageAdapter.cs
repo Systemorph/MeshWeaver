@@ -22,6 +22,24 @@ public interface IStorageAdapter
     IObservable<MeshNode?> Read(string path, JsonSerializerOptions options);
 
     /// <summary>
+    /// Reads multiple nodes from storage in a SINGLE round-trip when the
+    /// underlying backend supports it (Postgres batches via
+    /// <c>WHERE (namespace, id) IN ((…), (…))</c>). Order is not guaranteed;
+    /// missing paths are simply absent from the emitted sequence.
+    ///
+    /// <para>Default impl falls back to N parallel <see cref="Read"/> calls —
+    /// fine for FileSystem / InMemory (they have no per-call latency to
+    /// amortise). PostgreSqlStorageAdapter overrides this so multi-path
+    /// probes (e.g. the URL resolver's <c>path:a|b|c</c> longest-prefix
+    /// search) become ONE PG query instead of N.</para>
+    /// </summary>
+    IObservable<MeshNode> ReadMany(IReadOnlyCollection<string> paths, JsonSerializerOptions options)
+        => System.Reactive.Linq.Observable.Merge(
+            paths.Select(p => System.Reactive.Linq.Observable.Select(
+                System.Reactive.Linq.Observable.Where(Read(p, options), n => n is not null),
+                n => n!)));
+
+    /// <summary>
     /// Writes a node to storage. Emits the written node when this adapter
     /// accepted the path; emits <c>null</c> when the path isn't owned here
     /// so the try-then-claim chain in <c>PersistenceService.Write</c> moves

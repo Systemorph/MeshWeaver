@@ -107,6 +107,69 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         return ReadMeshNode(reader, options);
     }
 
+    /// <summary>
+    /// Batched override of <see cref="IStorageAdapter.ReadMany"/> — multi-path
+    /// probes (URL resolver's <c>path:a|b|c</c> longest-prefix search,
+    /// activity bulk reads) become ONE SQL query instead of N. Groups input
+    /// paths by (table, namespace) so a mixed batch with rows in different
+    /// tables / namespaces still runs as one query per (table, namespace)
+    /// group rather than per-path.
+    /// </summary>
+    public IObservable<MeshNode> ReadMany(IReadOnlyCollection<string> paths, JsonSerializerOptions options)
+        => Observable.Create<MeshNode>(async (observer, ct) =>
+        {
+            try
+            {
+                // Normalize + drop empties up front. Group by (table, namespace)
+                // so each PG round-trip is `WHERE namespace = $1 AND id IN (...)`
+                // — the cheapest shape for the indexed (namespace, id) PK.
+                var groups = paths
+                    .Select(NormalizePath)
+                    .Where(p => !string.IsNullOrEmpty(p))
+                    .Select(p =>
+                    {
+                        var (ns, id) = SplitPath(p);
+                        var table = ResolveTable(p);
+                        return (table, ns, id);
+                    })
+                    .GroupBy(t => (t.table, t.ns))
+                    .ToList();
+
+                foreach (var group in groups)
+                {
+                    var table = group.Key.table;
+                    var ns = group.Key.ns;
+                    var ids = group.Select(t => t.id).Distinct(StringComparer.Ordinal).ToArray();
+                    if (ids.Length == 0)
+                        continue;
+
+                    // Build the parameter placeholder list ($2, $3, …) for the
+                    // IN clause; the first parameter is the namespace.
+                    var placeholders = string.Join(", ",
+                        Enumerable.Range(2, ids.Length).Select(i => $"${i}"));
+                    await using var cmd = _dataSource.CreateCommand(
+                        $"SELECT id, namespace, name, description, node_type, category, icon, display_order, " +
+                        $"last_modified, version, state, content, desired_id, main_node " +
+                        $"FROM {table} WHERE namespace = $1 AND id IN ({placeholders})");
+                    cmd.Parameters.AddWithValue(ns);
+                    foreach (var id in ids)
+                        cmd.Parameters.AddWithValue(id);
+
+                    await using var reader = await cmd.ExecuteReaderAsync(ct);
+                    while (await reader.ReadAsync(ct))
+                    {
+                        observer.OnNext(ReadMeshNode(reader, options));
+                    }
+                }
+
+                observer.OnCompleted();
+            }
+            catch (Exception ex)
+            {
+                observer.OnError(ex);
+            }
+        });
+
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
         => Observable.FromAsync<MeshNode?>(async ct => { await WriteAsyncCore(node, options, ct); return node; });
 

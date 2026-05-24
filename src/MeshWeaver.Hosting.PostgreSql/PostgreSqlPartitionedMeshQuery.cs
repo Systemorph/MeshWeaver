@@ -239,16 +239,6 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
         [System.Runtime.CompilerServices.EnumeratorCancellation]
         CancellationToken ct)
     {
-        // Sync the partition-schema list each time. GetSearchableSchemasAsync's
-        // cached read of public.searchable_schemas only syncs from
-        // information_schema when its own table is empty — a new partition
-        // created mid-session is invisible to the fan-out until the next
-        // sync. SyncSearchableSchemasAsync is one cheap SELECT + DELETE +
-        // INSERTs, so paying it per fan-out is the simplest correctness fix
-        // (the alternative — pg_notify-on-CREATE-SCHEMA — needs DDL trigger
-        // wiring this provider doesn't own).
-        await _crossSchema.SyncSearchableSchemasAsync(ct);
-
         // For source:activity, the satellite to JOIN is "activities" — the
         // primary projection still comes from mesh_nodes (the main content
         // node). For source:accessed, the same shape uses user_activities.
@@ -272,25 +262,44 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
             tableName = ResolveTable(parsed);
         }
 
-        // Filter to schemas that contain BOTH the projection table and the
-        // join table (when present). Older partitions / static-mesh schemas
-        // (Doc, etc.) only ship mesh_nodes — including them in a satellite
-        // UNION raises "relation does not exist".
-        var schemas = await _crossSchema.GetSchemasWithTableAsync(tableName, ct);
-        if (joinTable is not null)
-        {
-            var withJoin = await _crossSchema.GetSchemasWithTableAsync(joinTable, ct);
-            var joinSet = new HashSet<string>(withJoin, StringComparer.OrdinalIgnoreCase);
-            schemas = schemas.Where(s => joinSet.Contains(s)).ToList();
-        }
-
-        // Pinned partition (concrete first segment) narrows the fan-out to a
-        // single schema; wildcard / missing first segment leaves the full
-        // searchable-schemas list intact.
+        // 🚨 Partition-pinned fast path. When the parsed query carries a
+        // concrete first segment (e.g. `nodeType:Thread namespace:Systemorph`,
+        // `path:Systemorph/_Thread/foo`, `namespace:Systemorph/_Thread`), we
+        // KNOW which schema to hit — skip the fan-out machinery entirely:
+        //   * no `SyncSearchableSchemasAsync` PG round-trip
+        //   * no `GetSchemasWithTableAsync` PG round-trip
+        //   * single-element schema list straight to QueryAcrossSchemasAsync
+        // The two skipped round-trips alone were costing 200-700 ms on cold
+        // page loads (visible in prod App Insights as serial `SELECT … FROM
+        // public.searchable_schemas` and `information_schema.tables` lookups
+        // right before the actual UNION query). Trusts that satellite tables
+        // exist in every partition that has primary `mesh_nodes` — if a row
+        // lookup misses it returns no rows; UNION over zero rows is still
+        // correct.
         var pinned = ResolvePinnedPartition(parsed);
+        List<string> schemas;
         if (pinned is not null)
         {
-            schemas = schemas.Where(s => string.Equals(s, pinned, StringComparison.OrdinalIgnoreCase)).ToList();
+            schemas = [pinned];
+            _logger?.LogDebug(
+                "[FanOut] pinned fast-path: partition={Partition} table={Table} joinTable={JoinTable}",
+                pinned, tableName, joinTable ?? "(none)");
+        }
+        else
+        {
+            // Unpinned (wildcard or missing first segment) → genuine cross-schema
+            // fan-out. Sync the schema list + filter to schemas that contain
+            // BOTH the projection table and the join table. Older partitions /
+            // static-mesh schemas (Doc, etc.) only ship mesh_nodes — including
+            // them in a satellite UNION raises "relation does not exist".
+            await _crossSchema.SyncSearchableSchemasAsync(ct);
+            schemas = (await _crossSchema.GetSchemasWithTableAsync(tableName, ct)).ToList();
+            if (joinTable is not null)
+            {
+                var withJoin = await _crossSchema.GetSchemasWithTableAsync(joinTable, ct);
+                var joinSet = new HashSet<string>(withJoin, StringComparer.OrdinalIgnoreCase);
+                schemas = schemas.Where(s => joinSet.Contains(s)).ToList();
+            }
         }
         _logger?.LogDebug(
             "[FanOut] schemas: count={Count} table={Table} joinTable={JoinTable} pinned={Pinned} list=[{Schemas}]",

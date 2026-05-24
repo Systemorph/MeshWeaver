@@ -104,7 +104,7 @@ public class SubThreadHangRepro(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact]
     public async Task HungSubThread_WithoutUserCancel_StaysExecuting()
     {
-        var ct = new CancellationTokenSource(45.Seconds()).Token;
+        var ct = new CancellationTokenSource(90.Seconds()).Token;
         var client = GetClient();
         var workspace = client.GetWorkspace();
 
@@ -138,49 +138,67 @@ public class SubThreadHangRepro(ITestOutputHelper output) : MonolithMeshTestBase
         // Wait for the sub-thread to reach IsExecuting=true — proves the
         // sub-thread hub activated and its WatchForExecution started the
         // agent. The hanging IChatClient takes over from here.
-        var subThread = await workspace.GetMeshNodeStream(subThreadPath)
-            .Select(n => n.Content as MeshThread)
-            .Where(t => t is { IsExecuting: true })
+        //
+        // 🚨 Race: WaitForDelegationPath returns as soon as the parent's
+        // tool call has DelegationPath stamped (synchronous), but
+        // ExecuteDelegationAsync's meshService.CreateNode(subThreadNode) is
+        // fire-and-forget — the per-node hub may not have activated yet.
+        // GetMeshNodeStream surfaces "missing satellite" as OnError
+        // (DeliveryFailureException) almost immediately (post-2026-05-24
+        // cache change f103be08a). .Catch+Defer retries with backoff so
+        // we wait for the create to land instead of failing fast.
+        var subThread = await Observable.Defer(() =>
+                workspace.GetMeshNodeStream(subThreadPath)
+                    .Select(n => n.Content as MeshThread)
+                    .Where(t => t is { IsExecuting: true })
+                    .Take(1))
+            .Catch<MeshThread?, Exception>(_ =>
+                Observable.Empty<MeshThread?>().Delay(200.Milliseconds()))
+            .Repeat()
             .Take(1)
             .Timeout(15.Seconds())
             .ToTask(ct);
         subThread!.IsExecuting.Should().BeTrue();
         Output.WriteLine($"Sub-thread reached IsExecuting=true at {DateTime.UtcNow:O}");
 
-        // Observation window: wait and confirm the sub-thread does NOT settle
-        // on its own. In prod this stays true for hours; here we use a tight
-        // window to keep the test fast. If/when a self-recovery watchdog is
-        // added, flip the assertion below to BeFalse with a window that
-        // exceeds the watchdog's timeout.
-        await Task.Delay(ObservationWindow, ct);
-
-        var stillExecuting = await workspace.GetMeshNodeStream(subThreadPath)
-            .Select(n => n.Content as MeshThread)
+        // REGRESSION GUARD for the watchdog-propagates-cancel fix:
+        //
+        // ChatClientAgentFactory.ExecuteDelegationAsync has a 30s safety
+        // timeout (CancellationTokenSource at line 544). When it fires, the
+        // exit path at line ~634 writes RequestedCancellationAt to the
+        // sub-thread MeshNode — same primitive the GUI Stop button uses —
+        // which propagates through the sub-thread's cancel watcher and
+        // tears down its CTS, causing HangingSubAgentChatClient's
+        // Task.Delay to throw OperationCanceled. Sub-thread settles
+        // IsExecuting=false.
+        //
+        // Without the fix, the sub-thread stays IsExecuting=true forever
+        // and the user sees a perpetually-"executing" bubble.
+        //
+        // The wait window: 30s watchdog + 15s slack for propagation through
+        // parent stream emission → sub-thread cancel watcher → CTS cancel →
+        // streaming loop exit → terminal Status flip. 45s total.
+        var settled = await Observable.Defer(() =>
+                workspace.GetMeshNodeStream(subThreadPath)
+                    .Select(n => n.Content as MeshThread)
+                    .Where(t => t is { IsExecuting: false })
+                    .Take(1))
+            .Catch<MeshThread?, Exception>(_ =>
+                Observable.Empty<MeshThread?>().Delay(500.Milliseconds()))
+            .Repeat()
             .Take(1)
-            .Timeout(5.Seconds())
+            .Timeout(45.Seconds())
             .ToTask(ct);
 
-        stillExecuting!.IsExecuting.Should().BeTrue(
-            "BUG: sub-thread agent stalled (chat client never returns) — without " +
-            "user-initiated cancel on the parent (RequestedCancellationAt), the " +
-            "sub-thread has no auto-recovery. Parent's 5-min delegation watchdog " +
-            "in ChatClientAgentFactory.ExecuteDelegationAsync only exits the " +
-            "parent's IAsyncEnumerable; it does NOT flip cancel on the sub-thread. " +
-            "Fix candidate: on watchdog/cancel, write RequestedCancellationAt to " +
-            "the sub-thread MeshNode the same way the GUI Stop button does. After " +
-            "the fix, invert this assertion to BeFalse.");
-        Output.WriteLine("Confirmed: hung sub-thread does NOT self-recover.");
-
-        // Clean shutdown: cancel via stream.Update on the parent so the hung
-        // sub-thread propagation watcher unwinds before dispose. Without this
-        // the hung sub-thread leaves DataChangeRequests pending past the
-        // Quiescing budget and dispose fails with a leaked-callback exception.
-        // Fire-and-forget — dispose's hosted-hub teardown completes the rest.
-        workspace.GetMeshNodeStream(parentPath)
-            .Update(curr => curr?.Content is MeshThread t
-                ? curr with { Content = t with { RequestedCancellationAt = DateTime.UtcNow } }
-                : curr!)
-            .Subscribe(_ => { }, _ => { });
+        settled!.IsExecuting.Should().BeFalse(
+            "FIX: sub-thread settled within the 30s watchdog + 15s propagation " +
+            "slack. ChatClientAgentFactory.ExecuteDelegationAsync's safety " +
+            "timeout fires on a never-completing sub-thread, writes " +
+            "RequestedCancellationAt to the sub-thread MeshNode (same write " +
+            "the GUI Stop button performs), and the sub-thread's cancel " +
+            "watcher unwinds its CTS — HangingSubAgentChatClient's Task.Delay " +
+            "throws OperationCanceled and the streaming loop exits clean.");
+        Output.WriteLine($"Sub-thread settled at {DateTime.UtcNow:O} (no user cancel — watchdog did it)");
     }
 
     /// <summary>
@@ -276,10 +294,15 @@ public class SubThreadHangRepro(ITestOutputHelper output) : MonolithMeshTestBase
     // unwind the hanging IChatClient.
     private static readonly TimeSpan CancelObservationWindow = TimeSpan.FromSeconds(20);
 
-    // 10s is short enough to keep CI fast and long enough that any plausible
-    // self-recovery mechanism would have fired (sub-thread streaming starts
-    // within seconds when the agent is responsive).
-    private static readonly TimeSpan ObservationWindow = TimeSpan.FromSeconds(10);
+    // 10s for CI; 12min (720s) for a watchdog-debug run — parent
+    // ExecuteDelegationAsync has a 5-min CancellationTokenSource that SHOULD
+    // propagate RequestedCancellationAt to the sub-thread (see
+    // ChatClientAgentFactory.cs:634-643). If the sub-thread still hasn't
+    // settled by 12 min, something is jamming the propagation.
+    private static readonly TimeSpan ObservationWindow =
+        Environment.GetEnvironmentVariable("MESHWEAVER_HANG_DEBUG") == "1"
+            ? TimeSpan.FromSeconds(720)
+            : TimeSpan.FromSeconds(10);
 
     private async Task<string> CreateThreadAsync(IMessageHub client, string text, CancellationToken ct)
     {
