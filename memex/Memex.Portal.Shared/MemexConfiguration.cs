@@ -501,8 +501,23 @@ public static class MemexConfiguration
         // `mesh/<guid>`. SecurityService then matched accessObject="mesh/<guid>"
         // (no match) instead of accessObject="rbuergi" (Admin) → cross-partition
         // writes denied while same-partition self-rule writes still passed.
-        app.UseMiddleware<VirtualUserMiddleware>();
+        //
+        // Order: UserContext → VirtualUser → Onboarding. UserContext extracts
+        // the real-user identity from OAuth claims / Bearer token first. Only
+        // if AccessService.Context is still null afterwards (no auth on the
+        // request) does VirtualUserMiddleware fall through to the cookie-backed
+        // guest identity. Before this swap, VirtualUserMiddleware ran first
+        // and bypassed VUser only on HttpContext.User.IsAuthenticated — but
+        // some flows (Bearer-token resolution inside UserContext) set the
+        // identity later in the pipeline, so VirtualUserMiddleware was
+        // wastefully creating a guest VUser node on legitimately-authed
+        // requests and the page crashed on
+        // "No handler found for CreateNodeRequest in portal/anonymous"
+        // when the create-request was posted to the portal hub instead of
+        // the mesh hub. See VUserHelper.EnsureVUserNode for the matching
+        // mesh-hub target fix.
         app.UseMiddleware<UserContextMiddleware>();
+        app.UseMiddleware<VirtualUserMiddleware>();
         app.UseMiddleware<OnboardingMiddleware>();
 
         //app.MapMeshWeaverSignalRHubs();

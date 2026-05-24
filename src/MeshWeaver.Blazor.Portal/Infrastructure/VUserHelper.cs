@@ -34,9 +34,20 @@ public static class VUserHelper
             Content = new AccessObject { IsVirtual = true }
         };
 
+        // 🚨 CreateNodeRequest must target the MESH hub — that's where
+        // WithNodeOperationHandlers registers the handler. PortalApp.Hub is a
+        // hosted hub at `portal/{userId}` (or `portal/anonymous`) which has no
+        // CreateNodeRequest handler, so a bare Observe without a target sends
+        // the request to portal/anonymous and prod surfaces
+        // "No handler found for message type CreateNodeRequest in portal/anonymous"
+        // — the page-open crash a real user just hit on the sub-thread URL.
+        var meshHub = hub.GetMeshHub();
+
         using (accessService.ImpersonateAsHub(hub))
         {
-            hub.Observe<CreateNodeResponse>(new CreateNodeRequest(userNode))
+            hub.Observe<CreateNodeResponse>(
+                    new CreateNodeRequest(userNode),
+                    o => o.WithTarget(meshHub.Address))
                 .FirstAsync()
                 .Subscribe(
                     delivery =>
