@@ -1,8 +1,10 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
+using MeshWeaver.AI.Attributes;
 using MeshWeaver.AI.Plugins;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
@@ -819,27 +821,81 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
 }
 
 /// <summary>
-/// AIFunction wrapper that restores the user's access context before each invocation.
-/// This is the single injection point for ALL tool calls — delegation, MeshPlugin, etc.
+/// AIFunction wrapper that restores the user's access context before each invocation
+/// AND enforces a per-tool execution timeout (via <see cref="ToolTimeoutAttribute"/>;
+/// default 30 s). This is the single injection point for ALL tool calls — delegation,
+/// MeshPlugin, etc.
+///
+/// <para>The timeout is read once at wrap time from the inner function's underlying
+/// method. On expiry the linked CTS cancels the tool invocation and the agent receives
+/// the synthetic "timed out" message as the tool result — never a hung promise.
+/// <c>delegate_to_agent</c> is exempt (lifecycle-managed by the thread-hub heartbeat,
+/// not a tool in the timeout-attribute sense).</para>
 /// </summary>
 internal sealed class AccessContextAIFunction : DelegatingAIFunction
 {
+    /// <summary>
+    /// Default timeout when no <see cref="ToolTimeoutAttribute"/> is present on the
+    /// underlying tool method. 30 s — long enough for any reasonable tool, short
+    /// enough that a hung tool surfaces fast in the chat UI.
+    /// </summary>
+    private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Tools that opt out of the timeout because their lifecycle is managed by the
+    /// thread hub itself (currently just <c>delegate_to_agent</c>). They have their
+    /// own heartbeat-based hang detection on <c>MeshThread.LastActivityAt</c>.
+    /// </summary>
+    private static readonly HashSet<string> TimeoutExemptTools = new(StringComparer.Ordinal)
+    {
+        "delegate_to_agent",
+    };
+
     private readonly IAgentChat _chat;
     private readonly AccessService _accessService;
+    private readonly TimeSpan? _timeout;
 
     public AccessContextAIFunction(AIFunction inner, IAgentChat chat, AccessService accessService)
         : base(inner)
     {
         _chat = chat;
         _accessService = accessService;
+        _timeout = TimeoutExemptTools.Contains(inner.Name)
+            ? null
+            : (inner.UnderlyingMethod?.GetCustomAttribute<ToolTimeoutAttribute>()?.Timeout
+                ?? DefaultTimeout);
     }
 
-    protected override ValueTask<object?> InvokeCoreAsync(
+    protected override async ValueTask<object?> InvokeCoreAsync(
         AIFunctionArguments arguments, CancellationToken cancellationToken)
     {
         var userCtx = _chat.ExecutionContext?.UserAccessContext;
         if (userCtx != null)
             _accessService.SetContext(userCtx);
-        return base.InvokeCoreAsync(arguments, cancellationToken);
+
+        if (_timeout is null)
+            return await base.InvokeCoreAsync(arguments, cancellationToken);
+
+        // Bound the wait via Task.WaitAsync — covers both well-behaved tools
+        // (which observe cts.Token and unwind via OCE) AND ill-behaved tools
+        // (which ignore the token and would otherwise pin the agent loop until
+        // their intrinsic delay finishes). On timeout, the inner Task becomes
+        // orphaned (still runs to completion in the background) but the agent
+        // never waits — it gets a deterministic synthetic FunctionResultContent.
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var invocation = base.InvokeCoreAsync(arguments, cts.Token).AsTask();
+        try
+        {
+            return await invocation.WaitAsync(_timeout.Value, cancellationToken);
+        }
+        catch (TimeoutException)
+        {
+            // Our timer fired. Signal cooperative cancellation so well-behaved
+            // tools wind down even though we've stopped waiting; ill-behaved
+            // tools continue but the wrapper is no longer blocked on them.
+            cts.Cancel();
+            return $"Tool '{Name}' timed out after {_timeout.Value.TotalSeconds:F0}s. " +
+                   $"Add [ToolTimeout(N)] to allow longer.";
+        }
     }
 }
