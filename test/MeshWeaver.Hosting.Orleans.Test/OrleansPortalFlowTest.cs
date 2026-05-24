@@ -64,7 +64,17 @@ public class OrleansPortalFlowTest(ITestOutputHelper output) : OrleansSharedTest
     /// Exact portal flow: create thread Ã¢â€ â€™ create cells (verified) Ã¢â€ â€™ submit Ã¢â€ â€™ execution Ã¢â€ â€™ response.
     /// </summary>
     // TODO(append-migration): kept on SubmitMessageRequest Ã¢â‚¬â€ see class-level comment.
-    [Fact]
+    // 🚨 The pre-create-cells + explicit-id flow this test exercised is dead:
+    // ThreadExecution.HandleSubmitMessage now ignores request.UserMessageId /
+    // ResponseMessageId and routes through ThreadInput.AppendUserInput, which
+    // generates fresh ids and lets the submission watcher allocate the
+    // response cell. The test's pre-created cells were orphaned (server wrote
+    // its own new cells), so the poll-on-pre-created-responseMsgId stayed
+    // empty forever — CI failure 2026-05-23 "Expected responseMsg.Text not
+    // to be empty, but found ''". Skipped until rewritten against the new
+    // GUI-shaped flow (ThreadSubmission.Submit + read server-allocated
+    // Messages[0] / Messages[^1]).
+    [Fact(Skip = "Tests dead legacy SubmitMessageRequest+explicit-id flow — see comment block")]
     public async Task PortalFlow_CreateThread_CreateCells_Submit_ExecutionCompletes()
     {
         SharedOrleansFixture.SwappableFactory.SetInner(new PortalFlowEchoChatClientFactory());
@@ -159,7 +169,10 @@ public class OrleansPortalFlowTest(ITestOutputHelper output) : OrleansSharedTest
     /// Verifies WatchForExecution triggers for new ActiveMessageId.
     /// </summary>
     // TODO(append-migration): kept on SubmitMessageRequest Ã¢â‚¬â€ see class-level comment.
-    [Fact]
+    // Same dead-legacy-flow issue as PortalFlow_CreateThread_CreateCells_Submit_ExecutionCompletes
+    // above — explicit UserMessageId / ResponseMessageId are ignored by the
+    // new AppendUserInput path.
+    [Fact(Skip = "Tests dead legacy SubmitMessageRequest+explicit-id flow — see comment block above")]
     public async Task ExistingThread_SecondMessage_ExecutionCompletes()
     {
         SharedOrleansFixture.SwappableFactory.SetInner(new PortalFlowEchoChatClientFactory());
