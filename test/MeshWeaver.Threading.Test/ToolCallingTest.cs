@@ -65,12 +65,11 @@ public class ToolCallingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var threadPath = created.Path;
         Output.WriteLine($"Thread created: {threadPath}");
 
-        var responseMsgId = await ChatFlow.SubmitAndWaitAsync(client, threadPath,
-            "Search for test documents", contextPath: ContextPath, ct: ct);
+        var responseMsgId = await ThreadFlow.SubmitAndWait(client, threadPath,
+            "Search for test documents", contextPath: ContextPath).FirstAsync().ToTask(ct);
 
-        var responseContent = await ChatFlow.ReadMessageAsync(client, threadPath, responseMsgId,
-            m => !string.IsNullOrEmpty(m.Text) && m.Status != ThreadMessageStatus.Streaming,
-            ct: ct);
+        var responseContent = await ThreadFlow.ReadMessage(client, threadPath, responseMsgId,
+            m => !string.IsNullOrEmpty(m.Text) && m.Status != ThreadMessageStatus.Streaming).FirstAsync().ToTask(ct);
         responseContent.Role.Should().Be("assistant");
 
         responseContent.Text.Should().Contain("TOOL_RESULT_RECEIVED",

@@ -82,14 +82,19 @@ public static class ThreadInput
     public static string AppendUserInput(
         IWorkspace workspace,
         string threadPath,
-        ThreadMessage message)
+        ThreadMessage message,
+        string? explicitMsgId = null)
     {
         if (string.IsNullOrEmpty(threadPath))
             throw new ArgumentException("threadPath is required", nameof(threadPath));
         ArgumentNullException.ThrowIfNull(workspace);
         ArgumentNullException.ThrowIfNull(message);
 
-        var msgId = NewId();
+        // Caller-supplied id honored when present (legacy SubmitMessageRequest
+        // flow where the client pre-created the user satellite cell and needs
+        // the queue + Messages-list entries to use the same id). Otherwise
+        // generate a fresh one as before.
+        var msgId = !string.IsNullOrEmpty(explicitMsgId) ? explicitMsgId : NewId();
         var logger = workspace.Hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.ThreadInput");
         logger?.LogDebug(

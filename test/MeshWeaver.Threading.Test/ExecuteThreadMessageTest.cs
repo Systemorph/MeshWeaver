@@ -83,22 +83,22 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
         var client = GetClient();
 
         var threadPath = await CreateEmptyThreadAsync(client, "CreatesUserAndResponseNodes", ct);
-        var responseMsgId = await ChatFlow.SubmitAndWaitAsync(client, threadPath,
-            "Hello agent", contextPath: ContextPath, ct: ct);
+        var responseMsgId = await ThreadFlow.SubmitAndWait(client, threadPath,
+            "Hello agent", contextPath: ContextPath).FirstAsync().ToTask(ct);
 
-        var thread = await ChatFlow.ReadThreadAsync(client, threadPath,
-            t => t.Messages.Count >= 2, ct: ct);
+        var thread = await ThreadFlow.ReadThread(client, threadPath,
+            t => t.Messages.Count >= 2).FirstAsync().ToTask(ct);
         thread.Messages.Should().HaveCount(2);
         Output.WriteLine($"Messages: [{string.Join(", ", thread.Messages)}]");
 
         var userId = thread.Messages[0];
-        var userContent = await ChatFlow.ReadMessageAsync(client, threadPath, userId,
-            m => m.Role == "user", ct: ct);
+        var userContent = await ThreadFlow.ReadMessage(client, threadPath, userId,
+            m => m.Role == "user").FirstAsync().ToTask(ct);
         userContent.Text.Should().Be("Hello agent");
         userContent.Type.Should().Be(ThreadMessageType.ExecutedInput);
 
-        var response = await ChatFlow.ReadMessageAsync(client, threadPath, responseMsgId,
-            m => m.Role == "assistant", ct: ct);
+        var response = await ThreadFlow.ReadMessage(client, threadPath, responseMsgId,
+            m => m.Role == "assistant").FirstAsync().ToTask(ct);
         response.Type.Should().Be(ThreadMessageType.AgentResponse);
     }
 
@@ -110,24 +110,24 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
 
         var threadPath = await CreateEmptyThreadAsync(client, "Multi-message", ct);
 
-        await ChatFlow.SubmitAndWaitAsync(client, threadPath, "First",
-            contextPath: ContextPath, ct: ct);
-        var thread1 = await ChatFlow.ReadThreadAsync(client, threadPath,
-            t => t is { IsExecuting: false } && t.Messages.Count >= 2, ct: ct);
+        await ThreadFlow.SubmitAndWait(client, threadPath, "First",
+            contextPath: ContextPath).FirstAsync().ToTask(ct);
+        var thread1 = await ThreadFlow.ReadThread(client, threadPath,
+            t => t is { IsExecuting: false } && t.Messages.Count >= 2).FirstAsync().ToTask(ct);
         thread1.Messages.Should().HaveCount(2);
         Output.WriteLine($"After first: [{string.Join(", ", thread1.Messages)}]");
 
-        await ChatFlow.SubmitAndWaitAsync(client, threadPath, "Second",
-            contextPath: ContextPath, ct: ct);
-        var thread2 = await ChatFlow.ReadThreadAsync(client, threadPath,
-            t => t is { IsExecuting: false } && t.Messages.Count >= 4, ct: ct);
+        await ThreadFlow.SubmitAndWait(client, threadPath, "Second",
+            contextPath: ContextPath).FirstAsync().ToTask(ct);
+        var thread2 = await ThreadFlow.ReadThread(client, threadPath,
+            t => t is { IsExecuting: false } && t.Messages.Count >= 4).FirstAsync().ToTask(ct);
         thread2.Messages.Should().HaveCount(4);
         Output.WriteLine($"All: [{string.Join(", ", thread2.Messages)}]");
 
         for (var i = 0; i < thread2.Messages.Count; i++)
         {
-            var msg = await ChatFlow.ReadMessageAsync(client, threadPath, thread2.Messages[i],
-                _ => true, ct: ct);
+            var msg = await ThreadFlow.ReadMessage(client, threadPath, thread2.Messages[i],
+                _ => true).FirstAsync().ToTask(ct);
             Output.WriteLine($"  [{i}] {msg.Role}: '{msg.Text}'");
         }
     }
@@ -139,22 +139,21 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
         var client = GetClient();
 
         var threadPath = await CreateEmptyThreadAsync(client, "Content verification", ct);
-        var responseMsgId = await ChatFlow.SubmitAndWaitAsync(client, threadPath,
-            "Tell me something", contextPath: ContextPath, ct: ct);
+        var responseMsgId = await ThreadFlow.SubmitAndWait(client, threadPath,
+            "Tell me something", contextPath: ContextPath).FirstAsync().ToTask(ct);
 
-        var thread = await ChatFlow.ReadThreadAsync(client, threadPath,
-            t => t.Messages.Count >= 2, ct: ct);
+        var thread = await ThreadFlow.ReadThread(client, threadPath,
+            t => t.Messages.Count >= 2).FirstAsync().ToTask(ct);
         Output.WriteLine($"Message IDs: [{string.Join(", ", thread.Messages)}]");
 
-        var userContent = await ChatFlow.ReadMessageAsync(client, threadPath, thread.Messages[0],
-            m => m.Role == "user", ct: ct);
+        var userContent = await ThreadFlow.ReadMessage(client, threadPath, thread.Messages[0],
+            m => m.Role == "user").FirstAsync().ToTask(ct);
         userContent.Text.Should().Be("Tell me something");
         userContent.Type.Should().Be(ThreadMessageType.ExecutedInput);
         Output.WriteLine($"User: role={userContent.Role}, text='{userContent.Text}'");
 
-        var response = await ChatFlow.ReadMessageAsync(client, threadPath, responseMsgId,
-            m => !string.IsNullOrEmpty(m.Text) && m.Status != ThreadMessageStatus.Streaming,
-            ct: ct);
+        var response = await ThreadFlow.ReadMessage(client, threadPath, responseMsgId,
+            m => !string.IsNullOrEmpty(m.Text) && m.Status != ThreadMessageStatus.Streaming).FirstAsync().ToTask(ct);
         response.Role.Should().Be("assistant");
         response.Type.Should().Be(ThreadMessageType.AgentResponse);
         response.Text.Length.Should().BeGreaterThan(10);
@@ -168,8 +167,8 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
         var client = GetClient();
 
         var threadPath = await CreateEmptyThreadAsync(client, "Deadlock test", ct);
-        var responseMsgId = await ChatFlow.SubmitAndWaitAsync(client, threadPath, "Quick test",
-            contextPath: ContextPath, timeout: 5.Seconds(), ct: ct);
+        var responseMsgId = await ThreadFlow.SubmitAndWait(client, threadPath, "Quick test",
+            contextPath: ContextPath, timeout: 5.Seconds()).FirstAsync().ToTask(ct);
 
         responseMsgId.Should().NotBeNullOrEmpty(
             "SubmitMessageRequest should complete within 5 seconds without deadlock");
@@ -198,11 +197,11 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
         var client = GetClient();
 
         var threadPath = await CreateEmptyThreadAsync(client, "AccessContext rides", ct);
-        var responseMsgId = await ChatFlow.SubmitAndWaitAsync(client, threadPath,
-            "Identity probe", contextPath: ContextPath, ct: ct);
+        var responseMsgId = await ThreadFlow.SubmitAndWait(client, threadPath,
+            "Identity probe", contextPath: ContextPath).FirstAsync().ToTask(ct);
 
-        var thread = await ChatFlow.ReadThreadAsync(client, threadPath,
-            t => t.Messages.Count >= 2, ct: ct);
+        var thread = await ThreadFlow.ReadThread(client, threadPath,
+            t => t.Messages.Count >= 2).FirstAsync().ToTask(ct);
         thread.Messages.Should().HaveCount(2,
             "user input + assistant response must both land");
 
@@ -255,7 +254,7 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
                 with { Messages = ["test1", "test2"] }
         };
 
-        var twoMessages = ChatFlow.ObserveMessages(client, threadPath)
+        var twoMessages = ThreadFlow.ObserveMessages(client, threadPath)
             .Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
 
         client.Post(new DataChangeRequest { Updates = [updatedNode] },
@@ -264,8 +263,8 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
         var msgIds = await twoMessages;
         msgIds.Should().BeEquivalentTo(["test1", "test2"]);
 
-        var thread = await ChatFlow.ReadThreadAsync(client, threadPath,
-            t => t.Messages.Count >= 2, ct: ct);
+        var thread = await ThreadFlow.ReadThread(client, threadPath,
+            t => t.Messages.Count >= 2).FirstAsync().ToTask(ct);
         thread.Messages.Should().BeEquivalentTo(["test1", "test2"]);
     }
 
@@ -316,24 +315,23 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
             new LayoutAreaReference(ThreadNodeType.ThreadArea));
         layoutStream.Should().NotBeNull("Thread hub should serve the Thread layout area");
 
-        var responseMsgId = await ChatFlow.SubmitAndWaitAsync(client, threadPath,
-            "Hello from end-to-end test", contextPath: ContextPath, ct: ct);
+        var responseMsgId = await ThreadFlow.SubmitAndWait(client, threadPath,
+            "Hello from end-to-end test", contextPath: ContextPath).FirstAsync().ToTask(ct);
         Output.WriteLine($"Response id: {responseMsgId}");
 
-        var thread = await ChatFlow.ReadThreadAsync(client, threadPath,
-            t => t.Messages.Count >= 2, ct: ct);
+        var thread = await ThreadFlow.ReadThread(client, threadPath,
+            t => t.Messages.Count >= 2).FirstAsync().ToTask(ct);
         thread.Messages.Should().HaveCount(2);
         Output.WriteLine($"Messages: [{string.Join(", ", thread.Messages)}]");
 
-        var userContent = await ChatFlow.ReadMessageAsync(client, threadPath, thread.Messages[0],
-            m => m.Role == "user", ct: ct);
+        var userContent = await ThreadFlow.ReadMessage(client, threadPath, thread.Messages[0],
+            m => m.Role == "user").FirstAsync().ToTask(ct);
         userContent.Text.Should().Be("Hello from end-to-end test");
         userContent.Type.Should().Be(ThreadMessageType.ExecutedInput);
         Output.WriteLine($"User message: '{userContent.Text}'");
 
-        var response = await ChatFlow.ReadMessageAsync(client, threadPath, responseMsgId,
-            m => !string.IsNullOrEmpty(m.Text) && m.Status != ThreadMessageStatus.Streaming,
-            ct: ct);
+        var response = await ThreadFlow.ReadMessage(client, threadPath, responseMsgId,
+            m => !string.IsNullOrEmpty(m.Text) && m.Status != ThreadMessageStatus.Streaming).FirstAsync().ToTask(ct);
         response.Role.Should().Be("assistant");
         response.Type.Should().Be(ThreadMessageType.AgentResponse);
         Output.WriteLine($"Response: '{response.Text}' ({response.Text.Length} chars)");
@@ -394,7 +392,7 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
 
         var threadPath = await CreateEmptyThreadAsync(client, "Local update test", ct);
 
-        var messagesChanged = ChatFlow.ObserveMessages(client, threadPath)
+        var messagesChanged = ThreadFlow.ObserveMessages(client, threadPath)
             .Where(m => m.Count >= 2).FirstAsync().ToTask(ct);
 
         await workspace.GetMeshNodeStream(threadPath).Update(node =>
@@ -423,7 +421,7 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
 
         var threadPath = await CreateEmptyThreadAsync(client, "Stream update test", ct);
 
-        var messagesChanged = ChatFlow.ObserveMessages(client, threadPath)
+        var messagesChanged = ThreadFlow.ObserveMessages(client, threadPath)
             .Where(m => m.Count >= 2).FirstAsync().ToTask(ct);
 
         await workspace.GetMeshNodeStream(threadPath).Update(node =>

@@ -80,21 +80,21 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
         threadPath.Should().StartWith($"{ContextPath}/");
         threadPath.Should().Contain($"/{ThreadNodeType.ThreadPartition}/");
 
-        var responseMsgId = await ChatFlow.SubmitAndWaitAsync(client, threadPath,
-            "Hello from persistence test", contextPath: ContextPath, ct: ct);
+        var responseMsgId = await ThreadFlow.SubmitAndWait(client, threadPath,
+            "Hello from persistence test", contextPath: ContextPath).FirstAsync().ToTask(ct);
 
-        var thread = await ChatFlow.ReadThreadAsync(client, threadPath,
-            t => t.Messages.Count >= 2, ct: ct);
+        var thread = await ThreadFlow.ReadThread(client, threadPath,
+            t => t.Messages.Count >= 2).FirstAsync().ToTask(ct);
         thread.Messages.Should().HaveCount(2);
         Output.WriteLine($"Messages: [{string.Join(", ", thread.Messages)}]");
 
-        var userContent = await ChatFlow.ReadMessageAsync(client, threadPath, thread.Messages[0],
-            m => m.Role == "user", ct: ct);
+        var userContent = await ThreadFlow.ReadMessage(client, threadPath, thread.Messages[0],
+            m => m.Role == "user").FirstAsync().ToTask(ct);
         userContent.Text.Should().Be("Hello from persistence test");
         Output.WriteLine($"User message OK: '{userContent.Text}'");
 
-        var responseContent = await ChatFlow.ReadMessageAsync(client, threadPath, responseMsgId,
-            m => m.Role == "assistant", ct: ct);
+        var responseContent = await ThreadFlow.ReadMessage(client, threadPath, responseMsgId,
+            m => m.Role == "assistant").FirstAsync().ToTask(ct);
         responseContent.Type.Should().Be(ThreadMessageType.AgentResponse);
         Output.WriteLine($"Response message node exists at: {threadPath}/{responseMsgId}");
 
@@ -110,10 +110,10 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
         await CreateContextNodeAsync(ContextPath, ct);
         var threadPath = await CreateThreadAsync(client, ContextPath, "Child query test", ct);
 
-        await ChatFlow.SubmitAndWaitAsync(client, threadPath, "Test query by namespace",
-            contextPath: ContextPath, ct: ct);
+        await ThreadFlow.SubmitAndWait(client, threadPath, "Test query by namespace",
+            contextPath: ContextPath).FirstAsync().ToTask(ct);
 
-        await ChatFlow.ReadThreadAsync(client, threadPath, t => t.Messages.Count >= 2, ct: ct);
+        await ThreadFlow.ReadThread(client, threadPath, t => t.Messages.Count >= 2).FirstAsync().ToTask(ct);
 
         var children = await MeshQuery.QueryAsync<MeshNode>(
                 $"namespace:{threadPath} nodeType:{ThreadMessageNodeType.NodeType}")
@@ -142,8 +142,8 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
         await CreateContextNodeAsync(ContextPath, ct);
         var threadPath = await CreateThreadAsync(client, ContextPath, "Timeout test", ct);
 
-        var responseMsgId = await ChatFlow.SubmitAndWaitAsync(client, threadPath,
-            "Test no timeout", contextPath: ContextPath, timeout: 15.Seconds(), ct: ct);
+        var responseMsgId = await ThreadFlow.SubmitAndWait(client, threadPath,
+            "Test no timeout", contextPath: ContextPath, timeout: 15.Seconds()).FirstAsync().ToTask(ct);
 
         responseMsgId.Should().NotBeNullOrEmpty("SubmitMessageResponse should arrive without timeout");
         Output.WriteLine("SubmitMessageRequest completed without timeout");
@@ -158,11 +158,11 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
         await CreateContextNodeAsync(ContextPath, ct);
         var threadPath = await CreateThreadAsync(client, ContextPath, "Persistence test", ct);
 
-        await ChatFlow.SubmitAndWaitAsync(client, threadPath, "Check persistence",
-            contextPath: ContextPath, ct: ct);
+        await ThreadFlow.SubmitAndWait(client, threadPath, "Check persistence",
+            contextPath: ContextPath).FirstAsync().ToTask(ct);
 
-        var thread = await ChatFlow.ReadThreadAsync(client, threadPath,
-            t => t.Messages.Count >= 2, ct: ct);
+        var thread = await ThreadFlow.ReadThread(client, threadPath,
+            t => t.Messages.Count >= 2).FirstAsync().ToTask(ct);
         thread.Messages.Should().HaveCountGreaterThanOrEqualTo(2,
             "Messages must be persisted with message IDs");
         Output.WriteLine($"Thread persisted: [{string.Join(", ", thread.Messages)}]");

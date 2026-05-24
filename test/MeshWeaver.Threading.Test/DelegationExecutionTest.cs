@@ -69,15 +69,14 @@ public class DelegationExecutionTest(ITestOutputHelper output) : MonolithMeshTes
         var threadPath = await CreateThreadAsync(client, "Delegation execution test", ct);
         Output.WriteLine($"Parent thread: {threadPath}");
 
-        var parentResponseMsgId = await ChatFlow.SubmitAndWaitAsync(client, threadPath,
-            "Research reinsurance pricing", contextPath: ContextPath, ct: ct);
+        var parentResponseMsgId = await ThreadFlow.SubmitAndWait(client, threadPath,
+            "Research reinsurance pricing", contextPath: ContextPath).FirstAsync().ToTask(ct);
         Output.WriteLine($"Parent response: {parentResponseMsgId}");
 
         // Wait for parent response to have its final text before creating
         // the sub-thread underneath.
-        await ChatFlow.ReadMessageAsync(client, threadPath, parentResponseMsgId,
-            m => !string.IsNullOrEmpty(m.Text) && m.Status != ThreadMessageStatus.Streaming,
-            ct: ct);
+        await ThreadFlow.ReadMessage(client, threadPath, parentResponseMsgId,
+            m => !string.IsNullOrEmpty(m.Text) && m.Status != ThreadMessageStatus.Streaming).FirstAsync().ToTask(ct);
 
         // Create the delegation sub-thread under the parent's response cell.
         var subThreadId = ThreadNodeType.GenerateSpeakingId("research reinsurance pricing");
@@ -93,13 +92,13 @@ public class DelegationExecutionTest(ITestOutputHelper output) : MonolithMeshTes
         Output.WriteLine($"Sub-thread created: {subThreadPath}");
 
         // Submit via GUI handler — server generates message ids on the sub-thread.
-        var subResponseMsgId = await ChatFlow.SubmitAndWaitAsync(client, subThreadPath,
-            "Find documents about reinsurance pricing models", contextPath: ContextPath, ct: ct);
+        var subResponseMsgId = await ThreadFlow.SubmitAndWait(client, subThreadPath,
+            "Find documents about reinsurance pricing models", contextPath: ContextPath).FirstAsync().ToTask(ct);
         Output.WriteLine($"Sub-thread response: {subResponseMsgId}");
 
         // Verify full hierarchy is navigable via remote streams.
-        var parentThread = await ChatFlow.ReadThreadAsync(client, threadPath,
-            t => t.Messages.Count >= 2, ct: ct);
+        var parentThread = await ThreadFlow.ReadThread(client, threadPath,
+            t => t.Messages.Count >= 2).FirstAsync().ToTask(ct);
         parentThread.Messages.Should().HaveCount(2);
 
         var subThreads = await MeshQuery
@@ -108,16 +107,16 @@ public class DelegationExecutionTest(ITestOutputHelper output) : MonolithMeshTes
         subThreads.Should().ContainSingle("should find exactly one sub-thread");
         subThreads[0].Path.Should().Be(subThreadPath);
 
-        var subThread = await ChatFlow.ReadThreadAsync(client, subThreadPath,
-            t => t is { IsExecuting: false } && t.Messages.Count >= 2, ct: ct);
+        var subThread = await ThreadFlow.ReadThread(client, subThreadPath,
+            t => t is { IsExecuting: false } && t.Messages.Count >= 2).FirstAsync().ToTask(ct);
         subThread.Messages.Should().HaveCount(2);
 
-        var subUserContent = await ChatFlow.ReadMessageAsync(client, subThreadPath,
-            subThread.Messages[0], m => m.Role == "user", ct: ct);
+        var subUserContent = await ThreadFlow.ReadMessage(client, subThreadPath,
+            subThread.Messages[0], m => m.Role == "user").FirstAsync().ToTask(ct);
         subUserContent.Text.Should().Contain("reinsurance pricing");
 
-        var subRespContent = await ChatFlow.ReadMessageAsync(client, subThreadPath,
-            subResponseMsgId, m => m.Role == "assistant" && !string.IsNullOrEmpty(m.Text), ct: ct);
+        var subRespContent = await ThreadFlow.ReadMessage(client, subThreadPath,
+            subResponseMsgId, m => m.Role == "assistant" && !string.IsNullOrEmpty(m.Text)).FirstAsync().ToTask(ct);
         subRespContent.Text.Should().NotBeNullOrEmpty();
 
         Output.WriteLine($"Sub-thread response: '{subRespContent.Text}'");

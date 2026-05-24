@@ -1,86 +1,51 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.AI;
-using MeshWeaver.Data;
-using MeshWeaver.Fixture;
-using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
-using Microsoft.Extensions.DependencyInjection;
 using Xunit;
-using MeshThread = MeshWeaver.AI.Thread;
 
-using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
-/// Orleans integration: exact portal flow.
-/// 1. Create thread (BuildThreadNode)
-/// 2. Create user cell Ã¢â€ â€™ verify
-/// 3. Create response cell Ã¢â€ â€™ verify
-/// 4. SubmitMessageRequest (state update only) Ã¢â€ â€™ verify
-/// 5. WatchForExecution triggers execution
-/// 6. Response cell gets agent text
+/// Orleans integration: portal/side-panel chat flow end-to-end.
+/// Uses <see cref="ThreadFlow"/> — the GUI-shaped static primitives — so
+/// the test stays in lockstep with what the user actually sees. NO inline
+/// re-implementation of the flow.
 ///
-/// TODO(append-migration): SubmitMessageRequest still used because this test
-/// specifically exercises the legacy "client creates user + response cells then
-/// posts SubmitMessageRequest with both UserMessageId + ResponseMessageId" flow.
-/// The new ThreadInput.AppendUserInput path makes the server own cell creation
-/// (via PendingUserMessages + the watcher), so the explicit pre-created cell ids
-/// have no equivalent. Production code (thread hub Ã¢â€ â€™ _Exec) still routes through
-/// SubmitMessageRequest with explicit ResponseMessageId, so this Orleans-level
-/// flow check remains meaningful until the legacy code is removed.
+/// <para>Previously this test exercised the legacy "client pre-creates user +
+/// response cells, then posts SubmitMessageRequest with explicit
+/// UserMessageId + ResponseMessageId" flow. That path is dead:
+/// <see cref="ThreadExecution.HandleSubmitMessage"/> now routes through
+/// <see cref="ThreadInput.AppendUserInput"/>; the submission watcher
+/// allocates its OWN cell ids via DispatchRound. The test's pre-created
+/// cells stayed orphaned and the poll-on-pre-created-responseMsgId waited
+/// indefinitely for text that never arrived (CI failure 2026-05-23).
+/// Rewritten 2026-05-24 to use ThreadFlow + read the server-allocated
+/// cell ids.</para>
 /// </summary>
 public class OrleansPortalFlowTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
         => await base.GetClientAsync($"portal-{name}-{Guid.NewGuid():N}", "TestUser");
 
-    private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
-    {
-        // Canonical CQRS-correct read via per-node MeshNodeReference reducer.
-        var response = await client.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path))).FirstAsync().ToTask(ct);
-        var node = response.Message.Data as MeshNode;
-        if (node == null && response.Message.Data is JsonElement je)
-            node = je.Deserialize<MeshNode>(Fixture.ClientMesh.JsonSerializerOptions);
-        if (node?.Content is T typed) return typed;
-        if (node?.Content is JsonElement contentJe)
-            return contentJe.Deserialize<T>(Fixture.ClientMesh.JsonSerializerOptions);
-        return null;
-    }
-
-    /// <summary>
-    /// Exact portal flow: create thread Ã¢â€ â€™ create cells (verified) Ã¢â€ â€™ submit Ã¢â€ â€™ execution Ã¢â€ â€™ response.
-    /// </summary>
-    // TODO(append-migration): kept on SubmitMessageRequest Ã¢â‚¬â€ see class-level comment.
-    // 🚨 The pre-create-cells + explicit-id flow this test exercised is dead:
-    // ThreadExecution.HandleSubmitMessage now ignores request.UserMessageId /
-    // ResponseMessageId and routes through ThreadInput.AppendUserInput, which
-    // generates fresh ids and lets the submission watcher allocate the
-    // response cell. The test's pre-created cells were orphaned (server wrote
-    // its own new cells), so the poll-on-pre-created-responseMsgId stayed
-    // empty forever — CI failure 2026-05-23 "Expected responseMsg.Text not
-    // to be empty, but found ''". Skipped until rewritten against the new
-    // GUI-shaped flow (ThreadSubmission.Submit + read server-allocated
-    // Messages[0] / Messages[^1]).
-    [Fact(Skip = "Tests dead legacy SubmitMessageRequest+explicit-id flow — see comment block")]
+    [Fact]
     public async Task PortalFlow_CreateThread_CreateCells_Submit_ExecutionCompletes()
     {
         SharedOrleansFixture.SwappableFactory.SetInner(new PortalFlowEchoChatClientFactory());
         try
         {
-            var ct = new CancellationTokenSource(30.Seconds()).Token;
+            var ct = new CancellationTokenSource(60.Seconds()).Token;
             var client = await GetClientAsync();
 
             // Step 1: Create thread
@@ -90,73 +55,32 @@ public class OrleansPortalFlowTest(ITestOutputHelper output) : OrleansSharedTest
             var threadPath = createResp.Message.Node!.Path!;
             Output.WriteLine($"Thread: {threadPath}");
 
-            // Step 2: Create user cell Ã¢â€ â€™ verify
-            var userMsgId = Guid.NewGuid().ToString("N")[..8];
-            var responseMsgId = Guid.NewGuid().ToString("N")[..8];
+            // Step 2: Submit via the GUI path + wait for the round to complete.
+            // ThreadFlow.SubmitAndWait returns the response message id —
+            // the server-allocated cell at Messages[^1] after IsExecuting flips
+            // back to false.
+            var responseMsgId = await ThreadFlow.SubmitAndWait(
+                client, threadPath, "Portal flow Orleans test",
+                contextPath: "TestUser",
+                timeout: 50.Seconds()).FirstAsync().ToTask(ct);
+            Output.WriteLine($"Round complete. Response cell: {responseMsgId}");
 
-            var userCellResp = await client.Observe(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
-                {
-                    NodeType = ThreadMessageNodeType.NodeType, MainNode = "TestUser",
-                    Content = new ThreadMessage
-                    {
-                        Role = "user", Text = "Portal flow Orleans test", Timestamp = DateTime.UtcNow,
-                        Type = ThreadMessageType.ExecutedInput, CreatedBy = "TestUser"
-                    }
-                }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-            userCellResp.Message.Success.Should().BeTrue("user cell creation must succeed");
-            Output.WriteLine($"User cell created: {userMsgId}");
+            // Step 3: Verify the cells. Same workspace.GetMeshNodeStream
+            // primitive — read via ThreadFlow.ReadMessage.
+            var finalThread = await ThreadFlow.ReadThread(
+                client, threadPath,
+                t => t.Messages.Count >= 2).FirstAsync().ToTask(ct);
+            Output.WriteLine($"Messages: [{string.Join(", ", finalThread.Messages)}]");
 
-            // Step 3: Create response cell Ã¢â€ â€™ verify
-            var responseCellResp = await client.Observe(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
-                {
-                    NodeType = ThreadMessageNodeType.NodeType, MainNode = "TestUser",
-                    Content = new ThreadMessage
-                    {
-                        Role = "assistant", Text = "", Timestamp = DateTime.UtcNow,
-                        Type = ThreadMessageType.AgentResponse, AgentName = "Orchestrator"
-                    }
-                }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-            responseCellResp.Message.Success.Should().BeTrue("response cell creation must succeed");
-            Output.WriteLine($"Response cell created: {responseMsgId}");
+            var userMsg = await ThreadFlow.ReadMessage(
+                client, threadPath, finalThread.Messages[0]).FirstAsync().ToTask(ct);
+            userMsg.Text.Should().Be("Portal flow Orleans test");
+            Output.WriteLine($"User cell: '{userMsg.Text}'");
 
-            // Step 4: Submit Ã¢â‚¬â€ updates state, WatchForExecution triggers execution
-            var submitResp = await client.Observe(new SubmitMessageRequest
-                {
-                    ThreadPath = threadPath,
-                    UserMessageText = "Portal flow Orleans test",
-                    UserMessageId = userMsgId,
-                    ResponseMessageId = responseMsgId,
-                    AgentName = "Orchestrator",
-                    ContextPath = "TestUser"
-                }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-            submitResp.Message.Success.Should().BeTrue("submit must succeed");
-            Output.WriteLine("Submitted Ã¢â‚¬â€ WatchForExecution should trigger");
-
-            // Step 5: Poll for execution to complete
-            var responsePath = $"{threadPath}/{responseMsgId}";
-            for (var i = 0; i < 60; i++)
-            {
-                var thread = await GetHubContentAsync<MeshThread>(client, threadPath, ct);
-                if (thread is { IsExecuting: false })
-                {
-                    Output.WriteLine($"Execution complete after {i * 500}ms");
-
-                    var responseMsg = await GetHubContentAsync<ThreadMessage>(client, responsePath, ct);
-                    responseMsg.Should().NotBeNull("response cell must exist");
-                    responseMsg!.Text.Should().NotBeNullOrEmpty("agent must have written response");
-                    Output.WriteLine($"Response: {responseMsg.Text[..Math.Min(100, responseMsg.Text.Length)]}");
-
-                    // Verify user cell
-                    var userMsg = await GetHubContentAsync<ThreadMessage>(client, $"{threadPath}/{userMsgId}", ct);
-                    userMsg.Should().NotBeNull();
-                    userMsg!.Text.Should().Be("Portal flow Orleans test");
-
-                    Output.WriteLine("PASSED");
-                    return;
-                }
-                await Task.Delay(500, ct);
-            }
-            throw new TimeoutException("Execution did not complete");
+            var responseMsg = await ThreadFlow.ReadMessage(
+                client, threadPath, finalThread.Messages[^1]).FirstAsync().ToTask(ct);
+            responseMsg.Text.Should().NotBeNullOrEmpty("agent must have written response");
+            Output.WriteLine($"Response: {responseMsg.Text[..Math.Min(100, responseMsg.Text.Length)]}");
         }
         finally
         {
@@ -165,90 +89,76 @@ public class OrleansPortalFlowTest(ITestOutputHelper output) : OrleansSharedTest
     }
 
     /// <summary>
-    /// Existing thread: second message on a thread that already has messages.
-    /// Verifies WatchForExecution triggers for new ActiveMessageId.
+    /// Mimics real user behavior: type and submit several messages rapidly
+    /// in succession. The user doesn't wait for each round to finish — they
+    /// pile up. The submission watcher's contract: every pending message
+    /// gets ingested into <see cref="MeshThread.Messages"/> with a response.
+    ///
+    /// Flow:
+    /// 1. Submit msg1 → claim round 1, dispatch
+    /// 2. Submit msg2 immediately (lands in <see cref="MeshThread.PendingUserMessages"/>
+    ///    while round 1 is running)
+    /// 3. Submit msg3 immediately (joins the queue)
+    /// 4. Round 1 completes → watcher dispatches round 2 with the entire
+    ///    pending queue drained ([msg2, msg3] share one response cell per
+    ///    <see cref="ThreadSubmission.PlanNextRound"/> semantics)
+    /// 5. Final state: every submitted text appears as a satellite cell,
+    ///    thread is Idle, all UserMessageIds are ingested
     /// </summary>
-    // TODO(append-migration): kept on SubmitMessageRequest Ã¢â‚¬â€ see class-level comment.
-    // Same dead-legacy-flow issue as PortalFlow_CreateThread_CreateCells_Submit_ExecutionCompletes
-    // above — explicit UserMessageId / ResponseMessageId are ignored by the
-    // new AppendUserInput path.
-    [Fact(Skip = "Tests dead legacy SubmitMessageRequest+explicit-id flow — see comment block above")]
-    public async Task ExistingThread_SecondMessage_ExecutionCompletes()
+    [Fact]
+    public async Task RapidSubmits_PileUpAndAllIngest()
     {
         SharedOrleansFixture.SwappableFactory.SetInner(new PortalFlowEchoChatClientFactory());
         try
         {
-            var ct = new CancellationTokenSource(30.Seconds()).Token;
+            var ct = new CancellationTokenSource(60.Seconds()).Token;
             var client = await GetClientAsync();
 
-            // Create thread + first message pair
-            var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Multi-message test", "TestUser");
+            var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Rapid submits test", "TestUser");
             var createResp = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("TestUser"))).FirstAsync().ToTask(ct);
             var threadPath = createResp.Message.Node!.Path!;
+            Output.WriteLine($"Thread: {threadPath}");
 
-            var u1 = Guid.NewGuid().ToString("N")[..8];
-            var r1 = Guid.NewGuid().ToString("N")[..8];
-            await client.Observe(new CreateNodeRequest(new MeshNode(u1, threadPath)
-            {
-                NodeType = ThreadMessageNodeType.NodeType, MainNode = "TestUser",
-                Content = new ThreadMessage { Role = "user", Text = "First question", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
-            }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-            await client.Observe(new CreateNodeRequest(new MeshNode(r1, threadPath)
-            {
-                NodeType = ThreadMessageNodeType.NodeType, MainNode = "TestUser",
-                Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-            }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-            await client.Observe(new SubmitMessageRequest
-            {
-                ThreadPath = threadPath, UserMessageText = "First question",
-                UserMessageId = u1, ResponseMessageId = r1, ContextPath = "TestUser"
-            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
+            // Rapid-fire three submits — mimics a user typing follow-ups
+            // without waiting for the agent. Submits 2 + 3 should land in
+            // PendingUserMessages while round 1 is still running, then
+            // drain into round 2 as a single multi-message round.
+            string[] userTexts = ["First question", "Second question", "Third question"];
+            foreach (var text in userTexts)
+                ThreadFlow.Submit(client, threadPath, text, contextPath: "TestUser");
+            Output.WriteLine($"Submitted {userTexts.Length} messages rapidly");
 
-            // Wait for first execution to complete
-            for (var i = 0; i < 60; i++)
-            {
-                var t = await GetHubContentAsync<MeshThread>(client, threadPath, ct);
-                if (t is { IsExecuting: false }) break;
-                await Task.Delay(500, ct);
-            }
-            Output.WriteLine("First message complete");
+            // Wait for the thread to settle: Idle + all user messages ingested.
+            // Single workspace.GetMeshNodeStream subscription (via ThreadFlow)
+            // filters for the final state. Ingestion = UserMessageIds count
+            // matches IngestedMessageIds count and equals the submitted count.
+            var finalThread = await ThreadFlow.ReadThread(
+                    client, threadPath,
+                    t => !t.IsExecuting
+                         && t.UserMessageIds.Count >= userTexts.Length
+                         && t.IngestedMessageIds.Count >= userTexts.Length,
+                    timeout: 45.Seconds())
+                .FirstAsync().ToTask(ct);
 
-            // Second message Ã¢â‚¬â€ same thread, new cells
-            var u2 = Guid.NewGuid().ToString("N")[..8];
-            var r2 = Guid.NewGuid().ToString("N")[..8];
-            await client.Observe(new CreateNodeRequest(new MeshNode(u2, threadPath)
-            {
-                NodeType = ThreadMessageNodeType.NodeType, MainNode = "TestUser",
-                Content = new ThreadMessage { Role = "user", Text = "Second question", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
-            }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-            await client.Observe(new CreateNodeRequest(new MeshNode(r2, threadPath)
-            {
-                NodeType = ThreadMessageNodeType.NodeType, MainNode = "TestUser",
-                Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-            }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-            await client.Observe(new SubmitMessageRequest
-            {
-                ThreadPath = threadPath, UserMessageText = "Second question",
-                UserMessageId = u2, ResponseMessageId = r2, ContextPath = "TestUser"
-            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
+            Output.WriteLine($"Settled. Messages: [{string.Join(", ", finalThread.Messages)}]");
+            Output.WriteLine($"UserMessageIds: [{string.Join(", ", finalThread.UserMessageIds)}]");
 
-            // Wait for second execution
-            for (var i = 0; i < 60; i++)
-            {
-                var t = await GetHubContentAsync<MeshThread>(client, threadPath, ct);
-                if (t is { IsExecuting: false } && t.Messages.Count >= 4)
-                {
-                    Output.WriteLine($"Second message complete after {i * 500}ms, Messages={t.Messages.Count}");
-                    var responseMsg = await GetHubContentAsync<ThreadMessage>(client, $"{threadPath}/{r2}", ct);
-                    responseMsg.Should().NotBeNull();
-                    responseMsg!.Text.Should().NotBeNullOrEmpty();
-                    Output.WriteLine($"Response: {responseMsg.Text[..Math.Min(80, responseMsg.Text.Length)]}");
-                    Output.WriteLine("PASSED");
-                    return;
-                }
-                await Task.Delay(500, ct);
-            }
-            throw new TimeoutException("Second execution did not complete");
+            // Verify every submitted text is present in the satellite cells.
+            // Reactive Merge across the user-cell streams — each stream is the
+            // GUI primitive ThreadFlow.ReadMessage (workspace.GetMeshNodeStream
+            // + Where + Take(1)) which completes once the cell text is present.
+            // .ToList() aggregates after every stream completes; .FirstAsync()
+            // takes that aggregated list, .ToTask(ct) bridges at the test edge.
+            var userCells = await finalThread.UserMessageIds
+                .Select(id => ThreadFlow.ReadMessage(client, threadPath, id))
+                .Merge()
+                .ToList()
+                .FirstAsync()
+                .ToTask(ct);
+
+            userCells.Should().HaveCount(userTexts.Length);
+            userCells.Select(c => c.Text).Should().BeEquivalentTo(userTexts);
+            Output.WriteLine($"All {userTexts.Length} user submissions ingested with text");
         }
         finally
         {

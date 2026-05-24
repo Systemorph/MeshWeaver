@@ -66,7 +66,7 @@ public class IsExecutingLifecycleTest(ITestOutputHelper output) : MonolithMeshTe
 
         // Warm up the remote stream subscription BEFORE submit so the
         // IsExecuting=true→false transition is captured. Same pattern
-        // ChatFlow.SubmitAndWaitAsync uses.
+        // ThreadFlow.SubmitAndWait uses.
         var baselineThread = await workspace.GetMeshNodeStream(threadPath)
             .Select(n => n.Content as MeshThread)
             .Where(t => t != null)
@@ -115,9 +115,9 @@ public class IsExecutingLifecycleTest(ITestOutputHelper output) : MonolithMeshTe
 
         // 3) Final ThreadMessage.CompletedAt must be set AND text non-empty.
         var lastMsgId = doneState.Messages[^1];
-        var finalMessage = await ChatFlow.ReadMessageAsync(client, threadPath, lastMsgId,
+        var finalMessage = await ThreadFlow.ReadMessage(client, threadPath, lastMsgId,
             m => m.CompletedAt != null && !string.IsNullOrEmpty(m.Text),
-            timeout: 15.Seconds(), ct: ct);
+            timeout: 15.Seconds()).FirstAsync().ToTask(ct);
 
         finalMessage.Text.Should().Contain("I received",
             "the Echo agent's streaming reply must reach the response cell — "

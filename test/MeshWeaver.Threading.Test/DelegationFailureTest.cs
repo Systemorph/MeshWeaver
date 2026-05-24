@@ -79,9 +79,9 @@ public class DelegationFailureTest(ITestOutputHelper output) : MonolithMeshTestB
             .FirstAsync().ToTask(ct);
         (cancelled.Content as MeshThread)?.RequestedCancellationAt.Should().NotBeNull();
 
-        var thread = await ChatFlow.ReadThreadAsync(client, threadPath,
+        var thread = await ThreadFlow.ReadThread(client, threadPath,
             t => t.Messages.Count >= 2,
-            timeout: 10.Seconds(), ct: ct);
+            timeout: 10.Seconds()).FirstAsync().ToTask(ct);
 
         thread.Should().NotBeNull();
         Output.WriteLine($"Thread has {thread.Messages.Count} messages");

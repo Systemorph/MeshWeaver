@@ -95,8 +95,8 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
         Output.WriteLine("Created thread with response message containing tool calls");
 
         var client = GetClient();
-        var msg = (await ChatFlow.ReadMessageAsync(client, threadPath, responseMsgId,
-            m => m.ToolCalls.Count >= 2, timeout: 10.Seconds(), ct: ct));
+        var msg = (await ThreadFlow.ReadMessage(client, threadPath, responseMsgId,
+            m => m.ToolCalls.Count >= 2, timeout: 10.Seconds()).FirstAsync().ToTask(ct));
 
         msg.ToolCalls.Should().HaveCount(2);
         msg.ToolCalls[0].Name.Should().Be("search_nodes");

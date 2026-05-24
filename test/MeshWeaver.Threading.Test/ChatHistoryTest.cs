@@ -57,15 +57,15 @@ public class ChatHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
     private async Task<string> SubmitAndWait(IMessageHub client, string threadPath, string text, CancellationToken ct)
     {
-        var responseMsgId = await ChatFlow.SubmitAndWaitAsync(client, threadPath, text,
-            contextPath: ContextPath, timeout: 60.Seconds(), ct: ct);
+        var responseMsgId = await ThreadFlow.SubmitAndWait(client, threadPath, text,
+            contextPath: ContextPath, timeout: 60.Seconds()).FirstAsync().ToTask(ct);
 
         // CompletedAt is the deterministic "streaming finished" signal — only set
         // by the terminal PushToResponseMessage call in ExecuteMessageAsync. Beats
         // text-pattern matching against in-flight placeholders.
-        var finalMessage = await ChatFlow.ReadMessageAsync(client, threadPath, responseMsgId,
+        var finalMessage = await ThreadFlow.ReadMessage(client, threadPath, responseMsgId,
             m => m.CompletedAt != null && !string.IsNullOrEmpty(m.Text),
-            timeout: 60.Seconds(), ct: ct);
+            timeout: 60.Seconds()).FirstAsync().ToTask(ct);
 
         return finalMessage.Text!;
     }
