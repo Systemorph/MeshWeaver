@@ -1677,11 +1677,17 @@ public static class ThreadExecution
                     // user sees a real terminal state instead of a blank cell.
                     if (string.IsNullOrEmpty(finalText) && finalToolCalls.IsEmpty)
                         finalText = "*Agent returned no response — streaming completed with zero tokens.*";
+                    // 🚨 Subscribe to actually fire the cold cache.Update write.
+                    // The previous discard left the write un-invoked — the response
+                    // cell's Status never flipped to Completed in production.
                     PushToResponseMessage(finalText, finalToolCalls, aggregatedChanges,
                         request.AgentName, request.ModelName,
                         inputTokens: inputTokens, outputTokens: outputTokens,
                         totalTokens: totalTokens, completedAt: DateTime.UtcNow,
-                        status: ThreadMessageStatus.Completed);
+                        status: ThreadMessageStatus.Completed).Subscribe(
+                        _ => { },
+                        ex => execLogger?.LogWarning(ex,
+                            "PushToResponseMessage(Completed) failed for {ThreadPath}", threadPath));
                     // Clear streaming state. Any PendingUserMessages that
                     // arrived mid-stream stay pending — the watcher dispatches
                     // them as a follow-up round once Status flips to Idle.
@@ -1717,10 +1723,15 @@ public static class ThreadExecution
                             cancelToolCalls = toolCallLog;
                             cancelNodeChanges = nodeChangeLog;
                         }
+                        // 🚨 Subscribe to fire the cold cache.Update — same reason as
+                        // the Completed branch above.
                         PushToResponseMessage(cancelText, cancelToolCalls, cancelNodeChanges,
                             request.AgentName, request.ModelName,
                             completedAt: DateTime.UtcNow,
-                            status: ThreadMessageStatus.Cancelled);
+                            status: ThreadMessageStatus.Cancelled).Subscribe(
+                            _ => { },
+                            ex => execLogger?.LogWarning(ex,
+                                "PushToResponseMessage(Cancelled) failed for {ThreadPath}", threadPath));
                         UpdateThreadExecution(t => t with
                         {
                             Status = ThreadExecutionStatus.Idle, ExecutionStatus = null, ActiveMessageId = null,
@@ -1746,24 +1757,34 @@ public static class ThreadExecution
                             errorNodeChanges = nodeChangeLog;
                         }
                         var errorText = (errorTextBase + $"\n\n*Error: {ex.Message}*").Trim();
-                        // Await the error write before flipping Status=Idle —
-                        // see comment on the Completed-status await above.
-                        await PushToResponseMessage(errorText, errorToolCalls, errorNodeChanges,
+                        // 🚨 NO await on hub-touching observables in src/. Subscribe-
+                        // continuation: push the error cell, then flip Idle, then notify.
+                        // (Previous `.ToTask()` bridge would deadlock the action block —
+                        // forbidden per feedback_no_totask_in_src.md / AsynchronousCalls.md.)
+                        var pushErrorObs = PushToResponseMessage(errorText, errorToolCalls, errorNodeChanges,
                             request.AgentName, request.ModelName,
                             completedAt: DateTime.UtcNow,
                             status: ThreadMessageStatus.Error)
-                            .Timeout(TimeSpan.FromSeconds(10))
-                            .FirstAsync().ToTask();
-                        UpdateThreadExecution(t => t with
-                        {
-                            Status = ThreadExecutionStatus.Idle, ExecutionStatus = null, ActiveMessageId = null,
-                            ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null
-                        }).Subscribe(
+                            .Timeout(TimeSpan.FromSeconds(10));
+                        var errorTextLocal = errorText;
+                        var errorNodeChangesLocal = errorNodeChanges;
+                        pushErrorObs.Subscribe(
                             _ => { },
-                            ex => execLogger?.LogWarning(ex,
-                                "UpdateThreadExecution(Idle/Error): stream.Update failed for {ThreadPath}",
-                                threadPath));
-                        NotifyParentCompletion(parentHub, threadPath, errorText, false, errorNodeChanges);
+                            pushEx => execLogger?.LogWarning(pushEx,
+                                "PushToResponseMessage(Error) failed for {ThreadPath}", threadPath),
+                            () =>
+                            {
+                                UpdateThreadExecution(t => t with
+                                {
+                                    Status = ThreadExecutionStatus.Idle, ExecutionStatus = null, ActiveMessageId = null,
+                                    ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null
+                                }).Subscribe(
+                                    _ => { },
+                                    updEx => execLogger?.LogWarning(updEx,
+                                        "UpdateThreadExecution(Idle/Error): stream.Update failed for {ThreadPath}",
+                                        threadPath),
+                                    () => NotifyParentCompletion(parentHub, threadPath, errorTextLocal, false, errorNodeChangesLocal));
+                            });
                     }
                     finally
                     {

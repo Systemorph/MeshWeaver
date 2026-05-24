@@ -303,7 +303,7 @@ dotnet test test/MeshWeaver.Hosting.Monolith.Test --no-restore
 dotnet test test/MeshWeaver.Graph.Test --filter "ClassName~AccessAssignment" --no-restore
 ```
 
-Workflow: run once in background → read failures → fix → run once more. Never re-run to see if it was a flake.
+Workflow: run once in background → read failures → fix → run once more. **🚨 NEVER re-run a test (single or suite) unless code under test has changed.** Re-running to "see if it was a flake" hides the bug — flakes are real races. Either fix the race or pin the failure with a smaller repro; do not retry. The only exceptions: (a) the test harness itself crashed (MSBuild MSB4166, infrastructure error — re-run is the same input), (b) the previous run was killed by the user before completion.
 
 ### DevLogin and Access Control
 
