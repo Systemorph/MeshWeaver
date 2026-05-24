@@ -1409,29 +1409,50 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             // circuit's identity in a sync-emission scope and silently
             // rejects every emission — symptom: empty skeleton bars.
             // Same pattern UserActivityLayoutAreas.cs:42-67 documents.
+            var capturedId = id;
             using (accessService?.ImpersonateAsSystem())
             {
                 var stream = cache.GetStream(nodePath);
                 messageSubs[id] = stream
                     .Where(n => n?.Content is not null)
-                    .Subscribe(n =>
-                    {
-                        // Real content arrived — drop any "missing" mark and the
-                        // probe; the bubble will render normally.
-                        if (missingProbes.Remove(id, out var probe)) probe.Dispose();
-                        if (missingMessages.Remove(id))
-                            InvokeAsync(StateHasChanged);
-                        UpdateMessageState(id, n);
-                    });
+                    .Subscribe(
+                        n =>
+                        {
+                            // Real content arrived — drop any "missing" mark and the
+                            // probe; the bubble will render normally.
+                            if (missingProbes.Remove(capturedId, out var probe)) probe.Dispose();
+                            if (missingMessages.Remove(capturedId))
+                                InvokeAsync(StateHasChanged);
+                            UpdateMessageState(capturedId, n);
+                        },
+                        ex =>
+                        {
+                            // 🚨 CRITICAL: handle errors here. The cache surfaces
+                            // missing satellites as OnError(DeliveryFailureException)
+                            // — without this handler the exception is unhandled and
+                            // crashes the Blazor circuit (the user-visible
+                            // "still crashing / stuck on progress screen" symptom
+                            // in prod 2026-05-24). Mark the bubble as missing and
+                            // re-render. Reproduced by
+                            // test/MeshWeaver.Threading.Test/MissingSatelliteTest.
+                            Logger.LogDebug(ex,
+                                "[ThreadChat:{InstanceId}] cache.GetStream errored for {NodePath} — marking message as missing",
+                                _instanceId, nodePath);
+                            InvokeAsync(() =>
+                            {
+                                if (_isDisposed) return;
+                                if (missingProbes.Remove(capturedId, out var probe)) probe.Dispose();
+                                if (missingMessages.Add(capturedId))
+                                    StateHasChanged();
+                            });
+                        });
             }
 
-            // Missing-message probe — give the cache 5s to deliver an emission.
-            // If nothing arrives the satellite is either deleted, never
-            // materialised, or denied by RLS — mark the bubble as missing so
-            // the GUI shows "Missing message" instead of an indefinite skeleton.
-            // Strict client-side fallback: no GetDataRequest round-trip that
-            // could itself hang on the same not-found path.
-            var capturedId = id;
+            // Missing-message probe — backup for the case where the cache stream
+            // neither emits content nor errors within the deadline (cold-observable
+            // starvation; not the path the OnError above catches). Surfaces the
+            // bubble as "missing" so the GUI never gets stuck on an indefinite
+            // skeleton.
             var probeDelay = TimeSpan.FromSeconds(5);
             missingProbes[id] = System.Reactive.Linq.Observable
                 .Timer(probeDelay)
@@ -1538,7 +1559,11 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 var stream = cache.GetStream(path);
                 delegationSubs[path] = stream
                     .Where(n => n is not null)
-                    .Subscribe(n => UpdateDelegationHeader(path, n));
+                    .Subscribe(
+                        n => UpdateDelegationHeader(path, n),
+                        ex => Logger.LogDebug(ex,
+                            "[ThreadChat:{InstanceId}] delegation cache.GetStream errored for {Path} — chip falls back to agent-name summary",
+                            _instanceId, path));
             }
         }
     }
