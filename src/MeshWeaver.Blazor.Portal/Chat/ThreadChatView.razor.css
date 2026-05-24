@@ -702,6 +702,16 @@
     border-bottom-left-radius: 4px;
 }
 
+/* "— message missing —" placeholder. Italic, muted, dashed border to read
+   as a non-content gap in the conversation. The chat keeps flowing past the
+   missing entry rather than getting stuck on a spinning skeleton. */
+.thread-msg-missing {
+    background: transparent;
+    border-style: dashed;
+    color: var(--neutral-foreground-hint);
+    font-style: italic;
+}
+
 .thread-msg-author {
     font-size: 0.78rem;
     font-weight: 600;

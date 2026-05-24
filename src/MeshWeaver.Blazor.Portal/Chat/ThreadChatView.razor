@@ -57,8 +57,18 @@ else
                     var isUser = state?.Role?.Equals("user", StringComparison.OrdinalIgnoreCase) ?? false;
                     var bubbleRoleClass = isUser ? "thread-msg-user" : "thread-msg-assistant";
 
-                    <div @key="@msgId" class="thread-msg-bubble @bubbleRoleClass">
-                    @if (state is null)
+                    <div @key="@msgId" class="thread-msg-bubble @bubbleRoleClass @(IsMissing(msgId) ? "thread-msg-missing" : "")">
+                    @if (state is null && IsMissing(msgId))
+                    {
+                        @* Satellite cell never delivered an emission within the
+                           probe window — either deleted, never materialised, or
+                           denied by RLS. Surface as "Missing message" instead
+                           of an indefinite skeleton so the user knows the chat
+                           continued past this point. *@
+                        <div class="thread-msg-author thread-msg-author-user">— message missing —</div>
+                        <div class="thread-msg-meta">id: @msgId</div>
+                    }
+                    else if (state is null)
                     {
                         <div class="thread-msg-skeleton-line"></div>
                         <div class="thread-msg-skeleton-line" style="width: 80%;"></div>

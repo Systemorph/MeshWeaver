@@ -283,8 +283,13 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     }
 
     /// <summary>
-    /// Resolves the display name of a node at the given path via GetDataRequest.
-    /// Purely Post + RegisterCallback — no query, no await.
+    /// Resolves the display name of a node at the given path via the
+    /// timeout-bounded <c>Hub.GetMeshNode</c> helper. Bounded by an internal
+    /// 5 s deadline — for missing or unroutable paths the helper returns
+    /// null (instead of leaving a hub callback dangling indefinitely, which
+    /// is what the prior direct-Post + Observe shape did and what surfaced
+    /// in prod 2026-05-24 as the chat-page SSR hang when a satellite at the
+    /// requested path didn't exist).
     /// </summary>
     private void RequestDisplayName(string path, Action<string?> onResult)
     {
@@ -296,31 +301,12 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
         try
         {
-            var delivery = Hub.Post(new GetDataRequest(new MeshNodeReference()),
-                o => o.WithTarget(new Address(path)));
-
-            if (delivery == null)
-            {
-                onResult(null);
-                return;
-            }
-
-            Hub.Observe((IMessageDelivery)delivery)
+            Hub.GetMeshNode(path, TimeSpan.FromSeconds(5))
                 .Subscribe(
-                    response =>
+                    node =>
                     {
-                        try
-                        {
-                            if (response.Message is GetDataResponse gdr && gdr.Data is MeshNode node)
-                                onResult(node.Name ?? node.Id);
-                            else
-                                onResult(null);
-                        }
-                        catch (Exception ex) when (!_isDisposed)
-                        {
-                            Logger.LogDebug(ex, "Error reading display name for {Path}", path);
-                            onResult(null);
-                        }
+                        if (_isDisposed) return;
+                        onResult(node?.Name ?? node?.Id);
                     },
                     ex =>
                     {
@@ -331,7 +317,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         }
         catch (Exception ex) when (!_isDisposed)
         {
-            Logger.LogDebug(ex, "Error posting GetDataRequest for {Path}", path);
+            Logger.LogDebug(ex, "Error reading display name for {Path}", path);
             onResult(null);
         }
     }
@@ -1349,6 +1335,14 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private readonly Dictionary<string, MessageBubbleState> messageStates = new();
     private readonly Dictionary<string, IDisposable> messageSubs = new();
     private readonly HashSet<string> editingMessages = new();
+    /// <summary>Message ids whose satellite cell did NOT emit within the cache
+    /// settle window — surfaced as "Missing message" in the bubble instead of
+    /// the loading skeleton. A deleted-by-someone-else or never-materialised
+    /// satellite would otherwise leave the bubble stuck on a skeleton forever
+    /// and (in prod 2026-05-24) hang any code path that does a GetDataRequest
+    /// on the same path.</summary>
+    private readonly HashSet<string> missingMessages = new();
+    private readonly Dictionary<string, IDisposable> missingProbes = new();
 
     /// <summary>Live state for a delegated sub-thread. <see cref="Title"/> is the
     /// sub-thread MeshNode's <c>Name</c> (ThreadNamer-generated or user-edited);
@@ -1397,6 +1391,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             messageSubs.Remove(id);
             messageStates.Remove(id);
             editingMessages.Remove(id);
+            if (missingProbes.Remove(id, out var probe)) probe.Dispose();
+            missingMessages.Remove(id);
         }
 
         foreach (var id in messageIds)
@@ -1418,8 +1414,33 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 var stream = cache.GetStream(nodePath);
                 messageSubs[id] = stream
                     .Where(n => n?.Content is not null)
-                    .Subscribe(n => UpdateMessageState(id, n));
+                    .Subscribe(n =>
+                    {
+                        // Real content arrived — drop any "missing" mark and the
+                        // probe; the bubble will render normally.
+                        if (missingProbes.Remove(id, out var probe)) probe.Dispose();
+                        if (missingMessages.Remove(id))
+                            InvokeAsync(StateHasChanged);
+                        UpdateMessageState(id, n);
+                    });
             }
+
+            // Missing-message probe — give the cache 5s to deliver an emission.
+            // If nothing arrives the satellite is either deleted, never
+            // materialised, or denied by RLS — mark the bubble as missing so
+            // the GUI shows "Missing message" instead of an indefinite skeleton.
+            // Strict client-side fallback: no GetDataRequest round-trip that
+            // could itself hang on the same not-found path.
+            var capturedId = id;
+            var probeDelay = TimeSpan.FromSeconds(5);
+            missingProbes[id] = System.Reactive.Linq.Observable
+                .Timer(probeDelay)
+                .Subscribe(_ => InvokeAsync(() =>
+                {
+                    if (_isDisposed) return;
+                    if (!messageStates.ContainsKey(capturedId) && missingMessages.Add(capturedId))
+                        StateHasChanged();
+                }));
         }
     }
 
@@ -1604,6 +1625,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     private MessageBubbleState? GetMessageState(string id) => messageStates.GetValueOrDefault(id);
 
+    private bool IsMissing(string id) => missingMessages.Contains(id);
+
     private bool IsEditing(string id) => editingMessages.Contains(id);
 
     private void StartEdit(string id)
@@ -1776,6 +1799,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             foreach (var sub in messageSubs.Values) sub.Dispose();
             messageSubs.Clear();
             messageStates.Clear();
+            foreach (var sub in missingProbes.Values) sub.Dispose();
+            missingProbes.Clear();
+            missingMessages.Clear();
             foreach (var sub in delegationSubs.Values) sub.Dispose();
             delegationSubs.Clear();
             delegationHeaders.Clear();
