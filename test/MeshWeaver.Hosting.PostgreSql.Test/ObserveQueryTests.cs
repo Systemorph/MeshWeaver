@@ -283,30 +283,28 @@ public class ObserveQueryTests : IAsyncLifetime
     }
 
     // Wait until the accumulator list has at least `expectedMinCount` items.
-    // Polls the list size on a 50 ms interval via Observable.Interval — replaces
-    // a `while + Task.Delay(50)` hand-rolled loop. Preserves the original
-    // contract of silently returning on timeout (no throw) so callers can
-    // still distinguish "got enough events" vs "expected more" via the
-    // post-call list count. The 100 ms settle delay stays — it's the only
-    // way to catch unwanted extra emissions arriving just after the target
-    // count is reached.
+    // Polls the list size on a 50 ms interval via Observable.Interval.
+    //
+    // TIMEOUT IS AN ERROR. If the expected count isn't reached within `timeout`,
+    // throws TimeoutException with observed-vs-expected counts — the silent
+    // timeout was hiding flakes (one missed event → confusing assertion later).
+    // The 30 s default absorbs CI contention without the per-test 60 s xUnit
+    // ceiling. Trailing 100 ms settle delay stays — catches extra emissions
+    // arriving just after the target count.
     private static async Task WaitForChanges(
         List<QueryResultChange<MeshNode>> changes,
         int expectedMinCount,
-        int timeout = 3000)
+        int timeout = 30_000)
     {
-        try
-        {
-            await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
-                .Where(_ => changes.Count >= expectedMinCount)
-                .FirstAsync()
-                .Timeout(TimeSpan.FromMilliseconds(timeout))
-                .ToTask();
-        }
-        catch (TimeoutException) { /* original behaviour: silent timeout */ }
-        // Small extra delay for processing to settle (catches "one more event
-        // arriving just after target count" — a quiet-window check would be
-        // strictly better but bigger to wire in).
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Where(_ => changes.Count >= expectedMinCount)
+            .FirstAsync()
+            .Timeout(
+                TimeSpan.FromMilliseconds(timeout),
+                Observable.Throw<long>(new TimeoutException(
+                    $"WaitForChanges timed out after {timeout} ms: expected at least " +
+                    $"{expectedMinCount} change(s), observed {changes.Count}.")))
+            .ToTask();
         await Task.Delay(100);
     }
 }

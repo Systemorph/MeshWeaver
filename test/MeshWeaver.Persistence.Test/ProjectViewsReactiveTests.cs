@@ -26,26 +26,27 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
 
     /// <summary>
     /// Wait until <paramref name="changes"/> has at least <paramref name="expectedMinCount"/>
-    /// items, polling on a 50 ms interval. Replaces Task.Delay(200..300)
-    /// propagation waits. Silent on timeout — caller asserts on the post-call
-    /// list size, matching the helper shape used in ObserveQueryTests /
-    /// FileSystemObservableQueryTests.
+    /// items, polling on a 50 ms interval.
+    /// <para>
+    /// <b>Timeout is an error.</b> If the expected count is not reached within
+    /// <paramref name="timeoutMs"/>, throws <see cref="TimeoutException"/> with
+    /// observed-vs-expected so the failure points at the missed signal instead
+    /// of cascading into a confusing assertion later.
+    /// </para>
     /// </summary>
-    private static async Task WaitForChanges<T>(
+    private static Task WaitForChanges<T>(
         List<T> changes,
         int expectedMinCount,
-        int timeoutMs = 3000)
-    {
-        try
-        {
-            await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
-                .Where(_ => changes.Count >= expectedMinCount)
-                .FirstAsync()
-                .Timeout(TimeSpan.FromMilliseconds(timeoutMs))
-                .ToTask();
-        }
-        catch (TimeoutException) { /* silent — caller asserts via list count */ }
-    }
+        int timeoutMs = 30_000)
+        => Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Where(_ => changes.Count >= expectedMinCount)
+            .FirstAsync()
+            .Timeout(
+                TimeSpan.FromMilliseconds(timeoutMs),
+                Observable.Throw<long>(new TimeoutException(
+                    $"WaitForChanges timed out after {timeoutMs} ms: expected at least " +
+                    $"{expectedMinCount} change(s) on the accumulator, observed {changes.Count}.")))
+            .ToTask();
 
     [Fact]
     public async Task ObserveQuery_EmitsAddedOnNewTodo()
