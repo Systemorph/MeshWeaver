@@ -32,12 +32,18 @@ internal sealed class IncludedPartitionStaticProvider(
     /// <summary>
     /// Namespaces already covered by <c>DefaultPartitionProvider</c> — skip them
     /// so we don't emit duplicate Partition nodes for the framework's own
-    /// built-in partitions (Admin, User, Portal, Kernel) or the global-scope
+    /// built-in partitions (Admin, Auth, Portal, Kernel) or the global-scope
     /// satellite namespaces (_Access, _Activity, _UserActivity, _Thread).
+    /// <para>
+    /// "Auth" was historically "User" before V27 renamed the central
+    /// auth-lookup partition. Keep "User" in the set so any live deployment
+    /// that still references the old name is filtered out alongside the new
+    /// "Auth" name.
+    /// </para>
     /// </summary>
     private static readonly HashSet<string> ReservedNames = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Admin", "User", "Portal", "Kernel",
+        "Admin", "Auth", "User", "Portal", "Kernel",
         "_Access", "_Activity", "_UserActivity", "_Thread",
     };
 

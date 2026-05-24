@@ -298,13 +298,26 @@ public static class NodeTypeLayoutAreas
             })
             .Switch();
 
+        var nodeTypeLogger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Graph.NodeTypeLayoutAreas");
+
         // Live observable of NodeType nodes under this namespace.
+        // Catch logs and re-emits empty so a transient query failure degrades
+        // the menu to "no nodeTypes" rather than blanking the whole layout —
+        // BUT it logs at Warning so silent timeouts (which previously hid CI
+        // hangs) surface in test output instead of disappearing.
         var nodeTypesStream = meshQuery == null
             ? Observable.Return<IReadOnlyList<MeshNode>>(Array.Empty<MeshNode>())
             : meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
                     $"path:{hubPath} nodeType:NodeType scope:descendants"))
                 .Select(change => (IReadOnlyList<MeshNode>)change.Items)
-                .Catch<IReadOnlyList<MeshNode>, Exception>(_ => Observable.Return((IReadOnlyList<MeshNode>)Array.Empty<MeshNode>()));
+                .Catch<IReadOnlyList<MeshNode>, Exception>(ex =>
+                {
+                    nodeTypeLogger?.LogWarning(ex,
+                        "NodeType query failed for path={Path}; falling back to empty list",
+                        hubPath);
+                    return Observable.Return((IReadOnlyList<MeshNode>)Array.Empty<MeshNode>());
+                });
 
         // Live observable of Agent nodes under this namespace.
         var agentsStream = meshQuery == null
@@ -312,7 +325,13 @@ public static class NodeTypeLayoutAreas
             : meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
                     $"path:{hubPath} nodeType:Agent scope:descendants"))
                 .Select(change => (IReadOnlyList<MeshNode>)change.Items)
-                .Catch<IReadOnlyList<MeshNode>, Exception>(_ => Observable.Return((IReadOnlyList<MeshNode>)Array.Empty<MeshNode>()));
+                .Catch<IReadOnlyList<MeshNode>, Exception>(ex =>
+                {
+                    nodeTypeLogger?.LogWarning(ex,
+                        "Agent query failed for path={Path}; falling back to empty list",
+                        hubPath);
+                    return Observable.Return((IReadOnlyList<MeshNode>)Array.Empty<MeshNode>());
+                });
 
         // Return static Splitter structure with observable nested views
         return Controls.Splitter

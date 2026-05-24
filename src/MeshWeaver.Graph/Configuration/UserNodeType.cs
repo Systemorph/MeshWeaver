@@ -45,9 +45,23 @@ public static class UserNodeType
             return services;
         });
         builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
-        // nodeType:User → restrict to "User" partition (no fan-out needed)
+        // nodeType:User without a path constraint → restrict to the "Auth"
+        // partition (no fan-out needed). The "Auth" partition (formerly "User",
+        // renamed in V27 / DefaultPartitionProvider) mirrors User / Group /
+        // Role / VUser / ApiToken rows from every source partition via the
+        // auth-mirror trigger, so a single-partition query covers every User
+        // node in the mesh.
+        //
+        // Skip the override when the query targets a specific path
+        // (e.g. ACME/User/Oliver, sample-data layouts that load users from
+        // their source partition) — otherwise the Auth restriction would
+        // hijack legitimate per-partition reads. The mirror is a discovery
+        // index; queries that already know the path should follow the
+        // natural first-segment partition route.
         builder.AddQueryRoutingRule(query =>
-            query.ExtractNodeType() == NodeType ? new QueryRoutingHints { Partition = "User" } : null);
+            query.ExtractNodeType() == NodeType && string.IsNullOrEmpty(query.Path)
+                ? new QueryRoutingHints { Partition = "Auth" }
+                : null);
         return builder;
     }
 
