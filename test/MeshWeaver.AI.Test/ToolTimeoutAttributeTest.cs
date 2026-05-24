@@ -30,6 +30,7 @@ namespace MeshWeaver.AI.Test;
 /// </summary>
 public class ToolTimeoutAttributeTest
 {
+    /// <summary>Tool ignores the linked CTS — wrapper must still return the synthetic timeout string and not pin the agent loop.</summary>
     [Fact(Timeout = 10_000)]
     public async Task ShortTimeout_ToolHangsIgnoringCancellation_ReturnsSyntheticTimeoutString()
     {
@@ -49,6 +50,7 @@ public class ToolTimeoutAttributeTest
             "tool's intrinsic 10s delay");
     }
 
+    /// <summary>Tool honours the linked CTS — wrapper returns the synthetic timeout and the tool unwinds essentially immediately.</summary>
     [Fact(Timeout = 10_000)]
     public async Task ShortTimeout_ToolRespectsCancellation_ReturnsTimeoutAndUnwindsPromptly()
     {
@@ -64,6 +66,7 @@ public class ToolTimeoutAttributeTest
             "a cancellation-aware tool unwinds essentially immediately on CTS fire");
     }
 
+    /// <summary>External cancellation propagates as OperationCanceledException — the wrapper only masks its OWN timer as the synthetic string.</summary>
     [Fact(Timeout = 10_000)]
     public async Task ExternalCancellation_PropagatesAsOperationCancelled_NotSyntheticTimeout()
     {

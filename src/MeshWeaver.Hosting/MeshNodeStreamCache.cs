@@ -174,6 +174,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
             var inner = new System.Reactive.Subjects.ReplaySubject<MeshNode>(1);
             var synced = System.Reactive.Subjects.Subject.Synchronize(inner);
             var accessService = meshHub.ServiceProvider.GetService<AccessService>();
+
             IDisposable hydrationSub;
             if (accessService is not null)
             {

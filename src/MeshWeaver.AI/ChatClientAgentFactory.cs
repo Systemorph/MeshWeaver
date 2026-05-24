@@ -404,10 +404,10 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                     MeshWeaver.AI.Delegation.DelegationLifecycle.Dispatched));
 
         var meshService = Hub.ServiceProvider.GetRequiredService<IMeshService>();
-        var nodeCache = Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        var workspace = Hub.GetWorkspace();
 
-        // Single channel — writer is the cache subscription; SINGLE READER is
-        // the `await foreach` below on the FCC invocation thread. Delta
+        // Single channel — writer is the stream subscription; SINGLE READER
+        // is the `await foreach` below on the FCC invocation thread. Delta
         // accumulation + terminal detection run single-threaded in the reader.
         var channel = System.Threading.Channels.Channel.CreateUnbounded<DelegationObservation>(
             new System.Threading.Channels.UnboundedChannelOptions
@@ -446,15 +446,17 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         }).Subscribe(_ => { },
             ex => Logger.LogDebug(ex, "[Delegation] response cell create benign error at {Path}", subThreadPath));
 
-        // Resilient cache streams — `cache.GetStream(path)` OnError's with
-        // "No node found" until the create-roundtrip + cache invalidation
-        // window closes. Catch+Repeat(delay) absorbs those early errors so
-        // the CombineLatest below sees the FIRST successful emission once the
-        // node materialises. Without this the subscription dies on the first
-        // OnError and the delegation hangs.
+        // 🚨 BYPASS the cache for sub-thread + response-cell reads. The
+        // process-wide MeshNodeStreamCache holds ONE shared subscription per
+        // path and its ReplaySubject permanently captures OnError. Subscribing
+        // before the sub-thread create completes would poison that shared
+        // entry for every other consumer (heartbeat scanner, GUI, MCP). The
+        // bypass opens a fresh per-call subscription via the workspace,
+        // wrapped in Defer + Catch + Repeat(200ms) so the create-roundtrip
+        // window doesn't kill the stream.
         IObservable<MeshNode?> ResilientStream(string path) =>
             System.Reactive.Linq.Observable.Defer(() =>
-                    nodeCache.GetStream(path).Select(n => (MeshNode?)n))
+                    workspace.GetMeshNodeStreamBypassCache(path).Select(n => (MeshNode?)n))
                 .Catch<MeshNode?, Exception>(_ =>
                     System.Reactive.Linq.Observable.Empty<MeshNode?>()
                         .Delay(TimeSpan.FromMilliseconds(200)))
