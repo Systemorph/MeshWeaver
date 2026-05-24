@@ -35,27 +35,31 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
 
     /// <summary>
     /// Wait until the accumulator list has at least <paramref name="expectedMinCount"/>
-    /// items. Polls the list size on a 50 ms interval via Observable.Interval —
-    /// replaces fixed Task.Delay(200..300) propagation waits. Preserves silent-
-    /// timeout semantics (no throw) so callers can still distinguish "got
-    /// enough" vs "expected more" via the post-call list count — matching the
-    /// shape used in ObserveQueryTests.WaitForChanges.
+    /// items. Polls the list size on a 50 ms interval via Observable.Interval.
+    /// <para>
+    /// <b>Timeout is an error.</b> If the expected count is not reached within
+    /// <paramref name="timeoutMs"/>, throws <see cref="TimeoutException"/> with the
+    /// observed-vs-expected counts. Silent timeouts were hiding flakes — when a
+    /// notification dropped, the assertion later failed with a confusing
+    /// "expected N got 0" instead of "I waited and never saw it". A loud
+    /// timeout here points straight at the missed signal. The 30 s default is
+    /// generous enough to absorb CI contention; the test budget per xUnit's
+    /// <c>methodTimeout</c> (60 s) is the upper bound either way.
+    /// </para>
     /// </summary>
-    private static async Task WaitForChanges<T>(
+    private static Task WaitForChanges<T>(
         List<T> changes,
         int expectedMinCount,
-        int timeoutMs = 3000)
-    {
-        try
-        {
-            await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
-                .Where(_ => changes.Count >= expectedMinCount)
-                .FirstAsync()
-                .Timeout(TimeSpan.FromMilliseconds(timeoutMs))
-                .ToTask();
-        }
-        catch (TimeoutException) { /* silent timeout — caller asserts via list count */ }
-    }
+        int timeoutMs = 30_000)
+        => Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Where(_ => changes.Count >= expectedMinCount)
+            .FirstAsync()
+            .Timeout(
+                TimeSpan.FromMilliseconds(timeoutMs),
+                Observable.Throw<long>(new TimeoutException(
+                    $"WaitForChanges timed out after {timeoutMs} ms: expected at least " +
+                    $"{expectedMinCount} change(s) on the accumulator, observed {changes.Count}.")))
+            .ToTask();
 
     #region Create Tests
 
