@@ -199,16 +199,26 @@ public static class MeshNodeExtensions
         //   1. Per-node hub doesn't exist yet (first-ever track for this path):
         //      routing returns DeliveryFailureException("No node found at ...")
         //      almost immediately — the SubscribeRequest fails fast.
-        //   2. Hub exists but hasn't emitted Initial within 2 s: TimeoutException.
+        //   2. Hub exists but hasn't emitted Initial within the probe window:
+        //      TimeoutException.
         // Both mean "treat as first-time create". We catch any exception on the
         // probe and route through to CreateNode.
+        //
+        // Probe window was 2 s historically — a guess made before cache.GetStream
+        // surfaced DeliveryFailureException sub-second for missing paths (proved
+        // in test/MeshWeaver.Threading.Test/MissingSatelliteTest). For first-time
+        // tracks the probe NEVER emits — the missing path errors fast OR the
+        // 200 ms timeout trips, both routed to the same CreateNode fallback.
+        // Cut from 2 s to 200 ms: removes ~1.8 s from the cold-start activity
+        // path on the first-ever track per user, which sits on the critical
+        // path of every cold page load through UserContextMiddleware.TrackLogin.
         //
         // Known race: two concurrent tracks for the same path both see the
         // miss probe and both attempt CreateNode → one wins, the other gets
         // InvalidOperationException("Node already exists"). The CreateNode
         // call below catches that race and falls through to a stream.Update
         // so the second tracker's increment isn't lost.
-        stream.Take(1).Timeout(TimeSpan.FromSeconds(2))
+        stream.Take(1).Timeout(TimeSpan.FromMilliseconds(200))
             .Catch<MeshNode, Exception>(ex =>
             {
                 logger?.LogDebug(ex,

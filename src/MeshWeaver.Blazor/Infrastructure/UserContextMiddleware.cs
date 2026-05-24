@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.Collections.Concurrent;
+using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Security.Claims;
 using MeshWeaver.Mesh;
@@ -119,9 +120,30 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
     }
 
     /// <summary>
+    /// Process-level dedup for <see cref="TrackLogin"/>. UserContextMiddleware
+    /// runs on EVERY HTTP request — page loads, /api calls, /_blazor connects,
+    /// SSE — and was previously firing a <c>TrackActivityRequest</c> per
+    /// request. That woke the per-user <c>{userId}/_UserActivity/{userId}</c>
+    /// grain on every navigation; in prod 2026-05-24 we measured the grain
+    /// activation taking 1.2 s on the critical path of a sub-thread page
+    /// load and the activity-tracker handler racing the page render for the
+    /// same hub's action block.
+    ///
+    /// Login is a session-shaped event, not a per-request one — a 5-minute
+    /// dedup window is sufficient for the "Recently Viewed / Login history"
+    /// dashboard that consumes the records. Subsequent requests within the
+    /// window skip the Post entirely; the activity grain stays cold unless
+    /// another flow needs it.
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, DateTimeOffset> _loginDedup = new();
+    private static readonly TimeSpan LoginDedupWindow = TimeSpan.FromMinutes(5);
+
+    /// <summary>
     /// Posts a fire-and-forget <see cref="TrackActivityRequest"/> with
-    /// <see cref="ActivityType.Login"/> for the just-resolved user. Exits
-    /// silently on any failure — auth must never depend on activity tracking.
+    /// <see cref="ActivityType.Login"/> for the just-resolved user. Process-
+    /// level deduped (see <see cref="_loginDedup"/>) so a request burst from
+    /// a single user doesn't spam the activity grain. Exits silently on any
+    /// failure — auth must never depend on activity tracking.
     /// </summary>
     private static void TrackLogin(AccessContext userContext, IMessageHub hub)
     {
@@ -129,6 +151,12 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
         {
             if (string.IsNullOrEmpty(userContext.ObjectId))
                 return;
+
+            var now = DateTimeOffset.UtcNow;
+            var last = _loginDedup.GetValueOrDefault(userContext.ObjectId, DateTimeOffset.MinValue);
+            if (now - last < LoginDedupWindow)
+                return;
+            _loginDedup[userContext.ObjectId] = now;
 
             hub.Post(new TrackActivityRequest(
                 NodePath: userContext.ObjectId,
