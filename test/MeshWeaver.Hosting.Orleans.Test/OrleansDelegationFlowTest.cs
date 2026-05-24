@@ -257,6 +257,15 @@ public class DelegationSiloConfigurator : ISiloConfigurator, IHostConfigurator
         hostBuilder.UseOrleansMeshServer()
             .ConfigurePortalMesh()
             .AddRowLevelSecurity()
+            // 🚨 .AddAI() registers BuiltInAgentProvider as IStaticNodeProvider —
+            // without it, the agent synced query (`namespace:Agent nodeType:Agent`)
+            // returns 0 nodes, AgentChatClient.SelectAgent returns null, and the
+            // chat client returns "No suitable agent found to handle the request."
+            // instead of the DelegationToolFakeChatClient's delegate_to_agent call.
+            // Symptom 2026-05-23: hasDelegation = false at the assertion, with
+            // a 199-pending-DataChangeRequest leak from the failed-then-retried
+            // execution rounds.
+            .AddAI()
             .AddMeshNodes(
                 new MeshNode("TestUser") { Name = "TestUser", NodeType = "User" })
             .AddMeshNodes(TestUserAdminAccess())
