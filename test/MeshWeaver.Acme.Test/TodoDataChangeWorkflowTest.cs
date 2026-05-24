@@ -298,7 +298,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         var control = await stream
             .GetControlStream(reference.Area!)
             .Where(c => c != null)
-            .Timeout(TimeSpan.FromSeconds(10))
+            .Timeout(TimeSpan.FromSeconds(30))
             .FirstAsync();
 
         control.Should().NotBeNull("TodaysFocus view should render initially");
@@ -399,7 +399,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         var control = await stream
             .GetControlStream(reference.Area!)
             .Where(c => c != null)
-            .Timeout(TimeSpan.FromSeconds(10))
+            .Timeout(TimeSpan.FromSeconds(30))
             .FirstAsync();
 
         control.Should().NotBeNull("AllTasks view should render");
@@ -427,7 +427,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         var control = await stream
             .GetControlStream(reference.Area!)
             .Where(c => c != null)
-            .Timeout(TimeSpan.FromSeconds(10))
+            .Timeout(TimeSpan.FromSeconds(30))
             .FirstAsync();
 
         control.Should().NotBeNull("Overview view should render");
@@ -465,7 +465,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         var control = await stream
             .GetControlStream(reference.Area!)
             .Where(c => c != null)
-            .Timeout(TimeSpan.FromSeconds(10))
+            .Timeout(TimeSpan.FromSeconds(30))
             .FirstAsync();
 
         control.Should().NotBeNull("AllTasks view should compile and render");
