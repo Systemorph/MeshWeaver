@@ -216,6 +216,28 @@ internal sealed class MeshService(
     public Task<T?> SelectAsync<T>(string path, string property, CancellationToken ct = default)
         => _query.SelectAsync<T>(path, property, ct);
 
+    public IObservable<IReadOnlyList<QueryResult>> Query(MeshQueryRequest request)
+    {
+        // Same identity-stamp guard as ObserveQuery — without it scoped DI
+        // consumers (Blazor circuits, MCP children) would hit the singleton
+        // providers as Anonymous and filter everything out.
+        if (request.UserId is null)
+        {
+            var captured = CaptureContext();
+            if (!string.IsNullOrEmpty(captured?.ObjectId))
+                request = request with { UserId = captured.ObjectId };
+        }
+        return _query.Query(request);
+    }
+
+    public IObservable<IReadOnlyList<QueryResult>> Autocomplete(
+        string basePath, string prefix,
+        AutocompleteMode mode = AutocompleteMode.RelevanceFirst,
+        int limit = 10,
+        string? contextPath = null,
+        string? context = null)
+        => _query.Autocomplete(basePath, prefix, mode, limit, contextPath, context);
+
     public IObservable<string?> GetPreRenderedHtml(string path)
         => _query
             .ObserveQuery<MeshNode>(new MeshQueryRequest { Query = $"path:{path}", Limit = 1 })

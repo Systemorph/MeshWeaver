@@ -265,6 +265,151 @@ public class MeshQuery : IMeshQueryCore
     }
 
     /// <summary>
+    /// 🚨 NEW unified surface — each <see cref="IMeshQueryProvider"/> emits
+    /// snapshots of <see cref="QueryResult"/> rows; we combine via
+    /// <see cref="Observable.CombineLatest{TSource}(IEnumerable{IObservable{TSource}})"/>,
+    /// dedupe by <see cref="QueryResult.Path"/> (highest-score wins; provider
+    /// name as final tiebreak), and re-emit on every change. Providers run
+    /// their async I/O inside their own hosted hubs — the call here never
+    /// touches the mesh hub's action block.
+    /// </summary>
+    public IObservable<IReadOnlyList<QueryResult>> Query(MeshQueryRequest request)
+    {
+        var matched = SelectMatchingProviders(NamespacesForRequest(request));
+        if (matched.Count == 0)
+            return Observable.Return((IReadOnlyList<QueryResult>)Array.Empty<QueryResult>());
+        var streams = matched.Select(p => p.Query(request, Options)).ToList();
+        return Observable.CombineLatest(streams)
+            .Select(snapshots => MergeSnapshots(snapshots));
+    }
+
+    /// <summary>
+    /// 🚨 NEW unified autocomplete — same shape as <see cref="Query"/> but with
+    /// <c>.StartWith(empty)</c> per provider so <see cref="Observable.CombineLatest{TSource}(IEnumerable{IObservable{TSource}})"/>
+    /// emits as soon as ANY provider produces. Slow providers don't gate the
+    /// UI — partial autocomplete suggestions render immediately.
+    /// </summary>
+    public IObservable<IReadOnlyList<QueryResult>> Autocomplete(
+        string basePath, string prefix,
+        AutocompleteMode mode = AutocompleteMode.RelevanceFirst,
+        int limit = 10,
+        string? contextPath = null,
+        string? context = null)
+    {
+        var matched = SelectMatchingProviders(NamespacesForBasePath(basePath));
+        if (matched.Count == 0)
+            return Observable.Return((IReadOnlyList<QueryResult>)Array.Empty<QueryResult>());
+        IReadOnlyList<QueryResult> empty = Array.Empty<QueryResult>();
+        var streams = matched.Select(p => p
+            .Autocomplete(basePath, prefix, Options, mode, limit, contextPath, context)
+            .StartWith(empty));
+        return Observable.CombineLatest(streams)
+            .Select(snapshots => MergeAutocompleteSnapshots(snapshots, limit, contextPath, prefix));
+    }
+
+    private static IReadOnlyList<QueryResult> MergeSnapshots(IList<IReadOnlyList<QueryResult>> snapshots)
+    {
+        var byPath = new Dictionary<string, QueryResult>(StringComparer.OrdinalIgnoreCase);
+        foreach (var snapshot in snapshots)
+        {
+            foreach (var row in snapshot)
+            {
+                if (string.IsNullOrEmpty(row.Path)) continue;
+                if (byPath.TryGetValue(row.Path, out var existing) && existing.Score >= row.Score)
+                    continue;
+                byPath[row.Path] = row;
+            }
+        }
+        return byPath.Values
+            .OrderByDescending(r => r.Score)
+            .ThenBy(r => r.Path.Length)
+            .ThenBy(r => r.Path, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    private static IReadOnlyList<QueryResult> MergeAutocompleteSnapshots(
+        IList<IReadOnlyList<QueryResult>> snapshots, int limit, string? contextPath, string? prefix)
+    {
+        var byPath = new Dictionary<string, QueryResult>(StringComparer.OrdinalIgnoreCase);
+        foreach (var snapshot in snapshots)
+        {
+            foreach (var row in snapshot)
+            {
+                if (string.IsNullOrEmpty(row.Path)) continue;
+                if (IsSatellitePath(row.Path)) continue;
+                if (byPath.TryGetValue(row.Path, out var existing) && existing.Score >= row.Score)
+                    continue;
+                var boosted = string.IsNullOrEmpty(contextPath)
+                    ? row
+                    : ApplyProximityBoost(row, contextPath, prefix);
+                byPath[row.Path] = boosted;
+            }
+        }
+        return byPath.Values
+            .OrderByDescending(r => r.Score)
+            .ThenBy(r => r.Path.Length)
+            .ThenBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
+            .Take(limit)
+            .ToList();
+    }
+
+    private static QueryResult ApplyProximityBoost(QueryResult row, string? contextPath, string? prefix)
+    {
+        if (string.IsNullOrEmpty(contextPath)) return row;
+        var path = row.Path;
+        var boost = 0.0;
+        int? pathDistance = null;
+
+        if (path.StartsWith(contextPath + "/", StringComparison.OrdinalIgnoreCase))
+        {
+            var relative = path[(contextPath.Length + 1)..];
+            var relativeDepth = relative.Count(c => c == '/');
+            pathDistance = relativeDepth;
+            boost = relativeDepth switch
+            {
+                0 => 2000,
+                1 => 900,
+                _ => 600,
+            };
+        }
+        else
+        {
+            var contextParent = contextPath.LastIndexOf('/');
+            if (contextParent > 0)
+            {
+                var parent = contextPath[..contextParent];
+                if (path.StartsWith(parent + "/", StringComparison.OrdinalIgnoreCase))
+                    boost = 1000;
+            }
+        }
+
+        if (boost == 0)
+        {
+            var contextSegments = contextPath.Split('/');
+            var pathSegments = path.Split('/');
+            var shared = 0;
+            for (var i = 0; i < Math.Min(contextSegments.Length, pathSegments.Length); i++)
+            {
+                if (contextSegments[i].Equals(pathSegments[i], StringComparison.OrdinalIgnoreCase))
+                    shared++;
+                else break;
+            }
+            if (shared >= 2) boost = 500;
+        }
+
+        var segmentCount = path.Count(c => c == '/') + 1;
+        boost -= segmentCount * 50;
+
+        if (!string.IsNullOrEmpty(prefix) && !string.IsNullOrEmpty(row.Name))
+        {
+            if (row.Name.Equals(prefix, StringComparison.OrdinalIgnoreCase)) boost += 1000;
+            else if (row.Name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) boost += 500;
+        }
+
+        return row with { Score = row.Score + boost, PathDistance = pathDistance ?? row.PathDistance };
+    }
+
+    /// <summary>
     /// <para>Dispatcher for the <see cref="IMeshQueryCore"/> surface. Routes
     /// based on <see cref="MeshQueryRequest.UserId"/>:</para>
     /// <list type="bullet">

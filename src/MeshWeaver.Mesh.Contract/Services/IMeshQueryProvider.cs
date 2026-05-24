@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 
@@ -106,6 +107,88 @@ public interface IMeshQueryProvider
     /// </code>
     /// </example>
     IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request, JsonSerializerOptions options);
+
+    /// <summary>
+    /// 🚨 NEW unified surface — every provider returns a live snapshot of
+    /// <see cref="QueryResult"/> rows for <paramref name="request"/>. Each emission
+    /// is the FULL current result list (not deltas). The aggregator combines
+    /// across providers via <c>CombineLatest</c>, dedupes by <see cref="QueryResult.Path"/>,
+    /// and sorts by score / OrderBy.
+    /// <para>
+    /// Providers that must hit external storage (Postgres, Cosmos, filesystem) MUST
+    /// run the actual I/O inside a HOSTED HUB they own — never on the calling mesh
+    /// hub's action block. See <c>Doc/Architecture/AsynchronousCalls.md</c> for the
+    /// hosted-hub-handler pattern.
+    /// </para>
+    /// <para>Default implementation bridges to the legacy
+    /// <see cref="ObserveQuery{T}"/> for back-compat during the migration. Concrete
+    /// providers should override to take the hosted-hub path.</para>
+    /// </summary>
+    IObservable<IReadOnlyList<QueryResult>> Query(MeshQueryRequest request, JsonSerializerOptions options)
+        => ObserveQuery<MeshNode>(request, options)
+            .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset or QueryChangeType.Added or QueryChangeType.Updated)
+            .Scan(
+                new Dictionary<string, QueryResult>(StringComparer.OrdinalIgnoreCase),
+                (acc, change) =>
+                {
+                    if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
+                        acc.Clear();
+                    for (var i = 0; i < change.Items.Count; i++)
+                    {
+                        var node = change.Items[i];
+                        if (string.IsNullOrEmpty(node.Path)) continue;
+                        var score = change.Scores is { Count: > 0 } s && i < s.Count ? s[i] : 0;
+                        acc[node.Path] = QueryResult.FromNode(node, score, providerName: Name);
+                    }
+                    return acc;
+                })
+            .Select(d => (IReadOnlyList<QueryResult>)d.Values.ToList());
+
+    /// <summary>
+    /// 🚨 NEW unified autocomplete surface — same snapshot semantics as
+    /// <see cref="Query"/>. Aggregator wraps each provider's stream with
+    /// <c>.StartWith(empty)</c> so <c>CombineLatest</c> emits partial results as
+    /// soon as ANY provider produces (slow providers don't gate the UI).
+    /// <para>Default impl bridges to the legacy
+    /// <see cref="AutocompleteAsync(string, string, JsonSerializerOptions, AutocompleteMode, int, string?, string?, CancellationToken)"/>
+    /// by draining the async-enumerable into a single snapshot list.</para>
+    /// </summary>
+    IObservable<IReadOnlyList<QueryResult>> Autocomplete(
+        string basePath, string prefix, JsonSerializerOptions options,
+        AutocompleteMode mode = AutocompleteMode.RelevanceFirst,
+        int limit = 10,
+        string? contextPath = null,
+        string? context = null)
+    {
+        return System.Reactive.Linq.Observable.Create<IReadOnlyList<QueryResult>>(observer =>
+        {
+            var cts = new CancellationTokenSource();
+            _ = System.Threading.Tasks.Task.Run(async () =>
+            {
+                try
+                {
+                    var rows = new List<QueryResult>();
+                    await foreach (var s in AutocompleteAsync(basePath, prefix, options, mode, limit, contextPath, context, cts.Token))
+                    {
+                        rows.Add(new QueryResult
+                        {
+                            Path = s.Path,
+                            Name = s.Name,
+                            NodeType = s.NodeType,
+                            Icon = s.Icon,
+                            Score = s.Score,
+                            ProviderName = Name,
+                        });
+                    }
+                    observer.OnNext(rows);
+                    observer.OnCompleted();
+                }
+                catch (OperationCanceledException) { observer.OnCompleted(); }
+                catch (Exception ex) { observer.OnError(ex); }
+            }, cts.Token);
+            return System.Reactive.Disposables.Disposable.Create(() => cts.Cancel());
+        });
+    }
 
     /// <summary>
     /// Selects a single property value from a node at the given path.
