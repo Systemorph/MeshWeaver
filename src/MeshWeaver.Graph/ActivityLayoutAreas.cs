@@ -21,6 +21,17 @@ public static class ActivityLayoutAreas
     public const string CancelArea = "Cancel";
 
     /// <summary>
+    /// The Cancel button is visible if-and-only-if the activity is currently
+    /// running AND no cancel request is already in flight. Centralised so the
+    /// three layout-area sites (Overview, Progress, CancelButton) share one
+    /// rule, and so tests can pin the contract without spinning up a full
+    /// layout-area host.
+    /// </summary>
+    public static bool IsCancelButtonVisible(ActivityLog log) =>
+        log.Status == ActivityStatus.Running
+        && log.RequestedStatus != ActivityStatus.Cancelled;
+
+    /// <summary>
     /// Registers the Activity-specific views (Overview, Thumbnail, Progress, Cancel).
     /// </summary>
     public static MessageHubConfiguration AddActivityViews(this MessageHubConfiguration configuration)
@@ -59,7 +70,7 @@ public static class ActivityLayoutAreas
                 // CancelXRequest message. The activity hub's own watcher
                 // (KernelContainer.StartActivityControlPlane) translates the
                 // RequestedStatus = Cancelled patch into the internal cancel.
-                if (log.Status == ActivityStatus.Running && log.RequestedStatus != ActivityStatus.Cancelled)
+                if (IsCancelButtonVisible(log))
                 {
                     stack = stack.WithView(Controls.Button("Cancel")
                         .WithIconStart(FluentIcons.Dismiss())
@@ -164,7 +175,7 @@ public static class ActivityLayoutAreas
                 // Inline Cancel: same content-patch pattern as the Overview's
                 // button. Only rendered while the activity is actually running
                 // and not already cancelling.
-                if (log.Status == ActivityStatus.Running && log.RequestedStatus != ActivityStatus.Cancelled)
+                if (IsCancelButtonVisible(log))
                 {
                     stack = stack.WithView(Controls.Button("Cancel")
                         .WithIconStart(FluentIcons.Dismiss())
