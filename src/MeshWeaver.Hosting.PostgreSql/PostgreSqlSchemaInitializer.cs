@@ -943,23 +943,24 @@ public static class PostgreSqlSchemaInitializer
             END;
             $$;
 
-            -- Mirror access objects (User / Group / Role / VUser) into the
-            -- global "user" schema so consumers (UserIdentityCache, group
-            -- resolution, role lookup) can do a single-schema lookup rather
-            -- than fan a synced query across every per-user partition.
-            -- Function is installed by V25_MirrorAccessObjectsToUserSchema in
-            -- public; this trigger wires the per-partition mesh_nodes table
-            -- to it. We skip the trigger entirely if the function doesn't
-            -- exist yet (fresh-DB ordering -- migration runs after init) and
-            -- also skip on the "user" schema itself (it's the mirror target).
+            -- Mirror access objects (User / Group / Role / VUser / ApiToken)
+            -- into the global "auth" schema so consumers (UserIdentityCache,
+            -- group resolution, role lookup, token validation) can do a
+            -- single-schema lookup rather than fan a synced query across
+            -- every per-user partition. Function is installed by
+            -- V27_RenameUserSchemaToAuthAndMirrorApiTokens in public;
+            -- this trigger wires the per-partition mesh_nodes table to it.
+            -- We skip the trigger entirely if the function doesn't exist yet
+            -- (fresh-DB ordering -- migration runs after init) and also skip
+            -- on the "auth" schema itself (it's the mirror target).
             DO $$
             BEGIN
                 IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'mesh_node_mirror_access_objects')
-                   AND EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'mirror_access_object_to_user_schema')
-                   AND current_schema() <> 'user' THEN
+                   AND EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'mirror_access_object_to_auth_schema')
+                   AND current_schema() <> 'auth' THEN
                     CREATE TRIGGER mesh_node_mirror_access_objects
                         AFTER INSERT OR UPDATE OR DELETE ON mesh_nodes
-                        FOR EACH ROW EXECUTE FUNCTION public.mirror_access_object_to_user_schema();
+                        FOR EACH ROW EXECUTE FUNCTION public.mirror_access_object_to_auth_schema();
                 END IF;
             END;
             $$;
@@ -1574,23 +1575,24 @@ public static class PostgreSqlSchemaInitializer
             END;
             $$;
 
-            -- Mirror access objects (User / Group / Role / VUser) into the
-            -- global "user" schema so consumers (UserIdentityCache, group
-            -- resolution, role lookup) can do a single-schema lookup rather
-            -- than fan a synced query across every per-user partition.
-            -- Function is installed by V25_MirrorAccessObjectsToUserSchema in
-            -- public; this trigger wires the per-partition mesh_nodes table
-            -- to it. We skip the trigger entirely if the function doesn't
-            -- exist yet (fresh-DB ordering -- migration runs after init) and
-            -- also skip on the "user" schema itself (it's the mirror target).
+            -- Mirror access objects (User / Group / Role / VUser / ApiToken)
+            -- into the global "auth" schema so consumers (UserIdentityCache,
+            -- group resolution, role lookup, token validation) can do a
+            -- single-schema lookup rather than fan a synced query across
+            -- every per-user partition. Function is installed by
+            -- V27_RenameUserSchemaToAuthAndMirrorApiTokens in public;
+            -- this trigger wires the per-partition mesh_nodes table to it.
+            -- We skip the trigger entirely if the function doesn't exist yet
+            -- (fresh-DB ordering -- migration runs after init) and also skip
+            -- on the "auth" schema itself (it's the mirror target).
             DO $$
             BEGIN
                 IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'mesh_node_mirror_access_objects')
-                   AND EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'mirror_access_object_to_user_schema')
-                   AND current_schema() <> 'user' THEN
+                   AND EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'mirror_access_object_to_auth_schema')
+                   AND current_schema() <> 'auth' THEN
                     CREATE TRIGGER mesh_node_mirror_access_objects
                         AFTER INSERT OR UPDATE OR DELETE ON mesh_nodes
-                        FOR EACH ROW EXECUTE FUNCTION public.mirror_access_object_to_user_schema();
+                        FOR EACH ROW EXECUTE FUNCTION public.mirror_access_object_to_auth_schema();
                 END IF;
             END;
             $$;
@@ -1735,23 +1737,24 @@ public static class PostgreSqlSchemaInitializer
             END;
             $$;
 
-            -- Mirror access objects (User / Group / Role / VUser) into the
-            -- global "user" schema so consumers (UserIdentityCache, group
-            -- resolution, role lookup) can do a single-schema lookup rather
-            -- than fan a synced query across every per-user partition.
-            -- Function is installed by V25_MirrorAccessObjectsToUserSchema in
-            -- public; this trigger wires the per-partition mesh_nodes table
-            -- to it. We skip the trigger entirely if the function doesn't
-            -- exist yet (fresh-DB ordering -- migration runs after init) and
-            -- also skip on the "user" schema itself (it's the mirror target).
+            -- Mirror access objects (User / Group / Role / VUser / ApiToken)
+            -- into the global "auth" schema so consumers (UserIdentityCache,
+            -- group resolution, role lookup, token validation) can do a
+            -- single-schema lookup rather than fan a synced query across
+            -- every per-user partition. Function is installed by
+            -- V27_RenameUserSchemaToAuthAndMirrorApiTokens in public;
+            -- this trigger wires the per-partition mesh_nodes table to it.
+            -- We skip the trigger entirely if the function doesn't exist yet
+            -- (fresh-DB ordering -- migration runs after init) and also skip
+            -- on the "auth" schema itself (it's the mirror target).
             DO $$
             BEGIN
                 IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'mesh_node_mirror_access_objects')
-                   AND EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'mirror_access_object_to_user_schema')
-                   AND current_schema() <> 'user' THEN
+                   AND EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'mirror_access_object_to_auth_schema')
+                   AND current_schema() <> 'auth' THEN
                     CREATE TRIGGER mesh_node_mirror_access_objects
                         AFTER INSERT OR UPDATE OR DELETE ON mesh_nodes
-                        FOR EACH ROW EXECUTE FUNCTION public.mirror_access_object_to_user_schema();
+                        FOR EACH ROW EXECUTE FUNCTION public.mirror_access_object_to_auth_schema();
                 END IF;
             END;
             $$;
