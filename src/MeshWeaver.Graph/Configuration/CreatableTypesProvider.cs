@@ -113,9 +113,23 @@ internal sealed class CreatableTypesProvider(
         // Pass the hub's real JsonSerializerOptions — IMeshQueryCore.ObserveQuery
         // deserialises rows with it; null would NRE inside the provider and the
         // .Catch below would silently swallow every query result.
+        //
+        // 🚨 Timeout(15s) → Empty is a deadlock guard. Aggregate (line 128
+        // below) waits for ALL merged observables to complete — if one
+        // ObserveQuery NEVER emits its Initial frame (the "synced-query
+        // first-emission" race that's already documented in
+        // project_synced_query_race.md), the merged stream never completes,
+        // Aggregate never emits its single tuple, and the outer FirstAsync
+        // hangs. Symptom: CreatableTypesFileSystemTest CI failure
+        // 2026-05-23 — test ran for its full 20 s timeout. With the
+        // timeout: a stuck query is treated as "no results", the downstream
+        // CombineLatest gate proceeds, and the test (or UI) gets the
+        // partial answer it would have gotten if the timeout query had
+        // returned empty naturally. Strictly better than hanging.
         var observables = queries.Select(q => meshQueryCore
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(q), jsonOptions)
             .Take(1)
+            .Timeout(TimeSpan.FromSeconds(15), Observable.Empty<QueryResultChange<MeshNode>>())
             .Catch<QueryResultChange<MeshNode>, Exception>(
                 _ => Observable.Empty<QueryResultChange<MeshNode>>()));
 
