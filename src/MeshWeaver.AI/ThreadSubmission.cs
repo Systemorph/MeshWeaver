@@ -783,20 +783,49 @@ internal static class ThreadSubmissionServer
     public static IDisposable InstallServerWatcher(IMessageHub threadHub)
     {
         var logger = threadHub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
+        // 🚨 Single-flight gate. DistinctUntilChanged on the fingerprint blocks
+        // back-to-back identical emissions, but a flicker — Idle → Executing
+        // → Idle within the same hub action-block tick — produces TWO distinct
+        // dispatchable emissions for ONE submission, and we'd POST two
+        // StartExecutionTrigger messages. HandleStartExecutionOnExec then
+        // creates two response cells, the round's thread.Messages list ends
+        // up with both, and the next round's LoadFullConversationHistoryFromMesh
+        // returns the orphan cell ("Allocating agent...") as a phantom
+        // assistant message in the chat history (ChatHistoryTest regression).
+        //
+        // Same shape as the gate inside ActivityControlPlaneExtensions.WatchSubmission.
+        var dispatching = 0;
         return threadHub.GetWorkspace().GetMeshNodeStream()
             .Select(node => Fingerprint(node))
             .DistinctUntilChanged()
-            .Where(fp => fp.NeedsDispatch)
             .Subscribe(
-                _ =>
+                fp =>
                 {
                     var threadPath = threadHub.Address.Path;
-                    logger?.LogDebug(
-                        "[SubmissionWatcher] posting StartExecutionTrigger for {ThreadPath}",
-                        threadPath);
-                    threadHub.Post(
-                        new StartExecutionTrigger(threadPath),
-                        o => o.WithTarget(threadHub.Address));
+                    if (fp.NeedsDispatch
+                        && System.Threading.Interlocked.CompareExchange(ref dispatching, 1, 0) == 0)
+                    {
+                        logger?.LogDebug(
+                            "[SubmissionWatcher] posting StartExecutionTrigger for {ThreadPath}",
+                            threadPath);
+                        threadHub.Post(
+                            new StartExecutionTrigger(threadPath),
+                            o => o.WithTarget(threadHub.Address));
+                    }
+                    else if (!fp.NeedsDispatch
+                             && System.Threading.Interlocked.Exchange(ref dispatching, 0) == 1)
+                    {
+                        // Gate released — the dispatch took effect (fingerprint transitioned
+                        // to a non-dispatchable state). The next genuine NeedsDispatch=true
+                        // emission (a fresh round after this one settles) is now allowed
+                        // through. Without this, a flicker Idle → Executing → Idle within
+                        // the same submission produces TWO StartExecutionTrigger posts →
+                        // TWO response cells → phantom assistant message in the next
+                        // round's chat history (ChatHistoryTest regression).
+                        logger?.LogDebug(
+                            "[SubmissionWatcher] dispatch settled, gate released for {ThreadPath}",
+                            threadPath);
+                    }
                 },
                 ex => logger?.LogWarning(ex,
                     "[SubmissionWatcher] stream errored for {ThreadPath}",
