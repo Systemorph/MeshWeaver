@@ -83,6 +83,29 @@ public interface IMeshService
     IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request);
 
     /// <summary>
+    /// 🚨 NEW unified query surface — each registered <see cref="IMeshQueryProvider"/>
+    /// emits a snapshot of <see cref="QueryResult"/> rows; the aggregator combines
+    /// via <see cref="System.Reactive.Linq.Observable.CombineLatest{TSource}(IEnumerable{IObservable{TSource}})"/>,
+    /// dedupes by <see cref="QueryResult.Path"/>, and orders by score.
+    /// Providers run async I/O inside hosted hubs they own — the call here never
+    /// touches the mesh hub's action block.
+    /// </summary>
+    IObservable<IReadOnlyList<QueryResult>> Query(MeshQueryRequest request);
+
+    /// <summary>
+    /// 🚨 NEW unified autocomplete surface — same shape as <see cref="Query"/>
+    /// but each provider's stream is wrapped with <c>.StartWith(empty)</c> so
+    /// partial autocomplete results render immediately without waiting for slow
+    /// providers.
+    /// </summary>
+    IObservable<IReadOnlyList<QueryResult>> Autocomplete(
+        string basePath, string prefix,
+        AutocompleteMode mode = AutocompleteMode.RelevanceFirst,
+        int limit = 10,
+        string? contextPath = null,
+        string? context = null);
+
+    /// <summary>
     /// Selects a single property value from a node at the given path.
     /// Efficient way to get one property without loading the full Content blob.
     /// </summary>
