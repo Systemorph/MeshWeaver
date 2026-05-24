@@ -421,24 +421,28 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             : GetPathsForScope(basePath, effectiveScope);
         var emittedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        // Exact-path probes. Skip empty/null entries — persistence.Read("") on
-        // some adapters throws NRE before the observable starts.
-        var exactPathNodes = pathsToSearch.ToObservable()
-            .Where(searchPath => !string.IsNullOrEmpty(searchPath))
-            .SelectMany(searchPath => Observable.Defer(() =>
+        // Exact-path probes — batched via IStorageAdapter.ReadMany so the
+        // multi-value `path:a|b|c` URL-resolver query (and any other multi-path
+        // probe) collapses to ONE round-trip on backends that support it
+        // (Postgres: WHERE namespace = $1 AND id IN (…)). FileSystem / InMemory
+        // fall back to the default Merge of N Reads — fine, no per-call
+        // latency to amortise.
+        var nonEmptyPaths = pathsToSearch
+            .Where(p => !string.IsNullOrEmpty(p))
+            .ToList();
+        var exactPathNodes = (nonEmptyPaths.Count == 0
+                ? Observable.Empty<MeshNode>()
+                : Observable.Defer(() =>
                 {
-                    try { return persistence.Read(searchPath, options); }
+                    try { return persistence.ReadMany(nonEmptyPaths, options); }
                     catch (Exception ex)
                     {
                         logger?.LogWarning(ex,
-                            "[StorageAdapterMeshQueryProvider.ExactRead] read threw synchronously path={Path}", searchPath);
-                        return Observable.Return<MeshNode?>(null);
+                            "[StorageAdapterMeshQueryProvider.ExactRead] ReadMany threw synchronously paths=[{Paths}]",
+                            string.Join(",", nonEmptyPaths));
+                        return Observable.Empty<MeshNode>();
                     }
-                })
-                .Take(1)
-                .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null)))
-            .Where(node => node != null)
-            .Select(node => node!)
+                }))
             .Where(node => _evaluator.Matches(node, parsedQuery)
                 && !IsExcludedByContext(node, context)
                 && !IsExcludedByIsMain(node, parsedQuery))
