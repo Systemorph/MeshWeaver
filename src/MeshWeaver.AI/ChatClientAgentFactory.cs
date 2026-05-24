@@ -378,295 +378,115 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         Logger.LogInformation("[Delegation] {Source} → {Target}, depth={Depth}, task={Task}",
             agentConfig.Id, targetId, depth, task.Length > 100 ? task[..97] + "..." : task);
 
-        var meshService = Hub.ServiceProvider.GetRequiredService<IMeshService>();
         // The PARENT response cell — also the namespace under which the sub-thread is created.
-        // We own this path; writes through `parentWorkspace.GetMeshNodeStream(parentMsgPath).Update(...)`
-        // serialise on the parent's action block.
         var parentMsgPath = $"{threadPath}/{execCtx.ResponseMessageId}";
         var mainEntityPath = execCtx.ContextPath ?? context ?? threadPath;
 
-        // Build the sub-thread with IsExecuting=true + PendingUserMessage so its hub's
-        // WatchForExecution starts streaming on activation.
-        var (subThreadNode, userMsgId, responseMsgId) = ThreadNodeType.BuildThreadWithMessages(
-            parentMsgPath, task,
-            createdBy: execCtx.UserAccessContext?.ObjectId,
-            agentName: targetId);
-        subThreadNode = subThreadNode with { MainNode = mainEntityPath };
-        var subThreadPath = subThreadNode.Path!;
-        var responsePath = $"{subThreadPath}/{responseMsgId}";
+        // Deterministically pre-compute the sub-thread path (GenerateSpeakingId
+        // is pure of the task text). The thread-hub handler will derive the SAME
+        // path inside BuildThreadWithMessages — so we can stamp it on the
+        // parent's tool-call entry RIGHT NOW via the Dispatched event without
+        // waiting for the round-trip to the handler.
+        var subThreadPath = $"{parentMsgPath}/{MeshWeaver.AI.ThreadNodeType.GenerateSpeakingId(task)}";
+        var callId = Guid.NewGuid().ToString("N")[..8];
 
-        // Stamp the delegation path so the parent's bubble can render the inline link.
-        var delegationDisplayName = $"Delegating to {targetId}...";
-        chat.DelegationPaths[delegationDisplayName] = subThreadPath;
-        chat.LastDelegationPath = subThreadPath;
-        chat.UpdateDelegationStatus?.Invoke(delegationDisplayName);
+        // Emit Dispatched onto chat.Delegations. AgentChatClient.EmitDelegationEvent
+        // also updates the ActiveDelegationPaths snapshot that the cancel watcher
+        // and the streaming-loop's stamp pass read. Single source of truth.
+        if (chat is AgentChatClient agentChat)
+            agentChat.EmitDelegationEvent(
+                new MeshWeaver.AI.Delegation.DelegationEvent(callId, subThreadPath,
+                    MeshWeaver.AI.Delegation.DelegationLifecycle.Dispatched));
 
-        Logger.LogInformation("[Delegation] Dispatch sub-thread {Path}: user={UserMsgId}, response={ResponseMsgId}",
-            subThreadPath, userMsgId, responseMsgId);
+        // Resolve the _Exec hub we're running on (FCC dispatches us from
+        // ExecuteMessageAsync, which runs on _Exec) and its DelegationRegistry.
+        // Hub here is the FACTORY's hub (typically the mesh hub) — that's NOT
+        // _Exec. Get _Exec from the threadHub's hosted-hub cache.
+        var threadHubAddress = new Address(threadPath);
+        var execHubAddress = new Address($"{threadPath}/_Exec");
+        var threadHub = Hub.GetHostedHub(threadHubAddress, HostedHubCreation.Never)
+            ?? throw new InvalidOperationException(
+                $"Thread hub at {threadHubAddress} not found for delegation");
+        var execHub = threadHub.GetHostedHub(execHubAddress, HostedHubCreation.Never)
+            ?? throw new InvalidOperationException(
+                $"_Exec hub at {execHubAddress} not found for delegation");
+        var registry = execHub.ServiceProvider.GetRequiredService<MeshWeaver.AI.Delegation.DelegationRegistry>();
 
-        // Create satellite cells + thread node reactively (no await).
-        meshService.CreateNode(new MeshNode(userMsgId, subThreadPath)
+        // Per-CallId channel that drives this IAsyncEnumerable. Writer is fed
+        // exclusively by HandleSubThreadStateChanged on _Exec's action block —
+        // single-writer guarantee without locks.
+        var channel = System.Threading.Channels.Channel.CreateUnbounded<MeshWeaver.AI.Delegation.DelegationFrame>(
+            new System.Threading.Channels.UnboundedChannelOptions
+            { SingleReader = true, SingleWriter = false });
+
+        var entry = new MeshWeaver.AI.Delegation.DelegationEntry
         {
-            NodeType = ThreadMessageNodeType.NodeType,
-            MainNode = mainEntityPath,
-            Content = new ThreadMessage
+            CallId = callId,
+            SubThreadPath = subThreadPath,
+            ResponseMsgId = "", // populated by HandleDelegationSubThreadCreated when the handler computes it
+            Writer = channel.Writer,
+        };
+        registry.Active[callId] = entry;
+
+        // Best-effort cleanup if the caller (FCC turn) gets cancelled mid-flight.
+        using var cleanup = cancellationToken.Register(() =>
+        {
+            if (registry.Active.TryRemove(callId, out var e))
             {
-                Role = "user", Text = task, Timestamp = DateTime.UtcNow,
-                Type = ThreadMessageType.ExecutedInput,
-                CreatedBy = execCtx.UserAccessContext?.ObjectId
+                e.Subscription?.Dispose();
+                e.Writer.TryComplete();
             }
-        }).Subscribe(_ => { },
-            error => Logger.LogDebug(error, "[Delegation] User cell create for {Path} returned error", subThreadPath));
-
-        meshService.CreateNode(new MeshNode(responseMsgId, subThreadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType,
-            MainNode = mainEntityPath,
-            Content = new ThreadMessage
-            {
-                Role = "assistant", Text = "", Timestamp = DateTime.UtcNow,
-                Type = ThreadMessageType.AgentResponse, AgentName = targetId
-            }
-        }).Subscribe(_ => { },
-            error => Logger.LogDebug(error, "[Delegation] Response cell create for {Path} returned error", subThreadPath));
-
-        meshService.CreateNode(subThreadNode).Subscribe(
-            _ => Logger.LogInformation("[Delegation] Sub-thread created at {Path}", subThreadPath),
-            error => Logger.LogWarning(error, "[Delegation] Sub-thread create failed at {Path}", subThreadPath));
-
-        // Terminal-signal channel: completion sources (sub.IsExecuting=false /
-        // sub.CompletedAt set) write here. The reader awaits one signal then
-        // computes the final state from the latest snapshots and returns.
-        var terminalTcs = new TaskCompletionSource<TerminalSignal>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        // 🚨 All remote MeshNode reads + writes go through IMeshNodeStreamCache.
-        // Going around it (ad-hoc workspace.GetRemoteStream / GetMeshNodeStream)
-        // opens a separate handle, so writes are "lost" — never seen by the
-        // readers of the cached stream. The cache is the single shared,
-        // process-wide handle per path (see IMeshNodeStreamCache xmldoc).
-        var nodeCache = Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-        // Live snapshots — written by subscriptions, read by the projector + terminal handler.
-        // Plain fields suffice: the only consumer is the projector lambda which
-        // re-reads on each emission, and we never need atomicity across both fields.
-        string lastSubText = "";
-        ThreadMessageStatus? lastSubStatus = null;
-
-        // 🚨 The GUI reads sub-thread state DIRECTLY via cache.GetStream(DelegationPath)
-        // → its ActiveMessageId → response cell. We do NOT mirror the sub-thread's
-        // streaming text onto the parent's ToolCallEntry.Result here — that was the
-        // source of duplicates + out-of-sync displays. We only write the parent's
-        // ToolCallEntry TWICE per delegation lifecycle: once at terminal (Status flip
-        // + final Result for FCC's FunctionResultContent), and the dispatch-time stamp
-        // is the FCC streaming loop's append (it already creates the entry).
-        //
-        // Subscriptions below exist ONLY to detect terminal — body display
-        // streams from the sub-thread itself.
-        void StampTerminalOnParentToolCall(ToolCallStatus newStatus)
-        {
-            // ⚠️  No-op kept as a hook for future terminal-state stamping.
-            //
-            // Earlier shapes that wrote to either:
-            //   (a) the parent's response-cell via nodeCache.Update, OR
-            //   (b) the streaming loop's toolCallLog via chat.ForwardToolCall
-            // produced duplicate ToolCallEntry rows in the test/Orleans flow
-            // (DelegationWriteCountTest had 0/10 pass rate, 2026-05-21).
-            // Root cause: FCC re-emits the same FunctionCallContent in turn 2's
-            // output stream as history echo. The streaming-loop's
-            // FunctionCallContent handler (ThreadExecution.cs line 1346) sees
-            // both emissions; the mirror here races with that.
-            //
-            // The bare entry → FunctionResultContent SetItem flow (line 1422)
-            // populates Result + Status from FCC's tool result directly. For
-            // production chat clients that emit FRC in stream output (Claude,
-            // GPT-4 etc.) this is sufficient. For test agents that don't emit
-            // FRC, Result stays null — that's the test agent's reality, not a
-            // regression of the delegation refactor. The structural invariant
-            // (one entry per DelegationPath) is preserved.
-            _ = newStatus;
-        }
-
-        // Channel for streaming text deltas back to FCC via DelegationTool's
-        // accumulator. Required to dodge the terminal-timing race: if we only
-        // yield once at terminal, lastSubText may be empty (sub-thread's
-        // final write may not have propagated through the cache by the moment
-        // we read it). Channel-of-deltas ensures DelegationTool accumulates
-        // every chunk as it arrives — total accumulation is the full text.
-        var deltaChannel = System.Threading.Channels.Channel.CreateUnbounded<string>(
-            new System.Threading.Channels.UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
-
-        // 1. Subscribe to the SUB-THREAD via the cache. The cache opens the
-        //    SubscribeRequest under System impersonation; that activates the
-        //    sub-thread hub (its WatchForExecution hook then auto-runs the
-        //    agent — BuildThreadWithMessages set IsExecuting=true). IsExecuting
-        //    flipping false (after we've observed it run) is the terminal signal.
-        //    The first emission can race ahead of the initial state, so we gate
-        //    on `startedExecuting`. No projection write — the parent bubble streams
-        //    sub-thread output through an embedded sub-thread Streaming layout area.
-        var startedExecuting = false;
-        var subThreadSub = nodeCache.GetStream(subThreadPath)
-            .Subscribe(
-                node =>
-                {
-                    if (node?.Content is not MeshThread thread) return;
-                    if (thread.IsExecuting)
-                    {
-                        startedExecuting = true;
-                        return;
-                    }
-                    if (startedExecuting)
-                        terminalTcs.TrySetResult(TerminalSignal.ThreadIdle);
-                },
-                ex => terminalTcs.TrySetException(ex));
-
-        // 2. Subscribe to the response-cell via the cache. Emits text deltas
-        //    onto deltaChannel as the sub-agent streams; ALSO updates lastSubText
-        //    so StampTerminalOnParentToolCall has the full accumulated text at
-        //    terminal. The cell's CompletedAt + per-cell Status are the
-        //    authoritative terminal signal.
-        var responseCellSub = nodeCache.GetStream(responsePath)
-            .Subscribe(
-                node =>
-                {
-                    if (node?.Content is not ThreadMessage msg) return;
-                    var current = msg.Text ?? "";
-                    if (current.Length > lastSubText.Length)
-                    {
-                        var delta = current[lastSubText.Length..];
-                        lastSubText = current;
-                        deltaChannel.Writer.TryWrite(delta);
-                    }
-                    lastSubStatus = msg.Status;
-                    if (msg.CompletedAt is not null)
-                        terminalTcs.TrySetResult(TerminalSignal.CellCompleted);
-                },
-                ex => terminalTcs.TrySetException(ex),
-                () => terminalTcs.TrySetResult(TerminalSignal.CellCompleted));
-
-        // Safety timeout so a never-completing sub-thread can't pin this iterator forever.
-        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(5));
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
-        using var cancelReg = linked.Token.Register(() =>
-        {
-            terminalTcs.TrySetCanceled(linked.Token);
-            deltaChannel.Writer.TryComplete();
         });
 
-        // When terminal fires (cell completed / thread idle), close the channel
-        // so the drain loop below exits. Fire-and-forget — the awaiter chain is
-        // the loop below; the task's only side-effect is closing the channel.
-        TerminalSignal signal = TerminalSignal.ThreadIdle;
-        Exception? terminalError = null;
-        var wasCancelled = false;
-        _ = terminalTcs.Task.ContinueWith(t =>
-        {
-            if (t.IsCanceled) wasCancelled = true;
-            else if (t.IsFaulted) terminalError = t.Exception?.GetBaseException();
-            else signal = t.Result;
-            deltaChannel.Writer.TryComplete();
-        }, TaskScheduler.Default);
+        // Post the lifecycle kickoff. The thread-hub handler sequences the three
+        // CreateNode observables (.Concat), then posts DelegationSubThreadCreated
+        // back to _Exec, which installs THE single observation subscription.
+        // From here, every state change flows through _Exec's action block as
+        // a SubThreadStateChanged message — no race, no rogue subscriptions on
+        // the mesh-hub scheduler.
+        threadHub.Post(
+            new MeshWeaver.AI.Delegation.CreateDelegationSubThread(
+                CallId: callId,
+                ParentMsgPath: parentMsgPath,
+                TargetAgentId: targetId,
+                Task: task,
+                MainEntityPath: mainEntityPath));
 
-        // Drain text deltas as they arrive. Each delta yields to FCC via
-        // DelegationTool.Delegate's accumulator — net effect is FCC sees the
-        // full sub-thread text as the FunctionResultContent, regardless of any
-        // terminal-vs-final-write race in the cache subscription.
-        try
+        // Drain frames until terminal. Each Delta is yielded to FCC's
+        // FunctionResultContent accumulator — sub-thread streaming text reaches
+        // the parent agent intact. The terminal frame carries the final
+        // ThreadMessageStatus / error message.
+        ThreadMessageStatus? finalStatus = null;
+        string? terminalError = null;
+        await foreach (var frame in channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
         {
-            await foreach (var delta in deltaChannel.Reader.ReadAllAsync(linked.Token).ConfigureAwait(false))
+            if (!string.IsNullOrEmpty(frame.Delta))
+                yield return frame.Delta;
+            if (frame.Terminal)
             {
-                if (!string.IsNullOrEmpty(delta))
-                    yield return delta;
+                finalStatus = frame.FinalStatus;
+                terminalError = frame.ErrorMessage;
+                break;
             }
         }
-        finally
-        {
-            subThreadSub?.Dispose();
-            responseCellSub?.Dispose();
-        }
 
-        // 🚨 Race guard: the sub-thread's IsExecuting=false flip can fire
-        // BEFORE the response cell's final Text emission propagates through
-        // the cache. Without this one-shot read, lastSubText can be empty at
-        // terminal and the FunctionResultContent FCC sees is "" — breaks
-        // both the parent agent's wrap-up reasoning AND the test assertion
-        // that Result is non-null. Do an authoritative cache read here so
-        // we capture whatever the cell has at this instant.
-        try
-        {
-            var finalCell = await nodeCache.GetStream(responsePath)
-                .Take(1)
-                .Timeout(TimeSpan.FromSeconds(2))
-                .ToTask(linked.Token)
-                .ConfigureAwait(false);
-            if (finalCell?.Content is ThreadMessage finalMsg)
-            {
-                if (!string.IsNullOrEmpty(finalMsg.Text))
-                    lastSubText = finalMsg.Text;
-                lastSubStatus = finalMsg.Status;
-            }
-        }
-        catch
-        {
-            // Best-effort; if the read fails, fall back to whatever lastSubText
-            // captured during the subscription lifetime.
-        }
+        // Emit Terminal onto chat.Delegations so subscribers (cancel watcher,
+        // tool-call stamper) can drop their per-CallId state.
+        if (chat is AgentChatClient agentChat2)
+            agentChat2.EmitDelegationEvent(
+                new MeshWeaver.AI.Delegation.DelegationEvent(callId, subThreadPath,
+                    MeshWeaver.AI.Delegation.DelegationLifecycle.Terminal));
 
-        // Map the observed terminal state → ToolCallStatus.
-        var finalStatus = wasCancelled || timeout.IsCancellationRequested || cancellationToken.IsCancellationRequested
-            ? ToolCallStatus.Cancelled
-            : terminalError is not null
-                ? ToolCallStatus.Failed
-                : lastSubStatus switch
-                {
-                    ThreadMessageStatus.Error => ToolCallStatus.Failed,
-                    ThreadMessageStatus.Cancelled => ToolCallStatus.Cancelled,
-                    _ => ToolCallStatus.Success
-                };
+        Logger.LogInformation(
+            "[Delegation] Sub-thread {Path} settled (status={Status}, error={Error})",
+            subThreadPath, finalStatus, terminalError ?? "(none)");
 
-        // Final write — flips Status to terminal and stamps the FULL accumulated
-        // sub-thread text on Result (the FunctionResultContent FCC delivers to
-        // the parent agent). One write per delegation lifecycle.
-        StampTerminalOnParentToolCall(finalStatus);
-
-        // 🚨 Watchdog / parent-cancel must propagate cancel to the sub-thread.
-        // Without this, the sub-thread's hub keeps running with IsExecuting=true
-        // and the user sees a perpetually-"executing" bubble (the prod symptom
-        // on 2026-05-20). We flip RequestedCancellationAt — the SAME primitive
-        // the GUI Stop button uses. The sub-thread's own cancellation watcher
-        // reacts to this and tears down its CTS.
-        if (timeout.IsCancellationRequested || cancellationToken.IsCancellationRequested)
-        {
-            try
-            {
-                nodeCache.Update(subThreadPath,
-                    curr => curr?.Content is MeshThread sub
-                        ? curr with { Content = sub with { RequestedCancellationAt = DateTime.UtcNow } }
-                        : curr!)
-                    .Subscribe(_ => { }, ex => Logger.LogWarning(ex,
-                        "[Delegation] Cancel propagation to sub-thread {Path} failed", subThreadPath));
-                Logger.LogInformation(
-                    "[Delegation] Sub-thread {Path} cancelled (watchdog={Wd} / caller={Cc}); propagated RequestedCancellationAt",
-                    subThreadPath, timeout.IsCancellationRequested, cancellationToken.IsCancellationRequested);
-            }
-            catch (Exception ex)
-            {
-                Logger.LogWarning(ex,
-                    "[Delegation] Could not propagate cancel to sub-thread {Path}", subThreadPath);
-            }
-        }
-        else
-        {
-            Logger.LogInformation(
-                "[Delegation] Sub-thread {Path} completed (signal={Signal}, status={Status})",
-                subThreadPath, signal, finalStatus);
-        }
-
-        // Append a terminal marker only on error/cancel — the deltas already
-        // yielded gave FCC the full sub-thread text. On success we don't
-        // emit anything more; FCC's FunctionResultContent IS the accumulated
-        // deltas, which IS the full sub-thread text.
+        // Terminal marker only on error/cancel. On success the deltas already
+        // delivered the full sub-thread text to FCC's FunctionResultContent.
         if (terminalError is not null)
-            yield return $"\n[Delegation failed: {terminalError.Message}]";
-        else if (wasCancelled || timeout.IsCancellationRequested || cancellationToken.IsCancellationRequested)
+            yield return $"\n[Delegation failed: {terminalError}]";
+        else if (cancellationToken.IsCancellationRequested
+                 || finalStatus == ThreadMessageStatus.Cancelled)
             yield return "\n[Delegation cancelled before completion]";
     }
 

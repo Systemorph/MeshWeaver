@@ -112,6 +112,16 @@ public static class ThreadExecution
             .WithHandler<ResubmitTrigger>(ThreadSubmission.HandleResubmitTrigger)
             .WithHandler<DeleteFromMessageTrigger>(ThreadSubmission.HandleDeleteFromMessageTrigger)
             .WithHandler<RecordSubmissionFailureTrigger>(ThreadSubmission.HandleRecordSubmissionFailureTrigger)
+            // Delegation lifecycle: race-free, hub-serialized via Hub.Post.
+            // CreateDelegationSubThread builds the sub-thread node + cells in
+            // a sequenced .Concat() chain on this thread hub's action block;
+            // CancelDelegationSubThread propagates RequestedCancellationAt
+            // to the named sub-thread (heartbeat-driven or user-driven).
+            // See Doc/Architecture/AsynchronousCalls.md + plan cozy-napping-parrot.
+            .WithHandler<MeshWeaver.AI.Delegation.CreateDelegationSubThread>(
+                MeshWeaver.AI.Delegation.DelegationHandlers.HandleCreateDelegationSubThread)
+            .WithHandler<MeshWeaver.AI.Delegation.CancelDelegationSubThread>(
+                MeshWeaver.AI.Delegation.DelegationHandlers.HandleCancelDelegationSubThread)
             .WithInitialization(SetThreadHubIdentity)
             .WithInitialization(RecoverStaleExecutingThread)
             .WithInitialization(WatchForExecution)
@@ -136,9 +146,50 @@ public static class ThreadExecution
         threadHub.GetHostedHub(
             new Address($"{threadHub.Address}/_Exec"),
             config => config
+                .WithServices(s =>
+                {
+                    // Per-_Exec-hub registry of in-flight delegations.
+                    // Accessed ONLY from the hub's handlers, which are
+                    // serialized on the action block — logically single-
+                    // threaded. ConcurrentDictionary is used inside only
+                    // for the lock-free TryAdd/TryRemove during startup/
+                    // shutdown windows.
+                    s.AddSingleton<MeshWeaver.AI.Delegation.DelegationRegistry>();
+                    return s;
+                })
                 .WithHandler<SubmitMessageRequest>(ExecuteMessageAsync)
-                .WithHandler<StartExecutionTrigger>(HandleStartExecutionOnExec),
+                .WithHandler<StartExecutionTrigger>(HandleStartExecutionOnExec)
+                // Delegation observation handlers — see DelegationHandlers.cs.
+                .WithHandler<MeshWeaver.AI.Delegation.DelegationSubThreadCreated>(
+                    MeshWeaver.AI.Delegation.DelegationHandlers.HandleDelegationSubThreadCreated)
+                .WithHandler<MeshWeaver.AI.Delegation.SubThreadStateChanged>(
+                    MeshWeaver.AI.Delegation.DelegationHandlers.HandleSubThreadStateChanged)
+                .WithHandler<MeshWeaver.AI.Delegation.HeartbeatTick>(
+                    MeshWeaver.AI.Delegation.DelegationHandlers.HandleHeartbeatTick)
+                .WithInitialization(InstallHeartbeatTicker),
             HostedHubCreation.Always);
+    }
+
+    /// <summary>
+    /// Installs the periodic <see cref="MeshWeaver.AI.Delegation.HeartbeatTick"/>
+    /// emitter on the <c>_Exec</c> hub. Every 5 s posts a tick to self;
+    /// <see cref="MeshWeaver.AI.Delegation.DelegationHandlers.HandleHeartbeatTick"/>
+    /// scans the registry for stale entries and posts
+    /// <see cref="MeshWeaver.AI.Delegation.CancelDelegationSubThread"/> to the
+    /// parent thread hub for any sub-thread that hasn't reported activity in
+    /// <see cref="MeshWeaver.AI.Delegation.DelegationHandlers.DefaultHeartbeatTimeout"/>.
+    ///
+    /// <para>Uses <c>Observable.Interval</c> + <c>Subscribe</c> with
+    /// disposal registered against the hub so the timer dies cleanly with the
+    /// hub. The tick handler short-circuits on an empty registry — negligible
+    /// cost when no delegations are in flight.</para>
+    /// </summary>
+    private static void InstallHeartbeatTicker(IMessageHub execHub)
+    {
+        var sub = System.Reactive.Linq.Observable
+            .Interval(MeshWeaver.AI.Delegation.DelegationHandlers.HeartbeatInterval)
+            .Subscribe(_ => execHub.Post(new MeshWeaver.AI.Delegation.HeartbeatTick()));
+        execHub.RegisterForDisposal(_ => sub.Dispose());
     }
 
     /// <summary>
@@ -732,6 +783,11 @@ public static class ThreadExecution
                     ExecutionStatus = null,
                     TokensUsed = 0,
                     ExecutionStartedAt = DateTime.UtcNow,
+                    // Heartbeat baseline — atomic with the Executing flip. The
+                    // parent heartbeat scanner reads this; combined with the
+                    // 60 s cold-start grace it gives a fresh round breathing
+                    // room before the "no activity" predicate can fire.
+                    LastActivityAt = DateTime.UtcNow,
                     PendingUserMessage = request.UserMessageText,
                     PendingAgentName = request.AgentName,
                     PendingModelName = request.ModelName,
@@ -924,6 +980,13 @@ public static class ThreadExecution
         // workspace.GetRemoteStream that opened a separate handle (writes through
         // one were invisible to readers of the other).
         var mainEntity = request.ContextPath ?? threadPath;
+        // Heartbeat write throttle — stamp LastActivityAt on the OWN thread node
+        // at most once per heartbeatStampInterval. Reads in the closure run on
+        // _Exec's serialized action block, so a plain DateTime field is safe.
+        // 1 s matches the heartbeat scanner cadence so a fresh delta is always
+        // visible to the scanner before its next tick.
+        var lastActivityStamped = DateTime.MinValue;
+        var heartbeatStampInterval = TimeSpan.FromSeconds(1);
         void PushToResponseMessage(string text, ImmutableList<ToolCallEntry> toolCalls,
             ImmutableList<NodeChangeEntry> updatedNodes,
             string? agentName, string? modelName,
@@ -1007,6 +1070,26 @@ public static class ThreadExecution
                 _ => { },
                 ex => logger.LogWarning(ex,
                     "[ThreadExec] cache.Update failed for {Path}", responsePath));
+
+            // Heartbeat stamp on the OWN thread. Throttled to one write per
+            // heartbeatStampInterval so the streaming hot path (Sample(100ms))
+            // doesn't spam thread-node writes — one per interval is plenty
+            // since the heartbeat scanner runs every 5 s and the timeout is
+            // 30 s. Single source of "is this sub-thread still alive?" the
+            // parent's heartbeat scanner reads via cache.GetStream(threadPath).
+            var now = DateTime.UtcNow;
+            if (now - lastActivityStamped > heartbeatStampInterval)
+            {
+                lastActivityStamped = now;
+                parentHub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
+                {
+                    if (node?.Content is not MeshThread t) return node!;
+                    return node with { Content = t with { LastActivityAt = now } };
+                }).Subscribe(
+                    _ => { },
+                    ex => logger.LogDebug(ex,
+                        "[ThreadExec] LastActivityAt stamp failed for {Path}", threadPath));
+            }
         }
 
         var execLogger = parentHub.ServiceProvider.GetService<ILoggerFactory>()
@@ -1182,61 +1265,55 @@ public static class ThreadExecution
                 StringBuilder? capturedResponseText = null;
                 client.ForwardNodeChange = entry => { lock (logLock) { nodeChangeLog = nodeChangeLog.Add(entry); } };
                 string? currentStatus = null;
-                client.UpdateDelegationStatus = status =>
+                // Subscribe to delegation lifecycle events. On Dispatched, stamp
+                // the path onto the first unmatched delegate_to tool-call entry
+                // and push the response. Replaces the legacy UpdateDelegationStatus
+                // callback (which keyed by display-name string). The subscription
+                // is disposed in the finally block at end of the round.
+                IDisposable? delegationStampSub = client is AgentChatClient ac
+                    ? ac.Delegations
+                        .Where(evt => evt.Phase == MeshWeaver.AI.Delegation.DelegationLifecycle.Dispatched)
+                        .Subscribe(evt =>
                 {
-                    currentStatus = status;
-                    logger.LogDebug("[ThreadExec] DELEGATION_STATUS: threadPath={ThreadPath}, status={Status}, delegationPaths=[{Paths}], toolCallLogSize={LogSize}",
-                        threadPath, status, string.Join(",", chatClient.DelegationPaths.Select(kv => $"{kv.Key}={kv.Value}")),
-                        toolCallLog.Count);
-                    // Push immediately when delegation path becomes available —
-                    // the streaming loop is blocked during tool execution so the
-                    // throttle block never runs. This ensures the parent message
-                    // shows the delegation link while the sub-thread executes.
-                    if (chatClient.DelegationPaths.TryGetValue(status, out var delPath))
+                    logger.LogDebug(
+                        "[ThreadExec] DELEGATION_DISPATCHED: threadPath={ThreadPath}, subPath={SubPath}, callId={CallId}, toolCallLogSize={LogSize}",
+                        threadPath, evt.SubThreadPath, evt.CallId, toolCallLog.Count);
+                    var stamped = false;
+                    ImmutableList<ToolCallEntry> snapshotLog;
+                    ImmutableList<NodeChangeEntry> snapshotNodes;
+                    string textSnapshot;
+                    lock (logLock)
                     {
-                        // Stamp the path on the first unmatched delegation tool call
-                        var stamped = false;
-                        ImmutableList<ToolCallEntry> snapshotLog;
-                        ImmutableList<NodeChangeEntry> snapshotNodes;
-                        string textSnapshot;
-                        lock (logLock)
+                        toolCallLog = toolCallLog.Select(e =>
                         {
-                            toolCallLog = toolCallLog.Select(e =>
+                            if (!stamped && e.Name.StartsWith("delegate_to") && e.DelegationPath == null)
                             {
-                                if (!stamped && e.Name.StartsWith("delegate_to") && e.DelegationPath == null)
-                                {
-                                    stamped = true;
-                                    logger.LogDebug("[ThreadExec] DELEGATION_STAMPED: name={Name} delPath={DelPath}",
-                                        e.Name, delPath);
-                                    return e with { DelegationPath = delPath };
-                                }
-                                return e;
-                            }).ToImmutableList();
-                            snapshotLog = toolCallLog;
-                            snapshotNodes = nodeChangeLog;
-                            // StringBuilder.ToString() is NOT thread-safe with concurrent
-                            // Append — it walks an internal chunk list. The streaming task
-                            // is Append-ing words for the "Delegation completed successfully"
-                            // text concurrently with this callback running on the sub-thread's
-                            // grain scheduler. Without the lock, ToString throws
-                            // ArgumentOutOfRangeException("index") mid-walk — the exact failure
-                            // OrleansDelegationTest.Delegation_ToolCallsAppear_WithDelegationPath
-                            // hits at line 167.
-                            textSnapshot = capturedResponseText?.ToString() ?? "";
-                        }
-                        if (!stamped)
-                            logger.LogWarning("[ThreadExec] DELEGATION_NO_STAMP: status={Status} — no unmatched delegate_to entry to stamp (logSize={LogSize})",
-                                status, snapshotLog.Count);
-                        // Preserve any previously streamed text
-                        PushToResponseMessage(textSnapshot, snapshotLog, snapshotNodes,
-                            request.AgentName, request.ModelName);
+                                stamped = true;
+                                logger.LogDebug("[ThreadExec] DELEGATION_STAMPED: name={Name} delPath={DelPath} callId={CallId}",
+                                    e.Name, evt.SubThreadPath, evt.CallId);
+                                return e with { DelegationPath = evt.SubThreadPath };
+                            }
+                            return e;
+                        }).ToImmutableList();
+                        snapshotLog = toolCallLog;
+                        snapshotNodes = nodeChangeLog;
+                        // StringBuilder.ToString() is NOT thread-safe with concurrent
+                        // Append — guard with logLock (same primitive as every other
+                        // toolCallLog mutation; otherwise mid-walk ToString throws
+                        // ArgumentOutOfRangeException, the original OrleansDelegationTest
+                        // line 167 failure).
+                        textSnapshot = capturedResponseText?.ToString() ?? "";
                     }
-                    else
-                    {
-                        logger.LogDebug("[ThreadExec] DELEGATION_STATUS_NO_PATH: status={Status} — no entry in DelegationPaths yet (set when ExecuteDelegationAsync runs)",
-                            status);
-                    }
-                };
+                    if (!stamped)
+                        logger.LogWarning("[ThreadExec] DELEGATION_NO_STAMP: subPath={SubPath} — no unmatched delegate_to entry to stamp (logSize={LogSize})",
+                            evt.SubThreadPath, snapshotLog.Count);
+                    // Push immediately so the parent message shows the delegation
+                    // link while the sub-thread executes (streaming loop is blocked
+                    // during tool execution; throttle block never runs).
+                    PushToResponseMessage(textSnapshot, snapshotLog, snapshotNodes,
+                        request.AgentName, request.ModelName);
+                        })
+                    : null;
                 // Middleware-side ForwardToolCall: UPDATES the matching bare entry
                 // (added by the streaming branch's FunctionCallContent path) with the
                 // result, instead of skipping. Previously this branch skipped the
@@ -1533,7 +1610,15 @@ public static class ThreadExecution
                     if (!string.IsNullOrEmpty(update.Text))
                         responseText.Append(update.Text);
 
-                    var pathValues = chatClient.DelegationPaths.Values.ToList();
+                    // ActiveDelegationPaths is maintained by AgentChatClient.EmitDelegationEvent
+                    // (Dispatched adds, Terminal removes). Order is non-deterministic for an
+                    // unordered set; the assumption that pathValues[idx] aligns with the
+                    // i-th unmatched delegate_to entry holds only because each Dispatched
+                    // event also fires the same stamp via the Delegations subscription
+                    // installed below — this fallback covers the streaming-loop edge case
+                    // where a delegation lands between Dispatched and the next streaming
+                    // emission, but the subscription is the authoritative stamper.
+                    var pathValues = chatClient.ActiveDelegationPaths.ToList();
                     var pathIdx = 0;
                     toolCallLog = toolCallLog.Select(e =>
                         e.Name.StartsWith("delegate_to") && e.DelegationPath == null && pathIdx < pathValues.Count
@@ -1650,6 +1735,7 @@ public static class ThreadExecution
                     }
                     finally
                     {
+                        delegationStampSub?.Dispose();
                         parentHub.Set<CancellationTokenSource>(null!);
                         executionCts.Dispose();
                         // No per-_Exec stream handle to dispose — writes went through
@@ -2053,7 +2139,7 @@ public static class ThreadExecution
                     var chat = hub.Get<AgentChatClient>();
                     if (chat is not null)
                     {
-                        foreach (var subPath in chat.DelegationPaths.Values)
+                        foreach (var subPath in chat.ActiveDelegationPaths)
                             if (!string.IsNullOrEmpty(subPath))
                                 subPaths = subPaths.Add(subPath);
                     }

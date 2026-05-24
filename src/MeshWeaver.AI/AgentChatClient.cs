@@ -141,14 +141,53 @@ public class AgentChatClient : IAgentChat
     /// <inheritdoc />
     public ThreadExecutionContext? ExecutionContext { get; private set; }
 
-    /// <inheritdoc />
-    public string? LastDelegationPath { get; set; }
+    /// <summary>
+    /// Backing Subject for <see cref="Delegations"/>. ExecuteDelegationAsync
+    /// emits onto this directly; subscribers (cancel watcher, tool-call
+    /// stamper) receive the events on the emitting thread — they're
+    /// expected to defer real work to a Hub.Post handler rather than
+    /// mutating state inline (see plan Slice 2c).
+    /// </summary>
+    private readonly System.Reactive.Subjects.Subject<MeshWeaver.AI.Delegation.DelegationEvent> _delegations = new();
 
     /// <inheritdoc />
-    public ConcurrentDictionary<string, string> DelegationPaths { get; } = new();
+    public IObservable<MeshWeaver.AI.Delegation.DelegationEvent> Delegations => _delegations;
 
-    /// <inheritdoc />
-    public Action<string>? UpdateDelegationStatus { get; set; }
+    /// <summary>
+    /// Internal hook for ExecuteDelegationAsync to emit lifecycle events.
+    /// Public would invite outside-the-agent writes; <c>internal</c> keeps
+    /// the emit surface tied to the agent factory in this assembly.
+    /// </summary>
+    internal void EmitDelegationEvent(MeshWeaver.AI.Delegation.DelegationEvent evt)
+    {
+        switch (evt.Phase)
+        {
+            case MeshWeaver.AI.Delegation.DelegationLifecycle.Dispatched:
+                ImmutableInterlocked.Update(ref _activeDelegationPaths, set => set.Add(evt.SubThreadPath));
+                break;
+            case MeshWeaver.AI.Delegation.DelegationLifecycle.Terminal:
+                ImmutableInterlocked.Update(ref _activeDelegationPaths, set => set.Remove(evt.SubThreadPath));
+                break;
+        }
+        _delegations.OnNext(evt);
+    }
+
+    /// <summary>
+    /// In-memory set of sub-thread paths currently in flight on this chat
+    /// session. Maintained by <see cref="EmitDelegationEvent"/>: Dispatched
+    /// adds, Terminal removes. Read by the cancel watcher in
+    /// <c>ThreadExecution.SetupCancellationWatcher</c> to propagate cancel
+    /// to sub-threads whose paths haven't yet been persisted onto
+    /// <c>Thread.StreamingToolCalls[].DelegationPath</c>, and by the
+    /// streaming-loop's stamp pass that walks unmatched
+    /// <c>delegate_to_agent</c> tool-call entries. Replaces the legacy
+    /// <see cref="DelegationPaths"/> dictionary (which keyed by transient
+    /// display name).
+    /// </summary>
+    private ImmutableHashSet<string> _activeDelegationPaths = ImmutableHashSet<string>.Empty;
+
+    /// <summary>Snapshot of active delegation sub-thread paths.</summary>
+    public ImmutableHashSet<string> ActiveDelegationPaths => _activeDelegationPaths;
 
     /// <inheritdoc />
     public Action<ToolCallEntry>? ForwardToolCall { get; set; }

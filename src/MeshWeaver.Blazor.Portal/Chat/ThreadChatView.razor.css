@@ -101,6 +101,17 @@
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+.thread-exec-elapsed {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.78rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--neutral-foreground-hint);
+    padding: 2px 8px;
+    border: 1px solid var(--neutral-stroke-rest);
+    border-radius: 10px;
+    background: var(--neutral-layer-1);
+    flex: 0 0 auto;
+}
 .thread-exec-cancel {
     display: inline-flex;
     align-items: center;
@@ -729,6 +740,28 @@
     font-size: 0.72rem;
     color: var(--neutral-foreground-hint);
     margin-bottom: 6px;
+    align-items: center;
+}
+
+.thread-msg-elapsed {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-variant-numeric: tabular-nums;
+    padding: 1px 6px;
+    border: 1px solid var(--neutral-stroke-rest);
+    border-radius: 8px;
+    background: var(--neutral-layer-1);
+    color: var(--neutral-foreground-hint);
+}
+
+.thread-msg-elapsed-live {
+    color: var(--accent-fill-rest);
+    border-color: var(--accent-fill-rest);
+    animation: thread-msg-elapsed-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes thread-msg-elapsed-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.55; }
 }
 
 .thread-msg-inline-actions {
@@ -972,9 +1005,29 @@
 .thread-runtime-subthread-title {
     font-weight: 600;
     font-size: 0.88rem;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.thread-runtime-subthread-title-text {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    flex: 1 1 auto;
+}
+
+.thread-runtime-subthread-elapsed {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 0.72rem;
+    font-weight: 500;
+    color: var(--accent-fill-rest);
+    padding: 1px 6px;
+    border: 1px solid var(--accent-fill-rest);
+    border-radius: 8px;
+    flex: 0 0 auto;
 }
 
 .thread-runtime-subthread-preview {

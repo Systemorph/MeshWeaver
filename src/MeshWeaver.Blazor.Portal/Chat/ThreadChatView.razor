@@ -87,6 +87,18 @@ else
                                 {
                                     <span>@state.Timestamp.Value.ToString("HH:mm:ss")</span>
                                 }
+                                @* Stream duration:
+                                   • Status == Streaming → live (ticker-driven, "0:12")
+                                   • CompletedAt set     → frozen final ("1:23")
+                                   • Otherwise (legacy bubbles loaded without Status/CompletedAt) → omit. *@
+                                @if (state.Status == "Streaming" && state.Timestamp.HasValue)
+                                {
+                                    <span class="thread-msg-elapsed thread-msg-elapsed-live" title="Streaming...">@FormatElapsed(state.Timestamp)</span>
+                                }
+                                else if (state.Timestamp.HasValue && state.CompletedAt.HasValue)
+                                {
+                                    <span class="thread-msg-elapsed" title="Stream duration">@FormatElapsed(state.Timestamp, state.CompletedAt)</span>
+                                }
                             </div>
                         }
 
@@ -225,6 +237,13 @@ else
             <div class="thread-exec-header">
                 <span class="thread-exec-star">&#10041;</span>
                 <span class="thread-exec-status">@(ThreadViewModel.ExecutionStatus ?? "Generating response...")</span>
+                @* Elapsed-time chip — driven by the 1 s ticker installed in OnInitialized.
+                   ExecutionStartedAt is null until the round flips Status → Executing, so
+                   the chip auto-hides for the brief StartingExecution window. *@
+                @if (ThreadViewModel.ExecutionStartedAt is { } started)
+                {
+                    <span class="thread-exec-elapsed" title="Elapsed since round started">@FormatElapsed(started)</span>
+                }
                 <button class="thread-exec-cancel" @onclick="CancelExecution">
                     <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="opacity: 0.7;"><rect x="3" y="3" width="10" height="10" rx="1"/></svg>
                     Stop
@@ -283,7 +302,16 @@ else
                         <a class="thread-runtime-subthread-card" href="/@path" title="@subTitle">
                             <img src="@subIcon" alt="" class="thread-runtime-subthread-icon" />
                             <div class="thread-runtime-subthread-body">
-                                <div class="thread-runtime-subthread-title">@subTitle</div>
+                                <div class="thread-runtime-subthread-title">
+                                    <span class="thread-runtime-subthread-title-text">@subTitle</span>
+                                    @* Elapsed-time chip for the sub-thread — null StartedAt
+                                       means the sub-thread is in StartingExecution and
+                                       hasn't flipped LastActivityAt yet; chip auto-hides. *@
+                                    @if (header.StartedAt is { } subStarted)
+                                    {
+                                        <span class="thread-runtime-subthread-elapsed" title="Elapsed since sub-thread started">@FormatElapsed(subStarted)</span>
+                                    }
+                                </div>
                                 <div class="thread-runtime-subthread-preview">@preview</div>
                             </div>
                             <span class="thread-runtime-subthread-pulse" aria-hidden="true">●</span>

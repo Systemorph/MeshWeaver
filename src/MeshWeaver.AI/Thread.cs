@@ -245,6 +245,30 @@ public record Thread
     public DateTime? ExecutionStartedAt { get; init; }
 
     /// <summary>
+    /// Wall clock of the most recent "the agent is still making progress"
+    /// signal — streaming text deltas, tool-call activity, status changes.
+    /// Written atomically with those events in the OWNING thread hub's
+    /// action block (no extra writes, no race). Read by the parent thread
+    /// hub's heartbeat watcher: if <c>IsExecuting=true</c> AND
+    /// <c>(now - LastActivityAt) &gt; HeartbeatTimeout</c> (with a 60 s
+    /// cold-start grace measured from <see cref="ExecutionStartedAt"/>),
+    /// the watcher flips <see cref="RequestedCancellationAt"/> on this
+    /// sub-thread — the same primitive the GUI Stop button uses. Replaces
+    /// the hard 5-minute watchdog in <c>ExecuteDelegationAsync</c>.
+    /// </summary>
+    public DateTime? LastActivityAt { get; init; }
+
+    /// <summary>
+    /// Per-thread override of the framework-default heartbeat timeout
+    /// (30 s). Set by an agent that legitimately makes slow progress
+    /// (e.g. non-streaming chat client with long single-shot completions).
+    /// Null → use default. The 60 s cold-start grace is applied
+    /// regardless, so the value can be aggressive without false-positives
+    /// on cold start.
+    /// </summary>
+    public TimeSpan? HeartbeatTimeout { get; init; }
+
+    /// <summary>
     /// User requested cancellation of the in-flight round. The thread hub's
     /// cancel watcher observes its own thread node and, when
     /// <c>RequestedCancellationAt &gt; ExecutionStartedAt</c>, cancels the

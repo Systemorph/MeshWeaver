@@ -100,7 +100,13 @@ public static class AIExtensions
             .WithType(typeof(ThreadExecutionContext), nameof(ThreadExecutionContext))
             // ChatHistoryEntry removed — ChatHistory uses string[] to avoid $type issues
             .WithType(typeof(SaveContentRequest), nameof(SaveContentRequest))
-            .WithType(typeof(SaveContentResponse), nameof(SaveContentResponse));
+            .WithType(typeof(SaveContentResponse), nameof(SaveContentResponse))
+            // Delegation lifecycle messages — race-free hub-serialized delegation.
+            .WithType(typeof(Delegation.CreateDelegationSubThread), nameof(Delegation.CreateDelegationSubThread))
+            .WithType(typeof(Delegation.DelegationSubThreadCreated), nameof(Delegation.DelegationSubThreadCreated))
+            .WithType(typeof(Delegation.SubThreadStateChanged), nameof(Delegation.SubThreadStateChanged))
+            .WithType(typeof(Delegation.HeartbeatTick), nameof(Delegation.HeartbeatTick))
+            .WithType(typeof(Delegation.CancelDelegationSubThread), nameof(Delegation.CancelDelegationSubThread));
 
     extension(IServiceCollection services)
     {

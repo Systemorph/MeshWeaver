@@ -230,6 +230,23 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         // Subscribe to side panel menu actions
         SidePanelState.OnActionRequested += OnSidePanelAction;
 
+        // 1-second ticker for elapsed-time chips on the exec bar, sub-thread cards,
+        // and per-bubble streaming chips. Only fires StateHasChanged when something's
+        // executing — silent on idle threads so we don't burn render cycles when
+        // there's nothing to update.
+        elapsedTicker = System.Reactive.Linq.Observable
+            .Interval(TimeSpan.FromSeconds(1))
+            .Subscribe(_ =>
+            {
+                if (_isDisposed) return;
+                var anyExecuting =
+                    ThreadViewModel?.IsExecuting == true
+                    || delegationHeaders.Values.Any(h => h.IsExecuting)
+                    || messageStates.Values.Any(s => s.Status == "Streaming");
+                if (anyExecuting)
+                    InvokeAsync(StateHasChanged);
+            });
+
         // Track navigation changes — subscribe to the reactive NavigationContext stream.
         _navContextSubscription = NavigationService.NavigationContext
             .Subscribe(ctx => { _currentNavContext = ctx; OnNavigationContextChanged(ctx); });
@@ -1330,7 +1347,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         DateTime? Timestamp,
         string? Text,
         IReadOnlyList<ToolCallEntry>? ToolCalls,
-        IReadOnlyList<NodeChangeEntry>? UpdatedNodes);
+        IReadOnlyList<NodeChangeEntry>? UpdatedNodes,
+        string? Status = null,
+        DateTime? CompletedAt = null);
 
     private readonly Dictionary<string, MessageBubbleState> messageStates = new();
     private readonly Dictionary<string, IDisposable> messageSubs = new();
@@ -1350,13 +1369,16 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// drives the runtime panel — running sub-threads show a live row, completed
     /// ones drop out. <see cref="ExecutionStatus"/> + <see cref="StreamingText"/>
     /// feed the inline progress preview ("Calling search_nodes…" / first 120 chars
-    /// of the streaming response).</summary>
+    /// of the streaming response). <see cref="StartedAt"/> drives the elapsed-time
+    /// chip; null on a freshly-created sub-thread before its first
+    /// StartingExecution → Executing flip.</summary>
     private record DelegationHeader(
         string? Title,
         string? Icon,
         bool IsExecuting,
         string? ExecutionStatus,
-        string? StreamingText);
+        string? StreamingText,
+        DateTime? StartedAt);
 
     /// <summary>delegationPath → live header (Title + Icon) so the chip can show
     /// the sub-thread's actual name instead of just the agent's name. Populated by
@@ -1491,8 +1513,15 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         IReadOnlyList<NodeChangeEntry>? updatedNodes = je.TryGetProperty("updatedNodes", out var unProp)
             && unProp.ValueKind == JsonValueKind.Array
                 ? unProp.Deserialize<List<NodeChangeEntry>>(Hub.JsonSerializerOptions) : null;
+        // Status + CompletedAt drive the per-bubble duration chip — "1:23" while
+        // Streaming (live ticker), "1:23 ✓" once Completed (frozen final value).
+        var status = je.TryGetProperty("status", out var stProp) && stProp.ValueKind == JsonValueKind.String
+            ? stProp.GetString() : null;
+        DateTime? completedAt = je.TryGetProperty("completedAt", out var caProp)
+            && caProp.ValueKind == JsonValueKind.String
+            && DateTime.TryParse(caProp.GetString(), out var ca) ? ca : null;
 
-        var newState = new MessageBubbleState(role, author, modelName, timestamp, text, toolCalls, updatedNodes);
+        var newState = new MessageBubbleState(role, author, modelName, timestamp, text, toolCalls, updatedNodes, status, completedAt);
         var prev = messageStates.GetValueOrDefault(id);
         if (Equals(prev, newState)) return;
 
@@ -1579,6 +1608,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         bool isExecuting = false;
         string? executionStatus = null;
         string? streamingText = null;
+        DateTime? startedAt = null;
         if (node.Content is not null)
         {
             var je = ToJsonElement(node.Content, Hub.JsonSerializerOptions);
@@ -1598,6 +1628,11 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 executionStatus = esProp.GetString();
             if (je.TryGetProperty("streamingText", out var stProp) && stProp.ValueKind == JsonValueKind.String)
                 streamingText = stProp.GetString();
+            // Drives the elapsed-time chip on the sub-thread card.
+            if (je.TryGetProperty("executionStartedAt", out var startProp)
+                && startProp.ValueKind == JsonValueKind.String
+                && startProp.TryGetDateTime(out var parsed))
+                startedAt = parsed;
         }
 
         var header = new DelegationHeader(
@@ -1605,7 +1640,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             Icon: string.IsNullOrEmpty(node.Icon) ? null : node.Icon,
             IsExecuting: isExecuting,
             ExecutionStatus: executionStatus,
-            StreamingText: streamingText);
+            StreamingText: streamingText,
+            StartedAt: startedAt);
         var prev = delegationHeaders.GetValueOrDefault(path);
         if (Equals(prev, header)) return;
         delegationHeaders[path] = header;
@@ -1772,6 +1808,32 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     }
 
     /// <summary>
+    /// Compact elapsed-time formatter for "how long has this been running".
+    /// Returns <c>"0:12"</c> for &lt; 1 h, <c>"1:23:45"</c> for &gt;= 1 h.
+    /// Negative or null clamps to <c>"0:00"</c> so a clock-skew anomaly
+    /// doesn't render <c>-3:14</c>.
+    /// </summary>
+    private static string FormatElapsed(DateTime? startedAt, DateTime? endedAt = null)
+    {
+        if (startedAt is null) return "0:00";
+        var end = endedAt ?? DateTime.UtcNow;
+        var span = end - startedAt.Value;
+        if (span < TimeSpan.Zero) span = TimeSpan.Zero;
+        return span.TotalHours >= 1
+            ? $"{(int)span.TotalHours}:{span.Minutes:D2}:{span.Seconds:D2}"
+            : $"{span.Minutes}:{span.Seconds:D2}";
+    }
+
+    /// <summary>
+    /// 1-second ticker that drives the elapsed-time chips' re-render. Subscribed
+    /// in <see cref="OnInitialized"/>; disposed in <see cref="DisposeAsync"/>.
+    /// Only triggers <see cref="StateHasChanged"/> when <em>something</em> is
+    /// executing (own thread or a sub-thread) — silent otherwise so an idle
+    /// thread view doesn't burn render cycles every second.
+    /// </summary>
+    private IDisposable? elapsedTicker;
+
+    /// <summary>
     /// Maps a model to its brand badge (label + CSS color class + tooltip).
     /// Anthropic models → tier letter (O/S/H) coloured by tier; OpenAI models →
     /// stripped GPT version (4o, o1, etc.); other providers → first two letters.
@@ -1817,6 +1879,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         if (!_isDisposed)
         {
             _isDisposed = true;
+            elapsedTicker?.Dispose();
             _navContextSubscription?.Dispose();
             agentSubscription?.Dispose();
             modelSubscription?.Dispose();

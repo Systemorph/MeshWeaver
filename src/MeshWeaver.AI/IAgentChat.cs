@@ -1,4 +1,5 @@
-﻿using MeshWeaver.AI.Persistence;
+﻿using MeshWeaver.AI.Delegation;
+using MeshWeaver.AI.Persistence;
 using MeshWeaver.Layout;
 using Microsoft.Extensions.AI;
 
@@ -75,24 +76,15 @@ public interface IAgentChat
     ThreadExecutionContext? ExecutionContext => null;
 
     /// <summary>
-    /// Path of the last delegation sub-thread created. Consumed by ThreadExecution
-    /// after each delegation tool call completes.
-    /// Deprecated: use DelegationPaths dictionary for parallel-safe delegation tracking.
+    /// Live stream of delegation lifecycle events
+    /// (Dispatched → Active → Terminal). Single source of truth for
+    /// "which sub-threads is this chat session waiting on?" The cancel
+    /// watcher subscribes here and maintains its own active-set; the
+    /// tool-call stamper writes the path onto the parent's tool-call entry
+    /// on the Dispatched event.
     /// </summary>
-    string? LastDelegationPath { get => null; set { } }
-
-    /// <summary>
-    /// Thread-safe mapping of delegation display name to sub-thread path.
-    /// Supports parallel delegations without race conditions.
-    /// </summary>
-    System.Collections.Concurrent.ConcurrentDictionary<string, string> DelegationPaths
-        => new();
-
-    /// <summary>
-    /// Callback to update delegation status on the parent execution context.
-    /// Set by ThreadExecution, called by delegation tools to forward sub-agent progress.
-    /// </summary>
-    Action<string>? UpdateDelegationStatus { get => null; set { } }
+    IObservable<DelegationEvent> Delegations
+        => System.Reactive.Linq.Observable.Empty<DelegationEvent>();
 
     /// <summary>
     /// Callback to forward tool call entries from sub-threads to the parent's tool call log.
