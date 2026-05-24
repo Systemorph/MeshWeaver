@@ -110,9 +110,8 @@ public class MeshQuery : IMeshQueryCore
     /// is merged via <see cref="Observable.Merge{TSource}(IEnumerable{IObservable{TSource}})"/>,
     /// path-deduped + satellite-filtered, sorted on completion, and emitted as a
     /// final pruned stream. Pure-IObservable end-to-end — no IAsyncEnumerable, no
-    /// Task.Run, no await. Per the hosted-hub-async rule, individual providers
-    /// own their own async I/O execution context (each provider's hosted hub);
-    /// the merge here just composes observables.
+    /// Task.Run, no await. Per-provider impls own their own scheduler escape at the
+    /// storage-adapter leaf (where async I/O actually happens).
     /// </summary>
     private static IObservable<QuerySuggestion> MergeAutocompleteStreams(
         IEnumerable<IObservable<QuerySuggestion>> sources,

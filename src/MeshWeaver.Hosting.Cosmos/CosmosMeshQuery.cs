@@ -211,7 +211,10 @@ public class CosmosMeshQuery : IMeshQueryProvider
             Path: basePath,
             Scope: QueryScope.Descendants);
 
+        // 🚨 Storage-adapter leaf — SubscribeOn(TaskPoolScheduler.Default) so the
+        // Cosmos SDK roundtrip never runs on the calling hub's ActionBlock.
         return _adapter.QueryNodesAsync(query).ToObservableSequence()
+            .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default)
             .Where(node => _meshConfiguration?.AutocompleteExcludedNodeTypes.Contains(node.NodeType ?? "") != true
                 && (context == null
                     || (_meshConfiguration?.IsExcludedFromContext(node.NodeType, context) != true

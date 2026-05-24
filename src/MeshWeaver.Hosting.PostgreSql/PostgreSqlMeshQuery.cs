@@ -418,8 +418,12 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
         var acUserId = _accessService?.Context?.ObjectId;
         var effectiveAutocompleteUserId = string.IsNullOrEmpty(acUserId) ? WellKnownUsers.Anonymous : acUserId;
 
-        // Bridge the IAsyncEnumerable from the storage adapter at the leaf to IObservable.
+        // 🚨 Storage-adapter leaf: bridge IAsyncEnumerable → IObservable AND escape
+        // to TaskPoolScheduler so the Npgsql roundtrip never runs on the calling
+        // hub's ActionBlock. SubscribeOn lives HERE (the very edge where we hit
+        // the DB) per AsynchronousCalls.md — never higher in the chain.
         return _adapter.QueryNodesAsync(query, options, effectiveAutocompleteUserId).ToObservableSequence()
+            .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default)
             .Where(node => _meshConfiguration?.AutocompleteExcludedNodeTypes.Contains(node.NodeType ?? "") != true
                 && (context == null
                     || (_meshConfiguration?.IsExcludedFromContext(node.NodeType, context) != true
