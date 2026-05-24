@@ -759,11 +759,13 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         };
 
         // 🚨 Pure-IObservable pipeline. QueryCoreAsync is still IAsyncEnumerable
-        // internally; bridge it via ToObservableSequence at this boundary (the
-        // existing helper used elsewhere in the codebase). Each emitted MeshNode
-        // is filtered + scored, accumulated into a list, sorted, clipped, then
-        // re-emitted as OnNext events. No await, no Task.Run.
+        // internally; bridge via ToObservableSequence at this boundary then escape
+        // to TaskPoolScheduler.Default — the IAsyncEnumerable iteration would
+        // otherwise capture the calling hub's ActionBlock scheduler and block
+        // it on the storage I/O. SubscribeOn lives HERE (the leaf where we cross
+        // into async I/O) per the AsynchronousCalls.md rule — never higher.
         return QueryCoreAsync(queryRequest, options).ToObservableSequence()
+            .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default)
             .Select(obj => obj as MeshNode)
             .Where(node => node is not null
                 && meshConfiguration?.AutocompleteExcludedNodeTypes.Contains(node.NodeType ?? "") != true
