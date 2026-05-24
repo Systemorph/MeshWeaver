@@ -254,7 +254,14 @@ public static class PersistenceExtensions
     public static IServiceCollection AddInMemoryPersistence(this IServiceCollection services)
     {
         services.TryAddSingleton<IStorageAdapter>(sp =>
-            new InMemoryStorageAdapter(sp.GetService<ILogger<InMemoryStorageAdapter>>()));
+            new InMemoryStorageAdapter(
+                sp.GetService<ILogger<InMemoryStorageAdapter>>(),
+                // The in-memory adapter publishes IDataChangeNotifier events for
+                // auth-relevant nodeTypes — equivalent to the PG mirror trigger.
+                // Without this notifier wired up, synced auth queries
+                // (GetTokensForUser etc.) never see writes under the in-memory
+                // backend.
+                sp.GetService<IDataChangeNotifier>()));
         RegisterDefaultAssemblyStore(services);
         return services.AddCoreAndWrapperServices();
     }
