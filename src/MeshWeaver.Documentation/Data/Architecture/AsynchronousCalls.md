@@ -142,6 +142,66 @@ When a routed `IRequest<T>` comes back as a `DeliveryFailure` saying *"No handle
 
 It's *almost never* a "the `WithHandler<X>` line is missing" bug. Always verify the type-registry parity first — a message that deserializes into the wrong CLR type can never match the handler filter `d is IMessageDelivery<X>`.
 
+## 🚨 Subscription callback → `hub.Post` → handler (don't do work directly in `Subscribe`)
+
+When a long-lived `IObservable<T>` (workspace stream, synced query, change feed) drives action on a hub, the `Subscribe` callback fires on **whatever scheduler the upstream emits on** — often the workspace's emission thread, sometimes a thread-pool task from a downstream operator, occasionally the hub's own ActionBlock. Putting non-trivial work in that callback couples the work to an unpredictable thread and routinely deadlocks: the callback walks into `workspace.GetQuery(...)` (cold cache → upstream Subscribe), or `meshService.CreateNode(...)` (posts to mesh hub and waits on the same hub's ActionBlock), and the chain blocks because the thread that holds the lock is the one that needs to free it.
+
+**Rule:** the `Subscribe` callback does ONE thing — `hub.Post(new TriggerMessage(...))` to a hub that owns the work. A registered handler on that hub picks the message off the ActionBlock and runs the logic there. The ActionBlock is the single-threaded actor for that hub; serialisation, re-entrancy, and ordering are all handled by the inbox.
+
+```csharp
+// ❌ WRONG — fires on workspace emission scheduler; does dispatch in-line.
+// Symptom: the dispatch walks into GetQuery's cold cache; cache's first
+// Subscribe needs the same hub to make progress; deadlock.
+ownStream
+    .Where(node => node.Content is NodeTypeDefinition def
+                   && def.CompilationStatus == CompilationStatus.Pending)
+    .Subscribe(pendingNode =>
+    {
+        workspace.GetMeshNodeStream().Update(curr => ... Compiling ...)
+            .Subscribe(_ =>
+                NodeTypeCompilationActivity.Start(hub, hubPath, logger)
+                    .Subscribe(activityPath =>
+                        hub.Post(new RunCompileRequest(hubPath, snapshot),
+                                 o => o.WithTarget(new Address(activityPath)))));
+    });
+
+// ✅ RIGHT — subscription posts; handler runs on the hub's ActionBlock.
+ownStream
+    .Where(node => node.Content is NodeTypeDefinition def
+                   && def.CompilationStatus == CompilationStatus.Pending)
+    .Subscribe(pendingNode =>
+        hub.Post(new DispatchCompileTrigger(pendingNode), o => o.WithTarget(hub.Address)));
+
+// Handler is registered on the per-NodeType hub in MeshDataSource:
+//   .WithHandler<DispatchCompileTrigger>(NodeTypeCompilationHelpers.HandleDispatchCompile)
+// The handler body owns the Pending→Compiling transition, activity dispatch,
+// and inline fallback. It runs on the ActionBlock — single-threaded — so the
+// status check + Update is implicitly atomic and no in-memory `dispatchInFlight`
+// flag is needed for the work itself (the Subscribe callback above keeps an
+// in-memory coalesce flag to avoid flooding the inbox with redundant Posts on
+// rapid Pending re-emissions; that flag is for back-pressure, not correctness).
+internal static IMessageDelivery HandleDispatchCompile(
+    IMessageHub hub, IMessageDelivery<DispatchCompileTrigger> request)
+{
+    var workspace = hub.GetWorkspace();
+    workspace.GetMeshNodeStream().Update(curr =>
+        curr.Content is NodeTypeDefinition def
+        && def.CompilationStatus == CompilationStatus.Pending
+            ? curr with { Content = def with { CompilationStatus = CompilationStatus.Compiling } }
+            : curr)
+        .Subscribe(...);
+    return request.Processed();
+}
+```
+
+**Why this matters specifically for `Subscribe` on the workspace stream:** the workspace's `MeshNodeReference` reducer emits on the thread that applied the change. When the change came from a hub message, that's the hub's ActionBlock. When it came from a remote stream, it's the workspace emission scheduler. The callback inherits whichever — and an `Update` chained off it inherits again. Anything downstream that needs a different scheduler (e.g. `GetQuery`'s `Task.Factory.StartNew(... TaskScheduler.Default)`) starts on thread-pool but its **continuation** captures the calling context. By the time you've chained three `.Subscribe`s deep, you've created a scheduler graph nobody can reason about.
+
+The `hub.Post` indirection breaks the graph: the post returns immediately, the Subscribe callback completes, and the handler runs on the well-defined ActionBlock thread of the target hub. Reasoning becomes local again.
+
+**Canonical reference:** `NodeTypeCompilationHelpers.InstallCompileWatcher` + `HandleDispatchCompile`. The watcher subscribes to the per-NodeType hub's own MeshNode stream filtered on `CompilationStatus == Pending`; on emission it posts `DispatchCompileTrigger` to its own hub address; the handler runs on that hub's ActionBlock and owns the Pending→Compiling transition + activity dispatch.
+
+**When `Subscribe` may run the work directly:** read-only display work that emits to a `BehaviorSubject` (no upstream calls), or a closure that simply tears down a disposable on a terminal event. Anything that touches `workspace.GetQuery`, `workspace.GetMeshNodeStream(remotePath)`, `meshService.CreateNode/UpdateNode`, or any `hub.Post` whose response your continuation awaits — move it behind a `hub.Post` + handler.
+
 ## Streams are reactive — subscribe, don't snapshot
 
 `ISynchronizationStream<T>` is consumed via `.Select(...)` / `.Where(...)` / `.Subscribe(...)`. The framework's snapshot accessor is `internal` — application code can't see it, so the temptation to `.Current?.Value` doesn't exist. If a sync handler needs a value it can't subscribe for, the handler is wrong: derive it from the request payload, or defer the work to a follow-up message posted from inside `Subscribe`.
