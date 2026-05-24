@@ -180,6 +180,16 @@ public static class MeshDataSourceExtensions
             .WithHandler<GetCompilationPathRequest>(NodeTypeContractHandler.Handle)
             .WithHandler<CreateReleaseRequest>(HandleCreateRelease)
             .WithHandler<RunTestsRequest>(HandleRunTests)
+            // Compile-dispatch handler: InstallCompileWatcher posts
+            // DispatchCompileTrigger when it observes Status=Pending. The
+            // handler runs on this hub's ActionBlock — single-threaded, no
+            // cross-scheduler ambiguity — and owns the Pending→Compiling
+            // transition + activity dispatch. Routing the work through a
+            // hub message instead of executing in the watcher's Subscribe
+            // callback eliminates the deadlock where the callback fired on
+            // the workspace emission thread and waited on a GetQuery
+            // cold-cache (Acme TodoDataChangeWorkflowTest layout-area hang).
+            .WithHandler<DispatchCompileTrigger>(NodeTypeCompilationHelpers.HandleDispatchCompile)
             // Persistence I/O handlers: MeshNodeTypeSource posts these instead of
             // calling IStorageAdapter directly from the workspace update pipeline.
             // Routing them through the hub's actor inbox serialises writes per node

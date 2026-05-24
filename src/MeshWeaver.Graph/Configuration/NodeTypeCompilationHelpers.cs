@@ -11,6 +11,24 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
+/// Internal fire-and-forget message posted by <see cref="NodeTypeCompilationHelpers.InstallCompileWatcher"/>
+/// when it observes a Pending → Compiling transition request on the NodeType's
+/// own MeshNode. The handler (<see cref="NodeTypeCompilationHelpers.HandleDispatchCompile"/>)
+/// runs on the per-NodeType hub's ActionBlock — that is the single-threaded
+/// dispatcher that owns "drive a compile for this NodeType." Routing the
+/// dispatch through a message instead of executing in the watcher's Subscribe
+/// callback eliminates the cross-scheduler deadlock where the callback fired on
+/// the workspace emission thread and synchronously waited on a GetQuery
+/// cold-cache (Acme layout-area-render hang, 2026-05-24).
+/// </summary>
+/// <param name="PendingNode">Snapshot of the NodeType MeshNode at the moment
+/// CompilationStatus = Pending was observed. The handler ships it inside
+/// <see cref="RunCompileRequest"/> so the activity reads the trigger-time
+/// state (ReleaseNotes etc.) without re-fetching through the mesh-hub-cached
+/// remote stream.</param>
+public record DispatchCompileTrigger(MeshNode PendingNode);
+
+/// <summary>
 /// Static helpers for NodeType compilation, owned by the per-NodeType hub
 /// (the actor that "is" the NodeType). The hub is at <c>Address(nodeTypePath)</c>;
 /// its own <see cref="MeshNode"/> carries every property the compile needs
@@ -151,6 +169,30 @@ internal static class NodeTypeCompilationHelpers
                 && def.CompilationStatus is not CompilationStatus.Pending
                                           and not CompilationStatus.Compiling)
             .Subscribe(_ => System.Threading.Interlocked.Exchange(ref dispatchInFlight, 0));
+        // 🚨 The watcher's Subscribe callback fires on whatever scheduler
+        // ownStream emits on — typically the workspace's emission thread,
+        // which can coincide with the per-NodeType hub's ActionBlock when
+        // the originating Update ran there. Doing the dispatch work
+        // (workspace.Update + activity Start + GetQuery cold-cache wait)
+        // directly inside that callback can deadlock: the GetQuery
+        // upstream's Initial fires on the SyncedQueryProvider's thread-pool
+        // task, but downstream Subscribers wanting to call back into the
+        // same hub queue behind the ActionBlock that's still in this
+        // callback. Symptom: ACME/Project Status=Compiling, then 28 s of
+        // silence, then test timeout (Acme TodoDataChangeWorkflowTest
+        // layout-area renders pre-fix).
+        //
+        // Fix: the watcher does NOTHING but post `DispatchCompileTrigger`
+        // to the OWN hub. The handler (HandleDispatchCompile, registered
+        // on the per-NodeType hub via MeshDataSource) runs on the hub's
+        // ActionBlock — guaranteed single-threaded, no scheduler ambiguity,
+        // no deadlock window. Single-flight is now status-based: the
+        // handler checks `CompilationStatus == Pending` on the OWN
+        // MeshNode; if another DispatchCompileTrigger already transitioned
+        // to Compiling, the second one no-ops. The in-memory
+        // `dispatchInFlight` flag still coalesces post bursts at the
+        // Subscribe layer so we don't flood the inbox with redundant
+        // messages on rapid Pending re-emissions.
         var watcherSub = ownStream
             .Where(node => node?.Content is NodeTypeDefinition def
                 && def.CompilationStatus == CompilationStatus.Pending
@@ -167,8 +209,8 @@ internal static class NodeTypeCompilationHelpers
             .Subscribe(
                 pendingNode =>
                 {
-                    // Coalesce duplicate Pending emissions into one activity.
-                    // First dispatcher wins; followers no-op until status
+                    // Coalesce duplicate Pending emissions into one ActionBlock
+                    // message. First post wins; followers no-op until status
                     // transitions out of Pending/Compiling (handled by resetSub).
                     if (System.Threading.Interlocked.CompareExchange(ref dispatchInFlight, 1, 0) != 0)
                     {
@@ -177,122 +219,13 @@ internal static class NodeTypeCompilationHelpers
                             hubPath);
                         return;
                     }
-                    logger?.LogDebug("Compile watcher: saw Pending for {HubPath} — attempting Pending → Compiling", hubPath);
-                    // Atomic Pending → Compiling transition. CompareExchange
-                    // semantics inside the Update lambda: only the caller that
-                    // observes status == Pending wins; others see Compiling
-                    // (already transitioned by us) and return curr unchanged.
-                    // The flag closes over THIS subscribe-handler invocation
-                    // (a separate local per emission), so concurrent watcher
-                    // emissions for the same logical Pending burst each get
-                    // their own `weTransitioned` and only ONE flips to true.
-                    var weTransitioned = false;
-                    workspace.GetMeshNodeStream().Update(curr =>
-                        {
-                            if (curr.Content is not NodeTypeDefinition def) return curr;
-                            if (def.CompilationStatus != CompilationStatus.Pending) return curr;
-                            weTransitioned = true;
-                            return curr with
-                            {
-                                Content = def with
-                                {
-                                    CompilationStatus = CompilationStatus.Compiling,
-                                    LastCompileStartedAt = DateTimeOffset.UtcNow
-                                }
-                            };
-                        })
-                        .Take(1)
-                        .Subscribe(
-                            compilingSnapshot =>
-                            {
-                                if (!weTransitioned)
-                                {
-                                    logger?.LogDebug("Compile watcher: another caller already transitioned {HubPath} out of Pending — skipping dispatch", hubPath);
-                                    // Someone else owns the transition; release the
-                                    // single-flight gate so the resetSub on the
-                                    // terminal status doesn't strand it forever
-                                    // (the terminal emission may already have fired
-                                    // before we got here).
-                                    System.Threading.Interlocked.Exchange(ref dispatchInFlight, 0);
-                                    return;
-                                }
-
-                                // Activity Control Plane: every long-running
-                                // operation runs on an Activity hub
-                                // (Doc/Architecture/ActivityControlPlane.md).
-                                // We already flipped Compiling above; the
-                                // activity OWNS the terminal write (Ok/Error +
-                                // LatestAssembly{Collection,Path} + Release
-                                // node creation). Single-writer per stage.
-                                var meshService = hub.ServiceProvider.GetService<IMeshService>();
-                                if (meshService is null)
-                                {
-                                    // Inline fallback when no IMeshService can
-                                    // create the activity (early bootstrap /
-                                    // minimal test fixture).
-                                    logger?.LogDebug("Compile watcher: activity unavailable for {HubPath}, running inline", hubPath);
-                                    RunCompile(workspace, hub, compilationService, pendingNode!, request: null);
-                                    return;
-                                }
-
-                                // Track whether activity Start emitted an
-                                // OnNext. If it completes without emitting
-                                // (Empty — happens when CreateNode swallows an
-                                // exception via the Catch in
-                                // NodeTypeCompilationActivity.Start), fall back
-                                // to inline RunCompile so the watcher doesn't
-                                // strand the NodeType in Compiling forever.
-                                // Without this fallback, EnrichWithNodeType's
-                                // slow path waits the full SlowPathTimeout
-                                // before applying the compilation-error
-                                // overlay — the deadlock surfaced as
-                                // AsiaRe_Overview_ShouldRender taking 30 s+
-                                // on cold-start runs.
-                                logger?.LogInformation(
-                                    "[COMPILE-TRACE] Compile watcher: starting activity for {HubPath}",
-                                    hubPath);
-                                var activityEmitted = false;
-                                // Capture the post-Compiling node (the Update's
-                                // emission, which IS the just-applied OWN state)
-                                // and ship it inside RunCompileRequest. The
-                                // activity reads it directly instead of going
-                                // through the mesh-hub-cached remote stream —
-                                // race-free even when MESH's view lags the
-                                // trigger writes that produced this Pending.
-                                // Falls back to the Pending-state snapshot if
-                                // the Compiling write didn't emit a value
-                                // (defensive — shouldn't happen with Update's
-                                // contract).
-                                var snapshot = compilingSnapshot ?? pendingNode;
-                                NodeTypeCompilationActivity.Start(hub, hubPath, logger!)
-                                    .Subscribe(
-                                        activityPath =>
-                                        {
-                                            activityEmitted = true;
-                                            logger?.LogInformation(
-                                                "[COMPILE-TRACE] Compile watcher: activity created at {ActivityPath} for {HubPath} — posting RunCompileRequest",
-                                                activityPath, hubPath);
-                                            hub.Post(new RunCompileRequest(hubPath, snapshot),
-                                                o => o.WithTarget(new Address(activityPath)));
-                                        },
-                                        ex => logger?.LogWarning(ex,
-                                            "[COMPILE-TRACE] Compile watcher: activity start faulted for {HubPath}", hubPath),
-                                        () =>
-                                        {
-                                            if (activityEmitted) return;
-                                            logger?.LogWarning(
-                                                "[COMPILE-TRACE] Compile watcher: activity start emitted EMPTY for {HubPath} — running compile inline (deadlock-fallback)",
-                                                hubPath);
-                                            RunCompile(workspace, hub, compilationService, pendingNode!, request: null);
-                                        });
-                            },
-                            ex =>
-                            {
-                                // Release the gate so a retry can take over.
-                                System.Threading.Interlocked.Exchange(ref dispatchInFlight, 0);
-                                logger?.LogWarning(ex,
-                                    "Compile watcher: Pending→Compiling transition faulted for {HubPath}", hubPath);
-                            });
+                    logger?.LogDebug(
+                        "Compile watcher: saw Pending for {HubPath} — posting DispatchCompileTrigger to OWN hub",
+                        hubPath);
+                    // Fire-and-forget. ActionBlock picks it up and runs
+                    // HandleDispatchCompile on the hub's thread.
+                    hub.Post(new DispatchCompileTrigger(pendingNode!),
+                        o => o.WithTarget(hub.Address));
                 },
                 ex => logger?.LogWarning(ex,
                     "Compile watcher faulted for {HubPath}", hub.Address.Path));
@@ -779,6 +712,93 @@ internal static class NodeTypeCompilationHelpers
     ///     <c>CreateReleaseResponse</c> can be returned to the requester.</item>
     /// </list></para>
     /// </summary>
+
+    /// <summary>
+    /// Per-NodeType-hub handler for <see cref="DispatchCompileTrigger"/>. Runs on
+    /// the hub's ActionBlock — the single-threaded actor for "this NodeType."
+    /// Owns the Pending → Compiling transition + activity dispatch (or inline
+    /// fallback). Status-based single-flight: if the OWN MeshNode already shows
+    /// Compiling (a sibling trigger raced ahead), the handler no-ops.
+    /// </summary>
+    public static IMessageDelivery HandleDispatchCompile(
+        IMessageHub hub, IMessageDelivery<DispatchCompileTrigger> request)
+    {
+        var hubPath = hub.Address.Path;
+        var logger = hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
+            .CreateLogger("MeshWeaver.Graph.CompileWatcher");
+        var workspace = hub.GetWorkspace();
+        var compilationService = hub.ServiceProvider.GetRequiredService<IMeshNodeCompilationService>();
+        var pendingNode = request.Message.PendingNode;
+
+        logger.LogInformation(
+            "[COMPILE-TRACE] HandleDispatchCompile: ENTERED on {HubPath}",
+            hubPath);
+
+        // Atomic Pending → Compiling transition. ActionBlock serialises
+        // messages so two DispatchCompileTriggers cannot run in parallel —
+        // the second sees Status=Compiling and the Update lambda short-circuits.
+        var weTransitioned = false;
+        workspace.GetMeshNodeStream().Update(curr =>
+            {
+                if (curr.Content is not NodeTypeDefinition def) return curr;
+                if (def.CompilationStatus != CompilationStatus.Pending) return curr;
+                weTransitioned = true;
+                return curr with
+                {
+                    Content = def with
+                    {
+                        CompilationStatus = CompilationStatus.Compiling,
+                        LastCompileStartedAt = DateTimeOffset.UtcNow
+                    }
+                };
+            })
+            .Take(1)
+            .Subscribe(
+                compilingSnapshot =>
+                {
+                    if (!weTransitioned)
+                    {
+                        logger.LogInformation(
+                            "[COMPILE-TRACE] HandleDispatchCompile: status already past Pending on {HubPath} — skipping dispatch",
+                            hubPath);
+                        return;
+                    }
+
+                    var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+                    logger.LogInformation(
+                        "[COMPILE-TRACE] HandleDispatchCompile: starting activity for {HubPath}",
+                        hubPath);
+                    var activityEmitted = false;
+                    var snapshot = compilingSnapshot ?? pendingNode;
+                    NodeTypeCompilationActivity.Start(hub, hubPath, logger)
+                        .Subscribe(
+                            activityPath =>
+                            {
+                                activityEmitted = true;
+                                logger.LogInformation(
+                                    "[COMPILE-TRACE] HandleDispatchCompile: activity created at {ActivityPath} for {HubPath} — posting RunCompileRequest",
+                                    activityPath, hubPath);
+                                hub.Post(new RunCompileRequest(hubPath, snapshot),
+                                    o => o.WithTarget(new Address(activityPath)));
+                            },
+                            ex => logger.LogWarning(ex,
+                                "[COMPILE-TRACE] HandleDispatchCompile: activity start faulted for {HubPath}", hubPath),
+                            () =>
+                            {
+                                if (activityEmitted) return;
+                                logger.LogWarning(
+                                    "[COMPILE-TRACE] HandleDispatchCompile: activity start emitted EMPTY for {HubPath} — running compile inline",
+                                    hubPath);
+                                RunCompile(workspace, hub, compilationService, pendingNode, request: null);
+                            });
+                },
+                ex => logger.LogWarning(ex,
+                    "[COMPILE-TRACE] HandleDispatchCompile: Pending→Compiling Update faulted for {HubPath}",
+                    hubPath));
+
+        return request.Processed();
+    }
+
     public static void RunCompile(
         IWorkspace workspace,
         IMessageHub hub,

@@ -353,6 +353,13 @@ public static class MeshNodeExtensions
         typeRegistry.WithType(typeof(CreateReleaseResponse), nameof(CreateReleaseResponse));
         typeRegistry.WithType(typeof(RunTestsRequest), nameof(RunTestsRequest));
         typeRegistry.WithType(typeof(RunTestsResponse), nameof(RunTestsResponse));
+        // Internal compile-dispatch trigger — InstallCompileWatcher posts
+        // DispatchCompileTrigger to the per-NodeType hub's own address; the
+        // handler runs on the hub's ActionBlock and owns the Pending→Compiling
+        // transition + activity dispatch. Type-registry entry is needed even
+        // for self-post so the framework's routing/serialisation pipeline can
+        // resolve the type-name on the wire.
+        typeRegistry.WithType(typeof(DispatchCompileTrigger), nameof(DispatchCompileTrigger));
         // Release MeshNode Content carries NodeTypeRelease. Without this entry
         // the polymorphic serializer falls back to FullName on the wire,
         // receiving hubs lack a matching short-name registration, and the
