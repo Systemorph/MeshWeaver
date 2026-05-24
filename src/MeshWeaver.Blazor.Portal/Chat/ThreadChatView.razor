@@ -114,63 +114,57 @@ else
                                     var isPending = call.Result == null;
                                     var summary = FormatToolCallSummary(call);
 
-                                    @if (isDelegation && isPending)
+                                    @if (isDelegation)
                                     {
+                                        @* Inline link only — sub-thread progress + status lives in the
+                                           runtime panel below the chat (anchored near the input). Keeps
+                                           the bubble compact and avoids the duplicate "tool call + embedded
+                                           streaming area" the user flagged. *@
                                         var delHeader = GetDelegationHeader(call.DelegationPath);
                                         var title = delHeader?.Title ?? summary;
                                         var icon = delHeader?.Icon ?? "/static/NodeTypeIcons/chat.svg";
-                                        <div class="thread-msg-delegation-entry">
-                                            <div class="thread-msg-delegation-header">
-                                                <img src="@icon" alt="" class="thread-msg-delegation-icon" />
-                                                <a href="/@call.DelegationPath" class="thread-msg-delegation-link thread-msg-delegation-title" title="@title">@title</a>
-                                                <span class="thread-msg-delegation-agent">@summary</span>
-                                                <span class="thread-msg-delegation-pulse" title="streaming">✹</span>
-                                            </div>
-                                            <div class="thread-msg-delegation-stream">
-                                                <LayoutAreaView ViewModel="@(new LayoutAreaControl(call.DelegationPath!, new LayoutAreaReference("Streaming")).WithSpinnerType(SpinnerType.None))"
-                                                                Stream="@Stream" Area="@($"del-{msgId}-{call.DelegationPath}")" />
-                                            </div>
-                                        </div>
+                                        var stateIcon = isPending
+                                            ? "↗"
+                                            : (call.IsSuccess ? "✓" : "✗");
+                                        var stateClass = isPending
+                                            ? "thread-msg-tool-delegation-pending"
+                                            : (call.IsSuccess ? "thread-msg-tool-delegation-ok" : "thread-msg-tool-delegation-error");
+                                        <a href="/@call.DelegationPath"
+                                           class="thread-msg-tool-delegation @stateClass"
+                                           title="@title">
+                                            <span class="thread-msg-tool-delegation-state">@stateIcon</span>
+                                            <img src="@icon" alt="" class="thread-msg-tool-delegation-icon" />
+                                            <span class="thread-msg-tool-delegation-title">@title</span>
+                                            <span class="thread-msg-tool-delegation-agent">@summary</span>
+                                        </a>
                                     }
                                     else
                                     {
                                         var display = FormatToolCallDisplay(call);
                                         var change = display.IsNodeModifying ? FindChange(state.UpdatedNodes, display.Path) : null;
-                                        var doneHeader = isDelegation ? GetDelegationHeader(call.DelegationPath) : null;
-                                        var doneTitle = doneHeader?.Title ?? summary;
-                                        var doneIcon = doneHeader?.Icon ?? "/static/NodeTypeIcons/chat.svg";
 
-                                        <details class="thread-msg-tool-entry @(isDelegation ? "thread-msg-delegation-entry" : "")">
+                                        <details class="thread-msg-tool-entry">
                                             <summary class="thread-msg-tool-entry-name">
                                                 <span class="thread-msg-tool-done @(call.IsSuccess ? "" : "thread-msg-tool-error")">@(call.IsSuccess ? "✓" : "✗")</span>
-                                                @if (isDelegation)
+                                                <span>@display.Verb</span>
+                                                @if (!string.IsNullOrEmpty(display.Path))
                                                 {
-                                                    <img src="@doneIcon" alt="" class="thread-msg-delegation-icon" />
-                                                    <a href="/@call.DelegationPath" class="thread-msg-delegation-link thread-msg-delegation-title" @onclick:stopPropagation title="@doneTitle">@doneTitle</a>
-                                                    <span class="thread-msg-delegation-agent">@summary</span>
+                                                    <text>&nbsp;</text>
+                                                    <a href="/@display.Path" class="thread-msg-tool-path" @onclick:stopPropagation>@display.Path</a>
                                                 }
-                                                else
+                                                @if (change is not null)
                                                 {
-                                                    <span>@display.Verb</span>
-                                                    @if (!string.IsNullOrEmpty(display.Path))
+                                                    @if (change.VersionBefore.HasValue && change.VersionAfter.HasValue)
                                                     {
-                                                        <text>&nbsp;</text>
-                                                        <a href="/@display.Path" class="thread-msg-tool-path" @onclick:stopPropagation>@display.Path</a>
+                                                        <a class="thread-msg-tool-action"
+                                                           href="/@display.Path/VersionDiff?from=@(change.VersionBefore)&to=@(change.VersionAfter)"
+                                                           @onclick:stopPropagation>Diff</a>
                                                     }
-                                                    @if (change is not null)
+                                                    @if (change.VersionBefore.HasValue)
                                                     {
-                                                        @if (change.VersionBefore.HasValue && change.VersionAfter.HasValue)
-                                                        {
-                                                            <a class="thread-msg-tool-action"
-                                                               href="/@display.Path/VersionDiff?from=@(change.VersionBefore)&to=@(change.VersionAfter)"
-                                                               @onclick:stopPropagation>Diff</a>
-                                                        }
-                                                        @if (change.VersionBefore.HasValue)
-                                                        {
-                                                            <a class="thread-msg-tool-action thread-msg-tool-action-muted"
-                                                               href="/@display.Path/VersionDiff?version=@(change.VersionBefore)"
-                                                               @onclick:stopPropagation>Revert v@(change.VersionBefore)</a>
-                                                        }
+                                                        <a class="thread-msg-tool-action thread-msg-tool-action-muted"
+                                                           href="/@display.Path/VersionDiff?version=@(change.VersionBefore)"
+                                                           @onclick:stopPropagation>Revert v@(change.VersionBefore)</a>
                                                     }
                                                 }
                                             </summary>
@@ -191,21 +185,11 @@ else
                     </div>
                 }
             }
-            @* Queued user messages — entries that were submitted but the inbox
-               has not yet drained into Messages. Renders inline at the end of
-               the chat history so the user sees their submission immediately,
-               even before round dispatch / cell materialisation. Disappears
-               when the inbox drain promotes the id into Messages. *@
-            @if (pendingTexts.Count > 0)
-            {
-                @foreach (var pendingText in pendingTexts)
-                {
-                    <div class="thread-chat-pending-message" @key="@($"pending-{pendingText.GetHashCode()}")">
-                        <FluentIcon Value="@(new Icons.Regular.Size16.Send())" />
-                        <span class="thread-chat-pending-message-text">@pendingText</span>
-                    </div>
-                }
-            }
+            @* Pending user messages (PendingMessageTexts) and running sub-threads
+               moved OUT of the scrollable history into the runtime panel
+               immediately above the input — see `.thread-runtime-panel` below.
+               Keeps the chat history clean (only persisted messages) and pins
+               in-flight state next to the input where the user is acting. *@
             @if (!hasAnyMessage && isCreatingThread)
             {
                 <div class="empty-thread-message">
@@ -255,6 +239,63 @@ else
                so the user sees their submission immediately — including before
                round dispatch starts streaming. The exec-bar no longer duplicates
                the queue display. *@
+        </div>
+    }
+
+    @* ─── Runtime panel ─────────────────────────────────────────────────
+       Pinned just above the chat input. Two sections, top-down:
+         (1) Running sub-threads — live cards for every delegation whose
+             sub-thread currently has IsExecuting=true. Title, icon,
+             ExecutionStatus, and a truncated preview of StreamingText.
+             Drops out the moment the sub-thread settles.
+         (2) Scheduled messages — entries the user typed while a round is
+             in flight. They sit BELOW the running section so the visual
+             ordering matches the lifecycle: "in flight" above,
+             "waiting to be picked up" below. When the round completes
+             and the inbox drains, they get promoted to real messages in
+             the history. *@
+    var runningSubThreads = GetRunningSubThreads().ToList();
+    var runtimeScheduled = ThreadViewModel?.PendingMessageTexts ?? Array.Empty<string>();
+    @if (runningSubThreads.Count > 0 || runtimeScheduled.Count > 0)
+    {
+        <div class="thread-runtime-panel">
+            @if (runningSubThreads.Count > 0)
+            {
+                <div class="thread-runtime-section thread-runtime-subthreads">
+                    <div class="thread-runtime-section-label">Running sub-threads</div>
+                    @foreach (var (path, header) in runningSubThreads)
+                    {
+                        var subIcon = header.Icon ?? "/static/NodeTypeIcons/chat.svg";
+                        var subTitle = header.Title ?? path;
+                        var preview = !string.IsNullOrWhiteSpace(header.StreamingText)
+                            ? TruncateText(header.StreamingText.Trim(), 200)
+                            : (header.ExecutionStatus ?? "Working…");
+                        <a class="thread-runtime-subthread-card" href="/@path" title="@subTitle">
+                            <img src="@subIcon" alt="" class="thread-runtime-subthread-icon" />
+                            <div class="thread-runtime-subthread-body">
+                                <div class="thread-runtime-subthread-title">@subTitle</div>
+                                <div class="thread-runtime-subthread-preview">@preview</div>
+                            </div>
+                            <span class="thread-runtime-subthread-pulse" aria-hidden="true">●</span>
+                        </a>
+                    }
+                </div>
+            }
+            @if (runtimeScheduled.Count > 0)
+            {
+                <div class="thread-runtime-section thread-runtime-scheduled">
+                    <div class="thread-runtime-section-label">
+                        Scheduled <span class="thread-runtime-hint">— waiting for current round to finish</span>
+                    </div>
+                    @foreach (var pendingText in runtimeScheduled)
+                    {
+                        <div class="thread-runtime-scheduled-row" @key="@($"pending-{pendingText.GetHashCode()}")">
+                            <span class="thread-runtime-scheduled-icon" aria-hidden="true">⏳</span>
+                            <span class="thread-runtime-scheduled-text">@pendingText</span>
+                        </div>
+                    }
+                </div>
+            }
         </div>
     }
 
