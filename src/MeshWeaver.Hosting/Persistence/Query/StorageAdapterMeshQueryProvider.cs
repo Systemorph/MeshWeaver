@@ -986,24 +986,37 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             IAsyncEnumerable<object> QueryStream(CancellationToken ct) =>
                 useSecurityFilter ? QueryAsync(request, options, ct) : QueryCoreAsync(request, options, ct);
 
-            // Pure IObservable shape — no Task.Factory.StartNew. The async
-            // IAsyncEnumerable is wrapped via Observable.FromAsync, then pushed
-            // to TaskPoolScheduler.Default via SubscribeOn so no inherited
-            // TaskScheduler (Orleans grain, ASP.NET) is captured by the async
-            // state machine on Subscribe.
+            // Enumerates the IAsyncEnumerable on a fresh thread-pool thread so that
+            // no custom TaskScheduler (Orleans, ASP.NET) is captured by the async
+            // state machine. Task.Factory.StartNew with TaskScheduler.Default is the
+            // explicit form of "run on thread pool, no inherited scheduler" —
+            // Observable.FromAsync's behaviour around captured schedulers was
+            // breaking ObserveQuery downstream (test cancellations / timeouts in
+            // SyncedQueryCrossSilo + SearchQueryTests.ReferenceAutocomplete after
+            // the experimental FromAsync swap in 7fc771b53).
             IObservable<List<(string? Path, T Item)>> RunQuery(CancellationToken ct) =>
-                Observable.FromAsync(async cancel =>
+                Observable.Create<List<(string?, T)>>(inner =>
+                {
+                    System.Threading.Tasks.Task.Factory.StartNew(async () =>
                     {
-                        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, cancel);
                         var results = new List<(string?, T)>();
-                        await foreach (var item in QueryStream(linked.Token))
+                        try
                         {
-                            if (item is T typed)
-                                results.Add((GetItemPath(item), typed));
+                            await foreach (var item in QueryStream(ct))
+                            {
+                                if (item is T typed)
+                                    results.Add((GetItemPath(item), typed));
+                            }
+                            inner.OnNext(results);
+                            inner.OnCompleted();
                         }
-                        return results;
-                    })
-                    .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default);
+                        catch (OperationCanceledException) { inner.OnCompleted(); }
+                        catch (Exception ex) { inner.OnError(ex); }
+                    }, System.Threading.CancellationToken.None,
+                       System.Threading.Tasks.TaskCreationOptions.DenyChildAttach,
+                       System.Threading.Tasks.TaskScheduler.Default);
+                    return System.Reactive.Disposables.Disposable.Empty;
+                });
 
             // Race-fix: subscribe to changeNotifier BEFORE running the initial query so
             // that any NotifyChange events fired during the initial query's I/O window
