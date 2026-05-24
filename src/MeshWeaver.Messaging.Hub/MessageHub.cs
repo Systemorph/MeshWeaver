@@ -158,8 +158,65 @@ public sealed class MessageHub : IMessageHub
     internal void StartMessageProcessing()
     {
         messageService.Start();
+        InstallStaleCallbackScanner();
         if (!Configuration.DeferredInitialization)
             Post(new InitializeHubRequest());
+    }
+
+    /// <summary>Periodic interval for the stale-callback scanner.</summary>
+    internal static readonly TimeSpan StaleCallbackScanInterval = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// A pending callback older than this is logged at Warning. Calibrated to
+    /// catch hangs that the user perceives (10–30 s is "the UI is stuck") while
+    /// staying above legitimate slow request paths (cold-start hub activation,
+    /// first-token agent latency, large query fan-out). Adjust via
+    /// <c>MESHWEAVER_STALE_CALLBACK_MS</c> env var if a deployment has higher
+    /// expected latencies.
+    /// </summary>
+    internal static readonly TimeSpan StaleCallbackThreshold =
+        long.TryParse(Environment.GetEnvironmentVariable("MESHWEAVER_STALE_CALLBACK_MS"), out var ms)
+            && ms > 0
+            ? TimeSpan.FromMilliseconds(ms)
+            : TimeSpan.FromSeconds(30);
+
+    private IDisposable? staleCallbackScannerSub;
+
+    /// <summary>
+    /// Always-on per-hub scanner. Every <see cref="StaleCallbackScanInterval"/>
+    /// snapshots <see cref="SnapshotPendingCallbacks"/>, filters entries older
+    /// than <see cref="StaleCallbackThreshold"/>, and logs them at Warning so
+    /// hangs are observable while in flight (no need to wait for the dispose
+    /// quiesce timeout to surface "we were stuck on X").
+    ///
+    /// <para>Cost: one timer tick per hub every 5 s + one dictionary scan;
+    /// negligible. Disposed in the dispose chain via the existing
+    /// <c>asyncDisposeActions</c>.</para>
+    /// </summary>
+    private void InstallStaleCallbackScanner()
+    {
+        var thresholdMs = (long)StaleCallbackThreshold.TotalMilliseconds;
+        staleCallbackScannerSub = Observable
+            .Interval(StaleCallbackScanInterval)
+            .Subscribe(_ =>
+            {
+                try
+                {
+                    var pending = SnapshotPendingCallbacks();
+                    if (pending.Length == 0) return;
+                    var stale = pending.Where(p => p.AgeMs > thresholdMs).ToArray();
+                    if (stale.Length == 0) return;
+                    TryLog(LogLevel.Warning,
+                        "[STALE-CALLBACK] {Address}: {Count} callback(s) pending > {ThresholdMs}ms: {Detail}",
+                        Address, stale.Length, thresholdMs, FormatPendingCallbacks(stale));
+                }
+                catch (Exception ex)
+                {
+                    TryLog(LogLevel.Debug,
+                        "[STALE-CALLBACK] {Address}: scan tick failed: {Error}",
+                        Address, ex.Message);
+                }
+            });
     }
 
     private readonly ThreadSafeLinkedList<AsyncDelivery> rules = new();
@@ -1145,6 +1202,12 @@ public sealed class MessageHub : IMessageHub
                     }
                     RunLevel = MessageHubRunLevel.Quiescing;
                 }
+
+                // Stop the always-on stale-callback scanner so it doesn't fire
+                // during the quiesce wait (its warnings would be redundant with
+                // [QUIESCE-START]/[QUIESCE-TIMEOUT]). Idempotent dispose.
+                staleCallbackScannerSub?.Dispose();
+                staleCallbackScannerSub = null;
 
                 var initialPendingSnapshot = SnapshotPendingCallbacks();
                 TryLog(LogLevel.Information,
