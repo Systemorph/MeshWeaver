@@ -41,14 +41,34 @@ public class VirtualUserMiddleware(RequestDelegate next, ILogger<VirtualUserMidd
             if (portalApp != null)
             {
                 var accessService = portalApp.Hub.ServiceProvider.GetRequiredService<AccessService>();
+
+                // 🚨 Skip the entire VUser flow when a real-user identity is
+                // already on AccessService — `UserContextMiddleware` runs
+                // BEFORE us in the pipeline (see MemexConfiguration.cs) and
+                // resolves OAuth / Bearer / mesh-User-by-email into
+                // AccessService.Context. Real users sometimes have
+                // `context.User.Identity.IsAuthenticated == false` (e.g.,
+                // the ASP.NET cookie expired but a Bearer token in the
+                // request still resolves a valid user via the cache); without
+                // this guard we'd wastefully provision a guest VUser node
+                // for them AND post the CreateNodeRequest into the portal
+                // hub, which has no handler — the crash the user just hit
+                // on the sub-thread URL.
+                var preExisting = accessService.Context ?? accessService.CircuitContext;
+                if (preExisting is not null && !preExisting.IsVirtual
+                    && !string.IsNullOrEmpty(preExisting.ObjectId))
+                {
+                    await next(context);
+                    return;
+                }
+
                 var (virtualUserId, isNew) = GetOrCreateVirtualUserId(context);
 
                 // Fast path: if the circuit already has a context for this virtual user, reuse it
                 // (avoids mesh call on every request — only needed once per circuit).
-                var existing = accessService.Context ?? accessService.CircuitContext;
-                if (existing is not null && existing.ObjectId == virtualUserId && existing.IsVirtual)
+                if (preExisting is not null && preExisting.ObjectId == virtualUserId && preExisting.IsVirtual)
                 {
-                    accessService.SetContext(existing);
+                    accessService.SetContext(preExisting);
                     await next(context);
                     return;
                 }
