@@ -58,6 +58,39 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
             .Timeout(TimeSpan.FromMilliseconds(timeoutMs))
             .ToTask();
 
+    /// <summary>
+    /// Prime the watcher by writing probe files into a sibling subdirectory
+    /// until the watcher actually delivers a notification for one. Proves
+    /// inotify is live before the real test action runs — replaces "Start()
+    /// returned, sleep N ms and hope" with an observed-event guarantee.
+    /// Bounded by Timeout, not by a guessed delay. Probe paths carry a unique
+    /// GUID marker and live under <c>.prime/</c> so they never match the
+    /// test's own assertions on <c>external/…</c> or <c>docs/…</c>.
+    ///
+    /// <para>Probes are spaced wider than the watcher's debounce window
+    /// (<see cref="FileSystemChangeWatcher.DebounceIntervalMs"/>). A tighter
+    /// schedule keeps resetting the debounce timer with each write, so no
+    /// notification ever fires from the probes themselves.</para>
+    /// </summary>
+    private Task PrimeWatcherAsync(
+        List<DataChangeNotification> notifications,
+        int timeoutMs = 10_000)
+    {
+        var marker = $"prime-{Guid.NewGuid():N}";
+        var probeDir = Path.Combine(_testDirectory, ".prime");
+        Directory.CreateDirectory(probeDir);
+        var stepMs = _watcher.DebounceIntervalMs * 2 + 50;
+        return Observable.Interval(TimeSpan.FromMilliseconds(stepMs))
+            .StartWith(0L)
+            .Do(i => File.WriteAllText(
+                Path.Combine(probeDir, $"{marker}-{i}.json"),
+                "{}"))
+            .Where(_ => notifications.Any(n => n.Path.Contains(marker)))
+            .FirstAsync()
+            .Timeout(TimeSpan.FromMilliseconds(timeoutMs))
+            .ToTask();
+    }
+
     public override void Dispose()
     {
         _watcherInstance?.Dispose();
@@ -80,6 +113,7 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
         _changeNotifier.Subscribe(n => receivedNotifications.Add(n));
 
         _watcher.Start();
+        await PrimeWatcherAsync(receivedNotifications);
 
         // Act - Create a file externally
         var dir = Path.Combine(_testDirectory, "external");
@@ -113,6 +147,7 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
         _changeNotifier.Subscribe(n => receivedNotifications.Add(n));
 
         _watcher.Start();
+        await PrimeWatcherAsync(receivedNotifications);
 
         // Act - Create a file externally
         var dir = Path.Combine(_testDirectory, "external");
@@ -163,12 +198,7 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
         _changeNotifier.Subscribe(n => receivedNotifications.Add(n));
 
         _watcher.Start();
-
-        // Watcher warm-up: FileSystemWatcher.Start returns before inotify is
-        // fully primed (especially on Linux). 100 ms is the empirical floor
-        // below which the watcher misses the first event. Kept as-is — this
-        // is a fixture warm-up, not a propagation wait.
-        await Task.Delay(100);
+        await PrimeWatcherAsync(receivedNotifications);
 
         // Act - Modify the file externally
         await File.WriteAllTextAsync(filePath, """
@@ -211,9 +241,7 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
         _changeNotifier.Subscribe(n => receivedNotifications.Add(n));
 
         _watcher.Start();
-
-        // Watcher warm-up — see ExternalFileModification_NotifiesObservers.
-        await Task.Delay(100);
+        await PrimeWatcherAsync(receivedNotifications);
 
         // Act - Delete the file externally
         File.Delete(filePath);
@@ -246,8 +274,7 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
         _changeNotifier.Subscribe(n => receivedNotifications.Add(n));
 
         _watcher.Start();
-        // Watcher warm-up.
-        await Task.Delay(100);
+        await PrimeWatcherAsync(receivedNotifications);
 
         // Act - Delete the file externally
         File.Delete(filePath);
@@ -273,6 +300,7 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
         _changeNotifier.Subscribe(n => receivedNotifications.Add(n));
 
         _watcher.Start();
+        await PrimeWatcherAsync(receivedNotifications);
 
         // Act - Create a markdown file externally
         var dir = Path.Combine(_testDirectory, "docs");
@@ -335,6 +363,7 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
         _changeNotifier.Subscribe(n => receivedNotifications.Add(n));
 
         _watcher.Start();
+        await PrimeWatcherAsync(receivedNotifications);
 
         // Create a file to verify watcher is working
         var dir = Path.Combine(_testDirectory, "external");
@@ -370,20 +399,23 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
         _changeNotifier.Subscribe(n => receivedNotifications.Add(n));
 
         _watcher.Start();
+        await PrimeWatcherAsync(receivedNotifications);
 
         var dir = Path.Combine(_testDirectory, "external");
         Directory.CreateDirectory(dir);
         var filePath = Path.Combine(dir, "node1.json");
 
-        // Act - Make rapid changes to the same file
+        // Act - Make rapid changes to the same file. The 20 ms waits keep the
+        // writes inside the 50 ms debounce window so the watcher coalesces them.
         await File.WriteAllTextAsync(filePath, """{ "id": "node1", "name": "v1" }""");
         await Task.Delay(20);
         await File.WriteAllTextAsync(filePath, """{ "id": "node1", "name": "v2" }""");
         await Task.Delay(20);
         await File.WriteAllTextAsync(filePath, """{ "id": "node1", "name": "v3" }""");
 
-        // Wait for debounce
-        await Task.Delay(500);
+        // Wait until the debounced notification for node1 lands — replaces a
+        // fixed Task.Delay(500) that races the debounce timer on slow CI.
+        await WaitForNotification(receivedNotifications, n => n.Path.Contains("external/node1"));
 
         // Assert - Changes should be debounced (not necessarily 3 separate notifications)
         // The exact count depends on timing, but we should have at least one

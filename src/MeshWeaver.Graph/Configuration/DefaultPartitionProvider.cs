@@ -19,7 +19,13 @@ internal class DefaultPartitionProvider : IStaticNodeProvider
         yield return CreatePartition("Admin", "admin", "System administration",
             tableMappings: PartitionDefinition.StandardTableMappings);
 
-        yield return CreatePartition("User", "user", "User profiles, settings, and user-scoped data",
+        // Central auth-lookup partition. The per-partition mirror trigger
+        // (mirror_access_object_to_auth_schema, V27) lands User / Group /
+        // Role / VUser / ApiToken rows here — namespace and id preserved
+        // from the source row — so token validation, role/group lookup, and
+        // email→user resolution become single-schema queries instead of
+        // cross-partition fan-outs.
+        yield return CreatePartition("Auth", "auth", "Auth lookup partition: User / Group / Role / VUser / ApiToken mirrors from every source partition",
             tableMappings: PartitionDefinition.StandardTableMappings);
 
         yield return CreatePartition("Portal", "portal", "Portal sessions",
