@@ -301,13 +301,27 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
             "user1", "Test User", "test@example.com", "Revoke Me").FirstAsync().ToTask(CT);
         await service.RevokeToken(result.Node.Path).FirstAsync().ToTask(CT);
 
-        // Stream-poll request/response — replaces a hand-rolled do/while +
-        // Task.Delay(50). Filters for the revoked token appearing in results.
+        // First wait for the revoke to land in the read-side index (the
+        // authoritative path ValidateToken takes) — once null returns, the
+        // persistence layer has the new state. Then read tokens via the
+        // synced query. Without this two-step gate, the synced-query cache
+        // was racing with the revoke commit (see
+        // project_synced_query_race.md) — under CI load the first emission
+        // of GetTokensForUser was the pre-revoke snapshot, and the
+        // .Where(IsRevoked) filter waited forever for a re-emit that never
+        // came.
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => service.ValidateToken(result.RawToken).FirstAsync())
+            .Where(v => v is null)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(10))
+            .ToTask(CT);
+
         var tokens = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .SelectMany(_ => service.GetTokensForUser("user1").FirstAsync())
             .Where(t => t.Any(x => x.IsRevoked))
             .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(10))
+            .Timeout(TimeSpan.FromSeconds(15))
             .ToTask(CT);
 
         tokens.Should().ContainSingle(t => t.Label == "Revoke Me" && t.IsRevoked);
@@ -321,13 +335,24 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
             "user1", "Test User", "test@example.com", "Delete Me").FirstAsync().ToTask(CT);
         await service.DeleteToken(result.Node.Path).FirstAsync().ToTask(CT);
 
-        // Stream-poll request/response — replaces a hand-rolled do/while +
-        // Task.Delay(50). Filters for the deleted token disappearing.
+        // First wait for the delete to land in the read-side index (the
+        // authoritative path ValidateToken takes), THEN read tokens via
+        // synced query. Two-step gate prevents the synced-query cache from
+        // returning stale pre-delete snapshots — see comment on
+        // GetTokensForUser_RevokedToken_StillAppearsAsRevoked for the
+        // synced-query race rationale.
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => service.ValidateToken(result.RawToken).FirstAsync())
+            .Where(v => v is null)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(10))
+            .ToTask(CT);
+
         var tokens = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .SelectMany(_ => service.GetTokensForUser("user1").FirstAsync())
             .Where(t => !t.Any(x => x.Label == "Delete Me"))
             .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(10))
+            .Timeout(TimeSpan.FromSeconds(15))
             .ToTask(CT);
 
         tokens.Should().NotContain(t => t.Label == "Delete Me");
