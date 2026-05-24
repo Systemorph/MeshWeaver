@@ -320,9 +320,19 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             var updated = update(current);
                             if (ReferenceEquals(updated, current) || Equals(updated, current))
                             {
-                                diagLogger?.LogDebug(
-                                    "[UpdateRemote] NO-OP hub={Hub} target={Path} — lambda returned unchanged",
-                                    _workspace.Hub.Address, _path);
+                                // 🚨 Lambda returned same instance — usually means
+                                // a typed pattern match (`curr.Content is MeshThread t`)
+                                // failed because Content is still JsonElement
+                                // (framework didn't deserialize to the registered
+                                // type). Log at Warning so the silent no-op is
+                                // visible without enabling Debug — otherwise a
+                                // stream.Update() that "succeeds" with no
+                                // observable effect (see CancelStream test failure
+                                // mode where RequestedCancellationAt stayed null).
+                                diagLogger?.LogWarning(
+                                    "[UpdateRemote] NO-OP hub={Hub} target={Path} contentType={ContentType} — lambda returned unchanged; check the lambda's content-type pattern match",
+                                    _workspace.Hub.Address, _path,
+                                    current.Content?.GetType().Name ?? "<null>");
                                 observer.OnNext(current);
                                 observer.OnCompleted();
                                 return;
@@ -400,21 +410,30 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                 return;
                             }
 
-                            // Wait for the next non-null emission from the remote stream
-                            // — that's the owner's echo of the merged state. Complete then.
-                            var postSub = remoteStream
-                                .Skip(1)
-                                .Where(c => c.Value is not null)
-                                .Take(1)
-                                .Timeout(TimeSpan.FromSeconds(10))
-                                .Subscribe(
-                                    c =>
-                                    {
-                                        observer.OnNext(c.Value!);
-                                        observer.OnCompleted();
-                                    },
-                                    observer.OnError);
-                            composite.Add(postSub);
+                            // 🚨 Return the LOCALLY-COMPUTED `updated` snapshot
+                            // optimistically — not "next non-null emission" from
+                            // the remote stream.
+                            //
+                            // Why not echo-from-stream:
+                            // - The first emission is always the full initial sync;
+                            //   subsequent emissions can be deltas/intermediate
+                            //   state with partial content.
+                            // - During streaming, the thread node emits many times
+                            //   per round ([JsonIgnore] StreamingText /
+                            //   StreamingToolCalls mutations etc.), so any "wait for
+                            //   N-th emission" heuristic races.
+                            // - The patch is posted with the caller's AccessContext;
+                            //   if RLS rejects it, observer.OnError fires below
+                            //   (and the post delivery error path triggers).
+                            //   Otherwise the patch IS what the owner commits — the
+                            //   lambda is pure and the merge is RFC 7396 deterministic.
+                            //
+                            // Caller gets the snapshot they asked for. If they want
+                            // the owner's full reconciled state they should re-read
+                            // via GetMeshNodeStream(path).Take(1) — a fresh
+                            // subscription always starts with the full sync emission.
+                            observer.OnNext(updated);
+                            observer.OnCompleted();
                         }
                         catch (Exception ex)
                         {
