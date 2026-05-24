@@ -47,43 +47,33 @@ public interface IMeshQueryProvider
     bool Matches(IReadOnlyList<string> queryNamespaces);
 
     /// <summary>
-    /// Autocomplete query - given a namespace, find best matching subnodes.
+    /// Autocomplete query — given a namespace, find best matching subnodes.
     /// Returns suggestions ordered by path length first (for path-based autocomplete).
+    /// <para>
+    /// 🚨 Returns <see cref="IObservable{T}"/> (not <c>IAsyncEnumerable</c>) so the
+    /// caller hub never blocks. Providers that do async I/O MUST execute that I/O
+    /// inside a hosted hub they own and emit results into this observable from the
+    /// hub's handler — the calling mesh hub just subscribes / posts, never awaits.
+    /// </para>
     /// </summary>
-    /// <param name="basePath">Base path to search from</param>
-    /// <param name="prefix">Prefix to match (partial name/path)</param>
-    /// <param name="options">JSON serializer options for type polymorphism</param>
-    /// <param name="limit">Maximum number of suggestions to return</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Suggestions ordered by path length, then score, then name</returns>
-    IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
+    IObservable<QuerySuggestion> AutocompleteAsync(
         string basePath,
         string prefix,
         JsonSerializerOptions options,
-        int limit = 10,
-        CancellationToken ct = default);
+        int limit = 10);
 
     /// <summary>
     /// Autocomplete query with specified ordering mode.
+    /// <para>Same observable-first contract as the simpler overload — hosted-hub async pattern only.</para>
     /// </summary>
-    /// <param name="basePath">Base path to search from</param>
-    /// <param name="prefix">Prefix to match (partial name/path)</param>
-    /// <param name="options">JSON serializer options for type polymorphism</param>
-    /// <param name="mode">Ordering mode (PathFirst or RelevanceFirst)</param>
-    /// <param name="limit">Maximum number of suggestions to return</param>
-    /// <param name="contextPath">Context path for proximity-based scoring (null for no proximity boost)</param>
-    /// <param name="context">Context for visibility filtering (e.g., "search"). Nodes excluded from this context are hidden.</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Suggestions ordered according to mode</returns>
-    IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
+    IObservable<QuerySuggestion> AutocompleteAsync(
         string basePath,
         string prefix,
         JsonSerializerOptions options,
         AutocompleteMode mode,
         int limit = 10,
         string? contextPath = null,
-        string? context = null,
-        CancellationToken ct = default);
+        string? context = null);
 
     /// <summary>
     /// Creates an observable query that monitors data sources for changes and emits updates.
@@ -159,35 +149,22 @@ public interface IMeshQueryProvider
         int limit = 10,
         string? contextPath = null,
         string? context = null)
-    {
-        // 🚨 Pure-IObservable bridge — no Task.Run. Observable.Create's async
-        // overload runs the iteration on the subscriber's scheduler (which
-        // SubscribeOn at the call site can move off the hub).
-        return System.Reactive.Linq.Observable.Create<IReadOnlyList<QueryResult>>(async (observer, ct) =>
-        {
-            try
+        // Default bridge — accumulate all suggestions emitted by the now-IObservable
+        // AutocompleteAsync surface into a single snapshot list. Pure-IObservable
+        // (no Task.Run, no await foreach) because AutocompleteAsync itself now
+        // returns IObservable<QuerySuggestion>.
+        => AutocompleteAsync(basePath, prefix, options, mode, limit, contextPath, context)
+            .Select(s => new QueryResult
             {
-                var rows = new List<QueryResult>();
-                var providerName = Name;
-                await foreach (var s in AutocompleteAsync(basePath, prefix, options, mode, limit, contextPath, context, ct).ConfigureAwait(false))
-                {
-                    rows.Add(new QueryResult
-                    {
-                        Path = s.Path,
-                        Name = s.Name,
-                        NodeType = s.NodeType,
-                        Icon = s.Icon,
-                        Score = s.Score,
-                        ProviderName = providerName,
-                    });
-                }
-                observer.OnNext(rows);
-                observer.OnCompleted();
-            }
-            catch (OperationCanceledException) { observer.OnCompleted(); }
-            catch (Exception ex) { observer.OnError(ex); }
-        });
-    }
+                Path = s.Path,
+                Name = s.Name,
+                NodeType = s.NodeType,
+                Icon = s.Icon,
+                Score = s.Score,
+                ProviderName = Name,
+            })
+            .ToList()
+            .Select(rows => (IReadOnlyList<QueryResult>)rows);
 
     /// <summary>
     /// Selects a single property value from a node at the given path.

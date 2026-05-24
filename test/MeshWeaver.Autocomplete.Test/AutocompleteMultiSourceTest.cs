@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Reactive;
@@ -475,8 +476,9 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     {
         // AutocompleteAsync with context should boost nearby items
         var suggestions = await MeshQuery
-            .AutocompleteAsync("ACME", "", AutocompleteMode.RelevanceFirst, 30, "ACME/ProductLaunch", ct: TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+            .AutocompleteAsync("ACME", "", AutocompleteMode.RelevanceFirst, 30, "ACME/ProductLaunch")
+            .ToArray()
+            .ToTask(TestContext.Current.CancellationToken);
 
         Output.WriteLine($"ACME autocomplete with context ACME/ProductLaunch:");
         foreach (var s in suggestions.Take(10))
@@ -507,8 +509,9 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     public async Task ShorterPathsWin_WithinSameScoreTier()
     {
         var suggestions = await MeshQuery
-            .AutocompleteAsync("ACME", "", 30, TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+            .AutocompleteAsync("ACME", "", 30)
+            .ToArray()
+            .ToTask(TestContext.Current.CancellationToken);
 
         Output.WriteLine($"ACME children by score then length:");
         foreach (var s in suggestions)
@@ -531,8 +534,9 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     public async Task ShorterPathsWin_ParentBeforeGrandchild()
     {
         var suggestions = await MeshQuery
-            .AutocompleteAsync("ACME", "", AutocompleteMode.RelevanceFirst, 30, ct: TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+            .AutocompleteAsync("ACME", "", AutocompleteMode.RelevanceFirst, 30)
+            .ToArray()
+            .ToTask(TestContext.Current.CancellationToken);
 
         var productLaunch = suggestions.FirstOrDefault(s => s.Path == "ACME/ProductLaunch");
         var todo = suggestions.FirstOrDefault(s => s.Path.StartsWith("ACME/ProductLaunch/Todo/"));
@@ -579,8 +583,9 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     public async Task CrossPartition_GlobalAutocomplete_ReturnsMultiplePartitions()
     {
         var suggestions = await MeshQuery
-            .AutocompleteAsync("", "", 30, TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+            .AutocompleteAsync("", "", 30)
+            .ToArray()
+            .ToTask(TestContext.Current.CancellationToken);
 
         var partitions = suggestions
             .Select(s => s.Path.Split('/')[0])

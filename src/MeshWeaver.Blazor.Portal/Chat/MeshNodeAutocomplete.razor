@@ -77,7 +77,6 @@
                     prefix: searchText ?? "",
                     mode: AutocompleteMode.RelevanceFirst,
                     limit: Options.Limit * 3)
-                .ToObservableSequence()
                 .Scan(System.Collections.Immutable.ImmutableList<QuerySuggestion>.Empty,
                     (acc, s) => acc.Add(s))
                 .Select(acc => (IReadOnlyList<QuerySuggestion>)acc);

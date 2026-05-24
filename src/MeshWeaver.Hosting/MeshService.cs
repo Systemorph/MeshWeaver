@@ -175,14 +175,14 @@ internal sealed class MeshService(
 
     // === Query (delegated to MeshQuery) ===
 
-    public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
-        string basePath, string prefix, int limit = 10, CancellationToken ct = default)
-        => _query.AutocompleteAsync(basePath, prefix, limit, ct);
+    public IObservable<QuerySuggestion> AutocompleteAsync(
+        string basePath, string prefix, int limit = 10)
+        => _query.AutocompleteAsync(basePath, prefix, limit);
 
-    public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
+    public IObservable<QuerySuggestion> AutocompleteAsync(
         string basePath, string prefix, AutocompleteMode mode, int limit = 10,
-        string? contextPath = null, string? context = null, CancellationToken ct = default)
-        => _query.AutocompleteAsync(basePath, prefix, mode, limit, contextPath, context, ct);
+        string? contextPath = null, string? context = null)
+        => _query.AutocompleteAsync(basePath, prefix, mode, limit, contextPath, context);
 
     public IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request)
     {

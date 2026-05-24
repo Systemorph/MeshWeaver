@@ -124,7 +124,8 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
         // Act: autocomplete with "Alpha" prefix (like typing in search bar)
         var suggestions = await MeshQuery
             .AutocompleteAsync("", "Alpha", 20)
-            .ToListAsync();
+            .ToList()
+            .ToTask();
 
         // Assert
         suggestions.Should().Contain(s => s.Path == "AlphaCorp",
@@ -144,7 +145,8 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
         // Act: autocomplete with partial name
         var suggestions = await MeshQuery
             .AutocompleteAsync("", "Beta", 20)
-            .ToListAsync();
+            .ToList()
+            .ToTask();
 
         // Assert
         suggestions.Should().Contain(s => s.Path == "BetaInc",

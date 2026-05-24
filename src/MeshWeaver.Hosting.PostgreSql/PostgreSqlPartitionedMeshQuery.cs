@@ -151,25 +151,23 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
     }
 
     /// <inheritdoc/>
-    public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
+    public IObservable<QuerySuggestion> AutocompleteAsync(
         string basePath,
         string prefix,
         JsonSerializerOptions options,
-        int limit = 10,
-        CancellationToken ct = default)
-        => System.Linq.AsyncEnumerable.Empty<QuerySuggestion>();
+        int limit = 10)
+        => Observable.Empty<QuerySuggestion>();
 
     /// <inheritdoc/>
-    public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
+    public IObservable<QuerySuggestion> AutocompleteAsync(
         string basePath,
         string prefix,
         JsonSerializerOptions options,
         AutocompleteMode mode,
-        int limit,
-        string? context,
-        string? userId,
-        CancellationToken ct = default)
-        => System.Linq.AsyncEnumerable.Empty<QuerySuggestion>();
+        int limit = 10,
+        string? contextPath = null,
+        string? context = null)
+        => Observable.Empty<QuerySuggestion>();
 
     /// <inheritdoc/>
     /// <remarks>Single-path SelectAsync is a scoped operation — leave it to

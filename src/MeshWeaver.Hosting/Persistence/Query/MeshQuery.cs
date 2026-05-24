@@ -71,30 +71,27 @@ public class MeshQuery : IMeshQueryCore
         return combined;
     }
 
-    public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
+    public IObservable<QuerySuggestion> AutocompleteAsync(
         string basePath,
         string prefix,
-        int limit = 10,
-        CancellationToken ct = default)
+        int limit = 10)
     {
         var matched = SelectMatchingProviders(NamespacesForBasePath(basePath));
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<MeshQuery>();
         return MergeAutocompleteStreams(
-            matched.Select(p => p.AutocompleteAsync(basePath, prefix, Options, limit, ct)),
+            matched.Select(p => p.AutocompleteAsync(basePath, prefix, Options, limit)),
             limit,
             applyBoost: null,
-            logger,
-            ct);
+            logger);
     }
 
-    public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
+    public IObservable<QuerySuggestion> AutocompleteAsync(
         string basePath,
         string prefix,
         AutocompleteMode mode,
         int limit = 10,
         string? contextPath = null,
-        string? context = null,
-        CancellationToken ct = default)
+        string? context = null)
     {
         var matched = SelectMatchingProviders(NamespacesForBasePath(basePath));
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<MeshQuery>();
@@ -102,31 +99,28 @@ public class MeshQuery : IMeshQueryCore
             ? null
             : s => ApplyProximityBoost(s, contextPath, prefix);
         return MergeAutocompleteStreams(
-            matched.Select(p => p.AutocompleteAsync(basePath, prefix, Options, mode, limit, contextPath, context, ct)),
+            matched.Select(p => p.AutocompleteAsync(basePath, prefix, Options, mode, limit, contextPath, context)),
             limit,
             applyBoost: boost,
-            logger,
-            ct);
+            logger);
     }
 
     /// <summary>
-    /// Reactive autocomplete fan-out — every per-provider <see cref="IAsyncEnumerable{QuerySuggestion}"/>
-    /// is bridged to <see cref="IObservable{QuerySuggestion}"/> via
-    /// <see cref="ObservableTopNExtensions.ToObservableSequence{T}(IAsyncEnumerable{T})"/>,
-    /// merged with <see cref="Observable.Merge{TSource}(IEnumerable{IObservable{TSource}})"/>,
-    /// path-deduped + satellite-filtered, and finally folded into a single sorted
-    /// snapshot via Subscribe-driven state. NO <c>await</c> in the body — the only
-    /// await lives in <see cref="ObservableTopNExtensions.ToAsyncEnumerableSequence{T}(IObservable{T}, CancellationToken)"/>,
-    /// the canonical bridge from observable to async-enumerable on the public surface.
+    /// Reactive autocomplete fan-out — each per-provider <see cref="IObservable{QuerySuggestion}"/>
+    /// is merged via <see cref="Observable.Merge{TSource}(IEnumerable{IObservable{TSource}})"/>,
+    /// path-deduped + satellite-filtered, sorted on completion, and emitted as a
+    /// final pruned stream. Pure-IObservable end-to-end — no IAsyncEnumerable, no
+    /// Task.Run, no await. Per the hosted-hub-async rule, individual providers
+    /// own their own async I/O execution context (each provider's hosted hub);
+    /// the merge here just composes observables.
     /// </summary>
-    private static IAsyncEnumerable<QuerySuggestion> MergeAutocompleteStreams(
-        IEnumerable<IAsyncEnumerable<QuerySuggestion>> sources,
+    private static IObservable<QuerySuggestion> MergeAutocompleteStreams(
+        IEnumerable<IObservable<QuerySuggestion>> sources,
         int limit,
         Func<QuerySuggestion, QuerySuggestion>? applyBoost,
-        Microsoft.Extensions.Logging.ILogger? logger,
-        CancellationToken ct)
+        Microsoft.Extensions.Logging.ILogger? logger)
     {
-        var streams = sources.Select(s => s.ToObservableSequence()).ToList();
+        var streams = sources.ToList();
         var merged = streams.Count switch
         {
             0 => Observable.Empty<QuerySuggestion>(),
@@ -134,11 +128,6 @@ public class MeshQuery : IMeshQueryCore
             _ => Observable.Merge(streams),
         };
 
-        // Single fold: dedup by path + satellite filter + optional boost into a
-        // ConcurrentBag/Dictionary (already thread-safe — Merge can OnNext from
-        // any provider thread). On OnCompleted the bag is sorted + clipped to
-        // limit; the snapshot is replayed as OnNext events to the downstream
-        // observable, which then bridges back to IAsyncEnumerable.
         return Observable.Create<QuerySuggestion>((Func<IObserver<QuerySuggestion>, IDisposable>)(observer =>
         {
             var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
@@ -163,7 +152,7 @@ public class MeshQuery : IMeshQueryCore
                     }
                     observer.OnCompleted();
                 });
-        })).ToAsyncEnumerableSequence(ct);
+        }));
     }
 
     /// <summary>

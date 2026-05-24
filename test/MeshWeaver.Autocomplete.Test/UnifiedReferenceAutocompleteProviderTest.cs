@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Reactive;
@@ -98,7 +100,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         Output.WriteLine("Querying for Systemorph via IMeshService...");
 
         // Query from root to find Systemorph
-        var suggestions = await MeshQuery.AutocompleteAsync("", "Sys", 10, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        var suggestions = await MeshQuery.AutocompleteAsync("", "Sys", 10).ToArray().ToTask(TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Found {suggestions.Length} suggestions for 'Sys':");
         foreach (var s in suggestions)
@@ -183,8 +185,9 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         // order-independent; without it the test only passed when an earlier
         // test in the shared-mesh class happened to load ACME (it failed in
         // CI's test order).
-        await MeshQuery.AutocompleteAsync("ACME", "Pro", 15, TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+        await MeshQuery.AutocompleteAsync("ACME", "Pro", 15)
+            .ToArray()
+            .ToTask(TestContext.Current.CancellationToken);
 
         // Act - query with "@Pro" (partial match for Project)
         var items = await provider.GetItems("@Pro", null).ToAsyncEnumerableSequence(TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
@@ -299,8 +302,9 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     public async Task MeshQuery_WithBasePath_OnlyReturnsChildren()
     {
         // Verify AutocompleteAsync with basePath scopes results
-        var suggestions = await MeshQuery.AutocompleteAsync("Systemorph", "", 20, TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+        var suggestions = await MeshQuery.AutocompleteAsync("Systemorph", "", 20)
+            .ToArray()
+            .ToTask(TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Children of Systemorph: {suggestions.Length}");
         foreach (var s in suggestions)
@@ -317,8 +321,9 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     public async Task MeshQuery_WithBasePathAndPrefix_FiltersCorrectly()
     {
         // Get all children of Systemorph first
-        var allChildren = await MeshQuery.AutocompleteAsync("Systemorph", "", 20, TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+        var allChildren = await MeshQuery.AutocompleteAsync("Systemorph", "", 20)
+            .ToArray()
+            .ToTask(TestContext.Current.CancellationToken);
 
         if (allChildren.Length == 0)
         {
@@ -330,8 +335,9 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         var firstChild = allChildren[0];
         var prefix = firstChild.Name[..Math.Min(3, firstChild.Name.Length)];
 
-        var filtered = await MeshQuery.AutocompleteAsync("Systemorph", prefix, 20, TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+        var filtered = await MeshQuery.AutocompleteAsync("Systemorph", prefix, 20)
+            .ToArray()
+            .ToTask(TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Filtered '{prefix}' under Systemorph: {filtered.Length} results");
         filtered.Should().AllSatisfy(s =>
@@ -473,8 +479,9 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         // Query with a base path that has children at different depths
-        var suggestions = await meshQuery.AutocompleteAsync("", "", 20, TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+        var suggestions = await meshQuery.AutocompleteAsync("", "", 20)
+            .ToArray()
+            .ToTask(TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Got {suggestions.Length} top-level suggestions:");
         foreach (var s in suggestions)

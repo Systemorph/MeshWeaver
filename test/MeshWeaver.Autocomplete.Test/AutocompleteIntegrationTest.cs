@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Reactive;
@@ -191,8 +192,9 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
     {
         // AutocompleteAsync should now order by score descending, then path length
         var suggestions = await MeshQuery
-            .AutocompleteAsync("", "", 20, TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+            .AutocompleteAsync("", "", 20)
+            .ToArray()
+            .ToTask(TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Top-level suggestions ({suggestions.Length}):");
         foreach (var s in suggestions)
@@ -213,12 +215,14 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
     {
         // Items closer to contextPath should get boosted scores
         var withContext = await MeshQuery
-            .AutocompleteAsync("ACME", "", AutocompleteMode.RelevanceFirst, 20, "ACME", ct: TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+            .AutocompleteAsync("ACME", "", AutocompleteMode.RelevanceFirst, 20, "ACME")
+            .ToArray()
+            .ToTask(TestContext.Current.CancellationToken);
 
         var withoutContext = await MeshQuery
-            .AutocompleteAsync("ACME", "", 20, TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+            .AutocompleteAsync("ACME", "", 20)
+            .ToArray()
+            .ToTask(TestContext.Current.CancellationToken);
 
         Output.WriteLine($"With context 'ACME': {withContext.Length} items");
         foreach (var s in withContext.Take(5))
@@ -243,8 +247,9 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
     {
         // When scores are the same, shorter paths should come first
         var suggestions = await MeshQuery
-            .AutocompleteAsync("ACME", "", 30, TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+            .AutocompleteAsync("ACME", "", 30)
+            .ToArray()
+            .ToTask(TestContext.Current.CancellationToken);
 
         Output.WriteLine($"ACME children ({suggestions.Length}):");
         foreach (var s in suggestions)
@@ -372,8 +377,9 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
     {
         // Global autocomplete (empty basePath) should return nodes from multiple partitions
         var suggestions = await MeshQuery
-            .AutocompleteAsync("", "", 30, TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+            .AutocompleteAsync("", "", 30)
+            .ToArray()
+            .ToTask(TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Global suggestions ({suggestions.Length}):");
         foreach (var s in suggestions)
