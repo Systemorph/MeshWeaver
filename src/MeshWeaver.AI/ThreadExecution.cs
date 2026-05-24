@@ -606,19 +606,11 @@ public static class ThreadExecution
             contextPath: request.ContextPath,
             attachments: request.Attachments);
 
-        // Honor caller-supplied UserMessageId when present — legacy clients
-        // that pre-create the user satellite cell need the queue + Messages
-        // list to use the same id, otherwise the pre-created cell is
-        // orphaned (server allocates a fresh id) and downstream poll-by-id
-        // never sees content. New callers pass null → AppendUserInput
-        // generates one as before.
-        var msgId = ThreadInput.AppendUserInput(
-            hub.GetWorkspace(), threadPath, userMessage,
-            explicitMsgId: request.UserMessageId);
+        var msgId = ThreadInput.AppendUserInput(hub.GetWorkspace(), threadPath, userMessage);
 
         logger?.LogInformation(
-            "[ThreadExec] HandleSubmitMessage: queued via AppendUserInput threadPath={ThreadPath} userMsgId={UserMsgId} explicit={Explicit}",
-            threadPath, msgId, request.UserMessageId is not null);
+            "[ThreadExec] HandleSubmitMessage: queued via AppendUserInput threadPath={ThreadPath} userMsgId={UserMsgId}",
+            threadPath, msgId);
 
         hub.Post(
             new SubmitMessageResponse
