@@ -186,73 +186,86 @@ public class CosmosMeshQuery : IMeshQueryProvider
     }
 
     /// <inheritdoc />
-    public IObservable<QuerySuggestion> AutocompleteAsync(
+    public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
         string basePath,
         string prefix,
         JsonSerializerOptions options,
-        int limit = 10)
-        => AutocompleteAsync(basePath, prefix, options, AutocompleteMode.PathFirst, limit, null, null);
+        int limit = 10,
+        CancellationToken ct = default)
+        => AutocompleteAsync(basePath, prefix, options, AutocompleteMode.PathFirst, limit, null, null, ct);
 
     /// <inheritdoc />
-    public IObservable<QuerySuggestion> AutocompleteAsync(
+    public async IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
         string basePath,
         string prefix,
         JsonSerializerOptions options,
         AutocompleteMode mode,
         int limit = 10,
         string? contextPath = null,
-        string? context = null)
+        string? context = null,
+        [EnumeratorCancellation] CancellationToken ct = default)
     {
         var normalizedPrefix = (prefix ?? "").ToLowerInvariant();
 
+        // Use descendants scope from basePath to find matching nodes
         var query = new ParsedQuery(
             Filter: null,
             TextSearch: string.IsNullOrEmpty(normalizedPrefix) ? null : normalizedPrefix,
             Path: basePath,
             Scope: QueryScope.Descendants);
 
-        // 🚨 Storage-adapter leaf — SubscribeOn(TaskPoolScheduler.Default) so the
-        // Cosmos SDK roundtrip never runs on the calling hub's ActionBlock.
-        return _adapter.QueryNodesAsync(query).ToObservableSequence()
-            .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default)
-            .Where(node => _meshConfiguration?.AutocompleteExcludedNodeTypes.Contains(node.NodeType ?? "") != true
-                && (context == null
-                    || (_meshConfiguration?.IsExcludedFromContext(node.NodeType, context) != true
-                        && node.ExcludeFromContext?.Contains(context) != true)))
-            .Select(node => ScoreOne(node, normalizedPrefix, contextPath))
-            .Where(s => s.Score > 0 || string.IsNullOrEmpty(normalizedPrefix))
-            .ToList()
-            .SelectMany(list => OrderForMode(list, mode).Take(limit));
+        var suggestions = new List<QuerySuggestion>();
+
+        await foreach (var node in _adapter.QueryNodesAsync(query, ct: ct))
+        {
+            // Skip node types excluded from autocomplete
+            if (_meshConfiguration?.AutocompleteExcludedNodeTypes.Contains(node.NodeType ?? "") == true)
+                continue;
+
+            // Context-based exclusion for autocomplete
+            if (context != null)
+            {
+                if (_meshConfiguration?.IsExcludedFromContext(node.NodeType, context) == true)
+                    continue;
+                if (node.ExcludeFromContext?.Contains(context) == true)
+                    continue;
+            }
+
+            var name = node.Name ?? node.Id ?? node.Path ?? "";
+            double score = 0;
+
+            if (name.StartsWith(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
+                score = 100 - (name.Length - normalizedPrefix.Length);
+            else if (name.Contains(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
+                score = 50;
+            else if ((node.Path ?? "").Contains(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
+                score = 30;
+
+            score += PathProximity.ComputeBoost(contextPath, node.Path);
+
+            if (score > 0 || string.IsNullOrEmpty(normalizedPrefix))
+            {
+                suggestions.Add(new QuerySuggestion(node.Path ?? "", name, node.NodeType, score, node.Icon));
+            }
+        }
+
+        IEnumerable<QuerySuggestion> ordered = mode switch
+        {
+            AutocompleteMode.RelevanceFirst => suggestions
+                .OrderByDescending(s => s.Score)
+                .ThenBy(s => s.Path.Length)
+                .ThenBy(s => s.Name),
+            _ => suggestions
+                .OrderBy(s => s.Path.Length)
+                .ThenByDescending(s => s.Score)
+                .ThenBy(s => s.Name)
+        };
+
+        foreach (var suggestion in ordered.Take(limit))
+        {
+            yield return suggestion;
+        }
     }
-
-    private static QuerySuggestion ScoreOne(MeshNode node, string normalizedPrefix, string? contextPath)
-    {
-        var name = node.Name ?? node.Id ?? node.Path ?? "";
-        double score = 0;
-
-        if (name.StartsWith(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
-            score = 100 - (name.Length - normalizedPrefix.Length);
-        else if (name.Contains(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
-            score = 50;
-        else if ((node.Path ?? "").Contains(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
-            score = 30;
-
-        score += PathProximity.ComputeBoost(contextPath, node.Path);
-
-        return new QuerySuggestion(node.Path ?? "", name, node.NodeType, score, node.Icon);
-    }
-
-    private static IEnumerable<QuerySuggestion> OrderForMode(IList<QuerySuggestion> suggestions, AutocompleteMode mode) => mode switch
-    {
-        AutocompleteMode.RelevanceFirst => suggestions
-            .OrderByDescending(s => s.Score)
-            .ThenBy(s => s.Path.Length)
-            .ThenBy(s => s.Name),
-        _ => suggestions
-            .OrderBy(s => s.Path.Length)
-            .ThenByDescending(s => s.Score)
-            .ThenBy(s => s.Name),
-    };
 
     /// <inheritdoc />
     public async Task<T?> SelectAsync<T>(string path, string property, JsonSerializerOptions options, CancellationToken ct = default)

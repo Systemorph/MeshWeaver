@@ -193,7 +193,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
         var ct = new CancellationTokenSource(15.Seconds()).Token;
 
         // Autocomplete for users should return all users (public read)
-        var suggestions = await MeshQuery.AutocompleteAsync("User", "Sam").ToList().ToTask(ct);
+        var suggestions = await MeshQuery.AutocompleteAsync("User", "Sam", ct: ct).ToListAsync(ct);
 
         suggestions.Should().Contain(s => s.Name == "Samuel",
             "Other users should be visible in autocomplete for access control");

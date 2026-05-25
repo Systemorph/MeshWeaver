@@ -135,8 +135,7 @@ public class GlobalSearchAccessTests(ITestOutputHelper output) : MonolithMeshTes
         // Act: autocomplete with prefix "Annual" (like typing in search bar)
         var suggestions = await MeshQuery
             .AutocompleteAsync("acSearch", "Annual", AutocompleteMode.RelevanceFirst, 10)
-            .ToList()
-            .ToTask();
+            .ToListAsync();
         Output.WriteLine($"Autocomplete 'Annual': {suggestions.Count} suggestions");
         foreach (var s in suggestions)
             Output.WriteLine($"  {s.Path}: {s.Name} (score={s.Score})");
@@ -164,8 +163,7 @@ public class GlobalSearchAccessTests(ITestOutputHelper output) : MonolithMeshTes
         // Act: autocomplete with context:search (like the search bar does)
         var suggestions = await MeshQuery
             .AutocompleteAsync("acCtx", "Risk", AutocompleteMode.RelevanceFirst, 10, context: "search")
-            .ToList()
-            .ToTask();
+            .ToListAsync();
         Output.WriteLine($"Autocomplete 'Risk' context:search: {suggestions.Count} suggestions");
         foreach (var s in suggestions)
             Output.WriteLine($"  {s.Path}: {s.Name} ({s.NodeType})");

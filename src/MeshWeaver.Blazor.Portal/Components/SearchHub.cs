@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Channels;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -110,14 +109,9 @@ internal sealed class SearchHub
                 var basePath = lastSlash >= 0 ? afterAt[..lastSlash] : "";
                 var prefix = lastSlash >= 0 ? afterAt[(lastSlash + 1)..] : afterAt;
 
-                // IObservable surface — collect once at the boundary then push
-                // into the channel. No await foreach (producer is IObservable now).
-                var items = await meshService.AutocompleteAsync(
-                        basePath, prefix, AutocompleteMode.RelevanceFirst, req.MaxResults,
-                        req.ContextPath, context: "search")
-                    .ToList()
-                    .ToTask(ct);
-                foreach (var s in items)
+                await foreach (var s in meshService.AutocompleteAsync(
+                    basePath, prefix, AutocompleteMode.RelevanceFirst, req.MaxResults,
+                    req.ContextPath, context: "search", ct))
                     await pending.Writer.WriteAsync(s, ct);
             }
             else

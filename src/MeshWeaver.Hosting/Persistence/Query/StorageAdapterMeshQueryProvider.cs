@@ -700,28 +700,30 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     }
 
     /// <inheritdoc />
-    public IObservable<QuerySuggestion> AutocompleteAsync(
+    public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
         string basePath,
         string prefix,
         JsonSerializerOptions options,
-        int limit = 10)
-        => AutocompleteImpl(basePath, prefix, options, null, AutocompleteMode.PathFirst, limit, null, null);
+        int limit = 10,
+        CancellationToken ct = default)
+        => AutocompleteAsync(basePath, prefix, options, null, AutocompleteMode.PathFirst, limit, null, null, ct);
 
     /// <inheritdoc />
-    public IObservable<QuerySuggestion> AutocompleteAsync(
+    public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
         string basePath,
         string prefix,
         JsonSerializerOptions options,
         AutocompleteMode mode,
         int limit = 10,
         string? contextPath = null,
-        string? context = null)
-        => AutocompleteImpl(basePath, prefix, options, null, mode, limit, contextPath, context);
+        string? context = null,
+        CancellationToken ct = default)
+        => AutocompleteAsync(basePath, prefix, options, null, mode, limit, contextPath, context, ct);
 
     /// <summary>
-    /// Autocomplete with user ID for access control filtering. Observable-first.
+    /// Autocomplete with user ID for access control filtering.
     /// </summary>
-    public IObservable<QuerySuggestion> AutocompleteAsync(
+    public async IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
         string basePath,
         string prefix,
         JsonSerializerOptions options,
@@ -729,22 +731,26 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         AutocompleteMode mode,
         int limit = 10,
         string? contextPath = null,
-        string? context = null)
-        => AutocompleteImpl(basePath, prefix, options, userId, mode, limit, contextPath, context);
-
-    private IObservable<QuerySuggestion> AutocompleteImpl(
-        string basePath,
-        string prefix,
-        JsonSerializerOptions options,
-        string? userId,
-        AutocompleteMode mode,
-        int limit,
-        string? contextPath,
-        string? context)
+        string? context = null,
+        [EnumeratorCancellation] CancellationToken ct = default)
     {
         var normalizedPath = NormalizePath(basePath);
         var normalizedPrefix = prefix ?? "";
 
+        var suggestions = new List<QuerySuggestion>();
+
+        // Per-adapter autocomplete is a thin scoring layer over the QUERY
+        // stream — autocomplete never reads nodes by path itself, never
+        // re-walks the adapter. The query path (FindMatchingNodesAsync via
+        // QueryCoreAsync) handles the scope walk inside this adapter and
+        // returns fully-populated MeshNodes; here we just score them against
+        // the prefix.
+        //
+        // Empty basePath: walk this adapter's full subtree from the root —
+        // the per-adapter is its own boss for "find anything matching prefix"
+        // inside its data. In routed setups, RoutingMeshQueryProvider has
+        // already narrowed basePath to a partition key before calling here,
+        // so the per-adapter never sees a truly empty basePath in routed mode.
         var queryString = string.IsNullOrEmpty(normalizedPath)
             ? "scope:subtree"
             : $"path:{normalizedPath} scope:subtree";
@@ -755,78 +761,102 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             Context = context,
             ContextPath = contextPath,
             UserId = userId,
+            // Over-fetch so the scorer can pick the best matches; the request
+            // limit is enforced post-scoring below.
             Limit = Math.Max(limit * 5, 100),
         };
 
-        // 🚨 Pure-IObservable pipeline. QueryCoreAsync is still IAsyncEnumerable
-        // internally; bridge via ToObservableSequence at this boundary then escape
-        // to TaskPoolScheduler.Default — the IAsyncEnumerable iteration would
-        // otherwise capture the calling hub's ActionBlock scheduler and block
-        // it on the storage I/O. SubscribeOn lives HERE (the leaf where we cross
-        // into async I/O) per the AsynchronousCalls.md rule — never higher.
-        return QueryCoreAsync(queryRequest, options).ToObservableSequence()
-            .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default)
-            .Select(obj => obj as MeshNode)
-            .Where(node => node is not null
-                && meshConfiguration?.AutocompleteExcludedNodeTypes.Contains(node.NodeType ?? "") != true
-                && (context == null || !IsExcludedByContext(node, context)))
-            .Select(node => ScoreOne(node!, normalizedPrefix, contextPath))
-            .Where(s => s.Score > 0)
-            .ToList()
-            .SelectMany(list => OrderForMode(list, mode).Take(limit));
+        await foreach (var obj in QueryCoreAsync(queryRequest, options, ct))
+        {
+            if (obj is not MeshNode node) continue;
+            // Skip node types excluded from autocomplete (configured via AddAutocompleteExcludedTypes)
+            if (meshConfiguration?.AutocompleteExcludedNodeTypes.Contains(node.NodeType ?? "") == true)
+                continue;
+
+            // Context-based exclusion for autocomplete
+            if (context != null && IsExcludedByContext(node, context))
+                continue;
+
+            var name = node.Name ?? node.Id ?? node.Path ?? "";
+            var path = node.Path ?? "";
+
+            // Calculate match score based on prefix match (check both name and path).
+            // Every comparison flows through StringComparison.OrdinalIgnoreCase —
+            // no lowercased copies, no per-char ToLowerInvariant.
+            double score = 0;
+
+            if (string.IsNullOrEmpty(normalizedPrefix))
+            {
+                // Empty prefix = list-all-children at basePath. Every node
+                // would match via the StartsWith("") branch below; the
+                // name-length term then favors children whose Name happens
+                // to be shorter than the parent's (e.g. "LaunchEvent"
+                // < "TaskFlow Product Launch"), pushing grandchildren above
+                // their parents in the ordered result. Bypass the name
+                // scoring and rank purely by depth so parents are always
+                // visited before descendants (repro:
+                // AutocompleteMultiSourceTest.ShorterPathsWin_ParentBeforeGrandchild).
+                score = 100 - (path.Count(c => c == '/') * 10);
+            }
+            // Name matches (higher priority)
+            else if (name.StartsWith(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                score = 100 - (name.Length - normalizedPrefix.Length); // Exact prefix match, shorter is better
+            }
+            else if (name.Contains(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                score = 50 - (name.IndexOf(normalizedPrefix, StringComparison.OrdinalIgnoreCase)); // Contains match
+            }
+            // Path matches (lower priority than name)
+            else if (path.Contains(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                score = 30 - (path.IndexOf(normalizedPrefix, StringComparison.OrdinalIgnoreCase) * 0.1); // Path contains match
+            }
+            else if (FuzzyMatch(name, normalizedPrefix))
+            {
+                score = 25; // Fuzzy match on name
+            }
+
+            // Path-depth penalty for non-empty prefixes too: every additional
+            // segment subtracts 1 so a parent's name match beats a deeper
+            // descendant's name match of equal strength.
+            if (!string.IsNullOrEmpty(normalizedPrefix))
+                score -= path.Count(c => c == '/');
+
+            score += PathProximity.ComputeBoost(contextPath, node.Path);
+
+            if (score > 0)
+            {
+                suggestions.Add(new QuerySuggestion(node.Path ?? "", name, node.NodeType, score, node.Icon));
+            }
+        }
+
+        // Order based on mode
+        IEnumerable<QuerySuggestion> ordered = mode switch
+        {
+            // PathFirst: path length first, then score, then name (for path-based autocomplete like @references)
+            AutocompleteMode.PathFirst => suggestions
+                .OrderBy(s => s.Path.Length)
+                .ThenByDescending(s => s.Score)
+                .ThenBy(s => s.Name),
+
+            // RelevanceFirst: score first (name match > path match > other), then path length, then name (for node selection)
+            AutocompleteMode.RelevanceFirst => suggestions
+                .OrderByDescending(s => s.Score)
+                .ThenBy(s => s.Path.Length)
+                .ThenBy(s => s.Name),
+
+            _ => suggestions
+                .OrderBy(s => s.Path.Length)
+                .ThenByDescending(s => s.Score)
+                .ThenBy(s => s.Name)
+        };
+
+        foreach (var suggestion in ordered.Take(limit))
+        {
+            yield return suggestion;
+        }
     }
-
-    private static QuerySuggestion ScoreOne(MeshNode node, string normalizedPrefix, string? contextPath)
-    {
-        var name = node.Name ?? node.Id ?? node.Path ?? "";
-        var path = node.Path ?? "";
-        double score = 0;
-
-        if (string.IsNullOrEmpty(normalizedPrefix))
-        {
-            // Empty prefix: rank purely by depth so parents come before descendants.
-            score = 100 - (path.Count(c => c == '/') * 10);
-        }
-        else if (name.StartsWith(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
-        {
-            score = 100 - (name.Length - normalizedPrefix.Length);
-        }
-        else if (name.Contains(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
-        {
-            score = 50 - (name.IndexOf(normalizedPrefix, StringComparison.OrdinalIgnoreCase));
-        }
-        else if (path.Contains(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
-        {
-            score = 30 - (path.IndexOf(normalizedPrefix, StringComparison.OrdinalIgnoreCase) * 0.1);
-        }
-        else if (FuzzyMatch(name, normalizedPrefix))
-        {
-            score = 25;
-        }
-
-        if (!string.IsNullOrEmpty(normalizedPrefix))
-            score -= path.Count(c => c == '/');
-
-        score += PathProximity.ComputeBoost(contextPath, node.Path);
-
-        return new QuerySuggestion(node.Path ?? "", name, node.NodeType, score, node.Icon);
-    }
-
-    private static IEnumerable<QuerySuggestion> OrderForMode(IList<QuerySuggestion> suggestions, AutocompleteMode mode) => mode switch
-    {
-        AutocompleteMode.PathFirst => suggestions
-            .OrderBy(s => s.Path.Length)
-            .ThenByDescending(s => s.Score)
-            .ThenBy(s => s.Name),
-        AutocompleteMode.RelevanceFirst => suggestions
-            .OrderByDescending(s => s.Score)
-            .ThenBy(s => s.Path.Length)
-            .ThenBy(s => s.Name),
-        _ => suggestions
-            .OrderBy(s => s.Path.Length)
-            .ThenByDescending(s => s.Score)
-            .ThenBy(s => s.Name),
-    };
 
     /// <summary>
     /// Loose-but-bounded fuzzy match: every character of <paramref name="prefix"/>
@@ -986,37 +1016,24 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             IAsyncEnumerable<object> QueryStream(CancellationToken ct) =>
                 useSecurityFilter ? QueryAsync(request, options, ct) : QueryCoreAsync(request, options, ct);
 
-            // Enumerates the IAsyncEnumerable on a fresh thread-pool thread so that
-            // no custom TaskScheduler (Orleans, ASP.NET) is captured by the async
-            // state machine. Task.Factory.StartNew with TaskScheduler.Default is the
-            // explicit form of "run on thread pool, no inherited scheduler" —
-            // Observable.FromAsync's behaviour around captured schedulers was
-            // breaking ObserveQuery downstream (test cancellations / timeouts in
-            // SyncedQueryCrossSilo + SearchQueryTests.ReferenceAutocomplete after
-            // the experimental FromAsync swap in 7fc771b53).
+            // Pure IObservable shape — no Task.Factory.StartNew. The async
+            // IAsyncEnumerable is wrapped via Observable.FromAsync, then pushed
+            // to TaskPoolScheduler.Default via SubscribeOn so no inherited
+            // TaskScheduler (Orleans grain, ASP.NET) is captured by the async
+            // state machine on Subscribe.
             IObservable<List<(string? Path, T Item)>> RunQuery(CancellationToken ct) =>
-                Observable.Create<List<(string?, T)>>(inner =>
-                {
-                    System.Threading.Tasks.Task.Factory.StartNew(async () =>
+                Observable.FromAsync(async cancel =>
                     {
+                        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, cancel);
                         var results = new List<(string?, T)>();
-                        try
+                        await foreach (var item in QueryStream(linked.Token))
                         {
-                            await foreach (var item in QueryStream(ct))
-                            {
-                                if (item is T typed)
-                                    results.Add((GetItemPath(item), typed));
-                            }
-                            inner.OnNext(results);
-                            inner.OnCompleted();
+                            if (item is T typed)
+                                results.Add((GetItemPath(item), typed));
                         }
-                        catch (OperationCanceledException) { inner.OnCompleted(); }
-                        catch (Exception ex) { inner.OnError(ex); }
-                    }, System.Threading.CancellationToken.None,
-                       System.Threading.Tasks.TaskCreationOptions.DenyChildAttach,
-                       System.Threading.Tasks.TaskScheduler.Default);
-                    return System.Reactive.Disposables.Disposable.Empty;
-                });
+                        return results;
+                    })
+                    .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default);
 
             // Race-fix: subscribe to changeNotifier BEFORE running the initial query so
             // that any NotifyChange events fired during the initial query's I/O window

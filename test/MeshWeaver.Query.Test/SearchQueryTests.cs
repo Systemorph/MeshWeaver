@@ -2,8 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using FluentAssertions;
 using Memex.Portal.Shared;
@@ -282,7 +280,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         var prefix = "";
 
         // Act
-        var suggestions = await MeshQuery.AutocompleteAsync(basePath, prefix, 10).ToArray().ToTask(TestContext.Current.CancellationToken);
+        var suggestions = await MeshQuery.AutocompleteAsync(basePath, prefix, 10, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
 
         // Assert
         Output.WriteLine($"Found {suggestions.Length} autocomplete suggestions from root");
@@ -300,7 +298,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         var prefix = "Per";
 
         // Act
-        var suggestions = await MeshQuery.AutocompleteAsync(basePath, prefix, 10).ToArray().ToTask(TestContext.Current.CancellationToken);
+        var suggestions = await MeshQuery.AutocompleteAsync(basePath, prefix, 10, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
 
         // Assert
         Output.WriteLine($"Found {suggestions.Length} suggestions for prefix 'Per'");
@@ -326,7 +324,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         }
 
         // Act
-        var suggestions = await MeshQuery.AutocompleteAsync(nodeWithPotentialChildren.Path!, "", 10).ToArray().ToTask(TestContext.Current.CancellationToken);
+        var suggestions = await MeshQuery.AutocompleteAsync(nodeWithPotentialChildren.Path!, "", 10, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
 
         // Assert
         Output.WriteLine($"Found {suggestions.Length} suggestions under '{nodeWithPotentialChildren.Path}'");
@@ -499,7 +497,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         Output.WriteLine($"Using base path: {basePath}");
 
         // Act - autocomplete from that path
-        var suggestions = await MeshQuery.AutocompleteAsync(basePath, "", 10).ToArray().ToTask(TestContext.Current.CancellationToken);
+        var suggestions = await MeshQuery.AutocompleteAsync(basePath, "", 10, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
 
         // Assert
         Output.WriteLine($"Found {suggestions.Length} sub-completions for '{basePath}/'");
