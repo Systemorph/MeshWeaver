@@ -198,7 +198,7 @@ public class OrleansUserOwnedModelTest(ITestOutputHelper output) : OrleansShared
             && n.NodeType == ModelProviderNodeType.NodeType);
     }
 
-    [Fact(Timeout = 60_000, Skip = "Acceptance test for the cache-hub-as-proper-partition refactor (see Doc/Architecture/OrleansTestRoutingPattern.md → 'The fix — cache hub as a proper partition'). The hard-code-in-RoutingGrain + manually-hosted-cache-hub approaches were both wrong; the right shape is to register MeshNodeStreamCache's hub as a static MeshNode under the 'cache' namespace, via IPartitionStorageProvider. Routing then finds it through pathResolver naturally. Un-skip after the partition wiring lands.")]
+    [Fact(Timeout = 60_000, Skip = "Cache hub wiring landed (cache/mesh-node-cache via config-driven StreamRoutedAddressTypes — see Doc/Architecture/OrleansTestRoutingPattern.md). Routing now reaches the cache hub (RegisterStream + memory-stream dispatch via MeshConfiguration.DefaultStreamRoutedAddressTypes), and the SubscribeRequest/SubscribeAck round-trip is observed in the trace. Remaining blocker: the cache hub's workspace `.GetRemoteStream<MeshNode, MeshNodeReference>` doesn't surface the initial frame to UpdateRemote's .Subscribe callback (line 313), so the patch never computes. Likely needs additional MeshNode type/reducer registration on the cache hub beyond AddData(). Track separately.")]
     public async Task UserOwnedProvider_RotateKey_ResolverPicksUpNewKey()
     {
         var ct = new CancellationTokenSource(45.Seconds()).Token;

@@ -139,6 +139,7 @@ public record MeshBuilder
         var excludedTypes = AutocompleteExcludedTypes;
         var accessConfig = NodeTypeAccessConfig;
         var routingRules = QueryRoutingRules;
+        var streamRoutedTypes = StreamRoutedAddressTypes;
 
         ConfigureServices(services => services
             .AddSingleton(_ =>
@@ -153,7 +154,8 @@ public record MeshBuilder
                     combinedDefaultConfig,
                     autocompleteExcludedNodeTypes: excludedTypes.Count > 0 ? excludedTypes : null,
                     nodeTypePermissions: accessConfig.Build(),
-                    queryRoutingRules: routingRules);
+                    queryRoutingRules: routingRules,
+                    streamRoutedAddressTypes: streamRoutedTypes);
             })
             .AddSingleton<ITypeRegistry>(_ =>
             {
@@ -294,4 +296,23 @@ public record MeshBuilder
     }
 
     internal List<QueryRoutingRule> QueryRoutingRules { get; } = [];
+
+    /// <summary>
+    /// Declares an address-type prefix that routes via the cluster-wide
+    /// Orleans memory stream rather than grain activation. Hubs at such
+    /// addresses are expected to <see cref="IRoutingService.RegisterStream(IMessageHub)"/>
+    /// in their <c>WithInitialization</c>. Built-in defaults
+    /// (<c>portal</c>, <c>client</c>) come from
+    /// <see cref="MeshConfiguration.DefaultStreamRoutedAddressTypes"/>;
+    /// modules add their own (e.g. <c>cache</c> for the mesh-node-cache
+    /// hub) here. See <c>Doc/Architecture/OrleansTestRoutingPattern.md</c>.
+    /// </summary>
+    public MeshBuilder AddStreamRoutedAddressType(string addressType)
+    {
+        StreamRoutedAddressTypes.Add(addressType);
+        return this;
+    }
+
+    internal HashSet<string> StreamRoutedAddressTypes { get; } =
+        new(global::MeshWeaver.Mesh.MeshConfiguration.DefaultStreamRoutedAddressTypes, StringComparer.Ordinal);
 }
