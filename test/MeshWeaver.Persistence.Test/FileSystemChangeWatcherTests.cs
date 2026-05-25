@@ -26,7 +26,7 @@ namespace MeshWeaver.Persistence.Test;
 public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private readonly string _testDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverTests", Guid.NewGuid().ToString());
-    private readonly DataChangeNotifier _changeNotifier = new();
+    private readonly System.Reactive.Subjects.Subject<DataChangeNotification> _changeNotifier = new();
     private FileSystemStorageAdapter? _storageAdapterInstance;
     private FileSystemStorageAdapter _storageAdapter => _storageAdapterInstance ??= CreateStorageAdapter();
     protected new IMeshService MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshService>();

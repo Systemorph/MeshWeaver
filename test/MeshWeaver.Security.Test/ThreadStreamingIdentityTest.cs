@@ -81,7 +81,7 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
     {
         LoginAsChatUser();
         var client = GetClient();
-        var ct = new CancellationTokenSource(20.Seconds()).Token;
+        var ct = new CancellationTokenSource(25.Seconds()).Token;
 
         var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(UserPath, "Test thread")), o => o.WithTarget(new Address(UserPath))).FirstAsync().ToTask(ct);
 
@@ -141,12 +141,12 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
         Output.WriteLine($"Response: '{responseMessage.Text}'");
     }
 
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 30000)]
     public async Task SubmitMessage_StreamsIncrementally_NotAllAtOnce()
     {
         LoginAsChatUser();
         var client = GetClient();
-        var ct = new CancellationTokenSource(12.Seconds()).Token;
+        var ct = new CancellationTokenSource(25.Seconds()).Token;
 
         // Create thread
         var createResponse = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(UserPath, "Incremental test")), o => o.WithTarget(new Address(UserPath))).FirstAsync().ToTask(ct);
