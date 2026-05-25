@@ -33,6 +33,27 @@ public sealed class OrleansTestSeedProvider : IStaticNodeProvider
 {
     public IEnumerable<MeshNode> GetStaticNodes()
     {
+        // 🚨 Default Agent — without ANY Agent node in the synced collection,
+        // AgentChatClient.SelectAgent returns null and every chat round in
+        // every test produces "No suitable agent found to handle the request."
+        // (root cause of OrleansChatHistoryTest.ColdStart, delegation tests,
+        // portal-flow tests, etc.). The factory wired up by SharedSiloConfigurator
+        // (EchoChatClientFactory / DelegationTestAgentFactory swapped in per-test)
+        // accepts any AgentConfiguration; the test just needs at least one
+        // Agent node so the agent picker has a candidate.
+        yield return new MeshNode("Assistant", "Agent")
+        {
+            Name = "Assistant",
+            NodeType = "Agent",
+            Content = new AgentConfiguration
+            {
+                Id = "Assistant",
+                Description = "Default test agent — handled by whichever IChatClientFactory the test class wired in (swappable via SharedOrleansFixture.SwappableFactory).",
+                IsDefault = true,
+                Instructions = "You are a helpful test assistant."
+            }
+        };
+
         // TestUser user node — owner of the per-user partition. Post-v10 the
         // user node lives at the ROOT namespace (path={userId}); the legacy
         // "User/" wrapper has been retired.
