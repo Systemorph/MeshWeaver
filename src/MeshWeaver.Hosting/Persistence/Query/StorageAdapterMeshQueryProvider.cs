@@ -1043,11 +1043,29 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                     })
                     .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default);
 
-            // Storage-level change events were intentionally removed —
-            // synced queries here are Initial-only. Consumers that need live
-            // updates for a specific path use workspace.GetMeshNodeStream /
-            // GetRemoteStream which subscribes to the OWNING per-node hub's
-            // workspace stream; that's the only sanctioned live source.
+            // Subscribe to persistence.Changes BEFORE running the initial query so
+            // notifications during the I/O window are captured. After Initial,
+            // swap to a live Buffer pipeline that re-queries on each batch.
+            // persistence.Changes is the adapter-level Subject (in-process);
+            // cross-process change visibility relies on the backend's own change
+            // feed (PG LISTEN/NOTIFY, Cosmos change feed) feeding per-process
+            // Subjects — same shape as prod.
+            var earlyBacklog = new List<DataChangeNotification>();
+            var earlyLock = new object();
+            var initialDone = false;
+            var earlySubscription = persistence.Changes
+                .Where(n => scopeFilters.Any(sf =>
+                    PathMatcher.ShouldNotify(n.Path, sf.BasePath, sf.Scope)))
+                .Subscribe(n =>
+                {
+                    lock (earlyLock)
+                    {
+                        if (!initialDone)
+                            earlyBacklog.Add(n);
+                    }
+                });
+            disposables.Add(earlySubscription);
+
             disposables.Add(
                 RunQuery(cts.Token).Subscribe(
                     initialResults =>
@@ -1059,6 +1077,33 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                             if (!string.IsNullOrEmpty(path))
                                 currentItems[path] = item;
                         }
+
+                        DataChangeNotification[] backlog;
+                        var changeBuffer = new Subject<DataChangeNotification>();
+                        disposables.Add(changeBuffer);
+                        disposables.Add(
+                            persistence.Changes
+                                .Where(n => scopeFilters.Any(sf =>
+                                    PathMatcher.ShouldNotify(n.Path, sf.BasePath, sf.Scope)))
+                                .Subscribe(changeBuffer));
+                        disposables.Add(
+                            changeBuffer
+                                .Buffer(DefaultDebounceInterval)
+                                .Where(batch => batch.Count > 0)
+                                .Subscribe(batch =>
+                                    disposables.Add(
+                                        RunQuery(cts.Token).Subscribe(
+                                            newResults => ProcessBatch(batch, newResults, currentItems, parsedQuery, observer),
+                                            ex => observer.OnError(ex)))));
+
+                        lock (earlyLock)
+                        {
+                            backlog = earlyBacklog.ToArray();
+                            earlyBacklog.Clear();
+                            initialDone = true;
+                        }
+                        earlySubscription.Dispose();
+
                         observer.OnNext(new QueryResultChange<T>
                         {
                             ChangeType = QueryChangeType.Initial,
@@ -1067,6 +1112,14 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                             Version = Interlocked.Increment(ref _version),
                             Timestamp = DateTimeOffset.UtcNow,
                         });
+
+                        if (backlog.Length > 0)
+                        {
+                            disposables.Add(
+                                RunQuery(cts.Token).Subscribe(
+                                    newResults => ProcessBatch(backlog.ToList(), newResults, currentItems, parsedQuery, observer),
+                                    ex => observer.OnError(ex)));
+                        }
                     },
                     ex => observer.OnError(ex)));
 
