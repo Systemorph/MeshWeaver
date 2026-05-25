@@ -276,13 +276,7 @@ public class SyncedQueryCrossSiloTest(ITestOutputHelper output)
     /// invariant that lets every silo's <c>NodeTypeService._hubConfigurations</c>
     /// cache populate without per-silo recompilation.</para>
     /// </summary>
-    [Fact(Timeout = 240000, Skip = "Pre-existing CI hang: test takes >90s in steady state " +
-        "(silo B's synced query receives MeshNode rows but Content arrives as JsonElement — " +
-        "the silos don't have NodeTypeDefinition in their TypeRegistry, so the `n.Content is " +
-        "NodeTypeDefinition` predicate never matches → 180s Rx Timeout fires → Blame's 90s " +
-        "inactivity threshold trips first and crashes the test host, taking out the rest of " +
-        "Query.Test with it. Re-enable after fixing silo-side type registration so Content " +
-        "deserializes correctly.")]
+    [Fact(Timeout = 240000)]
     public async Task DynamicCompile_OnSiloA_ResultIsObservableOnSiloB_ViaSync()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -295,16 +289,28 @@ public class SyncedQueryCrossSiloTest(ITestOutputHelper output)
         // Two participating "silos" each running a synced query over the
         // NodeType namespace — this is the shape NodeTypeService uses across
         // the cluster to mirror the assembly-location state.
+        // 🚨 Each silo MUST register NodeTypeDefinition in its TypeRegistry —
+        // without it, the synced query emits MeshNode rows where Content arrives
+        // as JsonElement, the `n.Content is NodeTypeDefinition d` predicate
+        // below never matches, and the test hangs on its 180 s Rx Timeout.
         var hubA = Mesh.ServiceProvider.CreateMessageHub(
             new Address("silo", "compile-a"),
-            config => config.AddData(data =>
-                data.WithVirtualDataSource("$compile-a", vs =>
-                    vs.WithMeshQuery(nodeTypeQuery))));
+            config =>
+            {
+                config.TypeRegistry.WithType(typeof(NodeTypeDefinition), nameof(NodeTypeDefinition));
+                return config.AddData(data =>
+                    data.WithVirtualDataSource("$compile-a", vs =>
+                        vs.WithMeshQuery(nodeTypeQuery)));
+            });
         var hubB = Mesh.ServiceProvider.CreateMessageHub(
             new Address("silo", "compile-b"),
-            config => config.AddData(data =>
-                data.WithVirtualDataSource("$compile-b", vs =>
-                    vs.WithMeshQuery(nodeTypeQuery))));
+            config =>
+            {
+                config.TypeRegistry.WithType(typeof(NodeTypeDefinition), nameof(NodeTypeDefinition));
+                return config.AddData(data =>
+                    data.WithVirtualDataSource("$compile-b", vs =>
+                        vs.WithMeshQuery(nodeTypeQuery)));
+            });
 
         var collA = hubA.GetWorkspace().GetQuery("$compile-a")!.Replay(1).RefCount();
         var collB = hubB.GetWorkspace().GetQuery("$compile-b")!.Replay(1).RefCount();
@@ -357,20 +363,25 @@ public class SyncedQueryCrossSiloTest(ITestOutputHelper output)
                 o => o.WithTarget(new Address(typePath)))
             .FirstAsync().ToTask(ct);
 
-        // Silo B observes the terminal state — the watcher's compile result
-        // (Ok + AssemblyLocation) reaches it through the upstream ObserveQuery
-        // that the synced collection subscribes to. Generous timeout because
-        // dynamic compile cold-start (Roslyn parse + emit + MetadataLoadContext
-        // assembly resolution) can run 60–90s on a contended CI runner; this
-        // test is the cross-silo invariant, not a perf gate.
-        var settled = await collB
-            .Select(arr => arr.FirstOrDefault(n => n.Path == typePath))
-            .Where(n => n?.Content is NodeTypeDefinition d
+        // Silo B observes the terminal state. 🚨 Read live Content via
+        // GetMeshNodeStream — synced query rows carry STALE Content by design
+        // (feedback_query_content_stale.md): the per-path-keyed snapshot
+        // refreshes on shell-level changes (path added/removed/version-bumped)
+        // but does NOT re-fetch Content. Asserting `Content is NodeTypeDefinition
+        // d && d.CompilationStatus == Ok` on a synced-query row was the deadlock
+        // root cause — the Updated event arrives but Content stays at the
+        // pre-compile snapshot, so the predicate never matches and the Rx
+        // Timeout fires. GetMeshNodeStream routes through the per-node hub's
+        // live MeshNodeReference reducer, which DOES refresh Content.
+        var settled = await hubB.GetWorkspace().GetMeshNodeStream(typePath)
+            .Where(n => n.Content is NodeTypeDefinition d
                 && (d.CompilationStatus == CompilationStatus.Ok
                     || d.CompilationStatus == CompilationStatus.Error))
-            .FirstAsync().Timeout(180.Seconds()).ToTask(ct);
+            .Take(1)
+            .Timeout(60.Seconds())
+            .ToTask(ct);
 
-        var settledDef = settled!.Content as NodeTypeDefinition;
+        var settledDef = settled.Content as NodeTypeDefinition;
         settledDef!.CompilationStatus.Should().Be(CompilationStatus.Ok,
             $"compile must succeed for valid C# source. Error: {settledDef.CompilationError}");
         settledDef.LatestAssemblyPath.Should().NotBeNullOrEmpty(
