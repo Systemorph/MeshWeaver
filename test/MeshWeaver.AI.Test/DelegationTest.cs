@@ -30,12 +30,15 @@ public class DelegationTest
     /// yielding the final string as a single chunk. Lets tests keep their existing
     /// Task-based delegation logic while the production tool signature is streaming.
     /// </summary>
-    private static async IAsyncEnumerable<string> ToStream(
+    /// <summary>
+    /// Wraps a Task-returning body into an IObservable&lt;string&gt; that emits
+    /// the result once and completes. Matches the new DelegationTool signature
+    /// (IObservable&lt;string&gt;) while letting tests keep Task-based logic.
+    /// </summary>
+    private static IObservable<string> ToStream(
         Func<CancellationToken, Task<string>> body,
-        [EnumeratorCancellation] CancellationToken ct = default)
-    {
-        yield return await body(ct);
-    }
+        CancellationToken ct = default)
+        => System.Reactive.Linq.Observable.FromAsync(() => body(ct));
 
     #region Fake Chat Client Infrastructure
 

@@ -608,6 +608,23 @@ public static class MeshDataSourceExtensions
         if (storage is null)
             return;
         var ownPath = hub.Address.Path;
+        // 🚨 LOOP GUARD: track the node we most recently wrote (via saveSub
+        // posting SaveMeshNodeRequest above) and skip notifications that match
+        // it. Without this guard, a write that round-trips through the change
+        // feed (adapter.Write → _changes.OnNext → this subscriber →
+        // stream.Update → ownStream emit → saveSub → SaveMeshNodeRequest →
+        // adapter.Write → _changes.OnNext …) spins forever. Each iteration's
+        // Update bumps a property (Version, LastModified) so plain Equals
+        // doesn't catch it. Locally observed: hub sync/YNizhNpYBUurwYhhyLjfTw
+        // emitted UpdateStreamRequest every ~600 ms for 1 h+ in
+        // Threading.Test's DelegationWriteCountTest after the VersionWriting
+        // Changes-forwarding fix (f28449035) connected the loop.
+        var lastSelfWrite = new System.Reactive.Subjects.BehaviorSubject<long>(-1);
+        var saveEchoSub = hub.GetWorkspace().GetMeshNodeStream()
+            .Where(n => n is not null)
+            .Subscribe(n => lastSelfWrite.OnNext(n.Version));
+        hub.RegisterForDisposal(saveEchoSub);
+
         var delSub = storage.Changes.Subscribe(notification =>
         {
             if (!string.Equals(notification.Path, ownPath, StringComparison.OrdinalIgnoreCase))
@@ -622,6 +639,11 @@ public static class MeshDataSourceExtensions
                 case DataChangeKind.Created:
                 case DataChangeKind.Updated:
                     if (notification.Entity is not MeshNode newNode)
+                        return;
+                    // Echo-suppression: this notification matches the version
+                    // we just wrote via saveSub → skip the Update that would
+                    // close the loop.
+                    if (newNode.Version == lastSelfWrite.Value)
                         return;
                     cache.IsDeleted = false;
                     try

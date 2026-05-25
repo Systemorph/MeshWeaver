@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Reactive.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -35,9 +36,27 @@ public class DelegationDeadlockTest
     private static readonly AgentConfiguration AgentB = new() { Id = "AgentB", Description = "target" };
 
     private static AIFunction CreateTool(
-        Func<string, string, string?, CancellationToken, IAsyncEnumerable<string>> execute) =>
+        Func<string, string, string?, CancellationToken, IObservable<string>> execute) =>
         (AIFunction)DelegationTool.CreateUnifiedDelegationTool(
             AgentA, [AgentA, AgentB], execute);
+
+    /// <summary>
+    /// Bridges the test's IAsyncEnumerable&lt;string&gt; pattern to the
+    /// production IObservable&lt;string&gt; delegation contract. await foreach
+    /// inside Observable.Create runs on the subscriber's continuation.
+    /// </summary>
+    private static IObservable<string> AsObservable(IAsyncEnumerable<string> source)
+        => Observable.Create<string>(async (observer, ct) =>
+        {
+            try
+            {
+                await foreach (var item in source.WithCancellation(ct))
+                    observer.OnNext(item);
+                observer.OnCompleted();
+            }
+            catch (OperationCanceledException) { observer.OnCompleted(); }
+            catch (Exception ex) { observer.OnError(ex); }
+        });
 
     private static AIFunctionArguments Args() => new(new Dictionary<string, object?>
     {
@@ -81,7 +100,7 @@ public class DelegationDeadlockTest
             await Task.CompletedTask;
         }
 
-        var tool = CreateTool(Execute);
+        var tool = CreateTool((a, t, c, ct) => AsObservable(Execute(a, t, c, ct)));
 
         // Invoke the tool on the pump — this is how FunctionInvokingChatClient
         // would invoke it from a grain message handler.
@@ -116,7 +135,7 @@ public class DelegationDeadlockTest
             yield return "world!";
         }
 
-        var tool = CreateTool(Execute);
+        var tool = CreateTool((a, t, c, ct) => AsObservable(Execute(a, t, c, ct)));
 
         var result = await tool.InvokeAsync(Args(), ct).AsTask().WaitAsync(10.Seconds(), ct);
         result?.ToString().Should().Contain("Hello, ").And.Contain("world!",

@@ -23,6 +23,17 @@
        changes. With it, every framework recompile invalidates downstream caches. -->
   <PropertyGroup Condition="'$(Version)' == ''">
     <InformationalVersion>1.0.0+dev.$([System.DateTime]::UtcNow.Ticks)</InformationalVersion>
+    <!-- Bump AssemblyVersion + FileVersion every build so MSBuild's CopyToOutputDirectory
+         heuristics always pick up the latest framework DLL. Without this, when source
+         edits don't change the file timestamp, downstream consumers (test bins) hold the
+         stale binary and re-running tests silently exercises old code.
+         Build = days since 2020-01-01 (16-bit safe for ~17 years).
+         Revision = seconds-since-midnight / 2 (16-bit safe, ~2s granularity). -->
+    <_BuildDays>$([System.DateTime]::UtcNow.Subtract($([System.DateTime]::new(2020, 1, 1))).Days)</_BuildDays>
+    <_SecondsToday>$([System.DateTime]::UtcNow.TimeOfDay.TotalSeconds.ToString("F0"))</_SecondsToday>
+    <_RevHalfSec>$([MSBuild]::Divide($(_SecondsToday), 2).ToString("F0"))</_RevHalfSec>
+    <AssemblyVersion>1.0.$(_BuildDays).$(_RevHalfSec)</AssemblyVersion>
+    <FileVersion>1.0.$(_BuildDays).$(_RevHalfSec)</FileVersion>
   </PropertyGroup>
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />
