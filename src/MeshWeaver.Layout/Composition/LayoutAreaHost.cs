@@ -518,8 +518,11 @@ public record LayoutAreaHost : IDisposable
             ret = initial;
         }
 
+        // Skip(1) when we already inlined the first emission — see notes on
+        // the IObservable<object?> overload above. Avoids duplicate UpdateArea.
         RegisterForDisposal(context.Parent?.Area ?? context.Area,
             connectable
+                .Skip(gotFirst ? 1 : 0)
                 .DistinctUntilChanged()
                 .Subscribe(c => UpdateArea(context, c), FailRendering));
         RegisterForDisposal(context.Parent?.Area ?? context.Area, connection);
@@ -639,9 +642,15 @@ public record LayoutAreaHost : IDisposable
             ret = DisposeExistingAreas(store, context);
         }
 
+        // When we already rendered the first emission into ret, Skip(1) so the
+        // live subscriber doesn't re-render the same value via UpdateArea (the
+        // Replay(1) buffer would replay it on subscribe → duplicate Patch that
+        // triggers a redundant re-render of the area + its child controls).
+        // For async observables (gotFirst=false), no buffered value to skip.
         RegisterForDisposal(
             context.Area,
             connectable
+                .Skip(gotFirst ? 1 : 0)
                 .DistinctUntilChanged()
                 .Subscribe(
                     view =>
