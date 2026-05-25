@@ -21,6 +21,7 @@ public partial class ThreadMessageBubbleView : BlazorView<ThreadMessageBubbleCon
     private DateTime? Timestamp;
 
     private string? messageText;
+    private string? summary;
     private IReadOnlyList<ToolCallEntry>? toolCalls;
     private IReadOnlyList<NodeChangeEntry>? updatedNodes;
     private bool isEditing;
@@ -167,6 +168,11 @@ public partial class ThreadMessageBubbleView : BlazorView<ThreadMessageBubbleCon
                         ? textProp.GetString()
                         : null;
                     if (text != messageText) { messageText = text; changed = true; }
+
+                    var newSummary = je.TryGetProperty("summary", out var sumProp) && sumProp.ValueKind == JsonValueKind.String
+                        ? sumProp.GetString()
+                        : null;
+                    if (newSummary != summary) { summary = newSummary; changed = true; }
 
                     IReadOnlyList<ToolCallEntry>? newToolCalls = je.TryGetProperty("toolCalls", out var tcProp)
                         && tcProp.ValueKind == JsonValueKind.Array

@@ -27,6 +27,18 @@
     }
     else
     {
+        @* Assistant-only: collapsible <details> showing the dedicated Summary
+           above the verbose Text. ExecuteMessageAsync writes Summary atomically
+           with Status=Completed (extracted from <summary>...</summary> in the
+           agent's response, falling back to the verbose Text). The Summary is
+           also what a delegating parent receives as the tool-call result. *@
+        @if (!IsUser && !string.IsNullOrEmpty(summary))
+        {
+            <div class="thread-msg-summary" title="Dedicated summary the agent produced for delegation / quick-scan">
+                <span class="thread-msg-summary-icon">✎</span>
+                <span class="thread-msg-summary-text">@summary</span>
+            </div>
+        }
         <MarkdownView ViewModel="@MarkdownVm" Stream="@Stream" Area="@($"{Area}/text")" />
         @if (IsUser && CanEdit)
         {
@@ -158,6 +170,7 @@
         border-bottom-left-radius: 4px;
         padding-left: 46px;
     }
+    /* .thread-msg-summary styles live in ThreadMessageBubbleView.razor.css */
     /* Sparkle avatar on assistant messages — floats top-left,
        circular, accent-tinted ring. Pure CSS, no extra HTML. */
     .thread-msg-assistant::before {

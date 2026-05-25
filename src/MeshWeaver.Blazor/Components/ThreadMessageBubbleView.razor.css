@@ -1,0 +1,33 @@
+/* Dedicated styles for ThreadMessageBubbleView. The bulk of the bubble's CSS
+   lives in the .razor's <style> block (pre-existing; will migrate here over
+   time). NEW styles MUST land here. Scope identifier is auto-attached by the
+   Blazor build to the component's root <div class="thread-msg-bubble">. */
+
+/* Summary chip shown above the verbose markdown body on assistant messages.
+   Populated atomically with ThreadMessageStatus.Completed; delegating parents
+   read the same value via the Thread.Summary stream. */
+.thread-msg-summary {
+    margin: 0 0 10px 0;
+    padding: 8px 12px;
+    border-left: 3px solid color-mix(in srgb, var(--accent-fill-rest) 60%, transparent);
+    background: color-mix(in srgb, var(--accent-fill-rest) 5%, transparent);
+    border-radius: 6px;
+    font-size: 0.92em;
+    line-height: 1.45;
+    color: color-mix(in srgb, var(--neutral-foreground-rest) 92%, transparent);
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+}
+
+.thread-msg-summary-icon {
+    flex: 0 0 auto;
+    color: var(--accent-fill-rest);
+    font-style: italic;
+    font-weight: 600;
+    line-height: 1.45;
+}
+
+.thread-msg-summary-text {
+    flex: 1 1 auto;
+}
