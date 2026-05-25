@@ -206,7 +206,22 @@ public static class DataExtensions
             return Task.FromResult(request);
 
         request = request.ForwardTo(SynchronizationAddress.Create(streamMessage.StreamId));
-        var syncHub = hub.GetHostedHub(request.Target!, create: HostedHubCreation.Never);
+
+        // Walk the parent chain looking for the sync sub-hub. The sync hub may
+        // have been created on a different hub than where this RouteStreamMessage
+        // fires — e.g., a cache/portal sub-hub opens a remote stream that creates
+        // its sync hub under itself, while an incoming DataChangedEvent targeted
+        // at a higher-level (parent) address triggers this handler on the parent.
+        // Without the walk, a single GetHostedHub(syncAddr, Never) at the current
+        // hub returns null → message silently dropped.
+        IMessageHub? syncHub = null;
+        var current = hub;
+        while (current is not null)
+        {
+            syncHub = current.GetHostedHub(request.Target!, create: HostedHubCreation.Never);
+            if (syncHub is not null) break;
+            current = current.Configuration.ParentHub;
+        }
         if (syncHub is null)
             return Task.FromResult(request.Ignored());
         syncHub.DeliverMessage(request);
