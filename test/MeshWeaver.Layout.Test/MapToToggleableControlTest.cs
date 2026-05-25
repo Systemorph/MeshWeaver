@@ -459,9 +459,6 @@ public class EditPersistenceTest(ITestOutputHelper output) : HubTestBase(output)
                     .Subscribe(entity => host.UpdateData(dataId, entity!)));
         }
 
-        // Set up auto-save: when local data changes, persist via DataChangeRequest
-        SetupAutoSave(host, dataId);
-
         // Build the form using MapToToggleableControl
         var properties = typeof(PersistableEntity).GetProperties()
             .Where(p => p.GetCustomAttribute<BrowsableAttribute>()?.Browsable != false)
@@ -477,45 +474,6 @@ public class EditPersistenceTest(ITestOutputHelper output) : HubTestBase(output)
         }
 
         return stack;
-    }
-
-    private void SetupAutoSave(LayoutAreaHost host, string dataId)
-    {
-        string? initialJson = null;
-
-        // 🚨 Debounce queues a timer that fires AFTER the subscriber may already
-        // have been disposed by host.RegisterForDisposal — and AFTER the test
-        // method has exited. The previous shape used `Output.WriteLine` (which
-        // throws InvalidOperationException once xunit invalidates the test's
-        // ITestOutputHelper) and `await ... .FirstAsync().ToTask()` (forbidden
-        // in src per AsynchronousCalls.md, and leaks past dispose here). Switch
-        // to Subscribe-only with no test-context dependency.
-        host.RegisterForDisposal($"autosave_{dataId}",
-            host.Stream.GetDataStream<PersistableEntity>(dataId)
-                .Debounce(TimeSpan.FromMilliseconds(100))
-                .Subscribe(entity =>
-                {
-                    if (entity == null)
-                        return;
-
-                    var currentJson = JsonSerializer.Serialize(entity, host.Hub.JsonSerializerOptions);
-
-                    if (initialJson == null)
-                    {
-                        initialJson = currentJson;
-                        return;
-                    }
-
-                    if (currentJson == initialJson)
-                        return;
-
-                    initialJson = currentJson;
-
-                    host.Hub.Observe<DataChangeResponse>(
-                            new DataChangeRequest().WithUpdates(entity),
-                            o => o.WithTarget(host.Hub.Address))
-                        .Subscribe(_ => { }, _ => { });
-                }));
     }
 
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
@@ -535,207 +493,27 @@ public class EditPersistenceTest(ITestOutputHelper output) : HubTestBase(output)
         return base.ConfigureClient(configuration).AddLayoutClient();
     }
 
-    /// <summary>
-    /// THIS TEST SHOULD FAIL - demonstrates that edits are not persisted.
-    ///
-    /// The test:
-    /// 1. Renders a form with MapToToggleableControl
-    /// 2. Updates the Title via UpdatePointer (simulating user edit)
-    /// 3. Waits for auto-save debounce
-    /// 4. Uses GetDataRequest to get a FRESH instance from the data store
-    /// 5. Verifies the Title was persisted
-    ///
-    /// Expected failure: The fresh instance will still have "Original Title"
-    /// because the edit is not properly persisted to the underlying store.
-    /// </summary>
-    [Fact(Skip = "Legacy data-source auto-save pattern (UpdatePointer + DataChangeRequest debounced subscription) is timing-dependent and flaky — auto-save subscription doesn't always fire within the 500ms wait when other tests run in parallel. Canonical write pattern is now via MeshNode (see CLAUDE.md auto-save section + AsynchronousCalls.md). Keep as a regression marker until the legacy data-source path is removed or fixed.")]
-    public async Task EditAndPersist_StringProperty_ShouldPersistToDataStore()
-    {
-        var client = GetClient();
-        var workspace = client.GetWorkspace();
-        var hostAddress = CreateHostAddress();
+    // Removed 2026-05-25:
+    //   - EditAndPersist_StringProperty_ShouldPersistToDataStore
+    //   - EditAndPersist_NullableDateTime_ShouldPersistToDataStore
+    //   - WorkspaceStreamEmit_ShouldNotOverwriteLocalEdits
+    // All three asserted behavior of a test-invented `SetupAutoSave` (debounced
+    // GetDataStream → DataChangeRequest) that production code does NOT use —
+    // see src/MeshWeaver.Layout/Domain/EditLayoutArea.cs:181, which writes via
+    // `stream.Subscribe → host.UpdateData` (no debounce, no DataChangeRequest).
+    // The canonical write path per CLAUDE.md is
+    //   workspace.GetMeshNodeStream(path).Update(current => …)
+    // for MeshNode data and `workspace.Update(...)` for data-source instances —
+    // not a hand-rolled debounce + Observe<DataChangeResponse>. The tests also
+    // leaked their Debounce subscriptions through the shared SP into sibling
+    // test classes (specifically DataChangeStreamUpdateTest.DeleteTask), so
+    // any one of them passing in isolation broke the full Layout.Test suite.
+    // Plus WorkspaceStreamEmit_ShouldNotOverwriteLocalEdits was a design
+    // contradiction: it asserted "local edit wins" against pure Debounce
+    // semantics ("last emit wins") with no source-level emission tagging.
+    // EditState_ShouldSurviveDataUpdates below tests genuine MapToToggleableControl
+    // behavior (edit-mode survival across data updates) and is retained.
 
-        // Get the layout stream
-        var layoutStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            hostAddress,
-            new LayoutAreaReference(PersistenceView));
-
-        // Wait for initial render
-        var control = await layoutStream
-            .GetControlStream(PersistenceView)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x is StackControl);
-
-        Output.WriteLine($"Initial control rendered: {control?.GetType().Name}");
-
-        // Verify initial data via workspace stream
-        var initialItems = await workspace
-            .GetRemoteStream<PersistableEntity>(hostAddress)!
-            .Timeout(5.Seconds())
-            .FirstAsync();
-
-        var initialEntity = initialItems.FirstOrDefault(e => e.Id == "persist-1");
-        initialEntity.Should().NotBeNull();
-        initialEntity!.Title.Should().Be("Original Title");
-        Output.WriteLine($"Initial entity from stream: Title={initialEntity.Title}");
-
-        // Update the title via UpdatePointer (simulating user edit)
-        var newTitle = $"Updated Title {DateTime.Now:HHmmss}";
-        Output.WriteLine($"Updating title to: {newTitle}");
-        layoutStream.UpdatePointer(newTitle, "/data/\"persistable_entity\"", new JsonPointerReference("title"));
-
-        // Wait for auto-save debounce (100ms) + processing time
-        Output.WriteLine("Waiting for auto-save...");
-        await Task.Delay(500, TestContext.Current.CancellationToken);
-
-        // Get FRESH instance from the data store via workspace stream
-        // This is the critical check - did the change actually persist?
-        var updatedItems = await workspace
-            .GetRemoteStream<PersistableEntity>(hostAddress)!
-            .Timeout(5.Seconds())
-            .FirstAsync();
-
-        var updatedEntity = updatedItems.FirstOrDefault(e => e.Id == "persist-1");
-
-        Output.WriteLine($"Updated entity from stream: Title={updatedEntity?.Title ?? "null"}");
-
-        // THIS ASSERTION SHOULD FAIL - the title should be updated but won't be
-        updatedEntity.Should().NotBeNull();
-        updatedEntity!.Title.Should().Be(newTitle,
-            "The title should be persisted to the data store, but it's not - this demonstrates the bug");
-    }
-
-    /// <summary>
-    /// THIS TEST SHOULD FAIL - demonstrates that DateTime? edits are not persisted.
-    /// </summary>
-    [Fact(Skip = "Legacy data-source auto-save (UpdatePointer + DataChangeRequest) does not emit on nullable DateTime field updates — auto-save subscription never fires for /dueDate changes (no 'Auto-save: Detected change' log line). Canonical write pattern is now via MeshNode (see CLAUDE.md auto-save section + AsynchronousCalls.md). Keep as a regression marker until the legacy data-source path is removed or fixed.")]
-    public async Task EditAndPersist_NullableDateTime_ShouldPersistToDataStore()
-    {
-        var client = GetClient();
-        var workspace = client.GetWorkspace();
-        var hostAddress = CreateHostAddress();
-
-        var layoutStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            hostAddress,
-            new LayoutAreaReference(PersistenceView));
-
-        // Wait for initial render
-        await layoutStream
-            .GetControlStream(PersistenceView)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x is StackControl);
-
-        // Verify initial date via workspace stream
-        var initialItems = await workspace
-            .GetRemoteStream<PersistableEntity>(hostAddress)!
-            .Timeout(5.Seconds())
-            .FirstAsync();
-
-        var initialEntity = initialItems.FirstOrDefault(e => e.Id == "persist-1");
-        initialEntity.Should().NotBeNull();
-        initialEntity!.DueDate.Should().Be(new DateTime(2024, 6, 15));
-        Output.WriteLine($"Initial DueDate: {initialEntity.DueDate}");
-
-        // Update the due date
-        var newDate = new DateTime(2025, 12, 25);
-        Output.WriteLine($"Updating DueDate to: {newDate}");
-        layoutStream.UpdatePointer(newDate, "/data/\"persistable_entity\"", new JsonPointerReference("dueDate"));
-
-        // Wait for auto-save
-        await Task.Delay(500, TestContext.Current.CancellationToken);
-
-        // Get fresh instance via workspace stream
-        var updatedItems = await workspace
-            .GetRemoteStream<PersistableEntity>(hostAddress)!
-            .Timeout(5.Seconds())
-            .FirstAsync();
-
-        var updatedEntity = updatedItems.FirstOrDefault(e => e.Id == "persist-1");
-
-        Output.WriteLine($"Updated DueDate from stream: {updatedEntity?.DueDate}");
-
-        // THIS ASSERTION SHOULD FAIL
-        updatedEntity.Should().NotBeNull();
-        updatedEntity!.DueDate.Should().Be(newDate,
-            "The DueDate should be persisted to the data store, but it's not - this demonstrates the bug");
-    }
-
-    /// <summary>
-    /// THIS TEST SHOULD FAIL - demonstrates that workspace stream emitting
-    /// overwrites local changes, causing data to revert to original values.
-    ///
-    /// The real scenario: OverviewLayoutArea subscribes to workspace stream and
-    /// calls host.UpdateData() when entity changes. If this happens before or
-    /// during editing, local changes get overwritten.
-    /// </summary>
-    [Fact(Skip = "Synthetic race-condition test — simulates a workspace emit DURING the 100ms debounce window using UpdatePointer with the original value. Debounce semantics are 'take latest after quiet period', so the test's expected outcome (local edit survives) contradicts the debounce contract. Distinguishing local edits from re-emits requires tagging emissions at source, not assertion-level reasoning. Keep as a design contract until the workspace-driven auto-save pattern is replaced (canonical pattern is now MeshNode-based — see CLAUDE.md).")]
-    public async Task WorkspaceStreamEmit_ShouldNotOverwriteLocalEdits()
-    {
-        var client = GetClient();
-        var workspace = client.GetWorkspace();
-        var hostAddress = CreateHostAddress();
-
-        var layoutStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            hostAddress,
-            new LayoutAreaReference(PersistenceView));
-
-        // Wait for initial render
-        await layoutStream
-            .GetControlStream(PersistenceView)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x is StackControl);
-
-        // Make a local edit
-        var newTitle = "Local Edit Title";
-        layoutStream.UpdatePointer(newTitle, "/data/\"persistable_entity\"", new JsonPointerReference("title"));
-        Output.WriteLine($"Made local edit: title = {newTitle}");
-
-        // Wait briefly for local update to propagate
-        await Task.Delay(50, TestContext.Current.CancellationToken);
-
-        // Read the local data to confirm it was updated
-        var localDataAfterEdit = await layoutStream
-            .GetDataStream<JsonElement>(new JsonPointerReference("/data/\"persistable_entity\""))
-            .Where(x => x.ValueKind != JsonValueKind.Undefined)
-            .Timeout(5.Seconds())
-            .FirstAsync();
-
-        var titleAfterEdit = localDataAfterEdit.TryGetProperty("title", out var t) ? t.GetString() : null;
-        Output.WriteLine($"Local data after edit: title = {titleAfterEdit}");
-        titleAfterEdit.Should().Be(newTitle, "Local edit should update the data");
-
-        // Now simulate what happens when workspace stream emits (like OverviewLayoutArea does)
-        // In the real scenario, the workspace stream subscription would call:
-        // host.UpdateData(dataId, serializedEntityFromWorkspace)
-        // This would overwrite the local edit with the original value
-
-        // Wait for auto-save debounce to NOT have triggered yet (it's 100ms in our test)
-        // Then simulate workspace emitting original data
-        await Task.Delay(30, TestContext.Current.CancellationToken); // Still within debounce window
-
-        // Simulate workspace stream emitting original entity data
-        // This is what happens when OverviewLayoutArea's subscription receives data
-        var originalEntity = InitialData.First();
-        layoutStream.UpdatePointer(originalEntity.Title, "/data/\"persistable_entity\"", new JsonPointerReference("title"));
-        Output.WriteLine($"Simulated workspace emit: title = {originalEntity.Title}");
-
-        // Now wait for debounce to complete
-        await Task.Delay(200, TestContext.Current.CancellationToken);
-
-        // Check what gets persisted - should be the LOCAL edit, not the original
-        var finalItems = await workspace
-            .GetRemoteStream<PersistableEntity>(hostAddress)!
-            .Timeout(5.Seconds())
-            .FirstAsync();
-
-        var finalEntity = finalItems.FirstOrDefault(e => e.Id == "persist-1");
-        Output.WriteLine($"Final persisted title: {finalEntity?.Title}");
-
-        // THIS ASSERTION SHOULD FAIL - the workspace emit overwrote local changes
-        finalEntity.Should().NotBeNull();
-        finalEntity!.Title.Should().Be(newTitle,
-            "Local edits should not be overwritten by workspace stream, but they are - this demonstrates the bug");
-    }
 
     /// <summary>
     /// THIS TEST SHOULD FAIL - demonstrates that edit state resets when view re-renders.

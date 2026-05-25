@@ -492,40 +492,25 @@ public record LayoutAreaHost : IDisposable
 
     internal EntityStoreAndUpdates RenderArea<T>(RenderingContext context, ViewStream<T> generator, EntityStore store) where T : UiControl?
     {
-        // Same race fix as the IObservable<object?> overload — see notes there.
-        // ViewStream<T> returns IObservable<T?> from generator.Invoke; if that
-        // observable emits synchronously (Observable.Return / BehaviorSubject),
-        // the first emission MUST land in the initial SubscribeRequest reply
-        // instead of as a follow-up Patch racing the reply on the wire.
-        var initial = DisposeExistingAreas(store, context);
-        var produced = generator.Invoke(this, context, initial.Store);
-        var connectable = produced.Replay(1);
-        var connection = connectable.Connect();
-
-        T? firstView = default;
-        var gotFirst = false;
-        using (connectable.Take(1).Subscribe(v => { firstView = v; gotFirst = true; }))
-        {
-        }
-
-        EntityStoreAndUpdates ret;
-        if (gotFirst)
-        {
-            ret = RenderArea(context, firstView, initial.Store);
-        }
-        else
-        {
-            ret = initial;
-        }
-
-        // Skip(1) when we already inlined the first emission — see notes on
-        // the IObservable<object?> overload above. Avoids duplicate UpdateArea.
+        // 🚨 Important: do NOT collapse the first emission into ret here.
+        // ViewStream<T> bodies typically call `host.UpdateData(...)` to seed
+        // the editor's DataContext BEFORE returning the control observable.
+        // Both UpdateData and the control-emission go through Stream.Update —
+        // which queues them. If we inline the control into ret, the client
+        // receives Full(control) BEFORE the queued data Patch lands, and any
+        // test/UI code that reads the control's DataContext and immediately
+        // posts a JsonPatch (`UpdatePointer`) hits "target path not reachable"
+        // because the data hasn't arrived yet. Symptom: EditorTest.TestEditorWithDelayed
+        // hangs forever with Json.Patch InvalidOperationException retry-loops.
+        //
+        // Keep the original "Full(empty) → Patch(data) → Patch(control)" order:
+        // returning ret without the view, then UpdateArea fires later when the
+        // observable emits, lets the data Patch land before the control Patch.
+        var ret = DisposeExistingAreas(store, context);
         RegisterForDisposal(context.Parent?.Area ?? context.Area,
-            connectable
-                .Skip(gotFirst ? 1 : 0)
-                .DistinctUntilChanged()
-                .Subscribe(c => UpdateArea(context, c), FailRendering));
-        RegisterForDisposal(context.Parent?.Area ?? context.Area, connection);
+            generator.Invoke(this, context, ret.Store)
+                .Subscribe(c => UpdateArea(context, c), FailRendering)
+        );
         return ret;
     }
     internal EntityStoreAndUpdates RenderArea<T>(RenderingContext context, AsyncViewStream<T> asyncGenerator, EntityStore store) where T : UiControl?
@@ -603,54 +588,20 @@ public record LayoutAreaHost : IDisposable
 
     internal EntityStoreAndUpdates RenderArea(RenderingContext context, IObservable<object?> generator, EntityStore store)
     {
+        // 🚨 Important: do NOT collapse the first emission into ret here — see
+        // notes on the ViewStream<T> overload above. View functions seed
+        // DataContext via `host.UpdateData(...)` which is queued through
+        // Stream.Update; inlining the control into ret would let the client
+        // see the control before the data Patch arrives, breaking any
+        // UpdatePointer call that follows. The original queued-Patch flow
+        // preserves data-before-control ordering.
         logger?.LogInformation("[LAH-RENDER-OBS] Start subscribing area={area} hub={hub} generatorType={genType}",
             context.Area, Stream.Hub.Address, generator.GetType().Name);
+        var ret = DisposeExistingAreas(store, context);
 
-        // 🚨 Race fix: when the generator emits its first value SYNCHRONOUSLY on
-        // Subscribe (Observable.Return / BehaviorSubject / ReplaySubject(1) — the
-        // common case for view functions that hand back a pre-built control), the
-        // emission MUST land in the SubscribeRequest's initial reply, not in a
-        // follow-up Patch. The Patch path fires Stream.Update before any client
-        // subscriber is wired up — by the time the SubscribeRequest reply lands
-        // and the client subscribes, that Patch is gone. Symptom: client receives
-        // Full(empty) and then nothing forever (GetControlStream → null then quiet).
-        //
-        // We peek the first emission via Replay(1), render it directly into ret so
-        // the Full carries the populated control, then track subsequent emissions
-        // for live updates. DistinctUntilChanged swallows the replayed first value.
-        var connectable = generator.Replay(1);
-        var connection = connectable.Connect();
-
-        object? firstView = null;
-        var gotFirst = false;
-        using (connectable.Take(1).Subscribe(v => { firstView = v; gotFirst = true; }))
-        {
-            // Synchronous-emit observables (Observable.Return etc.) fire inline;
-            // gotFirst is now true. Async observables leave it false and we fall
-            // back to the original Patch-on-emission flow.
-        }
-
-        EntityStoreAndUpdates ret;
-        if (gotFirst)
-        {
-            logger?.LogInformation("[LAH-RENDER-OBS] sync first-emit captured area={area} type={type}",
-                context.Area, firstView?.GetType().Name ?? "null");
-            ret = RenderArea(context, firstView, store);
-        }
-        else
-        {
-            ret = DisposeExistingAreas(store, context);
-        }
-
-        // When we already rendered the first emission into ret, Skip(1) so the
-        // live subscriber doesn't re-render the same value via UpdateArea (the
-        // Replay(1) buffer would replay it on subscribe → duplicate Patch that
-        // triggers a redundant re-render of the area + its child controls).
-        // For async observables (gotFirst=false), no buffered value to skip.
         RegisterForDisposal(
             context.Area,
-            connectable
-                .Skip(gotFirst ? 1 : 0)
+            generator
                 .DistinctUntilChanged()
                 .Subscribe(
                     view =>
@@ -666,7 +617,6 @@ public record LayoutAreaHost : IDisposable
                     },
                     () => logger?.LogInformation("[LAH-RENDER-OBS] completed area={area}", context.Area))
         );
-        RegisterForDisposal(context.Area, connection);
         return ret;
     }
 
