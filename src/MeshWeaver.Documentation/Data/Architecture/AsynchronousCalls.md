@@ -202,6 +202,64 @@ The `hub.Post` indirection breaks the graph: the post returns immediately, the S
 
 **When `Subscribe` may run the work directly:** read-only display work that emits to a `BehaviorSubject` (no upstream calls), or a closure that simply tears down a disposable on a terminal event. Anything that touches `workspace.GetQuery`, `workspace.GetMeshNodeStream(remotePath)`, `meshService.CreateNode/UpdateNode`, or any `hub.Post` whose response your continuation awaits — move it behind a `hub.Post` + handler.
 
+## 🚨 Subscribe-all-upfront cell loading — `Observable.CombineLatest` of N synchronization streams, never `.Concat()`
+
+Loading N node contents (chat history, thread thumbnail, sub-thread summary) needs **N hub activations in parallel**, not one at a time. The shape that gets this wrong is a serial fold:
+
+```csharp
+// ❌ WRONG — sequential; total = Σ(t_i).
+// `.Concat()` subscribes to stream #1 first, waits for it to complete (Take(1)
+// + Timeout), THEN subscribes to #2, etc. If each cell's hub takes 200 ms to
+// activate cold, ten cells = 2 s of wall-clock — but only one activation runs
+// at any moment, so most of the infra is idle. CI-load amplifies it: under
+// contention each t_i grows and the serial sum hits the per-cell Timeout.
+var cellLookups = cellIds.Select(id =>
+    workspace.GetMeshNodeStream($"{threadPath}/{id}")
+        .Take(1)
+        .Timeout(TimeSpan.FromSeconds(5))
+        .Catch<MeshNode, Exception>(_ => Observable.Empty<MeshNode>()));
+
+return cellLookups.Concat()              // serial fold
+    .ToList()
+    .Select(cells => Aggregate(cells));
+```
+
+```csharp
+// ✅ RIGHT — Observable.CombineLatest subscribes to ALL N upstream streams
+// the instant the consumer subscribes. The N per-node hub activations and
+// initial-frame round-trips happen CONCURRENTLY, so total wall-clock is
+// ≈ max(t_i) instead of Σ(t_i). On a 10-cell load with cold hubs this is
+// ~10× faster and — crucially — the variance flattens because slow infra
+// gets exercised in parallel rather than sequentially queued.
+//
+// Per-cell Catch returns a sentinel `null` so CombineLatest still fires
+// when one cell times out. Without the sentinel, CombineLatest waits
+// forever (it requires at least one emission from every input).
+var cellLookups = cellIds.Select(id =>
+    workspace.GetMeshNodeStream($"{threadPath}/{id}")
+        .Take(1)
+        .Timeout(TimeSpan.FromSeconds(5))
+        .Select(n => (MeshNode?)n)
+        .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null)));
+
+return Observable.CombineLatest(cellLookups)
+    .Take(1)
+    .Select(cells => Aggregate(cells.Where(c => c != null).Cast<MeshNode>().ToList()));
+```
+
+**Why `CombineLatest` and not `Merge`+`Distinct`:** both subscribe to all inputs upfront, so both achieve the parallel-activation goal. The difference is shape: `CombineLatest` produces a positional tuple/list (cell #i is at index i), which is what the aggregator wants. `Merge` produces a stream of values in arrival order — you'd then need `Distinct(node => node.Path)` + `Take(N)` + `ToList()` to recover the set. Both work; `CombineLatest` is simpler when each input emits exactly one value (`Take(1)`).
+
+**Why this smears load over infra:** each `cache.GetStream(path)` / `workspace.GetMeshNodeStream(path)` triggers an `IMeshNodeStreamCache` lookup, possibly a `GetPermissionRequest` to the access hub, possibly cold-activation of the per-node hub, possibly a database read on the partition root. Running all N in parallel lets the cache, the access pipeline, the database, and the activation scheduler all be busy at once instead of idle for `(N-1)/N` of the wall-clock. The result is more uniform tail latency under load — slow cells no longer block fast ones.
+
+**Lazy chain, eager subscribe:** building the `cellLookups.Select(...)` does NOT subscribe — these are cold observables. Subscription happens when `Observable.CombineLatest(cellLookups)` is itself subscribed (by `.ToTask()`, `.Subscribe(...)`, or by being chained into the caller's output). At that moment, all N inputs subscribe simultaneously. Don't materialize the inputs into a different shape (`.ToList()` of the source enumerable is fine; awaiting individual streams is not) — anything that touches each input sequentially before handing the collection to `CombineLatest` reintroduces the serial pattern.
+
+**Canonical callsites:**
+
+- `ThreadExecution.LoadFullConversationHistoryFromMesh` — N prior-cell loads for the agent's chat history per round.
+- `ThreadExecution.LoadPriorUserMessagesFromMesh` — post-restart resume after `AgentChatClient` cache miss.
+
+**When NOT to fan-out at all:** if the consumer only needs a *preview* (e.g. a thumbnail card in a catalog), don't load every cell to render a 60-char string. Return the synchronous data (title, count, last-modified) from the OWN node and delegate the preview to a `LayoutAreaControl` pointing at the relevant child cell's compact view — the child hub activates lazily on the Blazor side when the tile becomes visible. Canonical: `ThreadLayoutAreas.Thumbnail` returns title + count immediately and embeds a `LayoutAreaControl(lastCellPath, "Streaming")` for the preview.
+
 ## Streams are reactive — subscribe, don't snapshot
 
 `ISynchronizationStream<T>` is consumed via `.Select(...)` / `.Where(...)` / `.Subscribe(...)`. The framework's snapshot accessor is `internal` — application code can't see it, so the temptation to `.Current?.Value` doesn't exist. If a sync handler needs a value it can't subscribe for, the handler is wrong: derive it from the request payload, or defer the work to a follow-up message posted from inside `Subscribe`.
