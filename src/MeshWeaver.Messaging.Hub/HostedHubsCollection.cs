@@ -1,5 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -12,6 +14,17 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     private readonly ILogger logger = serviceProvider.GetRequiredService<ILogger<HostedHubsCollection>>();
 
     private readonly ConcurrentDictionary<Address, IMessageHub> messageHubs = new(AddressComparer.Instance);
+
+    private readonly Subject<IMessageHub> _hubAdded = new();
+    /// <summary>
+    /// Emits each <see cref="IMessageHub"/> as it's added to this collection.
+    /// Routes that need a hub that may register slightly later (cross-thread
+    /// sync sub-hub creation race) can subscribe to this and re-attempt
+    /// delivery when the matching hub appears. Hot subject — late subscribers
+    /// miss prior emissions; pair with a synchronous <see cref="GetHub"/>
+    /// check first.
+    /// </summary>
+    public IObservable<IMessageHub> HubAdded => _hubAdded.AsObservable();
 
     public IMessageHub? GetHub(Address address, Func<MessageHubConfiguration, MessageHubConfiguration> config, HostedHubCreation create)
     {
@@ -32,7 +45,11 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
             {
                 var newHub = CreateHub(address, config);
                 if (newHub != null)
-                    return messageHubs[address] = newHub;
+                {
+                    messageHubs[address] = newHub;
+                    try { _hubAdded.OnNext(newHub); } catch { /* never throw on notification */ }
+                    return newHub;
+                }
             }
 
             return null;
@@ -43,6 +60,7 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     {
         messageHubs[hub.Address] = hub;
         hub.RegisterForDisposal(h => messageHubs.TryRemove(h.Address, out _));
+        try { _hubAdded.OnNext(hub); } catch { /* never throw on notification */ }
     }
 
     private IMessageHub? CreateHub(Address address, Func<MessageHubConfiguration, MessageHubConfiguration> config)
