@@ -125,3 +125,87 @@ across the silo boundary:
 | Each user circuit's `PortalApplication` creates `portal/{userId}` via `GetHostedHub` + auto-`RegisterStream`. | Test's `GetClientAsync` creates `client/{clientId}` and auto-`RegisterStream`s it. |
 | All adapter instances (silo PG adapter + portal PG adapter) point at the same PG DB via shared connection string. | All `InMemoryStorageAdapter` instances (silo + client) share the same backing `ConcurrentDictionary` via fixture-level singleton. |
 | Silo dispatches portal-bound messages via Orleans memory stream keyed by `portal/{userId}`. | Silo dispatches test-bound responses via the same memory-stream mechanism, since the test hub subscribed at `client/{clientId}`. |
+
+## The cache hub — why the rotate test still fails
+
+The shared backing dict + `RegisterStream(ClientMesh.Address)` fixes
+visibility of just-written nodes (silo's path resolver finds them) but
+the **response routing** for `GetMeshNodeStream(remotePath).Update(…)`
+still falls into the mesh-type NotFound trap. Here's why:
+
+`MeshNodeStreamCache.GetEntry` opens its upstream subscription with:
+
+```csharp
+var handle = meshHub.GetWorkspace().GetMeshNodeStreamBypassCache(p);
+```
+
+The cache uses `meshHub` (the parent mesh hub) as the workspace —
+which means the `SubscribeRequest` it posts has `Sender = mesh/{guid}`,
+the mesh hub's own address. When the silo handles the request and posts
+a response back, the response targets `mesh/{guid}` → silo's
+`RoutingGrain.RouteMessage` sees a mesh-type address → no grain →
+NotFound.
+
+**The fix**: `MeshNodeStreamCache` must host its own dedicated
+**registered** hub at e.g. `cache/mesh-node-cache`, and open all
+upstream subscriptions from THAT hub's workspace. Then the response
+target is `cache/mesh-node-cache` — a registered, memory-stream-addressable
+hub that the silo CAN deliver to.
+
+Sketch:
+
+```csharp
+public sealed class MeshNodeStreamCache : IMeshNodeStreamCache
+{
+    private readonly IMessageHub cacheHub;
+
+    public MeshNodeStreamCache(IMessageHub meshHub, ILogger<MeshNodeStreamCache> logger)
+    {
+        var routingService = meshHub.ServiceProvider.GetRequiredService<IRoutingService>();
+        cacheHub = meshHub.GetHostedHub(
+            new Address("cache", "mesh-node-cache"),
+            config => config.WithInitialization(hub =>
+                hub.RegisterForDisposal(routingService.RegisterStream(hub))));
+        ...
+    }
+
+    private Entry GetEntry(string path) => _streams.GetOrAdd(path, p =>
+        new Lazy<Entry>(() =>
+        {
+            // Open upstream from the registered cache hub — sender on
+            // the SubscribeRequest is now cache/mesh-node-cache, which
+            // the silo's RoutingGrain can route responses back to via
+            // its memory-stream dispatch path.
+            var handle = cacheHub.GetWorkspace().GetMeshNodeStreamBypassCache(p);
+            ...
+        }));
+}
+```
+
+The cache hub must ALSO be added to the silo's `RoutingGrain` type
+list for memory-stream dispatch (or — cleaner — RoutingGrain's check
+becomes "if `IRoutingService.streams.ContainsKey(address)` use memory
+stream"), so `cache/*` addresses route via the cluster-wide memory
+stream the cache hub subscribed to via `RegisterStream`.
+
+## Test that proves this works
+
+`OrleansUserOwnedModelTest.UserOwnedProvider_RotateKey_ResolverPicksUpNewKey`
+is the canonical repro for this design requirement. It is currently
+skipped pending the cache-hub refactor. The test:
+
+1. Creates a `ModelProvider` node via the client mesh hub
+   (handler runs locally, writes to the shared backing dict).
+2. `GetMeshNodeStream(providerPath).Update(rotate)` — opens a remote
+   subscription via `MeshNodeStreamCache.GetEntry`.
+3. The silo handles the subscribe-and-rotate, posts back the new
+   `MeshNode`.
+4. Response routes to the cache hub at `cache/mesh-node-cache` —
+   registered, memory-stream-addressable.
+5. The test then asserts the post-rotate `ApiKey == "sk-rotated"` via
+   the synced query (which sees the rotation through the shared
+   backing dict).
+
+The test will pass once `MeshNodeStreamCache` is refactored to use a
+dedicated registered hub as outlined above. Until then it is skipped
+with a comment pointing to this document.
