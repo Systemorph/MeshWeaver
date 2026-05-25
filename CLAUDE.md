@@ -118,7 +118,11 @@ Full reference: [LocalDevWorkflow.md](src/MeshWeaver.Documentation/Data/Architec
 
 ## 🚨🚨🚨 ABSOLUTE: `GetMeshNodeStream().Update()` is the ONLY mutation API
 
-**Every mesh-node mutation goes through `workspace.GetMeshNodeStream(path).Update(current => modified)`. Every other API — `SubmitMessageRequest`/`SubmitMessageResponse`, completion callbacks via `hub.Set<Action<...>>`, bespoke `IRequest`/`IResponse` pairs for state changes — IS BEING DISCONTINUED. Do not add new code that uses those patterns; migrate existing code to `stream.Update` whenever you touch it.**
+**Every mesh-node mutation goes through `workspace.GetMeshNodeStream(path).Update(current => modified)`. Every other API — `SubmitMessageRequest`/`SubmitMessageResponse` (deleted 2026-05-25), completion callbacks via `hub.Set<Action<...>>`, bespoke `IRequest`/`IResponse` pairs for state changes — IS DISCONTINUED. Do not add new code that uses those patterns; migrate existing code to `stream.Update` whenever you touch it.**
+
+**Thread submissions**: `ThreadSubmission.Submit(new SubmitContext { Hub, ThreadPath, UserText, ContextPath, ... })`. Internally writes `PendingUserMessages` via `stream.Update`. The submission watcher reacts, drains pending into Messages, allocates cells, and invokes `ThreadExecution.ExecuteMessageAsync(execHub, RoundParams, AccessContext?)` **directly as a method** — no message dispatch.
+
+**Completion**: agent reaching terminal state writes `Status = Completed/Cancelled/Error` to the response cell via `PushToResponseMessage(...)` (stream.Update), AND creates a `Notification` MeshNode satellite at `{threadPath}/_Notification/{id}` via `EmitCompletionNotification`. The user's notification bell databinds to this — same source the tests assert on. Query shape: `path:{threadPath}/_Notification scope:children nodeType:Notification` (filter by nodeType for robustness when other satellite types live under the thread).
 
 **Observing completion**: subscribe to `workspace.GetRemoteStream<MeshNode>(path)` or `GetMeshNodeStream(path)` and wait for the relevant state on the node's `Content` (e.g. `MeshThread.Messages.Count >= 2`, `RequestedStatus = Cancelled`, `Status = Completed`). The GUI databinds the same way; tests do too.
 
