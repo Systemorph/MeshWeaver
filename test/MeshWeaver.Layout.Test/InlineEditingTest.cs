@@ -568,25 +568,24 @@ public class InlineEditingPersistenceTest(ITestOutputHelper output) : HubTestBas
             .Timeout(10.Seconds())
             .FirstAsync(x => x is StackControl);
 
-        // Rapidly update multiple times
+        // Rapidly update multiple times. No Task.Delay between calls — back-to-back
+        // UpdatePointer fires inside the debounce window naturally; the Where() below
+        // waits on the final state via stream.Where, not on a wall-clock sleep.
         var finalTitle = $"Final Title {DateTime.Now:HHmmss}";
         for (int i = 1; i <= 5; i++)
         {
             var intermediateTitle = i < 5 ? $"Intermediate {i}" : finalTitle;
             layoutStream.UpdatePointer(intermediateTitle, "/data/\"persisted_item\"", new JsonPointerReference("title"));
-            await Task.Delay(20, TestContext.Current.CancellationToken); // Less than debounce window
         }
 
         Output.WriteLine($"Sent 5 rapid updates, final title: {finalTitle}");
 
-        // Wait for debounce and persistence
-        await Task.Delay(500, TestContext.Current.CancellationToken);
-
-        // Verify only the final value was persisted
+        // Verify only the final value was persisted — stream.Where + Timeout
+        // is the canonical wait-for-condition shape (no Task.Delay).
         var items = await workspace
             .GetRemoteStream<PersistedContent>(hostAddress)!
             .Where(items => items.Any(i => i.Id == "item-1" && i.Title == finalTitle))
-            .Timeout(5.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync();
 
         var item = items.First(i => i.Id == "item-1");
