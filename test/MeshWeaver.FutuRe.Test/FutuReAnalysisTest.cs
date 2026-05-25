@@ -104,7 +104,10 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
                 SourceType = "FileSystem",
                 Name = "storage",
                 BasePath = graphPath,
-                // IsEditable defaults to false — read-only by design.
+                ExposeInChildren = true,
+                // IsEditable defaults to false — storage is the read-only backing
+                // store. Per-node MapContentCollection("attachments", "storage", …)
+                // wraps it as an editable view per node.
             }))
             .ConfigureDefaultNodeHub(config =>
             {

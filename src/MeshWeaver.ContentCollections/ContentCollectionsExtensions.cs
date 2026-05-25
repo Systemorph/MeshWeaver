@@ -596,6 +596,12 @@ internal class MappedContentCollectionConfigProvider(
         Name = targetCollectionName,
         SourceType = MappedSourceType,
         Address = address,
+        // The whole point of MapContentCollection is to expose a writable
+        // per-node view over a read-only backing store; default the wrapper
+        // to editable + child-visible. (Source collection's defaults still
+        // bind it — the resolved config picks IsEditable from this wrapper.)
+        IsEditable = true,
+        ExposeInChildren = true,
         Settings = new Dictionary<string, string>
         {
             [SourceCollectionKey] = sourceCollectionName,
