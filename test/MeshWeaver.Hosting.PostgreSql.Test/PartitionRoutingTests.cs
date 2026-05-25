@@ -37,15 +37,6 @@ public class PartitionRoutingTests
     /// state, not by accidental schema presence.
     /// </summary>
     /// <summary>
-    /// Obsolete after Matches() removal. The IsReadOnly + try-then-claim
-    /// design is exercised end-to-end by the Stage 9 test suites
-    /// (PgOnlyProdShapeTests, MixedPgStaticTests, PartitionLifecycleTests).
-    /// Keep as a Skip-marker so the file compiles until the new suites land.
-    /// </summary>
-    [Fact(Skip = "Replaced by PartitionLifecycleTests (Stage 9c) after Matches() removal")]
-    public Task Matches_OnlyTrue_AfterRegisterPartition() => Task.CompletedTask;
-
-    /// <summary>
     /// Writes to satellite paths must land in the satellite table named by
     /// <see cref="PartitionDefinition.TableMappings"/>, not in the primary
     /// <c>mesh_nodes</c> table. This is the storage-routing rule from
