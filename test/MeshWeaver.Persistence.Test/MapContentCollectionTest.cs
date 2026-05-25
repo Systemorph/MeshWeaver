@@ -35,12 +35,16 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
         Directory.CreateDirectory(_testBasePath);
         Output.WriteLine($"Test base path: {_testBasePath}");
 
-        // Create a "TestStorage" collection config at mesh level
+        // Create a "TestStorage" collection config at mesh level.
+        // ExposeInChildren=true so per-node MapContentCollection wrappers
+        // (which copy this flag from the source config) surface in
+        // GetAllCollectionConfigs after the default flip (95f840f34).
         var testStorageConfig = new ContentCollectionConfig
         {
             Name = "TestStorage",
             SourceType = "FileSystem",
-            BasePath = _testBasePath
+            BasePath = _testBasePath,
+            ExposeInChildren = true
         };
 
         return builder
