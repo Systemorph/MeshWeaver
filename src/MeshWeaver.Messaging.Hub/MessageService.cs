@@ -44,6 +44,23 @@ public class MessageService : IMessageService
     private readonly IMessageHub hub;
     private readonly BufferBlock<Func<Task<IMessageDelivery>>> buffer = new();
     private readonly BufferBlock<Func<Task<IMessageDelivery>>> deferredBuffer = new();
+
+    /// <summary>
+    /// Per-message deferral timeout. A message that sits in <see cref="deferredBuffer"/>
+    /// longer than this is failed back to the sender as a <see cref="DeliveryFailure"/>
+    /// instead of hanging. Surfaces stuck-init scenarios (e.g. NodeType compile that
+    /// never completes) as actionable errors rather than silent timeouts.
+    /// </summary>
+    private static readonly TimeSpan DeferralTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Tracks every delivery currently in <see cref="deferredBuffer"/>. Removed
+    /// when <see cref="ProcessDeferredMessage"/> drains it. The deferral-timeout
+    /// timer fires <see cref="ReportFailure"/> for any entry still here when its
+    /// deadline elapses.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, (IMessageDelivery Delivery, CancellationTokenSource TimeoutCts)>
+        deferredDeliveries = new();
     private readonly ActionBlock<Func<Task<IMessageDelivery>>> deliveryAction;
     private readonly BufferBlock<Func<CancellationToken, Task>> executionBuffer = new();
     private readonly ActionBlock<Func<CancellationToken, Task>> executionBlock;
@@ -157,9 +174,22 @@ public class MessageService : IMessageService
 
     private void NotifyStartupFailure(object? _)
     {
-        // TODO V10: See that we respond to each message (31.10.2025, Roland Buergi)
-        throw new DeliveryFailureException(
-            $"Message hub {Address} failed to initialize in {hub.Configuration.StartupTimeout}");
+        // Drain every deferred delivery and post a DeliveryFailure for each, so
+        // every caller's await resolves with a concrete error instead of hanging
+        // until the test-level timeout swallows the result silently. Throwing
+        // from this Timer callback (the old behaviour) was lost to the runtime
+        // and produced false-negative CI passes — the messages just sat in the
+        // deferred buffer until disposal.
+        var stillClosed = string.Join(",", gates.Keys);
+        var reason = $"Message hub {Address} failed to initialize in {hub.Configuration.StartupTimeout} — gates still closed: [{stillClosed}]";
+        logger.LogError(reason);
+        foreach (var (_, tracker) in deferredDeliveries)
+        {
+            tracker.TimeoutCts.Cancel();
+            tracker.TimeoutCts.Dispose();
+            ReportFailure(tracker.Delivery.WithProperty("Error", reason));
+        }
+        deferredDeliveries.Clear();
     }
 
     public bool OpenGate(string name)
@@ -436,6 +466,7 @@ public class MessageService : IMessageService
                             logger.LogDebug("Deferring on-target message {MessageType} (ID: {MessageId}) in {Address}",
                                 delivery.Message.GetType().Name, delivery.Id, Address);
                             MessageTrace.Write($"hub={Address} msg={name} id={delivery.Id} DEFERRED gates=[{string.Join(",", gates.Keys)}]");
+                            ScheduleDeferralTimeout(delivery);
                             deferredBuffer.Post(() => ProcessDeferredMessage(delivery, cancellationToken));
                             return delivery.Forwarded();
                         }
@@ -471,8 +502,49 @@ public class MessageService : IMessageService
     /// <summary>
     /// Process a deferred message, bypassing the deferral check to prevent infinite loops
     /// </summary>
+    /// <summary>
+    /// Tracks a deferred delivery and schedules a <see cref="DeferralTimeout"/>
+    /// deadline. If the hub doesn't drain the message within the budget, posts a
+    /// <see cref="DeliveryFailure"/> back to the sender with a diagnostic
+    /// listing the gates still closed — converts the "silent hang on stuck
+    /// init" failure mode into an actionable exception at the caller's await.
+    /// </summary>
+    private void ScheduleDeferralTimeout(IMessageDelivery delivery)
+    {
+        var cts = new CancellationTokenSource();
+        deferredDeliveries[delivery.Id] = (delivery, cts);
+        _ = Task.Delay(DeferralTimeout, cts.Token).ContinueWith(t =>
+        {
+            if (t.IsCanceled) return;
+            if (!deferredDeliveries.TryRemove(delivery.Id, out var tracker)) return;
+            tracker.TimeoutCts.Dispose();
+            var stillClosed = string.Join(",", gates.Keys);
+            ReportFailure(delivery.WithProperty("Error",
+                $"Hub {Address} deferred {delivery.Message.GetType().Name} (id={delivery.Id}) for >{DeferralTimeout.TotalSeconds:F0}s "
+                + $"without opening init gates [{stillClosed}] — likely a stuck NodeType compile, "
+                + $"missing handler registration on the receiver, or a dependency that never initialised."));
+        }, TaskScheduler.Default);
+    }
+
     private async Task<IMessageDelivery> ProcessDeferredMessage(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
+        // Pull from the deferral-timeout tracker first so the timeout timer
+        // won't fire ReportFailure after the message has been successfully
+        // drained. If the tracker entry is missing the timer already fired —
+        // a DeliveryFailure was posted and the sender has moved on; drop.
+        if (deferredDeliveries.TryRemove(delivery.Id, out var tracker))
+        {
+            tracker.TimeoutCts.Cancel();
+            tracker.TimeoutCts.Dispose();
+        }
+        else
+        {
+            logger.LogDebug(
+                "Dropping deferred message {MessageType} (ID: {MessageId}) in {Address} — deferral timeout already fired",
+                delivery.Message.GetType().Name, delivery.Id, Address);
+            return delivery.Ignored();
+        }
+
         logger.LogDebug("Processing deferred message {MessageType} (ID: {MessageId}) in {Address}",
             delivery.Message.GetType().Name, delivery.Id, Address);
 
@@ -772,6 +844,16 @@ public class MessageService : IMessageService
             logger.LogWarning(ex, "Error disposing hang detection timer in {elapsed}ms for {Address}",
                 hangDetectionStopwatch.ElapsedMilliseconds, Address);
         }
+
+        // Cancel every outstanding deferral-timeout timer so they don't post
+        // a DeliveryFailure into a hub that's already disposing (would race
+        // with the buffer.Complete below and produce noise).
+        foreach (var (_, tracker) in deferredDeliveries)
+        {
+            tracker.TimeoutCts.Cancel();
+            tracker.TimeoutCts.Dispose();
+        }
+        deferredDeliveries.Clear();
 
         // Complete the buffers to stop accepting new messages
         var bufferStopwatch = Stopwatch.StartNew();
