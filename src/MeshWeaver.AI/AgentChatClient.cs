@@ -580,23 +580,12 @@ public class AgentChatClient : IAgentChat
         var lastMessageText = messages.LastOrDefault() is { } last ? ExtractTextFromMessage(last) : null;
         DetectMessageAgentReferences(lastMessageText);
 
-        // 🚨 Cold-start gate: wait for the synced agent query to emit its Initial
-        // before SelectAgent — otherwise on a fresh Orleans silo the agents
-        // collection is empty and SelectAgent returns null, producing the
-        // "No suitable agent found" failure mode (Orleans.Test ChatHistory /
-        // delegation / chat-portal tests, ~9 of 19 failing test signatures).
-        // 30 s budget matches the cache-read timeout in HandleStartExecutionOnExec.
-        try
-        {
-            await WhenInitialized
-                .Take(1)
-                .Timeout(TimeSpan.FromSeconds(30))
-                .ToTask(cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (TimeoutException) { /* fall through — SelectAgent will return the canned error */ }
-
         // Pure in-memory lookup against the synced agent cache.
+        // 🚨 Callers MUST await `WhenInitialized` before calling here on a
+        // cold path — this method does not gate, because the gate must run
+        // on a non-hub thread (Task.Run in ThreadExecution.ExecuteMessageAsync).
+        // Awaiting WhenInitialized here would block the hub's ActionBlock if
+        // GetResponseAsync runs on it.
         var agent = SelectAgent(messages.LastOrDefault());
         if (agent == null)
         {
@@ -717,20 +706,9 @@ public class AgentChatClient : IAgentChat
         var lastMessageTextStreaming = messages.LastOrDefault() is { } lastMsg ? ExtractTextFromMessage(lastMsg) : null;
         DetectMessageAgentReferences(lastMessageTextStreaming);
 
-        // 🚨 Same cold-start gate as GetResponseAsync — wait for synced agent
-        // query Initial before SelectAgent, else cold Orleans silos return
-        // "No suitable agent found" with an empty cache.
-        try
-        {
-            await WhenInitialized
-                .Take(1)
-                .Timeout(TimeSpan.FromSeconds(30))
-                .ToTask(cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (TimeoutException) { /* fall through */ }
-
-        // Pure in-memory lookup against the synced agent cache.
+        // 🚨 Callers MUST await `WhenInitialized` before invoking on a cold
+        // path — gate is at the caller, not here, because awaiting would block
+        // the hub ActionBlock if GetStreamingResponseAsync is called on it.
         var agent = SelectAgent(messages.LastOrDefault());
         if (agent == null)
         {
