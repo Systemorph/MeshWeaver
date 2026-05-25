@@ -111,8 +111,16 @@ public static class ThreadSubmission
     /// </summary>
     public static void Submit(SubmitContext ctx)
     {
+        var logger = ctx.Hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.AI.ThreadSubmission");
+        logger?.LogInformation(
+            "[ThreadSubmission.Submit] ENTRY hub={Hub} threadPath={ThreadPath} userTextLen={Len} agent={Agent} model={Model}",
+            ctx.Hub.Address, ctx.ThreadPath ?? "(null)", ctx.UserText?.Length ?? 0,
+            ctx.AgentName ?? "(null)", ctx.ModelName ?? "(null)");
+
         if (string.IsNullOrEmpty(ctx.ThreadPath))
         {
+            logger?.LogWarning("[ThreadSubmission.Submit] REJECTED — no ThreadPath");
             ctx.OnError?.Invoke("Submit requires ThreadPath. Use CreateThreadAndSubmit for new threads.");
             return;
         }
@@ -135,6 +143,7 @@ public static class ThreadSubmission
         }
         catch (Exception ex)
         {
+            logger?.LogWarning(ex, "[ThreadSubmission.Submit] AppendUserInput threw for {ThreadPath}", ctx.ThreadPath);
             ctx.OnError?.Invoke($"Submit failed: {ex.Message}");
         }
     }

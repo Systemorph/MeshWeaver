@@ -92,8 +92,10 @@ public static class ThreadInput
         var msgId = NewId();
         var logger = workspace.Hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.ThreadInput");
-        logger?.LogDebug(
-            "[AppendUserInput] entry workspace.Hub={Hub} threadPath={ThreadPath} msgId={MsgId} agent={Agent} model={Model}",
+        // Promoted from Debug → Info so the delegation-test diagnostics show
+        // the submit chain (entry → update lambda → OnNext) at default log level.
+        logger?.LogInformation(
+            "[AppendUserInput] ENTRY workspace.Hub={Hub} threadPath={ThreadPath} msgId={MsgId} agent={Agent} model={Model}",
             workspace.Hub.Address, threadPath, msgId,
             message.AgentName ?? "(null)", message.ModelName ?? "(null)");
 
@@ -112,8 +114,8 @@ public static class ThreadInput
         // the caller's identity and surface as 'no AccessContext' warnings).
         workspace.GetMeshNodeStream(threadPath).Update(node =>
         {
-            logger?.LogDebug(
-                "[AppendUserInput] update lambda invoked for {ThreadPath} (node.Path={NodePath} contentType={ContentType})",
+            logger?.LogInformation(
+                "[AppendUserInput] UPDATE_LAMBDA invoked for {ThreadPath} (node.Path={NodePath} contentType={ContentType})",
                 threadPath, node.Path ?? "(null)",
                 node.Content?.GetType().Name ?? "(null)");
             var thread = node.Content as MeshThread ?? new MeshThread();
@@ -134,8 +136,8 @@ public static class ThreadInput
                 }
             };
         }).Subscribe(
-            updated => logger?.LogDebug(
-                "[AppendUserInput] OnNext for {ThreadPath} msgId={MsgId} — userIds={UserIds} pending={Pending}",
+            updated => logger?.LogInformation(
+                "[AppendUserInput] ON_NEXT for {ThreadPath} msgId={MsgId} — userIds={UserIds} pending={Pending}",
                 threadPath, msgId,
                 (updated.Content as MeshThread)?.UserMessageIds.Count ?? -1,
                 (updated.Content as MeshThread)?.PendingUserMessages.Count ?? -1),
