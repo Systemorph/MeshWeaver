@@ -188,7 +188,22 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         });
 
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
-        => Observable.FromAsync<MeshNode?>(async ct => { await WriteAsyncCore(node, options, ct); return node; });
+        => Observable.FromAsync<MeshNode?>(async ct =>
+        {
+            await WriteAsyncCore(node, options, ct);
+            // Fire the in-process Changes feed so same-process synced-query
+            // subscribers re-emit without waiting for the PG NOTIFY round-trip.
+            // PostgreSqlChangeListener still publishes for cross-process; the
+            // listener's pg_notify dedup (PostgreSqlExtensions LISTEN/NOTIFY
+            // dedup) makes the double-fire idempotent.
+            try
+            {
+                _changes.OnNext(DataChangeNotification.Updated(
+                    string.IsNullOrEmpty(node.Path) ? node.Id : node.Path, node));
+            }
+            catch { /* never throw — change feed is best-effort */ }
+            return node;
+        });
 
     private async Task WriteAsyncCore(MeshNode node, JsonSerializerOptions options, CancellationToken ct)
     {
@@ -251,7 +266,13 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     }
 
     public IObservable<string> Delete(string path)
-        => Observable.FromAsync(async ct => { await DeleteAsyncCore(path, ct); return path; });
+        => Observable.FromAsync(async ct =>
+        {
+            await DeleteAsyncCore(path, ct);
+            try { _changes.OnNext(DataChangeNotification.Deleted(path)); }
+            catch { /* never throw — change feed is best-effort */ }
+            return path;
+        });
 
     private async Task DeleteAsyncCore(string path, CancellationToken ct)
     {
