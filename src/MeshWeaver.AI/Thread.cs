@@ -195,6 +195,17 @@ public record Thread
     public string? CreatedBy { get; init; }
 
     /// <summary>
+    /// The thread's main output — the dedicated summary the agent produces at
+    /// the end of execution before returning. For sub-threads spawned via
+    /// <c>delegate_to_agent</c>, this is the value returned to the parent
+    /// agent as the tool-call result. Written by <c>ExecuteMessageAsync</c> at
+    /// the Completed terminal state (copies the last assistant message's text),
+    /// and the agent itself may overwrite it via a dedicated tool to provide
+    /// a tighter summary than the verbose chat response.
+    /// </summary>
+    public string? Summary { get; init; }
+
+    /// <summary>
     /// Explicit state machine for the round currently in flight. See
     /// <see cref="ThreadExecutionStatus"/> for the transition graph. The
     /// submission watcher fires when <see cref="Status"/> is
@@ -413,6 +424,17 @@ public record ThreadMessage
     /// The text content of the message.
     /// </summary>
     public required string Text { get; init; }
+
+    /// <summary>
+    /// Dedicated summary the agent produces at end-of-stream — a tighter
+    /// one-or-two-sentence distillation of <see cref="Text"/>. Written by
+    /// <c>ExecuteMessageAsync</c> in the same stream.Update cycle as the
+    /// final <see cref="ThreadMessageStatus.Completed"/> + thread-level
+    /// <see cref="Thread.Summary"/> flip. For sub-threads spawned via
+    /// <c>delegate_to_agent</c>, this is what the parent's tool-call result
+    /// resolves to — never the raw verbose <see cref="Text"/>.
+    /// </summary>
+    public string? Summary { get; init; }
 
     /// <summary>
     /// When the message was created.

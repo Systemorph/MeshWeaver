@@ -54,6 +54,11 @@ public static class AgentNodeType
     {
         Name = "Agent",
         Icon = "/static/NodeTypeIcons/bot.svg",
+        // Agents are first-class content nodes — they live at top-level paths
+        // (e.g. namespace:Agent for built-ins, or per-partition under contextPath)
+        // and are NOT children of another entity. The synced picker query
+        // (AgentPickerProjection.ObserveAgents) treats them as standalone.
+        IsSatelliteType = false,
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<AgentConfiguration>())

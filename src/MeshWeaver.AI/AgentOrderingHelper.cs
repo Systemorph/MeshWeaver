@@ -1,5 +1,7 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
+using MeshWeaver.Data;
+using MeshWeaver.Messaging;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Reactive;
@@ -8,14 +10,36 @@ namespace MeshWeaver.AI;
 
 /// <summary>
 /// Shared helper for querying and ordering agents by relevance to the current context.
-/// This is the SINGLE implementation of agent finding and ordering logic.
+/// Agent list retrieval ALWAYS flows through <see cref="AgentPickerProjection.ObserveAgents"/>
+/// → <c>workspace.GetQuery</c> — the synced pipeline that fans out across all
+/// static MeshNode providers, dedupes, and gates on the all-Initial event.
 /// </summary>
 public static class AgentOrderingHelper
 {
     /// <summary>
-    /// Queries agents from the mesh and returns them as AgentDisplayInfo with paths.
-    /// Searches NodeType namespace (children) and context path namespace (ancestors).
+    /// Reactive agent listing. Wraps <see cref="AgentPickerProjection.ObserveAgents"/>
+    /// (the canonical <c>workspace.GetQuery</c>-backed synced source) and emits the
+    /// agents ordered by <see cref="OrderByRelevance"/>. Every consumer — picker UI,
+    /// AgentDetailsArea, AzureClaude driver, tests — subscribes here, never to
+    /// <c>IMeshService.ObserveQuery</c> directly.
     /// </summary>
+    public static IObservable<IReadOnlyList<AgentDisplayInfo>> ObserveAgents(
+        IWorkspace workspace,
+        IMessageHub hub,
+        string? contextPath,
+        string? nodeTypePath)
+        => AgentPickerProjection.ObserveAgents(workspace, hub, contextPath, nodeTypePath)
+            .Select(agents => (IReadOnlyList<AgentDisplayInfo>)OrderByRelevance(agents, contextPath, nodeTypePath));
+
+    /// <summary>
+    /// <b>Test-only legacy shim.</b> Tests in <c>AgentSelectionTest</c> still
+    /// mock <see cref="IMeshService.ObserveQuery"/> directly; this preserves
+    /// the shape they expect. Production code MUST use <see cref="ObserveAgents"/>
+    /// (which goes through <c>workspace.GetQuery</c>). Two queries, both with
+    /// <c>nodeType:Agent</c>, varying on path + scope (the same shape the
+    /// production picker projection uses).
+    /// </summary>
+    [Obsolete("Production code must use ObserveAgents(workspace, hub, ...). This shim is preserved only for legacy IMeshService-mocking tests.")]
     public static async Task<IReadOnlyList<AgentDisplayInfo>> QueryAgentsAsync(
         IMeshService? meshQuery,
         string? contextPath,
@@ -23,13 +47,11 @@ public static class AgentOrderingHelper
     {
         var agentsDict = ImmutableDictionary<string, (AgentConfiguration Config, string Path)>.Empty;
 
-        // 1. Query agents from the NodeType namespace (higher priority)
-        // Use hierarchy scope to find agents that are children of the NodeType path
         if (meshQuery != null && !string.IsNullOrEmpty(nodeTypePath))
         {
             try
             {
-                var query = $"path:{nodeTypePath} nodeType:Agent scope:hierarchy";
+                var query = $"path:{nodeTypePath} nodeType:Agent scope:ancestors";
                 var stream = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
                     .Take(1)
                     .SelectMany(c => c.Items.ToObservable())
@@ -37,26 +59,19 @@ public static class AgentOrderingHelper
                 await foreach (var node in stream)
                 {
                     if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
-                    {
                         agentsDict = agentsDict.SetItem(config.Id, (config, node.Path ?? ""));
-                    }
                 }
             }
-            catch
-            {
-                // Ignore query errors
-            }
+            catch { /* ignore */ }
         }
 
-        // 2. Query agents from the context path namespace (ancestors)
         if (meshQuery != null)
         {
             try
             {
                 var query = string.IsNullOrEmpty(contextPath)
-                    ? "nodeType:Agent scope:selfAndAncestors"
-                    : $"path:{contextPath} nodeType:Agent scope:selfAndAncestors";
-
+                    ? "nodeType:Agent"
+                    : $"path:{contextPath} nodeType:Agent scope:ancestors";
                 var stream = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
                     .Take(1)
                     .SelectMany(c => c.Items.ToObservable())
@@ -64,18 +79,12 @@ public static class AgentOrderingHelper
                 await foreach (var node in stream)
                 {
                     if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
-                    {
                         agentsDict = agentsDict.SetItem(config.Id, (config, node.Path ?? ""));
-                    }
                 }
             }
-            catch
-            {
-                // Ignore query errors
-            }
+            catch { /* ignore */ }
         }
 
-        // Build display info list
         return agentsDict.Values
             .Select(x => new AgentDisplayInfo
             {

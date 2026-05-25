@@ -296,6 +296,8 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                              ExecuteDelegationAsync(agentConfig, allAgents, chat, agentName, task, context, ct),
                          listSubThreads: listSubThreads,
                          sendToSubThread: sendToSubThread,
+                         delegationEvents: chat.Delegations,
+                         workspace: Hub.GetWorkspace(),
                          logger: Logger))
             {
                 yield return tool;

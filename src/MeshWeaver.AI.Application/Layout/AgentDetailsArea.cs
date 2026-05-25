@@ -1,4 +1,7 @@
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text;
+using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Utils;
@@ -17,16 +20,17 @@ public static class AgentDetailsArea
     {
         // Extract agent name from LayoutAreaReference.Id
         var agentName = ExtractAgentNameFromLayoutAreaId(host.Reference.Id);
-        var meshQuery = host.Hub.ServiceProvider.GetService<MeshWeaver.Mesh.Services.IMeshService>();
-        if (meshQuery == null)
-        {
-            return Controls.Stack
-                .WithView(Controls.Title("Agent Details", 2), "Title")
-                .WithView(Controls.Text("Agent service not available."), "ErrorMessage");
-        }
 
-        // Load agents using AgentOrderingHelper
-        var agentDisplayInfos = await AgentOrderingHelper.QueryAgentsAsync(meshQuery, null, null);
+        // Agent list ALWAYS through the synced GetQuery pipeline
+        // (AgentPickerProjection.ObserveAgents) — never IMeshService.ObserveQuery /
+        // QueryAsync, those miss static-provider fan-out, dedup, and the Initial
+        // gating that produces "empty Agent dropdown" bugs.
+        var workspace = host.Hub.GetWorkspace();
+        var agentDisplayInfos = await AgentPickerProjection
+            .ObserveAgents(workspace, host.Hub, currentPath: null, nodeTypePath: null)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(10))
+            .ToTask(ct);
         var agents = agentDisplayInfos.Select(a => a.AgentConfiguration).ToList();
         var agent = agents.FirstOrDefault(a => a.Id == agentName);
 

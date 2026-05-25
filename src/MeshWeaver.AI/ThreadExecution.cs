@@ -674,7 +674,8 @@ public static class ThreadExecution
             string? agentName, string? modelName,
             int? inputTokens = null, int? outputTokens = null, int? totalTokens = null,
             DateTime? completedAt = null,
-            ThreadMessageStatus? status = null)
+            ThreadMessageStatus? status = null,
+            string? summary = null)
         {
             logger.LogDebug("[ThreadExec] PUSH_TO_MSG: responsePath={ResponsePath}, textLen={TextLen}, toolCalls={ToolCalls}, updatedNodes={UpdatedNodes}, status={Status}",
                 responsePath, text.Length, toolCalls.Count, updatedNodes.Count, status?.ToString() ?? "(preserve)");
@@ -738,7 +739,8 @@ public static class ThreadExecution
                     OutputTokens = outputTokens ?? current.OutputTokens,
                     TotalTokens = totalTokens ?? current.TotalTokens,
                     CompletedAt = completedAt ?? current.CompletedAt,
-                    Status = nextStatus
+                    Status = nextStatus,
+                    Summary = summary ?? current.Summary
                 };
                 return node != null
                     ? node with { Content = updatedContent }
@@ -1410,26 +1412,52 @@ public static class ThreadExecution
                     // user sees a real terminal state instead of a blank cell.
                     if (string.IsNullOrEmpty(finalText) && finalToolCalls.IsEmpty)
                         finalText = "*Agent returned no response — streaming completed with zero tokens.*";
+
+                    // Dedicated summary: parse <summary>...</summary> the agent
+                    // is instructed to emit at end-of-response (system prompt
+                    // boilerplate). If present, that inner text is the tool-
+                    // call result returned to a delegating parent; the marker
+                    // block is also stripped from finalText so the user sees a
+                    // clean response. If the marker is absent (agent forgot, or
+                    // an external chat client), summaryText falls back to
+                    // finalText. No extra LLM round-trip — same single
+                    // streaming foreach drives both.
+                    var summaryText = finalText;
+                    var summaryMatch = System.Text.RegularExpressions.Regex.Match(
+                        finalText,
+                        @"<summary>(?<inner>[\s\S]*?)</summary>",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    if (summaryMatch.Success)
+                    {
+                        summaryText = summaryMatch.Groups["inner"].Value.Trim();
+                        finalText = (finalText[..summaryMatch.Index] + finalText[(summaryMatch.Index + summaryMatch.Length)..]).TrimEnd();
+                        finalTextLen = finalText.Length;
+                    }
+
                     // 🚨 Subscribe to actually fire the cold cache.Update write.
-                    // The previous discard left the write un-invoked — the response
-                    // cell's Status never flipped to Completed in production.
+                    // Single push: writes Text=finalText, Summary=summaryText,
+                    // Status=Completed atomically to the response cell.
                     PushToResponseMessage(finalText, finalToolCalls, aggregatedChanges,
                         request.AgentName, request.ModelName,
                         inputTokens: inputTokens, outputTokens: outputTokens,
                         totalTokens: totalTokens, completedAt: DateTime.UtcNow,
-                        status: ThreadMessageStatus.Completed).Subscribe(
+                        status: ThreadMessageStatus.Completed,
+                        summary: summaryText).Subscribe(
                         _ => { },
                         ex => execLogger?.LogWarning(ex,
                             "PushToResponseMessage(Completed) failed for {ThreadPath}", threadPath));
-                    // Clear streaming state. Any PendingUserMessages that
-                    // arrived mid-stream stay pending — the watcher dispatches
-                    // them as a follow-up round once Status flips to Idle.
+                    // Clear streaming state AND publish the dedicated Summary
+                    // in the SAME stream.Update cycle as the Status → Idle
+                    // flip. Single emission → the parent's reactive subscriber
+                    // (DelegationTool) sees both Summary and Idle atomically,
+                    // never reads a stale empty Summary in an interleaving.
                     UpdateThreadExecution(t => t with
                     {
                         Status = ThreadExecutionStatus.Idle, ExecutionStatus = null, ActiveMessageId = null,
                         ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null,
                         PendingUserMessage = null, PendingAgentName = null, PendingModelName = null,
-                        PendingContextPath = null, PendingAttachments = null
+                        PendingContextPath = null, PendingAttachments = null,
+                        Summary = summaryText
                     }).Subscribe(
                         _ => { },
                         ex => execLogger?.LogWarning(ex,

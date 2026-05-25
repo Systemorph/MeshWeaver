@@ -41,12 +41,15 @@ One-way, fire-and-forget from the writer's perspective. The writer's action bloc
 ## Writer side: open the stream, push deltas, dispose
 
 ```csharp
-internal static IMessageDelivery ExecuteMessageAsync(
-    IMessageHub hub, IMessageDelivery<SubmitMessageRequest> delivery)
+// SubmitMessageRequest was deleted 2026-05-25 — ExecuteMessageAsync is now a
+// direct method call (not a hub handler). The submission watcher subscriber
+// invokes it after writing PendingUserMessages via stream.Update.
+internal static void ExecuteMessageAsync(
+    IMessageHub hub, RoundParams request, AccessContext? userAccessContext)
 {
     var parentHub  = hub.Configuration.ParentHub!;
     var workspace  = parentHub.GetWorkspace();
-    var responsePath = delivery.Message.ResponsePath!;
+    var responsePath = $"{request.ThreadPath}/{request.ResponseMessageId}";
 
     // Open the per-message remote stream once at start. Hold for the whole run.
     // The owning per-node hub activates on subscribe (it has the MeshNodeReference

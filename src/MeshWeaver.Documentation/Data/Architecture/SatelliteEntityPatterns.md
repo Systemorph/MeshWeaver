@@ -26,12 +26,16 @@ A comment is top-level when its namespace ends with `_Comment` (e.g., `Doc/MyDoc
 
 Satellite entity handlers must be **fully synchronous** (no `await`). They run inside the hub execution pipeline where blocking causes deadlocks in Orleans distributed mode.
 
-### Reference Implementation: `ThreadExecution.HandleSubmitMessage`
+### Reference Implementation: `ThreadExecution.ExecuteMessageAsync` (post-SubmitMessageRequest deletion)
 
 ```csharp
-internal static IMessageDelivery HandleSubmitMessage(
+// SubmitMessageRequest deleted 2026-05-25. The submission watcher invokes this
+// method directly after writing PendingUserMessages via stream.Update on the
+// thread node — no wire message, no handler.
+internal static void ExecuteMessageAsync(
     IMessageHub hub,
-    IMessageDelivery<SubmitMessageRequest> delivery)
+    RoundParams request,
+    AccessContext? userAccessContext)
 {
     var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
     var workspace = hub.GetWorkspace();  // Capture BEFORE Subscribe
@@ -213,10 +217,10 @@ meshService.CreateNode(subThreadNode).Subscribe(_ =>
             tcs.TrySetResult(new DelegationResult { ... });
     });
 
-    // 3. Submit message (Post + RegisterCallback, NOT AwaitResponse)
-    var delivery = Hub.Post(new SubmitMessageRequest { ... },
-        o => o.WithTarget(childAddress).WithAccessContext(userContext));
-    Hub.RegisterCallback(delivery, response => { ... return response; });
+    // 3. Submit via stream.Update on the sub-thread (SubmitMessageRequest
+    //    deleted 2026-05-25). The sub-thread's submission watcher reacts to
+    //    PendingUserMessages and invokes ExecuteMessageAsync directly.
+    ThreadInput.AppendUserInput(workspace, childAddress.Path, userMessage);
 },
 error => tcs.TrySetResult(new DelegationResult { Success = false }));
 

@@ -1,9 +1,14 @@
 using System.Collections.Immutable;
 using System.ComponentModel;
+using System.Reactive.Linq;
 using System.Text;
 using System.Text.Json;
+using MeshWeaver.Data;
+using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using MeshThread = MeshWeaver.AI.Thread;
 
 namespace MeshWeaver.AI.Plugins;
 
@@ -58,12 +63,13 @@ public record SubThreadInfo(
 ///         <c>PendingUserMessages</c> via <c>stream.Update</c>).</item>
 /// </list>
 ///
-/// <para><b>Completion semantics.</b> The current <c>delegate_to_agent</c> still
-/// drains the sub-thread's <see cref="IAsyncEnumerable{String}"/> chunks on a
-/// <c>Task.Run</c> with a TCS. The next reactive pass will switch this to
-/// subscribe to the sub-thread's MeshNode stream and resolve the TCS when
-/// <c>Status</c> flips back to <c>Idle</c> after execution, returning the
-/// dedicated summary the sub-agent writes to the thread before exiting.</para>
+/// <para><b>Completion semantics.</b> <c>delegate_to_agent</c> wraps the sub-thread's
+/// streaming pipeline in <c>Observable.Create</c> + <c>Subscribe</c>: the
+/// only <c>await foreach</c> in the entire delegation path runs on the subscriber's
+/// continuation (the parent agent loop's task scheduler), no <c>Task.Run</c>. Sub-thread
+/// completion (Status → Idle, response cell Status = Completed) terminates the inner
+/// async-enumerable; <c>OnCompleted</c> resolves the TCS with the aggregated summary
+/// text the sub-agent wrote to its response cell before exiting.</para>
 ///
 /// <para>Sub-thread progress is additionally visible inline via the side-channel
 /// <c>ToolCallEntry.DelegationPath</c> → the sub-thread's <c>Streaming</c> layout area.</para>
@@ -74,6 +80,14 @@ public static class DelegationTool
     /// Creates the suite of delegation tools: <c>delegate_to_agent</c>, plus
     /// <c>list_sub_threads</c> and <c>send_to_sub_thread</c> when the parent
     /// passes the needed accessor delegates.
+    ///
+    /// <para>When <paramref name="delegationEvents"/> + <paramref name="workspace"/>
+    /// are supplied, <c>delegate_to_agent</c> resolves its <c>Task&lt;string&gt;</c>
+    /// reactively: the next <c>Dispatched</c> event after invocation gives us the
+    /// sub-thread path, then a subscription to <c>workspace.GetRemoteStream&lt;MeshNode&gt;(subThreadPath)</c>
+    /// waits for <c>Thread.Status == Idle</c> (terminal), reads the sub-agent's
+    /// final assistant message text, and resolves the TCS with that summary —
+    /// no <c>Task.Run</c>, no chunk-aggregation race.</para>
     /// </summary>
     public static IEnumerable<AITool> CreateDelegationTools(
         AgentConfiguration currentAgent,
@@ -81,10 +95,14 @@ public static class DelegationTool
         Func<string, string, string?, CancellationToken, IAsyncEnumerable<string>> executeAsync,
         Func<IReadOnlyList<SubThreadInfo>>? listSubThreads = null,
         Action<string, string>? sendToSubThread = null,
+        IObservable<MeshWeaver.AI.Delegation.DelegationEvent>? delegationEvents = null,
+        IWorkspace? workspace = null,
         ILogger? logger = null)
     {
         yield return CreateUnifiedDelegationTool(
-            currentAgent, hierarchyAgents, executeAsync, listSubThreads != null, sendToSubThread != null, logger);
+            currentAgent, hierarchyAgents, executeAsync,
+            listSubThreads != null, sendToSubThread != null,
+            delegationEvents, workspace, logger);
 
         if (listSubThreads is not null)
             yield return CreateListSubThreadsTool(listSubThreads, logger);
@@ -103,7 +121,8 @@ public static class DelegationTool
         Func<string, string, string?, CancellationToken, IAsyncEnumerable<string>> executeAsync,
         ILogger? logger = null)
         => CreateUnifiedDelegationTool(currentAgent, hierarchyAgents, executeAsync,
-            hasListTool: false, hasSendTool: false, logger);
+            hasListTool: false, hasSendTool: false,
+            delegationEvents: null, workspace: null, logger);
 
     private static AITool CreateUnifiedDelegationTool(
         AgentConfiguration currentAgent,
@@ -111,6 +130,8 @@ public static class DelegationTool
         Func<string, string, string?, CancellationToken, IAsyncEnumerable<string>> executeAsync,
         bool hasListTool,
         bool hasSendTool,
+        IObservable<MeshWeaver.AI.Delegation.DelegationEvent>? delegationEvents,
+        IWorkspace? workspace,
         ILogger? logger)
     {
         var delegationInfo = ImmutableList<DelegationInfo>.Empty;
@@ -152,41 +173,124 @@ public static class DelegationTool
             logger?.LogInformation("Delegating to {AgentName}: {Task}, context={Context}",
                 agentName, task, context ?? "(inherited)");
 
-            // Drain the sub-thread's enumerable on ThreadPool with ConfigureAwait(false).
-            // This is the MeshWeaver "Post + RegisterCallback" shape: the caller awaits a
-            // TCS-backed Task resolved from a non-hub thread, so the grain scheduler is
-            // never captured on sub-thread continuations. The previous `async IAsyncEnumerable`
-            // shape let FunctionInvokingChatClient capture the grain scheduler on every
-            // iteration, wedging it whenever a sub-thread continuation needed to post back
-            // through the same scheduler — the Orleans deadlock.
+            // Reactive completion: pure observable composition. The only `await
+            // foreach` in the entire delegation path runs inside Observable.Create
+            // on the subscriber's continuation (TaskScheduler.Current at Subscribe
+            // time = the parent agent loop's task scheduler — Orleans grain in
+            // prod, default in monolith tests). No Task.Run, no callback-bag.
             //
-            // 🚧 Next refactor: switch to GetRemoteStream<MeshNode>(subThreadPath)
-            //    .Where(Status == Idle).FirstAsync() with summary read from thread.
+            // PRIMARY completion signal (when delegationEvents + workspace are
+            // wired by ChatClientAgentFactory): subscribe to delegationEvents for
+            // the next Dispatched (captures sub-thread path), then subscribe to
+            // workspace.GetRemoteStream<MeshNode>(subThreadPath), wait for
+            // Thread.Status flipping back to Idle AFTER ExecutionStartedAt was set
+            // (= post-execution Idle), and read the last assistant ThreadMessage's
+            // Text as the sub-agent's dedicated summary. Resolve TCS with that.
+            //
+            // FALLBACK (legacy callers without delegationEvents/workspace, or
+            // when the reactive path doesn't fire in time): the IAsyncEnumerable's
+            // OnCompleted resolves the TCS with the aggregated chunk text. The
+            // IAsyncEnumerable also drives the sub-thread setup as a side effect,
+            // so it MUST be subscribed even when the reactive completion path
+            // would handle the result — otherwise the sub-thread never starts.
             var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var sb = new StringBuilder();
 
-            _ = Task.Run(async () =>
+            if (delegationEvents is not null && workspace is not null)
             {
-                var sb = new StringBuilder();
+                delegationEvents
+                    .Where(e => e.Phase == MeshWeaver.AI.Delegation.DelegationLifecycle.Dispatched)
+                    .Take(1)
+                    .Subscribe(dispatched =>
+                    {
+                        var subThreadPath = dispatched.SubThreadPath;
+                        logger?.LogInformation(
+                            "Delegation Dispatched: sub-thread={SubPath}, callId={CallId} — subscribing for Idle",
+                            subThreadPath, dispatched.CallId);
+
+                        // Subscribe to the sub-thread node's stream and capture
+                        // the Running → Idle transition. We use Scan to remember
+                        // whether we've seen a non-Idle (Executing / Completing)
+                        // status; the first Idle emission after that is the
+                        // genuine post-execution terminal, NOT the initial-Idle
+                        // emission the synced query replays on subscribe.
+                        workspace.GetRemoteStream<MeshNode>(new Address(subThreadPath))
+                            .Select(nodes => nodes?.FirstOrDefault(n => n.Path == subThreadPath))
+                            .Select(node => node?.Content as MeshThread)
+                            .Where(t => t is not null)
+                            .Scan(
+                                (sawRunning: false, terminal: (MeshThread?)null),
+                                (state, t) =>
+                                {
+                                    if (t!.Status is ThreadExecutionStatus.Executing
+                                                  or ThreadExecutionStatus.StartingExecution
+                                                  or ThreadExecutionStatus.Completing)
+                                        return (true, null);
+                                    if (state.sawRunning && t.Status == ThreadExecutionStatus.Idle)
+                                        return (state.sawRunning, t);
+                                    return state;
+                                })
+                            .Where(s => s.terminal is not null)
+                            .Take(1)
+                            .Timeout(TimeSpan.FromMinutes(10))
+                            .Subscribe(
+                                s =>
+                                {
+                                    // Thread.Summary IS the agent's tool-call result —
+                                    // written by ExecuteMessageAsync in the same
+                                    // stream.Update cycle as Status → Idle, so this
+                                    // emission carries the summary atomically.
+                                    var summary = s.terminal!.Summary ?? "";
+                                    logger?.LogInformation(
+                                        "Sub-thread {SubPath} Running→Idle: summary len={Len}",
+                                        subThreadPath, summary.Length);
+                                    tcs.TrySetResult(summary);
+                                },
+                                ex => logger?.LogWarning(ex,
+                                    "Sub-thread {SubPath} Running→Idle wait failed; falling back to chunk aggregate",
+                                    subThreadPath));
+                    });
+            }
+
+            Observable.Create<string>(async (observer, ct) =>
+            {
                 try
                 {
                     await foreach (var chunk in executeAsync(agentName, task, context, cancellationToken)
-                        .WithCancellation(cancellationToken).ConfigureAwait(false))
+                        .WithCancellation(cancellationToken))
                     {
-                        sb.Append(chunk);
+                        observer.OnNext(chunk);
                     }
-                    tcs.TrySetResult(sb.ToString());
-                    logger?.LogInformation("Delegation to {AgentName} stream completed", agentName);
+                    observer.OnCompleted();
                 }
                 catch (OperationCanceledException)
                 {
-                    tcs.TrySetCanceled(cancellationToken);
+                    observer.OnCompleted();
                 }
                 catch (Exception ex)
                 {
-                    logger?.LogError(ex, "Delegation to {AgentName} failed", agentName);
-                    tcs.TrySetException(ex);
+                    observer.OnError(ex);
                 }
-            });
+            })
+            .Subscribe(
+                chunk => sb.Append(chunk),
+                ex =>
+                {
+                    logger?.LogError(ex, "Delegation to {AgentName} failed", agentName);
+                    if (ex is OperationCanceledException) tcs.TrySetCanceled(cancellationToken);
+                    else tcs.TrySetException(ex);
+                },
+                () =>
+                {
+                    // TrySetResult is idempotent — if the reactive Idle path
+                    // already resolved with the dedicated summary, this is a no-op.
+                    if (tcs.TrySetResult(sb.ToString()))
+                    {
+                        logger?.LogInformation(
+                            "Delegation to {AgentName} completed via chunk-aggregate fallback (len={Len})",
+                            agentName, sb.Length);
+                    }
+                });
 
             return tcs.Task;
         }
