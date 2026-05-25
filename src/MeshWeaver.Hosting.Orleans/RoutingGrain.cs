@@ -34,6 +34,7 @@ internal static class RoutingGrainTrace
 [StatelessWorker(1)]
 internal class RoutingGrain(
     IPathResolver pathResolver,
+    MeshConfiguration meshConfig,
     ILogger<RoutingGrain> logger) : Grain, IRoutingGrain
 {
     public Task<IMessageDelivery> RouteMessage(IMessageDelivery delivery)
@@ -65,12 +66,17 @@ internal class RoutingGrain(
         // surfaced through the standard response/DeliveryFailure path on the
         // sender's hub.
 
-        // Portal/client hubs are not grains — deliver via Orleans memory stream directly.
-        // OnNextAsync MUST run inside the grain task scope (the stream provider
-        // is grain-scheduler-bound); fire-and-forget would lose the message.
-        if (address.Type == AddressExtensions.PortalType || address.Type == "client")
+        // Config-driven memory-stream dispatch: any address-type prefix
+        // declared as a static stream route goes via the cluster-wide
+        // Orleans memory stream instead of grain activation. This is the
+        // "I'm a registered hosted hub, find me via my RegisterStream
+        // subscription" path — portal hubs (`portal/{userId}`), test
+        // client hubs (`client/{id}`), cache hub (`cache/mesh-node-cache`),
+        // etc. The list is populated by each module via
+        // `IMeshBuilder.AddStreamRoutedAddressType("…")`.
+        if (meshConfig.StreamRoutedAddressTypes.Contains(address.Type))
         {
-            logger.LogDebug("[ROUTE] {Address} is portal/client → memory stream", addressPath);
+            logger.LogDebug("[ROUTE] {Address} type={Type} declared stream-routed → memory stream", addressPath, address.Type);
             RoutingGrainTrace.Write($"RoutingGrain.RouteMessage MEMORY_STREAM addr={addressPath} id={delivery.Id} streamName={addressPath}");
             var s = streamProvider.GetStream<IMessageDelivery>(addressPath);
             return s.OnNextAsync(delivery)

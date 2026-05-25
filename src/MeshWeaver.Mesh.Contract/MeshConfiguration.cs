@@ -18,8 +18,41 @@ public class MeshConfiguration(
     IReadOnlyList<string>? globalCreatableTypes = null,
     IReadOnlySet<string>? autocompleteExcludedNodeTypes = null,
     IReadOnlyList<NodeTypePermission>? nodeTypePermissions = null,
-    IReadOnlyList<QueryRoutingRule>? queryRoutingRules = null)
+    IReadOnlyList<QueryRoutingRule>? queryRoutingRules = null,
+    IReadOnlySet<string>? streamRoutedAddressTypes = null)
 {
+    /// <summary>
+    /// Address-type prefixes that route via the cluster-wide Orleans memory
+    /// stream rather than grain activation. Populated by modules at startup
+    /// via <see cref="MeshBuilderExtensions.AddStreamRoutedAddressType"/>.
+    /// Defaults to <c>portal</c> + <c>client</c>; <see cref="MeshWeaver.Hosting"/>'s
+    /// MeshNodeStreamCache adds <c>cache</c> when its hub is wired.
+    ///
+    /// <para>The silo's <c>RoutingGrain.RouteMessage</c> consults this set
+    /// instead of hard-coding string literals — see
+    /// <c>Doc/Architecture/OrleansTestRoutingPattern.md</c>. Hubs at these
+    /// addresses must call <see cref="IRoutingService.RegisterStream(IMessageHub)"/>
+    /// in their <c>WithInitialization</c> so the cluster-wide memory stream
+    /// dispatch reaches them.</para>
+    /// </summary>
+    public IReadOnlySet<string> StreamRoutedAddressTypes { get; } =
+        streamRoutedAddressTypes ?? DefaultStreamRoutedAddressTypes;
+
+    /// <summary>
+    /// Static initialisation-time defaults — declared here rather than via
+    /// runtime <c>MeshBuilder.AddStreamRoutedAddressType</c> so initialisation
+    /// order can never make a builtin host-hub type "go missing" (no flakes
+    /// from a configurator running before the cache hub's module registers
+    /// itself).
+    /// <list type="bullet">
+    ///   <item><c>portal</c> — Blazor user circuits (PortalApplication).</item>
+    ///   <item><c>client</c> — test client hubs / SDK clients.</item>
+    ///   <item><c>cache</c> — MeshNodeStreamCache's mesh-node-cache hub.</item>
+    /// </list>
+    /// </summary>
+    public static readonly IReadOnlySet<string> DefaultStreamRoutedAddressTypes =
+        new HashSet<string>(StringComparer.Ordinal) { "portal", "client", "cache" };
+
     /// <summary>
     /// Registered mesh nodes by their key/path.
     /// </summary>

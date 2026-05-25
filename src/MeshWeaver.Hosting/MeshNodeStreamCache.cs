@@ -94,6 +94,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
     private const int MaxMissingNodeRetries = 30;
 
     private readonly IMessageHub meshHub;
+    private readonly IMessageHub cacheHub;
     private readonly ILogger<MeshNodeStreamCache> logger;
 
     // 🚨 Lazy<Entry> wraps the factory because ConcurrentDictionary.GetOrAdd
@@ -115,15 +116,36 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
         this.meshHub = meshHub;
         this.logger = logger;
 
-        // 🚨 Register cleanup so hydration subscriptions are disposed at the
-        // hub's Shutdown entry (before Quiescing). Without this, every
-        // cache.GetStream(path) opens a SubscribeRequest that dangles in
-        // mesh hub's responseSubjects forever — the test base's QuiesceTimeout
-        // leak-detection (~500ms) flags it as a leaked Observe callback and
-        // fails the test class at dispose. The dispose action runs in
-        // HandleShutdown's pre-Quiescing pass, so canceling the subscriptions
-        // here clears responseSubjects before the snapshot is taken.
-        meshHub.RegisterForDisposal(_ => DisposeHydrationSubscriptions());
+        // 🚨 Dedicated cache hub at the cluster-wide static address
+        // `cache/mesh-node-cache`. The `cache` address-type is declared as
+        // stream-routed at static-init time in
+        // MeshConfiguration.DefaultStreamRoutedAddressTypes — silo's
+        // RoutingGrain sees that and dispatches via memory stream rather
+        // than grain activation. The cache hub follows the Portal pattern
+        // (PortalApplication.DefaultPortalConfig) and registers itself
+        // with the routing service in WithInitialization so its memory-
+        // stream subscription wires up before any reader subscribes.
+        //
+        // Without this hub, MeshNodeStreamCache would open all upstream
+        // SubscribeRequests with the parent mesh hub as Sender —
+        // unregistered, non-routable from the silo's perspective —
+        // and silo-side responses would NotFound. See
+        // Doc/Architecture/OrleansTestRoutingPattern.md.
+        var routingService = meshHub.ServiceProvider.GetRequiredService<IRoutingService>();
+        cacheHub = meshHub.GetHostedHub(
+            new Address("cache", "mesh-node-cache"),
+            config => config
+                .AddData()  // IWorkspace registration so GetEntry can build the stream handle
+                .WithInitialization(hub =>
+                    hub.RegisterForDisposal(routingService.RegisterStream(hub))),
+            HostedHubCreation.Always)!;
+
+        // Register cleanup on the cache hub so hydration subscriptions are
+        // disposed at its Shutdown entry (before Quiescing). The cache hub
+        // owns the cache's lifetime; tearing it down here cancels every
+        // upstream SubscribeRequest the cache opened so the leak detector
+        // sees a clean response-subjects set at test-class dispose.
+        cacheHub.RegisterForDisposal(_ => DisposeHydrationSubscriptions());
     }
 
     private void DisposeHydrationSubscriptions()
@@ -159,8 +181,11 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
             logger.LogDebug("MeshNodeStreamCache: opening shared stream for {Path}", p);
             // 🚨 Bypass the cache when opening our OWN upstream — otherwise
             // GetMeshNodeStream(workspace, path) auto-redirects back into the
-            // cache and we'd recurse forever waiting for ourselves.
-            var handle = meshHub.GetWorkspace().GetMeshNodeStreamBypassCache(p);
+            // cache and we'd recurse forever waiting for ourselves. Use the
+            // dedicated CACHE HUB's workspace so the SubscribeRequest's Sender
+            // is `cache/mesh-node-cache` — a static stream-routed address the
+            // silo's RoutingGrain delivers responses to via memory stream.
+            var handle = cacheHub.GetWorkspace().GetMeshNodeStreamBypassCache(p);
             // Replay(1) + eager .Connect() under the sanctioned cache identity:
             // the upstream SubscribeRequest opens ONCE under
             // MeshNodeCacheIdentity.Address ("cache/mesh-node-cache"). The cache
