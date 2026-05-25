@@ -543,6 +543,12 @@ internal class SecurityService : ISecurityService, IDisposable
         var key = scope ?? string.Empty;
         return _scopeAssignmentsCache.GetOrCreate(key, entry =>
         {
+            // Permanent diagnostic: when an access-control bug shows up,
+            // this log proves which scopes ever opened a synced AccessAssignment
+            // query — missing scopes are the smoking gun (e.g. only root opens
+            // because HasPermission for the actual nodePath never reaches this
+            // method).
+            _logger.LogDebug("[ScopeAssign-OPEN] hub={Hub} scope={Scope}", _hub.Address, key);
             entry.SlidingExpiration = UserCacheTtl;
 
             // Self: narrow ObserveQuery for THIS scope's _Access subtree only.
