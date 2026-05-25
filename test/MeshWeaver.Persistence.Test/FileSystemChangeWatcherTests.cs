@@ -163,9 +163,13 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
             """);
 
         // Stream-wait for the watcher's notification — replaces Task.Delay(500).
+        // 15s budget to match ExternalFileCreation_NotifiesObservers — Linux
+        // inotify takes 1-2s after watch establishment and CI runners under
+        // load tripped the default 5s here (run 26386225837).
         await WaitForNotification(receivedNotifications, n =>
             n.Path.Contains("external/node1") &&
-            (n.Kind == DataChangeKind.Created || n.Kind == DataChangeKind.Updated));
+            (n.Kind == DataChangeKind.Created || n.Kind == DataChangeKind.Updated),
+            timeoutMs: 15_000);
 
         // Assert - watcher should have published a creation/update notification
         receivedNotifications.Should().NotBeEmpty();
