@@ -355,6 +355,18 @@ public static class ThreadExecution
             .Take(1)
             .Subscribe(node =>
         {
+            // Diagnostic: every thread node we observe at this entry point.
+            // Confirms the auto-execute watcher actually fires and lets us see
+            // why threads created via BuildThreadWithMessages with PendingUserMessage
+            // either dispatch or get skipped.
+            if (node?.Content is MeshThread t0)
+            {
+                logger?.LogInformation(
+                    "[ThreadExec] WatchForExecution observed {ThreadPath} status={Status} hasPendingMsg={HasPending} isExecuting={Executing} activeMsg={Active}",
+                    threadPath, t0.Status, t0.PendingUserMessage is { Length: > 0 },
+                    t0.IsExecuting, t0.ActiveMessageId ?? "(null)");
+            }
+
             if (node?.Content is not MeshThread { PendingUserMessage: not null } thread)
                 return;
 
@@ -369,8 +381,9 @@ public static class ThreadExecution
             // MainNode for child cells = the thread's own MainNode (content node).
             var mainEntity = node?.MainNode ?? thread.PendingContextPath ?? threadPath;
 
-            logger?.LogInformation("[ThreadExec] Auto-execute: {ThreadPath}, activeMsg={ActiveMsg}",
-                threadPath, responseMsgId);
+            logger?.LogInformation(
+                "[ThreadExec] Auto-execute (initial submit / BuildThreadWithMessages): {ThreadPath}, activeMsg={ActiveMsg}, pendingMsgLen={Len}, agent={Agent}",
+                threadPath, responseMsgId, thread.PendingUserMessage?.Length ?? 0, thread.PendingAgentName ?? "(default)");
 
             var accessService = hub.ServiceProvider.GetService<AccessService>();
             if (!string.IsNullOrEmpty(thread.CreatedBy))
@@ -1144,17 +1157,16 @@ public static class ThreadExecution
                     ImmutableList<NodeChangeEntry>.Empty, request.AgentName, request.ModelName,
                     status: ThreadMessageStatus.Streaming);
 
-                // Schedule the streaming loop on the CURRENT TaskScheduler (= the
-                // Orleans grain scheduler when called from the submission watcher,
-                // = the default scheduler in monolith tests). NOT Task.Run (= thread
-                // pool) — per the architectural rule "only streaming is async; everything
-                // else is reactive". The streaming `await foreach` is the only async
-                // place allowed in the entire implementation; tool invocations run
-                // synchronously inside the loop (Microsoft.Extensions.AI's auto-invoke).
-                // Delegation completion is observed via stream subscription, not via
-                // awaited message round-trips, so the grain doesn't deadlock waiting
-                // on itself.
-                _ = Task.Factory.StartNew(async () =>
+                // Streaming loop runs on the thread pool via Task.Run — the grain
+                // scheduler stays FREE to process tool-call responses, delegation
+                // callbacks, and workspace updates. Without this, tool calls
+                // deadlock: they await a response that needs the grain scheduler
+                // which is blocked by the in-flight `await foreach`. The
+                // `await foreach` is the ONLY async place in the entire
+                // implementation; tool invocations + cell pushes inside this
+                // task run as observable composition, and the grain scheduler
+                // is available to handle their cross-hub Subscribe callbacks.
+                _ = Task.Run(async () =>
                 {
                     // Re-seed user AccessContext at the task-launch boundary. Inside this lambda we
                     // run the streaming loop + tool calls + responseStream.Update, all of which
@@ -1198,9 +1210,27 @@ public static class ThreadExecution
                     var pendingCalls = ImmutableDictionary<string, FunctionCallContent>.Empty;
                     string? lastCallKey = null;
 
+                    // Diagnostic: log the message + tool set we hand to the chat client.
+                    // The 6 OrleansDelegation* tests fail with toolCalls=0 — this lets us
+                    // see whether the test's fake client sees delegate_to_agent in
+                    // options.Tools (which gates its FunctionCallContent emission).
+                    logger.LogInformation(
+                        "[ThreadExec] STREAM_BEGIN threadPath={ThreadPath} agent={Agent} model={Model} msgs={Msgs}",
+                        threadPath, request.AgentName ?? "(default)", request.ModelName ?? "(default)",
+                        allMessages.Count);
+
                     // Pass ALL messages through the official AgentChatClient path
                     await foreach (var update in client.GetStreamingResponseAsync(allMessages, ct))
             {
+                // Diagnostic: surface every content-kind we see. If FunctionInvokingChatClient
+                // eats the FunctionCallContent before we see it, this loop only logs TextContent /
+                // UsageContent — the smoking gun for "toolCalls=0" failures.
+                if (update.Contents.Count > 0)
+                {
+                    logger.LogDebug("[ThreadExec] STREAM_UPDATE kinds=[{Kinds}]",
+                        string.Join(",", update.Contents.Select(c => c.GetType().Name)));
+                }
+
                 // Capture function call / delegation activity for execution status
                 foreach (var content in update.Contents)
                 {
@@ -1563,10 +1593,7 @@ public static class ThreadExecution
                         // IMeshNodeStreamCache.Update, whose upstream handle is owned
                         // by the cache and outlives this round.
                     }
-                },
-                executionCts.Token,
-                TaskCreationOptions.None,
-                TaskScheduler.Current).Unwrap();
+                });
                     }); // end of LoadFullConversationHistory.Subscribe
                 }); // end of contextNodeObs.Subscribe
                 }, // end of WhenInitialized.Subscribe onNext
