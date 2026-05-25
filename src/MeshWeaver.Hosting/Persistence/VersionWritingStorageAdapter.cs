@@ -22,6 +22,18 @@ internal class VersionWritingStorageAdapter(
     IStorageAdapter inner,
     IVersionQuery? versionQuery) : IStorageAdapter
 {
+    // 🚨 Decorator MUST forward Changes — without this it falls back to the
+    // interface default Observable.Empty, and every synced query subscribed
+    // to persistence.Changes on this decorator stops receiving notifications.
+    // The IDataChangeNotifier removal refactor (929bfe985) moved change-feed
+    // delivery to IStorageAdapter.Changes — at which point this decorator's
+    // missing override silently became the new bottleneck. Symptom in CI
+    // (26408564176): ~25 Security / Auth / NodeOps / Layout failures where
+    // the synced AccessAssignment query only emitted its Initial = 0 and
+    // never re-emitted after CreateNode runtime writes, so permission grants
+    // never reached the AccessControlPipeline before its 45 s deadline.
+    public IObservable<DataChangeNotification> Changes => inner.Changes;
+
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
         => inner.Read(path, options);
 
