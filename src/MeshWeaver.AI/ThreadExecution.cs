@@ -513,7 +513,12 @@ public static class ThreadExecution
         cache.GetStream(threadPath)
             .Where(n => (n?.Content as MeshThread)?.Status == ThreadExecutionStatus.StartingExecution)
             .Take(1)
-            .Timeout(TimeSpan.FromSeconds(10))
+            // 30 s, not 10 s — Orleans cold-start grain activation + cache hydration
+            // can run 15-25 s on a contended CI silo. The prior 10 s tripped on
+            // every Orleans.Test that goes through chat (delegation, portal flow,
+            // export, thread access — 8+ failures in CI run 26376715753 all
+            // showed `[HandleStartExecutionOnExec] cache read failed`).
+            .Timeout(TimeSpan.FromSeconds(30))
             .Subscribe(
                 latest =>
                 {
