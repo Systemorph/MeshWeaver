@@ -90,21 +90,17 @@ public static class ThreadExecution
 
     public static MessageHubConfiguration AddThreadExecution(this MessageHubConfiguration configuration)
         => configuration
-            // SubmitMessageRequest is the LAST surviving thread-mutation request:
-            // its handler pre-allocates a CancellationTokenSource that the pure
-            // stream-update path can't replicate without a side-effect watcher.
-            // Migration plan tracked in tasks #10. See RequestViaStreamUpdate.md.
-            .WithHandler<SubmitMessageRequest>(HandleSubmitMessage)
+            // SubmitMessageRequest was deleted 2026-05-25 — public submissions go
+            // through ThreadSubmission.Submit → ThreadInput.AppendUserInput →
+            // stream.Update writes PendingUserMessages on the thread node. The
+            // submission watcher (InstallSubmissionWatcher) reacts to that, the
+            // _Exec hosted hub runs the round, ExecuteMessageAsync is called
+            // directly as a method (no wire message). See CLAUDE.md →
+            // "GetMeshNodeStream().Update() is the ONLY mutation API".
             // Two-stage round-start: the THREAD hub atomically claims the
             // round (Status: Idle → StartingExecution) because the thread node
             // is its own; the _Exec hosted hub (see InstallExecutionHub) takes
             // over for the drain + cell creation + Status → Executing + stream.
-            // Both register a handler for StartExecutionTrigger:
-            //   • thread hub.HandleStartExecution — atomic claim, forward
-            //     to _Exec on success
-            //   • _Exec.HandleStartExecutionOnExec — drain pending into
-            //     Messages, materialise user cells, allocate response cell,
-            //     flip Status → Executing, post SubmitMessageRequest to self.
             .WithHandler<StartExecutionTrigger>(ThreadSubmission.HandleStartExecution)
             // Internal cross-hub mutation triggers — when ThreadSubmission.Apply*
             // is invoked from a non-owner hub, it posts these so the work lands
@@ -130,13 +126,12 @@ public static class ThreadExecution
             .WithInitialization(InstallHeartbeatTicker);
 
     /// <summary>
-    /// Eagerly creates the <c>_Exec</c> hosted hub at thread hub init time with
-    /// the handlers it owns: <see cref="SubmitMessageRequest"/> (streaming
-    /// entry) and <see cref="StartExecutionTrigger"/> (round-start: drain
+    /// Eagerly creates the <c>_Exec</c> hosted hub at thread hub init time.
+    /// Owns the <see cref="StartExecutionTrigger"/> handler (round-start: drain
     /// pending into Messages, materialise user cells, allocate response cell,
-    /// then post a SubmitMessageRequest to self for the streaming pass).
+    /// then call <c>ExecuteMessageAsync</c> directly for the streaming pass).
     ///
-    /// <para>Eager creation matters: the submission watcher posts directly to
+    /// <para>Eager creation matters: the submission watcher targets
     /// <c>{threadAddress}/_Exec</c>, and the framework's hosted-hub routing
     /// uses <see cref="HostedHubCreation.Never"/> when forwarding — so the
     /// hub must already exist before the first watcher tick.</para>
@@ -146,7 +141,6 @@ public static class ThreadExecution
         threadHub.GetHostedHub(
             new Address($"{threadHub.Address}/_Exec"),
             config => config
-                .WithHandler<SubmitMessageRequest>(ExecuteMessageAsync)
                 .WithHandler<StartExecutionTrigger>(HandleStartExecutionOnExec),
             HostedHubCreation.Always);
     }
@@ -396,20 +390,20 @@ public static class ThreadExecution
 
                 var executionHub = hub.GetHostedHub(
                     new Address($"{hub.Address}/_Exec"),
-                    config => config.WithHandler<SubmitMessageRequest>(ExecuteMessageAsync),
+                    config => config,
                     HostedHubCreation.Always);
 
-                executionHub!.Post(new SubmitMessageRequest
-                {
-                    ThreadPath = threadPath,
-                    UserMessageText = thread.PendingUserMessage ?? "",
-                    UserMessageId = userMsgId,
-                    ResponseMessageId = responseMsgId,
-                    AgentName = thread.PendingAgentName,
-                    ModelName = thread.PendingModelName,
-                    ContextPath = thread.PendingContextPath ?? thread.CreatedBy,
-                    Attachments = thread.PendingAttachments
-                }, o => userCtx != null ? o.WithAccessContext(userCtx) : o);
+                // Direct method call — no SubmitMessageRequest post.
+                ExecuteMessageAsync(executionHub!, new RoundParams(
+                    ThreadPath: threadPath,
+                    ResponseMessageId: responseMsgId,
+                    UserMessageId: userMsgId,
+                    UserMessageText: thread.PendingUserMessage ?? "",
+                    AgentName: thread.PendingAgentName,
+                    ModelName: thread.PendingModelName,
+                    ContextPath: thread.PendingContextPath ?? thread.CreatedBy,
+                    Attachments: thread.PendingAttachments
+                ), userCtx);
             }
 
             // Create cells, then start execution
@@ -608,325 +602,9 @@ public static class ThreadExecution
         return delivery.Processed();
     }
 
-    /// <summary>
-    /// Handles <see cref="SubmitMessageRequest"/> by appending the user message to
-    /// <see cref="MeshThread.PendingUserMessages"/> via
-    /// <see cref="ThreadInput.AppendUserInput"/>. The submission watcher
-    /// (<see cref="InstallSubmissionWatcher"/> → <see cref="ThreadSubmission.InstallServerWatcher"/>
-    /// → <c>DispatchRoundObs</c>) takes over: it ingests the pending entries into
-    /// <see cref="MeshThread.Messages"/>, materialises user satellite cells, allocates
-    /// a single response cell for the round, and posts to the <c>_Exec</c> hub.
-    ///
-    /// <para><b>Why not direct-dispatch.</b> A handler that allocated a response cell
-    /// and posted to <c>_Exec</c> on every <see cref="SubmitMessageRequest"/> raced
-    /// the active round's state (multiple concurrent rounds clobbered each other's
-    /// CTS / <c>ActiveMessageId</c> / <c>PendingUserMessage</c>). All ingestion goes
-    /// through the single-flight watcher path so the queue-don't-cancel semantics
-    /// hold: rapid submits pile up in <c>PendingUserMessages</c>; the watcher
-    /// dispatches them whenever <see cref="MeshThread.IsExecuting"/> is false, and
-    /// the agent's <c>check_inbox</c> tool drains them mid-round.</para>
-    /// </summary>
-    internal static IMessageDelivery HandleSubmitMessage(
-        IMessageHub hub,
-        IMessageDelivery<SubmitMessageRequest> delivery)
-    {
-        var request = delivery.Message;
-        var threadPath = request.ThreadPath;
-        var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
-
-        // Build the user message envelope (no cell materialisation here — the
-        // watcher / InboxTool creates the satellite cell when ingesting pending).
-        var userMessage = ThreadInput.CreateUserMessage(
-            request.UserMessageText,
-            createdBy: delivery.AccessContext?.ObjectId,
-            agentName: request.AgentName,
-            modelName: request.ModelName,
-            contextPath: request.ContextPath,
-            attachments: request.Attachments);
-
-        var msgId = ThreadInput.AppendUserInput(hub.GetWorkspace(), threadPath, userMessage);
-
-        logger?.LogInformation(
-            "[ThreadExec] HandleSubmitMessage: queued via AppendUserInput threadPath={ThreadPath} userMsgId={UserMsgId}",
-            threadPath, msgId);
-
-        hub.Post(
-            new SubmitMessageResponse
-            {
-                Success = true,
-                Messages = ImmutableList.Create(msgId)
-            },
-            o => o.ResponseFor(delivery));
-        return delivery.Processed();
-    }
-
-    // ────────────────────────────────────────────────────────────────────────
-    // Below: legacy direct-dispatch helpers (NOT a live entry point).
-    // Retained while the surrounding sub-thread delegation code still references
-    // the response-cell / completion-callback shape; new callsites must route
-    // through AppendUserInput + the submission watcher.
-    // ────────────────────────────────────────────────────────────────────────
-#pragma warning disable IDE0051 // Remove unused private members
-    private static IMessageDelivery HandleSubmitMessageLegacy(
-        IMessageHub hub,
-        IMessageDelivery<SubmitMessageRequest> delivery)
-    {
-        var request = delivery.Message;
-        var threadPath = request.ThreadPath;
-        var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
-
-        var clientProvidedCells = request.UserMessageId != null && request.ResponseMessageId != null;
-        var userMsgId = request.UserMessageId ?? Guid.NewGuid().ToString("N")[..8];
-        var responseMsgId = request.ResponseMessageId ?? Guid.NewGuid().ToString("N")[..8];
-        var responsePath = $"{threadPath}/{responseMsgId}";
-
-        var existingCts = hub.Get<CancellationTokenSource>();
-        existingCts?.Dispose();
-        var executionCts = new CancellationTokenSource();
-        hub.Set(executionCts);
-
-        // Atomic state-update with two outcomes:
-        //   • Fresh round (thread idle): claim it — set IsExecuting=true,
-        //     ActiveMessageId, mirror to IngestedMessageIds. Caller proceeds
-        //     to create response cell + post to _Exec.
-        //   • Queue (thread busy): append user message to PendingUserMessages
-        //     + UserMessageIds + Messages. Caller acknowledges and returns;
-        //     the submission watcher (ThreadSubmission.InstallSubmissionWatcher
-        //     → DispatchRoundObs) fires as soon as the in-flight round flips
-        //     IsExecuting=false and dispatches the queued user as its own
-        //     round.
-        //
-        // The branch decision lives INSIDE the Update lambda so two concurrent
-        // SubmitMessageRequest deliveries see strictly sequential snapshots and
-        // pick the correct path each time. The `queued` flag is closure-
-        // captured: the lambda runs synchronously on the hub's action block
-        // (OWN update via dsStream.Update), so by the time control returns
-        // from `Update(...)` the flag is stable and the outer `if (queued)`
-        // check is race-free.
-        var queued = false;
-        var queuedUserMessage = new ThreadMessage
-        {
-            Role = "user",
-            Text = request.UserMessageText,
-            Timestamp = DateTime.UtcNow,
-            Type = ThreadMessageType.ExecutedInput,
-            CreatedBy = delivery.AccessContext?.ObjectId,
-            AgentName = request.AgentName,
-            ModelName = request.ModelName,
-            ContextPath = request.ContextPath,
-            Attachments = request.Attachments,
-            Status = ThreadMessageStatus.Submitted
-        };
-        hub.GetWorkspace().GetMeshNodeStream().Update(node =>
-        {
-            var thread = node.Content as MeshThread ?? new MeshThread();
-            if (thread.IsExecuting)
-            {
-                // Queue path — round busy, append without claiming.
-                queued = true;
-                var qmsgs = thread.Messages.Contains(userMsgId)
-                    ? thread.Messages
-                    : thread.Messages.Add(userMsgId);
-                var qUserIds = thread.UserMessageIds.Contains(userMsgId)
-                    ? thread.UserMessageIds
-                    : thread.UserMessageIds.Add(userMsgId);
-                var qPending = thread.PendingUserMessages.SetItem(userMsgId, queuedUserMessage);
-                return node with
-                {
-                    Content = thread with
-                    {
-                        Messages = qmsgs,
-                        UserMessageIds = qUserIds,
-                        PendingUserMessages = qPending,
-                        // Preserve the queued submit's agent/model so the
-                        // next round picks them up (watcher's DispatchRound
-                        // reads thread.PendingAgentName / PendingModelName).
-                        PendingAgentName = request.AgentName ?? thread.PendingAgentName,
-                        PendingModelName = request.ModelName ?? thread.PendingModelName,
-                        PendingContextPath = request.ContextPath ?? thread.PendingContextPath
-                    }
-                };
-            }
-
-            // Direct dispatch path — thread idle, claim the round.
-            var msgs = thread.Messages;
-            if (!msgs.Contains(userMsgId)) msgs = msgs.Add(userMsgId);
-            if (!msgs.Contains(responseMsgId)) msgs = msgs.Add(responseMsgId);
-            var userIds = thread.UserMessageIds.Contains(userMsgId)
-                ? thread.UserMessageIds
-                : thread.UserMessageIds.Add(userMsgId);
-            var ingested = thread.IngestedMessageIds.Contains(userMsgId)
-                ? thread.IngestedMessageIds
-                : thread.IngestedMessageIds.Add(userMsgId);
-            return node with
-            {
-                Content = thread with
-                {
-                    Messages = msgs,
-                    UserMessageIds = userIds,
-                    IngestedMessageIds = ingested,
-                    Status = ThreadExecutionStatus.Executing,
-                    ActiveMessageId = responseMsgId,
-                    ExecutionStatus = null,
-                    TokensUsed = 0,
-                    ExecutionStartedAt = DateTime.UtcNow,
-                    // Heartbeat baseline — atomic with the Executing flip. The
-                    // parent heartbeat scanner reads this; combined with the
-                    // 60 s cold-start grace it gives a fresh round breathing
-                    // room before the "no activity" predicate can fire.
-                    LastActivityAt = DateTime.UtcNow,
-                    PendingUserMessage = request.UserMessageText,
-                    PendingAgentName = request.AgentName,
-                    PendingModelName = request.ModelName,
-                    PendingContextPath = request.ContextPath,
-                    PendingAttachments = request.Attachments?.ToImmutableList()
-                }
-            };
-        }).Subscribe(
-            _ => { },
-            ex => logger?.LogWarning(ex,
-                "HandleSubmitMessage: UpdateMeshNode failed for {ThreadPath}", threadPath));
-
-        // If we queued the user message, materialise the user satellite cell
-        // for the GUI to bind to (status=Submitted), respond with the queued
-        // id, and return. The watcher dispatches the round when the current
-        // turn ends.
-        if (queued)
-        {
-            var qMainEntity = request.ContextPath ?? threadPath;
-            var queueMeshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-            queueMeshService.CreateNode(new MeshNode(userMsgId, threadPath)
-            {
-                NodeType = ThreadMessageNodeType.NodeType,
-                MainNode = qMainEntity,
-                Content = queuedUserMessage
-            }).Subscribe(
-                _ => logger?.LogDebug("[ThreadExec] Queued user cell: {Path}", $"{threadPath}/{userMsgId}"),
-                ex => logger?.LogDebug(ex,
-                    "[ThreadExec] Queued user cell create error (may already exist): {Path}",
-                    $"{threadPath}/{userMsgId}"));
-            hub.Post(
-                new SubmitMessageResponse
-                {
-                    Success = true,
-                    Messages = ImmutableList.Create(userMsgId)
-                },
-                o => o.ResponseFor(delivery));
-            // Discard the unused CTS we pre-allocated above — the queued
-            // submission rides the current round's CTS until the watcher
-            // dispatches it, at which point _Exec's ExecuteMessageAsync
-            // creates a fresh CTS via StoreNewCts.
-            executionCts.Dispose();
-            return delivery.Processed();
-        }
-
-        logger?.LogInformation("[ThreadExec] HandleSubmitMessage: state updated for {ThreadPath}, activeMsg={ActiveMsg}, clientCells={ClientCells}",
-            threadPath, responseMsgId, clientProvidedCells);
-
-        var userCtx = delivery.AccessContext;
-        // MainNode for child cells = the thread's own MainNode (content node).
-        // We can't read the live workspace value synchronously here (.Current?.Value is null
-        // on cold hubs — see Doc/Architecture/AsynchronousCalls.md "never read .Current").
-        // The thread node's MainNode is set at creation time by ThreadNodeType.BuildThreadNode
-        // to equal the contextPath, so request.ContextPath is the authoritative value. Fall
-        // back to threadPath as a last resort (legacy threads with no ContextPath supplied).
-        var mainEntity = request.ContextPath ?? threadPath;
-
-        void RespondAndStartExecution()
-        {
-            // Register the completion callback BEFORE starting execution. The
-            // _Exec hub's ExecuteMessageAsync calls NotifyParentCompletion when
-            // the agent finishes streaming; that lookup needs the callback to
-            // already be on the hub. Without this the delegation tool's
-            // TaskCompletionSource never resolves and the parent thread hangs.
-            hub.Set<Action<SubmitMessageResponse>>(completionResponse =>
-            {
-                hub.Post(completionResponse, o => o.ResponseFor(delivery));
-                hub.Set<Action<SubmitMessageResponse>>(null!);
-            });
-
-            hub.Post(new SubmitMessageResponse { Success = true, Messages = ImmutableList.Create(userMsgId, responseMsgId) },
-                o => o.ResponseFor(delivery));
-
-            var legacyCache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-            UpdateResponseCell(legacyCache, responsePath, threadPath, responseMsgId, mainEntity,
-                msg => msg with { Text = "Allocating agent...", Status = ThreadMessageStatus.Streaming },
-                logger);
-
-            var executionHub = hub.GetHostedHub(
-                new Address($"{hub.Address}/_Exec"),
-                config => config.WithHandler<SubmitMessageRequest>(ExecuteMessageAsync),
-                HostedHubCreation.Always);
-
-            executionHub!.Post(new SubmitMessageRequest
-            {
-                ThreadPath = threadPath,
-                UserMessageText = request.UserMessageText,
-                UserMessageId = userMsgId,
-                ResponseMessageId = responseMsgId,
-                AgentName = request.AgentName,
-                ModelName = request.ModelName,
-                ContextPath = request.ContextPath,
-                Attachments = request.Attachments
-            }, o => userCtx != null ? o.WithAccessContext(userCtx) : o);
-        }
-
-        void RespondWithError(string error)
-        {
-            logger?.LogWarning("[ThreadExec] Cell creation failed for {ThreadPath}: {Error}", threadPath, error);
-            // Clear execution state since we're not starting
-            hub.GetWorkspace().GetMeshNodeStream().Update(node =>
-            {
-                var t = node.Content as MeshThread ?? new MeshThread();
-                return node with { Content = t with { Status = ThreadExecutionStatus.Idle, ActiveMessageId = null, ExecutionStartedAt = null } };
-            }).Subscribe(
-                _ => { },
-                ex => logger?.LogWarning(ex,
-                    "RespondWithError: UpdateMeshNode failed for {ThreadPath}", threadPath));
-            hub.Post(new SubmitMessageResponse { Success = false, Error = error },
-                o => o.ResponseFor(delivery));
-        }
-
-        if (clientProvidedCells)
-        {
-            // GUI flow — cells already exist, respond and start immediately.
-            RespondAndStartExecution();
-        }
-        else
-        {
-            // Server flow — create cells first, then respond and start execution.
-            // Response cell creation gates execution; user cell is fire-and-forget.
-            var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-
-            meshService.CreateNode(new MeshNode(userMsgId, threadPath)
-            {
-                NodeType = ThreadMessageNodeType.NodeType, MainNode = mainEntity,
-                Content = new ThreadMessage
-                {
-                    Role = "user", Text = request.UserMessageText, Timestamp = DateTime.UtcNow,
-                    Type = ThreadMessageType.ExecutedInput, CreatedBy = delivery.AccessContext?.ObjectId
-                }
-            }).Subscribe(
-                _ => logger?.LogDebug("[ThreadExec] User cell created: {Path}", $"{threadPath}/{userMsgId}"),
-                ex => logger?.LogDebug("[ThreadExec] User cell creation error (may already exist): {Error}", ex.Message));
-
-            meshService.CreateNode(new MeshNode(responseMsgId, threadPath)
-            {
-                NodeType = ThreadMessageNodeType.NodeType, MainNode = mainEntity,
-                Content = new ThreadMessage
-                {
-                    Role = "assistant", Text = "", Timestamp = DateTime.UtcNow,
-                    Type = ThreadMessageType.AgentResponse,
-                    AgentName = request.AgentName, ModelName = request.ModelName
-                }
-            }).Subscribe(
-                _ => RespondAndStartExecution(),
-                ex => RespondWithError($"Failed to create response cell: {ex.Message}"));
-        }
-
-        return delivery.Processed();
-    }
-#pragma warning restore IDE0051
+    // HandleSubmitMessage + HandleSubmitMessageLegacy deleted 2026-05-25.
+    // Public submissions go through ThreadSubmission.Submit → ThreadInput.AppendUserInput
+    // → the submission watcher. _Exec calls ExecuteMessageAsync directly (method, not message).
 
     /// <summary>
     /// Async handler on the _Exec hosted hub.
@@ -942,23 +620,34 @@ public static class ThreadExecution
     /// the tool loop instead of relying on Microsoft.Extensions.AI's auto-invocation;
     /// that's intentionally NOT done here.
     /// </summary>
-    internal static IMessageDelivery ExecuteMessageAsync(
+    /// <summary>
+    /// Parameters for a single agent round. Direct-call replacement for the
+    /// old <c>SubmitMessageRequest</c> wire message — the inputs the agent loop
+    /// needs to run one round. Not a wire message: ExecuteMessageAsync is
+    /// invoked as a method, not via Post/handler dispatch.
+    /// </summary>
+    internal sealed record RoundParams(
+        string ThreadPath,
+        string ResponseMessageId,
+        string? UserMessageId,
+        string UserMessageText,
+        string? AgentName,
+        string? ModelName,
+        string? ContextPath,
+        IReadOnlyList<string>? Attachments);
+
+    internal static void ExecuteMessageAsync(
         IMessageHub hub,
-        IMessageDelivery<SubmitMessageRequest> delivery)
+        RoundParams request,
+        AccessContext? userAccessContext)
     {
-        var request = delivery.Message;
         var parentHub = hub.Configuration.ParentHub!;
         var threadPath = request.ThreadPath;
         var logger = parentHub.ServiceProvider.GetRequiredService<ILogger<AgentChatClient>>();
         var cache = parentHub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-        // 🚨 ResponsePath removed from SubmitMessageRequest (2026-05-21).
-        // The id is set by DispatchRound at post-time (= thread.ActiveMessageId
-        // at the moment of the post, never re-set during the round); the path
-        // derives as {threadPath}/{ResponseMessageId}. No cache lookup at this
-        // entry point — the request is the authoritative source for THIS round.
         var responseMsgId = request.ResponseMessageId
             ?? throw new InvalidOperationException(
-                $"ExecuteMessageAsync: SubmitMessageRequest for thread {threadPath} has no ResponseMessageId");
+                $"ExecuteMessageAsync: RoundParams for thread {threadPath} has no ResponseMessageId");
         var responsePath = $"{threadPath}/{responseMsgId}";
 
         // Helper: push content to the response message via IMeshNodeStreamCache.
@@ -1127,8 +816,8 @@ public static class ThreadExecution
 
         // Set user access context
         var accessService = parentHub.ServiceProvider.GetService<AccessService>();
-        if (delivery.AccessContext != null)
-            accessService?.SetContext(delivery.AccessContext);
+        if (userAccessContext != null)
+            accessService?.SetContext(userAccessContext);
 
         // Reuse cached agent (skips 3+ seconds of agent init on 2nd+ message).
         // hub.Get<T> / hub.Set<T> is per-hub instance state — same hub across
@@ -1225,7 +914,7 @@ public static class ThreadExecution
                 if (request.Attachments is { Count: > 0 })
                     client.SetAttachments(request.Attachments);
 
-                var userAccessContext = delivery.AccessContext;
+                // userAccessContext already in scope from the method parameter.
                 client.SetExecutionContext(new ThreadExecutionContext
                 {
                     ThreadPath = threadPath,
@@ -1462,8 +1151,8 @@ public static class ThreadExecution
                     // each fires on the upstream hub's pipeline where AsyncLocal Context flips
                     // to the per-cell hub's impersonated address. Reseed here so every downstream
                     // post goes out under the user's identity.
-                    if (delivery.AccessContext != null)
-                        parentHub.ServiceProvider.GetService<AccessService>()?.SetContext(delivery.AccessContext);
+                    if (userAccessContext != null)
+                        parentHub.ServiceProvider.GetService<AccessService>()?.SetContext(userAccessContext);
 
                     var ct = executionCts.Token;
                     var responseText = new StringBuilder();
@@ -1889,48 +1578,24 @@ public static class ThreadExecution
         // Register subscription for disposal — use parentHub's workspace
         // (this is the thread hub's own workspace, the natural lifetime owner).
         parentHub.GetWorkspace().AddDisposable(initSub);
-
-        return delivery.Processed();
     }
 
     /// <summary>
-    /// Notifies the parent thread that this child thread's execution completed.
-    /// The parent's delegation tool handler resolves its <c>TaskCompletionSource</c>
-    /// via the per-hub completion-callback registered by <see cref="HandleSubmitMessage"/>.
-    /// Only fires if a callback is present (i.e., this thread is a delegation child).
+    /// Logging-only completion stub. The SubmitMessageResponse callback shape
+    /// was deleted 2026-05-25; parent threads now observe sub-thread completion
+    /// via the response cell's stream (Status flips to Completed/Cancelled/Error
+    /// via PushToResponseMessage). Kept as a method for the existing 4 callsites
+    /// — the delegation tool's reactive completion observation will replace the
+    /// callsites in the next refactor pass.
     /// </summary>
     private static void NotifyParentCompletion(
         IMessageHub hub, string threadPath, string responseText, bool success,
         ImmutableList<NodeChangeEntry>? updatedNodes = null)
     {
         var logger = hub.ServiceProvider.GetRequiredService<ILogger<AgentChatClient>>();
-        var status = success ? SubmitMessageStatus.ExecutionCompleted
-            : SubmitMessageStatus.ExecutionFailed;
-        logger.LogInformation("[ThreadExec] NOTIFY_PARENT: threadPath={ThreadPath}, status={Status}, textLen={TextLen}",
-            threadPath, status, responseText.Length);
-
-        // Invoke the completion callback registered by HandleSubmitMessage.
-        // The callback was stored on this same hub via hub.Set; here we read it
-        // back from the same per-hub property bag.
-        var callback = hub.Get<Action<SubmitMessageResponse>>();
-        if (callback != null)
-        {
-            callback(new SubmitMessageResponse
-            {
-                Success = success,
-                Status = status,
-                ResponseText = Truncate(responseText, 500),
-                UpdatedNodes = updatedNodes
-            });
-        }
-        else
-        {
-            // Expected for non-delegated threads (the user's top-level submit, not a
-            // sub-thread). Only delegation child threads have a parent callback registered
-            // by HandleSubmitMessage. Don't log at Warning — every regular chat round
-            // would emit it and drown the trace.
-            logger.LogDebug("[ThreadExec] No completion callback for {ThreadPath}", threadPath);
-        }
+        logger.LogInformation(
+            "[ThreadExec] NOTIFY_PARENT: threadPath={ThreadPath}, success={Success}, textLen={TextLen}, updatedNodes={UpdatedNodes}",
+            threadPath, success, responseText.Length, updatedNodes?.Count ?? 0);
     }
 
     /// <summary>

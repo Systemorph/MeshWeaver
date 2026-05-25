@@ -1120,25 +1120,25 @@ internal static class ThreadSubmissionServer
                                     msg => msg with { Text = "Allocating agent...", Status = ThreadMessageStatus.Streaming },
                                     logger);
 
-                                // Step 3: post to _Exec hosted hub — actual agent streaming runs there.
+                                // Step 3: direct method call on _Exec hosted hub.
+                                // No SubmitMessageRequest post — the agent loop runs as
+                                // composed observables; only the LLM streaming is async.
                                 var executionHub = hub.GetHostedHub(
                                     new Address($"{hub.Address}/_Exec"),
-                                    config => config.WithHandler<SubmitMessageRequest>(ThreadExecution.ExecuteMessageAsync),
+                                    config => config,
                                     HostedHubCreation.Always);
 
-                                executionHub!.Post(
-                                    new SubmitMessageRequest
-                                    {
-                                        ThreadPath = threadPath,
-                                        UserMessageText = roundUserText,
-                                        UserMessageId = dispatch.UserMessageIds.LastOrDefault(),
-                                        ResponseMessageId = responseMsgId,
-                                        AgentName = dispatch.AgentName,
-                                        ModelName = dispatch.ModelName,
-                                        ContextPath = dispatch.ContextPath,
-                                        Attachments = dispatch.Attachments
-                                    },
-                                    o => userCtx != null ? o.WithAccessContext(userCtx) : o);
+                                ThreadExecution.ExecuteMessageAsync(executionHub!,
+                                    new ThreadExecution.RoundParams(
+                                        ThreadPath: threadPath,
+                                        ResponseMessageId: responseMsgId,
+                                        UserMessageId: dispatch.UserMessageIds.LastOrDefault(),
+                                        UserMessageText: roundUserText,
+                                        AgentName: dispatch.AgentName,
+                                        ModelName: dispatch.ModelName,
+                                        ContextPath: dispatch.ContextPath,
+                                        Attachments: dispatch.Attachments),
+                                    userCtx);
                             },
                             ex =>
                             {

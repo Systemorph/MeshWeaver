@@ -103,14 +103,16 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
         var threadPath = createResponse.Message.Node!.Path!;
         Output.WriteLine($"Thread: {threadPath}");
 
-        // 2. Submit message â€” this triggers AI streaming on the _Exec sub-hub
-        var submitResponse = await client.Observe(new SubmitMessageRequest
-            {
-                ThreadPath = threadPath,
-                UserMessageText = "Hello from identity test",
-                ContextPath = UserPath
-            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-        submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
+        // 2. Submit message via stream.Update — triggers AI streaming on the _Exec sub-hub.
+        //    SubmitMessageRequest deleted 2026-05-25; submission is now ThreadSubmission.Submit
+        //    which writes PendingUserMessages on the thread node.
+        ThreadSubmission.Submit(new SubmitContext
+        {
+            Hub = client,
+            ThreadPath = threadPath,
+            UserText = "Hello from identity test",
+            ContextPath = UserPath,
+        });
         Output.WriteLine("Message submitted, waiting for streaming...");
 
         // 3. Poll for the response message to be populated by streaming
@@ -151,15 +153,15 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
         createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error);
         var threadPath = createResponse.Message.Node!.Path!;
 
-        // Submit message
+        // Submit message via stream.Update.
         var submitTime = DateTimeOffset.UtcNow;
-        var submitResponse = await client.Observe(new SubmitMessageRequest
-            {
-                ThreadPath = threadPath,
-                UserMessageText = "Stream incrementally please",
-                ContextPath = UserPath
-            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-        submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
+        ThreadSubmission.Submit(new SubmitContext
+        {
+            Hub = client,
+            ThreadPath = threadPath,
+            UserText = "Stream incrementally please",
+            ContextPath = UserPath,
+        });
 
         // Poll for first partial response â€” should arrive within 5 seconds,
         // NOT after full streaming completes (which would take longer)
@@ -213,13 +215,13 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
         createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error);
         var threadPath = createResponse.Message.Node!.Path!;
 
-        var submitResponse = await client.Observe(new SubmitMessageRequest
+        ThreadSubmission.Submit(new SubmitContext
         {
+            Hub = client,
             ThreadPath = threadPath,
-            UserMessageText = "Stream me growing chunks please",
-            ContextPath = UserPath
-        }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
-        submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
+            UserText = "Stream me growing chunks please",
+            ContextPath = UserPath,
+        });
 
         // Wait briefly for the response cell to be allocated.
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();

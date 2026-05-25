@@ -79,15 +79,13 @@ public static class AIExtensions
             .WithType(typeof(AI.Thread), nameof(AI.Thread))
             .WithType(typeof(ThreadMessage), nameof(ThreadMessage))
             // MessageViewModel is not registered — handled as JsonElement on the wire.
-            // SubmitMessageRequest is the LAST surviving thread-mutation request —
-            // its handler pre-allocates a CancellationTokenSource that the
-            // stream-update path can't replicate without a side-effect watcher.
-            // Migration plan tracked in tasks #10. Everything else
-            // (Append/Resubmit/Cancel/Delete) was migrated to stream.Update via
-            // ThreadInput / ThreadSubmission helpers and DELETED.
-            // See Doc/Architecture/RequestViaStreamUpdate.md.
-            .WithType(typeof(SubmitMessageRequest), nameof(SubmitMessageRequest))
-            .WithType(typeof(SubmitMessageResponse), nameof(SubmitMessageResponse))
+            // SubmitMessageRequest / SubmitMessageResponse deleted 2026-05-25:
+            // the only mutation API is workspace.GetMeshNodeStream(path).Update(...).
+            // Public submission flow is ThreadSubmission.Submit → ThreadInput.AppendUserInput
+            // (writes PendingUserMessages); the submission watcher reacts and invokes
+            // ExecuteMessageAsync directly as a method (no wire message).
+            // See CLAUDE.md → "GetMeshNodeStream().Update() is the ONLY mutation API"
+            // and Doc/Architecture/RequestViaStreamUpdate.md.
             // Internal triggers — registered on the wire so a remote client's
             // ThreadSubmission.Apply* call can land on the per-thread hub.
             .WithType(typeof(ResubmitTrigger), nameof(ResubmitTrigger))
