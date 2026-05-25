@@ -63,7 +63,11 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
         {
             Name = "storage",
             SourceType = "FileSystem",
-            BasePath = graphPath
+            BasePath = graphPath,
+            // Per-node MapContentCollection wrappers inherit ExposeInChildren
+            // from the source; storage defaults to false since the wire-default
+            // flip (95f840f34), so set it explicitly here.
+            ExposeInChildren = true
         };
 
         return builder

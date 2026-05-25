@@ -100,7 +100,8 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
         {
             Name = "storage",
             SourceType = "FileSystem",
-            BasePath = contentDir
+            BasePath = contentDir,
+            ExposeInChildren = true
         };
 
         return builder
