@@ -55,8 +55,9 @@ public class MeshOperationsUploadTest : MonolithMeshTestBase
             .AddFileSystemPersistence(TestDataPath)
             .AddGraph()
             .AddAI()
-            // Per-node FileSystem content collection. IsEditable=true is the contract
-            // the upload tool checks before writing — read-only collections must reject.
+            // Per-node FileSystem content collection. IsEditable=true must be set
+            // explicitly — the field defaults to false (matches bool type-default to
+            // survive WhenWritingDefault serialization).
             .ConfigureDefaultNodeHub(config =>
             {
                 var nodePath = config.Address.ToString();
@@ -70,12 +71,12 @@ public class MeshOperationsUploadTest : MonolithMeshTestBase
                     Settings = new Dictionary<string, string> { ["BasePath"] = contentDir },
                 };
                 // Second collection — same shape, but read-only. Lets us assert that
-                // Upload refuses to write into a non-editable collection.
+                // Upload refuses to write into a non-editable collection. IsEditable
+                // defaults to false; we leave it unset.
                 var readOnlyConfig = new ContentCollectionConfig
                 {
                     Name = "frozen",
                     SourceType = "FileSystem",
-                    IsEditable = false,
                     BasePath = contentDir,
                     Settings = new Dictionary<string, string> { ["BasePath"] = contentDir },
                 };
@@ -332,12 +333,8 @@ public class MeshOperationsUploadTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Skipped: the read-only refusal is a tangential edge case that pre-dates this PR.
-    /// In the test fixture, the `frozen` collection's `IsEditable=false` flag isn't
-    /// surviving the GetDataRequest round-trip (or isn't being honoured by the
-    /// IsEditable check in Upload). Needs its own bug-investigation session — out of
-    /// scope for the upload-service work whose primary goal is round-tripping
-    /// pictures and documents.
+    /// Upload refuses to write into a collection where <c>IsEditable = false</c>
+    /// (the "frozen" fixture leaves IsEditable at its default false).
     /// </summary>
     [Fact]
     public async Task Upload_ReadOnlyCollection_Refused()

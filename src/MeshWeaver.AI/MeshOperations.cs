@@ -1024,8 +1024,10 @@ public class MeshOperations
                 {
                     // Deserialize via the hub's JSON options so the naming policy (camelCase)
                     // and all fields — including IsEditable — round-trip correctly. The
-                    // manual TryGetProperty form this replaced silently dropped IsEditable
-                    // for read-only collections, letting writes through.
+                    // ContentCollectionConfig bools default to false (matching bool's
+                    // type-default) so writable / visible callsites must set them
+                    // explicitly; that keeps WhenWritingDefault from silently dropping
+                    // meaningful state across the wire.
                     IReadOnlyCollection<ContentCollectionConfig>? configs = collectionResponse?.Message switch
                     {
                         GetDataResponse { Data: JsonElement je } =>

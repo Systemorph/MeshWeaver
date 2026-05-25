@@ -67,10 +67,7 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
                     SourceType = "FileSystem",
                     IsEditable = true,
                     BasePath = contentDir,
-                    Settings = new Dictionary<string, string>
-                    {
-                        ["BasePath"] = contentDir
-                    }
+                    Settings = new Dictionary<string, string> { ["BasePath"] = contentDir }
                 };
                 config = config.AddContentCollection(_ => nodeContentConfig);
                 return config.AddDefaultLayoutAreas();

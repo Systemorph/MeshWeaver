@@ -48,7 +48,7 @@
         /// <summary>
         /// Sets the collection metadata from a ContentCollectionConfig so it survives serialization.
         /// </summary>
-        public FileBrowserControl WithCollectionInfo(string sourceType, string? basePath, Dictionary<string, string>? settings)
+        public FileBrowserControl WithCollectionInfo(string sourceType, string? basePath, IReadOnlyDictionary<string, string>? settings)
             => this with
             {
                 SourceType = sourceType,

@@ -298,7 +298,9 @@ public static class MemexConfiguration
                 // Ensure Settings are populated for AzureBlob source type
                 if (contentStorageConfig.SourceType == "AzureBlob")
                 {
-                    var settings = contentStorageConfig.Settings ?? new Dictionary<string, string>();
+                    var settings = contentStorageConfig.Settings is { } existing
+                        ? new Dictionary<string, string>(existing)
+                        : new Dictionary<string, string>();
                     if (!settings.ContainsKey("ContainerName"))
                         settings["ContainerName"] = "content";
                     if (!settings.ContainsKey("ClientName"))
@@ -377,11 +379,11 @@ public static class MemexConfiguration
                         {
                             Name = "content",
                             IsEditable = true,
+                            ExposeInChildren = true,
                             BasePath = basePath,
-                            Settings = new Dictionary<string, string>(contentStorageConfig.Settings ?? new())
-                            {
-                                ["BasePath"] = basePath
-                            }
+                            Settings = contentStorageConfig.Settings is { } src
+                                ? new Dictionary<string, string>(src) { ["BasePath"] = basePath }
+                                : new Dictionary<string, string> { ["BasePath"] = basePath }
                         };
                         config = config.AddContentCollection(_ => nodeContentConfig);
                     }
