@@ -41,13 +41,18 @@ public static class AgentPickerProjection
 
     /// <summary>
     /// THE single source of truth for both agent and model picker query
-    /// strings. Three queries per kind, all carrying the same
-    /// <c>nodeType:</c> filter, varying only on namespace + scope:
+    /// strings. All queries carry the same <c>nodeType:</c> filter, varying
+    /// only on namespace/path + scope. For <see cref="BuildAgentQueries"/>:
     /// <list type="number">
-    ///   <item>built-in: <c>namespace:Agent / namespace:Model</c></item>
-    ///   <item>per-context: <c>namespace:{currentPath} scope:selfAndAncestors</c></item>
-    ///   <item>per-NodeType: <c>namespace:{nodeTypePath} scope:selfAndAncestors</c></item>
+    ///   <item>built-in: <c>namespace:Agent nodeType:Agent</c></item>
+    ///   <item>per-context inheritance: <c>path:{currentPath} nodeType:Agent scope:ancestors</c>
+    ///         — Agent nodes placed at any ancestor of the content path.</item>
+    ///   <item>per-NodeType inheritance: <c>path:{nodeTypePath} nodeType:Agent scope:ancestors</c>
+    ///         — Agent nodes inherited up the NodeType chain.</item>
     /// </list>
+    ///
+    /// <para>Models use a different shape (<c>_Provider/</c> subtrees, scope:descendants)
+    /// because providers contain models — see <see cref="BuildModelQueries"/>.</para>
     ///
     /// <para>Every consumer (chat picker UI, AgentChatClient, AzureClaude
     /// driver factory) calls <see cref="BuildAgentQueries"/> or
@@ -88,6 +93,21 @@ public static class AgentPickerProjection
         return queries.ToArray();
     }
 
+    /// <summary>
+    /// Three queries, all <c>nodeType:{nodeType}</c>, varying on the second
+    /// filter (per <c>QuerySyntax.md</c>):
+    /// <list type="number">
+    ///   <item>system catalog: <c>namespace:{rootNamespace}</c></item>
+    ///   <item>per-context inheritance: <c>path:{currentPath} scope:ancestors</c>
+    ///         — Agent nodes whose path IS an ancestor of currentPath.</item>
+    ///   <item>per-NodeType inheritance: <c>path:{nodeTypePath} scope:ancestors</c>
+    ///         — Agent nodes inherited up the NodeType chain.</item>
+    /// </list>
+    /// <para><c>path:X scope:ancestors</c> (NOT <c>namespace:X scope:selfAndAncestors</c>)
+    /// is the correct shape: agents are placed AT paths and inherited DOWN; the query
+    /// walks UP the path tree from the content's path collecting ancestor-placed agents.
+    /// Self is excluded (the content's own path isn't an Agent itself).</para>
+    /// </summary>
     private static string[] BuildQueries(string nodeType, string rootNamespace, string? currentPath, string? nodeTypePath)
     {
         var queries = new List<string>
@@ -95,9 +115,9 @@ public static class AgentPickerProjection
             $"namespace:{rootNamespace} nodeType:{nodeType}",
         };
         if (!string.IsNullOrEmpty(currentPath))
-            queries.Add($"namespace:{currentPath} nodeType:{nodeType} scope:selfAndAncestors");
+            queries.Add($"path:{currentPath} nodeType:{nodeType} scope:ancestors");
         if (!string.IsNullOrEmpty(nodeTypePath))
-            queries.Add($"namespace:{nodeTypePath} nodeType:{nodeType} scope:selfAndAncestors");
+            queries.Add($"path:{nodeTypePath} nodeType:{nodeType} scope:ancestors");
         return queries.ToArray();
     }
 
