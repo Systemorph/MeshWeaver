@@ -45,6 +45,7 @@ public class NodeHubContentCollectionTest(ITestOutputHelper output) : HubTestBas
                 Name = "content",
                 SourceType = "FileSystem",
                 IsEditable = true,
+                ExposeInChildren = true,
                 BasePath = contentPath,
                 Settings = new Dictionary<string, string> { ["BasePath"] = contentPath }
             });
