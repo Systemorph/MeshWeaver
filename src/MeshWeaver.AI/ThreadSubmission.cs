@@ -131,7 +131,7 @@ public static class ThreadSubmission
         // SubmissionWatcher picks up the new entry in PendingUserMessages and runs.
         // No SubmitMessageRequest, no SubmitMessageResponse, no completion callback.
         var userMessage = ThreadInput.CreateUserMessage(
-            ctx.UserText,
+            ctx.UserText ?? string.Empty,
             createdBy: null,
             agentName: ctx.AgentName,
             modelName: ctx.ModelName,

@@ -214,8 +214,7 @@ public static class DelegationTool
                         // status; the first Idle emission after that is the
                         // genuine post-execution terminal, NOT the initial-Idle
                         // emission the synced query replays on subscribe.
-                        workspace.GetRemoteStream<MeshNode>(new Address(subThreadPath))
-                            .Select(nodes => nodes?.FirstOrDefault(n => n.Path == subThreadPath))
+                        workspace.GetMeshNodeStream(subThreadPath)
                             .Select(node => node?.Content as MeshThread)
                             .Where(t => t is not null)
                             .Scan(

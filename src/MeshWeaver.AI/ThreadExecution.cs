@@ -444,7 +444,7 @@ public static class ThreadExecution
                     NodeType = ThreadMessageNodeType.NodeType, MainNode = mainEntity,
                     Content = new ThreadMessage
                     {
-                        Role = "user", Text = thread.PendingUserMessage, Timestamp = DateTime.UtcNow,
+                        Role = "user", Text = thread.PendingUserMessage ?? string.Empty, Timestamp = DateTime.UtcNow,
                         Type = ThreadMessageType.ExecutedInput, CreatedBy = thread.CreatedBy
                     }
                 }).Subscribe(_ => { },
