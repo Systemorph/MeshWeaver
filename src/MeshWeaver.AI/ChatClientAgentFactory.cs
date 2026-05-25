@@ -276,17 +276,34 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
 
         if (hasDelegations || hasHierarchyAgents || agentConfig.IsDefault)
         {
-            var delegationTool = DelegationTool.CreateUnifiedDelegationTool(
-                agentConfig,
-                hierarchyAgents,
-                executeAsync: (agentName, task, context, ct) =>
-                    ExecuteDelegationAsync(agentConfig, allAgents, chat, agentName, task, context, ct),
-                Logger);
+            // list_sub_threads: snapshot of this chat's active delegation paths.
+            // Only AgentChatClient maintains ActiveDelegationPaths; if the chat
+            // is some other IAgentChat (e.g. test stub), skip the optional tool.
+            Func<IReadOnlyList<MeshWeaver.AI.Plugins.SubThreadInfo>>? listSubThreads = null;
+            Action<string, string>? sendToSubThread = null;
+            if (chat is AgentChatClient acc)
+            {
+                var workspace = Hub.GetWorkspace();
+                listSubThreads = () => SnapshotActiveSubThreads(acc, workspace);
+                sendToSubThread = (threadPath, message) =>
+                    PushMessageToSubThread(workspace, threadPath, message);
+            }
 
-            Logger.LogInformation("Created unified delegation tool for agent {AgentName} with {HierarchyCount} hierarchy agents",
-                agentConfig.Id, hierarchyAgents.Count);
+            foreach (var tool in DelegationTool.CreateDelegationTools(
+                         agentConfig,
+                         hierarchyAgents,
+                         executeAsync: (agentName, task, context, ct) =>
+                             ExecuteDelegationAsync(agentConfig, allAgents, chat, agentName, task, context, ct),
+                         listSubThreads: listSubThreads,
+                         sendToSubThread: sendToSubThread,
+                         logger: Logger))
+            {
+                yield return tool;
+            }
 
-            yield return delegationTool;
+            Logger.LogInformation(
+                "Created delegation tools for agent {AgentName} with {HierarchyCount} hierarchy agents (list={List}, send={Send})",
+                agentConfig.Id, hierarchyAgents.Count, listSubThreads is not null, sendToSubThread is not null);
         }
 
         // Create handoff tool when agent has explicit handoffs
@@ -333,6 +350,60 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
     /// to <see cref="ToolCallStatus.Cancelled"/>, then yield the partial text
     /// so FCC can carry on.</para>
     /// </summary>
+    /// <summary>
+    /// Snapshot accessor for the <c>list_sub_threads</c> tool. Reads the
+    /// AgentChatClient's <c>ActiveDelegationPaths</c> set (maintained by
+    /// EmitDelegationEvent) and enriches each path with a best-effort
+    /// status / preview from the workspace cache (synchronous; no awaits).
+    /// </summary>
+    private static IReadOnlyList<MeshWeaver.AI.Plugins.SubThreadInfo> SnapshotActiveSubThreads(
+        AgentChatClient chat, MeshWeaver.Data.IWorkspace workspace)
+    {
+        var paths = chat.ActiveDelegationPaths;
+        if (paths.IsEmpty)
+            return Array.Empty<MeshWeaver.AI.Plugins.SubThreadInfo>();
+
+        var result = new List<MeshWeaver.AI.Plugins.SubThreadInfo>(paths.Count);
+        foreach (var path in paths)
+        {
+            // Best-effort agent name extraction from the path tail. The full
+            // status / preview / activity enrichment will land in the next
+            // refactor pass when the subscriber on the sub-thread node also
+            // pushes a snapshot into AgentChatClient for instant tool access.
+            // For now: the tool exposes the in-flight list with paths +
+            // agent-name parsed from the path slug, which already lets the
+            // parent agent decide whether to wait or send a follow-up.
+            var lastSegment = path.Split('/').LastOrDefault() ?? path;
+            var agentNameGuess = lastSegment.Split('-').FirstOrDefault() ?? "unknown";
+            result.Add(new MeshWeaver.AI.Plugins.SubThreadInfo(
+                ThreadPath: path,
+                AgentName: agentNameGuess,
+                Status: "Executing",
+                PreviewText: null,
+                LastActivity: null));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Handler for the <c>send_to_sub_thread</c> tool. Writes a follow-up user
+    /// message into the sub-thread's pending-messages queue via stream.Update;
+    /// the sub-thread's submission watcher picks it up and dispatches a new
+    /// round (or the agent's inbox-drain tool absorbs it mid-stream).
+    /// </summary>
+    private static void PushMessageToSubThread(
+        MeshWeaver.Data.IWorkspace workspace, string subThreadPath, string message)
+    {
+        var userMessage = ThreadInput.CreateUserMessage(
+            message,
+            createdBy: "parent-agent",
+            agentName: null,
+            modelName: null,
+            contextPath: null,
+            attachments: null);
+        ThreadInput.AppendUserInput(workspace, subThreadPath, userMessage);
+    }
+
     private async IAsyncEnumerable<string> ExecuteDelegationAsync(
         AgentConfiguration agentConfig,
         IReadOnlyDictionary<string, ChatClientAgent> allAgents,
