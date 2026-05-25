@@ -1286,6 +1286,15 @@ public static class ThreadExecution
                 StringBuilder? capturedResponseText = null;
                 client.ForwardNodeChange = entry => { lock (logLock) { nodeChangeLog = nodeChangeLog.Add(entry); } };
                 string? currentStatus = null;
+                // Pending Dispatched paths: when the Dispatched event fires BEFORE
+                // the outer streaming loop processes the corresponding
+                // FunctionCallContent and adds the bare entry, we queue the path
+                // here. The streaming loop drains the queue on each add. Without
+                // this, fast FCC dispatches lose the stamp and the response cell
+                // ships a bare delegate_to entry (the failing assertion in
+                // DelegationWriteCountTest). Drained in FIFO order to preserve
+                // multi-delegation correlation.
+                var pendingDispatchedPaths = ImmutableQueue<string>.Empty;
                 // Subscribe to delegation lifecycle events. On Dispatched, stamp
                 // the path onto the first unmatched delegate_to tool-call entry
                 // and push the response. Replaces the legacy UpdateDelegationStatus
@@ -1296,7 +1305,7 @@ public static class ThreadExecution
                         .Where(evt => evt.Phase == MeshWeaver.AI.Delegation.DelegationLifecycle.Dispatched)
                         .Subscribe(evt =>
                 {
-                    logger.LogDebug(
+                    logger.LogInformation(
                         "[ThreadExec] DELEGATION_DISPATCHED: threadPath={ThreadPath}, subPath={SubPath}, callId={CallId}, toolCallLogSize={LogSize}",
                         threadPath, evt.SubThreadPath, evt.CallId, toolCallLog.Count);
                     var stamped = false;
@@ -1310,12 +1319,19 @@ public static class ThreadExecution
                             if (!stamped && e.Name.StartsWith("delegate_to") && e.DelegationPath == null)
                             {
                                 stamped = true;
-                                logger.LogDebug("[ThreadExec] DELEGATION_STAMPED: name={Name} delPath={DelPath} callId={CallId}",
+                                logger.LogInformation("[ThreadExec] DELEGATION_STAMPED: name={Name} delPath={DelPath} callId={CallId}",
                                     e.Name, evt.SubThreadPath, evt.CallId);
                                 return e with { DelegationPath = evt.SubThreadPath };
                             }
                             return e;
                         }).ToImmutableList();
+                        if (!stamped)
+                        {
+                            // FCC fired Dispatched faster than the outer streaming
+                            // loop could process the FunctionCallContent. Queue the
+                            // path; the streaming-loop add will drain it.
+                            pendingDispatchedPaths = pendingDispatchedPaths.Enqueue(evt.SubThreadPath);
+                        }
                         snapshotLog = toolCallLog;
                         snapshotNodes = nodeChangeLog;
                         // StringBuilder.ToString() is NOT thread-safe with concurrent
@@ -1326,8 +1342,8 @@ public static class ThreadExecution
                         textSnapshot = capturedResponseText?.ToString() ?? "";
                     }
                     if (!stamped)
-                        logger.LogWarning("[ThreadExec] DELEGATION_NO_STAMP: subPath={SubPath} — no unmatched delegate_to entry to stamp (logSize={LogSize})",
-                            evt.SubThreadPath, snapshotLog.Count);
+                        logger.LogInformation("[ThreadExec] DELEGATION_DEFERRED_STAMP: subPath={SubPath} — queued for streaming-loop add (logSize={LogSize}, queueDepth={Q})",
+                            evt.SubThreadPath, snapshotLog.Count, pendingDispatchedPaths.Count());
                     // Push immediately so the parent message shows the delegation
                     // link while the sub-thread executes (streaming loop is blocked
                     // during tool execution; throttle block never runs).
@@ -1518,12 +1534,25 @@ public static class ThreadExecution
                             var alreadyPending = toolCallLog.Any(e => e.Name == functionCall.Name && e.Result == null);
                             if (!isDuplicate && !alreadyPending && !alreadyByCallId)
                             {
+                                // Drain a pending Dispatched path if Dispatched fired
+                                // before this FunctionCallContent reached the loop —
+                                // the bare entry would otherwise ship without a
+                                // DelegationPath (DelegationWriteCountTest failure
+                                // mode). Drain only for delegate_to* names.
+                                string? stampedPath = null;
+                                if (functionCall.Name.StartsWith("delegate_to") && !pendingDispatchedPaths.IsEmpty)
+                                {
+                                    pendingDispatchedPaths = pendingDispatchedPaths.Dequeue(out stampedPath);
+                                    logger.LogInformation("[ThreadExec] DELEGATION_DRAINED_STAMP: name={Name} delPath={DelPath} callId={CallId}",
+                                        functionCall.Name, stampedPath, callId);
+                                }
                                 toolCallLog = toolCallLog.Add(new ToolCallEntry
                                 {
                                     Name = functionCall.Name,
                                     DisplayName = formatted,
                                     Arguments = argsDetail,
                                     CallId = callId,
+                                    DelegationPath = stampedPath,
                                     Timestamp = DateTime.UtcNow
                                 });
                             }
@@ -2378,16 +2407,24 @@ public static class ThreadExecution
                 if (cellIds.Count == 0)
                     return Observable.Return<IReadOnlyList<ThreadMessage>>(Array.Empty<ThreadMessage>());
 
+                // 🚨 Subscribe-all-upfront via Observable.CombineLatest — N
+                // per-cell synchronization streams subscribe simultaneously when
+                // the consumer subscribes, so the N hub activations are
+                // concurrent (≈ max(t_i)) instead of serial Σ(t_i) via .Concat().
+                // Catch returns sentinel null so a single slow cell doesn't strand
+                // the load. See AsynchronousCalls.md → "Subscribe-all-upfront cell loading".
                 var cellLookups = cellIds.Select(id =>
                     cache.GetStream($"{threadPath}/{id}")
                         .Take(1)
                         .Timeout(TimeSpan.FromSeconds(5))
-                        .Catch<MeshNode, Exception>(_ => Observable.Empty<MeshNode>()));
+                        .Select(n => (MeshNode?)n)
+                        .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null)));
 
-                return cellLookups.Concat()
-                    .ToList()
+                return Observable.CombineLatest(cellLookups)
+                    .Take(1)
                     .Select(nodes => (IReadOnlyList<ThreadMessage>)nodes
-                        .Select(n => n.Content as ThreadMessage)
+                        .Where(n => n != null)
+                        .Select(n => n!.Content as ThreadMessage)
                         .Where(m => m != null && string.Equals(m.Role, "user", StringComparison.OrdinalIgnoreCase))
                         .OrderBy(m => m!.Timestamp)
                         .Cast<ThreadMessage>()
