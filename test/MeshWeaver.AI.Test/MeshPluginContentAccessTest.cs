@@ -66,6 +66,7 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
                     Name = "content",
                     SourceType = "FileSystem",
                     IsEditable = true,
+                    ExposeInChildren = true,
                     BasePath = contentDir,
                     Settings = new Dictionary<string, string> { ["BasePath"] = contentDir }
                 };
