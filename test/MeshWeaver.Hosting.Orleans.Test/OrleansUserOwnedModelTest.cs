@@ -198,7 +198,7 @@ public class OrleansUserOwnedModelTest(ITestOutputHelper output) : OrleansShared
             && n.NodeType == ModelProviderNodeType.NodeType);
     }
 
-    [Fact(Timeout = 60_000, Skip = "Cache hub wiring landed (cache/mesh-node-cache via config-driven StreamRoutedAddressTypes — see Doc/Architecture/OrleansTestRoutingPattern.md). Routing now reaches the cache hub (RegisterStream + memory-stream dispatch via MeshConfiguration.DefaultStreamRoutedAddressTypes), and the SubscribeRequest/SubscribeAck round-trip is observed in the trace. Remaining blocker: the cache hub's workspace `.GetRemoteStream<MeshNode, MeshNodeReference>` doesn't surface the initial frame to UpdateRemote's .Subscribe callback (line 313), so the patch never computes. Likely needs additional MeshNode type/reducer registration on the cache hub beyond AddData(). Track separately.")]
+    [Fact(Timeout = 60_000, Skip = "Cache-hub routing wired (config-driven StreamRoutedAddressTypes), but DataChangedEvent gets `state=Ignored isOnTarget=True` at the cache hub: DataExtensions.RouteStreamMessage tries hub.GetHostedHub(SynchronizationAddress.Create(streamMessage.StreamId), HostedHubCreation.Never) and returns null, so the change-event is dropped. Either the sync sub-hub was hosted under a different parent than the cache hub, or there's a race between sync-hub creation and the first inbound DataChangedEvent. Trace evidence: sync hubs exist (sync/QhZ4MnpRzUmoAkZEtYRvrQ etc.) but cache hub's lookup misses them. Next step: trace where workspace.GetRemoteStream creates its sync sub-hub when called on the cache hub's workspace.")]
     public async Task UserOwnedProvider_RotateKey_ResolverPicksUpNewKey()
     {
         var ct = new CancellationTokenSource(45.Seconds()).Token;
@@ -227,15 +227,15 @@ public class OrleansUserOwnedModelTest(ITestOutputHelper output) : OrleansShared
             }
         };
 
-        // Rotate is chained INSIDE the create's response continuation —
-        // the CreateNodeResponse only fires after the silo's per-node hub
-        // has persisted the node, which guarantees routing-grain indexing
-        // has settled by the time the Update fires. Without this chaining,
-        // a separate `await create; await update` interleaves a fresh Rx
-        // continuation that races the silo's routing convergence.
+        // Rotate is chained INSIDE the create's response continuation, going
+        // through the dedicated IMeshNodeStreamCache hub at cache/mesh-node-cache
+        // — the canonical cross-silo write path. The cache hub is registered
+        // with the routing service (Portal pattern) so the silo's response to
+        // the Subscribe+Patch round-trip routes back via the cluster-wide
+        // Orleans memory stream. See Doc/Architecture/OrleansTestRoutingPattern.md.
+        var cache = client.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
         await client.Observe(new CreateNodeRequest(providerNode), o => o.WithTarget(meshAddress))
-            .SelectMany(_ => siloWorkspace.GetMeshNodeStream(providerPath)
-                .Update(node => node with
+            .SelectMany(_ => cache.Update(providerPath, node => node with
                 {
                     Content = (node.Content as ModelProviderConfiguration
                                ?? new ModelProviderConfiguration { Provider = "Anthropic" })
