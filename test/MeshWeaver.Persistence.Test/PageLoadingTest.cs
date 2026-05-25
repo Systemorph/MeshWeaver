@@ -55,7 +55,11 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         {
             Name = "storage",
             SourceType = "FileSystem",
-            BasePath = graphPath
+            BasePath = graphPath,
+            // ExposeInChildren=true so per-node MapContentCollection wrappers
+            // (which copy this flag from the source) surface in
+            // GetAllCollectionConfigs after the default flip (95f840f34).
+            ExposeInChildren = true
         };
 
         return builder
