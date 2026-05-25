@@ -41,14 +41,6 @@ public class FileSystemStorageAdapter : IStorageAdapter
         Directory.CreateDirectory(baseDirectory);
     }
 
-    // In-process change feed for same-process synced-query subscribers.
-    // FileSystem inotify events flow through FileSystemChangeWatcher separately;
-    // this Subject covers the case where this process's CreateNode / DeleteNode
-    // writes need to propagate to synced queries without waiting for the
-    // inotify round-trip. Mirror of InMemoryStorageAdapter._changes pattern.
-    private readonly System.Reactive.Subjects.Subject<DataChangeNotification> _changes = new();
-    public IObservable<DataChangeNotification> Changes => _changes.AsObservable();
-
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
         => Observable.FromAsync(ct => ReadAsyncCore(path, options, ct));
 
@@ -169,17 +161,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
     }
 
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
-        => Observable.FromAsync<MeshNode?>(async ct =>
-        {
-            await WriteAsyncCore(node, options, ct);
-            try
-            {
-                _changes.OnNext(DataChangeNotification.Updated(
-                    string.IsNullOrEmpty(node.Path) ? node.Id : node.Path, node));
-            }
-            catch { /* never throw — change feed is best-effort */ }
-            return node;
-        });
+        => Observable.FromAsync<MeshNode?>(async ct => { await WriteAsyncCore(node, options, ct); return node; });
 
     private async Task WriteAsyncCore(MeshNode node, JsonSerializerOptions options, CancellationToken ct)
     {
@@ -236,13 +218,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
     }
 
     public IObservable<string> Delete(string path)
-        => Observable.Defer(() =>
-        {
-            DeleteCore(path);
-            try { _changes.OnNext(DataChangeNotification.Deleted(path)); }
-            catch { /* never throw — change feed is best-effort */ }
-            return Observable.Return(path);
-        });
+        => Observable.Defer(() => { DeleteCore(path); return Observable.Return(path); });
 
     private void DeleteCore(string path)
     {
