@@ -1080,11 +1080,14 @@ internal static class ThreadSubmissionServer
                             // Contains check covers the resubmit case where u1 was already in
                             // Messages from a prior round — ApplyResubmit removed u1 from
                             // IngestedMessageIds (so the watcher re-dispatches it) but kept it
-                            // in Messages, so a blind AddRange would duplicate it.
+                            // in Messages, so a blind AddRange would duplicate it. Symmetric
+                            // Contains check on responseMsgId catches the edge case where
+                            // DispatchRound retries (rollback + watcher re-dispatch with the
+                            // SAME response cell already wired up — same dispatch instance).
                             var msgs = t.Messages;
                             foreach (var uid in dispatch.UserMessageIds)
                                 if (!msgs.Contains(uid)) msgs = msgs.Add(uid);
-                            msgs = msgs.Add(responseMsgId);
+                            if (!msgs.Contains(responseMsgId)) msgs = msgs.Add(responseMsgId);
 
                             var ingested = t.IngestedMessageIds.AddRange(
                                 dispatch.UserMessageIds.Where(uid => !t.IngestedMessageIds.Contains(uid)));
