@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -30,6 +31,16 @@ internal sealed class PostgreSqlPathRoutingAdapter : IStorageAdapter
     private readonly PostgreSqlPartitionStorageProvider _provider;
     private readonly ConcurrentDictionary<string, PostgreSqlStorageAdapter> _adaptersBySchema =
         new(StringComparer.OrdinalIgnoreCase);
+
+    // Merged in-process change feed across every lazily-created per-schema
+    // PostgreSqlStorageAdapter. PathRoutingAdapter is the IStorageAdapter the
+    // PartitionStorageProvider exposes; the synced-query layer subscribes here
+    // to receive notifications from ANY schema this router fans out to.
+    // Without this, the default interface Changes = Observable.Empty drops every
+    // change event silently (the same bug pattern VersionWritingStorageAdapter
+    // had — f28449035).
+    private readonly Subject<DataChangeNotification> _changes = new();
+    public IObservable<DataChangeNotification> Changes => _changes.AsObservable();
 
     public PostgreSqlPathRoutingAdapter(PostgreSqlPartitionStorageProvider provider)
     {
@@ -81,7 +92,14 @@ internal sealed class PostgreSqlPathRoutingAdapter : IStorageAdapter
     {
         var schema = !string.IsNullOrEmpty(def.Schema) ? def.Schema : def.Namespace;
         return _adaptersBySchema.GetOrAdd(schema!, _ =>
-            new PostgreSqlStorageAdapter(_provider.BaseDataSource, embeddingProvider: null, def));
+        {
+            var adapter = new PostgreSqlStorageAdapter(_provider.BaseDataSource, embeddingProvider: null, def);
+            // Wire the new per-schema adapter's Changes into the routing
+            // adapter's merged feed. Once-per-schema cost — the inner adapter
+            // is itself cached in _adaptersBySchema.
+            adapter.Changes.Subscribe(_changes);
+            return adapter;
+        });
     }
 
     private PostgreSqlStorageAdapter? AdapterForReadState(PartitionState state) => state switch
