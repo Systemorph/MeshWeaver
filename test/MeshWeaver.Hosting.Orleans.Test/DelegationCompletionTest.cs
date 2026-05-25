@@ -118,5 +118,31 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
             "EmitCompletionNotification must create a Notification MeshNode targeting the thread, " +
             "which the user's notification bell databinds to");
         Output.WriteLine("Verified: completion notification appeared in user's bell");
+
+        // 6. Dedicated Summary on ThreadMessage AND Thread. ExecuteMessageAsync
+        //    parses <summary>...</summary> from the agent's response (or falls
+        //    back to finalText) and writes the same string atomically with
+        //    Status flips — Thread.Summary at Status=Idle, ThreadMessage.Summary
+        //    at Status=Completed. The delegation tool reads Thread.Summary as
+        //    the tool-call result; the UI shows ThreadMessage.Summary as a
+        //    one-line digest of the verbose response.
+        finalMsg.Summary.Should().NotBeNull(
+            "response cell must carry a dedicated Summary populated at terminal status — " +
+            "the delegation tool returns this (not the verbose Text) to the parent agent");
+        finalMsg.Summary.Should().NotBeEmpty("summary must contain text");
+        Output.WriteLine($"Verified: response cell Summary length = {finalMsg.Summary!.Length}");
+
+        var threadStreamFinal = workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!;
+        var threadAtIdle = await threadStreamFinal
+            .Select(nodes => nodes?.FirstOrDefault(n => n.Path == threadPath)?.Content as MeshThread)
+            .Where(t => t is { Status: MeshWeaver.AI.ThreadExecutionStatus.Idle }
+                        && !string.IsNullOrEmpty(t.Summary))
+            .Take(1).Timeout(10.Seconds()).ToTask(ct);
+        threadAtIdle!.Summary.Should().NotBeNullOrEmpty(
+            "Thread.Summary must be populated atomically with Status=Idle so a delegating " +
+            "parent observing the sub-thread sees the summary in the same emission as the Idle flip");
+        threadAtIdle.Summary.Should().Be(finalMsg.Summary,
+            "Thread.Summary and ThreadMessage.Summary should carry the same digest");
+        Output.WriteLine($"Verified: thread Summary matches response-cell Summary");
     }
 }
