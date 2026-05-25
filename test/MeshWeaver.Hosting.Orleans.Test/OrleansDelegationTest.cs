@@ -239,9 +239,16 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
         Output.WriteLine("2. Initial execution complete");
 
         // 3. Resubmit
+        // 🚨 Wait for SETTLED state (IsExecuting=false AND msgIds changed).
+        // Mid-resubmit transitions briefly show 3 messages before the
+        // truncate-then-re-add settles to 2 — see Resubmit_AfterExecution_DoesNotDeadlock
+        // in OrleansNodeChangePropagationTest for the full repro.
         var resubmitted = workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Select(nodes => (nodes?.FirstOrDefault(n => n.Path == threadPath)?.Content as MeshThread)?.Messages ?? [])
-            .Where(ids => ids.Count >= 2 && !ids.SequenceEqual(msgIds))
+            .Select(nodes => nodes?.FirstOrDefault(n => n.Path == threadPath)?.Content as MeshThread)
+            .Where(t => t is { IsExecuting: false }
+                && t.Messages.Count >= 2
+                && !t.Messages.SequenceEqual(msgIds))
+            .Select(t => (IReadOnlyList<string>)t!.Messages)
             .Timeout(15.Seconds())
             .FirstAsync().ToTask(ct);
 
