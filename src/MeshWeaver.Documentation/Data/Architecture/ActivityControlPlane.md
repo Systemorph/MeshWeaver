@@ -170,6 +170,94 @@ the dispatching flag (the same state can't fire twice). The chain runs in the
 hub's natural scheduler so AsyncLocal flows. Multi-step orchestration is an
 `IObservable<Unit>` chain (`Concat` / `Zip` / `SelectMany`), no mutable flags.
 
+### Idempotent triggers — `Requested<X>` lives ON THE NODE, not in memory
+
+> ## 🚨 Absolute rule
+>
+> **Single-flight an action via a paired `Requested<X>` field on the owning
+> node, never via an in-memory `Interlocked` gate.** Each hub owns its OWN
+> state, on its OWN node. The watcher writes the request through
+> `stream.Update`; the claim clears it in the same atomic update that
+> transitions `Status`. No external state coordinates the dispatch.
+
+Watchers that fire a one-shot trigger from an observable stream must single-flight.
+The wrong way is an in-memory `Interlocked.CompareExchange(ref dispatching, 1, 0)`
+gate. That gate races on CI when the workspace stream's `ReplaySubject(1)`
+emits a stale snapshot after the gate has been released — a flicker
+`Idle → Executing → Idle` in the same hub tick can dispatch twice. The
+production failure mode this caused was `Submit_DuringExecution_QueuedUntilRoundCompletes`:
+u2 ingested twice into `IngestedMessageIds`, two `StartExecutionTrigger`
+posts, two response cells, six messages in `thread.Messages` instead of four.
+
+The right way: every "needs work" trigger has a paired field on the
+owning node. The watcher's predicate gates on **all three** of:
+1. The state field (`Status == Idle`),
+2. The work-to-do field (`PendingUserMessages.Count > 0`,
+   `RequestedReleasePath != LatestReleasePath`, etc.),
+3. The intent field (`Requested<X> is null`).
+
+Existing pairs in the codebase:
+
+| Owning node            | Intent field             | Current-state field        | Cleared by                       |
+|------------------------|--------------------------|----------------------------|----------------------------------|
+| `MeshThread`           | `RequestedExecution`     | `Status` (Starting/Executing) | `HandleStartExecution` claim     |
+| `MeshThread`           | `RequestedCancellationAt`| Sub-thread's cancel watcher   | Sub-thread's CTS unwind          |
+| `NodeTypeDefinition`   | `RequestedReleasePath`   | `LatestReleasePath`           | `NodeTypeCompileActivityHandler` |
+| `ActivityLog`          | `RequestedStatus`        | `Status`                      | Activity hub on transition       |
+
+Submission-watcher implementation pattern (the SOLE entry point for
+dispatching a new round on the thread hub):
+
+```csharp
+threadHub.GetWorkspace().GetMeshNodeStream()
+    .Where(n => n.Content is MeshThread t
+        && t.Status == ThreadExecutionStatus.Idle
+        && t.PendingUserMessages.Count > 0
+        && t.RequestedExecution is null)        // ← intent field
+    .Subscribe(_ =>
+    {
+        workspace.GetMeshNodeStream().Update(node =>
+        {
+            // 🚨 Re-check ALL THREE inside the lambda. The stream.Update lambda
+            // runs on the hub's action block — concurrent emissions race here
+            // and the SECOND lambda sees RequestedExecution != null and bails.
+            var t = node.Content as MeshThread;
+            if (t is null
+                || t.Status != Idle
+                || t.PendingUserMessages.IsEmpty
+                || t.RequestedExecution is not null) return node;
+            return node with { Content = t with { RequestedExecution = DateTime.UtcNow } };
+        }).Subscribe(updated =>
+        {
+            if ((updated.Content as MeshThread)?.RequestedExecution is null)
+                return; // someone else won the race
+            threadHub.Post(new StartExecutionTrigger(threadPath), ...);
+        });
+    });
+```
+
+Claim-handler pattern (clears the intent in the same atomic transition):
+
+```csharp
+hub.GetWorkspace().GetMeshNodeStream().Update(node =>
+{
+    var t = node.Content as MeshThread;
+    if (t.Status != Idle) return node;            // already running
+    if (t.PendingUserMessages.IsEmpty) return node; // nothing to do
+    return node with { Content = t with {
+        Status = StartingExecution,
+        ExecutionStartedAt = DateTime.UtcNow,
+        RequestedExecution = null                  // ← clear intent atomically
+    }};
+});
+```
+
+**Why "each hub owns its own state":** the intent field lives on the same
+node as the state field. The owning hub is the only writer; cross-hub
+coordination is impossible because no other hub knows about the field.
+Read-only views (UI, MCP) can show "request pending" by checking
+`Requested<X> is not null && Status == Idle`.
+
 Ship the round-orchestration steps as small `IObservable<Unit>` builders
 (`CreateUserCells`, `CommitRound`, `DispatchToExec`). Each step is one
 `Hub.Observe(..., target)` or `workspace.UpdateMeshNode(...)` followed by
