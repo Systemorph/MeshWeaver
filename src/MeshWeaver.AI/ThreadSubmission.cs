@@ -411,7 +411,13 @@ public static class ThreadSubmission
                 Content = t with
                 {
                     Status = ThreadExecutionStatus.StartingExecution,
-                    ExecutionStartedAt = DateTime.UtcNow
+                    ExecutionStartedAt = DateTime.UtcNow,
+                    // Clear the paired intent field in the SAME atomic update —
+                    // see MeshThread.RequestedExecution. The watcher will see
+                    // Status != Idle on its next emission AND a null
+                    // RequestedExecution, so a flicker Idle → StartingExecution
+                    // → Idle within the same hub tick can't re-trigger.
+                    RequestedExecution = null
                 }
             };
         }).Subscribe(
@@ -783,72 +789,80 @@ internal static class ThreadSubmissionServer
     public static IDisposable InstallServerWatcher(IMessageHub threadHub)
     {
         var logger = threadHub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
-        // 🚨 Single-flight gate. DistinctUntilChanged on the fingerprint blocks
-        // back-to-back identical emissions, but a flicker — Idle → Executing
-        // → Idle within the same hub action-block tick — produces TWO distinct
-        // dispatchable emissions for ONE submission, and we'd POST two
-        // StartExecutionTrigger messages. HandleStartExecutionOnExec then
-        // creates two response cells, the round's thread.Messages list ends
-        // up with both, and the next round's LoadFullConversationHistoryFromMesh
-        // returns the orphan cell ("Allocating agent...") as a phantom
-        // assistant message in the chat history (ChatHistoryTest regression).
+        // 🚨 Single-flight via durable per-node intent field, not via in-memory
+        // Interlocked gate. See MeshThread.RequestedExecution. The watcher
+        // observes its OWN thread node's stream and on every emission where
+        //   Status == Idle && PendingUserMessages non-empty && RequestedExecution is null
+        // performs an atomic CAS-style write through stream.Update:
+        //   - re-checks Status / Pending / RequestedExecution INSIDE the lambda
+        //     (so concurrent emissions all funnel through the hub's action block)
+        //   - sets RequestedExecution = now
+        //   - then posts StartExecutionTrigger
+        // Concurrent watcher emissions race to write RequestedExecution; the
+        // SECOND atomic Update sees RequestedExecution != null and bails. The
+        // claim in HandleStartExecution clears RequestedExecution in the same
+        // atomic update that flips Status to StartingExecution.
         //
-        // Same shape as the gate inside ActivityControlPlaneExtensions.WatchSubmission.
-        var dispatching = 0;
+        // Old shape used Interlocked.CompareExchange(ref dispatching, 1, 0) which
+        // raced on CI: ReplaySubject(1) emissions flickered Idle → Executing →
+        // Idle within one hub tick, the gate released on the Executing emission,
+        // and a re-emitted stale Idle snapshot tripped the CAS a second time
+        // (producing two StartExecutionTrigger posts → u2 ingested twice →
+        // Submit_DuringExecution_QueuedUntilRoundCompletes failure on CI).
         return threadHub.GetWorkspace().GetMeshNodeStream()
-            .Select(node => Fingerprint(node))
-            .DistinctUntilChanged()
+            .Select(NeedsDispatch)
+            .Where(needs => needs)
             .Subscribe(
-                fp =>
+                _ =>
                 {
                     var threadPath = threadHub.Address.Path;
-                    if (fp.NeedsDispatch
-                        && System.Threading.Interlocked.CompareExchange(ref dispatching, 1, 0) == 0)
+                    var workspace = threadHub.GetWorkspace();
+                    workspace.GetMeshNodeStream().Update(node =>
                     {
-                        logger?.LogDebug(
-                            "[SubmissionWatcher] posting StartExecutionTrigger for {ThreadPath}",
-                            threadPath);
-                        threadHub.Post(
-                            new StartExecutionTrigger(threadPath),
-                            o => o.WithTarget(threadHub.Address));
-                    }
-                    else if (!fp.NeedsDispatch
-                             && System.Threading.Interlocked.Exchange(ref dispatching, 0) == 1)
-                    {
-                        // Gate released — the dispatch took effect (fingerprint transitioned
-                        // to a non-dispatchable state). The next genuine NeedsDispatch=true
-                        // emission (a fresh round after this one settles) is now allowed
-                        // through. Without this, a flicker Idle → Executing → Idle within
-                        // the same submission produces TWO StartExecutionTrigger posts →
-                        // TWO response cells → phantom assistant message in the next
-                        // round's chat history (ChatHistoryTest regression).
-                        logger?.LogDebug(
-                            "[SubmissionWatcher] dispatch settled, gate released for {ThreadPath}",
-                            threadPath);
-                    }
+                        var t = node.Content as MeshThread;
+                        if (t is null
+                            || t.Status != ThreadExecutionStatus.Idle
+                            || t.PendingUserMessages.IsEmpty
+                            || t.RequestedExecution is not null)
+                        {
+                            return node; // already requested or no longer idle
+                        }
+                        return node with { Content = t with { RequestedExecution = DateTime.UtcNow } };
+                    }).Subscribe(
+                        updated =>
+                        {
+                            // Did this Update actually flip RequestedExecution? If
+                            // the post-update node still has RequestedExecution null
+                            // (or unchanged), another concurrent emission won the
+                            // race — drop. Otherwise post the trigger.
+                            if ((updated.Content as MeshThread)?.RequestedExecution is null)
+                                return;
+                            logger?.LogDebug(
+                                "[SubmissionWatcher] posting StartExecutionTrigger for {ThreadPath}",
+                                threadPath);
+                            threadHub.Post(
+                                new StartExecutionTrigger(threadPath),
+                                o => o.WithTarget(threadHub.Address));
+                        },
+                        ex => logger?.LogWarning(ex,
+                            "[SubmissionWatcher] RequestedExecution Update failed for {ThreadPath}", threadPath));
                 },
                 ex => logger?.LogWarning(ex,
                     "[SubmissionWatcher] stream errored for {ThreadPath}",
                     threadHub.Address.Path));
     }
 
-    private record struct WatcherFingerprint(
-        ThreadExecutionStatus Status,
-        int PendingCount,
-        bool NeedsDispatch);
-
     /// <summary>
-    /// Compresses the dispatchable state into a value tuple that drives
-    /// <c>DistinctUntilChanged</c>. NeedsDispatch is true when the thread is
-    /// <see cref="ThreadExecutionStatus.Idle"/> and at least one entry is
-    /// queued in <c>PendingUserMessages</c>.
+    /// Predicate equivalent: the thread is idle, has pending work, and no
+    /// request is in flight yet. Used by the submission watcher to filter
+    /// dispatchable emissions.
     /// </summary>
-    private static WatcherFingerprint Fingerprint(MeshNode? node)
+    private static bool NeedsDispatch(MeshNode? node)
     {
-        if (node?.Content is not MeshThread t)
-            return new WatcherFingerprint(ThreadExecutionStatus.Idle, 0, false);
-        var needs = t.Status == ThreadExecutionStatus.Idle && t.PendingUserMessages.Count > 0;
-        return new WatcherFingerprint(t.Status, t.PendingUserMessages.Count, needs);
+        if (node?.Content is not MeshThread t) return false;
+        return t.Status == ThreadExecutionStatus.Idle
+               && t.PendingUserMessages.Count > 0
+               && t.RequestedExecution is null;
     }
 
     /// <summary>

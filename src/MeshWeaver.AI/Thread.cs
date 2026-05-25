@@ -283,6 +283,40 @@ public record Thread
     public DateTime? RequestedCancellationAt { get; init; }
 
     /// <summary>
+    /// Timestamp of the most recent execution-request emission, set by the
+    /// submission watcher BEFORE posting <c>StartExecutionTrigger</c>.
+    /// <para>This is the canonical paired field for the
+    /// "single-flight an action without an in-memory gate" pattern:</para>
+    /// <list type="bullet">
+    /// <item><c>RequestedExecution</c> + <see cref="Status"/> ⇨ this thread</item>
+    /// <item><c>RequestedCancellationAt</c> + cancel watcher ⇨ same thread</item>
+    /// <item><c>RequestedReleasePath</c> + <c>LatestReleasePath</c> ⇨ NodeTypeDefinition</item>
+    /// <item><c>RequestedStatus</c> + <c>Status</c> ⇨ ActivityLog</item>
+    /// </list>
+    /// <para>Lifecycle:</para>
+    /// <list type="number">
+    /// <item>Submission watcher observes
+    ///   <c>Status == Idle &amp;&amp; PendingUserMessages.Count &gt; 0 &amp;&amp; RequestedExecution is null</c>.
+    ///   It writes <c>RequestedExecution = DateTime.UtcNow</c> via
+    ///   <c>workspace.GetMeshNodeStream().Update(...)</c> THEN posts
+    ///   <see cref="StartExecutionTrigger"/>. Concurrent watcher emissions see
+    ///   <c>RequestedExecution</c> already set and skip.</item>
+    /// <item><see cref="ThreadSubmission.HandleStartExecution"/>'s atomic claim
+    ///   transitions <see cref="Status"/> from <see cref="ThreadExecutionStatus.Idle"/>
+    ///   to <see cref="ThreadExecutionStatus.StartingExecution"/> AND clears
+    ///   <c>RequestedExecution</c> in the same lambda — so a flicker
+    ///   <c>Idle → StartingExecution → Idle</c> in the same hub tick can never
+    ///   see <c>RequestedExecution</c> still set at <c>Idle</c>.</item>
+    /// </list>
+    /// <para>Replaces the in-memory <c>Interlocked.CompareExchange</c> gate at
+    /// <c>ThreadSubmissionServer.InstallServerWatcher</c>, which raced on CI when
+    /// the workspace stream's <c>ReplaySubject(1)</c> emitted a stale snapshot
+    /// after the gate had been released, producing two
+    /// <see cref="StartExecutionTrigger"/> posts for one submission.</para>
+    /// </summary>
+    public DateTime? RequestedExecution { get; init; }
+
+    /// <summary>
     /// Pending user message text — set at thread creation to auto-start execution.
     /// When the thread grain activates and sees this, it immediately starts streaming.
     /// Cleared after execution starts.
