@@ -30,17 +30,38 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
     private static readonly HashSet<string> AuthNotifyNodeTypes =
         new(StringComparer.Ordinal) { "User", "Group", "Role", "VUser", "ApiToken" };
 
-    private readonly ConcurrentDictionary<string, MeshNode> _nodes =
-        new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, List<object>> _partitionObjects =
-        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, MeshNode> _nodes;
+    private readonly ConcurrentDictionary<string, List<object>> _partitionObjects;
     private readonly ILogger? _logger;
     private readonly IDataChangeNotifier? _notifier;
 
     public InMemoryStorageAdapter(
         ILogger<InMemoryStorageAdapter>? logger = null,
         IDataChangeNotifier? notifier = null)
+        : this(
+            nodes: new(StringComparer.OrdinalIgnoreCase),
+            partitionObjects: new(StringComparer.OrdinalIgnoreCase),
+            logger,
+            notifier)
     {
+    }
+
+    /// <summary>
+    /// Backing-store-injected constructor — share the same dictionaries
+    /// across multiple <see cref="InMemoryStorageAdapter"/> instances so a
+    /// multi-host test cluster (Orleans silo + client in one process) sees
+    /// one logical store, mirroring production where multiple adapter
+    /// instances all point at the same PG backend. The default ctor still
+    /// allocates per-instance dicts for isolated unit-test use.
+    /// </summary>
+    public InMemoryStorageAdapter(
+        ConcurrentDictionary<string, MeshNode> nodes,
+        ConcurrentDictionary<string, List<object>> partitionObjects,
+        ILogger<InMemoryStorageAdapter>? logger = null,
+        IDataChangeNotifier? notifier = null)
+    {
+        _nodes = nodes;
+        _partitionObjects = partitionObjects;
         _logger = logger;
         _notifier = notifier;
     }
