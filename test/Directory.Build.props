@@ -6,6 +6,19 @@
     <!-- Suppress FluentAssertions license warning for open source projects -->
     <FLUENTASSERTIONS_SUPPRESS_WARNING>true</FLUENTASSERTIONS_SUPPRESS_WARNING>
     <Nullable>enable</Nullable>
+    <!-- Always emit a TRX so every `dotnet test` invocation leaves a parseable
+         result file in TestResults/ — required for hang diagnosis (the only
+         place the per-test StdOut + outcome is recorded once the host crashes
+         or the runner is killed). Without this, local runs leave nothing
+         behind to inspect. CI passes `-l:trx` explicitly; this matches that
+         behavior for local. Path = `<project>/TestResults/_<machine>_<utc>.trx`. -->
+    <VSTestLogger>trx</VSTestLogger>
+    <!-- xUnit v3 → trx StdOut: anything written via ITestOutputHelper.WriteLine
+         (which the per-test ILogger redirects to at Information+ via xunit.runner.json
+         + appsettings.json's MeshWeaver=Information) flows into the trx's
+         <StdOut> element on the failing test result. No extra config needed
+         beyond keeping diagnosticMessages false (default) and writing logs
+         through the standard pipeline. -->
   </PropertyGroup>
 
   <ItemGroup>
