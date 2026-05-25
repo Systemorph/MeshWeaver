@@ -610,7 +610,7 @@ public class AgentChatClient : IAgentChat
         var response = await agent.RunAsync(chatMessage, thread, cancellationToken: cancellationToken);
 
         // Save the updated thread
-        await SaveThreadAsync(agent, thread);
+        _ = SaveThreadAsync(agent, thread); // no-op; method returns Task.CompletedTask
 
         foreach (var responseMsg in response.Messages)
         {
@@ -675,7 +675,7 @@ public class AgentChatClient : IAgentChat
 
             // Run target agent on the same shared thread with the handoff message
             var handoffResponse = await targetAgent.RunAsync(handoff.Message, thread, cancellationToken: cancellationToken);
-            await SaveThreadAsync(targetAgent, thread);
+            _ = SaveThreadAsync(targetAgent, thread); // no-op; method returns Task.CompletedTask
 
             foreach (var msg in handoffResponse.Messages)
             {
@@ -800,7 +800,7 @@ public class AgentChatClient : IAgentChat
         }
 
         // Save the updated thread
-        await SaveThreadAsync(agent, thread);
+        _ = SaveThreadAsync(agent, thread); // no-op; method returns Task.CompletedTask
 
         // Check for any queued layout area content
         while (!queuedLayoutAreaContent.IsEmpty)
@@ -889,7 +889,7 @@ public class AgentChatClient : IAgentChat
                 }
             }
 
-            await SaveThreadAsync(targetAgent, thread);
+            _ = SaveThreadAsync(targetAgent, thread); // no-op; method returns Task.CompletedTask
 
             // Yield any queued layout area content from the handoff target
             while (!queuedLayoutAreaContent.IsEmpty)

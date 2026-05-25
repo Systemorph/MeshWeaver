@@ -92,7 +92,7 @@ public static class DelegationTool
     public static IEnumerable<AITool> CreateDelegationTools(
         AgentConfiguration currentAgent,
         IReadOnlyList<AgentConfiguration> hierarchyAgents,
-        Func<string, string, string?, CancellationToken, IAsyncEnumerable<string>> executeAsync,
+        Func<string, string, string?, CancellationToken, IObservable<string>> executeAsync,
         Func<IReadOnlyList<SubThreadInfo>>? listSubThreads = null,
         Action<string, string>? sendToSubThread = null,
         IObservable<MeshWeaver.AI.Delegation.DelegationEvent>? delegationEvents = null,
@@ -118,7 +118,7 @@ public static class DelegationTool
     public static AITool CreateUnifiedDelegationTool(
         AgentConfiguration currentAgent,
         IReadOnlyList<AgentConfiguration> hierarchyAgents,
-        Func<string, string, string?, CancellationToken, IAsyncEnumerable<string>> executeAsync,
+        Func<string, string, string?, CancellationToken, IObservable<string>> executeAsync,
         ILogger? logger = null)
         => CreateUnifiedDelegationTool(currentAgent, hierarchyAgents, executeAsync,
             hasListTool: false, hasSendTool: false,
@@ -127,7 +127,7 @@ public static class DelegationTool
     private static AITool CreateUnifiedDelegationTool(
         AgentConfiguration currentAgent,
         IReadOnlyList<AgentConfiguration> hierarchyAgents,
-        Func<string, string, string?, CancellationToken, IAsyncEnumerable<string>> executeAsync,
+        Func<string, string, string?, CancellationToken, IObservable<string>> executeAsync,
         bool hasListTool,
         bool hasSendTool,
         IObservable<MeshWeaver.AI.Delegation.DelegationEvent>? delegationEvents,
@@ -252,26 +252,12 @@ public static class DelegationTool
                     });
             }
 
-            Observable.Create<string>(async (observer, ct) =>
-            {
-                try
-                {
-                    await foreach (var chunk in executeAsync(agentName, task, context, cancellationToken)
-                        .WithCancellation(cancellationToken))
-                    {
-                        observer.OnNext(chunk);
-                    }
-                    observer.OnCompleted();
-                }
-                catch (OperationCanceledException)
-                {
-                    observer.OnCompleted();
-                }
-                catch (Exception ex)
-                {
-                    observer.OnError(ex);
-                }
-            })
+            // Pure Subscribe — executeAsync now returns IObservable<string> directly
+            // (ExecuteDelegationAsync builds the sub-thread node via meshService.CreateNode
+            // and Emits Dispatched; the parent's TCS is resolved by the Idle subscription
+            // above which reads Thread.Summary). No await foreach, no Task.Run, no
+            // Observable.Create wrapper.
+            executeAsync(agentName, task, context, cancellationToken)
             .Subscribe(
                 chunk => sb.Append(chunk),
                 ex =>
