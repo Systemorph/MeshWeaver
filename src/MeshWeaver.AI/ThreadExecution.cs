@@ -1525,10 +1525,18 @@ public static class ThreadExecution
                             _ => { },
                             ex => execLogger?.LogWarning(ex,
                                 "PushToResponseMessage(Cancelled) failed for {ThreadPath}", threadPath));
+                        // Summary invariant: every Idle write must carry a Summary.
+                        // Cancelled path has no agent-emitted <summary> block, so
+                        // Summary defaults to the cancellation context's accumulated
+                        // text — same as the user-visible response cell Text.
+                        var cancelSummary = string.IsNullOrEmpty(cancelText)
+                            ? "Cancelled before completion."
+                            : cancelText;
                         UpdateThreadExecution(t => t with
                         {
                             Status = ThreadExecutionStatus.Idle, ExecutionStatus = null, ActiveMessageId = null,
-                            ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null
+                            ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null,
+                            Summary = cancelSummary
                         }).Subscribe(
                             _ => { },
                             ex => execLogger?.LogWarning(ex,
@@ -1568,10 +1576,15 @@ public static class ThreadExecution
                                 "PushToResponseMessage(Error) failed for {ThreadPath}", threadPath),
                             () =>
                             {
+                                // Summary invariant for the Error path — non-empty.
+                                var errorSummary = string.IsNullOrEmpty(errorTextLocal)
+                                    ? $"Error: {ex.Message}"
+                                    : errorTextLocal;
                                 UpdateThreadExecution(t => t with
                                 {
                                     Status = ThreadExecutionStatus.Idle, ExecutionStatus = null, ActiveMessageId = null,
-                                    ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null
+                                    ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null,
+                                    Summary = errorSummary
                                 }).Subscribe(
                                     _ => { },
                                     updEx => execLogger?.LogWarning(updEx,
