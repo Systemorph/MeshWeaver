@@ -339,7 +339,7 @@ public class MeshOperationsUploadTest : MonolithMeshTestBase
     /// scope for the upload-service work whose primary goal is round-tripping
     /// pictures and documents.
     /// </summary>
-    [Fact(Skip = "TODO: investigate why IsEditable=false isn't refused — separate from upload core")]
+    [Fact]
     public async Task Upload_ReadOnlyCollection_Refused()
     {
         var nodePath = await CreateTestNodeAsync("frozen");
