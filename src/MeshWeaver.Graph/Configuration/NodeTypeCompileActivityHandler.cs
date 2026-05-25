@@ -40,6 +40,41 @@ internal static class NodeTypeCompileActivityHandler
             "[COMPILE-TRACE] NodeTypeCompileActivityHandler.Handle entered: parent={ParentPath} activity={ActivityPath}",
             parentPath, activityPath);
 
+        // Compile is infrastructure work. Trigger-time gates whether the caller
+        // is allowed to initiate a compile; the compile body itself reads
+        // sources, writes assemblies and updates compile state on the parent
+        // NodeType — all of which need to succeed regardless of which user (or
+        // system path: startup, NodeType version bump, self-heal in
+        // EnrichWithNodeType) requested it. The compile body lives entirely
+        // under ImpersonateAsSystem so source reads and the terminal
+        // WriteToParent (status=Ok/Error + assembly path) are never blocked by
+        // the caller's per-node permissions.
+        //
+        // The using-scope is on the handler's action-block thread; all child
+        // observables (CreateNode for the activity log, streamCache.Update for
+        // WriteToParent, IAssemblyStore.Put) Subscribe synchronously inside
+        // this scope, so AccessContextPropagation captures System for the
+        // entire chain.
+        var accessService = activityHub.ServiceProvider.GetService<AccessService>();
+        var systemScope = accessService?.ImpersonateAsSystem();
+        try
+        {
+            return HandleCore(activityHub, request, logger, parentPath, activityPath);
+        }
+        finally
+        {
+            systemScope?.Dispose();
+        }
+    }
+
+    private static IMessageDelivery HandleCore(
+        IMessageHub activityHub,
+        IMessageDelivery<RunCompileRequest> request,
+        ILogger? logger,
+        string parentPath,
+        string activityPath)
+    {
+
         var compilationService = activityHub.ServiceProvider.GetService<IMeshNodeCompilationService>();
         if (compilationService is null)
         {
