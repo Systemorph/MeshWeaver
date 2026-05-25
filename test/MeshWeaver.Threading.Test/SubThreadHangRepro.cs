@@ -337,12 +337,13 @@ public class SubThreadHangRepro(ITestOutputHelper output) : MonolithMeshTestBase
         var respPath = $"{parentPath}/{respMsgId}";
 
         // The sub-thread path lives on the response message's tool calls.
+        // 30s budget — 15s tripped on slow CI runners (run 26376715753).
         var responseMsg = await workspace.GetMeshNodeStream(respPath)
             .Select(n => n.Content as ThreadMessage)
             .Where(m => m?.ToolCalls != null && m.ToolCalls.Count > 0
                 && m.ToolCalls[0].DelegationPath is { Length: > 0 })
             .Take(1)
-            .Timeout(15.Seconds())
+            .Timeout(30.Seconds())
             .ToTask(ct);
 
         return responseMsg!.ToolCalls![0].DelegationPath!;

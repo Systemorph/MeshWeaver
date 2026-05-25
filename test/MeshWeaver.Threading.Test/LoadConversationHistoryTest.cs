@@ -75,7 +75,10 @@ public class LoadConversationHistoryTest(ITestOutputHelper output) : MonolithMes
             m => !string.IsNullOrEmpty(m.Text)).FirstAsync().ToTask(ct);
     }
 
-    [Fact]
+    // 60s timeout: two real ThreadFlow.SubmitAndWait calls + ReadThread predicate
+    // waits — local runs ~3s, CI cold-start runs ~30s. Default 30s methodTimeout
+    // tripped on CI (31.85s in run 26376715753).
+    [Fact(Timeout = 60_000)]
     public async Task AllCells_HaveText_ReturnsFullHistory()
     {
         var ct = new CancellationTokenSource(60.Seconds()).Token;

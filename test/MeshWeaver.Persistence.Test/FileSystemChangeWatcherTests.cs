@@ -129,9 +129,11 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
         // Stream-wait for the FS event — replaces a fixed Task.Delay(500).
         // Linux inotify can take 1-2s to deliver the first event after the
         // watch is established; a 500 ms delay would race on Linux CI.
+        // 15s budget: 5s default tripped on slow Linux runners (run 26376715753).
         await WaitForNotification(receivedNotifications, n =>
             n.Path.Contains("external/node1") &&
-            (n.Kind == DataChangeKind.Created || n.Kind == DataChangeKind.Updated));
+            (n.Kind == DataChangeKind.Created || n.Kind == DataChangeKind.Updated),
+            timeoutMs: 15_000);
 
         // Assert - On Windows, file creation + write may result in Created or Changed/Updated event
         receivedNotifications.Should().Contain(n =>

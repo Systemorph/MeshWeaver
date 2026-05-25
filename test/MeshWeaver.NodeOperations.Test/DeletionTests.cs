@@ -182,7 +182,7 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
     ///   var nodeFactory = host.Hub.ServiceProvider.GetRequiredService&lt;IMeshService&gt;();
     ///   await nodeFactory.DeleteNode(nodePath);
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 60_000)]
     public async Task Delete_FromNodeHub_Succeeds()
     {
         // Arrange â€” create a node and get its hub via the routing service

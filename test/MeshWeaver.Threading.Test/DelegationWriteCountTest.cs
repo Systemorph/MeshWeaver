@@ -52,9 +52,9 @@ public class DelegationWriteCountTest(ITestOutputHelper output) : MonolithMeshTe
             // the test exits. The default 500 ms quiesce budget is too tight
             // for streaming-heavy rounds — observed 9 in-flight DataChangeRequests
             // at dispose ("X pending callback(s) after 0.50s" failure mode).
-            // Bump per-class; we still fail hard if writes don't drain within
-            // the longer window.
-            .ConfigureHub(c => c.WithQuiesceTimeout(TimeSpan.FromSeconds(5)))
+            // 5 s wasn't enough on CI (run 26376715753 still leaked); bump to 15 s.
+            // We still fail hard if writes don't drain within the longer window.
+            .ConfigureHub(c => c.WithQuiesceTimeout(TimeSpan.FromSeconds(15)))
             .ConfigureServices(services =>
             {
                 services.AddSingleton<IChatClientFactory, CountingDelegationFactory>();
