@@ -116,9 +116,9 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
         this.meshHub = meshHub;
         this.logger = logger;
 
-        // 🚨 Dedicated cache hub at the cluster-wide static address
-        // `cache/mesh-node-cache`. The `cache` address-type is declared as
-        // stream-routed at static-init time in
+        // 🚨 Dedicated cache hub at a PROCESS-UNIQUE address keyed by the
+        // parent mesh hub's Address Id. The `cache` address-type is declared
+        // as stream-routed at static-init time in
         // MeshConfiguration.DefaultStreamRoutedAddressTypes — silo's
         // RoutingGrain sees that and dispatches via memory stream rather
         // than grain activation. The cache hub follows the Portal pattern
@@ -126,14 +126,21 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
         // with the routing service in WithInitialization so its memory-
         // stream subscription wires up before any reader subscribes.
         //
-        // Without this hub, MeshNodeStreamCache would open all upstream
-        // SubscribeRequests with the parent mesh hub as Sender —
-        // unregistered, non-routable from the silo's perspective —
-        // and silo-side responses would NotFound. See
+        // 🚨 Process-uniqueness is critical: if the silo's and the client's
+        // cache hubs share the same address (`cache/mesh-node-cache`), both
+        // subscribe to the same cluster-wide Orleans memory stream — so a
+        // silo-side response to a client-initiated SubscribeRequest may be
+        // delivered to the silo's cache hub instead of the client's. The
+        // wrong cache hub then has no sync sub-hub for the incoming
+        // DataChangedEvent's StreamId, RouteStreamMessage returns
+        // request.Ignored(), and the client times out. Keying by the mesh
+        // hub's Id (a per-process guid) guarantees each process's cache hub
+        // gets its own memory-stream subscription. See
         // Doc/Architecture/OrleansTestRoutingPattern.md.
         var routingService = meshHub.ServiceProvider.GetRequiredService<IRoutingService>();
+        var cacheAddress = new Address("cache", meshHub.Address.Id);
         cacheHub = meshHub.GetHostedHub(
-            new Address("cache", "mesh-node-cache"),
+            cacheAddress,
             config => config
                 .AddData()  // IWorkspace registration so GetEntry can build the stream handle
                 .WithInitialization(hub =>
