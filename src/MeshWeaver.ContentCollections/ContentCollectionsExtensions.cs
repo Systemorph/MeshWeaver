@@ -441,8 +441,8 @@ public static class ContentCollectionsExtensions
                     {
                         Name = collectionName,
                         SourceType = "EmbeddedResource",
-                        IsEditable = false,
-                        ExposeInChildren = false,
+                        // IsEditable defaults to false — embedded resources are read-only.
+                        // ExposeInChildren defaults to false — backing store, hidden by design.
                         Settings = new Dictionary<string, string>
                         {
                             ["AssemblyName"] = assembly.GetName().Name ?? "",
@@ -479,10 +479,7 @@ public static class ContentCollectionsExtensions
                             SourceType = "FileSystem",
                             BasePath = basePath,
                             Address = configuration.Address,
-                            Settings = new Dictionary<string, string>
-                            {
-                                ["BasePath"] = basePath
-                            }
+                            Settings = new Dictionary<string, string> { ["BasePath"] = basePath }
                         };
 
                         return new ContentCollectionConfigProvider(config);
@@ -507,8 +504,11 @@ public static class ContentCollectionsExtensions
                     {
                         var collectionConfig = collectionConfigFactory(sp);
 
-                        // Ensure Settings are set
-                        var settings = collectionConfig.Settings ?? new Dictionary<string, string>();
+                        // Ensure Settings are set. Settings is IReadOnlyDictionary; copy
+                        // into a Dictionary so BasePath can be added.
+                        var settings = collectionConfig.Settings is { } existing
+                            ? new Dictionary<string, string>(existing)
+                            : new Dictionary<string, string>();
                         if (collectionConfig.BasePath != null && !settings.ContainsKey("BasePath"))
                         {
                             settings["BasePath"] = collectionConfig.BasePath;

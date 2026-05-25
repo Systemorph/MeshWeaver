@@ -104,7 +104,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
                 SourceType = "FileSystem",
                 Name = "storage",
                 BasePath = graphPath,
-                IsEditable = false
+                // IsEditable defaults to false — read-only by design.
             }))
             .ConfigureDefaultNodeHub(config =>
             {

@@ -42,10 +42,7 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
                 SourceType = "FileSystem",
                 IsEditable = true,
                 BasePath = _contentBasePath,
-                Settings = new Dictionary<string, string>
-                {
-                    ["BasePath"] = _contentBasePath
-                }
+                Settings = new Dictionary<string, string> { ["BasePath"] = _contentBasePath }
             });
     }
 

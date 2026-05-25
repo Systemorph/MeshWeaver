@@ -46,10 +46,7 @@ public class NodeHubContentCollectionTest(ITestOutputHelper output) : HubTestBas
                 SourceType = "FileSystem",
                 IsEditable = true,
                 BasePath = contentPath,
-                Settings = new Dictionary<string, string>
-                {
-                    ["BasePath"] = contentPath
-                }
+                Settings = new Dictionary<string, string> { ["BasePath"] = contentPath }
             });
     }
 
@@ -116,20 +113,20 @@ public class NodeHubContentCollectionTest(ITestOutputHelper output) : HubTestBas
         // Simulate the scenario where storage is registered but hidden
         var hub = GetClient();
 
-        // Register a hidden storage collection (ExposeInChildren = false)
+        // Register a hidden storage collection (ExposeInChildren = false, the default)
         var contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
         contentService.AddConfiguration(new ContentCollectionConfig
         {
             Name = "storage",
             SourceType = "FileSystem",
             IsEditable = true,
-            ExposeInChildren = false,
+            // ExposeInChildren defaults to false — collection is hidden from children.
             BasePath = _contentBasePath
         });
 
         var allConfigs = contentService.GetAllCollectionConfigs();
 
-        // "storage" should NOT appear (ExposeInChildren = false)
+        // "storage" should NOT appear (ExposeInChildren = false, the default)
         allConfigs.Should().NotContain(c => c.Name == "storage",
             "hidden storage collection should not appear in GetAllCollectionConfigs");
 

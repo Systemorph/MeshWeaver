@@ -143,10 +143,9 @@ public class ContentService : IContentService
             BasePath = fullPath,
             Address = mappedConfig.Address,
             IsEditable = mappedConfig.IsEditable,
-            Settings = new Dictionary<string, string>(sourceConfig.Settings ?? new Dictionary<string, string>())
-            {
-                ["BasePath"] = fullPath
-            }
+            Settings = sourceConfig.Settings is { } src
+                ? new Dictionary<string, string>(src) { ["BasePath"] = fullPath }
+                : new Dictionary<string, string> { ["BasePath"] = fullPath }
         };
 
         // Cache the resolved config

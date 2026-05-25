@@ -54,7 +54,9 @@ builder.UseMeshWeaver(
         // Register storage collection at mesh level for static file serving (monolith only)
         if (storageConfig != null)
         {
-            storageConfig = storageConfig with { IsEditable = false, IsStatic = true, ExposeInChildren = false };
+            // Storage collection: read-only static backing store, hidden from children.
+            // IsEditable / ExposeInChildren default to false — leave unset.
+            storageConfig = storageConfig with { IsStatic = true };
             config.ConfigureHub(hub => hub.AddContentCollection(_ => storageConfig));
         }
 
