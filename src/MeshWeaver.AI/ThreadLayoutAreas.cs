@@ -491,62 +491,47 @@ public static class ThreadLayoutAreas
 
     /// <summary>
     /// Renders a compact thumbnail for thread nodes in catalogs.
-    /// Shows title, last activity time, and message preview.
-    /// Walks the live thread's <see cref="MeshThread.Messages"/> list and
-    /// resolves each cell via <c>GetMeshNodeStream</c> — authoritative live
-    /// content, no stale-catalog read.
+    /// Shows title, last activity, and message count synchronously from the
+    /// thread node alone — does NOT subscribe to any cell streams. The text
+    /// preview is delegated to a <see cref="LayoutAreaControl"/> pointing at
+    /// the last cell's "Streaming" area, so the cell hub streams its own
+    /// few-lines preview lazily on the Blazor side. Catalog rendering with N
+    /// threads no longer pays N × M cell-load round-trips.
     /// </summary>
     public static IObservable<UiControl?> Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var workspace = host.Workspace;
-
-        return workspace.GetMeshNodeStream()
-            .SelectMany(node =>
-            {
-                var thread = node?.Content as MeshThread;
-                var cellIds = thread?.Messages ?? ImmutableList<string>.Empty;
-                if (cellIds.Count == 0)
-                    return Observable.Return((node, (IReadOnlyList<MeshNode>)Array.Empty<MeshNode>()));
-
-                var cellLookups = cellIds.Select(id =>
-                    workspace.GetMeshNodeStream($"{hubPath}/{id}")
-                        .Take(1)
-                        .Timeout(TimeSpan.FromSeconds(5))
-                        .Catch<MeshNode, Exception>(_ => Observable.Empty<MeshNode>()));
-
-                return cellLookups.Concat()
-                    .ToList()
-                    .Select(cells => (node, (IReadOnlyList<MeshNode>)cells));
-            })
-            .Select(t => BuildThumbnail(t.node, hubPath, t.Item2));
+        return host.Workspace.GetMeshNodeStream()
+            .Select(node => BuildThumbnail(node, hubPath));
     }
 
-    private static UiControl BuildThumbnail(MeshNode? node, string hubPath, IReadOnlyList<MeshNode> messageNodes)
+    private static UiControl BuildThumbnail(MeshNode? node, string hubPath)
     {
-        var content = node?.Content as MeshThread;
+        var thread = node?.Content as MeshThread;
+        var cellIds = thread?.Messages ?? ImmutableList<string>.Empty;
         var title = node?.Name ?? "Thread";
         var lastActivity = node?.LastModified.ToString("g") ?? "";
 
-        // Extract messages from child nodes
-        var messages = messageNodes
-            .Select(n => n.Content as ThreadMessage)
-            .Where(m => m != null && m.Type != ThreadMessageType.EditingPrompt)
-            .OrderBy(m => m!.Timestamp)
-            .ToList();
+        // Preview is a lazy embedded layout area pointing at the last cell's
+        // compact Streaming view (last 3 lines + tool-call chips). The cell
+        // hub only activates when the catalog tile becomes visible. When the
+        // thread has no cells, fall back to a static "No messages yet" line.
+        UiControl previewView = cellIds.Count > 0
+            ? new LayoutAreaControl(
+                    $"{hubPath}/{cellIds[^1]}",
+                    new LayoutAreaReference("Streaming"))
+                .WithSpinnerType(SpinnerType.Skeleton)
+                .WithStyle("margin: 8px 0 0 0; max-height: 60px; overflow: hidden;")
+            : Controls.Html(
+                "<p style=\"margin: 8px 0 0 0; font-size: 0.9rem; " +
+                "color: var(--neutral-foreground-hint);\">No messages yet.</p>");
 
-        // Fall back to legacy inline messages
-        var messageCount = messages.Count;
-
-        // Get preview from last message
-        var preview = "";
-        var lastMessage = messages.LastOrDefault();
-        if (lastMessage != null)
+        var countLabel = cellIds.Count switch
         {
-            preview = lastMessage.Text.Length > 60
-                ? lastMessage.Text[..57] + "..."
-                : lastMessage.Text;
-        }
+            0 => "",
+            1 => "1 message",
+            _ => $"{cellIds.Count} messages"
+        };
 
         return Controls.Stack
             .WithStyle("padding: 16px; background: var(--neutral-layer-card-container); border: 1px solid var(--neutral-stroke-rest); border-radius: 8px;")
@@ -556,10 +541,12 @@ public static class ThreadLayoutAreas
                 .WithView(Controls.Icon(FluentIcons.Chat(IconSize.Size24)).WithStyle("color: var(--accent-fill-rest);"))
                 .WithView(Controls.Stack
                     .WithView(Controls.Html($"<strong style=\"display: block;\">{System.Web.HttpUtility.HtmlEncode(title)}</strong>"))
-                    .WithView(Controls.Html($"<span style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint);\">{lastActivity}</span>"))))
-            .WithView(!string.IsNullOrEmpty(preview)
-                ? Controls.Html($"<p style=\"margin: 8px 0 0 0; font-size: 0.9rem; color: var(--neutral-foreground-hint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;\">{System.Web.HttpUtility.HtmlEncode(preview)}</p>")
-                : Controls.Html($"<p style=\"margin: 8px 0 0 0; font-size: 0.9rem; color: var(--neutral-foreground-hint);\">{messageCount} messages</p>"))
+                    .WithView(Controls.Html(
+                        $"<span style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint);\">" +
+                        $"{lastActivity}" +
+                        (string.IsNullOrEmpty(countLabel) ? "" : $" &middot; {countLabel}") +
+                        "</span>"))))
+            .WithView(previewView)
             .WithView(new NavLinkControl("", null, $"/{hubPath}/{ThreadNodeType.ThreadArea}"));
     }
 
