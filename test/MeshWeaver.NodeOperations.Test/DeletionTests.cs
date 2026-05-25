@@ -25,7 +25,13 @@ namespace MeshWeaver.NodeOperations.Test;
 /// </summary>
 public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private CancellationToken TestTimeout => new CancellationTokenSource(45.Seconds()).Token;
+    // 90 s: Linux CI's per-message-hub activation routinely takes >45 s when
+    // the suite is mid-run with many AccessAssignment / PartitionAccessPolicy
+    // synced queries firing in the background — Delete_FromNodeHub_Succeeds
+    // hit a STALE-CALLBACK at GetDataRequest@{TestData/del6target}(44.8s) in
+    // CI run 26416621680. Locally the test completes in ~10 s; the bump
+    // absorbs the slow path without masking a genuine hang.
+    private CancellationToken TestTimeout => new CancellationTokenSource(90.Seconds()).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder);
