@@ -763,7 +763,18 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             UserId = userId,
             // Over-fetch so the scorer can pick the best matches; the request
             // limit is enforced post-scoring below.
-            Limit = Math.Max(limit * 5, 100),
+            //
+            // Empty basePath means "match anywhere across this adapter" —
+            // contains-match / substring search needs to see the FULL subtree
+            // because the matcher can't push the prefix down to the FS scan.
+            // 100 was tripping AutocompleteIconTests.Autocomplete_ContainsMatch_FindsBySubstring
+            // when "Marketing" landed past the first 100 in FS enum order, so
+            // "arke" returned 0 even though "Mar" (prefix) returned Marketing.
+            // Cap higher for empty basePath; the scoped case still pays for
+            // accuracy at small cost since basePath narrows the walk.
+            Limit = string.IsNullOrEmpty(normalizedPath)
+                ? Math.Max(limit * 50, 1000)
+                : Math.Max(limit * 5, 100),
         };
 
         await foreach (var obj in QueryCoreAsync(queryRequest, options, ct))
