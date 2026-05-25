@@ -15,7 +15,9 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Orleans.Hosting;
 using Orleans.TestingHost;
 using Xunit;
@@ -131,7 +133,20 @@ public class TestClientConfigurator : IHostConfigurator
     public void Configure(IHostBuilder hostBuilder)
     {
         hostBuilder.UseOrleansMeshClient()
-            .ConfigurePortalMesh();
+            .ConfigurePortalMesh()
+            .ConfigureServices(services =>
+            {
+                // 🚨 Share the in-memory backing dicts with the silo — see
+                // SharedSiloConfigurator for rationale. Single-process test
+                // cluster needs ONE logical store; production has multiple
+                // adapter instances all pointing at the same PG backend.
+                services.Replace(ServiceDescriptor.Singleton<InMemoryStorageAdapter>(sp =>
+                    new InMemoryStorageAdapter(
+                        SharedOrleansFixture.SharedNodes,
+                        SharedOrleansFixture.SharedPartitionObjects,
+                        sp.GetService<ILoggerFactory>()?.CreateLogger<InMemoryStorageAdapter>())));
+                return services;
+            });
     }
 }
 
@@ -208,6 +223,20 @@ public class TestSiloConfigurator : ISiloConfigurator, IHostConfigurator
 
     public void Configure(IHostBuilder hostBuilder)
     {
+        hostBuilder.ConfigureServices(services =>
+        {
+            // 🚨 Share the in-memory backing dicts with the Orleans client
+            // (TestClientConfigurator). Single-process test cluster mirrors
+            // prod's "multiple adapter instances, same PG backend" shape so
+            // a node created via either mesh hub is visible to the silo's
+            // path resolver. See SharedOrleansFixture.SharedNodes for the
+            // rationale.
+            services.Replace(ServiceDescriptor.Singleton<InMemoryStorageAdapter>(sp =>
+                new InMemoryStorageAdapter(
+                    SharedOrleansFixture.SharedNodes,
+                    SharedOrleansFixture.SharedPartitionObjects,
+                    sp.GetService<ILoggerFactory>()?.CreateLogger<InMemoryStorageAdapter>())));
+        });
         var meshBuilder = hostBuilder.UseOrleansMeshServer()
             .AddPartitionedInMemoryPersistence()
             .ConfigurePortalMesh()

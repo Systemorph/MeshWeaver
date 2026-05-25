@@ -14,8 +14,11 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
+using MeshWeaver.Hosting.Persistence;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Orleans.Hosting;
 using Orleans.TestingHost;
 using MeshWeaver.Fixture;
@@ -36,6 +39,20 @@ public class SharedOrleansFixture : IAsyncLifetime
 {
     public TestCluster Cluster { get; private set; } = null!;
     public IMessageHub ClientMesh => Cluster.Client.ServiceProvider.GetRequiredService<IMessageHub>();
+
+    /// <summary>
+    /// Shared backing store for in-memory storage adapters across the silo +
+    /// Orleans client DI containers in the test cluster. Production runs PG
+    /// where multiple adapter instances point at the same DB; tests need the
+    /// same shape so a CreateNodeRequest handled on the client mesh hub is
+    /// visible to the silo's path resolver / routing grain. Without sharing,
+    /// each DI container builds its own dict and routing finds NotFound for
+    /// just-created paths (the rotate-test deadlock).
+    /// </summary>
+    internal static readonly System.Collections.Concurrent.ConcurrentDictionary<string, MeshNode> SharedNodes
+        = new(System.StringComparer.OrdinalIgnoreCase);
+    internal static readonly System.Collections.Concurrent.ConcurrentDictionary<string, System.Collections.Generic.List<object>> SharedPartitionObjects
+        = new(System.StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// The swappable chat factory. Tests replace this to use different fakes.
@@ -68,6 +85,19 @@ public class SharedOrleansFixture : IAsyncLifetime
         builder.AddClientBuilderConfigurator<TestClientConfigurator>();
         Cluster = builder.Build();
         await Cluster.DeployAsync();
+
+        // 🚨 Register the client's mesh hub as an Orleans memory-stream
+        // subscriber so the silo can route response messages back to it.
+        // The client mesh hub at `mesh/{guid}` isn't a grain — it's a
+        // hosted hub on the client process. Without this registration, a
+        // SubscribeRequest the client mesh posts to a remote path (e.g.
+        // GetMeshNodeStream(remotePath).Update) gets handled on the silo,
+        // but the response is targeted back to `mesh/{guid}` which the
+        // silo's RoutingGrain can't resolve → NotFound. RegisterStream
+        // subscribes the hub to the memory stream so the silo's RoutingGrain
+        // memory-stream fallback delivers responses correctly.
+        Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
+            .RegisterStream(ClientMesh.Address, ClientMesh.DeliverMessage);
     }
 
     public async ValueTask DisposeAsync()
@@ -257,6 +287,18 @@ public class SharedSiloConfigurator : ISiloConfigurator, IHostConfigurator
             {
                 services.AddSingleton<IChatClientFactory>(SharedOrleansFixture.SwappableFactory);
                 services.AddSingleton<IStaticNodeProvider, OrleansTestSeedProvider>();
+                // 🚨 Share the in-memory backing dicts with the Orleans client
+                // DI container — single-process test cluster mirrors prod's
+                // "multiple adapter instances, same PG backend" shape so a
+                // node created via the client mesh hub is visible to the
+                // silo's path resolver. Without this, each container builds
+                // its own dict and routing emits NotFound for just-created
+                // paths.
+                services.Replace(ServiceDescriptor.Singleton<InMemoryStorageAdapter>(sp =>
+                    new InMemoryStorageAdapter(
+                        SharedOrleansFixture.SharedNodes,
+                        SharedOrleansFixture.SharedPartitionObjects,
+                        sp.GetService<ILoggerFactory>()?.CreateLogger<InMemoryStorageAdapter>())));
                 return services;
             })
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
