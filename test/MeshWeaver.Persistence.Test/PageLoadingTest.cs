@@ -55,11 +55,14 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         {
             Name = "storage",
             SourceType = "FileSystem",
-            BasePath = graphPath,
-            // ExposeInChildren=true so per-node MapContentCollection wrappers
-            // (which copy this flag from the source) surface in
-            // GetAllCollectionConfigs after the default flip (95f840f34).
-            ExposeInChildren = true
+            BasePath = graphPath
+            // NOTE: storage stays ExposeInChildren=false here. The test
+            // doesn't query GetAllCollectionConfigs from descendant hubs;
+            // setting ExposeInChildren=true cascades visibility of the
+            // per-node mapped wrappers ("attachments", "content") through
+            // the hierarchy, which slowed down LoadsWithoutHanging assertions
+            // past their 10 s budget. If a future test needs cross-hub
+            // visibility, prefer a per-test fixture override.
         };
 
         return builder
