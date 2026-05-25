@@ -413,12 +413,9 @@ public static class MeshExtensions
                     // notification, response Post, version-history write, logging) which
                     // happen after the change-feed publish in the chain.
 
-                    // Notify the live ObserveQuery change feed — the engine subscribes
-                    // to IDataChangeNotifier to surface Added/Updated/Removed deltas.
-                    // Bypassing this here (when persistence is a raw IStorageAdapter,
-                    // not the routing wrapper) left synced queries blind to writes.
-                    hub.ServiceProvider.GetService<IDataChangeNotifier>()?
-                        .NotifyChange(DataChangeNotification.Updated(resultNode.Path, resultNode));
+                    // Live ObserveQuery delta is surfaced by the storage adapter's
+                    // Changes feed (IStorageAdapter.Changes) from inside its Write —
+                    // no separate notify path from this handler.
 
                     // Version history is now written inside PersistenceService.SaveNode
                     // (chained off the post-save MeshNode emission) — no explicit
@@ -960,8 +957,8 @@ public static class MeshExtensions
                     return storage.DeleteAndPublish(path, changeFeed)
                         .Do(_ =>
                         {
-                            meshHub.ServiceProvider.GetService<IDataChangeNotifier>()?
-                                .NotifyChange(DataChangeNotification.Deleted(path, null));
+                            // Storage adapter's Changes feed fires the Deleted
+                            // event from inside storage.Delete — no extra notify here.
                             // 🚨 Invalidate the process-wide MeshNodeStreamCache so
                             // subsequent reads of this path don't see the pre-delete
                             // value held in the Replay(1) entry.
@@ -1667,8 +1664,7 @@ public static class MeshExtensions
                                 saved =>
                                 {
                                     if (saved is null) return;
-                                    hub.ServiceProvider.GetService<IDataChangeNotifier>()?
-                                        .NotifyChange(DataChangeNotification.Updated(saved.Path, saved));
+                                    // Storage adapter fires the Updated Changes event from inside Write.
                                     logger.LogInformation(
                                         "Node persisted at {Path} by {UpdatedBy}",
                                         saved.Path, capturedRequest.UpdatedBy ?? "system");
@@ -2021,7 +2017,6 @@ public static class MeshExtensions
         var moveRequest = request.Message;
         var meshService = hub.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Services.IMeshService>();
         var storage = hub.ServiceProvider.GetRequiredService<IStorageAdapter>();
-        var changeNotifier = hub.ServiceProvider.GetService<IDataChangeNotifier>();
         var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
         var sourcePath = moveRequest.SourcePath;
         var targetPath = moveRequest.TargetPath;
@@ -2053,14 +2048,12 @@ public static class MeshExtensions
                         // Commit-then-publish: DeleteAndPublish chains the
                         // MeshChangeEvent.Deleted into the storage observable, so the
                         // event for each path fires only after that path's storage
-                        // commit completes. The IDataChangeNotifier notify stays as a
-                        // separate .Do so it runs in the same per-emission step.
+                        // commit completes. The storage adapter's Changes feed
+                        // fires the Deleted notification from inside its Delete.
                         return paths
                             .OrderByDescending(p => p.Length)
                             .ToObservable()
-                            .SelectMany(p => storage.DeleteAndPublish(p, changeFeed)
-                                .Do(_ => changeNotifier?.NotifyChange(
-                                    DataChangeNotification.Deleted(p, null))))
+                            .SelectMany(p => storage.DeleteAndPublish(p, changeFeed))
                             .ToList()
                             .Select(_ => copied);
                     }))

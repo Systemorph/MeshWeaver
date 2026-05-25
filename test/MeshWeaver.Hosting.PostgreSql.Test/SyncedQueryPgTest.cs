@@ -29,7 +29,6 @@ public class SyncedQueryPgTest : IAsyncLifetime
 {
     private readonly PostgreSqlFixture _fixture;
     private readonly JsonSerializerOptions _options = new();
-    private DataChangeNotifier _notifier = null!;
     private PostgreSqlChangeListener _listener = null!;
     private PostgreSqlMeshQuery _query = null!;
 
@@ -40,17 +39,17 @@ public class SyncedQueryPgTest : IAsyncLifetime
         await _fixture.CleanDataAsync();
         await _fixture.AccessControl.GrantAsync("ACME", "Anonymous", "Read",
             isAllow: true, TestContext.Current.CancellationToken);
-        _notifier = new DataChangeNotifier();
-        _listener = new PostgreSqlChangeListener(_fixture.DataSource, _notifier);
+        // PG LISTEN pumps into the adapter's Changes Subject; query subscribes
+        // to adapter.Changes for live updates.
+        _listener = new PostgreSqlChangeListener(_fixture.DataSource, _fixture.StorageAdapter.ChangeObserver);
         await _listener.StartAsync(TestContext.Current.CancellationToken);
         await Task.Delay(200, TestContext.Current.CancellationToken);
-        _query = new PostgreSqlMeshQuery(_fixture.StorageAdapter, _notifier);
+        _query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
     }
 
     public async ValueTask DisposeAsync()
     {
         await _listener.DisposeAsync();
-        _notifier.Dispose();
     }
 
     /// <summary>

@@ -50,7 +50,17 @@ public sealed class PersistenceService : IStorageAdapter
             .ToList();
         _allOrdered = specific.Concat(wildcard).ToList();
         _writable = _allOrdered.Where(p => !p.IsReadOnly).ToList();
+
+        // Surface the union of every provider's Changes feed so consumers
+        // that subscribe to IStorageAdapter.Changes see writes from any
+        // provider (per-node hub reconciliation in MeshDataSource etc.).
+        _changes = Observable.Merge(_allOrdered.Select(p => p.Adapter.Changes));
     }
+
+    private readonly IObservable<DataChangeNotification> _changes;
+
+    /// <inheritdoc />
+    public IObservable<DataChangeNotification> Changes => _changes;
 
     /// <summary>
     /// Try each adapter's Read in order; emit the first non-null result, or

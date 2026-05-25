@@ -19,7 +19,6 @@ namespace MeshWeaver.Hosting.PostgreSql;
 public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
 {
     private readonly PostgreSqlStorageAdapter _adapter;
-    private readonly IDataChangeNotifier? _changeNotifier;
     private readonly AccessService? _accessService;
     private readonly MeshConfiguration? _meshConfiguration;
     private readonly QueryParser _parser = new();
@@ -42,14 +41,12 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
 
     public PostgreSqlMeshQuery(
         PostgreSqlStorageAdapter adapter,
-        IDataChangeNotifier? changeNotifier = null,
         AccessService? accessService = null,
         MeshConfiguration? meshConfiguration = null,
         IEnumerable<string>? excludedNamespaces = null,
         IEmbeddingProvider? embeddingProvider = null)
     {
         _adapter = adapter;
-        _changeNotifier = changeNotifier;
         _accessService = accessService;
         _meshConfiguration = meshConfiguration;
         _excludedNamespaces = (excludedNamespaces ?? Enumerable.Empty<string>())
@@ -583,22 +580,18 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
             var earlyLock = new object();
             var initialDone = false;
 
-            IDisposable? earlySubscription = null;
-            if (_changeNotifier != null)
-            {
-                earlySubscription = _changeNotifier
-                    .Where(n => parsedFilters.Any(f =>
-                        PathMatcher.ShouldNotify(n.Path, f.BasePath, f.Scope)))
-                    .Subscribe(n =>
+            var earlySubscription = _adapter.Changes
+                .Where(n => parsedFilters.Any(f =>
+                    PathMatcher.ShouldNotify(n.Path, f.BasePath, f.Scope)))
+                .Subscribe(n =>
+                {
+                    lock (earlyLock)
                     {
-                        lock (earlyLock)
-                        {
-                            if (!initialDone)
-                                earlyBacklog.Add(n);
-                        }
-                    });
-                disposables.Add(earlySubscription);
-            }
+                        if (!initialDone)
+                            earlyBacklog.Add(n);
+                    }
+                });
+            disposables.Add(earlySubscription);
 
             disposables.Add(RunQuery().Subscribe(
                 initialResults =>
@@ -611,39 +604,36 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
                             currentItems[path] = item;
                     }
 
-                    DataChangeNotification[] backlog = Array.Empty<DataChangeNotification>();
-                    if (_changeNotifier != null)
+                    DataChangeNotification[] backlog;
+                    // 1) Set up live subscription first — starts buffering immediately.
+                    var changeBuffer = new Subject<DataChangeNotification>();
+                    disposables.Add(changeBuffer);
+                    disposables.Add(
+                        _adapter.Changes
+                            .Where(n => parsedFilters.Any(f =>
+                                PathMatcher.ShouldNotify(n.Path, f.BasePath, f.Scope)))
+                            .Subscribe(changeBuffer));
+                    disposables.Add(
+                        changeBuffer
+                            .Buffer(DefaultDebounceInterval)
+                            .Where(batch => batch.Count > 0)
+                            .Subscribe(batch =>
+                                disposables.Add(
+                                    RunQuery().Subscribe(
+                                        newResults => ProcessBatch(batch, newResults, currentItems, firstParsed, observer),
+                                        ex => observer.OnError(ex)))));
+
+                    // 2) Snapshot + clear early backlog under lock; gate further early-capture.
+                    lock (earlyLock)
                     {
-                        // 1) Set up live subscription first — starts buffering immediately.
-                        var changeBuffer = new Subject<DataChangeNotification>();
-                        disposables.Add(changeBuffer);
-                        disposables.Add(
-                            _changeNotifier
-                                .Where(n => parsedFilters.Any(f =>
-                                    PathMatcher.ShouldNotify(n.Path, f.BasePath, f.Scope)))
-                                .Subscribe(changeBuffer));
-                        disposables.Add(
-                            changeBuffer
-                                .Buffer(DefaultDebounceInterval)
-                                .Where(batch => batch.Count > 0)
-                                .Subscribe(batch =>
-                                    disposables.Add(
-                                        RunQuery().Subscribe(
-                                            newResults => ProcessBatch(batch, newResults, currentItems, firstParsed, observer),
-                                            ex => observer.OnError(ex)))));
-
-                        // 2) Snapshot + clear early backlog under lock; gate further early-capture.
-                        lock (earlyLock)
-                        {
-                            backlog = earlyBacklog.ToArray();
-                            earlyBacklog.Clear();
-                            initialDone = true;
-                        }
-
-                        // 3) Early subscription is now redundant — live pipeline carries
-                        //    all subsequent events. Dispose to free the upstream sub.
-                        earlySubscription?.Dispose();
+                        backlog = earlyBacklog.ToArray();
+                        earlyBacklog.Clear();
+                        initialDone = true;
                     }
+
+                    // 3) Early subscription is now redundant — live pipeline carries
+                    //    all subsequent events. Dispose to free the upstream sub.
+                    earlySubscription.Dispose();
 
                     observer.OnNext(new QueryResultChange<T>
                     {
@@ -665,9 +655,6 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
                                 newResults => ProcessBatch(backlog.ToList(), newResults, currentItems, firstParsed, observer),
                                 ex => observer.OnError(ex)));
                     }
-
-                    if (_changeNotifier == null)
-                        observer.OnCompleted();
                 },
                 ex => observer.OnError(ex)));
 

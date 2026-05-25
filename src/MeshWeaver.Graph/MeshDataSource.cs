@@ -229,6 +229,9 @@ public static class MeshDataSourceExtensions
             node = node with { Version = 1 };
         logger?.LogDebug("[SaveMeshNode] start path={Path} version={Version}",
             node.Path, node.Version);
+        // Storage adapter's own Changes feed publishes the Updated event
+        // (see IStorageAdapter.Changes / InMemoryStorageAdapter.Write) — no
+        // separate fan-out from the handler.
         persistence.Write(node, hub.JsonSerializerOptions)
             .Subscribe(
                 saved => logger?.LogDebug("[SaveMeshNode] persisted path={Path} version={Version}",
@@ -595,20 +598,17 @@ public static class MeshDataSourceExtensions
             // MeshDataSource) — leave Current = null; pipeline falls through.
         }
 
-        var notifier = hub.ServiceProvider.GetService<IDataChangeNotifier>();
-        if (notifier == null)
+        // Per-node hub reconciles its own cached state when the mesh hub
+        // writes storage directly (HandleCreateNodeRequest / HandleUpdateNodeRequest).
+        // Without this bridge, the per-node hub's workspace would stay stale
+        // on the pre-write MeshNode and subsequent SubscribeRequests would
+        // serve the wrong content. The change-feed Subject lives on the
+        // adapter; this hub subscribes to its own path only.
+        var storage = hub.ServiceProvider.GetService<IStorageAdapter>();
+        if (storage is null)
             return;
-        // Use Address.Path (segments joined) instead of ToString() — ToString() on a
-        // hosted address appends "~<host>" (e.g. "ACME/CrudTest_xxx~mesh/<guid>"),
-        // which never matches the segment-only path that
-        // FileSystemPersistenceService.NormalizePath emits in the Deleted
-        // notification ("ACME/CrudTest_xxx"). With the mismatch, IsDeleted was never
-        // set and the per-node hub kept serving its cached MeshNode after delete —
-        // FullCrudWorkflow_CreateGetUpdateDelete saw the deleted node returned by
-        // a follow-up Get because the workspace MeshNodeReference reducer hadn't
-        // been short-circuited.
         var ownPath = hub.Address.Path;
-        var delSub = notifier.Subscribe(notification =>
+        var delSub = storage.Changes.Subscribe(notification =>
         {
             if (!string.Equals(notification.Path, ownPath, StringComparison.OrdinalIgnoreCase))
                 return;
@@ -617,22 +617,10 @@ public static class MeshDataSourceExtensions
             {
                 case DataChangeKind.Deleted:
                     cache.IsDeleted = true;
-                    // Do NOT dispose — the Deleted notification fires from inside
-                    // DeleteNodeRequest's pipeline while an in-flight SubscribeRequest
-                    // is still being served. Synchronous Dispose would CancelExecution
-                    // and orphan that callback. IsDeleted is the single source of
-                    // truth read by the read pipeline.
                     return;
 
                 case DataChangeKind.Created:
                 case DataChangeKind.Updated:
-                    // Mesh-hub HandleCreateNodeRequest / HandleUpdateNodeRequest
-                    // writes persistence directly, then fires this notification with
-                    // the saved entity. The per-node hub's workspace would otherwise
-                    // stay stale on the pre-write MeshNode — caught by
-                    // WorkspaceCacheEvictionTest.AfterRecreate. Push the new entity
-                    // through our own MeshNodeStream so the InstanceCollection
-                    // refreshes; subsequent SubscribeRequests serve the live state.
                     if (notification.Entity is not MeshNode newNode)
                         return;
                     cache.IsDeleted = false;

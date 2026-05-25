@@ -24,7 +24,6 @@ public class ObserveQueryTests : IAsyncLifetime
 {
     private readonly IsolatedPostgreSqlFixture _fixture;
     private readonly JsonSerializerOptions _options = new();
-    private DataChangeNotifier _notifier = null!;
     private PostgreSqlChangeListener _listener = null!;
     private PostgreSqlMeshQuery _query = null!;
 
@@ -38,18 +37,18 @@ public class ObserveQueryTests : IAsyncLifetime
         await _fixture.CleanDataAsync();
         // Grant Anonymous Read access so observe tests work without explicit userId
         await _fixture.AccessControl.GrantAsync("ACME", "Anonymous", "Read", isAllow: true, TestContext.Current.CancellationToken);
-        _notifier = new DataChangeNotifier();
-        _listener = new PostgreSqlChangeListener(_fixture.DataSource, _notifier);
+        // PG LISTEN pumps directly into the adapter's Changes Subject via its
+        // internal ChangeObserver; the query subscribes to adapter.Changes.
+        _listener = new PostgreSqlChangeListener(_fixture.DataSource, _fixture.StorageAdapter.ChangeObserver);
         await _listener.StartAsync(TestContext.Current.CancellationToken);
         // Give the LISTEN connection a moment to establish
         await Task.Delay(200, TestContext.Current.CancellationToken);
-        _query = new PostgreSqlMeshQuery(_fixture.StorageAdapter, _notifier);
+        _query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
     }
 
     public async ValueTask DisposeAsync()
     {
         await _listener.DisposeAsync();
-        _notifier.Dispose();
     }
 
     [Fact]

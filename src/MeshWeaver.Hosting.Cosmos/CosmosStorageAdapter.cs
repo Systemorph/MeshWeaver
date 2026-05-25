@@ -1,5 +1,6 @@
 using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Text.Json;
 using Microsoft.Azure.Cosmos;
 using MeshWeaver.Mesh;
@@ -17,6 +18,16 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
     private readonly Container _partitionsContainer;
     private readonly CosmosSqlGenerator _sqlGenerator = new();
     private CosmosChangeFeedProcessor? _changeFeedProcessor;
+    private readonly Subject<DataChangeNotification> _changes = new();
+
+    /// <inheritdoc />
+    public IObservable<DataChangeNotification> Changes => _changes.AsObservable();
+
+    /// <summary>
+    /// Internal hook for <see cref="CosmosChangeFeedProcessor"/> to push
+    /// Cosmos change-feed events into the adapter's <see cref="Changes"/> feed.
+    /// </summary>
+    internal IObserver<DataChangeNotification> ChangeObserver => _changes;
 
     /// <summary>
     /// Gets the nodes container for external use (e.g., change feed processing).

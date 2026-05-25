@@ -7,14 +7,14 @@ using MeshWeaver.Messaging;
 namespace MeshWeaver.Hosting.Persistence;
 
 /// <summary>
-/// Watches a directory for file system changes and publishes notifications to IDataChangeNotifier.
+/// Watches a directory for file system changes and publishes notifications to IObserver<DataChangeNotification>.
 /// This enables reactive updates when files are modified externally (e.g., by another process or editor).
 /// </summary>
 public class FileSystemChangeWatcher : IDisposable
 {
     private readonly string _baseDirectory;
     private readonly IStorageAdapter _storageAdapter;
-    private readonly IDataChangeNotifier _changeNotifier;
+    private readonly IObserver<DataChangeNotification> _changeNotifier;
     private readonly IMessageHub? _hub;
     private readonly JsonSerializerOptions? _jsonOptions;
     private readonly FileSystemWatcher _watcher;
@@ -41,7 +41,7 @@ public class FileSystemChangeWatcher : IDisposable
     public FileSystemChangeWatcher(
         string baseDirectory,
         IStorageAdapter storageAdapter,
-        IDataChangeNotifier changeNotifier,
+        IObserver<DataChangeNotification> changeNotifier,
         IMessageHub hub)
         : this(baseDirectory, storageAdapter, changeNotifier)
     {
@@ -54,7 +54,7 @@ public class FileSystemChangeWatcher : IDisposable
     public FileSystemChangeWatcher(
         string baseDirectory,
         IStorageAdapter storageAdapter,
-        IDataChangeNotifier changeNotifier,
+        IObserver<DataChangeNotification> changeNotifier,
         JsonSerializerOptions jsonOptions)
         : this(baseDirectory, storageAdapter, changeNotifier)
     {
@@ -64,7 +64,7 @@ public class FileSystemChangeWatcher : IDisposable
     private FileSystemChangeWatcher(
         string baseDirectory,
         IStorageAdapter storageAdapter,
-        IDataChangeNotifier changeNotifier)
+        IObserver<DataChangeNotification> changeNotifier)
     {
         _baseDirectory = baseDirectory;
         _storageAdapter = storageAdapter;
@@ -196,7 +196,7 @@ public class FileSystemChangeWatcher : IDisposable
                     .Take(1)
                     .Where(node => node is not null)
                     .Subscribe(
-                        node => _changeNotifier.NotifyChange(
+                        node => _changeNotifier.OnNext(
                             changeType == WatcherChangeTypes.Created
                                 ? DataChangeNotification.Created(normalizedPath, node!)
                                 : DataChangeNotification.Updated(normalizedPath, node!)),
@@ -204,7 +204,7 @@ public class FileSystemChangeWatcher : IDisposable
                 break;
 
             case WatcherChangeTypes.Deleted:
-                _changeNotifier.NotifyChange(DataChangeNotification.Deleted(normalizedPath));
+                _changeNotifier.OnNext(DataChangeNotification.Deleted(normalizedPath));
                 break;
         }
     }

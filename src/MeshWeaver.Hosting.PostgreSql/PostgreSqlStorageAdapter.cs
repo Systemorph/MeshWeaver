@@ -1,5 +1,6 @@
 ﻿using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using MeshWeaver.Mesh;
@@ -24,8 +25,24 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     private readonly PartitionDefinition? _partitionDefinition;
     private readonly string? _schemaName;
     private readonly Microsoft.Extensions.Logging.ILogger? _logger;
+    private readonly Subject<DataChangeNotification> _changes = new();
 
     public NpgsqlDataSource DataSource => _dataSource;
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Surfaces the PG <c>LISTEN/NOTIFY</c> change feed — a
+    /// <see cref="PostgreSqlChangeListener"/> background service publishes here
+    /// for every row committed to <c>mesh_nodes</c> (and satellite tables),
+    /// so synced-query subscribers see writes from any process in the cluster.
+    /// </remarks>
+    public IObservable<DataChangeNotification> Changes => _changes.AsObservable();
+
+    /// <summary>
+    /// Internal hook for <see cref="PostgreSqlChangeListener"/> to push
+    /// LISTEN/NOTIFY events into the adapter's <see cref="Changes"/> feed.
+    /// </summary>
+    internal IObserver<DataChangeNotification> ChangeObserver => _changes;
 
     public PostgreSqlStorageAdapter(
         NpgsqlDataSource dataSource,

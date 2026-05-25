@@ -99,7 +99,6 @@ public static class PostgreSqlExtensions
                     "PostgreSqlMeshQuery requires PostgreSqlStorageAdapter.");
             return new PostgreSqlMeshQuery(
                 adapter,
-                sp.GetService<IDataChangeNotifier>(),
                 sp.GetService<AccessService>(),
                 meshConfiguration: null,
                 excludedNamespaces: null,
@@ -136,7 +135,6 @@ public static class PostgreSqlExtensions
         services.AddSingleton<PostgreSqlMeshQuery>(sp =>
             new PostgreSqlMeshQuery(
                 storageAdapter,
-                sp.GetService<IDataChangeNotifier>(),
                 sp.GetService<AccessService>(),
                 meshConfiguration: null,
                 excludedNamespaces: null,
@@ -178,7 +176,6 @@ public static class PostgreSqlExtensions
         services.AddSingleton<PostgreSqlMeshQuery>(sp =>
             new PostgreSqlMeshQuery(
                 storageAdapter,
-                sp.GetService<IDataChangeNotifier>(),
                 sp.GetService<AccessService>(),
                 meshConfiguration: null,
                 excludedNamespaces: null,
@@ -189,12 +186,11 @@ public static class PostgreSqlExtensions
         // Register core persistence services (IStorageAdapter, IStorageService, etc.)
         services.AddPersistence(storageAdapter);
 
-        // Register the Change Listener
+        // Register the Change Listener — feeds the adapter's Changes feed.
         services.AddSingleton(sp =>
         {
-            var notifier = sp.GetRequiredService<IDataChangeNotifier>();
             var logger = sp.GetService<ILogger<PostgreSqlChangeListener>>();
-            return new PostgreSqlChangeListener(dataSource, notifier, logger);
+            return new PostgreSqlChangeListener(dataSource, storageAdapter.ChangeObserver, logger);
         });
 
         // Register access control and activity store
@@ -254,8 +250,6 @@ public static class PostgreSqlExtensions
         configureDataSource?.Invoke(dataSourceBuilder);
         var baseDataSource = dataSourceBuilder.Build();
 
-        services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
-
         // No need to remove a pre-registered InMemory wildcard: PersistenceService
         // orders wildcards by IPartitionStorageProvider.Priority desc, and
         // PostgreSqlPartitionStorageProvider returns 100 (schema-aware) vs.
@@ -297,13 +291,15 @@ public static class PostgreSqlExtensions
         // hosted-service wrapper the listener never starts and every synced
         // query's Replay(1) cache freezes at its Initial value (writes propagate
         // to the table but the cached observable never re-emits).
-        services.AddSingleton(sp =>
-        {
-            var notifier = sp.GetRequiredService<IDataChangeNotifier>();
-            var listenerLogger = sp.GetService<ILogger<PostgreSqlChangeListener>>();
-            return new PostgreSqlChangeListener(baseDataSource, notifier, listenerLogger);
-        });
-        services.AddHostedService<PostgreSqlChangeListenerHostedService>();
+        // TODO partitioned-pg change feed: in the partitioned setup the
+        // listener pump-notifications across many per-partition adapters.
+        // For now this PG listener wiring is disabled — each
+        // PostgreSqlStorageAdapter publishes from its own Write/Delete (no
+        // cross-process LISTEN) which is enough for the in-process test
+        // scenarios. A follow-up will route LISTEN events to the right
+        // partition adapter's ChangeObserver via the partition registry.
+        // services.AddSingleton(sp => new PostgreSqlChangeListener(baseDataSource, ..., ...));
+        // services.AddHostedService<PostgreSqlChangeListenerHostedService>();
         // Boot-time seed: CREATE SCHEMA + table init for every framework
         // partition advertised by a static node provider. No enumeration —
         // only what's explicitly registered.
@@ -339,8 +335,6 @@ public static class PostgreSqlExtensions
         Action<PostgreSqlStorageOptions>? configure = null,
         Action<NpgsqlDataSourceBuilder>? configureDataSource = null)
     {
-        services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
-
         services.AddSingleton<PostgreSqlPartitionStorageProvider>(sp =>
         {
             var baseDataSource = sp.GetRequiredService<NpgsqlDataSource>();

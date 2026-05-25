@@ -18,6 +18,18 @@ namespace MeshWeaver.Mesh.Services;
 /// </summary>
 public interface IStorageAdapter
 {
+    /// <summary>
+    /// In-process change feed — subscribers receive a notification for every
+    /// <see cref="Write"/> and <see cref="Delete"/> this adapter commits.
+    /// Used by per-node hubs to reconcile their cached workspace state when
+    /// the mesh hub writes storage directly (bypassing per-node hub
+    /// <c>stream.Update</c> routing). Default impl returns
+    /// <c>Observable.Empty</c>; adapters that mutate state should override
+    /// and publish from their Write/Delete.
+    /// </summary>
+    IObservable<DataChangeNotification> Changes
+        => System.Reactive.Linq.Observable.Empty<DataChangeNotification>();
+
     /// <summary>Reads a node from storage. Emits the node (or null) and completes.</summary>
     IObservable<MeshNode?> Read(string path, JsonSerializerOptions options);
 

@@ -90,7 +90,7 @@ public class CosmosChangeFeedTests : IAsyncLifetime
         }
 
         // Arrange
-        var changeNotifier = new DataChangeNotifier();
+        var changeNotifier = new System.Reactive.Subjects.Subject<DataChangeNotification>();
         var nodesContainer = _database!.GetContainer(NodesContainer);
         var leasesContainer = _database.GetContainer(LeasesContainer);
 
@@ -120,7 +120,7 @@ public class CosmosChangeFeedTests : IAsyncLifetime
         }
 
         // Arrange
-        var changeNotifier = new DataChangeNotifier();
+        var changeNotifier = new System.Reactive.Subjects.Subject<DataChangeNotification>();
         var nodesContainer = _database!.GetContainer(NodesContainer);
         var partitionsContainer = _database.GetContainer(PartitionsContainer);
         var leasesContainer = _database.GetContainer(LeasesContainer);
@@ -167,47 +167,11 @@ public class CosmosChangeFeedTests : IAsyncLifetime
         await leaseContainer.DeleteContainerAsync(cancellationToken: TestContext.Current.CancellationToken);
     }
 
-    [Fact]
-    public void DataChangeNotifier_SubscribersReceiveNotifications()
-    {
-        // This test doesn't require the emulator
-        // Arrange
-        var notifier = new DataChangeNotifier();
-        var receivedNotifications = new List<DataChangeNotification>();
+    // Removed obsolete DataChangeNotifier_* unit tests — the framework's
+    // standalone DataChangeNotifier class was deleted. Subjects (the live
+    // change-feed primitive each storage adapter holds internally) are
+    // System.Reactive types and don't need re-tested here.
 
-        var subscription = notifier.Subscribe(n => receivedNotifications.Add(n));
-
-        // Act
-        notifier.NotifyChange(DataChangeNotification.Created("test/path", new { Name = "Test" }));
-        notifier.NotifyChange(DataChangeNotification.Updated("test/path", new { Name = "Updated" }));
-        notifier.NotifyChange(DataChangeNotification.Deleted("test/path"));
-
-        // Assert
-        receivedNotifications.Should().HaveCount(3);
-        receivedNotifications[0].Kind.Should().Be(DataChangeKind.Created);
-        receivedNotifications[1].Kind.Should().Be(DataChangeKind.Updated);
-        receivedNotifications[2].Kind.Should().Be(DataChangeKind.Deleted);
-
-        subscription.Dispose();
-    }
-
-    [Fact]
-    public void DataChangeNotifier_DisposedNotifier_DoesNotSendNotifications()
-    {
-        // Arrange
-        var notifier = new DataChangeNotifier();
-        var receivedNotifications = new List<DataChangeNotification>();
-
-        notifier.Subscribe(n => receivedNotifications.Add(n));
-
-        // Act
-        notifier.NotifyChange(DataChangeNotification.Created("test/path", null));
-        notifier.Dispose();
-        notifier.NotifyChange(DataChangeNotification.Updated("test/path", null)); // Should be ignored
-
-        // Assert
-        receivedNotifications.Should().HaveCount(1);
-    }
 
     [Fact]
     public void DataChangeNotification_StaticFactoryMethods_CreateCorrectNotifications()

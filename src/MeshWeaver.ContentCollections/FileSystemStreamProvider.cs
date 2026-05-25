@@ -218,13 +218,13 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
     }
 
     /// <summary>
-    /// Attaches a file system monitor that publishes changes to an IDataChangeNotifier.
-    /// Watches all file types (not just .md).
+    /// Attaches a file system monitor that publishes changes via
+    /// <paramref name="onChange"/>. Watches all file types (not just .md).
     /// </summary>
-    /// <param name="notifier">The data change notifier to publish changes to.</param>
+    /// <param name="onChange">Callback invoked for every Created/Updated/Deleted event.</param>
     /// <param name="filter">Optional file extension filter (e.g., ".json"). If null, watches all files.</param>
     /// <returns>A disposable that stops the watcher when disposed.</returns>
-    public IDisposable? AttachMonitor(IDataChangeNotifier notifier, string? filter = null)
+    public IDisposable? AttachMonitor(Action<DataChangeNotification> onChange, string? filter = null)
     {
         var watcherInstance = new FileSystemWatcher(basePath)
         {
@@ -238,7 +238,7 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
                 return;
 
             var relativePath = Path.GetRelativePath(basePath, e.FullPath).Replace('\\', '/');
-            notifier.NotifyChange(DataChangeNotification.Updated(relativePath, null));
+            onChange(DataChangeNotification.Updated(relativePath, null));
         }
 
         void OnCreated(object sender, FileSystemEventArgs e)
@@ -247,7 +247,7 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
                 return;
 
             var relativePath = Path.GetRelativePath(basePath, e.FullPath).Replace('\\', '/');
-            notifier.NotifyChange(DataChangeNotification.Created(relativePath, null));
+            onChange(DataChangeNotification.Created(relativePath, null));
         }
 
         void OnDeleted(object sender, FileSystemEventArgs e)
@@ -256,7 +256,7 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
                 return;
 
             var relativePath = Path.GetRelativePath(basePath, e.FullPath).Replace('\\', '/');
-            notifier.NotifyChange(DataChangeNotification.Deleted(relativePath, null));
+            onChange(DataChangeNotification.Deleted(relativePath, null));
         }
 
         void OnRenamed(object sender, RenamedEventArgs e)
@@ -267,8 +267,8 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
             var oldRelativePath = Path.GetRelativePath(basePath, e.OldFullPath).Replace('\\', '/');
             var newRelativePath = Path.GetRelativePath(basePath, e.FullPath).Replace('\\', '/');
 
-            notifier.NotifyChange(DataChangeNotification.Deleted(oldRelativePath, null));
-            notifier.NotifyChange(DataChangeNotification.Created(newRelativePath, null));
+            onChange(DataChangeNotification.Deleted(oldRelativePath, null));
+            onChange(DataChangeNotification.Created(newRelativePath, null));
         }
 
         watcherInstance.Changed += OnChanged;

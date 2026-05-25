@@ -48,7 +48,7 @@ public class VectorSearchTests
         var adapter = new PostgreSqlStorageAdapter(_fixture.DataSource, stub);
         var query = new PostgreSqlMeshQuery(
             adapter,
-            changeNotifier: null,
+            
             accessService: null,
             meshConfiguration: null,
             excludedNamespaces: null,
@@ -84,7 +84,7 @@ public class VectorSearchTests
         var adapter = new PostgreSqlStorageAdapter(_fixture.DataSource, stub);
         var query = new PostgreSqlMeshQuery(
             adapter,
-            changeNotifier: null,
+            
             accessService: null,
             meshConfiguration: null,
             excludedNamespaces: null,
@@ -123,7 +123,7 @@ public class VectorSearchTests
         var adapter = new PostgreSqlStorageAdapter(_fixture.DataSource, stub);
         var query = new PostgreSqlMeshQuery(
             adapter,
-            changeNotifier: null,
+            
             accessService: null,
             meshConfiguration: null,
             excludedNamespaces: null,

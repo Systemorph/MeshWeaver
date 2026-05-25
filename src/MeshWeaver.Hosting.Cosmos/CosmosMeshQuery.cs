@@ -18,7 +18,6 @@ namespace MeshWeaver.Hosting.Cosmos;
 public class CosmosMeshQuery : IMeshQueryProvider
 {
     private readonly CosmosStorageAdapter _adapter;
-    private readonly IDataChangeNotifier? _changeNotifier;
     private readonly MeshConfiguration? _meshConfiguration;
     private readonly HashSet<string> _excludedNamespaces;
     private readonly QueryParser _parser = new();
@@ -28,12 +27,10 @@ public class CosmosMeshQuery : IMeshQueryProvider
 
     public CosmosMeshQuery(
         CosmosStorageAdapter adapter,
-        IDataChangeNotifier? changeNotifier = null,
         MeshConfiguration? meshConfiguration = null,
         IEnumerable<string>? excludedNamespaces = null)
     {
         _adapter = adapter;
-        _changeNotifier = changeNotifier;
         _meshConfiguration = meshConfiguration;
         _excludedNamespaces = (excludedNamespaces ?? Enumerable.Empty<string>())
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -358,17 +355,14 @@ public class CosmosMeshQuery : IMeshQueryProvider
                 return Disposable.Empty;
             }
 
-            if (_changeNotifier == null)
-            {
-                observer.OnCompleted();
-                return Disposable.Empty;
-            }
-
-            // Subscribe to changes with debouncing
+            // Subscribe to the storage adapter's Changes feed — that's the
+            // live signal (Cosmos change feed wraps into here). If no change
+            // feed is wired up, the adapter's default Changes IS Observable.Empty,
+            // and the synced query stays at the Initial emission.
             var changeBuffer = new Subject<DataChangeNotification>();
             var subscription = new CompositeDisposable();
 
-            var notifierSubscription = _changeNotifier
+            var notifierSubscription = _adapter.Changes
                 .Where(n => PathMatcher.ShouldNotify(n.Path, normalizedBasePath, effectiveScope))
                 .Subscribe(changeBuffer);
             subscription.Add(notifierSubscription);

@@ -7,19 +7,19 @@ namespace MeshWeaver.Hosting.PostgreSql;
 
 /// <summary>
 /// Listens for PostgreSQL LISTEN/NOTIFY on the mesh_node_changes channel
-/// and publishes DataChangeNotification events to IDataChangeNotifier.
+/// and publishes DataChangeNotification events to IObserver<DataChangeNotification>.
 /// </summary>
 public class PostgreSqlChangeListener : IAsyncDisposable
 {
     private readonly NpgsqlDataSource _dataSource;
-    private readonly IDataChangeNotifier _changeNotifier;
+    private readonly IObserver<DataChangeNotification> _changeNotifier;
     private readonly ILogger<PostgreSqlChangeListener>? _logger;
     private CancellationTokenSource? _cts;
     private Task? _listenTask;
 
     public PostgreSqlChangeListener(
         NpgsqlDataSource dataSource,
-        IDataChangeNotifier changeNotifier,
+        IObserver<DataChangeNotification> changeNotifier,
         ILogger<PostgreSqlChangeListener>? logger = null)
     {
         _dataSource = dataSource;
@@ -121,7 +121,7 @@ public class PostgreSqlChangeListener : IAsyncDisposable
                 _ => DataChangeKind.Updated
             };
 
-            _changeNotifier.NotifyChange(new DataChangeNotification(path, kind, null, DateTimeOffset.UtcNow));
+            _changeNotifier.OnNext(new DataChangeNotification(path, kind, null, DateTimeOffset.UtcNow));
         }
         catch (Exception ex)
         {

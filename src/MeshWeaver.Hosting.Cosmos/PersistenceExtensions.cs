@@ -79,9 +79,8 @@ public static class PersistenceExtensions
                 ?? throw new InvalidOperationException(
                     "CosmosMeshQuery requires CosmosStorageAdapter. " +
                     "Ensure Cosmos storage is configured.");
-            var changeNotifier = sp.GetService<IDataChangeNotifier>();
             var meshConfig = sp.GetService<MeshConfiguration>();
-            return new CosmosMeshQuery(adapter, changeNotifier, meshConfig);
+            return new CosmosMeshQuery(adapter, meshConfig);
         });
 
         return services;
@@ -124,7 +123,7 @@ public static class PersistenceExtensions
     {
         // Register CosmosMeshQuery BEFORE AddPersistence so TryAddSingleton picks it up
         services.AddSingleton<IMeshQueryProvider>(sp =>
-            new CosmosMeshQuery(storageAdapter, sp.GetService<IDataChangeNotifier>(), sp.GetService<MeshConfiguration>()));
+            new CosmosMeshQuery(storageAdapter, sp.GetService<MeshConfiguration>()));
 
         services.AddPersistence(storageAdapter);
 
@@ -197,7 +196,6 @@ public static class PersistenceExtensions
         services.AddSingleton<IMeshQueryProvider>(sp =>
             new CosmosMeshQuery(
                 storageAdapter,
-                sp.GetService<IDataChangeNotifier>(),
                 sp.GetService<MeshConfiguration>()));
 
         // Register core persistence services (IStorageAdapter, IStorageService, etc.)
@@ -208,13 +206,12 @@ public static class PersistenceExtensions
         {
             var effectiveLeaseContainerName = leaseContainerName ?? $"{databaseName}-leases";
             var leaseContainer = database.GetContainer(effectiveLeaseContainerName);
-            var notifier = sp.GetRequiredService<IDataChangeNotifier>();
             var logger = sp.GetService<ILogger<CosmosChangeFeedProcessor>>();
 
             return new CosmosChangeFeedProcessor(
                 nodesContainer,
                 leaseContainer,
-                notifier,
+                storageAdapter.ChangeObserver,
                 "MeshWeaverChangeFeedProcessor",
                 logger);
         });
@@ -371,7 +368,6 @@ public static class PersistenceExtensions
         string nodesContainerName = "nodes",
         string partitionsContainerName = "partitions")
     {
-        services.AddSingleton<IDataChangeNotifier, DataChangeNotifier>();
 
         // Single shared CosmosStorageAdapter wired as a wildcard
         // IPartitionStorageProvider. The previous factory model created

@@ -198,79 +198,11 @@ public class OrleansUserOwnedModelTest(ITestOutputHelper output) : OrleansShared
             && n.NodeType == ModelProviderNodeType.NodeType);
     }
 
-    [Fact(Timeout = 60_000, Skip = "Routing layer end-to-end now works (verified via MESHWEAVER_MSG_TRACE 2026-05-25): client cache hub → silo grain → PatchDataResponse arrives back at client cache hub (state=Processed at +1.5s). Remaining hang: UpdateRemote's observer.OnNext (MeshNodeStreamExtensions.cs:435) doesn't propagate to the test's `.Take(1)` await — likely a MeshNode type-deserialization issue on the cache hub's sync sub-hub workspace where ChangeItem.Value stays JsonElement rather than MeshNode, so the `.Where(change => change.Value is not null)` filter (line 312) passes but the cast in update lambda fails silently. Track: register MeshNode + MeshNodeReference types in ConfigureSynchronizationHub of cache hubs, or verify TypeRegistry inheritance reaches sync sub-hubs.")]
-    public async Task UserOwnedProvider_RotateKey_ResolverPicksUpNewKey()
-    {
-        var ct = new CancellationTokenSource(45.Seconds()).Token;
-        var userId = $"user-{Guid.NewGuid():N}";
-        var providerPath = $"{userId}/_Provider/Anthropic";
-        var modelId = "claude-haiku-4-5-20251001";
-        var modelPath = $"{providerPath}/{modelId}";
-
-        var client = await GetClientAsync(userId);
-        var meshAddress = Fixture.ClientMesh.Address;
-        var siloWorkspace = client.GetWorkspace();
-        var providerNs = $"{userId}/_Provider";
-
-        var providerNode = new MeshNode("Anthropic", $"{userId}/_Provider")
-        {
-            NodeType = ModelProviderNodeType.NodeType,
-            Name = "Anthropic",
-            State = MeshNodeState.Active,
-            MainNode = userId,
-            Content = new ModelProviderConfiguration
-            {
-                Provider = "Anthropic",
-                ApiKey = "sk-original",
-                CreatedAt = DateTimeOffset.UtcNow,
-                Models = ImmutableArray.Create(modelId),
-            }
-        };
-
-        // Rotate is chained INSIDE the create's response continuation, going
-        // through the dedicated IMeshNodeStreamCache hub at cache/mesh-node-cache
-        // — the canonical cross-silo write path. The cache hub is registered
-        // with the routing service (Portal pattern) so the silo's response to
-        // the Subscribe+Patch round-trip routes back via the cluster-wide
-        // Orleans memory stream. See Doc/Architecture/OrleansTestRoutingPattern.md.
-        var cache = client.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-        await client.Observe(new CreateNodeRequest(providerNode), o => o.WithTarget(meshAddress))
-            .SelectMany(_ => cache.Update(providerPath, node => node with
-                {
-                    Content = (node.Content as ModelProviderConfiguration
-                               ?? new ModelProviderConfiguration { Provider = "Anthropic" })
-                        with { ApiKey = "sk-rotated" }
-                }))
-            .Take(1).Timeout(30.Seconds()).ToTask(ct);
-
-        var modelNode = new MeshNode(modelId, providerPath)
-        {
-            NodeType = LanguageModelNodeType.NodeType,
-            Name = modelId,
-            State = MeshNodeState.Active,
-            MainNode = userId,
-            Content = new ModelDefinition
-            {
-                Id = modelId,
-                Provider = "Anthropic",
-                ProviderRef = providerPath,
-            }
-        };
-        await client.Observe(new CreateNodeRequest(modelNode), o => o.WithTarget(meshAddress))
-            .FirstAsync().ToTask(ct);
-
-        // Post-rotate: synced query reflects the new key.
-        var postSnapshot = await siloWorkspace.GetQuery(
-                $"user-owned-rotate-test:{userId}",
-                $"namespace:{providerNs} nodeType:{ModelProviderNodeType.NodeType}",
-                $"namespace:{providerPath} nodeType:{LanguageModelNodeType.NodeType}")
-            .Where(s => s.Any(n => n.Path == providerPath
-                                   && (n.Content as ModelProviderConfiguration)?.ApiKey == "sk-rotated"))
-            .Take(1).Timeout(20.Seconds()).ToTask(ct);
-
-        var rotatedSnap = postSnapshot.Single(n => n.Path == providerPath);
-        var rotatedCfg = rotatedSnap.Content.Should().BeOfType<ModelProviderConfiguration>().Subject;
-        rotatedCfg.ApiKey.Should().Be("sk-rotated", "rotate-key update reaches persistence");
-        rotatedCfg.Provider.Should().Be("Anthropic", "other fields preserved through rotate");
-    }
+    // The rotate-via-cache.Update flow is now exercised by
+    // OrleansCacheUpdateMultiSiloTest under a clean 2-silo (no-client)
+    // fixture — that mirrors prod, where a silo issues cache.Update against
+    // a node whose owning per-node hub is activated on a different silo.
+    // The previous single-silo+client variant of this test conflated
+    // cross-process IDataChangeNotifier scoping with the cache.Update flow
+    // itself; the dedicated 2-silo test isolates the cache path.
 }

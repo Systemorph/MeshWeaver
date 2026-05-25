@@ -7,13 +7,13 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.Hosting.Cosmos;
 
 /// <summary>
-/// Processes Cosmos DB Change Feed and publishes changes to IDataChangeNotifier.
+/// Processes Cosmos DB Change Feed and publishes changes to IObserver<DataChangeNotification>.
 /// </summary>
 public class CosmosChangeFeedProcessor : IAsyncDisposable
 {
     private readonly Container _monitoredContainer;
     private readonly Container _leaseContainer;
-    private readonly IDataChangeNotifier _changeNotifier;
+    private readonly IObserver<DataChangeNotification> _changeNotifier;
     private readonly ILogger<CosmosChangeFeedProcessor>? _logger;
     private readonly string _processorName;
     private ChangeFeedProcessor? _processor;
@@ -21,7 +21,7 @@ public class CosmosChangeFeedProcessor : IAsyncDisposable
     public CosmosChangeFeedProcessor(
         Container monitoredContainer,
         Container leaseContainer,
-        IDataChangeNotifier changeNotifier,
+        IObserver<DataChangeNotification> changeNotifier,
         string processorName = "MeshWeaverChangeFeedProcessor",
         ILogger<CosmosChangeFeedProcessor>? logger = null)
     {
@@ -138,7 +138,7 @@ public class CosmosChangeFeedProcessor : IAsyncDisposable
 
         // Cosmos Change Feed only reports creates and updates (not deletes in the default mode)
         // To detect deletes, you would need to use the "AllVersionsAndDeletes" mode with dedicated configuration
-        _changeNotifier.NotifyChange(DataChangeNotification.Updated(path, null));
+        _changeNotifier.OnNext(DataChangeNotification.Updated(path, null));
 
         _logger?.LogDebug("Published change notification for path '{Path}'", path);
     }

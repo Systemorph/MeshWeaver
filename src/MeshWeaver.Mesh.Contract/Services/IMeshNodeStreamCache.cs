@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace MeshWeaver.Mesh.Services;
 
 /// <summary>
@@ -51,6 +53,34 @@ public interface IMeshNodeStreamCache
     /// Subscribe (the side effect runs on Subscribe).
     /// </summary>
     IObservable<MeshNode> Update(string path, System.Func<MeshNode, MeshNode> update);
+
+    /// <summary>
+    /// Caller-typed <see cref="GetStream(string)"/>: every emitted MeshNode's
+    /// <c>Content</c> is round-tripped through <paramref name="options"/> so the
+    /// caller sees a typed domain instance (e.g. <c>ModelProviderConfiguration</c>)
+    /// rather than the raw <c>JsonElement</c> the cache hub stores. Use this when
+    /// your code pattern-matches on <c>Content</c>'s runtime type.
+    ///
+    /// <para>The cache hub itself is domain-type-agnostic — it doesn't know about
+    /// <c>ModelProviderConfiguration</c> et al. Conversion is done at the boundary
+    /// here using the caller's <see cref="JsonSerializerOptions"/>, which DOES
+    /// know the types (its <c>$type</c> polymorphic resolver was built from the
+    /// caller hub's <c>TypeRegistry</c>). Decouples the process-singleton cache
+    /// from every domain type a tenant happens to register.</para>
+    /// </summary>
+    IObservable<MeshNode> GetStream(string path, JsonSerializerOptions options);
+
+    /// <summary>
+    /// Caller-typed <see cref="Update(string, System.Func{MeshNode, MeshNode})"/>:
+    /// the <paramref name="update"/> lambda receives a MeshNode whose <c>Content</c>
+    /// has been deserialised via <paramref name="options"/>, and the returned
+    /// updated MeshNode's <c>Content</c> is serialised back using the same
+    /// options when computing the JSON-merge patch posted to the owning hub.
+    /// </summary>
+    IObservable<MeshNode> Update(
+        string path,
+        System.Func<MeshNode, MeshNode> update,
+        JsonSerializerOptions options);
 
     /// <summary>
     /// Removes the cached <c>Replay(1)</c> entry for <paramref name="path"/>.
