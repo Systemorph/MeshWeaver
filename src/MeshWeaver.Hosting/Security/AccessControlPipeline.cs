@@ -125,25 +125,22 @@ public static class AccessControlPipeline
                         // stream — a hot, never-completing observable. Take(1)
                         // closes each inner so Concat below actually advances
                         // through the check list and OnCompleted fires.
+                        //
+                        // No Timeout here: the access cache must always be a
+                        // reactive Subscribe over the hierarchical union
+                        // (self + ancestors) of AccessAssignment streams,
+                        // which is already populated synchronously from
+                        // IStaticNodeProvider at SecurityService construction.
+                        // A 10s wait was a workaround for a wedged cache —
+                        // fix the cache, don't ceiling-block here. If the
+                        // cache genuinely never emits, that's a framework
+                        // bug to surface, not paper over with a deny.
                         .Take(1)
-                        // Defense-in-depth ceiling: if the SecurityService data
-                        // source genuinely never emits — e.g. the synced
-                        // AccessAssignment VirtualDataSource is wedged on the
-                        // hub, or a downstream Role lookup hangs on a missing
-                        // workspace — the inner Take(1) would otherwise wait
-                        // forever, leaving the caller's hub.Observe to time
-                        // out at the full 30 s RequestTimeout. 10 s gives the
-                        // synced query plenty of time to land its first
-                        // emission on a slow hub init while still keeping the
-                        // worst case well below the framework default.
-                        .Timeout(TimeSpan.FromSeconds(10))
                         .Catch<bool, Exception>(ex =>
                         {
                             logger?.LogWarning(ex,
-                                "AccessControlPipeline: permission check on {Path} for {Permission} did not " +
-                                "complete within 10 s — failing closed. " +
-                                "Likely cause: SecurityService data source hung (synced AccessAssignment query " +
-                                "with no Initial emission). Hub={Hub}, message={MessageType}",
+                                "AccessControlPipeline: permission check on {Path} for {Permission} threw — failing closed. "
+                                + "Hub={Hub}, message={MessageType}",
                                 check.Path, check.Permission, hub.Address, delivery.Message.GetType().Name);
                             return Observable.Return(false);
                         })
@@ -222,12 +219,24 @@ public static class AccessControlPipeline
             return request.Processed();
         }
 
-        // Always evaluate for the current user on the hub's own path.
-        sec.GetEffectivePermissions(ownPath)
+        // Resolve the originating user explicitly via the same ResolveIdentity
+        // path the pre-handler permission pipeline uses — NEVER the no-arg
+        // GetEffectivePermissions(ownPath), which falls back to
+        // accessService.Context. That AsyncLocal at handler-entry holds
+        // "system-security" from SecurityService's bootstrap-time
+        // ImpersonateAsSystem scope (it leaks past the using-block because the
+        // bootstrap action-block thread captured the context at construction).
+        // Trusting it returned Permission.All for every caller — including
+        // anonymous deliveries — and silently turned every GetPermission
+        // probe into a System-level reply.
+        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        var userId = ResolveIdentity(request, accessService) ?? WellKnownUsers.Anonymous;
+
+        sec.GetEffectivePermissions(ownPath, userId)
             .Take(1)
             .Subscribe(perms =>
             {
-                logger?.LogDebug("[GP] reply hub={Hub} perms={Perms}", ownPath, perms);
+                logger?.LogDebug("[GP] reply hub={Hub} user={User} perms={Perms}", ownPath, userId, perms);
                 hub.Post(new GetPermissionResponse(perms), o => o.ResponseFor(request));
             },
             ex => logger?.LogWarning(ex, "[GP] stream error hub={Hub}", ownPath));
