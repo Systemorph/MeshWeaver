@@ -680,11 +680,16 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask();
             Output.WriteLine("Node hub initialized.");
 
-            // Step 3: Confirm the node (make it Active)
+            // Step 3: Confirm the node (make it Active). Subscribe to drain the
+            // request's callback — `client.Post` alone registers a pending
+            // callback that never gets consumed (the response IS dispatched
+            // but no one's listening), which trips the quiesce-budget check
+            // at test dispose: "leaked callback — the test posted a request
+            // and never received (or never awaited) its reply". Observe +
+            // Subscribe consumes the response without blocking the next step.
             var activeNode = transientNode with { State = MeshNodeState.Active };
-            client.Post(
-                new CreateNodeRequest(activeNode),
-                o => o.WithTarget(nodeAddress));
+            client.Observe(new CreateNodeRequest(activeNode), o => o.WithTarget(nodeAddress))
+                .Subscribe(_ => { }, _ => { });
 
             // Step 4-5: Wait for node to become Active via the authoritative
             // per-node hub stream (GetMeshNodeStream), then read the same
