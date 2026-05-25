@@ -57,12 +57,15 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
             })
             .Build();
 
-        // Create the "storage" collection config that node types (Organization, Person) will map from
+        // Create the "storage" collection config that node types (Organization, Person) will map from.
+        // ExposeInChildren=true so per-node MapContentCollection wrappers (which copy this flag
+        // from the source config) surface in GetAllCollectionConfigs after the default flip.
         var storageConfig = new ContentCollectionConfig
         {
             Name = "storage",
             SourceType = "FileSystem",
-            BasePath = graphPath
+            BasePath = graphPath,
+            ExposeInChildren = true
         };
 
         return builder

@@ -51,7 +51,12 @@ public class ContentAutocompleteInChatTest(ITestOutputHelper output) : MonolithM
         {
             Name = "storage",
             SourceType = "FileSystem",
-            BasePath = graphPath
+            BasePath = graphPath,
+            // Per-node mapped collections (MapContentCollection below) inherit
+            // ExposeInChildren from the source; storage defaults to false since
+            // the wire-default flip, so set it explicitly here so the autocomplete
+            // tests' GetAllCollectionConfigs walks see the storage view.
+            ExposeInChildren = true
         };
 
         return builder
