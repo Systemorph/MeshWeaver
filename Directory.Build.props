@@ -14,6 +14,16 @@
     <!-- Suppress FluentAssertions license warning for open source project -->
     <FLUENTASSERTIONS_SUPPRESS_WARNING>true</FLUENTASSERTIONS_SUPPRESS_WARNING>
   </PropertyGroup>
+  <!-- Dev build fingerprint. When no Version is specified, bake UTC ticks into
+       AssemblyInformationalVersion so every fresh build of an assembly carries a
+       distinct identity. Reason: NodeType compilation pins persisted compiles to
+       NodeTypeCompilationHelpers.FrameworkVersion, derived from this attribute.
+       Without the suffix the dev semver stays at "1.0.0" forever, so cached
+       NodeType DLLs from a previous build aren't invalidated when the framework
+       changes. With it, every framework recompile invalidates downstream caches. -->
+  <PropertyGroup Condition="'$(Version)' == ''">
+    <InformationalVersion>1.0.0+dev.$([System.DateTime]::UtcNow.Ticks)</InformationalVersion>
+  </PropertyGroup>
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
