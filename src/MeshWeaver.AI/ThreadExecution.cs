@@ -1142,11 +1142,21 @@ public static class ThreadExecution
                     ImmutableList<NodeChangeEntry>.Empty, request.AgentName, request.ModelName,
                     status: ThreadMessageStatus.Streaming);
 
-                _ = Task.Run(async () =>
+                // Schedule the streaming loop on the CURRENT TaskScheduler (= the
+                // Orleans grain scheduler when called from the submission watcher,
+                // = the default scheduler in monolith tests). NOT Task.Run (= thread
+                // pool) — per the architectural rule "only streaming is async; everything
+                // else is reactive". The streaming `await foreach` is the only async
+                // place allowed in the entire implementation; tool invocations run
+                // synchronously inside the loop (Microsoft.Extensions.AI's auto-invoke).
+                // Delegation completion is observed via stream subscription, not via
+                // awaited message round-trips, so the grain doesn't deadlock waiting
+                // on itself.
+                _ = Task.Factory.StartNew(async () =>
                 {
-                    // Re-seed user AccessContext at the Task.Run boundary. Inside this lambda we
+                    // Re-seed user AccessContext at the task-launch boundary. Inside this lambda we
                     // run the streaming loop + tool calls + responseStream.Update, all of which
-                    // post to other hubs. Task.Run is preceded by a chain of Subscribe callbacks
+                    // post to other hubs. Preceded by a chain of Subscribe callbacks
                     // (Initialize, contextNodeObs, threadWorkspace.GetStream, history loaders) —
                     // each fires on the upstream hub's pipeline where AsyncLocal Context flips
                     // to the per-cell hub's impersonated address. Reseed here so every downstream
@@ -1465,6 +1475,7 @@ public static class ThreadExecution
                                 "UpdateThreadExecution(Idle/Cancelled): stream.Update failed for {ThreadPath}",
                                 threadPath));
                         NotifyParentCompletion(parentHub, threadPath, cancelText, false, cancelNodeChanges);
+                        EmitCompletionNotification(parentHub, threadPath, "Cancelled", request.AgentName);
                     }
                     catch (Exception ex)
                     {
@@ -1506,7 +1517,11 @@ public static class ThreadExecution
                                     updEx => execLogger?.LogWarning(updEx,
                                         "UpdateThreadExecution(Idle/Error): stream.Update failed for {ThreadPath}",
                                         threadPath),
-                                    () => NotifyParentCompletion(parentHub, threadPath, errorTextLocal, false, errorNodeChangesLocal));
+                                    () =>
+                                    {
+                                        NotifyParentCompletion(parentHub, threadPath, errorTextLocal, false, errorNodeChangesLocal);
+                                        EmitCompletionNotification(parentHub, threadPath, errorTextLocal, request.AgentName);
+                                    });
                             });
                     }
                     finally
@@ -1518,7 +1533,10 @@ public static class ThreadExecution
                         // IMeshNodeStreamCache.Update, whose upstream handle is owned
                         // by the cache and outlives this round.
                     }
-                });
+                },
+                executionCts.Token,
+                TaskCreationOptions.None,
+                TaskScheduler.Current).Unwrap();
                     }); // end of LoadFullConversationHistory.Subscribe
                 }); // end of contextNodeObs.Subscribe
                 }, // end of WhenInitialized.Subscribe onNext

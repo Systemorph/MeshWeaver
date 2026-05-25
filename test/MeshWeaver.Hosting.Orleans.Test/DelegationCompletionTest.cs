@@ -96,5 +96,27 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
             "response cell reaches terminal Status when agent finishes");
         finalMsg.Text.Should().NotBeNullOrEmpty("agent's response text lives on the response cell");
         Output.WriteLine($"Verified: response cell text length = {finalMsg.Text!.Length}");
+
+        // 5. Completion notification — EmitCompletionNotification writes a Notification
+        //    satellite at {threadPath}/_Notification/{id} (routes to "notifications"
+        //    table per StandardTableMappings). The bell-icon UI in the portal
+        //    databinds to notifications under the user; we assert the same shape.
+        //    Tests the "agent completion ⇒ notification" reactive trigger.
+        var meshService = client.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Services.IMeshService>();
+        var notificationAppeared = false;
+        for (var i = 0; i < 30 && !notificationAppeared; i++)
+        {
+            var notifications = await meshService
+                .QueryAsync<MeshNode>($"path:{threadPath}/_Notification scope:children nodeType:Notification")
+                .ToListAsync(ct);
+            notificationAppeared = notifications.Any(n =>
+                n.Content is MeshWeaver.Mesh.Notification notif
+                && notif.TargetNodePath == threadPath);
+            if (!notificationAppeared) await Task.Delay(200, ct);
+        }
+        notificationAppeared.Should().BeTrue(
+            "EmitCompletionNotification must create a Notification MeshNode targeting the thread, " +
+            "which the user's notification bell databinds to");
+        Output.WriteLine("Verified: completion notification appeared in user's bell");
     }
 }
