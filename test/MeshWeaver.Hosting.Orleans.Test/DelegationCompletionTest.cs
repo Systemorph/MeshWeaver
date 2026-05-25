@@ -24,26 +24,16 @@ using Xunit;
 
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using MeshThread = MeshWeaver.AI.Thread;
+
 namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
-/// Tests that a SubmitMessageRequest returns TWO SubmitMessageResponse messages:
-/// 1. Status=CellsCreated (cells created, execution starting)
-/// 2. Status=ExecutionCompleted (agent finished, response text available)
-///
-/// This is critical for delegation: the parent thread's RegisterCallback
-/// waits for the second response to resolve the delegation TCS.
-/// Without it, the parent thread hangs forever after delegation.
-///
-/// TODO(append-migration): SubmitMessageRequest still used because this test
-/// specifically validates the dual-response (CellsCreated + ExecutionCompleted)
-/// semantic of the legacy submit pipeline. The new ThreadInput.AppendUserInput API
-/// returns a single Success/Error response and the agent's response text lives
-/// only on the response satellite cell Ã¢â‚¬â€ there's no equivalent of the second
-/// completion response for this test to assert against. Internal production code
-/// (thread hub Ã¢â€ â€™ _Exec sub-hub) still uses SubmitMessageRequest with this dual
-/// response semantic, so the underlying behaviour is still worth exercising
-/// while the legacy contract is in place.
+/// Submit a user message via <c>ThreadSubmission.Submit</c> (which internally
+/// routes through <c>workspace.GetMeshNodeStream(threadPath).Update</c> —
+/// the only sanctioned mutation API, see CLAUDE.md). Observe completion via
+/// the thread + response-cell streams, the same primitive the GUI databinds
+/// to. No <c>SubmitMessageResponse</c>, no completion callbacks.
 /// </summary>
 public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
@@ -51,97 +41,60 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
         => await base.GetClientAsync($"completion-{name}-{Guid.NewGuid():N}", "TestUser");
 
     /// <summary>
-    /// Verifies that SubmitMessageRequest produces two responses:
-    /// 1. CellsCreated (immediate)
-    /// 2. ExecutionCompleted (after agent finishes streaming)
-    ///
-    /// The test uses RegisterCallback (same pattern as delegation tool)
-    /// and collects all responses until ExecutionCompleted arrives.
+    /// User submission produces a user-message cell + an agent-response cell;
+    /// the agent eventually writes terminal text into the response cell. All
+    /// observed via the response cell's MeshNode stream.
     /// </summary>
-    // TODO(append-migration): kept on SubmitMessageRequest Ã¢â‚¬â€ see class-level comment.
     [Fact(Timeout = 60000)]
-    public async Task SubmitMessage_ReceivesBothCellsCreated_AndExecutionCompleted()
+    public async Task SubmitMessage_ResponseCellGetsTerminalText()
     {
         var ct = new CancellationTokenSource(50.Seconds()).Token;
         var client = await GetClientAsync();
 
-        // Create thread
-        var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("TestUser", "Completion test", "TestUser")), o => o.WithTarget(new Address("TestUser"))).FirstAsync().ToTask(ct);
+        // 1. Create thread
+        var response = await client
+            .Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("TestUser", "Completion test", "TestUser")),
+                o => o.WithTarget(new Address("TestUser")))
+            .FirstAsync().ToTask(ct);
         response.Message.Success.Should().BeTrue(response.Message.Error);
         var threadPath = response.Message.Node!.Path!;
         Output.WriteLine($"Thread: {threadPath}");
 
-        // Post SubmitMessageRequest and collect responses via RegisterCallback
-        var responses = new List<(SubmitMessageStatus Status, bool Success, string? ResponseText)>();
-        var completionTcs = new TaskCompletionSource<bool>();
-
-        var delivery = client.Post(
-            new SubmitMessageRequest
-            {
-                ThreadPath = threadPath,
-                UserMessageText = "Test completion notification",
-                ContextPath = "TestUser"
-            },
-            o => o.WithTarget(new Address(threadPath)));
-        delivery.Should().NotBeNull("Post should return delivery");
-
-        // hub.Observe completes after the first emission. Re-subscribe after CellsCreated
-        // to catch the second response (ExecutionCompleted) â€” same shape as the legacy
-        // RegisterCallback re-register pattern.
-        void SubscribeForResponse(IMessageDelivery del)
+        // 2. Submit via the canonical API (Submit → ThreadInput.AppendUserInput
+        //    → stream.Update on the thread node).
+        ThreadSubmission.Submit(new SubmitContext
         {
-            client.Observe(del).Subscribe(
-                cb =>
-                {
-                    if (cb.Message is SubmitMessageResponse msg)
-                    {
-                        Output.WriteLine($"Response: Status={msg.Status}, Success={msg.Success}, Error={msg.Error}, TextLen={msg.ResponseText?.Length ?? 0}");
-                        responses.Add((msg.Status, msg.Success, msg.ResponseText));
+            Hub = client,
+            ThreadPath = threadPath,
+            UserText = "Test completion notification",
+            ContextPath = "TestUser",
+        });
 
-                        if (msg.Status == SubmitMessageStatus.CellsCreated)
-                            SubscribeForResponse(del); // Re-subscribe for completion
-                        else
-                            completionTcs.TrySetResult(msg.Success);
-                    }
-                    else
-                    {
-                        Output.WriteLine($"Unexpected response: {cb.Message?.GetType().Name}");
-                        completionTcs.TrySetResult(false);
-                    }
-                },
-                ex =>
-                {
-                    Output.WriteLine($"DeliveryFailure: {ex.Message}");
-                    completionTcs.TrySetResult(false);
-                });
-        }
-        SubscribeForResponse((IMessageDelivery)delivery!);
+        // 3. Observe the thread stream until BOTH messages exist.
+        var workspace = client.GetWorkspace();
+        var threadStream = workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!;
 
-        // Wait for execution to complete (with timeout)
-        var timeoutTask = Task.Delay(45_000, ct);
-        var completed = await Task.WhenAny(completionTcs.Task, timeoutTask);
-        if (completed == timeoutTask)
-        {
-            Output.WriteLine($"TIMEOUT! Received {responses.Count} response(s): [{string.Join(", ", responses.Select(r => r.Status))}]");
-        }
-        completed.Should().Be(completionTcs.Task,
-            "should receive ExecutionCompleted before timeout Ã¢â‚¬â€ parent thread would hang otherwise");
+        var msgIds = await threadStream
+            .Select(nodes => (nodes?.FirstOrDefault(n => n.Path == threadPath)?.Content as MeshThread)?.Messages
+                             ?? System.Collections.Immutable.ImmutableList<string>.Empty)
+            .Where(ids => ids.Count >= 2)
+            .Take(1).Timeout(45.Seconds()).ToTask(ct);
+        var responseMsgId = msgIds[1];
+        var responsePath = $"{threadPath}/{responseMsgId}";
+        Output.WriteLine($"Response message cell: {responsePath}");
 
-        // Verify we got both responses
-        responses.Should().HaveCountGreaterThanOrEqualTo(2,
-            "should receive CellsCreated + ExecutionCompleted");
+        // 4. Observe the response cell's stream until it reaches Completed with
+        //    non-empty Text. This is "execution completed" in the stream-only
+        //    world — replaces the obsolete SubmitMessageResponse(ExecutionCompleted).
+        var responseStream = workspace.GetRemoteStream<MeshNode>(new Address(responsePath))!;
+        var finalMsg = await responseStream
+            .Select(nodes => nodes?.FirstOrDefault(n => n.Path == responsePath)?.Content as ThreadMessage)
+            .Where(m => m is { Status: ThreadMessageStatus.Completed } && !string.IsNullOrEmpty(m.Text))
+            .Take(1).Timeout(45.Seconds()).ToTask(ct);
 
-        responses[0].Status.Should().Be(SubmitMessageStatus.CellsCreated,
-            "first response should be CellsCreated");
-        responses[0].Success.Should().BeTrue();
-
-        var lastResponse = responses.Last();
-        lastResponse.Status.Should().Be(SubmitMessageStatus.ExecutionCompleted,
-            "final response should be ExecutionCompleted");
-        lastResponse.Success.Should().BeTrue();
-        lastResponse.ResponseText.Should().NotBeNullOrEmpty(
-            "ExecutionCompleted should include the agent's response text");
-
-        Output.WriteLine($"Delegation completion verified: {responses.Count} responses, final text length={lastResponse.ResponseText?.Length}");
+        finalMsg!.Status.Should().Be(ThreadMessageStatus.Completed,
+            "response cell reaches terminal Status when agent finishes");
+        finalMsg.Text.Should().NotBeNullOrEmpty("agent's response text lives on the response cell");
+        Output.WriteLine($"Verified: response cell text length = {finalMsg.Text!.Length}");
     }
 }
