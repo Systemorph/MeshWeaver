@@ -477,13 +477,21 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
 
             var meshService = Hub.ServiceProvider.GetRequiredService<IMeshService>();
 
-            // Pure nested-Subscribe pattern (per CLAUDE.md AsynchronousCalls.md):
-            // CreateNode → on emission, subscribe to sub-thread stream for the
-            // Running→Idle transition → on Idle, emit Terminal event so the
-            // parent's tool-call TCS (in DelegationTool's reactive subscription)
-            // resolves with Thread.Summary. No await, no .ToTask(), no SelectMany
-            // chain that could capture the grain scheduler — Subscribe is the
-            // continuation primitive.
+            // Subscribe callbacks routed through the PARENT THREAD HUB via Post.
+            // Every Subscribe in delegation work would otherwise execute on
+            // the upstream emitter's thread (mesh-service reply path,
+            // workspace synced-query thread, etc.) — racing with the parent
+            // hub's own action block. By posting a continuation message to
+            // the parent hub, the work lands inside its action block,
+            // serialized with all other hub operations (MaxDegreeOfParallelism = 1).
+            //
+            // The continuation handler runs on the parent hub:
+            //   - calls EmitDelegationEvent (writes AgentChatClient state)
+            //   - sets up sub-thread stream subscription (also routed via Post)
+            //   - any subsequent state mutation is hub-serialized.
+            var parentHubAddress = chat.ExecutionContext is not null
+                ? new Address(chat.ExecutionContext.ThreadPath)
+                : Hub.Address;
             return System.Reactive.Linq.Observable.Create<string>(observer =>
             {
                 var workspace = Hub.GetWorkspace();
@@ -495,41 +503,14 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                         Logger.LogInformation(
                             "[Delegation:{CallId}] CREATE_OK sub={Path}", callId, subThreadPath);
 
-                        if (chat is AgentChatClient agentChat)
-                        {
-                            Logger.LogInformation(
-                                "[Delegation:{CallId}] EMIT_DISPATCHED sub={Path}", callId, subThreadPath);
-                            agentChat.EmitDelegationEvent(
-                                new MeshWeaver.AI.Delegation.DelegationEvent(callId, subThreadPath,
-                                    MeshWeaver.AI.Delegation.DelegationLifecycle.Dispatched));
-
-                            // Watch sub-thread for Running→Idle. Same Scan-based
-                            // pattern DelegationTool uses for the parent's
-                            // TCS resolution — emit Terminal here so the
-                            // cancel-watcher + tool-call stamper drop the entry.
-                            workspace.GetMeshNodeStream(subThreadPath).Subscribe(
-                                node =>
-                                {
-                                    if (node?.Content is not MeshThread t) return;
-                                    if (t.Status is ThreadExecutionStatus.Executing
-                                                 or ThreadExecutionStatus.StartingExecution
-                                                 or ThreadExecutionStatus.Completing)
-                                    {
-                                        sawRunning = true;
-                                    }
-                                    else if (sawRunning && t.Status == ThreadExecutionStatus.Idle)
-                                    {
-                                        Logger.LogInformation(
-                                            "[Delegation:{CallId}] TERMINAL sub={Path} (Running→Idle)",
-                                            callId, subThreadPath);
-                                        agentChat.EmitDelegationEvent(
-                                            new MeshWeaver.AI.Delegation.DelegationEvent(callId, subThreadPath,
-                                                MeshWeaver.AI.Delegation.DelegationLifecycle.Terminal));
-                                    }
-                                },
-                                ex => Logger.LogWarning(ex,
-                                    "[Delegation:{CallId}] sub-thread stream errored", callId));
-                        }
+                        // Post the Dispatched-trigger to the parent hub so the
+                        // EmitDelegationEvent + sub-thread subscription wiring
+                        // runs inside the parent's action block. Same credential
+                        // (AsyncLocal AccessContext) is carried through the Post
+                        // pipeline automatically (AccessContextPropagation rule).
+                        Hub.Post(
+                            new DelegationDispatchedTrigger(callId, subThreadPath),
+                            o => o.WithTarget(parentHubAddress));
 
                         // No chunks emitted — DelegationTool's reactive
                         // completion path reads Thread.Summary directly on Idle.
