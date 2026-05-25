@@ -1192,7 +1192,7 @@ public static class ThreadExecution
                     using var pushSub = snapshots
                         .Sample(StreamingSampleInterval)
                         .Subscribe(s => PushToResponseMessage(
-                            s.Text, s.ToolCalls, s.NodeChanges,
+                            StripSummaryBlock(s.Text), s.ToolCalls, s.NodeChanges,
                             request.AgentName, request.ModelName,
                             status: ThreadMessageStatus.Streaming));
                     var pendingCalls = ImmutableDictionary<string, FunctionCallContent>.Empty;
@@ -1421,7 +1421,9 @@ public static class ThreadExecution
                     // clean response. If the marker is absent (agent forgot, or
                     // an external chat client), summaryText falls back to
                     // finalText. No extra LLM round-trip — same single
-                    // streaming foreach drives both.
+                    // streaming foreach drives both. Streaming-time pushes
+                    // already strip the in-flight <summary> block via
+                    // StripSummaryBlock so the user never sees the markers.
                     var summaryText = finalText;
                     var summaryMatch = System.Text.RegularExpressions.Regex.Match(
                         finalText,
@@ -1682,6 +1684,25 @@ public static class ThreadExecution
                 ex => logger?.LogWarning(ex,
                     "[ThreadExec] Failed to create completion notification for {ThreadPath}",
                     threadPath));
+    }
+
+    /// <summary>
+    /// Strips an in-flight or completed <c>&lt;summary&gt;...&lt;/summary&gt;</c>
+    /// block from the agent's response so the user never sees the marker
+    /// tags. Removes ANY closed block, then trims a trailing open <c>&lt;summary&gt;</c>
+    /// (and everything after) so chunks mid-stream don't leak the partial
+    /// inner text into the visible Text. Always returns a trimmed string.
+    /// </summary>
+    private static string StripSummaryBlock(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return text;
+        var stripped = System.Text.RegularExpressions.Regex.Replace(
+            text, @"<summary>[\s\S]*?</summary>", "",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        var openIdx = stripped.LastIndexOf("<summary>", StringComparison.OrdinalIgnoreCase);
+        if (openIdx >= 0)
+            stripped = stripped[..openIdx];
+        return stripped.TrimEnd();
     }
 
     /// <summary>
