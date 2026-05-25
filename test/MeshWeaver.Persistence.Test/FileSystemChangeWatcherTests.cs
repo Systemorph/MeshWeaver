@@ -26,7 +26,7 @@ namespace MeshWeaver.Persistence.Test;
 public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private readonly string _testDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverTests", Guid.NewGuid().ToString());
-    private readonly System.Reactive.Subjects.Subject<DataChangeNotification> _changeNotifier = new();
+    private readonly DataChangeNotifier _changeNotifier = new();
     private FileSystemStorageAdapter? _storageAdapterInstance;
     private FileSystemStorageAdapter _storageAdapter => _storageAdapterInstance ??= CreateStorageAdapter();
     protected new IMeshService MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -51,13 +51,7 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
     private static Task WaitForNotification(
         List<DataChangeNotification> notifications,
         Func<DataChangeNotification, bool> predicate,
-        int timeoutMs = 15_000) =>
-        // Linux CI's inotify can take 2-5 s to dispatch events under load;
-        // 15 s keeps the happy path fast (predicate fires on the next 50 ms
-        // tick) while absorbing the slow path. The earlier 5 s default
-        // caught Watcher_RapidChanges_Debounced flaking in GitHub Actions —
-        // the third write landed at ~T+1s but the debounced notification
-        // didn't propagate until T+5s+, beyond the old window.
+        int timeoutMs = 5000) =>
         Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .Where(_ => notifications.Any(predicate))
             .FirstAsync()
