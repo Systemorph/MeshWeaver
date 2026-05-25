@@ -86,6 +86,12 @@ public abstract class OrleansTestBase<TSiloConfigurator>(ITestOutputHelper outpu
     {
         configuration.TypeRegistry.AddAITypes();
         return configuration
+            // 🚨 Bump RequestTimeout 30s → 90s for Orleans tests. Cold-start
+            // Roslyn compile + cross-silo grain activation routinely runs 30-60s
+            // on contended CI runners; the default 30s tripped on
+            // GetCompilationPathRequest, GetDataRequest, and SubmitMessageRequest
+            // in multiple Orleans.Test failures (run 26376715753).
+            .WithRequestTimeout(TimeSpan.FromSeconds(90))
             .AddMeshDataSource(source => source)
             .AddLayoutClient();
     }
