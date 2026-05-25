@@ -644,12 +644,19 @@ internal static class NodeTypeCompilationHelpers
             semver = asm.GetName().Version?.ToString() ?? "0.0.0";
         }
 
-        // Un-packed dev default — the version never moves across local
-        // rebuilds, so fold in the assembly file's last-write time to keep
-        // dev iteration honest. Deployed builds carry a real version and
-        // skip this (stable across servers).
+        // Un-packed dev default — the SDK leaves semver at "1.0.0" across
+        // every dotnet build, so the bare semver alone would never invalidate
+        // a stale cache. Directory.Build.props bakes `1.0.0+dev.{ticks}` into
+        // AssemblyInformationalVersion at compile time (only re-evaluated when
+        // the assembly is actually recompiled), so use the full string as the
+        // dev fingerprint. Stable across copies/touches of the same .dll
+        // (which is what was broken before — File.GetLastWriteTimeUtc drifted
+        // even when the bytes were identical). Deployed builds carry a real
+        // semver (`3.0.0-preview2`) and skip this fallback.
         if (semver is "1.0.0" or "1.0.0.0" or "0.0.0")
         {
+            if (!string.IsNullOrEmpty(info))
+                return info;
             var loc = asm.Location;
             if (!string.IsNullOrEmpty(loc) && System.IO.File.Exists(loc))
                 return $"{semver}+{System.IO.File.GetLastWriteTimeUtc(loc):O}";
