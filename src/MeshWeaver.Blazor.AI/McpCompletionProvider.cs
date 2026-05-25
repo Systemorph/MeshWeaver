@@ -1,5 +1,3 @@
-using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.Logging;
 
@@ -38,16 +36,15 @@ public class McpCompletionProvider
 
         try
         {
-            // IObservable surface — collect to list at the MCP boundary.
-            var list = await meshQuery.AutocompleteAsync(
-                    basePath: "",
-                    prefix: prefix,
-                    mode: AutocompleteMode.RelevanceFirst,
-                    limit: limit)
-                .ToList()
-                .ToTask(ct);
-            foreach (var item in list)
+            await foreach (var item in meshQuery.AutocompleteAsync(
+                basePath: "",
+                prefix: prefix,
+                mode: AutocompleteMode.RelevanceFirst,
+                limit: limit,
+                ct: ct))
+            {
                 suggestions.Add(item.Path);
+            }
         }
         catch (Exception ex)
         {

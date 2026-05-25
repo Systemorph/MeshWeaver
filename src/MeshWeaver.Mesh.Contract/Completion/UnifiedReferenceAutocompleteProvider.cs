@@ -4,7 +4,6 @@ using System.Text.Json;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using MeshWeaver.Reactive;
 
 namespace MeshWeaver.Mesh.Completion;
 
@@ -169,16 +168,16 @@ internal class UnifiedReferenceAutocompleteProvider(
         }
 
         // Suggest child nodes at the searchBase
-        IObservable<QuerySuggestion>? suggestions = null;
+        IAsyncEnumerable<QuerySuggestion>? suggestions = null;
         try
         {
-            suggestions = meshQuery.AutocompleteAsync(searchBase ?? "", currentSegment, 15);
+            suggestions = meshQuery.AutocompleteAsync(searchBase ?? "", currentSegment, 15, ct);
         }
         catch { /* Ignore errors */ }
 
         if (suggestions != null)
         {
-            await foreach (var suggestion in suggestions.ToAsyncEnumerableSequence(ct))
+            await foreach (var suggestion in suggestions.WithCancellation(ct))
             {
                 // Get the child name (last segment of the suggestion path)
                 var childName = suggestion.Name;
@@ -228,16 +227,16 @@ internal class UnifiedReferenceAutocompleteProvider(
         if (meshQuery == null)
             yield break;
 
-        IObservable<QuerySuggestion>? suggestions = null;
+        IAsyncEnumerable<QuerySuggestion>? suggestions = null;
         try
         {
-            suggestions = meshQuery.AutocompleteAsync(searchBase, currentSegment, 15);
+            suggestions = meshQuery.AutocompleteAsync(searchBase, currentSegment, 15, ct);
         }
         catch { /* Ignore errors */ }
 
         if (suggestions != null)
         {
-            await foreach (var suggestion in suggestions.ToAsyncEnumerableSequence(ct))
+            await foreach (var suggestion in suggestions.WithCancellation(ct))
             {
                 yield return new AutocompleteItem(
                     Label: suggestion.Name,
@@ -309,16 +308,16 @@ internal class UnifiedReferenceAutocompleteProvider(
         // Suggest children at current path
         if (meshQuery != null)
         {
-            IObservable<QuerySuggestion>? suggestions = null;
+            IAsyncEnumerable<QuerySuggestion>? suggestions = null;
             try
             {
-                suggestions = meshQuery.AutocompleteAsync(address, currentSegment, 15);
+                suggestions = meshQuery.AutocompleteAsync(address, currentSegment, 15, ct);
             }
             catch { /* Ignore errors */ }
 
             if (suggestions != null)
             {
-                await foreach (var suggestion in suggestions.ToAsyncEnumerableSequence(ct))
+                await foreach (var suggestion in suggestions.WithCancellation(ct))
                 {
                     yield return new AutocompleteItem(
                         Label: $"{suggestion.Name}/",
@@ -349,16 +348,16 @@ internal class UnifiedReferenceAutocompleteProvider(
         // Top-level nodes from mesh query (root level)
         if (meshQuery != null)
         {
-            IObservable<QuerySuggestion>? suggestions = null;
+            IAsyncEnumerable<QuerySuggestion>? suggestions = null;
             try
             {
-                suggestions = meshQuery.AutocompleteAsync("", prefix, 15);
+                suggestions = meshQuery.AutocompleteAsync("", prefix, 15, ct);
             }
             catch { /* Ignore errors */ }
 
             if (suggestions != null)
             {
-                await foreach (var suggestion in suggestions.ToAsyncEnumerableSequence(ct))
+                await foreach (var suggestion in suggestions.WithCancellation(ct))
                 {
                     if (addedPaths.Add(suggestion.Path))
                     {
@@ -427,16 +426,16 @@ internal class UnifiedReferenceAutocompleteProvider(
         if (meshQuery == null)
             yield break;
 
-        IObservable<QuerySuggestion>? suggestions = null;
+        IAsyncEnumerable<QuerySuggestion>? suggestions = null;
         try
         {
-            suggestions = meshQuery.AutocompleteAsync(address, prefix, 15);
+            suggestions = meshQuery.AutocompleteAsync(address, prefix, 15, ct);
         }
         catch { /* Ignore errors */ }
 
         if (suggestions != null)
         {
-            await foreach (var suggestion in suggestions.ToAsyncEnumerableSequence(ct))
+            await foreach (var suggestion in suggestions.WithCancellation(ct))
             {
                 yield return new AutocompleteItem(
                     Label: suggestion.Name,

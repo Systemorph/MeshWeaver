@@ -54,25 +54,26 @@ public interface IMeshService
     // === Query ===
 
     /// <summary>
-    /// Autocomplete query — given a namespace, find best matching subnodes.
-    /// 🚨 Returns <see cref="IObservable{T}"/> so callers never block the mesh hub.
-    /// Providers run async I/O on hosted hubs they own.
+    /// Autocomplete query - given a namespace, find best matching subnodes.
+    /// Returns suggestions ordered by path length first (for path-based autocomplete).
     /// </summary>
-    IObservable<QuerySuggestion> AutocompleteAsync(
+    IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
         string basePath,
         string prefix,
-        int limit = 10);
+        int limit = 10,
+        CancellationToken ct = default);
 
     /// <summary>
     /// Autocomplete query with specified ordering mode.
     /// </summary>
-    IObservable<QuerySuggestion> AutocompleteAsync(
+    IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
         string basePath,
         string prefix,
         AutocompleteMode mode,
         int limit = 10,
         string? contextPath = null,
-        string? context = null);
+        string? context = null,
+        CancellationToken ct = default);
 
     /// <summary>
     /// Creates an observable query that monitors data sources for changes and emits updates.

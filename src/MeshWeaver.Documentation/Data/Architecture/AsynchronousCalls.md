@@ -309,35 +309,9 @@ return workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
 
 This is also how you **wait for work to finish** — subscribe until a field in the node's content flips to a completion state, then `.Take(1)`. No polling loop. No repeated queries.
 
-### 🚨 No `IAsyncEnumerable<T>` in producer code
+### Sets / listings — **prefer `ObserveQuery`**, not `QueryAsync`
 
-**Every mesh producer surface returns `IObservable<T>`, not `IAsyncEnumerable<T>`.** This includes `IMeshService.AutocompleteAsync` (returns `IObservable<QuerySuggestion>`), `IMeshQueryProvider.AutocompleteAsync`, `IMeshService.Query` (returns `IObservable<IReadOnlyList<QueryResult>>`), and every per-provider variant. The framework intentionally has no `IAsyncEnumerable<T>` method on any cross-hub seam.
-
-**Why:** an `IAsyncEnumerable<T>` makes the consumer say `await foreach`. That `await foreach` runs on whatever scheduler / SynchronizationContext the caller is on — most often the mesh hub's action block. The hub stays parked on the iteration until the producer drains. Drop a slow DB query into the chain and the entire hub is blocked behind it. The fix is to keep the producer as `IObservable<T>` (the consumer Subscribes — never awaits — and the producer's async work lives inside a *hosted hub the producer owns*, dispatched via `hub.Observe<RequestX>(...)` + an `Observable.FromAsync` at the storage leaf).
-
-If a legacy consumer genuinely needs to materialise the stream as a list (MCP tool returning `Task<string[]>`, a Blazor render path that builds an array), bridge **at that single boundary** and only there:
-
-```csharp
-// ❌ WRONG — `await foreach` over a mesh observable forces an IAsyncEnumerable shape
-// somewhere upstream. Don't make the producer accommodate this.
-await foreach (var s in meshService.AutocompleteAsync(...))
-    suggestions.Add(s.Path);
-
-// ✅ RIGHT — collect to list on the consumer side; the producer stayed IObservable.
-var list = await meshService.AutocompleteAsync(...).ToList().ToTask(ct);
-foreach (var s in list)
-    suggestions.Add(s.Path);
-
-// ✅ EVEN BETTER (if the consumer can stay reactive) — Subscribe and forward.
-meshService.AutocompleteAsync(...)
-    .Subscribe(s => UpdateUi(s));
-```
-
-If you write a new producer method on any framework seam, return `IObservable<T>` (or `IObservable<IReadOnlyList<T>>` for snapshot semantics), never `IAsyncEnumerable<T>`.
-
-### Sets / listings — **prefer `Query` / `ObserveQuery`**, not `QueryAsync`
-
-For the cases where a query is the right idea (listings, filters, existence across the mesh), use `IMeshService.Query(MeshQueryRequest)` (returns `IObservable<IReadOnlyList<QueryResult>>` — snapshot per emission, dedupes across providers, scored) or `IMeshService.ObserveQuery<T>` (returns `IObservable<QueryResultChange<T>>` with Initial/Added/Removed deltas). Both compose with `Select` / `Where` / `Subscribe` exactly like every other mesh observable. **Do not `await` the `QueryAsync` `IAsyncEnumerable<T>` version** — it blocks the hub AND lags the read-side index.
+Even for the cases where a query is the right idea (listings, filters, existence across the mesh), **do not `await` the `IAsyncEnumerable<T>`** version — use the reactive `IMeshService.ObserveQuery<T>` overload. It returns `IObservable<QueryResultChange<T>>` with an initial full set and then incremental deltas, and it composes with `Select` / `Where` / `Subscribe` exactly like every other mesh observable.
 
 > **Even `ObserveQuery` is wrong inside a layout area for displaying values.** Declare a binding (a path-bound control or a `JsonPointerReference`) and let the Blazor view subscribe. See [Data Binding](xref:GUI/DataBinding). Backend rendering code should be fully synchronous and side-effect-free.
 
@@ -724,7 +698,7 @@ The 2026-04-24 PlanStorage / MeshNodeAuditing test failures all traced to the sa
 
 > **Full treatment in [Blazor Async — `Subscribe`, not `await`](BlazorAsync).** That
 > article is the practical playbook: lifecycle hooks, click handlers, parallel
-> queries, multi-step flows, and the boundary bridges for IAsyncEnumerable consumers (`Subscribe` + collect-to-list).
+> queries, multi-step flows, and the channel bridge for IAsyncEnumerable-shaped APIs.
 > Read it before touching any `.razor` / `.razor.cs` file.
 
 **Never** `await` a mesh operation in a Blazor component lifecycle method, click handler, autocomplete callback, or anywhere else. This is non-negotiable: every `await meshService.QueryAsync(...)`, `await meshService.UpdateNode(...)`, `await Hub.AwaitResponse(...)` in GUI code is a deadlock waiting to happen, and `Task.FromResult(snapshot)` is no better — it freezes the snapshot at the call moment and ignores live updates.

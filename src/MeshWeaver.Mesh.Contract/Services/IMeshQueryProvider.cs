@@ -47,33 +47,43 @@ public interface IMeshQueryProvider
     bool Matches(IReadOnlyList<string> queryNamespaces);
 
     /// <summary>
-    /// Autocomplete query — given a namespace, find best matching subnodes.
+    /// Autocomplete query - given a namespace, find best matching subnodes.
     /// Returns suggestions ordered by path length first (for path-based autocomplete).
-    /// <para>
-    /// 🚨 Returns <see cref="IObservable{T}"/> (not <c>IAsyncEnumerable</c>) so the
-    /// caller hub never blocks. Providers that do async I/O MUST execute that I/O
-    /// inside a hosted hub they own and emit results into this observable from the
-    /// hub's handler — the calling mesh hub just subscribes / posts, never awaits.
-    /// </para>
     /// </summary>
-    IObservable<QuerySuggestion> AutocompleteAsync(
+    /// <param name="basePath">Base path to search from</param>
+    /// <param name="prefix">Prefix to match (partial name/path)</param>
+    /// <param name="options">JSON serializer options for type polymorphism</param>
+    /// <param name="limit">Maximum number of suggestions to return</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>Suggestions ordered by path length, then score, then name</returns>
+    IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
         string basePath,
         string prefix,
         JsonSerializerOptions options,
-        int limit = 10);
+        int limit = 10,
+        CancellationToken ct = default);
 
     /// <summary>
     /// Autocomplete query with specified ordering mode.
-    /// <para>Same observable-first contract as the simpler overload — hosted-hub async pattern only.</para>
     /// </summary>
-    IObservable<QuerySuggestion> AutocompleteAsync(
+    /// <param name="basePath">Base path to search from</param>
+    /// <param name="prefix">Prefix to match (partial name/path)</param>
+    /// <param name="options">JSON serializer options for type polymorphism</param>
+    /// <param name="mode">Ordering mode (PathFirst or RelevanceFirst)</param>
+    /// <param name="limit">Maximum number of suggestions to return</param>
+    /// <param name="contextPath">Context path for proximity-based scoring (null for no proximity boost)</param>
+    /// <param name="context">Context for visibility filtering (e.g., "search"). Nodes excluded from this context are hidden.</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>Suggestions ordered according to mode</returns>
+    IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
         string basePath,
         string prefix,
         JsonSerializerOptions options,
         AutocompleteMode mode,
         int limit = 10,
         string? contextPath = null,
-        string? context = null);
+        string? context = null,
+        CancellationToken ct = default);
 
     /// <summary>
     /// Creates an observable query that monitors data sources for changes and emits updates.
@@ -139,9 +149,9 @@ public interface IMeshQueryProvider
     /// <see cref="Query"/>. Aggregator wraps each provider's stream with
     /// <c>.StartWith(empty)</c> so <c>CombineLatest</c> emits partial results as
     /// soon as ANY provider produces (slow providers don't gate the UI).
-    /// <para>Default impl bridges to
-    /// <see cref="AutocompleteAsync(string, string, JsonSerializerOptions, AutocompleteMode, int, string?, string?)"/>
-    /// by accumulating its emissions into a single snapshot list.</para>
+    /// <para>Default impl bridges to the legacy
+    /// <see cref="AutocompleteAsync(string, string, JsonSerializerOptions, AutocompleteMode, int, string?, string?, CancellationToken)"/>
+    /// by draining the async-enumerable into a single snapshot list.</para>
     /// </summary>
     IObservable<IReadOnlyList<QueryResult>> Autocomplete(
         string basePath, string prefix, JsonSerializerOptions options,
@@ -149,22 +159,36 @@ public interface IMeshQueryProvider
         int limit = 10,
         string? contextPath = null,
         string? context = null)
-        // Default bridge — accumulate all suggestions emitted by the now-IObservable
-        // AutocompleteAsync surface into a single snapshot list. Pure-IObservable
-        // (no Task.Run, no await foreach) because AutocompleteAsync itself now
-        // returns IObservable<QuerySuggestion>.
-        => AutocompleteAsync(basePath, prefix, options, mode, limit, contextPath, context)
-            .Select(s => new QueryResult
+    {
+        return System.Reactive.Linq.Observable.Create<IReadOnlyList<QueryResult>>(observer =>
+        {
+            var cts = new CancellationTokenSource();
+            _ = System.Threading.Tasks.Task.Run(async () =>
             {
-                Path = s.Path,
-                Name = s.Name,
-                NodeType = s.NodeType,
-                Icon = s.Icon,
-                Score = s.Score,
-                ProviderName = Name,
-            })
-            .ToList()
-            .Select(rows => (IReadOnlyList<QueryResult>)rows);
+                try
+                {
+                    var rows = new List<QueryResult>();
+                    await foreach (var s in AutocompleteAsync(basePath, prefix, options, mode, limit, contextPath, context, cts.Token))
+                    {
+                        rows.Add(new QueryResult
+                        {
+                            Path = s.Path,
+                            Name = s.Name,
+                            NodeType = s.NodeType,
+                            Icon = s.Icon,
+                            Score = s.Score,
+                            ProviderName = Name,
+                        });
+                    }
+                    observer.OnNext(rows);
+                    observer.OnCompleted();
+                }
+                catch (OperationCanceledException) { observer.OnCompleted(); }
+                catch (Exception ex) { observer.OnError(ex); }
+            }, cts.Token);
+            return System.Reactive.Disposables.Disposable.Create(() => cts.Cancel());
+        });
+    }
 
     /// <summary>
     /// Selects a single property value from a node at the given path.

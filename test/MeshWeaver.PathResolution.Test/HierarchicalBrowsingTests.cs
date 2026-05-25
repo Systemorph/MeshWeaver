@@ -185,7 +185,7 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
         await SetupMarketingHierarchy();
 
         // Test autocomplete for "Email"
-        var suggestions = await MeshQuery.AutocompleteAsync("Systemorph/Marketing", "Email", 10).ToList().ToTask();
+        var suggestions = await MeshQuery.AutocompleteAsync("Systemorph/Marketing", "Email", 10).ToListAsync();
 
         suggestions.Should().HaveCount(1);
         suggestions[0].Name.Should().Be("Email Triage");
@@ -198,7 +198,7 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
         await SetupMarketingHierarchy();
 
         // Test autocomplete with partial match
-        var suggestions = await MeshQuery.AutocompleteAsync("Systemorph/Marketing", "claim", 10).ToList().ToTask();
+        var suggestions = await MeshQuery.AutocompleteAsync("Systemorph/Marketing", "claim", 10).ToListAsync();
 
         // Should find Claims Processing and its sub-stories
         suggestions.Should().Contain(s => s.Name == "Claims Processing");
