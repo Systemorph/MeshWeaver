@@ -733,9 +733,37 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         var hasHandoffs = agentConfig.Handoffs is { Count: > 0 };
         var hasHierarchyAgents = hierarchyAgents.Count > 1;
 
+        // Thread-message inspection + summary contract — appended for every
+        // agent so delegation-incapable agents still know how to discover
+        // prior responses and how their own response gets stored as a summary.
+        var threadInspectionAndSummary =
+            """
+
+            **Reading prior thread messages:**
+            Use the `search` tool with `nodeType:ThreadMessage` to find conversation cells.
+              - One thread: `search "path:{threadPath} scope:descendants nodeType:ThreadMessage"`
+              - One sub-thread (delegation child): same shape with the sub-thread's path.
+              - Project only the fields you need with `select:` — e.g.
+                `search "path:{threadPath} scope:descendants nodeType:ThreadMessage select:text,summary,role,timestamp"`.
+              - To read the dedicated summary of a completed sub-thread directly,
+                `get "{subThreadPath}"` and read `content.summary` (filled atomically
+                with `content.status=Idle`).
+            Use `select:summary` when scanning many cells — it returns the one-line
+            digest without the verbose `text`, so you can survey a deep thread cheaply.
+
+            **End every response with a <summary> block:**
+            At the very end of your response, on its own line, emit:
+              `<summary>One- or two-sentence distillation of what you did or decided.</summary>`
+            The framework strips this from what the user sees and stores it as the
+            dedicated summary on both the response message and the thread. When a
+            parent agent delegated to you, this summary IS the tool-call result it
+            receives back — not your verbose response. Be tight and outcome-focused.
+
+            """;
+
         if (!hasDelegations && !hasHandoffs && !hasHierarchyAgents && !agentConfig.IsDefault)
         {
-            return baseInstructions;
+            return baseInstructions + threadInspectionAndSummary;
         }
 
         var result = baseInstructions;
@@ -784,6 +812,8 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
 
                    """;
         }
+
+        result += threadInspectionAndSummary;
 
         // Handoff guidelines
         if (hasHandoffs)
