@@ -37,7 +37,6 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
 {
     private readonly IStorageAdapter persistence;
     private readonly AccessService? accessService;
-    private readonly IDataChangeNotifier? changeNotifier;
     private readonly MeshConfiguration? meshConfiguration;
     // 🚨 Lazy<INodeValidator> — NOT bare INodeValidator. RlsNodeValidator
     // (the only non-test impl) takes ISecurityService at construction time.
@@ -73,7 +72,6 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         // results are MeshNodes today, and any future non-MeshNode projection
         // should declare an INodeValidator if it needs gating.
         AccessService? accessService = null,
-        IDataChangeNotifier? changeNotifier = null,
         MeshConfiguration? meshConfiguration = null,
         IEnumerable<Lazy<INodeValidator>>? nodeValidators = null,
         IEnumerable<IPartitionStorageProvider>? partitionProviders = null,
@@ -81,7 +79,6 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     {
         this.persistence = persistence;
         this.accessService = accessService;
-        this.changeNotifier = changeNotifier;
         this.meshConfiguration = meshConfiguration;
         this.nodeValidators = nodeValidators;
         this.logger = logger;
@@ -1046,39 +1043,11 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                     })
                     .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default);
 
-            // Race-fix: subscribe to changeNotifier BEFORE running the initial query so
-            // that any NotifyChange events fired during the initial query's I/O window
-            // are captured. Otherwise the events fire before the subscription is set
-            // up and are silently lost (the DataChangeNotifier is a plain Subject<> with
-            // no buffering). Symptom of the bug: synced query consumers (GetTokensForUser,
-            // WaitForPermissionAsync) never see writes that complete during their first
-            // Initial query — first emission has the stale snapshot and the live change
-            // stream never replays the missed event.
-            //
-            // Approach: accumulate early notifications in a synchronized List until the
-            // initial query completes. Inside the initialResults callback, swap to the
-            // live Buffer pipeline AND drain the backlog as one synthetic batch.
-            var earlyBacklog = new List<DataChangeNotification>();
-            var earlyLock = new object();
-            var initialDone = false;
-
-            IDisposable? earlySubscription = null;
-            if (changeNotifier != null)
-            {
-                earlySubscription = changeNotifier
-                    .Where(n => scopeFilters.Any(sf =>
-                        PathMatcher.ShouldNotify(n.Path, sf.BasePath, sf.Scope)))
-                    .Subscribe(n =>
-                    {
-                        lock (earlyLock)
-                        {
-                            if (!initialDone)
-                                earlyBacklog.Add(n);
-                        }
-                    });
-                disposables.Add(earlySubscription);
-            }
-
+            // Storage-level change events were intentionally removed —
+            // synced queries here are Initial-only. Consumers that need live
+            // updates for a specific path use workspace.GetMeshNodeStream /
+            // GetRemoteStream which subscribes to the OWNING per-node hub's
+            // workspace stream; that's the only sanctioned live source.
             disposables.Add(
                 RunQuery(cts.Token).Subscribe(
                     initialResults =>
@@ -1090,50 +1059,6 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                             if (!string.IsNullOrEmpty(path))
                                 currentItems[path] = item;
                         }
-                        // Wire up the LIVE change pipeline before emitting Initial so that
-                        // any node mutation triggered by a subscriber reacting to Initial
-                        // is guaranteed to be captured by the changeBuffer.
-                        //
-                        // Ordering matters: set up the LIVE subscription FIRST so no event
-                        // can fire after "initialDone = true" but before there's any
-                        // downstream subscriber. Events fired between live-set-up and
-                        // backlog-swap may be captured BOTH by the live Buffer pipeline AND
-                        // by the early subscription — ProcessBatch is idempotent against
-                        // currentItems, so duplicate-processing is wasted CPU but correct.
-                        DataChangeNotification[] backlog = Array.Empty<DataChangeNotification>();
-                        if (changeNotifier != null)
-                        {
-                            // 1) Set up live subscription first — starts buffering immediately.
-                            var changeBuffer = new Subject<DataChangeNotification>();
-                            disposables.Add(changeBuffer);
-                            disposables.Add(
-                                changeNotifier
-                                    .Where(n => scopeFilters.Any(sf =>
-                                        PathMatcher.ShouldNotify(n.Path, sf.BasePath, sf.Scope)))
-                                    .Subscribe(changeBuffer));
-                            disposables.Add(
-                                changeBuffer
-                                    .Buffer(DefaultDebounceInterval)
-                                    .Where(batch => batch.Count > 0)
-                                    .Subscribe(batch =>
-                                        disposables.Add(
-                                            RunQuery(cts.Token).Subscribe(
-                                                newResults => ProcessBatch(batch, newResults, currentItems, parsedQuery, observer),
-                                                ex => observer.OnError(ex)))));
-
-                            // 2) Snapshot + clear early backlog under lock; gate further early-capture.
-                            lock (earlyLock)
-                            {
-                                backlog = earlyBacklog.ToArray();
-                                earlyBacklog.Clear();
-                                initialDone = true;
-                            }
-
-                            // 3) Early subscription is now redundant — live pipeline carries
-                            //    all subsequent events. Dispose to free the upstream sub.
-                            earlySubscription?.Dispose();
-                        }
-
                         observer.OnNext(new QueryResultChange<T>
                         {
                             ChangeType = QueryChangeType.Initial,
@@ -1142,20 +1067,6 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                             Version = Interlocked.Increment(ref _version),
                             Timestamp = DateTimeOffset.UtcNow,
                         });
-
-                        // Drain the early backlog as one immediate batch — these events
-                        // fired DURING the initial query window, so we need to re-query
-                        // and apply diffs against the just-populated currentItems.
-                        if (backlog.Length > 0)
-                        {
-                            disposables.Add(
-                                RunQuery(cts.Token).Subscribe(
-                                    newResults => ProcessBatch(backlog.ToList(), newResults, currentItems, parsedQuery, observer),
-                                    ex => observer.OnError(ex)));
-                        }
-
-                        if (changeNotifier == null)
-                            observer.OnCompleted();
                     },
                     ex => observer.OnError(ex)));
 

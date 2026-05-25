@@ -96,25 +96,12 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         // succeeded. The DeleteNode handler fires
         // `IDataChangeNotifier.NotifyChange(Deleted)` per path; subscribing
         // and dropping the pending save reconciles the two writers.
-        var changeNotifier = workspace.Hub.ServiceProvider.GetService<IDataChangeNotifier>();
-        if (changeNotifier != null)
-        {
-            var sub = changeNotifier
-                .Where(n => n.Kind == DataChangeKind.Deleted && !string.IsNullOrEmpty(n.Path))
-                .Subscribe(n =>
-                {
-                    // Mark recently-deleted so the next UpdateImpl filters this
-                    // path out of `adds` even when the workspace's initial
-                    // snapshot still contains it. Drop any save already queued
-                    // in the debounce buffer for completeness.
-                    _recentlyDeleted[n.Path] = DateTimeOffset.UtcNow;
-                    var dropped = _pendingSaves.TryRemove(n.Path, out _);
-                    _logger?.LogDebug(
-                        "MeshNodeTypeSource[{HubPath}]: delete notified path={Path} pendingDropped={Dropped}",
-                        _hubPath, n.Path, dropped);
-                });
-            _pendingFlushSubscriptions.Add(sub);
-        }
+        // Storage-level change events were removed. Delete reconciliation
+        // for this debounce buffer used to subscribe to a storage Changes
+        // feed; that feed is gone. The per-node hub's HandleDeleteNodeRequest
+        // is now the only path that mutates the per-node hub's cache.IsDeleted
+        // — the debounce sampler's IsDeleted gate above is sufficient to
+        // prevent the resurrect-after-delete write race on the OWNING hub.
 
         // Hub-teardown hook — awaits any pending flushes so a per-node hub
         // disposing mid-write doesn't lose data. Without it, the next test

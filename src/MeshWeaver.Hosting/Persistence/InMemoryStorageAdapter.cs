@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -17,32 +18,20 @@ namespace MeshWeaver.Hosting.Persistence;
 /// </summary>
 public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdapter
 {
-    /// <summary>
-    /// NodeTypes the in-memory adapter publishes change notifications for —
-    /// matches the PG-side <c>mirror_access_object_to_auth_schema</c> trigger's
-    /// filter (V27). Auth lookups (token validation, GetTokensForUser,
-    /// UserIdentityCache) need prompt notification under the in-memory backend
-    /// where there is no <c>pg_notify</c> change feed to drive them. Non-auth
-    /// writes stay quiet — firing for every workspace change would cascade
-    /// into layout-render hot paths (root cause of the earlier
-    /// PageLoadingTest hang attempt).
-    /// </summary>
-    private static readonly HashSet<string> AuthNotifyNodeTypes =
-        new(StringComparer.Ordinal) { "User", "Group", "Role", "VUser", "ApiToken" };
-
     private readonly ConcurrentDictionary<string, MeshNode> _nodes;
     private readonly ConcurrentDictionary<string, List<object>> _partitionObjects;
     private readonly ILogger? _logger;
-    private readonly IDataChangeNotifier? _notifier;
+    private readonly Subject<DataChangeNotification> _changes = new();
+
+    /// <inheritdoc />
+    public IObservable<DataChangeNotification> Changes => _changes.AsObservable();
 
     public InMemoryStorageAdapter(
-        ILogger<InMemoryStorageAdapter>? logger = null,
-        IDataChangeNotifier? notifier = null)
+        ILogger<InMemoryStorageAdapter>? logger = null)
         : this(
             nodes: new(StringComparer.OrdinalIgnoreCase),
             partitionObjects: new(StringComparer.OrdinalIgnoreCase),
-            logger,
-            notifier)
+            logger)
     {
     }
 
@@ -51,19 +40,16 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
     /// across multiple <see cref="InMemoryStorageAdapter"/> instances so a
     /// multi-host test cluster (Orleans silo + client in one process) sees
     /// one logical store, mirroring production where multiple adapter
-    /// instances all point at the same PG backend. The default ctor still
-    /// allocates per-instance dicts for isolated unit-test use.
+    /// instances all point at the same PG backend.
     /// </summary>
     public InMemoryStorageAdapter(
         ConcurrentDictionary<string, MeshNode> nodes,
         ConcurrentDictionary<string, List<object>> partitionObjects,
-        ILogger<InMemoryStorageAdapter>? logger = null,
-        IDataChangeNotifier? notifier = null)
+        ILogger<InMemoryStorageAdapter>? logger = null)
     {
         _nodes = nodes;
         _partitionObjects = partitionObjects;
         _logger = logger;
-        _notifier = notifier;
     }
 
     private static string Norm(string? path) => path?.Trim('/') ?? "";
@@ -85,14 +71,7 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
                 _nodes[Norm(node.Path)] = node;
                 _logger?.LogDebug("[InMemoryAdapter#{Id:X}] Write {Path} (count={Count})",
                     GetHashCode(), Norm(node.Path), _nodes.Count);
-                // Auth-mirror notification — in-memory equivalent of the V27
-                // PG trigger. Same nodeType filter so synced auth queries
-                // (GetTokensForUser, UserIdentityCache, role/group lookups)
-                // observe writes immediately under the in-memory backend.
-                if (!string.IsNullOrEmpty(node.NodeType) && AuthNotifyNodeTypes.Contains(node.NodeType))
-                {
-                    _notifier?.NotifyChange(DataChangeNotification.Updated(Norm(node.Path), node));
-                }
+                try { _changes.OnNext(DataChangeNotification.Updated(Norm(node.Path), node)); } catch { /* never throw */ }
             }
             return Observable.Return(node);
         });
@@ -101,10 +80,7 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
         => Observable.Defer(() =>
         {
             _nodes.TryRemove(Norm(path), out var removed);
-            // Mirror-equivalent: deletion of an auth-relevant node also fires
-            // the notification so synced queries see the removal.
-            if (removed is { NodeType: { } nt } && AuthNotifyNodeTypes.Contains(nt))
-                _notifier?.NotifyChange(DataChangeNotification.Deleted(Norm(path), removed));
+            try { _changes.OnNext(DataChangeNotification.Deleted(Norm(path), removed)); } catch { /* never throw */ }
             return Observable.Return(path);
         });
 

@@ -51,6 +51,13 @@ public class SharedOrleansFixture : IAsyncLifetime
     /// </summary>
     internal static readonly System.Collections.Concurrent.ConcurrentDictionary<string, MeshNode> SharedNodes
         = new(System.StringComparer.OrdinalIgnoreCase);
+
+    // Note: in prod every silo has its own per-process IStorageAdapter.Changes
+    // Subject (fed by PG LISTEN/NOTIFY or Cosmos change feed). Tests don't
+    // bridge those across processes — consumers that need to observe a
+    // specific node bind via workspace.GetMeshNodeStream(path) (same as
+    // the GUI), which routes through the owning per-node hub's workspace
+    // stream and works cross-process without a shared notifier.
     internal static readonly System.Collections.Concurrent.ConcurrentDictionary<string, System.Collections.Generic.List<object>> SharedPartitionObjects
         = new(System.StringComparer.OrdinalIgnoreCase);
 

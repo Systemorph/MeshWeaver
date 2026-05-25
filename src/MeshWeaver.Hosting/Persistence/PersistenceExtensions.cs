@@ -253,15 +253,12 @@ public static class PersistenceExtensions
     /// <returns>The service collection for chaining</returns>
     public static IServiceCollection AddInMemoryPersistence(this IServiceCollection services)
     {
+        // The in-memory adapter owns its own change-feed Subject and surfaces
+        // it via IStorageAdapter.Changes — synced-query providers subscribe
+        // there. No standalone IDataChangeNotifier service needed.
         services.TryAddSingleton<IStorageAdapter>(sp =>
             new InMemoryStorageAdapter(
-                sp.GetService<ILogger<InMemoryStorageAdapter>>(),
-                // The in-memory adapter publishes IDataChangeNotifier events for
-                // auth-relevant nodeTypes — equivalent to the PG mirror trigger.
-                // Without this notifier wired up, synced auth queries
-                // (GetTokensForUser etc.) never see writes under the in-memory
-                // backend.
-                sp.GetService<IDataChangeNotifier>()));
+                sp.GetService<ILogger<InMemoryStorageAdapter>>()));
         RegisterDefaultAssemblyStore(services);
         return services.AddCoreAndWrapperServices();
     }
@@ -287,7 +284,6 @@ public static class PersistenceExtensions
     /// <returns>The service collection for chaining</returns>
     public static IServiceCollection AddPartitionedInMemoryPersistence(this IServiceCollection services)
     {
-        services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
         // One shared in-memory adapter + provider — InMemoryPartitionStorageProvider
         // is a wildcard catch-all that handles every first-segment partition.
         services.AddSingleton<InMemoryStorageAdapter>(sp =>
@@ -436,7 +432,6 @@ public static class PersistenceExtensions
         string baseDirectory,
         Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null)
     {
-        services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
 
         // In-memory routing for Release MeshNodes that the compile watcher
         // emits at {nodeTypePath}/Release/{version}. Registered BEFORE the
@@ -526,7 +521,6 @@ public static class PersistenceExtensions
         if (services.Any(d => d.ServiceType == typeof(CoreAndWrapperServicesMarker)))
             return services;
 
-        services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
 
         // PersistenceService bundles all IPartitionStorageProvider adapters.
         // Pure delegation by path — no cache, no init, no factory wrapper.
@@ -611,7 +605,6 @@ public static class PersistenceExtensions
         if (services.Any(d => d.ServiceType == typeof(CoreAndWrapperServicesMarker)))
             return services;
 
-        services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
         services.TryAddSingleton<StorageAdapterMeshQueryProvider>();
         // 🚨 AddSingleton, not TryAddSingleton — see the same-shape comment in
         // AddPartitionedCoreAndWrapperServices. Backends that register their own

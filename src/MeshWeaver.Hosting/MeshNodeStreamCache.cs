@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -142,6 +143,15 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
         cacheHub = meshHub.GetHostedHub(
             cacheAddress,
             config => config
+                // 🚨 Cache hub is domain-type-agnostic by design: its TypeRegistry
+                // knows ONLY framework types (MeshNode, MeshNodeReference inherited
+                // from the parent mesh hub) and treats MeshNode.Content as
+                // JsonElement. Callers that need typed Content pass their own
+                // JsonSerializerOptions through the IMeshNodeStreamCache.GetStream /
+                // Update overloads; the framework converts JsonElement ↔ typed
+                // Content using the caller's polymorphic resolver. This decouples
+                // the process-singleton cache from every domain type a tenant
+                // happens to register.
                 .AddData()  // IWorkspace registration so GetEntry can build the stream handle
                 .WithInitialization(hub =>
                     hub.RegisterForDisposal(routingService.RegisterStream(hub))),
@@ -404,6 +414,67 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
         // calls reach the same hub and are naturally serialized. No semaphore
         // or lock at this layer.
         GetEntry(path).Handle.Update(update);
+
+    /// <summary>
+    /// Caller-typed read: every emitted MeshNode's <c>Content</c> is round-tripped
+    /// through <paramref name="options"/> so the caller sees a typed domain
+    /// instance (<c>ModelProviderConfiguration</c>, etc.) rather than the raw
+    /// <c>JsonElement</c> the cache hub stores. See
+    /// <see cref="IMeshNodeStreamCache.GetStream(string, JsonSerializerOptions)"/>.
+    /// </summary>
+    public IObservable<MeshNode> GetStream(string path, JsonSerializerOptions options) =>
+        GetStream(path).Select(node => ConvertContentJsonElementToTyped(node, options));
+
+    /// <summary>
+    /// Caller-typed write: deserialises the current MeshNode's <c>Content</c>
+    /// via <paramref name="options"/> before invoking <paramref name="update"/>,
+    /// then re-serialises the lambda's returned <c>Content</c> back to a
+    /// <c>JsonElement</c> (still using <paramref name="options"/> so the
+    /// <c>$type</c> discriminator is written) before the framework computes the
+    /// JSON-merge patch. The cache hub's own serializer stays domain-agnostic.
+    /// </summary>
+    public IObservable<MeshNode> Update(
+        string path,
+        Func<MeshNode, MeshNode> update,
+        JsonSerializerOptions options)
+    {
+        Func<MeshNode, MeshNode> wrapped = node =>
+        {
+            var typed = ConvertContentJsonElementToTyped(node, options);
+            var updated = update(typed);
+            return ConvertContentTypedToJsonElement(updated, options);
+        };
+        return GetEntry(path).Handle.Update(wrapped);
+    }
+
+    private static MeshNode ConvertContentJsonElementToTyped(MeshNode node, JsonSerializerOptions options)
+    {
+        // Only convert when the cache emitted a raw JsonElement (the cache hub
+        // doesn't know domain types, so Content lands here as JsonElement). If
+        // the cache somehow already has a typed value (e.g. a same-process
+        // caller already converted), pass through.
+        if (node.Content is JsonElement je)
+        {
+            return node with { Content = je.Deserialize<object>(options) };
+        }
+        return node;
+    }
+
+    private static MeshNode ConvertContentTypedToJsonElement(MeshNode node, JsonSerializerOptions options)
+    {
+        // Already a JsonElement (or null) — nothing to do; the cache hub's
+        // serializer can faithfully serialise it on the outbound patch.
+        if (node.Content is null or JsonElement)
+            return node;
+        // Caller-typed Content — serialise via the CALLER'S options so the
+        // $type discriminator is written. This makes the JSON-merge patch the
+        // framework computes self-describing on the wire; the silo's own
+        // type-aware serializer reads it back as the same typed value.
+        return node with
+        {
+            Content = JsonSerializer.SerializeToElement(node.Content, options)
+        };
+    }
 
     /// <summary>
     /// Removes the cached entry for <paramref name="path"/> so the next
