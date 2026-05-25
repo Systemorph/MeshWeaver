@@ -132,16 +132,18 @@ public static class AccessControlPipeline
                         // hub, or a downstream Role lookup hangs on a missing
                         // workspace — the inner Take(1) would otherwise wait
                         // forever, leaving the caller's hub.Observe to time
-                        // out at the full 30 s RequestTimeout. 10 s gives the
-                        // synced query plenty of time to land its first
-                        // emission on a slow hub init while still keeping the
-                        // worst case well below the framework default.
-                        .Timeout(TimeSpan.FromSeconds(10))
+                        // out at the full RequestTimeout. 45 s sits between the
+                        // typical cold-compile contention window (FutuRe LocalAnalysis
+                        // can take ~15-30 s to settle on a freshly-built process)
+                        // and the framework's default 60 s RequestTimeout, so a
+                        // genuinely hung permission lookup still surfaces well
+                        // before the caller's hub.Observe gives up.
+                        .Timeout(TimeSpan.FromSeconds(45))
                         .Catch<bool, Exception>(ex =>
                         {
                             logger?.LogWarning(ex,
                                 "AccessControlPipeline: permission check on {Path} for {Permission} did not " +
-                                "complete within 10 s — failing closed. " +
+                                "complete within 45 s — failing closed. " +
                                 "Likely cause: SecurityService data source hung (synced AccessAssignment query " +
                                 "with no Initial emission). Hub={Hub}, message={MessageType}",
                                 check.Path, check.Permission, hub.Address, delivery.Message.GetType().Name);
