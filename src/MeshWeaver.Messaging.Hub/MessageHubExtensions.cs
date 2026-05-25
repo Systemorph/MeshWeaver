@@ -136,25 +136,23 @@ public static class MessageHubExtensions
             current = parent;
         }
 
-        // Fallback: heartbeat via Observable.Interval (monolith or no grain callback).
-        // Stop on the first DeliveryFailure so we don't spam warnings when no handler is registered.
-        var cts = new CancellationTokenSource();
-        IDisposable? sub = null;
-        sub = Observable.Interval(TimeSpan.FromSeconds(25))
-            .Subscribe(_ =>
-            {
-                var delivery = hub.Post(new HeartBeatEvent());
-                if (delivery == null) return;
-                // Subscribe to the heartbeat response. DeliveryFailure flows via OnError —
-                // when there's no handler on the target, kill the heartbeat.
-                hub.Observe(delivery).Subscribe(
-                    _ => { },
-                    _ =>
-                    {
-                        sub?.Dispose();
-                        cts.Cancel();
-                    });
-            });
-        return new CompositeDisposable(sub, Disposable.Create(() => cts.Cancel()));
+        // No grain callback anywhere in the parent chain ⇒ we're in monolith
+        // mode (or in a hub kind that has no long-running-operation support).
+        // The XML doc above documents this returns a no-op disposable. The
+        // previous shape posted HeartBeatEvent on a 25s Observable.Interval
+        // intending to "stop on first DeliveryFailure when no handler is
+        // registered" — but the heartbeat timer runs on a background thread
+        // with no user identity, so the post pipeline records null
+        // AccessContext on HeartBeatEvent. The receiving hub's "no handler"
+        // path posts DeliveryFailure with PostOptions.ResponseFor(delivery),
+        // which inherits that null AccessContext. The pipeline then fails
+        // closed dropping the DeliveryFailure → the sender's OnError never
+        // fires → the timer loops forever. Symptom: testhost stays alive
+        // 5+ minutes after every test in the project finished, emitting
+        // "No handler found for HeartBeatEvent" + "DeliveryFailure posted
+        // with no AccessContext" every 25 s until the runner kills the host.
+        // In monolith there's nothing for the heartbeat to keep alive anyway
+        // (no grain to delay-deactivate), so a no-op is the correct shape.
+        return Disposable.Empty;
     }
 }
