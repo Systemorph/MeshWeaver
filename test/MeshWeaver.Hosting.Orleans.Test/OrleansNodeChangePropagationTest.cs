@@ -280,11 +280,19 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
         // 2. Resubmit Ã¢â‚¬â€ sends ThreadSubmission.ApplyResubmit to the thread grain.
         //    This was the original deadlock: the handler subscribed to workspace streams.
         //    Now uses Observable + workspace.UpdateMeshNode.
-        // Resubmit keeps user message (index 0) + adds new response = 2 messages.
-        // But the IDs change (old response removed, new one added).
-        // Watch for the stream to show a DIFFERENT set of IDs than the initial ones.
-        var resubmittedMessages = ObserveThreadMessages(client, threadPath)
-            .Where(ids => ids.Count >= 2 && !ids.SequenceEqual(msgIds))
+        // 🚨 Wait for the SETTLED state (IsExecuting=false AND msgIds changed),
+        // not just any observable count>=2 emission. Mid-resubmit transitions
+        // briefly show 3 messages [user, old-response, new-response] before the
+        // truncate-then-re-add settles to [user, new-response] = 2. The prior
+        // predicate matched the intermediate state and the [1]-not-old assertion
+        // failed because msgIds[1] (old response) was still visible.
+        var workspace = client.GetWorkspace();
+        var resubmittedMessages = workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
+            .Select(nodes => nodes?.FirstOrDefault(n => n.Path == threadPath)?.Content as MeshThread)
+            .Where(t => t is { IsExecuting: false }
+                && t.Messages.Count >= 2
+                && !t.Messages.SequenceEqual(msgIds))
+            .Select(t => (IReadOnlyList<string>)t!.Messages)
             .FirstAsync()
             .ToTask(ct);
 
