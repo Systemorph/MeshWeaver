@@ -116,9 +116,36 @@ When you change code in `Memex.Portal.Distributed` or any project it references,
 
 Full reference: [LocalDevWorkflow.md](src/MeshWeaver.Documentation/Data/Architecture/LocalDevWorkflow.md)
 
-## 🚨 NodeMutations: `stream.Update()` only — never request/response
+## 🚨🚨🚨 ABSOLUTE: `GetMeshNodeStream().Update()` is the ONLY mutation API
 
-**Threads, thread messages, NodeType compile state, Code editing — every mesh-node mutation goes through `workspace.GetMeshNodeStream(path).Update(current => modified)`. NO bespoke `IRequest`/`IResponse` pairs.**
+**Every mesh-node mutation goes through `workspace.GetMeshNodeStream(path).Update(current => modified)`. Every other API — `SubmitMessageRequest`/`SubmitMessageResponse`, completion callbacks via `hub.Set<Action<...>>`, bespoke `IRequest`/`IResponse` pairs for state changes — IS BEING DISCONTINUED. Do not add new code that uses those patterns; migrate existing code to `stream.Update` whenever you touch it.**
+
+**Observing completion**: subscribe to `workspace.GetRemoteStream<MeshNode>(path)` or `GetMeshNodeStream(path)` and wait for the relevant state on the node's `Content` (e.g. `MeshThread.Messages.Count >= 2`, `RequestedStatus = Cancelled`, `Status = Completed`). The GUI databinds the same way; tests do too.
+
+**Tests**: any test that posts a verb-shaped request and waits for a response shape (`*Request → *Response`) is testing a deprecated API. Migrate to: write via `stream.Update`, observe via `GetRemoteStream<MeshNode>(path).Where(node => predicate).FirstAsync().Timeout(...)`.
+
+**Application code uses only `stream.Update`.** Internal plumbing that `stream.Update` itself uses (`PatchDataRequest` for cross-hub writes, `DataChangedEvent` for stream fan-out) is fine where it already exists — but you never `hub.Post(PatchDataRequest, ...)` from application code. If you find yourself doing that, you're bypassing the API; use `workspace.GetMeshNodeStream(path).Update(...)` and the framework posts the patch for you.
+
+### Updating an external node — `GetMeshNodeStream(path).Update(...)`
+
+The same API works for nodes the caller does NOT own. `workspace.GetMeshNodeStream(path)` returns a handle that auto-dispatches:
+
+- `path == my-hub's-address`: writes go through the local data source (`UpdateOwn`).
+- `path != my-hub's-address`: writes route to the owning per-node hub via the process-wide `IMeshNodeStreamCache`, which opens a sync subscription + posts a JSON-merge `PatchDataRequest` (RFC 7396) to that hub. The owner serialises every mirror's write through its single-threaded action block — no race, no clobber.
+
+```csharp
+// Own node (this hub):
+workspace.GetMeshNodeStream().Update(node => node with { Content = ... });
+
+// External node (anywhere in the mesh — same API):
+workspace.GetMeshNodeStream(otherPath).Update(node => node with { Content = ... });
+```
+
+The remote variant returns the locally-computed updated snapshot optimistically; if you need the owner's reconciled state, re-subscribe via `GetRemoteStream<MeshNode>(addr).Take(1)`.
+
+**Eventual-consistency safe**: cross-hub `stream.Update` does NOT send the whole node back. It diffs `current` vs `update(current)` and sends only the RFC 7396 JSON-merge patch. The owner merges the patch against its CURRENT state, so concurrent writers from different mirrors don't clobber each other's fields (Mirror A's `{Content: {Field1: X}}` and Mirror B's `{Content: {Field2: Y}}` both land — never "last write wins on whole node"). Treat your `update` lambda accordingly: touch only the fields you intend to change.
+
+### The 3 rules (unchanged)
 
 This is the unification of three rules we used to write separately:
 

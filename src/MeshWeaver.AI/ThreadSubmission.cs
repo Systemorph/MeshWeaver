@@ -117,32 +117,26 @@ public static class ThreadSubmission
             return;
         }
 
-        var delivery = ctx.Hub.Post(
-            new SubmitMessageRequest
-            {
-                ThreadPath = ctx.ThreadPath!,
-                UserMessageText = ctx.UserText,
-                AgentName = ctx.AgentName,
-                ModelName = ctx.ModelName,
-                ContextPath = ctx.ContextPath,
-                Attachments = ctx.Attachments
-            },
-            o => o.WithTarget(new Address(ctx.ThreadPath!)));
-
-        if (delivery == null)
+        // 🚨 Canonical stream-only path (see CLAUDE.md → "GetMeshNodeStream().Update()
+        // is the ONLY mutation API"). Write directly via ThreadInput.AppendUserInput
+        // which uses workspace.GetMeshNodeStream(threadPath).Update — the owner's
+        // SubmissionWatcher picks up the new entry in PendingUserMessages and runs.
+        // No SubmitMessageRequest, no SubmitMessageResponse, no completion callback.
+        var userMessage = ThreadInput.CreateUserMessage(
+            ctx.UserText,
+            createdBy: null,
+            agentName: ctx.AgentName,
+            modelName: ctx.ModelName,
+            contextPath: ctx.ContextPath,
+            attachments: ctx.Attachments);
+        try
         {
-            ctx.OnError?.Invoke("Hub.Post returned null");
-            return;
+            ThreadInput.AppendUserInput(ctx.Hub.GetWorkspace(), ctx.ThreadPath!, userMessage);
         }
-
-        ctx.Hub.Observe((IMessageDelivery)delivery)
-            .Subscribe(
-                response =>
-                {
-                    if (response.Message is SubmitMessageResponse { Success: false } fail)
-                        ctx.OnError?.Invoke($"Submit failed: {fail.Error ?? "unknown"}");
-                },
-                ex => ctx.OnError?.Invoke($"Submit failed: {ex.Message}"));
+        catch (Exception ex)
+        {
+            ctx.OnError?.Invoke($"Submit failed: {ex.Message}");
+        }
     }
 
     /// <summary>
