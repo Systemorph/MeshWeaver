@@ -104,6 +104,24 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
             }
         });
 
+        // 🚨 Race workaround: wait for the NodeType compile to reach a terminal
+        // status BEFORE opening the area's GetRemoteStream. The LayoutAreaHost's
+        // WithInitialization fires asynchronously via a posted InitializeHubRequest
+        // (LayoutAreaHost.cs:140); if the client's SubscribeRequest is processed
+        // before the init completes (CI 0.5s compile vs local 24s cold-start),
+        // the client sees only the empty initial Full and the post-init Patch
+        // never reaches the subscriber. Triggering the compile via a stream open
+        // beforehand ensures the per-instance hub + LayoutAreaHost are fully
+        // initialised when the test's own subscription lands. Framework-level
+        // fix needs the SubscribeRequest reply to await init completion.
+        await Mesh.GetWorkspace().GetMeshNodeStream(NodeTypePath)
+            .Where(n => n.Content is NodeTypeDefinition d
+                && (d.CompilationStatus == CompilationStatus.Ok
+                    || d.CompilationStatus == CompilationStatus.Error))
+            .Take(1)
+            .Timeout(45.Seconds())
+            .ToTask(ct);
+
         // The NodeType must compile cleanly — render the Import area to trigger
         // the compile, then assert we got back a Stack containing the form.
         var control = await RenderAreaAsync(instancePath, "ImportTelemetry", ct);
