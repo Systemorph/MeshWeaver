@@ -24,6 +24,7 @@ using Xunit;
 
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using Microsoft.Agents.AI;
 using MeshThread = MeshWeaver.AI.Thread;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
@@ -227,4 +228,108 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
             "child's Summary — same shape the DelegationTool uses for sub-thread tool-call results");
         Output.WriteLine($"Level-2 Summary: {childRunningToIdle.terminal.Summary![..Math.Min(80, childRunningToIdle.terminal.Summary.Length)]}");
     }
+
+    /// <summary>
+    /// Steers the test agent's streaming response to include an explicit
+    /// <c>&lt;summary&gt;EXPECTED&lt;/summary&gt;</c> block and verifies that
+    /// ExecuteMessageAsync's parser extracts the inner text into
+    /// <c>Thread.Summary</c> + <c>ThreadMessage.Summary</c>, AND strips the
+    /// marker from the user-visible <c>ThreadMessage.Text</c>.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task SummaryBlock_ParsedFromAgentResponse_AndStrippedFromText()
+    {
+        var ct = new CancellationTokenSource(50.Seconds()).Token;
+
+        const string expectedSummary = "Greeting acknowledged.";
+        const string visibleBody = "Hello! How can I help you today?";
+        var streamedResponse = $"{visibleBody} <summary>{expectedSummary}</summary>";
+
+        // Swap the cluster's chat client factory to one that streams our crafted
+        // response. SwappableFactory is process-wide — restore the default
+        // FakeChatClientFactory in a try/finally so subsequent tests aren't affected.
+        SharedOrleansFixture.SwappableFactory.SetInner(new SteerableFakeChatClientFactory(streamedResponse));
+        try
+        {
+            var client = await GetClientAsync();
+            var workspace = client.GetWorkspace();
+
+            var createResp = await client
+                .Observe(new CreateNodeRequest(
+                    ThreadNodeType.BuildThreadNode("TestUser", "Summary block test", "TestUser")),
+                    o => o.WithTarget(new Address("TestUser")))
+                .FirstAsync().ToTask(ct);
+            createResp.Message.Success.Should().BeTrue(createResp.Message.Error);
+            var threadPath = createResp.Message.Node!.Path!;
+
+            ThreadSubmission.Submit(new SubmitContext
+            {
+                Hub = client,
+                ThreadPath = threadPath,
+                UserText = "Hi",
+                ContextPath = "TestUser",
+            });
+
+            var threadAtIdle = await workspace.GetMeshNodeStream(threadPath)
+                .Select(node => node?.Content as MeshThread)
+                .Where(t => t is { Status: MeshWeaver.AI.ThreadExecutionStatus.Idle }
+                            && !string.IsNullOrEmpty(t.Summary))
+                .Take(1).Timeout(45.Seconds()).ToTask(ct);
+
+            threadAtIdle!.Summary.Should().Be(expectedSummary,
+                "ExecuteMessageAsync must parse <summary>...</summary> from the agent " +
+                "response and write the inner text as Thread.Summary atomically with Status=Idle.");
+
+            // Response cell carries the same Summary and clean Text (marker stripped).
+            var responseMsgId = threadAtIdle.Messages.Last();
+            var responsePath = $"{threadPath}/{responseMsgId}";
+            var responseMsg = await workspace.GetMeshNodeStream(responsePath)
+                .Select(node => node?.Content as ThreadMessage)
+                .Where(m => m is { Status: ThreadMessageStatus.Completed } && !string.IsNullOrEmpty(m.Summary))
+                .Take(1).Timeout(45.Seconds()).ToTask(ct);
+            responseMsg!.Summary.Should().Be(expectedSummary,
+                "ThreadMessage.Summary on the response cell must match Thread.Summary");
+            responseMsg.Text.Should().NotContain("<summary>",
+                "the <summary> marker must be stripped from the user-visible Text");
+            responseMsg.Text.Should().NotContain(expectedSummary,
+                "the summary inner text must be stripped from Text too (lives only in Summary)");
+            responseMsg.Text.Should().Contain(visibleBody.Trim(),
+                "the agent's user-visible response body must survive the strip");
+
+            Output.WriteLine($"Verified: Summary='{threadAtIdle.Summary}', Text='{responseMsg.Text}'");
+        }
+        finally
+        {
+            SharedOrleansFixture.SwappableFactory.Reset();
+        }
+    }
+}
+
+/// <summary>
+/// A FakeChatClientFactory whose response text is set per-instance, so a test
+/// can steer the streamed assistant output (including a trailing
+/// <c>&lt;summary&gt;</c> block) and assert the framework's parsing behavior.
+/// </summary>
+internal class SteerableFakeChatClientFactory(string response) : IChatClientFactory
+{
+    public string Name => "SteerableFakeFactory";
+    public IReadOnlyList<string> Models => ["fake-model"];
+    public int Order => 0;
+
+    public ChatClientAgent CreateAgent(
+        AgentConfiguration config, IAgentChat chat,
+        IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
+        IReadOnlyList<AgentConfiguration> hierarchyAgents,
+        string? modelName = null)
+        => new(chatClient: new FakeChatClient(response),
+            instructions: config.Instructions ?? "Test assistant.",
+            name: config.Id, description: config.Description ?? config.Id,
+            tools: [], loggerFactory: null, services: null);
+
+    public Task<ChatClientAgent> CreateAgentAsync(
+        AgentConfiguration config, IAgentChat chat,
+        IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
+        IReadOnlyList<AgentConfiguration> hierarchyAgents,
+        string? modelName = null)
+        => Task.FromResult(CreateAgent(config, chat, existingAgents, hierarchyAgents, modelName));
 }
