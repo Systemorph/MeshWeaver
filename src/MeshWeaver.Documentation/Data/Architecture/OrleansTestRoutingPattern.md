@@ -146,47 +146,63 @@ a response back, the response targets `mesh/{guid}` → silo's
 `RoutingGrain.RouteMessage` sees a mesh-type address → no grain →
 NotFound.
 
-**The fix**: `MeshNodeStreamCache` must host its own dedicated
-**registered** hub at e.g. `cache/mesh-node-cache`, and open all
-upstream subscriptions from THAT hub's workspace. Then the response
-target is `cache/mesh-node-cache` — a registered, memory-stream-addressable
-hub that the silo CAN deliver to.
+## The fix — cache hub as a proper partition (not a hosted hub, not a hard-coded type)
 
-Sketch:
+The cache hub at `cache/mesh-node-cache` is a **real top-level hub**
+(not a hosted hub — no `~` notation), discoverable by routing the
+same way every other mesh node is: through a registered
+`IPartitionStorageProvider` for the `cache` namespace. There is **no
+hard-coded address-type check** in `RoutingGrain`.
 
-```csharp
-public sealed class MeshNodeStreamCache : IMeshNodeStreamCache
-{
-    private readonly IMessageHub cacheHub;
+The shape:
 
-    public MeshNodeStreamCache(IMessageHub meshHub, ILogger<MeshNodeStreamCache> logger)
-    {
-        var routingService = meshHub.ServiceProvider.GetRequiredService<IRoutingService>();
-        cacheHub = meshHub.GetHostedHub(
-            new Address("cache", "mesh-node-cache"),
-            config => config.WithInitialization(hub =>
-                hub.RegisterForDisposal(routingService.RegisterStream(hub))));
-        ...
-    }
+1. Define a static `MeshNode` for the cache hub at
+   `cache/mesh-node-cache` with `HubConfiguration` that auto-registers
+   via `RegisterStream` in `WithInitialization` (same Portal pattern).
+2. Wire the static node through an `IStaticNodeProvider`:
+   ```csharp
+   public sealed class MeshNodeCacheStaticProvider : IStaticNodeProvider
+   {
+       public IEnumerable<MeshNode> GetStaticNodes()
+       {
+           yield return new MeshNode("mesh-node-cache", "cache")
+           {
+               NodeType = "CacheHub",
+               State = MeshNodeState.Active,
+               HubConfiguration = config => config
+                   .AddData()
+                   .WithInitialization(hub =>
+                       hub.RegisterForDisposal(
+                           hub.ServiceProvider.GetRequiredService<IRoutingService>()
+                               .RegisterStream(hub)))
+           };
+       }
+   }
+   ```
+3. Register the partition in DI:
+   ```csharp
+   services.AddSingleton<IStaticNodeProvider, MeshNodeCacheStaticProvider>();
+   services.AddSingleton<IPartitionStorageProvider>(sp =>
+       new StaticNodePartitionStorageProvider(
+           "cache",
+           sp.GetRequiredService<MeshNodeCacheStaticProvider>(),
+           description: "Mesh-node cache hub partition"));
+   ```
+4. The silo's `pathResolver.ResolvePath("cache/mesh-node-cache")` now
+   returns the static node. `RoutingGrain` dispatches to a grain at
+   that address — exactly the path other mesh nodes take. The grain
+   activates with the static node's `HubConfiguration`, the
+   `WithInitialization` hook fires `RegisterStream`, and the silo's
+   memory-stream dispatch (`address.Type == "portal" || "client"`) is
+   irrelevant: the cache hub IS a grain on the silo, and other
+   processes route to it via the standard grain-dispatch path.
 
-    private Entry GetEntry(string path) => _streams.GetOrAdd(path, p =>
-        new Lazy<Entry>(() =>
-        {
-            // Open upstream from the registered cache hub — sender on
-            // the SubscribeRequest is now cache/mesh-node-cache, which
-            // the silo's RoutingGrain can route responses back to via
-            // its memory-stream dispatch path.
-            var handle = cacheHub.GetWorkspace().GetMeshNodeStreamBypassCache(p);
-            ...
-        }));
-}
-```
-
-The cache hub must ALSO be added to the silo's `RoutingGrain` type
-list for memory-stream dispatch (or — cleaner — RoutingGrain's check
-becomes "if `IRoutingService.streams.ContainsKey(address)` use memory
-stream"), so `cache/*` addresses route via the cluster-wide memory
-stream the cache hub subscribed to via `RegisterStream`.
+The `MeshNodeStreamCache` class itself stays a process-local DI
+singleton. It opens upstream `SubscribeRequest`s with the cache hub's
+address as `Target` (not as `Sender`); responses to the SubscribeRequest
+flow back via the standard request/response correlation path that
+`OrleansRoutingService` handles for any address — no special-case
+needed.
 
 ## Test that proves this works
 

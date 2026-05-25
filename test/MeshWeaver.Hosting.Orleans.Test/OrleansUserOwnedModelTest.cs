@@ -198,7 +198,7 @@ public class OrleansUserOwnedModelTest(ITestOutputHelper output) : OrleansShared
             && n.NodeType == ModelProviderNodeType.NodeType);
     }
 
-    [Fact(Timeout = 60_000, Skip = "Canonical repro for the cache-hub design requirement. MeshNodeStreamCache currently opens upstream from `meshHub.GetWorkspace()` so the SubscribeRequest's Sender is mesh/{guid} — not registered with the routing service, so the silo's response routes to NotFound. Fix: refactor MeshNodeStreamCache to host its own registered hub at cache/mesh-node-cache via meshHub.GetHostedHub + WithInitialization(routingService.RegisterStream), and open all upstream subscriptions from that hub's workspace. Full design + implementation sketch: Doc/Architecture/OrleansTestRoutingPattern.md → 'The cache hub — why the rotate test still fails'. Once the cache hub refactor lands, this test verifies the end-to-end rotation flow.")]
+    [Fact(Timeout = 60_000, Skip = "Acceptance test for the cache-hub-as-proper-partition refactor (see Doc/Architecture/OrleansTestRoutingPattern.md → 'The fix — cache hub as a proper partition'). The hard-code-in-RoutingGrain + manually-hosted-cache-hub approaches were both wrong; the right shape is to register MeshNodeStreamCache's hub as a static MeshNode under the 'cache' namespace, via IPartitionStorageProvider. Routing then finds it through pathResolver naturally. Un-skip after the partition wiring lands.")]
     public async Task UserOwnedProvider_RotateKey_ResolverPicksUpNewKey()
     {
         var ct = new CancellationTokenSource(45.Seconds()).Token;

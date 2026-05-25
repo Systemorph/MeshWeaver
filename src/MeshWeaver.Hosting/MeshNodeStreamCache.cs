@@ -94,7 +94,6 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
     private const int MaxMissingNodeRetries = 30;
 
     private readonly IMessageHub meshHub;
-    private readonly IMessageHub cacheHub;
     private readonly ILogger<MeshNodeStreamCache> logger;
 
     // 🚨 Lazy<Entry> wraps the factory because ConcurrentDictionary.GetOrAdd
@@ -116,38 +115,15 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
         this.meshHub = meshHub;
         this.logger = logger;
 
-        // 🚨 Dedicated cache hub at cache/mesh-node-cache — mesh-wide
-        // in-memory address. Follows the Portal pattern
-        // (PortalApplication.DefaultPortalConfig): created as a hosted
-        // hub under the parent mesh hub, auto-registered with the
-        // routing service in WithInitialization. The registration
-        // subscribes the cache hub to the Orleans memory stream keyed
-        // by `cache/mesh-node-cache`, so the silo can route response
-        // messages back to it. Every upstream `SubscribeRequest` the
-        // cache opens (via cacheHub.GetWorkspace() below) carries this
-        // hub's address as Sender — a registered, routable address —
-        // instead of the parent mesh hub's `mesh/{guid}` (which the
-        // silo's RoutingGrain would emit `NotFound` for).
-        //
-        // See Doc/Architecture/OrleansTestRoutingPattern.md → "The
-        // cache hub" for the routing-failure mode this avoids.
-        var routingService = meshHub.ServiceProvider.GetRequiredService<IRoutingService>();
-        cacheHub = meshHub.GetHostedHub(
-            new Address("cache", "mesh-node-cache"),
-            config => config.WithInitialization(hub =>
-                hub.RegisterForDisposal(routingService.RegisterStream(hub))),
-            HostedHubCreation.Always)!;
-
         // 🚨 Register cleanup so hydration subscriptions are disposed at the
         // hub's Shutdown entry (before Quiescing). Without this, every
         // cache.GetStream(path) opens a SubscribeRequest that dangles in
-        // the cache hub's responseSubjects forever — the test base's
-        // QuiesceTimeout leak-detection (~500ms) flags it as a leaked
-        // Observe callback and fails the test class at dispose. The
-        // dispose action runs in HandleShutdown's pre-Quiescing pass,
-        // so canceling the subscriptions here clears responseSubjects
-        // before the snapshot is taken.
-        cacheHub.RegisterForDisposal(_ => DisposeHydrationSubscriptions());
+        // mesh hub's responseSubjects forever — the test base's QuiesceTimeout
+        // leak-detection (~500ms) flags it as a leaked Observe callback and
+        // fails the test class at dispose. The dispose action runs in
+        // HandleShutdown's pre-Quiescing pass, so canceling the subscriptions
+        // here clears responseSubjects before the snapshot is taken.
+        meshHub.RegisterForDisposal(_ => DisposeHydrationSubscriptions());
     }
 
     private void DisposeHydrationSubscriptions()
@@ -184,11 +160,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
             // 🚨 Bypass the cache when opening our OWN upstream — otherwise
             // GetMeshNodeStream(workspace, path) auto-redirects back into the
             // cache and we'd recurse forever waiting for ourselves.
-            // Use the dedicated CACHE HUB's workspace so the SubscribeRequest's
-            // Sender is `cache/mesh-node-cache` (registered, routable) rather
-            // than the parent mesh hub's `mesh/{guid}` (unregistered → silo
-            // emits NotFound on response routing).
-            var handle = cacheHub.GetWorkspace().GetMeshNodeStreamBypassCache(p);
+            var handle = meshHub.GetWorkspace().GetMeshNodeStreamBypassCache(p);
             // Replay(1) + eager .Connect() under the sanctioned cache identity:
             // the upstream SubscribeRequest opens ONCE under
             // MeshNodeCacheIdentity.Address ("cache/mesh-node-cache"). The cache
