@@ -294,19 +294,20 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         // "should actually fail but then not result in chaos … user should be
         // notified with proper error". A terminal status — never the
         // intermediate Compiling — is the contract for "notified".
-        NodeTypeDefinition? settledDef = null;
-        for (var attempt = 0; attempt < 60; attempt++)
-        {
-            await Task.Delay(TimeSpan.FromMilliseconds(500), ct);
-            var snapshot = await SiloMeshService
-                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{typePath}"))
-                .FirstAsync()
-                .ToTask(ct);
-            var node = snapshot.Items.FirstOrDefault();
-            settledDef = node?.Content as NodeTypeDefinition;
-            if (settledDef is { CompilationStatus: CompilationStatus.Ok or CompilationStatus.Error })
-                break;
-        }
+        // 🚨 Use GetMeshNodeStream (per-node MeshNodeReference reducer) instead of
+        // ObserveQuery — query rows carry stale Content by design (feedback_query_content_stale.md),
+        // so the polling loop's `node.Content as NodeTypeDefinition` cast saw the
+        // pre-trigger snapshot forever and `settledDef` stayed null. The per-node
+        // hub's reducer refreshes Content on every write.
+        var siloHub = ((InProcessSiloHandle)Cluster.Silos[0]).SiloHost.Services
+            .GetRequiredService<IMessageHub>();
+        var settledNode = await siloHub.GetWorkspace().GetMeshNodeStream(typePath)
+            .Where(n => n.Content is NodeTypeDefinition d
+                && d.CompilationStatus is CompilationStatus.Ok or CompilationStatus.Error)
+            .Take(1)
+            .Timeout(60.Seconds())
+            .ToTask(ct);
+        var settledDef = settledNode.Content as NodeTypeDefinition;
 
         settledDef.Should().NotBeNull(
             "the NodeType MeshNode must remain readable after the trigger");
