@@ -67,15 +67,19 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
     /// Maximum time we wait for the owning per-node hub to answer
     /// <see cref="GetPermissionRequest"/>. The handler is synchronous
     /// (`AccessControlPipeline.HandleGetPermission` resolves the local
-    /// <see cref="ISecurityService"/> and posts a response immediately),
-    /// so 3s is generous — anything beyond that means the hub is stuck
-    /// (corrupted MeshNode load, hung security walk, mesh-hub backlog).
-    /// On timeout we treat the answer as <see cref="Permission.None"/> and
-    /// cache it for <see cref="AccessTtl"/> so we don't retry every
-    /// emission. Prevents a single stuck per-node hub from wedging the
-    /// chat view / any other consumer that subscribes to multiple paths.
+    /// <see cref="ISecurityService"/> and posts a response immediately)
+    /// once the hub is active. The catch is Orleans cold-start: the per-node
+    /// grain may take 5-10s to activate on first touch (cluster placement,
+    /// MeshNode hydration, SecurityService warm-up). 15s covers cold start
+    /// while still bounding genuinely stuck hubs.
+    ///
+    /// On timeout we DENY this subscription (Permission.None → Unauthorized)
+    /// but DO NOT cache the deny — a single slow activation would otherwise
+    /// poison the cache for <see cref="AccessTtl"/> and lock out every
+    /// subsequent subscription within that window. Real Deny answers from
+    /// the hub are cached as normal.
     /// </summary>
-    private static readonly TimeSpan PermissionRequestTimeout = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan PermissionRequestTimeout = TimeSpan.FromSeconds(15);
 
     /// <summary>Backoff between hydration retries when the node doesn't exist yet.</summary>
     private static readonly TimeSpan MissingNodeRetryDelay = TimeSpan.FromMilliseconds(200);
@@ -304,34 +308,45 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
             // AddRowLevelSecurity). Without RLS the gate doesn't fire at all
             // — see the no-AccessService bail-out at the top of GetStream.
             //
-            // 🚨 Timeout is non-negotiable. The owning hub MUST respond fast,
-            // but real failure modes (corrupted MeshNode in storage, missing
-            // ancestor in the security walk, mesh-hub backlog) can leave the
-            // request unanswered. Without a timeout EVERY subscriber to this
-            // path's bubble waits forever — the prod 2026-05-23 thread-page
-            // deadlock: one stuck ThreadMessage with a broken delegationPath
-            // wedged the entire chat view. On timeout we cache None (= deny,
-            // not crash) so the gated observable terminates cleanly with the
-            // standard UnauthorizedAccessException the chat view already
-            // handles. Better a denied bubble than a frozen page.
+            // 🚨 Timeout is non-negotiable. The owning hub MUST respond fast
+            // once active, but real failure modes (corrupted MeshNode, missing
+            // ancestor in the security walk, mesh-hub backlog, Orleans
+            // grain-activation cold start) can leave the request unanswered.
+            // Without a timeout EVERY subscriber to this path's bubble waits
+            // forever — the prod 2026-05-23 thread-page deadlock: one stuck
+            // ThreadMessage with a broken delegationPath wedged the entire
+            // chat view.
+            //
+            // Two outcomes:
+            //   1. Real response (Allow or Deny) → cache for AccessTtl.
+            //   2. Timeout → deny THIS subscription with Permission.None,
+            //      but DO NOT cache — a single slow activation would otherwise
+            //      lock out every subscriber within the 30s TTL. The next
+            //      subscription gets a fresh chance.
             return meshHub.Observe(
                     new GetPermissionRequest(),
                     o => o.WithTarget(new Address(path)).WithAccessContext(captured))
                 .Select(d => (d.Message as GetPermissionResponse)?.Permissions ?? Permission.None)
                 .Take(1)
+                .Select(perms => (Perms: perms, IsTimeout: false))
                 .Timeout(PermissionRequestTimeout, Observable.Defer(() =>
                 {
                     logger.LogWarning(
-                        "GetPermissionRequest timed out after {Timeout} for {Path} (user={User}) — gating as None. " +
-                        "Owning hub did not respond; check for stuck per-node hub or corrupted ancestor.",
+                        "GetPermissionRequest timed out after {Timeout} for {Path} (user={User}) — denying " +
+                        "this subscription as Permission.None WITHOUT caching. " +
+                        "Owning hub did not respond; check for stuck per-node hub, corrupted ancestor, " +
+                        "or slow Orleans grain activation.",
                         PermissionRequestTimeout, path, captured.ObjectId);
-                    return Observable.Return(Permission.None);
+                    return Observable.Return((Perms: Permission.None, IsTimeout: true));
                 }))
-                .SelectMany(perms =>
+                .SelectMany(result =>
                 {
-                    _access[key] = new AccessEntry(perms,
-                        DateTimeOffset.UtcNow + AccessTtl);
-                    return GateOnRead(perms, shared, path, captured);
+                    if (!result.IsTimeout)
+                    {
+                        _access[key] = new AccessEntry(result.Perms,
+                            DateTimeOffset.UtcNow + AccessTtl);
+                    }
+                    return GateOnRead(result.Perms, shared, path, captured);
                 });
         }).CarryAccessContext(accessService);
     }
