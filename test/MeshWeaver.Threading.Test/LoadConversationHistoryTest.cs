@@ -69,10 +69,16 @@ public class LoadConversationHistoryTest(ITestOutputHelper output) : MonolithMes
     {
         var responseMsgId = await ThreadFlow.SubmitAndWait(client, threadPath, text,
             contextPath: ContextPath).FirstAsync().ToTask(ct);
-        // Wait for the response cell to have populated text — this is what the
-        // loader's per-cell Where(non-empty text) waits for.
+        // Wait for the response cell to reach a TERMINAL status. Earlier we
+        // gated on `!IsNullOrEmpty(m.Text)`, but ThreadExecution stamps the
+        // placeholder "Generating response..." onto the cell text very early
+        // in the streaming loop — that text passes the non-empty check while
+        // the real response is still mid-stream, so the history assertion
+        // later read the placeholder instead of the FakeResponse.
         await ThreadFlow.ReadMessage(client, threadPath, responseMsgId,
-            m => !string.IsNullOrEmpty(m.Text)).FirstAsync().ToTask(ct);
+            m => m.Status is ThreadMessageStatus.Completed
+                          or ThreadMessageStatus.Cancelled
+                          or ThreadMessageStatus.Error).FirstAsync().ToTask(ct);
     }
 
     // 60s timeout: two real ThreadFlow.SubmitAndWait calls + ReadThread predicate
