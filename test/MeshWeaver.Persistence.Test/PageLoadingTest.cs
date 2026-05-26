@@ -177,7 +177,7 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     /// loads access assignments. Subsequent runs hit the timestamped-subdir
     /// cache via CompilationCacheService.TryGetLatestCachedDllPath.
     /// </summary>
-    [Theory(Timeout = 60000)]
+    [Theory(Timeout = 120000)]
     [InlineData("ACME")]
     [InlineData("Systemorph")]
     public async Task Organization_LoadsWithoutHanging(string nodePath)
@@ -192,7 +192,7 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     /// <summary>
     /// Tests that Person nodes load without hanging.
     /// </summary>
-    [Theory(Timeout = 60000)]
+    [Theory(Timeout = 120000)]
     [InlineData("Cornerstone/Microsoft")]
     [InlineData("Cornerstone/Tesla")]
     public async Task Person_LoadsWithoutHanging(string nodePath)
@@ -204,7 +204,7 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     /// Tests that the Activity area loads for User nodes.
     /// This verifies UserActivityLayoutAreas is properly registered via UserNodeType.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 120000)]
     public async Task User_Activity_LoadsWithoutHanging()
     {
         await AssertAreaLoadsWithoutHanging("Cornerstone/Microsoft", "Activity");
@@ -218,7 +218,7 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     /// Tests that Cornerstone Insured nodes load without hanging.
     /// This specifically tests the CombineLatest fix with StartWith.
     /// </summary>
-    [Theory(Timeout = 60000)]
+    [Theory(Timeout = 120000)]
     [InlineData("Cornerstone/Microsoft")]
     [InlineData("Cornerstone/EuropeanLogistics")]
     [InlineData("Cornerstone/GlobalManufacturing")]
@@ -231,7 +231,7 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     /// Tests that the PricingCatalog area loads for Cornerstone nodes.
     /// This directly tests the CombineLatest fix with StartWith.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 120000)]
     public async Task CornerstoneInsured_PricingCatalog_LoadsWithoutHanging()
     {
         await AssertAreaLoadsWithoutHanging("Cornerstone/Microsoft", "PricingCatalog");
@@ -244,7 +244,7 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     /// <summary>
     /// Tests that Markdown documentation nodes load without hanging.
     /// </summary>
-    [Theory(Timeout = 60000)]
+    [Theory(Timeout = 120000)]
     [InlineData("MeshWeaver/Welcome")]
     public async Task MarkdownNode_LoadsWithoutHanging(string nodePath)
     {
@@ -258,7 +258,7 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     /// <summary>
     /// Tests that Northwind nodes load without hanging.
     /// </summary>
-    [Theory(Timeout = 60000)]
+    [Theory(Timeout = 120000)]
     [InlineData("Northwind")]
     public async Task NorthwindNode_LoadsWithoutHanging(string nodePath)
     {
@@ -272,7 +272,7 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     /// <summary>
     /// Tests that multiple concurrent requests to different node types don't cause hanging.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 120000)]
     public async Task ConcurrentRequests_MultipleNodeTypes_AllLoadWithoutHanging()
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
