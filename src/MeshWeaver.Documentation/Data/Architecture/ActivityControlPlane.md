@@ -206,9 +206,6 @@ Existing pairs in the codebase:
 |------------------------|----------------------------------|-------------------------------|----------------------------------|
 | `MeshThread`           | (none — Status transition gates) | `Status` (Starting/Executing) | `InstallServerWatcher` claim     |
 | `MeshThread`           | `RequestedCancellationAt`        | Sub-thread's cancel watcher   | Sub-thread's CTS unwind          |
-| `MeshThread`           | `RequestedResubmit`              | `Messages` / `PendingUserMessages` | `InstallResubmitWatcher`     |
-| `MeshThread`           | `RequestedDeleteFromMessageId`   | `Messages`                    | `InstallDeleteFromMessageWatcher`|
-| `MeshThread`           | `PendingFailures` (dict)         | Error cells in `Messages`     | `InstallFailureRecordWatcher`    |
 | `NodeTypeDefinition`   | `RequestedReleasePath`           | `LatestReleasePath`           | `NodeTypeCompileActivityHandler` |
 | `ActivityLog`          | `RequestedStatus`                | `Status`                      | Activity hub on transition       |
 
