@@ -330,40 +330,28 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     }
 
     /// <summary>
-    /// Synchronous lookup for built-in MeshNodes. Checks MeshConfiguration.Nodes
-    /// first (NodeType definitions), then IStaticNodeProvider. For instance nodes
-    /// that have no HubConfiguration of their own, resolves the NodeType's
-    /// HubConfiguration from MeshConfiguration.Nodes — this avoids the stream-cache
-    /// path which would route a SubscribeRequest back through this same grain and
-    /// deadlock on _hubReady. Returns null if nothing is found.
+    /// Synchronous lookup for built-in MeshNodes via IStaticNodeProvider. For
+    /// instance nodes that have no HubConfiguration of their own, resolves the
+    /// NodeType's HubConfiguration from the same static registry — this avoids
+    /// the stream-cache path which would route a SubscribeRequest back through
+    /// this same grain and deadlock on _hubReady. Returns null if nothing is
+    /// found.
     /// </summary>
     private MeshNode? TryResolveStaticNode(string addressPath)
     {
-        var meshConfig = meshHub.ServiceProvider.GetService<MeshConfiguration>();
-
-        // Direct config match — NodeType definitions and other explicitly registered nodes.
-        if (meshConfig is not null && meshConfig.Nodes.TryGetValue(addressPath, out var node))
-            return node;
-
-        // Static node providers (e.g., test seeds, user nodes).
-        var staticNode = meshHub.ServiceProvider.GetServices<IStaticNodeProvider>()
-            .SelectMany(p => p.GetStaticNodes())
-            .FirstOrDefault(n => string.Equals(n.Path, addressPath, StringComparison.OrdinalIgnoreCase));
-
+        var staticNode = meshHub.ServiceProvider.FindStaticNode(addressPath);
         if (staticNode is null) return null;
         if (staticNode.HubConfiguration is not null) return staticNode;
 
-        // Instance node (NodeType = "User", "Markdown", etc.) with no HubConfiguration.
-        // Look up the NodeType's HubConfiguration from the static registry so we can
-        // skip the stream-cache path entirely.
-        if (!string.IsNullOrEmpty(staticNode.NodeType)
-            && meshConfig is not null
-            && meshConfig.Nodes.TryGetValue(staticNode.NodeType, out var nodeTypeNode)
-            && nodeTypeNode.HubConfiguration is not null)
+        // Instance node (NodeType = "User", "Markdown", etc.) with no
+        // HubConfiguration. Look up the NodeType's HubConfiguration from the
+        // static registry so we can skip the stream-cache path entirely.
+        if (!string.IsNullOrEmpty(staticNode.NodeType))
         {
-            return staticNode with { HubConfiguration = nodeTypeNode.HubConfiguration };
+            var nodeTypeNode = meshHub.ServiceProvider.FindStaticNode(staticNode.NodeType);
+            if (nodeTypeNode?.HubConfiguration is not null)
+                return staticNode with { HubConfiguration = nodeTypeNode.HubConfiguration };
         }
-
         return staticNode;
     }
 }
