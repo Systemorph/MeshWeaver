@@ -11,9 +11,9 @@ namespace Memex.Portal.Shared.Authentication;
 /// <para>Background: <c>SecurityService.GetEffectiveRoles</c> walks scopes from root
 /// down and accumulates role assignments. Without a root-scope AccessAssignment
 /// granting Admin, a configured Microsoft Entra ID user has zero roles on the
-/// root scope, which surfaces as <c>"lacks Read permission on 'Organization'"</c>
+/// root scope, which surfaces as <c>"lacks Read permission on 'Space'"</c>
 /// when navigating to the NodeType detail page (and equivalent denials on
-/// cross-partition operations like creating a new Organization).</para>
+/// cross-partition operations like creating a new Space).</para>
 ///
 /// <para>The test base ships an equivalent seed via
 /// <c>TestUsers.PublicAdminAccess()</c> — production needs the same shape,

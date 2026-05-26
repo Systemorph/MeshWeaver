@@ -332,10 +332,10 @@ public static class MemexConfiguration
                 .AddGraph()
                 // Seed root-scope Admin AccessAssignments for users listed under
                 // `Auth:GlobalAdmins` so configured admins bypass per-partition
-                // RLS for cross-partition operations (list Organizations, create
-                // a new Organization, etc.). Empty / missing section = no-op.
+                // RLS for cross-partition operations (list Spaces, create
+                // a new Space, etc.). Empty / missing section = no-op.
                 .AddMeshNodes(Authentication.GlobalAdminSeed.Build(configuration))
-                .AddOrganizationType()
+                .AddSpaceType()
                 .AddPortalType()
                 .AddAI()
                 // Each AI provider self-registers everything (catalog

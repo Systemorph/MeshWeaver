@@ -19,32 +19,28 @@ namespace Memex.Portal.Shared.Authentication;
 /// publishing thread and deadlock under load.
 /// See <c>Doc/Architecture/AsynchronousCalls.md</c>.</para>
 ///
-/// <para><b>Three rows, one onboarding write:</b>
+/// <para><b>Two rows, one onboarding write:</b>
 /// <list type="number">
 ///   <item>Per-user partition root — <c>{username}.mesh_nodes</c> at
 ///         <c>(namespace='', id={username})</c>. This is what <c>/{username}</c>
 ///         resolves to via the standard partition router; renders the User layout
 ///         (Activity area) from <see cref="MeshWeaver.Graph.Configuration.UserNodeType"/>'s
-///         HubConfiguration.</item>
+///         HubConfiguration. The per-user Postgres schema is created lazily on
+///         this first write by the path-routing adapter (calls
+///         <c>public.ensure_partition_schema</c>); no explicit
+///         <c>Admin/Partition</c> catalog entry needed.</item>
 ///   <item>User-catalog mirror — <c>user.mesh_nodes</c> at
 ///         <c>(namespace='User', id={username})</c>. The login flow runs
 ///         <c>nodeType:User content.email:X</c> and scans the <c>user</c> schema.
 ///         Without this mirror, the catalog query finds nothing and every signed-in
 ///         user bounces back to <c>/onboarding</c>.</item>
-///   <item>Admin/Partition catalog entry — <c>admin.mesh_nodes</c> at
-///         <c>(namespace='Admin/Partition', id={username})</c>. Registers the
-///         per-user partition with the storage provider so the routing layer's
-///         first-segment lookup matches <c>{username}</c>.</item>
 /// </list>
 /// </para>
 ///
-/// <para>Ordering matters — <c>Admin/Partition</c> is created FIRST so the per-user
-/// partition root's first-segment lookup matches when the partition-root write
-/// arrives. The user-catalog mirror is independent (lives in the pre-existing
-/// <c>user</c> schema). Sequencing is expressed reactively via
-/// <c>SelectMany</c>: the partition-root subscribe is triggered by the
-/// Admin/Partition emission; the catalog-mirror subscribe by the partition-root
-/// emission.</para>
+/// <para>Sequencing is expressed reactively via <c>SelectMany</c>: the
+/// catalog-mirror subscribe is triggered by the partition-root emission. The
+/// partition-root is the canonical row (V27 mirror trigger copies User rows from
+/// the per-user partition into <c>auth.mesh_nodes</c> automatically).</para>
 /// </summary>
 public sealed class UserOnboardingService(
     IMeshService meshService,
@@ -73,23 +69,6 @@ public sealed class UserOnboardingService(
             PinnedPaths = ["Doc"],
         };
 
-        var partitionCatalogEntry = new MeshNode(username, "Admin/Partition")
-        {
-            Name = username,
-            NodeType = "Partition",
-            State = MeshNodeState.Active,
-            Content = new PartitionDefinition
-            {
-                Namespace = username,
-                DataSource = "default",
-                Schema = username.ToLowerInvariant(),
-                Table = "mesh_nodes",
-                TableMappings = PartitionDefinition.StandardTableMappings,
-                Versioned = true,
-                Description = $"User partition for {fullDisplayName}",
-            }
-        };
-
         var partitionRootNode = new MeshNode(username)
         {
             Name = fullDisplayName,
@@ -108,9 +87,9 @@ public sealed class UserOnboardingService(
             Content = userContent,
         };
 
-        // SelectMany sequences the three writes — Admin/Partition first so the
-        // partition-root write can route, then the user-catalog mirror. The
-        // outer observable emits ONLY the partition-root node (the canonical
+        // SelectMany sequences the two writes — partition-root first (auto-creates
+        // the per-user schema via ensure_partition_schema), then the catalog mirror.
+        // The outer observable emits ONLY the partition-root node (the canonical
         // identity) so callers can treat the return value as `the User node`.
         //
         // Wrap in Observable.Using + ImpersonateAsSystem so the whole onboarding
@@ -123,10 +102,7 @@ public sealed class UserOnboardingService(
         // was built for — explicitly documented in AccessService.cs.
         return Observable.Using(
             () => accessService.ImpersonateAsSystem(),
-            _ => meshService.CreateNode(partitionCatalogEntry)
-                .Do(__ => logger?.LogInformation(
-                    "Onboarding: registered partition '{Username}' via Admin/Partition catalog", username))
-                .SelectMany(__ => meshService.CreateNode(partitionRootNode))
+            _ => meshService.CreateNode(partitionRootNode)
                 .Do(__ => logger?.LogInformation(
                     "Onboarding: wrote partition-root User '{Username}' to {Schema}.mesh_nodes",
                     username, username.ToLowerInvariant()))

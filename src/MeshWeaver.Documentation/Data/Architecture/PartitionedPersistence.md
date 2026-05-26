@@ -173,7 +173,7 @@ See [Test State Isolation](TestStateIsolation) for the test-fixture pattern.
 
 ## PartitionDefinition
 
-Each partition is defined by a `PartitionDefinition` that specifies its namespace, data source, schema, and table mappings. Organization partitions use `StandardTableMappings` to route satellite node types to dedicated tables.
+Each partition is defined by a `PartitionDefinition` that specifies its namespace, data source, schema, and table mappings. Per-tenant partitions (Space, User) are created lazily on first write by the routing adapter — no explicit `Partition` MeshNode is emitted. System-level partitions (Admin, Auth, Portal, Kernel, global satellites like `_Access`) are registered statically by `DefaultPartitionProvider`. Tenant partitions use `StandardTableMappings` to route satellite node types to dedicated tables.
 
 ## Satellite Sub-Namespaces
 
@@ -290,7 +290,7 @@ Each partition gets its own PostgreSQL schema. A per-schema `NpgsqlDataSource` i
 
 ```
 Database
-+-- schema "acme"                    ← Organization partition (with satellite tables)
++-- schema "acme"                    ← Space partition (with satellite tables)
 |   +-- mesh_nodes                   ← Primary entities
 |   +-- activities                   ← _Activity satellite nodes
 |   +-- user_activities              ← _UserActivity satellite nodes
