@@ -161,19 +161,33 @@ public class CompilationCacheServiceTest : IDisposable
         isValid.Should().BeFalse();
     }
 
-    [Fact]
-    public void IsCacheValid_ReturnsTrue_WhenCacheIsNewer()
+    /// <summary>
+    /// Lays out the timestamped-subdir cache that <see cref="CompilationCacheService.TryGetLatestCachedDllPath"/>
+    /// expects: <c>{cacheDir}/{nodeName}_{ticks_hex}/{nodeName}.{dll,pdb}</c>
+    /// plus the flat <c>{cacheDir}/{nodeName}.cs</c> source mirror. Mirrors what
+    /// <see cref="MeshNodeCompilationService.CompileToDiskAsync"/> writes at runtime.
+    /// </summary>
+    private string CreateCacheArtifacts(string nodeName, DateTime? dllWriteTime = null)
     {
-        // Arrange
-        var nodeName = "valid_cache";
-        var dllPath = _service.GetDllPath(nodeName);
-        var pdbPath = _service.GetPdbPath(nodeName);
+        var subdir = Path.Combine(_testCacheDir, $"{nodeName}_{DateTimeOffset.UtcNow.Ticks:x}");
+        Directory.CreateDirectory(subdir);
+        var dllPath = Path.Combine(subdir, $"{nodeName}.dll");
+        var pdbPath = Path.Combine(subdir, $"{nodeName}.pdb");
         var sourcePath = _service.GetSourcePath(nodeName);
-
-        // Create cache files
         File.WriteAllText(dllPath, "dummy dll");
         File.WriteAllText(pdbPath, "dummy pdb");
         File.WriteAllText(sourcePath, "dummy source");
+        if (dllWriteTime is { } t)
+            File.SetLastWriteTimeUtc(dllPath, t);
+        return dllPath;
+    }
+
+    [Fact]
+    public void IsCacheValid_ReturnsTrue_WhenCacheIsNewer()
+    {
+        // Arrange — write a subdir-style cache entry matching the runtime layout.
+        var nodeName = "valid_cache";
+        CreateCacheArtifacts(nodeName);
 
         // Node was modified before the cache was created
         var lastModified = DateTimeOffset.UtcNow.AddMinutes(-5);
@@ -188,20 +202,9 @@ public class CompilationCacheServiceTest : IDisposable
     [Fact]
     public void IsCacheValid_ReturnsFalse_WhenNodeIsNewer()
     {
-        // Arrange
+        // Arrange — write a subdir-style cache entry with a backdated DLL.
         var nodeName = "stale_cache";
-        var dllPath = _service.GetDllPath(nodeName);
-        var pdbPath = _service.GetPdbPath(nodeName);
-        var sourcePath = _service.GetSourcePath(nodeName);
-
-        // Create cache files
-        File.WriteAllText(dllPath, "dummy dll");
-        File.WriteAllText(pdbPath, "dummy pdb");
-        File.WriteAllText(sourcePath, "dummy source");
-
-        // Set file time to past
-        var pastTime = DateTime.UtcNow.AddHours(-1);
-        File.SetLastWriteTimeUtc(dllPath, pastTime);
+        CreateCacheArtifacts(nodeName, dllWriteTime: DateTime.UtcNow.AddHours(-1));
 
         // Node was modified after the cache was created
         var lastModified = DateTimeOffset.UtcNow;
@@ -223,18 +226,12 @@ public class CompilationCacheServiceTest : IDisposable
         // for the affected NodeType. Verify the validity contract here; ALC
         // unload is exercised by NodeTypeService / CodeEditRecompileTest.
         var nodeName = "to_invalidate";
-        var dllPath = _service.GetDllPath(nodeName);
-        var pdbPath = _service.GetPdbPath(nodeName);
+        // Write a subdir-style cache entry stamped forward of "now" so
+        // IsCacheValid returns true before InvalidateCache flips the sticky flag.
+        var dllPath = CreateCacheArtifacts(nodeName, dllWriteTime: DateTime.UtcNow.AddHours(1));
+        var pdbPath = Path.ChangeExtension(dllPath, ".pdb");
         var sourcePath = _service.GetSourcePath(nodeName);
-
-        File.WriteAllText(dllPath, "dummy dll");
-        File.WriteAllText(pdbPath, "dummy pdb");
-        File.WriteAllText(sourcePath, "dummy source");
-
-        // Stamp all three forward of "now" so they're newer than any partition
-        // last-modified the call site would pass.
         var futureStamp = DateTime.UtcNow.AddHours(1);
-        File.SetLastWriteTimeUtc(dllPath, futureStamp);
         File.SetLastWriteTimeUtc(pdbPath, futureStamp);
         File.SetLastWriteTimeUtc(sourcePath, futureStamp);
 
