@@ -104,7 +104,7 @@ public class OrleansDocumentationTest(ITestOutputHelper output) : TestBase(outpu
         resolution.Should().NotBeNull("Doc/Architecture/BusinessRules should resolve");
     }
 
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task BusinessRules_LayoutArea_Loads()
     {
         var portal = await CreatePortalHubAsync();

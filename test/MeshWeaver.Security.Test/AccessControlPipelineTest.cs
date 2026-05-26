@@ -5,7 +5,7 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
-using Memex.Portal.Shared;
+using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Security;
 using MeshWeaver.Graph.Configuration;
@@ -129,7 +129,7 @@ public class HubPermissionRuleSetTest(ITestOutputHelper output) : MonolithMeshTe
 {
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
-            .AddOrganizationType()
+            .AddSpaceType()
             .AddSampleUsers();
 
     [Fact(Timeout = 10000)]
@@ -207,7 +207,7 @@ public class OrganizationHubAccessTest(ITestOutputHelper output) : MonolithMeshT
 {
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
-            .AddOrganizationType()
+            .AddSpaceType()
             .AddSampleUsers();
 
     [Fact(Timeout = 10000)]

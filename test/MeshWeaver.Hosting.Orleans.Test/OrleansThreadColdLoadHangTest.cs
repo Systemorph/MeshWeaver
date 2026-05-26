@@ -273,7 +273,7 @@ public class OrleansThreadColdLoadHangTest(ITestOutputHelper output) : TestBase(
     /// sub-thread shape. If the grain activates but never settles
     /// (IsExecuting stays true forever): same symptom, different root cause.</para>
     /// </summary>
-    [Fact(Timeout = 90000)]
+    [Fact(Timeout = 60000)]
     public async Task SubThreadUrl_LoadedColdFromStorage_ActivatesAndSettlesWithoutDeadlock()
     {
         var ct = new CancellationTokenSource(80.Seconds()).Token;
@@ -350,7 +350,7 @@ public class OrleansThreadColdLoadHangTest(ITestOutputHelper output) : TestBase(
     /// would regress every "thread crashed mid-stream" recovery in prod, not
     /// just the delegation case.
     /// </summary>
-    [Fact(Timeout = 90000)]
+    [Fact(Timeout = 60000)]
     public async Task StaleExecutingThread_LoadedColdFromStorage_RecoversToIdle()
     {
         var ct = new CancellationTokenSource(80.Seconds()).Token;

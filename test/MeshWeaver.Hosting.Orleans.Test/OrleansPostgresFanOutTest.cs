@@ -71,7 +71,7 @@ public class OrleansPostgresFanOutTest(ITestOutputHelper output)
         return false;
     }
 
-    [Fact(Timeout = 240000)]
+    [Fact(Timeout = 60000)]
     public async Task ActivityFeed_FanOutAcrossPartitions_SortedByActivityRecency()
     {
         if (ShouldSkip(out var reason)) { Output.WriteLine($"SKIPPED: {reason}"); return; }
@@ -119,7 +119,7 @@ public class OrleansPostgresFanOutTest(ITestOutputHelper output)
             "last_modified — p2's activity is newer than p1's so p2 must come first");
     }
 
-    [Fact(Timeout = 240000)]
+    [Fact(Timeout = 60000)]
     public async Task LatestThreads_FanOutAcrossPartitions_FilterByCreatedBy()
     {
         if (ShouldSkip(out var reason)) { Output.WriteLine($"SKIPPED: {reason}"); return; }
@@ -167,7 +167,7 @@ public class OrleansPostgresFanOutTest(ITestOutputHelper output)
             "sort:LastModified-desc must order threads by their own last_modified across partitions");
     }
 
-    [Fact(Timeout = 240000)]
+    [Fact(Timeout = 60000)]
     public async Task ScopedQuery_StaysOnSinglePartition_NoFanOut()
     {
         if (ShouldSkip(out var reason)) { Output.WriteLine($"SKIPPED: {reason}"); return; }
@@ -204,7 +204,7 @@ public class OrleansPostgresFanOutTest(ITestOutputHelper output)
             "scoped query MUST NOT leak rows from p2 — fan-out is gated on unscoped/wildcard");
     }
 
-    [Fact(Timeout = 240000)]
+    [Fact(Timeout = 60000)]
     public async Task ActivityFeed_RespectsExplicitLimit_AcrossPartitions()
     {
         if (ShouldSkip(out var reason)) { Output.WriteLine($"SKIPPED: {reason}"); return; }
@@ -268,7 +268,7 @@ public class OrleansPostgresFanOutTest(ITestOutputHelper output)
     /// IMeshService call — so a wiring bug in the dashboard hub's mesh-query
     /// resolution would surface here but not in the other tests.</para>
     /// </summary>
-    [Fact(Timeout = 240000)]
+    [Fact(Timeout = 60000)]
     public async Task UserDashboard_RendersLatestThreads_FromRemotePartition()
     {
         if (ShouldSkip(out var reason)) { Output.WriteLine($"SKIPPED: {reason}"); return; }
@@ -317,7 +317,7 @@ public class OrleansPostgresFanOutTest(ITestOutputHelper output)
             "the dashboard's Latest Threads query MUST surface threads from partitions other than the user's own — fan-out across all partitions");
     }
 
-    [Fact(Timeout = 240000)]
+    [Fact(Timeout = 60000)]
     public async Task LatestThreads_FiltersOutOtherUsers()
     {
         if (ShouldSkip(out var reason)) { Output.WriteLine($"SKIPPED: {reason}"); return; }

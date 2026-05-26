@@ -231,7 +231,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Verifies that the AsiaRe business unit renders its Overview area
     /// with actual content (not just an error control).
     /// </summary>
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task AsiaRe_Overview_ShouldRender()
     {
         var client = GetClient();

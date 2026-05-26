@@ -201,7 +201,7 @@ public class OrleansDynamicCompilationTest(ITestOutputHelper output)
     /// MeshNode from persistence, loads the dynamic assembly, and answers from
     /// the per-instance hub.
     /// </summary>
-    [Fact(Timeout = 90000)]
+    [Fact(Timeout = 60000)]
     public async Task Instance_OfDynamicNodeType_ActivatesAndAnswers()
     {
         var ct = new CancellationTokenSource(80.Seconds()).Token;
@@ -298,7 +298,7 @@ public class OrleansCrossSiloCompilationTest(ITestOutputHelper output)
 {
     protected override short InitialSilosCount => 2;
 
-    [Fact(Timeout = 90000)]
+    [Fact(Timeout = 60000)]
     public async Task CompiledArtifact_IsVisibleFromBothSilos()
     {
         var ct = new CancellationTokenSource(80.Seconds()).Token;

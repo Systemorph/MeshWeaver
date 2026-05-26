@@ -86,7 +86,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
     ///   7. Wait for V2 release node.
     ///   8. Create fresh instance â†’ must serve V2 layout.
     /// </summary>
-    [Fact(Timeout = 90000)]
+    [Fact(Timeout = 60000)]
     public async Task CodeEdit_ExplicitRelease_IsUpToDate_RecompilesOnSourceChange()
     {
         var ct = new CancellationTokenSource(75.Seconds()).Token;
@@ -215,7 +215,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
     /// (<c>EnrichWithNodeType slow path faulted</c>, <c>SubscribeRequest</c>
     /// timeouts → compilation-error overlay → MARKER_V1 never rendered).
     /// </summary>
-    [Fact(Timeout = 90000)]
+    [Fact(Timeout = 60000)]
     public async Task NodeType_RequestedReleasePath_PinsToHistoricalRelease()
     {
         var ct = new CancellationTokenSource(75.Seconds()).Token;

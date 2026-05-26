@@ -1,4 +1,4 @@
-using Memex.Portal.Shared;
+using MeshWeaver.Blazor.Portal;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -60,7 +60,7 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(dataDirectory)
             .AddAcme()
-            .AddOrganizationType()
+            .AddSpaceType()
             .ConfigureServices(services =>
             {
                 // Use shared disk cache - first test compiles, subsequent tests reuse

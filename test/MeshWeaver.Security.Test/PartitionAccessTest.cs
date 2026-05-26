@@ -9,7 +9,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using Memex.Portal.Shared;
+using MeshWeaver.Blazor.Portal;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -25,7 +25,7 @@ public class PartitionAccessTest(ITestOutputHelper output) : MonolithMeshTestBas
 {
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
-            .AddOrganizationType()
+            .AddSpaceType()
             .AddMeshNodes(
                 // Pre-seed a partition node for testing
                 new MeshNode("TestPartition", PartitionNodeType.Namespace)
@@ -142,14 +142,14 @@ public class PartitionAccessTest(ITestOutputHelper output) : MonolithMeshTestBas
     }
 
     [Fact(Timeout = 30000)]
-    public async Task OrganizationCreation_CreatesPartitionNode()
+    public async Task SpaceCreation_CreatesPartitionNode()
     {
         // Roland's global Admin role is pre-seeded via ConfigureMesh's static AccessAssignment.
         var orgNode = new MeshNode("Globex")
         {
             Name = "Globex Corp",
-            NodeType = "Organization",
-            Content = new Organization { Name = "Globex Corp" }
+            NodeType = "Space",
+            Content = new Space { Name = "Globex Corp" }
         };
 
         var created = await NodeFactory.CreateNode(orgNode);

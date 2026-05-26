@@ -1,4 +1,5 @@
 using System;
+using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -34,7 +35,7 @@ public class SpaceNodeCreationTest(ITestOutputHelper output) : MonolithMeshTestB
             NodeType = SpaceNodeType.NodeType
         };
 
-        var created = await NodeFactory.CreateNode(node);
+        var created = await NodeFactory.CreateNode(node).ToTask(TestContext.Current.CancellationToken);
 
         created.Should().NotBeNull("Admin should be able to create Space nodes");
         created.State.Should().Be(MeshNodeState.Active);
@@ -47,7 +48,7 @@ public class SpaceNodeCreationTest(ITestOutputHelper output) : MonolithMeshTestB
         fetched.Should().NotBeNull("Created space should be queryable");
         fetched!.NodeType.Should().Be("Space");
 
-        await NodeFactory.DeleteNode(spacePath);
+        await NodeFactory.DeleteNode(spacePath).ToTask(TestContext.Current.CancellationToken);
     }
 
     [Fact(Timeout = 60000)]
@@ -73,13 +74,13 @@ public class SpaceNodeCreationTest(ITestOutputHelper output) : MonolithMeshTestB
             Content = spaceContent
         };
 
-        var created = await NodeFactory.CreateNode(node);
+        var created = await NodeFactory.CreateNode(node).ToTask(TestContext.Current.CancellationToken);
 
         created.Should().NotBeNull();
         created.State.Should().Be(MeshNodeState.Active);
         created.NodeType.Should().Be("Space");
         Output.WriteLine($"Space with content created at: {created.Path}");
 
-        await NodeFactory.DeleteNode(spacePath);
+        await NodeFactory.DeleteNode(spacePath).ToTask(TestContext.Current.CancellationToken);
     }
 }

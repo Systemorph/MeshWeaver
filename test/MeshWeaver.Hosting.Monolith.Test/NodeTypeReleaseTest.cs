@@ -41,7 +41,7 @@ public class NodeTypeReleaseTest(ITestOutputHelper output) : MonolithMeshTestBas
     private const string NodeTypeId = "Sample";
     private const string NodeTypePath = $"{ReleaseTestPartition}/{NodeTypeId}";
 
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task CompilationPending_CreatesReleaseMeshNode_WithNotes()
     {
         var ct = TestContext.Current.CancellationToken;

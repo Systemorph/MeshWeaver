@@ -20,7 +20,7 @@ namespace MeshWeaver.Persistence.Test;
 /// <c>NodeTypeDefinition</c> node — fails FAST with a clear diagnostic, rather
 /// than waiting 30s for a typeStream emission that will never come.
 /// Regression guard for the PageLoadingTest ACME hang that traced back to
-/// missing <c>AddOrganizationType()</c>.
+/// missing <c>AddSpaceType()</c>.
 /// </summary>
 public class UnregisteredNodeTypeTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {

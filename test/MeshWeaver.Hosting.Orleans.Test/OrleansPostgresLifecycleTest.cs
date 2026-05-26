@@ -58,7 +58,7 @@ public class OrleansPostgresLifecycleTest(ITestOutputHelper output)
         return false;
     }
 
-    [Fact(Timeout = 180000)]
+    [Fact(Timeout = 60000)]
     public async Task CreatePartition_OnSiloA_Visible_OnSiloB()
     {
         if (ShouldSkip(out var reason)) { Output.WriteLine($"SKIPPED: {reason}"); return; }
@@ -113,7 +113,7 @@ public class OrleansPostgresLifecycleTest(ITestOutputHelper output)
         resolution!.Prefix.Should().Be(ns);
     }
 
-    [Fact(Timeout = 180000)]
+    [Fact(Timeout = 60000)]
     public async Task Write_OnSiloA_Read_OnSiloB()
     {
         if (ShouldSkip(out var reason)) { Output.WriteLine($"SKIPPED: {reason}"); return; }

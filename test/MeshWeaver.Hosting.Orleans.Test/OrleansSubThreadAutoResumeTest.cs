@@ -105,7 +105,7 @@ public class OrleansSubThreadAutoResumeTest(ITestOutputHelper output) : TestBase
         return client;
     }
 
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task SubThreadDelegation_LiveProgressOnToolCall_TerminalSuccess_AndFcReentry()
     {
         var ct = new CancellationTokenSource(110.Seconds()).Token;
