@@ -113,11 +113,7 @@ Compilation is an Activity, so it cancels through the **Activity Control Plane**
 `RequestedStatus`, you never post a bespoke cancel message:
 
 ```csharp
-workspace.GetMeshNodeStream(activityPath).Update(curr =>
-        curr.Content is ActivityLog log
-            ? curr with { Content = log with { RequestedStatus = ActivityStatus.Cancelled } }
-            : curr)
-    .Subscribe(_ => { }, _ => { });
+hub.CancelActivity(activityPath);
 ```
 
 The activity hub's control-plane watcher sees the patch and tears the compile

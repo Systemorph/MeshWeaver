@@ -53,10 +53,7 @@ public record ActivityLog(string Category)
 The kernel-hosted activity is the working example shipped today. The user clicks "Cancel" → the click handler does:
 
 ```csharp
-ctx.Host.Workspace.UpdateMeshNode(curr =>
-    curr.Content is ActivityLog log
-        ? curr with { Content = log with { RequestedStatus = ActivityStatus.Cancelled } }
-        : curr);
+ctx.Host.Hub.CancelActivity(ctx.Host.Hub.Address.ToString());
 ```
 
 The activity hub's initialization subscribes to its own `MeshNodeReference` and watches `RequestedStatus`. On the transition to `Cancelled`, it triggers the underlying cancellation (in the kernel case: dispatches `CancelScriptRequest` to the executor child hub — an internal message, not part of the public API). The script's `CancellationToken` trips, `OperationCanceledException` flows back through the executor's normal completion path, and `Status` flips to `Cancelled`.
@@ -534,10 +531,8 @@ private static Task Trigger(ClickAction ctx, string activityPath)
 {
     // Flip RequestedStatus → Running. The Activity hub's WatchControlPlane
     // subscription picks it up and submits the script to the kernel.
-    ctx.Host.Workspace.UpdateMeshNode(curr =>
-        curr.Content is ActivityLog log
-            ? curr with { Content = log with { RequestedStatus = ActivityStatus.Running } }
-            : curr);
+    ctx.Host.Hub.RequestActivityStatus(
+        ctx.Host.Hub.Address.ToString(), ActivityStatus.Running);
     return Task.CompletedTask;
 }
 ```
