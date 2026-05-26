@@ -122,8 +122,20 @@ public static class ThreadNodeType
     }
 
     /// <summary>
-    /// Builds a thread node with pre-populated messages and pending execution.
-    /// When the thread grain activates, it auto-starts execution — no separate SubmitMessageRequest needed.
+    /// Builds a thread node pre-seeded with a user message in
+    /// <see cref="Thread.PendingUserMessages"/>. The thread starts at
+    /// <see cref="ThreadExecutionStatus.Idle"/>; when the per-thread hub
+    /// activates, <c>InstallServerWatcher</c> sees the pending entry and
+    /// drives the standard claim → DispatchRound → execute flow. No
+    /// pre-allocated satellite cells, no <c>ActiveMessageId</c>, no
+    /// auto-execute trigger competing with the submission watcher.
+    ///
+    /// <para>The returned <c>UserMsgId</c> is the key used in
+    /// <c>PendingUserMessages</c>. <c>ResponseMsgId</c> is intentionally
+    /// the empty string for back-compat: <see cref="ThreadSubmissionServer.DispatchAfterClaim"/>
+    /// allocates the real response cell id when the watcher claims the
+    /// round. Callers that need the response id after dispatch should
+    /// subscribe to <see cref="Thread.ActiveMessageId"/>.</para>
     /// </summary>
     public static (MeshNode Thread, string UserMsgId, string ResponseMsgId) BuildThreadWithMessages(
         string contextPath, string messageText,
@@ -143,7 +155,19 @@ public static class ThreadNodeType
             : messageText;
 
         var userMsgId = Guid.NewGuid().ToString("N")[..8];
-        var responseMsgId = Guid.NewGuid().ToString("N")[..8];
+        var userMessage = new ThreadMessage
+        {
+            Role = "user",
+            Text = messageText,
+            CreatedBy = createdBy,
+            AgentName = agentName,
+            ModelName = modelName,
+            ContextPath = contextPath,
+            Attachments = attachments,
+            Timestamp = DateTime.UtcNow,
+            Type = ThreadMessageType.ExecutedInput,
+            Status = ThreadMessageStatus.Submitted
+        };
 
         var threadNode = new MeshNode(speakingId, ns)
         {
@@ -154,11 +178,10 @@ public static class ThreadNodeType
             Content = new Thread
             {
                 CreatedBy = createdBy,
-                Messages = ImmutableList.Create(userMsgId, responseMsgId),
-                Status = ThreadExecutionStatus.Executing,
-                ActiveMessageId = responseMsgId,
-                ExecutionStartedAt = DateTime.UtcNow,
-                PendingUserMessage = messageText,
+                Status = ThreadExecutionStatus.Idle,
+                UserMessageIds = ImmutableList.Create(userMsgId),
+                PendingUserMessages = ImmutableDictionary<string, ThreadMessage>.Empty
+                    .Add(userMsgId, userMessage),
                 PendingAgentName = agentName,
                 PendingModelName = modelName,
                 PendingContextPath = contextPath,
@@ -166,7 +189,11 @@ public static class ThreadNodeType
             }
         };
 
-        return (threadNode, userMsgId, responseMsgId);
+        // ResponseMsgId is now allocated by DispatchAfterClaim, not here. Return
+        // empty string for back-compat — call sites that wanted the id pre-emptively
+        // (e.g. for parent tool-call tracking) should read Thread.ActiveMessageId
+        // from the stream after the submission watcher claims.
+        return (threadNode, userMsgId, "");
     }
 
     /// <summary>

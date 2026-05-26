@@ -110,7 +110,6 @@ public static class ThreadExecution
                 MeshWeaver.AI.Delegation.DelegationHandlers.HandleCancelDelegationSubThread)
             .WithInitialization(SetThreadHubIdentity)
             .WithInitialization(RecoverStaleExecutingThread)
-            .WithInitialization(WatchForExecution)
             .WithInitialization(InstallCancellationWatcher)
             .WithInitialization(InstallExecutionHub)
             .WithInitialization(InstallSubmissionWatcher)
@@ -413,145 +412,14 @@ public static class ThreadExecution
         });
     }
 
-    /// <summary>
-    /// Startup auto-execute hook for threads created with <c>BuildThreadWithMessages</c>:
-    /// IsExecuting=true + PendingUserMessage set at creation time. Creates the user/response
-    /// cells and dispatches the same SubmitMessageRequest path the GUI uses, so a single
-    /// <c>CreateNodeRequest</c> can atomically create a thread AND start its first round.
-    /// HandleSubmitMessage handles all client-initiated execution after startup.
-    /// </summary>
-    private static void WatchForExecution(IMessageHub hub)
-    {
-        var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
-        var threadPath = hub.Address.Path;
-
-        // Startup auto-execute hook for threads created with BuildThreadWithMessages
-        // (IsExecuting=true + PendingUserMessage set at creation time). Wait for the
-        // FIRST emission whose Content is a MeshThread carrying both flags — earlier
-        // emissions during data-source init can be empty/null and were previously
-        // swallowed by Take(1), causing the auto-execute to silently drop.
-        // HandleSubmitMessage handles runtime execution after startup.
-        IObservable<MeshNode> ownNode;
-        try { ownNode = hub.GetWorkspace().GetMeshNodeStream(); }
-        catch { return; }
-
-        // Take the FIRST emission whose Content is typed as MeshThread (post-
-        // ResolveJsonElementContent). Previously we used `.Take(1)` directly on
-        // the full stream — which races: an early emission during data-source init
-        // can be null/JsonElement-shaped, the pattern match below fails silently,
-        // and the auto-execute is dropped.
-        //
-        // We must NOT also wait for `PendingUserMessage` here: HandleSubmitMessage
-        // sets PendingUserMessage AFTER hub init, and that update would re-trigger
-        // a Where-based filter — racing HandleSubmitMessage's own dispatch and
-        // double-creating cells (failing with "Node already exists").
-        //
-        // So: wait only for typed MeshThread Content; check PendingUserMessage
-        // INSIDE Subscribe so threads NOT created with BuildThreadWithMessages
-        // skip the auto-execute path silently.
-        var sub = ownNode
-            .Where(node => node?.Content is MeshThread)
-            .Take(1)
-            .Subscribe(node =>
-        {
-            // Diagnostic: every thread node we observe at this entry point.
-            // Confirms the auto-execute watcher actually fires and lets us see
-            // why threads created via BuildThreadWithMessages with PendingUserMessage
-            // either dispatch or get skipped.
-            if (node?.Content is MeshThread t0)
-            {
-                logger?.LogInformation(
-                    "[ThreadExec] WatchForExecution observed {ThreadPath} status={Status} hasPendingMsg={HasPending} isExecuting={Executing} activeMsg={Active}",
-                    threadPath, t0.Status, t0.PendingUserMessage is { Length: > 0 },
-                    t0.IsExecuting, t0.ActiveMessageId ?? "(null)");
-            }
-
-            if (node?.Content is not MeshThread { PendingUserMessage: not null } thread)
-                return;
-
-            // Only auto-execute threads created with BuildThreadWithMessages
-            if (!thread.IsExecuting || thread.ActiveMessageId == null)
-                return;
-
-            var responseMsgId = thread.ActiveMessageId;
-            var responsePath = $"{threadPath}/{responseMsgId}";
-            var activeIdx = thread.Messages.IndexOf(responseMsgId);
-            var userMsgId = activeIdx > 0 ? thread.Messages[activeIdx - 1] : null;
-            // MainNode for child cells = the thread's own MainNode (content node).
-            var mainEntity = node?.MainNode ?? thread.PendingContextPath ?? threadPath;
-
-            logger?.LogInformation(
-                "[ThreadExec] Auto-execute (initial submit / BuildThreadWithMessages): {ThreadPath}, activeMsg={ActiveMsg}, pendingMsgLen={Len}, agent={Agent}",
-                threadPath, responseMsgId, thread.PendingUserMessage?.Length ?? 0, thread.PendingAgentName ?? "(default)");
-
-            var accessService = hub.ServiceProvider.GetService<AccessService>();
-            if (!string.IsNullOrEmpty(thread.CreatedBy))
-                accessService?.SetContext(new AccessContext { ObjectId = thread.CreatedBy, Name = thread.CreatedBy });
-
-            var userCtx = !string.IsNullOrEmpty(thread.CreatedBy)
-                ? new AccessContext { ObjectId = thread.CreatedBy, Name = thread.CreatedBy }
-                : null;
-
-            void StartExecution()
-            {
-                var startCache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-                UpdateResponseCell(startCache, responsePath, threadPath, responseMsgId,
-                    mainEntity,
-                    msg => msg with { Text = "Allocating agent...", Status = ThreadMessageStatus.Streaming },
-                    logger);
-
-                var executionHub = hub.GetHostedHub(
-                    new Address($"{hub.Address}/_Exec"),
-                    config => config,
-                    HostedHubCreation.Always);
-
-                // Direct method call — no SubmitMessageRequest post.
-                ExecuteMessageAsync(executionHub!, new RoundParams(
-                    ThreadPath: threadPath,
-                    ResponseMessageId: responseMsgId,
-                    UserMessageId: userMsgId,
-                    UserMessageText: thread.PendingUserMessage ?? "",
-                    AgentName: thread.PendingAgentName,
-                    ModelName: thread.PendingModelName,
-                    ContextPath: thread.PendingContextPath ?? thread.CreatedBy,
-                    Attachments: thread.PendingAttachments
-                ), userCtx);
-            }
-
-            // Create cells, then start execution
-            var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-            meshService.CreateNode(new MeshNode(responseMsgId, threadPath)
-            {
-                NodeType = ThreadMessageNodeType.NodeType, MainNode = mainEntity,
-                Content = new ThreadMessage
-                {
-                    Role = "assistant", Text = "", Timestamp = DateTime.UtcNow,
-                    Type = ThreadMessageType.AgentResponse,
-                    AgentName = thread.PendingAgentName, ModelName = thread.PendingModelName
-                }
-            }).Subscribe(_ => StartExecution(),
-                error =>
-                {
-                    logger?.LogDebug("[ThreadExec] Response cell creation error: {Error}", error.Message);
-                    StartExecution();
-                });
-
-            if (userMsgId != null)
-            {
-                meshService.CreateNode(new MeshNode(userMsgId, threadPath)
-                {
-                    NodeType = ThreadMessageNodeType.NodeType, MainNode = mainEntity,
-                    Content = new ThreadMessage
-                    {
-                        Role = "user", Text = thread.PendingUserMessage ?? string.Empty, Timestamp = DateTime.UtcNow,
-                        Type = ThreadMessageType.ExecutedInput, CreatedBy = thread.CreatedBy
-                    }
-                }).Subscribe(_ => { },
-                    error => logger?.LogDebug("[ThreadExec] User cell creation error: {Error}", error.Message));
-            }
-        });
-        hub.RegisterForDisposal(sub);
-    }
+    // WatchForExecution deleted as part of the "one trigger via GetMeshNodeStream"
+    // unification. The legacy auto-execute hook for BuildThreadWithMessages used
+    // PendingUserMessage (singular) + Status=Executing pre-set at construction
+    // time, then competed with the submission watcher by creating cells +
+    // calling ExecuteMessageAsync directly. BuildThreadWithMessages now seeds
+    // PendingUserMessages (dict) at Status=Idle and lets InstallServerWatcher
+    // claim through the standard flow — a single trigger path for every
+    // thread, no message-type or watcher rivalry.
 
     // HandleSubmitMessage + HandleSubmitMessageLegacy deleted 2026-05-25.
     // HandleStartExecutionOnExec deleted with the trigger removal — _Exec's
