@@ -75,7 +75,8 @@ public static class PermissionTestExtensions
         // no polling, no Task.Delay. Timeout(60s) gives the synced query
         // headroom on slow CI before failing the test with TimeoutException
         // rather than hanging.
-        var t = timeout ?? TimeSpan.FromSeconds(60);
+        // 90s matches WaitForPermissionAsync default — see comment there.
+        var t = timeout ?? TimeSpan.FromSeconds(90);
         return await sec.GetEffectivePermissions(path, userId)
             .Where(until)
             .Timeout(t)
@@ -108,7 +109,13 @@ public static class PermissionTestExtensions
         TimeSpan? timeout = null)
     {
         var sec = hub.ServiceProvider.GetRequiredService<ISecurityService>();
-        var t = timeout ?? TimeSpan.FromSeconds(40);
+        // 90s default: locally these tests complete in 9-15s; CI's cold-start
+        // synced AccessAssignment query has been observed >40s on slow Linux
+        // runners, which the previous 40s default hit consistently in
+        // CreateNodeViaEvent / ThreadPermissionTest / ObserveQueryFreshness.
+        // 90s is the upper bound a test would still feel responsive at —
+        // anything longer than that and there's a real bug worth surfacing.
+        var t = timeout ?? TimeSpan.FromSeconds(90);
         return sec.GetEffectivePermissions(path, userId)
             .Where(p => p.HasFlag(permission))
             .Timeout(t)
