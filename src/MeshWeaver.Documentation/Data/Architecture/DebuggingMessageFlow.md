@@ -2,9 +2,20 @@
 
 When a hub-handler "looks like a deadlock" (test times out, response never comes back), don't bisect blindly and **don't rerun the test 2-3 times to see if it sticks**. The framework already emits a structured trace at `Trace` level — turn it on, run **once**, grep, fix.
 
+## 🚨 Log levels — edit the bin/test appsettings, NOT the source
+
+**Do not flip `LogInformation` ↔ `LogDebug` ↔ `LogTrace` in `src/` to debug something.** Log-level changes in code reflect the production cost model — every `Information` line in production is billed by App Insights, so toggling those values temporarily silently bleeds budget the next time it ships.
+
+Two sanctioned paths to raise verbosity:
+
+- **For a test debugging session**: edit `test/<Suite>/bin/Debug/net10.0/appsettings.json` (or `test/appsettings.json` at the runtime location). `reloadOnChange: true` is wired so the level flips mid-run without a rebuild. Revert before committing.
+- **For a production debugging session**: edit `memex/aspire/Memex.Portal.Distributed/appsettings.json` under `Logging:ApplicationInsights:LogLevel`. That section gates the App Insights ingest filter — Console/stdout uses the top-level `Logging:LogLevel`.
+
+If a `Log*` call is genuinely too noisy or too quiet at the level it's written, fix it permanently with a commit explaining the cost/value trade-off. Never sneak it in alongside an unrelated change.
+
 ## One-shot recipe
 
-1. **Crank logging to Trace** in `test/appsettings.json`:
+1. **Crank logging to Trace** in the test's runtime appsettings (`test/<Suite>/bin/Debug/net10.0/appsettings.json` or the shared `test/appsettings.json`):
    ```json
    {
      "Logging": {

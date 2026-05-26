@@ -95,7 +95,7 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
             .SelectMany(p => p.GetStaticNodes())
             .Where(n => !configPaths.Contains(n.Path))
             .ToArray();
-        _logger?.LogInformation(
+        _logger?.LogDebug(
             "[StaticNodeQueryProvider] ctor: {Providers} provider(s) -> {Count} nodes; byType=[{ByType}]; byNamespace(top)=[{ByNs}]",
             providerList.Count,
             _providerNodes.Length,
