@@ -44,7 +44,7 @@ removed. Three reasons:
    wanted to iterate "all static nodes" or "find one by path" — the same
    surface `IStaticNodeProvider` already offered. The dictionary was a
    parallel pipe that some sources fed (AddMeshNodes) and others didn't
-   (BuiltInAgentProvider, OrganizationNodeProvider). Consumers that read
+   (BuiltInAgentProvider, DefaultPartitionProvider). Consumers that read
    only the dictionary missed half the nodes.
 
 2. **The de-dup semantics were ambiguous.** `GroupBy(Path).Last()` baked a

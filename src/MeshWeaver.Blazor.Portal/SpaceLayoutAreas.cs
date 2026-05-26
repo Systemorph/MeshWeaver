@@ -5,77 +5,77 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 
-namespace Memex.Portal.Shared;
+namespace MeshWeaver.Blazor.Portal;
 
 /// <summary>
-/// Custom views for Organization nodes.
+/// Custom views for Space nodes.
 /// </summary>
-public static class OrganizationLayoutAreas
+public static class SpaceLayoutAreas
 {
     private const string ThinScrollbar = "scrollbar-width: thin; scrollbar-color: rgba(128,128,128,0.3) transparent;";
     private const string ContentMaxWidth = "max-width: 1280px; margin: 0 auto; padding: 0 24px;";
 
     /// <summary>
-    /// GitHub-style organization header view with live dashboard below.
+    /// GitHub-style space header view with live dashboard below.
     /// Shows logo, name, description, stats, then a set of MeshSearch sections scoped
-    /// to the organization's own partition, and a chat input inviting content creation.
+    /// to the space's own partition, and a chat input inviting content creation.
     /// </summary>
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
 
-        var orgStream = host.Workspace.GetStream<Organization>()
-            ?.Select(orgs => orgs?.FirstOrDefault())
-            ?? Observable.Return<Organization?>(null);
+        var spaceStream = host.Workspace.GetStream<Space>()
+            ?.Select(spaces => spaces?.FirstOrDefault())
+            ?? Observable.Return<Space?>(null);
 
         var nodeStream = host.Workspace.GetStream<MeshNode>()
             ?.Select(nodes => nodes?.FirstOrDefault(n => n.Path == hubPath))
             ?? Observable.Return<MeshNode?>(null);
 
-        return orgStream.CombineLatest(nodeStream).Select(t =>
+        return spaceStream.CombineLatest(nodeStream).Select(t =>
         {
-            var (org, node) = t;
-            if (org == null && node == null)
+            var (space, node) = t;
+            if (space == null && node == null)
                 return Controls.Markdown("*Loading...*") as UiControl;
 
-            return BuildOrganizationView(host, org, node);
+            return BuildSpaceView(host, space, node);
         });
     }
 
-    private static UiControl BuildOrganizationView(
+    private static UiControl BuildSpaceView(
         LayoutAreaHost host,
-        Organization? org,
+        Space? space,
         MeshNode? node)
     {
-        var orgPath = node?.Path ?? host.Hub.Address.ToString();
-        var orgName = org?.Name ?? node?.Name ?? orgPath;
+        var spacePath = node?.Path ?? host.Hub.Address.ToString();
+        var spaceName = space?.Name ?? node?.Name ?? spacePath;
 
         var shell = Controls.Stack
             .WithWidth("100%")
             .WithStyle($"height: 100%; overflow-y: auto; {ThinScrollbar}");
 
-        shell = shell.WithView(BuildHeader(org, node, orgName));
-        shell = shell.WithView(BuildBodyContent(org, node));
+        shell = shell.WithView(BuildHeader(space, node, spaceName));
+        shell = shell.WithView(BuildBodyContent(space, node));
 
-        if (IsSystemorph(orgPath))
-            shell = shell.WithView(BuildSystemorphHighlights(orgPath));
+        if (IsSystemorph(spacePath))
+            shell = shell.WithView(BuildSystemorphHighlights(spacePath));
         else
-            shell = shell.WithView(BuildDashboardGrid(orgPath));
+            shell = shell.WithView(BuildDashboardGrid(spacePath));
 
         return shell;
     }
 
     /// <summary>
-    /// Logo + name + description + stats row. GitHub-style org header, fixed at the top.
+    /// Logo + name + description + stats row. GitHub-style header, fixed at the top.
     /// </summary>
-    private static UiControl BuildHeader(Organization? org, MeshNode? node, string orgName)
+    private static UiControl BuildHeader(Space? space, MeshNode? node, string spaceName)
     {
-        var description = org?.Description;
-        var logo = org?.Logo ?? GetNodeLogo(node);
-        var website = org?.Website;
-        var location = org?.Location;
-        var email = org?.Email;
-        var isVerified = org?.IsVerified ?? false;
+        var description = space?.Description;
+        var logo = space?.Logo ?? GetNodeLogo(node);
+        var website = space?.Website;
+        var location = space?.Location;
+        var email = space?.Email;
+        var isVerified = space?.IsVerified ?? false;
 
         var container = Controls.Stack
             .WithStyle("flex-shrink: 0; padding: 24px 0 16px 0; width: 100%;");
@@ -93,7 +93,7 @@ public static class OrganizationLayoutAreas
         }
         else
         {
-            var initials = GetInitials(orgName);
+            var initials = GetInitials(spaceName);
             logoControl = Controls.Html(
                 $"<div style=\"width: 100px; height: 100px; border-radius: 12px; background: var(--accent-fill-rest); display: flex; align-items: center; justify-content: center; color: white; font-size: 2.5rem; font-weight: 600;\">" +
                 $"{System.Web.HttpUtility.HtmlEncode(initials)}</div>");
@@ -104,7 +104,7 @@ public static class OrganizationLayoutAreas
         var infoColumn = Controls.Stack.WithStyle("gap: 8px; flex: 1;");
 
         infoColumn = infoColumn.WithView(Controls.Html(
-            $"<h1 style=\"margin: 0; font-size: 2rem; font-weight: 600;\">{System.Web.HttpUtility.HtmlEncode(orgName)}</h1>"));
+            $"<h1 style=\"margin: 0; font-size: 2rem; font-weight: 600;\">{System.Web.HttpUtility.HtmlEncode(spaceName)}</h1>"));
 
         if (!string.IsNullOrEmpty(description))
         {
@@ -162,41 +162,41 @@ public static class OrganizationLayoutAreas
     }
 
     /// <summary>
-    /// Body content — priority: node.PreRenderedHtml → org.Body → default welcome markdown.
+    /// Body content — priority: node.PreRenderedHtml → space.Body → default welcome markdown.
     /// </summary>
-    private static UiControl BuildBodyContent(Organization? org, MeshNode? node)
+    private static UiControl BuildBodyContent(Space? space, MeshNode? node)
     {
         var bodyStyle = $"{ContentMaxWidth} padding-top: 24px; padding-bottom: 8px;";
 
         if (!string.IsNullOrWhiteSpace(node?.PreRenderedHtml))
             return new MarkdownControl("") { Html = node.PreRenderedHtml }.WithStyle(bodyStyle);
 
-        if (!string.IsNullOrWhiteSpace(org?.Body))
-            return Controls.Markdown(org!.Body!).WithStyle(bodyStyle);
+        if (!string.IsNullOrWhiteSpace(space?.Body))
+            return Controls.Markdown(space!.Body!).WithStyle(bodyStyle);
 
-        return Controls.Markdown(OrganizationNodeType.WelcomeMarkdown).WithStyle(bodyStyle);
+        return Controls.Markdown(SpaceNodeType.WelcomeMarkdown).WithStyle(bodyStyle);
     }
 
     /// <summary>
-    /// Dashboard grid mirroring the UserActivity layout but scoped to this organization's partition:
+    /// Dashboard grid mirroring the UserActivity layout but scoped to this space's partition:
     /// Latest Threads, Items, Activity Feed.
     /// </summary>
-    private static UiControl BuildDashboardGrid(string orgPath)
+    private static UiControl BuildDashboardGrid(string spacePath)
     {
         var grid = Controls.LayoutGrid
             .WithStyle($"{ContentMaxWidth} padding-top: 24px; padding-bottom: 24px; gap: 24px; width: 100%;");
 
         // Latest Threads — full width
-        grid = grid.WithView(BuildLatestThreads(orgPath), skin => skin.WithXs(12));
+        grid = grid.WithView(BuildLatestThreads(spacePath), skin => skin.WithXs(12));
 
-        // Items in this organization — full width, grouped by type
-        grid = grid.WithView(BuildItems(orgPath), skin => skin.WithXs(12));
+        // Items in this space — full width, grouped by type
+        grid = grid.WithView(BuildItems(spacePath), skin => skin.WithXs(12));
 
         // Activity feed — 2/3 width on desktop
-        grid = grid.WithView(BuildActivityFeed(orgPath), skin => skin.WithXs(12).WithSm(8));
+        grid = grid.WithView(BuildActivityFeed(spacePath), skin => skin.WithXs(12).WithSm(8));
 
         // Recently updated main content — 1/3 width on desktop
-        grid = grid.WithView(BuildRecentUpdates(orgPath), skin => skin.WithXs(12).WithSm(4));
+        grid = grid.WithView(BuildRecentUpdates(spacePath), skin => skin.WithXs(12).WithSm(4));
 
         return grid;
     }
@@ -206,31 +206,31 @@ public static class OrganizationLayoutAreas
     /// and a Post Pipeline of Social Media posts. Each section uses rich Thumbnail layout areas
     /// where available so cards have visual punch instead of plain icon+name rows.
     /// </summary>
-    private static UiControl BuildSystemorphHighlights(string orgPath)
+    private static UiControl BuildSystemorphHighlights(string spacePath)
     {
         var stack = Controls.Stack
             .WithStyle($"{ContentMaxWidth} padding-top: 24px; padding-bottom: 24px; gap: 32px; width: 100%;");
 
-        stack = stack.WithView(BuildFeaturedStories(orgPath));
-        stack = stack.WithView(BuildEventCalendar(orgPath));
-        stack = stack.WithView(BuildPostShowcase(orgPath));
+        stack = stack.WithView(BuildFeaturedStories(spacePath));
+        stack = stack.WithView(BuildEventCalendar(spacePath));
+        stack = stack.WithView(BuildPostShowcase(spacePath));
 
         return stack;
     }
 
     /// <summary>
-    /// Featured Marketing Stories — Markdown children of the Story series hub at {orgPath}/Story.
+    /// Featured Marketing Stories — Markdown children of the Story series hub at {spacePath}/Story.
     /// </summary>
-    private static UiControl BuildFeaturedStories(string orgPath)
+    private static UiControl BuildFeaturedStories(string spacePath)
     {
         var heading = Controls.Html(
             $"<div style=\"display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding-bottom:8px;border-bottom:1px solid var(--neutral-stroke-rest);\">" +
             $"<h2 style=\"margin:0;font-size:1.35rem;\">✦ Featured Stories</h2>" +
-            $"<a href=\"/{orgPath}/Story\" style=\"color:var(--accent-foreground-rest);text-decoration:none;font-size:0.9rem;\">See all →</a>" +
+            $"<a href=\"/{spacePath}/Story\" style=\"color:var(--accent-foreground-rest);text-decoration:none;font-size:0.9rem;\">See all →</a>" +
             $"</div>");
 
         var grid = Controls.MeshSearch
-            .WithHiddenQuery($"namespace:{orgPath}/Story scope:children nodeType:Markdown sort:LastModified-desc")
+            .WithHiddenQuery($"namespace:{spacePath}/Story scope:children nodeType:Markdown sort:LastModified-desc")
             .WithShowSearchBox(false)
             .WithShowEmptyMessage(true)
             .WithRenderMode(MeshSearchRenderMode.Flat)
@@ -248,13 +248,13 @@ public static class OrganizationLayoutAreas
     }
 
     /// <summary>
-    /// Embed the existing EventCalendar Overview from {orgPath}/Events so the month grid
-    /// shows inline on the organization page. Single source of truth — same widget the
+    /// Embed the existing EventCalendar Overview from {spacePath}/Events so the month grid
+    /// shows inline on the space page. Single source of truth — same widget the
     /// dedicated calendar page uses.
     /// </summary>
-    private static UiControl BuildEventCalendar(string orgPath)
+    private static UiControl BuildEventCalendar(string spacePath)
     {
-        var eventsPath = $"{orgPath}/Events";
+        var eventsPath = $"{spacePath}/Events";
 
         var heading = Controls.Html(
             $"<div style=\"display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding-bottom:8px;border-bottom:1px solid var(--neutral-stroke-rest);\">" +
@@ -273,13 +273,13 @@ public static class OrganizationLayoutAreas
     }
 
     /// <summary>
-    /// Social Media post pipeline — all Posts under {orgPath}/SocialMedia rendered as
+    /// Social Media post pipeline — all Posts under {spacePath}/SocialMedia rendered as
     /// LinkedIn-style preview cards (PostThumbnail layout area). Status pills on each card
     /// distinguish Draft / Scheduled / Published at a glance.
     /// </summary>
-    private static UiControl BuildPostShowcase(string orgPath)
+    private static UiControl BuildPostShowcase(string spacePath)
     {
-        var socialPath = $"{orgPath}/SocialMedia";
+        var socialPath = $"{spacePath}/SocialMedia";
 
         var heading = Controls.Html(
             $"<div style=\"display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding-bottom:8px;border-bottom:1px solid var(--neutral-stroke-rest);\">" +
@@ -288,7 +288,7 @@ public static class OrganizationLayoutAreas
             $"</div>");
 
         var posts = Controls.MeshSearch
-            .WithHiddenQuery($"namespace:{socialPath} nodeType:{orgPath}/Post scope:subtree sort:LastModified-desc")
+            .WithHiddenQuery($"namespace:{socialPath} nodeType:{spacePath}/Post scope:subtree sort:LastModified-desc")
             .WithShowSearchBox(false)
             .WithShowEmptyMessage(true)
             .WithRenderMode(MeshSearchRenderMode.Flat)
@@ -299,7 +299,7 @@ public static class OrganizationLayoutAreas
             .WithItemLimit(12)
             .WithMaxRows(6)
             .WithReactiveMode(true)
-            .WithCreateNodeType($"{orgPath}/Post")
+            .WithCreateNodeType($"{spacePath}/Post")
             .WithCreateNamespace(socialPath);
 
         return Controls.Stack
@@ -309,13 +309,13 @@ public static class OrganizationLayoutAreas
     }
 
     /// <summary>
-    /// Threads created against this organization or its descendants.
+    /// Threads created against this space or its descendants.
     /// </summary>
-    private static UiControl BuildLatestThreads(string orgPath)
+    private static UiControl BuildLatestThreads(string spacePath)
     {
         return Controls.MeshSearch
             .WithTitle("Latest Threads")
-            .WithHiddenQuery($"nodeType:Thread namespace:{orgPath}/*/_Thread sort:LastModified-desc")
+            .WithHiddenQuery($"nodeType:Thread namespace:{spacePath}/*/_Thread sort:LastModified-desc")
             .WithShowSearchBox(false)
             .WithShowEmptyMessage(true)
             .WithRenderMode(MeshSearchRenderMode.Flat)
@@ -326,18 +326,18 @@ public static class OrganizationLayoutAreas
             .WithMaxColumns(4)
             .WithReactiveMode(true)
             .WithCreateNodeType("Thread")
-            .WithCreateNamespace(orgPath);
+            .WithCreateNamespace(spacePath);
     }
 
     /// <summary>
-    /// Child content of the organization, grouped by node type. Mirrors the standard catalog view
-    /// but with a create-page affordance so empty organizations invite content creation.
+    /// Child content of the space, grouped by node type. Mirrors the standard catalog view
+    /// but with a create-page affordance so empty spaces invite content creation.
     /// </summary>
-    private static UiControl BuildItems(string orgPath)
+    private static UiControl BuildItems(string spacePath)
     {
         return Controls.MeshSearch
             .WithTitle("Content")
-            .WithHiddenQuery($"namespace:{orgPath} is:main context:search scope:descendants sort:LastModified-desc")
+            .WithHiddenQuery($"namespace:{spacePath} is:main context:search scope:descendants sort:LastModified-desc")
             .WithShowSearchBox(true)
             .WithShowEmptyMessage(true)
             .WithRenderMode(MeshSearchRenderMode.Grouped)
@@ -347,17 +347,17 @@ public static class OrganizationLayoutAreas
             .WithMaxColumns(4)
             .WithCollapsibleSections(true)
             .WithReactiveMode(true)
-            .WithCreateHref($"/create?type=Markdown&namespace={Uri.EscapeDataString(orgPath)}");
+            .WithCreateHref($"/create?type=Markdown&namespace={Uri.EscapeDataString(spacePath)}");
     }
 
     /// <summary>
-    /// Activity timeline scoped to this organization — recent edits, comments, threads.
+    /// Activity timeline scoped to this space — recent edits, comments, threads.
     /// </summary>
-    private static UiControl BuildActivityFeed(string orgPath)
+    private static UiControl BuildActivityFeed(string spacePath)
     {
         return Controls.MeshSearch
             .WithTitle("Activity Feed")
-            .WithHiddenQuery($"source:activity namespace:{orgPath} scope:subtree is:main sort:LastModified-desc")
+            .WithHiddenQuery($"source:activity namespace:{spacePath} scope:subtree is:main sort:LastModified-desc")
             .WithShowSearchBox(false)
             .WithShowEmptyMessage(true)
             .WithRenderMode(MeshSearchRenderMode.Flat)
@@ -370,13 +370,13 @@ public static class OrganizationLayoutAreas
     }
 
     /// <summary>
-    /// Recently updated main content in the organization — compact sidebar column.
+    /// Recently updated main content in the space — compact sidebar column.
     /// </summary>
-    private static UiControl BuildRecentUpdates(string orgPath)
+    private static UiControl BuildRecentUpdates(string spacePath)
     {
         return Controls.MeshSearch
             .WithTitle("Recently Updated")
-            .WithHiddenQuery($"namespace:{orgPath} is:main scope:subtree sort:LastModified-desc")
+            .WithHiddenQuery($"namespace:{spacePath} is:main scope:subtree sort:LastModified-desc")
             .WithShowSearchBox(false)
             .WithShowEmptyMessage(true)
             .WithRenderMode(MeshSearchRenderMode.Flat)
@@ -388,8 +388,8 @@ public static class OrganizationLayoutAreas
             .WithReactiveMode(true);
     }
 
-    private static bool IsSystemorph(string orgPath) =>
-        string.Equals(orgPath, "Systemorph", StringComparison.OrdinalIgnoreCase);
+    private static bool IsSystemorph(string spacePath) =>
+        string.Equals(spacePath, "Systemorph", StringComparison.OrdinalIgnoreCase);
 
     private static string? GetNodeLogo(MeshNode? node)
     {

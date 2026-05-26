@@ -5,7 +5,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
-using Memex.Portal.Shared;
+using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -22,12 +22,12 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 /// Organization instances live at root paths, not under the "Organization" namespace.
 /// </summary>
 [Collection("PostgreSql")]
-public class GlobalAdminOrganizationSearchTests
+public class GlobalAdminSpaceSearchTests
 {
     private readonly PostgreSqlFixture _fixture;
     private readonly JsonSerializerOptions _options = new();
 
-    public GlobalAdminOrganizationSearchTests(PostgreSqlFixture fixture)
+    public GlobalAdminSpaceSearchTests(PostgreSqlFixture fixture)
     {
         _fixture = fixture;
     }
@@ -57,9 +57,9 @@ public class GlobalAdminOrganizationSearchTests
             await adapter.WriteAsync(new MeshNode(org)
             {
                 Name = $"{org} Inc.",
-                NodeType = OrganizationNodeType.NodeType,
+                NodeType = SpaceNodeType.NodeType,
                 State = MeshNodeState.Active,
-                Content = new Organization { Name = $"{org} Inc." }
+                Content = new Space { Name = $"{org} Inc." }
             }, _options, ct);
 
             // A child Markdown node under the org
@@ -73,7 +73,7 @@ public class GlobalAdminOrganizationSearchTests
             // Register Organization as public_read in each schema
             var ac = new PostgreSqlAccessControl(ds);
             await ac.SyncNodeTypePermissionsAsync(
-                [new NodeTypePermission(OrganizationNodeType.NodeType, PublicRead: true)], ct);
+                [new NodeTypePermission(SpaceNodeType.NodeType, PublicRead: true)], ct);
         }
 
         // Populate searchable_schemas
@@ -98,7 +98,7 @@ public class GlobalAdminOrganizationSearchTests
             await cmd.ExecuteNonQueryAsync(ct);
 
         // Query: nodeType:Organization â€” the fixed query for Organization Search
-        var nodeTypeFilter = $"LOWER(n.node_type) = '{OrganizationNodeType.NodeType.ToLowerInvariant()}'";
+        var nodeTypeFilter = $"LOWER(n.node_type) = '{SpaceNodeType.NodeType.ToLowerInvariant()}'";
         var results = await CallSearchAcrossSchemasAsync(
             nodeTypeFilter, adminUserId, "last_modified DESC", 50, ct);
 
@@ -106,7 +106,7 @@ public class GlobalAdminOrganizationSearchTests
         results.Select(n => n.Name).Should().Contain("AlphaOrg Inc.");
         results.Select(n => n.Name).Should().Contain("BetaOrg Inc.");
         results.Select(n => n.Name).Should().Contain("GammaOrg Inc.");
-        results.Should().OnlyContain(n => n.NodeType == OrganizationNodeType.NodeType);
+        results.Should().OnlyContain(n => n.NodeType == SpaceNodeType.NodeType);
     }
 
     [Fact(Timeout = 60000)]
@@ -119,7 +119,7 @@ public class GlobalAdminOrganizationSearchTests
         await using (var cmd = _fixture.DataSource.CreateCommand("DELETE FROM public.partition_access"))
             await cmd.ExecuteNonQueryAsync(ct);
 
-        var nodeTypeFilter = $"LOWER(n.node_type) = '{OrganizationNodeType.NodeType.ToLowerInvariant()}'";
+        var nodeTypeFilter = $"LOWER(n.node_type) = '{SpaceNodeType.NodeType.ToLowerInvariant()}'";
         var results = await CallSearchAcrossSchemasAsync(
             nodeTypeFilter, "regularuser", "last_modified DESC", 50, ct);
 

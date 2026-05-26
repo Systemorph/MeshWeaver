@@ -5,7 +5,7 @@ using System.Reactive.Threading.Tasks;
 using System.Reactive.Linq;
 using FluentAssertions;
 using FluentAssertions.Extensions;
-using Memex.Portal.Shared;
+using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Security;
@@ -20,8 +20,8 @@ namespace MeshWeaver.NodeOperations.Test;
 /// <summary>
 /// Tests that GetEffectivePermissionsAsync correctly finds persisted AccessAssignment nodes.
 /// Protocol:
-/// 1) Install OrganizationNodeType
-/// 2) Create Organization "Systemorph"
+/// 1) Install SpaceNodeType
+/// 2) Create Space "Systemorph"
 /// 3) Ask ISecurityService.HasPermission → should NOT return None
 /// </summary>
 public class EffectivePermissionTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
@@ -30,7 +30,7 @@ public class EffectivePermissionTest(ITestOutputHelper output) : MonolithMeshTes
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
-            .AddOrganizationType();
+            .AddSpaceType();
 
     protected override async Task SetupAccessRightsAsync()
     {
@@ -39,31 +39,23 @@ public class EffectivePermissionTest(ITestOutputHelper output) : MonolithMeshTes
     }
 
     [Fact(Timeout = 60000)]
-    public async Task CreateOrganization_HasPermission_ReturnsAdmin()
+    public async Task CreateSpace_HasPermission_ReturnsAdmin()
     {
-        // 1) OrganizationNodeType installed via ConfigureMesh
-
-        // 2) Create Organization "Systemorph"
-        var orgNode = MeshNode.FromPath("Systemorph") with
+        var spaceNode = MeshNode.FromPath("Systemorph") with
         {
             Name = "Systemorph",
-            NodeType = OrganizationNodeType.NodeType,
-            Content = new Organization { Name = "Systemorph" }
+            NodeType = SpaceNodeType.NodeType,
+            Content = new Space { Name = "Systemorph" }
         };
-        await NodeFactory.CreateNode(orgNode);
+        await NodeFactory.CreateNode(spaceNode);
 
-        // 3) Subscribe to the live GetEffectivePermissions stream and wait
-        //    for the first non-empty emission — that's the synced
-        //    AccessAssignment satellite landing. Same CI-only index-propagation
-        //    race as AdminCreator_HasFullPermissions; deterministic via .Where
-        //    instead of poll + Task.Delay.
         var permissions = await Mesh.GetPermissionAsync(
             "Systemorph", TestUsers.Admin.ObjectId,
             until: p => p != Permission.None,
             ct: TestTimeout);
 
         permissions.Should().NotBe(Permission.None,
-            "Creator should have permissions from persisted AccessAssignment on the Organization");
+            "Creator should have permissions from persisted AccessAssignment on the Space");
         permissions.Should().Be(Permission.All,
             "Admin role grants all permissions");
     }

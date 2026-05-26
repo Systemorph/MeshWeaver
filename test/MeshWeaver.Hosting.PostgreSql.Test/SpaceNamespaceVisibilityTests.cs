@@ -3,7 +3,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
-using Memex.Portal.Shared;
+using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -13,46 +13,46 @@ using MeshWeaver.Fixture;
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
 /// <summary>
-/// Tests that Organization partition root nodes are visible in queries.
-/// When an Organization "PartnerRe" is created, a MeshNode at path "PartnerRe"
+/// Tests that Space partition root nodes are visible in queries.
+/// When an Space "PartnerRe" is created, a MeshNode at path "PartnerRe"
 /// must be queryable so it appears in the namespace picker (context:create)
 /// and in autocomplete results.
 /// </summary>
 [Collection("PostgreSql")]
-public class OrganizationNamespaceVisibilityTests
+public class SpaceNamespaceVisibilityTests
 {
     private readonly PostgreSqlFixture _fixture;
     private readonly JsonSerializerOptions _options = new();
 
-    public OrganizationNamespaceVisibilityTests(PostgreSqlFixture fixture)
+    public SpaceNamespaceVisibilityTests(PostgreSqlFixture fixture)
     {
         _fixture = fixture;
     }
 
-    private async Task SeedOrganizationAsync()
+    private async Task SeedSpaceAsync()
     {
         await _fixture.CleanDataAsync();
         var adapter = _fixture.StorageAdapter;
         var ac = _fixture.AccessControl;
 
-        // Seed Organization node at root path (same as partition namespace)
+        // Seed Space node at root path (same as partition namespace)
         await adapter.WriteAsync(new MeshNode("PartnerRe")
         {
             Name = "PartnerRe AG",
-            NodeType = "Organization",
-            Content = new Organization { Name = "PartnerRe AG" }
+            NodeType = "Space",
+            Content = new Space { Name = "PartnerRe AG" }
         }, _options, TestContext.Current.CancellationToken);
 
-        // Seed a child node under the Organization
+        // Seed a child node under the Space
         await adapter.WriteAsync(new MeshNode("AiConsulting", "PartnerRe")
         {
             Name = "AI Consulting",
             NodeType = "Group"
         }, _options, TestContext.Current.CancellationToken);
 
-        // Register Organization as public-read
+        // Register Space as public-read
         await ac.SyncNodeTypePermissionsAsync([
-            new NodeTypePermission("Organization", PublicRead: true)
+            new NodeTypePermission("Space", PublicRead: true)
         ], TestContext.Current.CancellationToken);
 
         // Grant authenticated user access
@@ -61,9 +61,9 @@ public class OrganizationNamespaceVisibilityTests
     }
 
     [Fact]
-    public async Task OrganizationRootNode_VisibleByPath()
+    public async Task SpaceRootNode_VisibleByPath()
     {
-        await SeedOrganizationAsync();
+        await SeedSpaceAsync();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
         var request = MeshQueryRequest.FromQuery("path:PartnerRe", "alice");
@@ -73,18 +73,18 @@ public class OrganizationNamespaceVisibilityTests
             if (item is MeshNode node) results.Add(node);
         }
 
-        results.Should().HaveCount(1, "Organization root node should be queryable by path");
+        results.Should().HaveCount(1, "Space root node should be queryable by path");
         results[0].Name.Should().Be("PartnerRe AG");
-        results[0].NodeType.Should().Be("Organization");
+        results[0].NodeType.Should().Be("Space");
     }
 
     [Fact]
-    public async Task OrganizationRootNode_VisibleByNodeType()
+    public async Task SpaceRootNode_VisibleByNodeType()
     {
-        await SeedOrganizationAsync();
+        await SeedSpaceAsync();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
-        var request = MeshQueryRequest.FromQuery("nodeType:Organization", "alice");
+        var request = MeshQueryRequest.FromQuery("nodeType:Space", "alice");
         var results = new List<MeshNode>();
         await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
         {
@@ -92,13 +92,13 @@ public class OrganizationNamespaceVisibilityTests
         }
 
         results.Should().Contain(n => n.Path == "PartnerRe",
-            "Organization root node should appear in nodeType:Organization queries");
+            "Space root node should appear in nodeType:Space queries");
     }
 
     [Fact]
-    public async Task OrganizationRootNode_VisibleInNamespaceQuery()
+    public async Task SpaceRootNode_VisibleInNamespaceQuery()
     {
-        await SeedOrganizationAsync();
+        await SeedSpaceAsync();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
         // This is how the namespace picker queries â€” root-level nodes
@@ -110,13 +110,13 @@ public class OrganizationNamespaceVisibilityTests
         }
 
         results.Should().Contain(n => n.Path == "PartnerRe",
-            "Organization root node should appear in root namespace query (namespace picker)");
+            "Space root node should appear in root namespace query (namespace picker)");
     }
 
     [Fact]
-    public async Task OrganizationChildren_VisibleAsDescendants()
+    public async Task SpaceChildren_VisibleAsDescendants()
     {
-        await SeedOrganizationAsync();
+        await SeedSpaceAsync();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
         var request = MeshQueryRequest.FromQuery("path:PartnerRe scope:descendants", "alice");
@@ -127,13 +127,13 @@ public class OrganizationNamespaceVisibilityTests
         }
 
         results.Should().Contain(n => n.Path == "PartnerRe/AiConsulting",
-            "Children under Organization should be visible as descendants");
+            "Children under Space should be visible as descendants");
     }
 
     [Fact]
-    public async Task OrganizationRootNode_VisibleWithContextCreate()
+    public async Task SpaceRootNode_VisibleWithContextCreate()
     {
-        await SeedOrganizationAsync();
+        await SeedSpaceAsync();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
         // The RoutingMeshQueryProvider scopes fan-out queries as:
@@ -148,7 +148,7 @@ public class OrganizationNamespaceVisibilityTests
         }
 
         results.Should().Contain(n => n.Path == "PartnerRe",
-            "Organization root node must appear in context:create queries â€” " +
+            "Space root node must appear in context:create queries â€” " +
             "otherwise the namespace picker won't show it");
     }
 }

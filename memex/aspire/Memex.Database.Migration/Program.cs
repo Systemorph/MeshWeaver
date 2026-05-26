@@ -84,6 +84,8 @@ var migrations = new IMigration[]
     new V24_DedupMeshNodeNotifyTrigger(),
     new V25_MirrorAccessObjectsToUserSchema(),
     new V26_AddNotificationsSatelliteTable(),
+    new V27_RenameUserSchemaToAuthAndMirrorApiTokens(),
+    new V28_RenameOrganizationToSpace(),
 };
 
 var ctx = new MigrationContext(dataSource, connectionString, options, logger, initResult.IsFreshDb);

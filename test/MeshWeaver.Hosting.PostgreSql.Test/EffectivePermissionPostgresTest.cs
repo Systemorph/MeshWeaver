@@ -5,7 +5,7 @@ using System.Reactive.Threading.Tasks;
 using System.Reactive.Linq;
 using FluentAssertions;
 using FluentAssertions.Extensions;
-using Memex.Portal.Shared;
+using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith;
@@ -55,7 +55,7 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
                 services.AddPartitionedPostgreSqlPersistence(csb.ConnectionString))
             .AddRowLevelSecurity()
             .AddGraph()
-            .AddOrganizationType();
+            .AddSpaceType();
     }
 
     /// <summary>
@@ -149,8 +149,8 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
         var orgNode = MeshNode.FromPath(orgId) with
         {
             Name = orgId,
-            NodeType = OrganizationNodeType.NodeType,
-            Content = new Organization { Name = orgId }
+            NodeType = SpaceNodeType.NodeType,
+            Content = new Space { Name = orgId }
         };
         await NodeFactory.CreateNode(orgNode);
 

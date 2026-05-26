@@ -6,8 +6,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
-using Memex.Portal.Shared;
 using Memex.Portal.Shared.Authentication;
+using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
@@ -25,18 +25,18 @@ using Xunit;
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
 /// <summary>
-/// Stage 9d — End-to-end organization + user onboarding integration. Drives
+/// Stage 9d — End-to-end Space + user onboarding integration. Drives
 /// the same code paths the prod portal hits when:
 ///
 /// <list type="bullet">
 ///   <item>a new user signs in for the first time → <see cref="UserOnboardingService"/>
 ///     writes Admin/Partition/{user} + {user} root + user-catalog mirror.</item>
-///   <item>an admin creates a new organization → Admin/Partition/{org} +
-///     {org} partition root.</item>
+///   <item>an admin creates a new Space → schema is created lazily on first write
+///     by the PG routing adapter; no Admin/Partition record is emitted anymore.</item>
 /// </list>
 /// </summary>
 [Collection("PostgreSql")]
-public class OrganizationOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOutputHelper output)
+public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOutputHelper output)
     : MonolithMeshTestBase(output)
 {
     private readonly PostgreSqlFixture _fixture = fixture;
@@ -59,7 +59,7 @@ public class OrganizationOnboardingIntegrationTests(PostgreSqlFixture fixture, I
             })
             .AddRowLevelSecurity()
             .AddGraph()
-            .AddOrganizationType();
+            .AddSpaceType();
     }
 
     [Fact(Timeout = 120000)]
@@ -91,7 +91,7 @@ public class OrganizationOnboardingIntegrationTests(PostgreSqlFixture fixture, I
     }
 
     [Fact(Timeout = 120000)]
-    public async Task CreateOrganization_RoutableAfterAdminPartitionWrite()
+    public async Task CreateSpace_RoutableAfterAdminPartitionWrite()
     {
         var ct = TestTimeout;
         var orgId = $"pg9d_org_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
@@ -115,7 +115,7 @@ public class OrganizationOnboardingIntegrationTests(PostgreSqlFixture fixture, I
 
         var orgRoot = await meshService.CreateNode(new MeshNode(orgId)
         {
-            NodeType = "Organization",
+            NodeType = "Space",
             Name = orgId,
             State = MeshNodeState.Active,
         }).Timeout(30.Seconds()).FirstAsync().ToTask(ct);
@@ -127,7 +127,7 @@ public class OrganizationOnboardingIntegrationTests(PostgreSqlFixture fixture, I
             .Catch<AddressResolution?, TimeoutException>(_ => Observable.Return<AddressResolution?>(null))
             .FirstAsync().ToTask(ct);
         resolution.Should().NotBeNull(
-            "post-create the organization partition must be routable");
+            "post-create the Space partition must be routable");
     }
 
     [Fact(Timeout = 120000)]

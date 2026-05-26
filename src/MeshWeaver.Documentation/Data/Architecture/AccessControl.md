@@ -489,7 +489,7 @@ securityService.HasPermission("Anonymous", Permission.Read)
 
 ```mermaid
 flowchart TB
-    Global["Global Scope<br/>(empty namespace)"] --> Org["Organization<br/>e.g., ACME"]
+    Global["Global Scope<br/>(empty namespace)"] --> Org["Space<br/>e.g., ACME"]
     Org --> Proj["Project<br/>e.g., ACME/ProjectX"]
     Proj --> Task["Task<br/>e.g., ACME/ProjectX/Task1"]
 

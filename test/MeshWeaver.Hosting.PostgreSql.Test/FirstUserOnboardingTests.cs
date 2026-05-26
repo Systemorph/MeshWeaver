@@ -5,7 +5,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
-using Memex.Portal.Shared;
+using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -166,15 +166,15 @@ public class FirstUserOnboardingTests
             await adapter.WriteAsync(new MeshNode(org)
             {
                 Name = $"{org} Corp",
-                NodeType = OrganizationNodeType.NodeType,
+                NodeType = SpaceNodeType.NodeType,
                 State = MeshNodeState.Active,
-                Content = new Organization { Name = $"{org} Corp" }
+                Content = new Space { Name = $"{org} Corp" }
             }, _options, ct);
 
             // Register Organization as public_read in each org schema
             var ac = new PostgreSqlAccessControl(ds);
             await ac.SyncNodeTypePermissionsAsync(
-                [new NodeTypePermission(OrganizationNodeType.NodeType, PublicRead: true)], ct);
+                [new NodeTypePermission(SpaceNodeType.NodeType, PublicRead: true)], ct);
         }
 
         // Populate searchable_schemas
@@ -189,7 +189,7 @@ public class FirstUserOnboardingTests
 
         // Cross-schema search for Organization nodes as globaladmin
         var results = await CallSearchAcrossSchemasAsync(
-            $"LOWER(n.node_type) = '{OrganizationNodeType.NodeType.ToLowerInvariant()}'",
+            $"LOWER(n.node_type) = '{SpaceNodeType.NodeType.ToLowerInvariant()}'",
             username, "last_modified DESC", 50, ct);
 
         results.Should().HaveCount(2, "Global admin should see all organizations (has partition_access to both)");
