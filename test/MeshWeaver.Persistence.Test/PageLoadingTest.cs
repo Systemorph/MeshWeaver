@@ -170,8 +170,12 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
     /// <summary>
     /// Tests that Organization nodes load without hanging.
+    /// 60 s timeout (vs 10 s default) because ACME's first activation triggers
+    /// cold compile of its three child NodeTypes (Article, Project, Todo) +
+    /// loads access assignments. Subsequent runs hit the timestamped-subdir
+    /// cache via CompilationCacheService.TryGetLatestCachedDllPath.
     /// </summary>
-    [Theory(Timeout = 10000)]
+    [Theory(Timeout = 60000)]
     [InlineData("ACME")]
     [InlineData("Systemorph")]
     public async Task Organization_LoadsWithoutHanging(string nodePath)
