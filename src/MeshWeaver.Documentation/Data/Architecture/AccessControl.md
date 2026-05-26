@@ -7,6 +7,25 @@ Icon: /static/DocContent/Architecture/AccessControl/icon.svg
 
 MeshWeaver provides row-level security through **AccessAssignment MeshNodes** stored directly in the mesh node hierarchy. Permissions are evaluated by walking the node tree from root to target path, applying closest-wins semantics.
 
+# 🚨 Public API — read this first
+
+**Application code calls `hub.CheckPermission(path, permission)` or `hub.GetEffectivePermissions(path)`.** Both return `IObservable<T>` end-to-end — compose with `CombineLatest`/`Select`, never `await`. Full reference: [PermissionApi](PermissionApi).
+
+```csharp
+using MeshWeaver.Mesh;
+
+// True / false on the current ambient user
+hub.CheckPermission(nodePath, Permission.Update);
+
+// Full effective Permission set
+hub.GetEffectivePermissions(nodePath);
+
+// Explicit user (admin tooling, server-to-server)
+hub.CheckPermission(nodePath, "alice", Permission.Update);
+```
+
+The rest of this document covers the **internals** that back those extensions: AccessAssignment node shape, the recursive scope walk, the per-scope synced subscriptions cached on `IMeshNodeStreamCache` under system identity, the RLS validator wired into the storage adapter. Don't resolve `ISecurityService` directly from application code — it's framework-internal infrastructure that the extension wraps.
+
 # Core Concepts
 
 ## AccessAssignment MeshNodes
