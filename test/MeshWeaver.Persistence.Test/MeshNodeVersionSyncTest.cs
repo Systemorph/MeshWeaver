@@ -205,11 +205,15 @@ public record GraphRoot
     [Fact(Timeout = 10000)]
     public async Task MeshNode_VersionProperty_CanBeSetAndPersisted()
     {
-        // Arrange - create a node with a specific version
+        // Arrange - create a node with a specific version. Use a built-in
+        // NodeType ("Group") so the per-node hub activates without waiting
+        // for a Roslyn compile — this test exercises Version persistence,
+        // not NodeType compilation. A dynamic NodeType (e.g. "type/graph")
+        // would block CreateNode behind the slow-path compile and time out.
         var nodeWithVersion = MeshNode.FromPath("test/versioned") with
         {
             Name = "Versioned Node",
-            NodeType = "type/graph",
+            NodeType = "Group",
             Version = 42
         };
 
