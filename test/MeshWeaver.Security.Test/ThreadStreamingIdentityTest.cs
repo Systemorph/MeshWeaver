@@ -106,13 +106,10 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
         // 2. Submit message via stream.Update — triggers AI streaming on the _Exec sub-hub.
         //    SubmitMessageRequest deleted 2026-05-25; submission is now ThreadSubmission.Submit
         //    which writes PendingUserMessages on the thread node.
-        ThreadSubmission.Submit(new SubmitContext
-        {
-            Hub = client,
-            ThreadPath = threadPath,
-            UserText = "Hello from identity test",
-            ContextPath = UserPath,
-        });
+        client.SubmitMessage(
+            threadPath,
+            "Hello from identity test",
+            contextPath: UserPath);
         Output.WriteLine("Message submitted, waiting for streaming...");
 
         // 3. Poll for the response message to be populated by streaming
@@ -155,13 +152,10 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
 
         // Submit message via stream.Update.
         var submitTime = DateTimeOffset.UtcNow;
-        ThreadSubmission.Submit(new SubmitContext
-        {
-            Hub = client,
-            ThreadPath = threadPath,
-            UserText = "Stream incrementally please",
-            ContextPath = UserPath,
-        });
+        client.SubmitMessage(
+            threadPath,
+            "Stream incrementally please",
+            contextPath: UserPath);
 
         // Poll for first partial response â€” should arrive within 5 seconds,
         // NOT after full streaming completes (which would take longer)
@@ -215,13 +209,10 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
         createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error);
         var threadPath = createResponse.Message.Node!.Path!;
 
-        ThreadSubmission.Submit(new SubmitContext
-        {
-            Hub = client,
-            ThreadPath = threadPath,
-            UserText = "Stream me growing chunks please",
-            ContextPath = UserPath,
-        });
+        client.SubmitMessage(
+            threadPath,
+            "Stream me growing chunks please",
+            contextPath: UserPath);
 
         // Wait briefly for the response cell to be allocated.
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();

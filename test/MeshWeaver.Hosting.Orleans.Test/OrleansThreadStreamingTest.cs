@@ -94,15 +94,12 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
             .Where(ids => ids.Count >= 2)
             .FirstAsync().ToTask(ct);
 
-        // Submit via ThreadInput.AppendUserInput
-        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
-            {
-                Hub = client,
-                ThreadPath = threadPath,
-                UserText = "Tell me something",
-                ContextPath = ContextPath
-            });
-            var msgIds = await twoMessages;
+        // Submit via workspace extension
+        client.SubmitMessage(
+            threadPath,
+            "Tell me something",
+            contextPath: ContextPath);
+        var msgIds = await twoMessages;
         var responseMsgId = msgIds[1];
         Output.WriteLine($"Response message: {responseMsgId}");
 
@@ -166,16 +163,13 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
             .FirstAsync()
             .ToTask(ct);
 
-        // Submit message via ThreadInput.AppendUserInput
+        // Submit message via workspace extension
         Output.WriteLine("2. Submitting message...");
-        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
-            {
-                Hub = client,
-                ThreadPath = threadPath,
-                UserText = "Use the test tool please",
-                ContextPath = ContextPath
-            });
-            Output.WriteLine("3. Message submitted successfully");
+        client.SubmitMessage(
+            threadPath,
+            "Use the test tool please",
+            contextPath: ContextPath);
+        Output.WriteLine("3. Message submitted successfully");
 
         // Wait for 2 message IDs
         var msgIds = await twoMessages;
@@ -263,15 +257,12 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
         var threadPath = createResp.Message.Node!.Path!;
         Output.WriteLine($"1. Thread: {threadPath}");
 
-        // 2. Submit message via ThreadInput.AppendUserInput
-        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
-            {
-                Hub = client,
-                ThreadPath = threadPath,
-                UserText = "Use the test tool please",
-                ContextPath = ContextPath
-            });
-            Output.WriteLine("2. Message submitted");
+        // 2. Submit message via workspace extension
+        client.SubmitMessage(
+            threadPath,
+            "Use the test tool please",
+            contextPath: ContextPath);
+        Output.WriteLine("2. Message submitted");
 
         // 3. Wait for 2 messages (user + response)
         var msgIds = await workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
@@ -343,14 +334,11 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
         var threadPath = createResp.Message.Node!.Path!;
         Output.WriteLine($"1. Thread: {threadPath}");
 
-        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
-            {
-                Hub = client,
-                ThreadPath = threadPath,
-                UserText = "Test",
-                ContextPath = ContextPath
-            });
-            Output.WriteLine("2. Submitted");
+        client.SubmitMessage(
+            threadPath,
+            "Test",
+            contextPath: ContextPath);
+        Output.WriteLine("2. Submitted");
 
         // 2. Wait for response message to appear
         var msgIds = await workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!

@@ -108,14 +108,11 @@ public class OrleansSubThreadRoutingTest(ITestOutputHelper output) : OrleansShar
             .FirstAsync()
             .ToTask(ct);
 
-        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
-            {
-                Hub = client,
-                ThreadPath = threadPath,
-                UserText = "Test message for sub-thread routing",
-                ContextPath = "TestUser"
-            });
-            Output.WriteLine("First ThreadInput.AppendUserInput succeeded");
+        client.SubmitMessage(
+            threadPath,
+            "Test message for sub-thread routing",
+            contextPath: "TestUser");
+        Output.WriteLine("First SubmitMessage succeeded");
 
         var msgIds = await twoMessages;
         msgIds.Should().HaveCount(2);
@@ -157,15 +154,12 @@ public class OrleansSubThreadRoutingTest(ITestOutputHelper output) : OrleansShar
             .FirstAsync()
             .ToTask(ct);
 
-        Output.WriteLine($"Posting ThreadInput.AppendUserInput to sub-thread: {subThreadPath}");
-        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
-            {
-                Hub = client,
-                ThreadPath = subThreadPath,
-                UserText = "Hello from sub-thread!",
-                ContextPath = "TestUser"
-            });
-            Output.WriteLine("Sub-thread ThreadInput.AppendUserInput succeeded!");
+        Output.WriteLine($"Posting SubmitMessage to sub-thread: {subThreadPath}");
+        client.SubmitMessage(
+            subThreadPath,
+            "Hello from sub-thread!",
+            contextPath: "TestUser");
+        Output.WriteLine("Sub-thread SubmitMessage succeeded!");
 
         // 5. Wait for sub-thread cells to appear
         var subMsgIds = await subTwoMessages;
@@ -218,14 +212,11 @@ public class OrleansSubThreadRoutingTest(ITestOutputHelper output) : OrleansShar
             .FirstAsync()
             .ToTask(ct);
 
-        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
-            {
-                Hub = client,
-                ThreadPath = threadPath,
-                UserText = "Access context test msg",
-                ContextPath = "TestUser"
-            });
-            var msgIds = await twoMessages;
+        client.SubmitMessage(
+            threadPath,
+            "Access context test msg",
+            contextPath: "TestUser");
+        var msgIds = await twoMessages;
         var responseMsgId = msgIds[1];
         Output.WriteLine($"Response message: {responseMsgId}");
 

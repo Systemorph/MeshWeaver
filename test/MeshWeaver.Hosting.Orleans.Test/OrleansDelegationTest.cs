@@ -143,15 +143,12 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
             .FirstAsync()
             .ToTask(ct);
 
-        // 3. Submit message via ThreadInput.AppendUserInput â€” triggers delegation via production ChatClientAgentFactory
-        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
-            {
-                Hub = client,
-                ThreadPath = threadPath,
-                UserText = "Please delegate this research task",
-                ContextPath = "TestUser"
-            });
-            Output.WriteLine("2. Message submitted");
+        // 3. Submit message via workspace extension â€” triggers delegation via production ChatClientAgentFactory
+        client.SubmitMessage(
+            threadPath,
+            "Please delegate this research task",
+            contextPath: "TestUser");
+        Output.WriteLine("2. Message submitted");
 
         // 4. Wait for message cells
         var msgIds = await twoMessages;
@@ -220,14 +217,11 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
             .Where(ids => ids.Count >= 2)
             .FirstAsync().ToTask(ct);
 
-        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
-            {
-                Hub = client,
-                ThreadPath = threadPath,
-                UserText = "Delegate something",
-                ContextPath = "TestUser"
-            });
-            var msgIds = await twoMessages;
+        client.SubmitMessage(
+            threadPath,
+            "Delegate something",
+            contextPath: "TestUser");
+        var msgIds = await twoMessages;
         Output.WriteLine($"1. Initial messages: [{string.Join(", ", msgIds)}]");
 
         // 2. Wait for execution to complete
@@ -253,9 +247,9 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
             .FirstAsync().ToTask(ct);
 
         // Stream-update resubmit — see RequestViaStreamUpdate.md.
-        MeshWeaver.AI.ThreadSubmission.ApplyResubmit(
-            client, threadPath, msgIds[0],
-            newUserText: "Delegate something", agentName: null, modelName: null);
+        client.ResubmitMessage(
+            threadPath, msgIds[0],
+            newUserText: "Delegate something");
 
         var newMsgIds = await resubmitted;
         Output.WriteLine($"3. After resubmit: [{string.Join(", ", newMsgIds)}]");

@@ -176,16 +176,13 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTe
             .FirstAsync()
             .ToTask(ct);
 
-        // 3. Submit message via ThreadInput.AppendUserInput (like side panel SendMessageAsync)
-        Output.WriteLine("Posting ThreadInput.AppendUserInput...");
-        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
-            {
-                Hub = client,
-                ThreadPath = threadPath,
-                UserText = "Hello from side panel test",
-                ContextPath = "TestUser"
-            });
-            Output.WriteLine("ThreadInput.AppendUserInput succeeded");
+        // 3. Submit message via workspace extension (like side panel SendMessageAsync)
+        Output.WriteLine("Posting SubmitMessage...");
+        client.SubmitMessage(
+            threadPath,
+            "Hello from side panel test",
+            contextPath: "TestUser");
+        Output.WriteLine("SubmitMessage succeeded");
 
         // 4. Wait for both cells to appear in stream
         var msgIds = await twoMessages;
@@ -272,14 +269,11 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTe
         //    [SubmitMessagePermission] check now sits on the data-change
         //    pipeline; if identity is lost, the per-thread grain rejects the
         //    write with "(anonymous)" and Messages stays empty.
-        Output.WriteLine("ThreadSubmission.Submit with CircuitContext identity...");
-        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
-        {
-            Hub = client,
-            ThreadPath = threadPath,
-            UserText = "Hello with identity",
-            ContextPath = "TestUser"
-        });
+        Output.WriteLine("SubmitMessage with CircuitContext identity...");
+        client.SubmitMessage(
+            threadPath,
+            "Hello with identity",
+            contextPath: "TestUser");
 
         // 6. Wait for both cells to appear in stream
         var msgIds = await twoMessages;
@@ -355,14 +349,11 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTe
         // uses (ThreadChatView). If the permission check fails the OnError
         // callback fires with the rejection message and the test does NOT hang.
         var responseTcs = new TaskCompletionSource<string?>();
-        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
-        {
-            Hub = client,
-            ThreadPath = threadPath,
-            UserText = "Should be denied",
-            ContextPath = "TestUser",
-            OnError = msg => responseTcs.TrySetResult(msg)
-        });
+        client.SubmitMessage(
+            threadPath,
+            "Should be denied",
+            contextPath: "TestUser",
+            onError: msg => responseTcs.TrySetResult(msg));
 
         var timeoutTask = Task.Delay(15_000, ct);
         var error = await Task.WhenAny(responseTcs.Task, timeoutTask) == responseTcs.Task
@@ -393,14 +384,11 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTe
         var twoMessages = ObserveThreadMessages(client, threadPath)
             .Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
 
-        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
-            {
-                Hub = client,
-                ThreadPath = threadPath,
-                UserText = "Test child nodes",
-                ContextPath = "TestUser"
-            });
-            var msgIds = await twoMessages;
+        client.SubmitMessage(
+            threadPath,
+            "Test child nodes",
+            contextPath: "TestUser");
+        var msgIds = await twoMessages;
 
         // Verify each message is at {threadPath}/{msgId}
         foreach (var msgId in msgIds)

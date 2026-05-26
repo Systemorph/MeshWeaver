@@ -19,9 +19,10 @@ namespace MeshWeaver.Auth.Test;
 
 /// <summary>
 /// Pins the onboarding dual-write contract — every <see cref="UserOnboardingService.CreateUser"/>
-/// call lands THREE rows: partition-root, user-catalog mirror, Admin/Partition entry.
-/// Without all three either path routing (<c>/{username}</c>), login lookup
-/// (<c>nodeType:User content.email:X</c>), or partition activation breaks.
+/// call lands TWO rows: partition-root and user-catalog mirror. The dedicated
+/// <c>Admin/Partition/{user}</c> entry was dropped (2026-05-26): the path-routing
+/// adapter's <c>PendingCreate</c> branch creates the per-user schema lazily on
+/// first write, so no explicit Partition MeshNode is needed.
 ///
 /// <para>Real mesh, in-memory partitioned persistence, no mocks — this is the
 /// shape prod hits when a new user signs up. The chain stays 100% reactive
@@ -62,11 +63,11 @@ public class UserOnboardingServiceTests(ITestOutputHelper output) : MonolithMesh
             .SetCircuitContext(new AccessContext { ObjectId = userId, Name = userId });
 
     /// <summary>
-    /// The service emits the partition-root MeshNode AND persists all three
-    /// rows (a/b/c) such that subsequent reads find them at the expected paths.
+    /// The service emits the partition-root MeshNode AND persists both
+    /// rows (a/b) such that subsequent reads find them at the expected paths.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task CreateUser_WritesAllThreeRows()
+    public async Task CreateUser_WritesBothRows()
     {
         var username = $"obtest-{Guid.NewGuid():N}".ToLowerInvariant()[..16];
 
@@ -115,13 +116,9 @@ public class UserOnboardingServiceTests(ITestOutputHelper output) : MonolithMesh
         catalogMirror!.NodeType.Should().Be("User");
         catalogMirror.Namespace.Should().Be("User");
 
-        // (c) Admin/Partition catalog entry — path = "Admin/Partition/{username}"
-        var partitionCatalog = await ReadNodeAsync($"Admin/Partition/{username}", Ct);
-        partitionCatalog.Should().NotBeNull(
-            "Admin/Partition catalog entry is required so the storage provider's " +
-            "first-segment lookup matches '{username}' — without it the partition-root " +
-            "write itself doesn't route");
-        partitionCatalog!.NodeType.Should().Be("Partition");
+        // No Admin/Partition catalog entry is emitted anymore — the path-routing
+        // adapter's PendingCreate branch creates the per-user schema lazily on
+        // the first write to {username}/... (see PostgreSqlPathRoutingAdapter.cs).
     }
 
     /// <summary>

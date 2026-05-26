@@ -141,14 +141,11 @@ public class OrleansHostedHubRoutingTest(ITestOutputHelper output) : OrleansShar
         //    on Messages.Count growing is the canary for "local workspace
         //    write visible to grain-direct read" â€” the bug class behind the
         //    polling failures.
-        Output.WriteLine("[Act] ThreadSubmission.Submit");
-        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
-        {
-            Hub = client,
-            ThreadPath = threadPath,
-            UserText = "Workspace propagation test message",
-            ContextPath = "TestUser"
-        });
+        Output.WriteLine("[Act] SubmitMessage");
+        client.SubmitMessage(
+            threadPath,
+            "Workspace propagation test message",
+            contextPath: "TestUser");
 
         // 4. Poll until the new message ids show up via a fresh GetDataRequest.
         MeshThread? current = null;
