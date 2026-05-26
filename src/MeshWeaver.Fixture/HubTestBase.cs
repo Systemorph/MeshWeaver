@@ -15,7 +15,10 @@ public class HubTestBase : TestBase
 
     protected static Address CreateMeshAddress(string? id = null) => new(MeshType, id ?? "1");
     protected static Address CreateHostAddress(string? id = null) => new(HostType, id ?? "1");
-    protected static Address CreateClientAddress(string? id = null) => new(ClientType, id ?? "1");
+    // Unique-per-call when id is null. See MonolithMeshTestBase.CreateClientAddress
+    // for the routing-table partitioning rationale (leaked server-side sync streams
+    // from prior tests' client hubs flooding the latest client/1's action block).
+    protected static Address CreateClientAddress(string? id = null) => new(ClientType, id ?? Guid.NewGuid().ToString("N")[..12]);
 
     [Inject]
     protected IMessageHub Mesh = null!;

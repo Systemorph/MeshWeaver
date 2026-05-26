@@ -20,7 +20,17 @@ namespace MeshWeaver.Hosting.Monolith.TestBase;
 
 public abstract class MonolithMeshTestBase : Fixture.TestBase
 {
-    protected static Address CreateClientAddress() => new("client", "1");
+    // Unique-per-call. Prior versions returned the fixed `client/1` address;
+    // when a test class uses ShareMeshAcrossTests, every test's GetClient()
+    // overwrote streams[client/1] in RoutingService, and server-side sync
+    // streams paired with the previous client/1 kept emitting DataChangedEvents
+    // addressed to that slot — those events queued on the latest client/1's
+    // action block ahead of new SubscribeAcks + initial-state emissions, blowing
+    // through stream FirstAsync timeouts. Unique addresses partition the routing
+    // table so leaked traffic from a prior test lands at a dead slot and is
+    // dropped harmlessly. PageLoadingTest.ConcurrentRequests + the AI/Threading
+    // suite hangs both traced to this.
+    protected static Address CreateClientAddress() => new("client", Guid.NewGuid().ToString("N")[..12]);
 
     /// <summary>
     /// Base mesh configuration without access control setup.
@@ -949,9 +959,47 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         return false;
     }
 
+    /// <summary>
+    /// Per-test-method client tracking. Every GetClient() is appended; DisposeAsync
+    /// disposes them all (including the shared-mesh path). Critical for
+    /// ShareMeshAcrossTests classes: without it the prior test's client hub stays
+    /// alive on the mesh, its server-side LayoutAreaReference / MeshNodeReference
+    /// sync streams keep emitting DataChangedEvents to the (now-abandoned) client
+    /// address, and the action block backs up across tests. Per-test dispose
+    /// signals each client to RegisterForDisposal its routing-stream registration
+    /// and its workspace, drops it from streams[address], and the server-side
+    /// sync streams complete cleanly.
+    /// </summary>
+    private readonly List<IMessageHub> _clientsCreated = new();
+
     protected IMessageHub GetClient(Func<MessageHubConfiguration, MessageHubConfiguration>? config = null)
     {
-        return Mesh.ServiceProvider.CreateMessageHub(CreateClientAddress(), config ?? ConfigureClient)!;
+        var client = Mesh.ServiceProvider.CreateMessageHub(CreateClientAddress(), config ?? ConfigureClient)!;
+        lock (_clientsCreated) _clientsCreated.Add(client);
+        return client;
+    }
+
+    private void DisposeTestClients(string testName, Stopwatch sw)
+    {
+        IMessageHub[] snapshot;
+        lock (_clientsCreated)
+        {
+            snapshot = _clientsCreated.ToArray();
+            _clientsCreated.Clear();
+        }
+        if (snapshot.Length == 0) return;
+
+        TestPhaseTrace(testName, "DISPOSE_CLIENTS_START", sw.ElapsedMilliseconds, $"count={snapshot.Length}");
+        foreach (var client in snapshot)
+        {
+            try { client.Dispose(); }
+            catch (Exception ex)
+            {
+                FileOutput.WriteLine(
+                    $"[DISPOSE] {testName}: client {client.Address} dispose failed: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+        TestPhaseTrace(testName, "DISPOSE_CLIENTS_DONE", sw.ElapsedMilliseconds);
     }
 
     protected virtual MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
@@ -1015,6 +1063,16 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         // etc.) still runs.
         if (ShareMeshAcrossTests)
         {
+            // Drop the per-test client hubs FIRST — the shared mesh stays alive
+            // for the rest of the class, but every client hub the test created
+            // must be disposed here. Otherwise streams[client/<guid>] never
+            // unregisters, server-side sync streams keep emitting to the
+            // dropped client, and the per-class TestQuiesceTimeout fires only
+            // when the suite is teardown (which by then is too late — the
+            // intermediate tests were already slow from the action-block
+            // congestion). See ConcurrentRequests deadlock (commit 02dd88f37)
+            // and the AI/Threading suite 6-min CI timeout.
+            DisposeTestClients(testName, sw);
             TestPhaseTrace(testName, "DISPOSE_SHARED_SKIP", sw.ElapsedMilliseconds);
             try { await base.DisposeAsync(); }
             catch (Exception ex)
@@ -1027,6 +1085,11 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             WriteInstanceMemoryDelta(testName, shared: true);
             return;
         }
+
+        // Non-shared path also benefits — Mesh.Dispose disposes all hosted hubs
+        // including clients, but doing it via the tracked list is faster and
+        // more deterministic (no race against the Mesh's own dispose).
+        DisposeTestClients(testName, sw);
 
         try
         {
