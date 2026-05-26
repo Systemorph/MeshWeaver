@@ -106,15 +106,7 @@ public static class RunningActivitiesStripe
         {
             cancel = cancel.WithClickAction(ctx =>
             {
-                var cancelLogger = ctx.Host.Hub.ServiceProvider.GetService<ILoggerFactory>()
-                    ?.CreateLogger("MeshWeaver.Graph.RunningActivitiesStripe");
-                ctx.Host.Hub.GetWorkspace().GetMeshNodeStream(activity.Path).Update(curr =>
-                    curr.Content is ActivityLog l
-                        ? curr with { Content = l with { RequestedStatus = ActivityStatus.Cancelled } }
-                        : curr).Subscribe(
-                            _ => { },
-                            ex => cancelLogger?.LogWarning(ex,
-                                "RunningActivitiesStripe.Cancel: UpdateMeshNode failed for {Path}", activity.Path));
+                ctx.Host.Hub.CancelActivity(activity.Path);
                 return Task.CompletedTask;
             });
         }

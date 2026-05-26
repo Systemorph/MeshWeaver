@@ -188,15 +188,9 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
             .FirstAsync();
 
         // The canonical cancel: patch RequestedStatus on the activity content.
-        // No CancelScriptRequest, no message types â€” just GetMeshNodeStream(path).Update.
-        // .Subscribe is mandatory: Update returns a cold observable; the partition
-        // write side effect only runs on Subscribe â€” a discarded observable would
-        // silently no-op.
-        workspace.GetMeshNodeStream(activityPath.Path).Update(curr =>
-            curr.Content is ActivityLog log
-                ? curr with { Content = log with { RequestedStatus = ActivityStatus.Cancelled } }
-                : curr)
-            .Subscribe(_ => { }, _ => { });
+        // No CancelScriptRequest, no message types — the IMessageHub extension
+        // does the GetMeshNodeStream(path).Update + Subscribe under the hood.
+        workspace.Hub.CancelActivity(activityPath.Path);
 
         // The activity hub's control-plane watcher sees the patch, dispatches
         // the internal cancel, the script throws OperationCanceledException, and

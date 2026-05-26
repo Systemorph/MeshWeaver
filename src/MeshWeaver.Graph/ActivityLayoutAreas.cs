@@ -76,16 +76,7 @@ public static class ActivityLayoutAreas
                         .WithIconStart(FluentIcons.Dismiss())
                         .WithClickAction(ctx =>
                         {
-                            var cancelLogger = ctx.Host.Hub.ServiceProvider.GetService<ILoggerFactory>()
-                                ?.CreateLogger("MeshWeaver.Graph.ActivityLayoutAreas");
-                            ctx.Host.Workspace.GetMeshNodeStream().Update(curr =>
-                                curr.Content is ActivityLog active
-                                    ? curr with { Content = active with { RequestedStatus = ActivityStatus.Cancelled } }
-                                    : curr).Subscribe(
-                                        _ => { },
-                                        ex => cancelLogger?.LogWarning(ex,
-                                            "ActivityLayoutAreas.Overview.Cancel: UpdateMeshNode failed for {Hub}",
-                                            ctx.Host.Hub.Address));
+                            ctx.Host.Hub.CancelActivity(ctx.Host.Hub.Address.ToString());
                             return Task.CompletedTask;
                         }));
                 }
@@ -136,16 +127,7 @@ public static class ActivityLayoutAreas
                 {
                     button = button.WithClickAction(ctx =>
                     {
-                        var cancelLogger = ctx.Host.Hub.ServiceProvider.GetService<ILoggerFactory>()
-                            ?.CreateLogger("MeshWeaver.Graph.ActivityLayoutAreas");
-                        ctx.Host.Workspace.GetMeshNodeStream().Update(curr =>
-                            curr.Content is ActivityLog l
-                                ? curr with { Content = l with { RequestedStatus = ActivityStatus.Cancelled } }
-                                : curr).Subscribe(
-                                    _ => { },
-                                    ex => cancelLogger?.LogWarning(ex,
-                                        "ActivityLayoutAreas.CancelButton: UpdateMeshNode failed for {Hub}",
-                                        ctx.Host.Hub.Address));
+                        ctx.Host.Hub.CancelActivity(ctx.Host.Hub.Address.ToString());
                         return Task.CompletedTask;
                     });
                 }
@@ -181,16 +163,7 @@ public static class ActivityLayoutAreas
                         .WithIconStart(FluentIcons.Dismiss())
                         .WithClickAction(ctx =>
                         {
-                            var cancelLogger = ctx.Host.Hub.ServiceProvider.GetService<ILoggerFactory>()
-                                ?.CreateLogger("MeshWeaver.Graph.ActivityLayoutAreas");
-                            ctx.Host.Workspace.GetMeshNodeStream().Update(curr =>
-                                curr.Content is ActivityLog l
-                                    ? curr with { Content = l with { RequestedStatus = ActivityStatus.Cancelled } }
-                                    : curr).Subscribe(
-                                        _ => { },
-                                        ex => cancelLogger?.LogWarning(ex,
-                                            "ActivityLayoutAreas.Progress.Cancel: UpdateMeshNode failed for {Hub}",
-                                            ctx.Host.Hub.Address));
+                            ctx.Host.Hub.CancelActivity(ctx.Host.Hub.Address.ToString());
                             return Task.CompletedTask;
                         }));
                 }
