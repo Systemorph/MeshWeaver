@@ -560,7 +560,7 @@ public static class CreateLayoutArea
         var knownType = restrictedTypes is { Length: 1 } ? restrictedTypes[0] : defaultType;
         if (!string.IsNullOrEmpty(knownType))
         {
-            var typeNode = meshConfiguration.Nodes.Values.FirstOrDefault(n => n.Path == knownType);
+            var typeNode = host.Hub.ServiceProvider.FindStaticNode(knownType);
             var typeDef = typeNode?.Content as NodeTypeDefinition;
 
             // Apply DefaultNamespace from NodeTypeDefinition (pre-selects but doesn't restrict)
@@ -577,7 +577,7 @@ public static class CreateLayoutArea
             defaultNamespace = restrictedNamespaces[0];
 
         // 2. Build fixed creatable type Items (alphabetical)
-        var creatableTypeNodes = meshConfiguration.Nodes.Values
+        var creatableTypeNodes = host.Hub.ServiceProvider.EnumerateStaticNodes()
             .Where(n => n.ExcludeFromContext?.Contains("create") != true)
             .OrderBy(n => n.Name ?? n.Path)
             .ToArray();
@@ -794,8 +794,7 @@ public static class CreateLayoutArea
 
                         var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
 
-                        var typeRegistration = meshConfiguration.Nodes.Values
-                            .FirstOrDefault(n => n.Path == selectedType);
+                        var typeRegistration = host.Hub.ServiceProvider.FindStaticNode(selectedType);
 
                         var newNode = MeshNode.FromPath(nodePath) with
                         {

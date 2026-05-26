@@ -12,13 +12,13 @@ namespace MeshWeaver.Mesh.Completion;
 /// </summary>
 public class MeshCatalogAutocompleteProvider : IAutocompleteProvider
 {
-    private readonly MeshConfiguration? meshConfig;
+    private readonly IServiceProvider serviceProvider;
     private const int PrefixCategoryPriority = 1800;
 
     /// <inheritdoc cref="MeshCatalogAutocompleteProvider"/>
     public MeshCatalogAutocompleteProvider(IServiceProvider serviceProvider)
     {
-        meshConfig = serviceProvider.GetService<MeshConfiguration>();
+        this.serviceProvider = serviceProvider;
     }
 
     /// <inheritdoc />
@@ -28,13 +28,12 @@ public class MeshCatalogAutocompleteProvider : IAutocompleteProvider
         var yielded = new HashSet<string>();
         var items = new List<AutocompleteItem>();
 
-        if (meshConfig != null)
-        {
-            var topLevelNodes = meshConfig.Nodes.Values
-                .Where(n => n.Segments.Count == 1)
-                .OrderBy(n => n.Order ?? int.MaxValue)
-                .ThenBy(n => n.Name);
+        var topLevelNodes = serviceProvider.EnumerateStaticNodes()
+            .Where(n => n.Segments.Count == 1)
+            .OrderBy(n => n.Order ?? int.MaxValue)
+            .ThenBy(n => n.Name);
 
+        {
             foreach (var node in topLevelNodes)
             {
                 yielded.Add($"@{node.Path}/");

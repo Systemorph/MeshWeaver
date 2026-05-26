@@ -150,13 +150,23 @@ public record MeshBuilder
                         ? config => defaultNodeHubConfigs.Aggregate(config, (c, f) => f(c))
                         : null;
                 return new MeshConfiguration(
-                    MeshNodes.GroupBy(x => x.Path).ToDictionary(g => g.Key, g => g.Last()),
+                    // Internal-only list — MeshConfiguration uses it to compute
+                    // derived lazies (ContextExcludedTypes / SatelliteNodeTypes);
+                    // no public property exposes it. Application code reads
+                    // static nodes via serviceProvider.EnumerateStaticNodes().
+                    MeshNodes,
                     combinedDefaultConfig,
                     autocompleteExcludedNodeTypes: excludedTypes.Count > 0 ? excludedTypes : null,
                     nodeTypePermissions: accessConfig.Build(),
                     queryRoutingRules: routingRules,
                     streamRoutedAddressTypes: streamRoutedTypes);
             })
+            // Static nodes registered via AddMeshNodes(...) flow as an
+            // IStaticNodeProvider. Application code reads them via
+            // serviceProvider.EnumerateStaticNodes() — there is no Nodes
+            // dictionary on MeshConfiguration. Last-write-wins by Path is
+            // applied at iteration time inside the provider.
+            .AddSingleton<IStaticNodeProvider>(new StaticMeshNodeListProvider(MeshNodes))
             .AddSingleton<ITypeRegistry>(_ =>
             {
                 // Register core mesh types on the shared registry so they're available to ALL hubs

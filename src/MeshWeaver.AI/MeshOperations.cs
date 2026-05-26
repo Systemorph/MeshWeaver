@@ -1186,12 +1186,10 @@ public class MeshOperations
     private IObservable<Func<MessageHubConfiguration, MessageHubConfiguration>?>
         ResolveHubConfigForSchema(string nodeType)
     {
-        var meshConfig = hub.ServiceProvider.GetService<MeshConfiguration>();
-        if (meshConfig != null
-            && meshConfig.Nodes.TryGetValue(nodeType, out var staticNode)
-            && staticNode.HubConfiguration != null)
+        var staticNode = hub.ServiceProvider.FindStaticNode(nodeType);
+        if (staticNode is { HubConfiguration: { } cfg })
         {
-            return Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(staticNode.HubConfiguration);
+            return Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(cfg);
         }
 
         var compilationService = hub.ServiceProvider.GetService<IMeshNodeCompilationService>();
@@ -1537,7 +1535,7 @@ public class MeshOperations
                 // Static fast path: NodeType registered via AddMeshNodes — there is
                 // no per-NodeType hub or persisted MeshNode, so the runtime status
                 // is implicit Ok (its HubConfiguration is bundled with the framework).
-                if (meshConfig != null && meshConfig.Nodes.ContainsKey(nodeTypePath))
+                if (hub.ServiceProvider.FindStaticNode(nodeTypePath) is not null)
                     return Observable.Return(FormatDiagnostics(
                         CompilationStatus.Ok, nodeTypePath,
                         error: null, startedAt: null, lastCompiledAt: null,

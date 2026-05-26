@@ -76,19 +76,6 @@ internal static class NodeTypeEnrichmentHelpers
         if (string.IsNullOrEmpty(nodeType))
             return Observable.Return(ApplyDefaultConfig(node, meshConfiguration));
 
-        // Static fast-path: any AddMeshNodes-registered type with a HubConfiguration.
-        // The framework assembly hosting this type is already loaded into the default
-        // ALC (we got here by calling code in this AppDomain), so we only need the
-        // delegate. AssemblyLocation used to gate this too, but it added nothing —
-        // a static type registered without one still works fine because activation
-        // just invokes the HubConfiguration lambda.
-        if (meshConfiguration.Nodes.TryGetValue(nodeType, out var staticTypeNode)
-            && staticTypeNode.HubConfiguration != null)
-        {
-            return Observable.Return(ApplyEntry(
-                node, staticTypeNode.HubConfiguration, nodeType, meshConfiguration));
-        }
-
         // Static-provider fast-path: IStaticNodeProvider-registered NodeTypes
         // ship HubConfiguration in-process (the delegate doesn't survive
         // serialisation, so we MUST find them locally before opening a remote
@@ -104,6 +91,77 @@ internal static class NodeTypeEnrichmentHelpers
                 node, hubCfg, nodeType, meshConfiguration));
         }
 
+        // Fast existence probe: before opening the slow-path subscription
+        // (which waits SlowPathTimeout = 30s for the NodeType's stream to
+        // emit), do a one-shot query for path:{nodeType}. If nothing comes
+        // back, no NodeType is registered anywhere — fail FAST with a clear
+        // diagnostic instead of stranding the activation for 30s on a stream
+        // that will never emit.
+        var queryCore = meshHub.ServiceProvider.GetService<IMeshQueryCore>();
+        if (queryCore != null)
+        {
+            var probeRequest = MeshQueryRequest.FromQuery($"path:{nodeType}") with
+            {
+                UserId = WellKnownUsers.System,
+            };
+            return Observable.Using(
+                    () => (meshHub.ServiceProvider.GetService<AccessService>()?.ImpersonateAsSystem())
+                          ?? System.Reactive.Disposables.Disposable.Empty,
+                    _ => queryCore.ObserveQuery<MeshNode>(probeRequest, meshHub.JsonSerializerOptions))
+                .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
+                .Take(1)
+                .Timeout(NodeTypeProbeTimeout)
+                .Catch<QueryResultChange<MeshNode>, Exception>(ex =>
+                {
+                    logger?.LogWarning(ex,
+                        "EnrichWithNodeType probe for NodeType '{NodeType}' faulted ({ExceptionType}) — treating as missing",
+                        nodeType, ex.GetType().Name);
+                    return Observable.Return(new QueryResultChange<MeshNode>
+                    {
+                        ChangeType = QueryChangeType.Initial,
+                        Items = []
+                    });
+                })
+                .Select(probe => probe.Items.Count > 0)
+                .SelectMany(found =>
+                {
+                    if (!found)
+                    {
+                        var msg =
+                            $"NodeType '{nodeType}' is not registered (referenced by instance '{node.Path}'). " +
+                            $"Either register the type via AddXxxType() in your mesh builder, or fix " +
+                            $"the instance's NodeType field. Activation cannot proceed.";
+                        logger?.LogWarning(
+                            "EnrichWithNodeType: NodeType '{NodeType}' has no static registration and no persisted node at that path — applying error overlay to '{InstancePath}'",
+                            nodeType, node.Path);
+                        return Observable.Return(
+                            WithCompilationErrorOverlay(node, nodeType, msg, meshConfiguration));
+                    }
+                    return BuildEnrichmentChain(meshHub, meshConfiguration, compilationService, node, nodeType, logger);
+                });
+        }
+
+        return BuildEnrichmentChain(meshHub, meshConfiguration, compilationService, node, nodeType, logger);
+    }
+
+    /// <summary>
+    /// Existence probe timeout — short on purpose. The probe is a one-shot
+    /// "does a node at path:{nodeType} exist" query against the static and
+    /// storage providers; missing-type scenarios should surface in &lt;1s on
+    /// a healthy mesh. Anything longer almost certainly means a real backend
+    /// problem the operator needs to see, so we treat probe timeouts as
+    /// "missing" and emit the error overlay.
+    /// </summary>
+    private static readonly TimeSpan NodeTypeProbeTimeout = TimeSpan.FromSeconds(3);
+
+    private static IObservable<MeshNode> BuildEnrichmentChain(
+        IMessageHub meshHub,
+        MeshConfiguration meshConfiguration,
+        IMeshNodeCompilationService? compilationService,
+        MeshNode node,
+        string nodeType,
+        ILogger? logger)
+    {
         // Slow path: subscribe to the NodeType MeshNode stream directly via
         // the mesh hub's workspace. The workspace's per-(addr, ref) cache
         // dedupes the underlying SubscribeRequest so concurrent activations
@@ -316,8 +374,7 @@ internal static class NodeTypeEnrichmentHelpers
         // compile; apply the default hub config so the instance is still usable
         // and queryable, rather than overlaying a (false) compilation error.
         if (def is null)
-            return Observable.Return(CopyIconFromNodeType(
-                ApplyDefaultConfig(node, meshConfiguration), nodeType, meshConfiguration));
+            return Observable.Return(ApplyDefaultConfig(node, meshConfiguration));
 
         // NodeTypeDefinition with no compile lifecycle attached and no
         // HubConfiguration: a test-seeded type definition (or any framework
@@ -328,8 +385,7 @@ internal static class NodeTypeEnrichmentHelpers
                 || def.CompilationStatus == CompilationStatus.Unknown)
             && typeNode.HubConfiguration is null)
         {
-            return Observable.Return(CopyIconFromNodeType(
-                ApplyDefaultConfig(node, meshConfiguration), nodeType, meshConfiguration));
+            return Observable.Return(ApplyDefaultConfig(node, meshConfiguration));
         }
 
         // Pinned release: when NodeTypeDefinition.RequestedReleasePath is set,
@@ -636,10 +692,9 @@ internal static class NodeTypeEnrichmentHelpers
         MeshConfiguration meshConfiguration)
     {
         _ = localAssemblyPath;
-        return CopyIconFromNodeType(
-            node with { HubConfiguration = node.HubConfiguration ?? hubConfig },
-            nodeType,
-            meshConfiguration);
+        _ = nodeType;
+        _ = meshConfiguration;
+        return node with { HubConfiguration = node.HubConfiguration ?? hubConfig };
     }
 
     public static MeshNode WithCompilationErrorOverlay(
@@ -653,27 +708,13 @@ internal static class NodeTypeEnrichmentHelpers
             : meshConfiguration.DefaultNodeHubConfiguration;
 
         if (string.IsNullOrEmpty(error))
-            return CopyIconFromNodeType(
-                node with { HubConfiguration = baseConfig }, nodeType, meshConfiguration);
+            return node with { HubConfiguration = baseConfig };
 
         var overlay = CreateCompilationErrorConfiguration(error);
         Func<MessageHubConfiguration, MessageHubConfiguration> composed = baseConfig != null
             ? (config => overlay(baseConfig(config)))
             : overlay;
-        return CopyIconFromNodeType(
-            node with { HubConfiguration = composed }, nodeType, meshConfiguration);
-    }
-
-    private static MeshNode CopyIconFromNodeType(
-        MeshNode node, string nodeType, MeshConfiguration meshConfiguration)
-    {
-        if (string.IsNullOrEmpty(node.Icon)
-            && meshConfiguration.Nodes.TryGetValue(nodeType, out var builtInNode)
-            && !string.IsNullOrEmpty(builtInNode.Icon))
-        {
-            return node with { Icon = builtInNode.Icon };
-        }
-        return node;
+        return node with { HubConfiguration = composed };
     }
 
     private static Func<MessageHubConfiguration, MessageHubConfiguration>

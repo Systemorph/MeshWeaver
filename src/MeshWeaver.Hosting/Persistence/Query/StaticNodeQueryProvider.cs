@@ -32,7 +32,7 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
     {
         var firstSegments = providers
             .SelectMany(p => p.GetStaticNodes())
-            .Concat(meshConfiguration?.Nodes.Values ?? Enumerable.Empty<MeshNode>())
+            .Concat((meshConfiguration?.AddMeshNodesList ?? Enumerable.Empty<MeshNode>()))
             .Select(n => n.Path)
             .Where(p => !string.IsNullOrEmpty(p))
             .Select(p => p!.Split('/', 2)[0])
@@ -86,7 +86,7 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
         // which has no isSearch guard (caught by
         // StaticNodeQueryContextTests.SearchContext_ExcludesStaticNodes).
         var configPaths = new HashSet<string>(
-            (meshConfiguration?.Nodes.Values ?? Enumerable.Empty<MeshNode>())
+            ((meshConfiguration?.AddMeshNodesList ?? Enumerable.Empty<MeshNode>()))
                 .Select(n => n.Path)
                 .Where(p => !string.IsNullOrEmpty(p)),
             StringComparer.OrdinalIgnoreCase);
@@ -102,7 +102,7 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
             string.Join(", ", _providerNodes.GroupBy(n => n.NodeType ?? "(null)").Select(g => $"{g.Key}={g.Count()}")),
             string.Join(", ", _providerNodes.GroupBy(n => n.Namespace ?? "(null)").OrderByDescending(g => g.Count()).Take(5).Select(g => $"{g.Key}={g.Count()}")));
 
-        _configNodes = (meshConfiguration?.Nodes.Values ?? Enumerable.Empty<MeshNode>()).ToArray();
+        _configNodes = ((meshConfiguration?.AddMeshNodesList ?? Enumerable.Empty<MeshNode>())).ToArray();
 
         _allNodes = _providerNodes.Concat(_configNodes).ToArray();
 
