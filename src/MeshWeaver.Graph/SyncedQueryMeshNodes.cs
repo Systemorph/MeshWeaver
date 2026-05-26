@@ -296,7 +296,7 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
             // Hosting — we just pass userIdentity through and let the
             // dispatch happen at the consumer.
             upstream = queryCore.ObserveQuery<MeshNode>(request, options).Do(change =>
-                diagLogger?.LogInformation(
+                diagLogger?.LogDebug(
                     "[SyncedQuery] queries=[{Queries}] change={Type} count={Count}",
                     string.Join(" | ", queries), change.ChangeType, change.Items?.Count ?? 0));
         }
@@ -341,7 +341,7 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
                             string.IsNullOrEmpty(n.Path) ? d : d.Remove(n.Path)),
                     _ => dict,
                 })
-            .Do(dict => diagLogger?.LogInformation(
+            .Do(dict => diagLogger?.LogDebug(
                 "[SyncedQuery] snapshot hub={HubAddress} count={Count} keys=[{Keys}]",
                 workspace.Hub.Address, dict.Count,
                 string.Join(", ", dict.Keys.Take(10))))

@@ -728,7 +728,7 @@ public class AgentChatClient : IAgentChat
         if (!string.IsNullOrEmpty(agent.Instructions))
             turnMessages.Add(new ChatMessage(ChatRole.System, agent.Instructions));
         turnMessages.AddRange(messages);
-        logger.LogInformation("[AgentChat] Sending {Count} messages (+ system) to {Agent}",
+        logger.LogDebug("[AgentChat] Sending {Count} messages (+ system) to {Agent}",
             messages.Count, agent.Name);
         currentAttachments = null;
 
@@ -1128,7 +1128,7 @@ public class AgentChatClient : IAgentChat
             contextPath?.TrimStart('/') ?? string.Empty,
             string.Empty).ToImmutableList();
 
-        logger.LogInformation("[AgentChatClient] {Count} agents: [{Agents}]",
+        logger.LogDebug("[AgentChatClient] {Count} agents: [{Agents}]",
             loadedAgents.Count, string.Join(", ", loadedAgents.Select(a => a.Name)));
 
         agentsInitialized = false;
@@ -1179,7 +1179,7 @@ public class AgentChatClient : IAgentChat
             return;
         }
         isPersistentFactory = defaultFactory.IsPersistent;
-        logger.LogInformation("[AgentChatClient] Default factory {FactoryName} for model {ModelName} (persistent={IsPersistent}); agents may select per-agent factories via PreferredModel",
+        logger.LogDebug("[AgentChatClient] Default factory {FactoryName} for model {ModelName} (persistent={IsPersistent}); agents may select per-agent factories via PreferredModel",
             defaultFactory.Name, currentModelName ?? "default", isPersistentFactory);
 
         var configs = loadedAgents.Select(a => a.AgentConfiguration).ToImmutableList();
@@ -1232,7 +1232,7 @@ public class AgentChatClient : IAgentChat
         }
 
         agentsInitialized = true;
-        logger.LogInformation("[AgentChatClient] Created {Count} agents", agents.Count);
+        logger.LogDebug("[AgentChatClient] Created {Count} agents", agents.Count);
     }
 
     /// <summary>
@@ -1259,7 +1259,7 @@ public class AgentChatClient : IAgentChat
         }
 
         isPersistentFactory = factory.IsPersistent;
-        logger.LogInformation("[AgentChatClient] Using factory {FactoryName} for model {ModelName} (persistent={IsPersistent})",
+        logger.LogDebug("[AgentChatClient] Using factory {FactoryName} for model {ModelName} (persistent={IsPersistent})",
             factory.Name, currentModelName ?? "default", isPersistentFactory);
 
         var configs = loadedAgents.Select(a => a.AgentConfiguration).ToImmutableList();
@@ -1288,7 +1288,7 @@ public class AgentChatClient : IAgentChat
         }
 
         agentsInitialized = true;
-        logger.LogInformation("[AgentChatClient] Created {Count} agents", agents.Count);
+        logger.LogDebug("[AgentChatClient] Created {Count} agents", agents.Count);
     }
 
     /// <summary>

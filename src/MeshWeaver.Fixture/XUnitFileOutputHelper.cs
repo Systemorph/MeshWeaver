@@ -48,6 +48,18 @@ public class XUnitFileOutputHelper : ITestOutputHelper, IDisposable
     private bool _disposed = false;
     private readonly string _baseFileName;
     private string? _currentTestMethod;
+
+    // Per-test-method log files: opt-in via MESHWEAVER_TEST_FILE_LOGS=1. Disabled
+    // by default so CI runners aren't writing thousands of .log files (their
+    // upload step then ships the lot as an artifact, blowing through storage
+    // quotas). Locally you can flip this on for the hung-test workflow:
+    //   set MESHWEAVER_TEST_FILE_LOGS=1
+    //   dotnet test … --filter X
+    // and the per-method files appear at bin/Debug/net10.0/test-logs/.
+    // ITestOutputHelper.WriteLine is unaffected — xUnit console output remains.
+    private static readonly bool FileLogsEnabled =
+        string.Equals(Environment.GetEnvironmentVariable("MESHWEAVER_TEST_FILE_LOGS"), "1", StringComparison.Ordinal)
+        || string.Equals(Environment.GetEnvironmentVariable("MESHWEAVER_TEST_FILE_LOGS"), "true", StringComparison.OrdinalIgnoreCase);
     // Long-lived writer for the active test method. Replaces the previous
     // `File.AppendAllText` per WriteLine — that opened, wrote, and closed
     // the file on every call (with up to 3 retries on lock contention).
@@ -59,8 +71,9 @@ public class XUnitFileOutputHelper : ITestOutputHelper, IDisposable
 
     static XUnitFileOutputHelper()
     {
-        // Ensure log directory exists
-        Directory.CreateDirectory(LogDirectory);
+        // Ensure log directory exists only when file logging is enabled.
+        if (FileLogsEnabled)
+            Directory.CreateDirectory(LogDirectory);
     }
 
     public XUnitFileOutputHelper(ITestOutputHelper xunitOutput, string? testName = null)
@@ -79,6 +92,11 @@ public class XUnitFileOutputHelper : ITestOutputHelper, IDisposable
         if (_disposed) return;
 
         _currentTestMethod = methodName;
+
+        // Opt-out by default: skip file I/O entirely unless MESHWEAVER_TEST_FILE_LOGS
+        // is set. xUnit's own ITestOutputHelper still captures everything for
+        // console display; we just stop persisting per-method .log files.
+        if (!FileLogsEnabled) return;
 
         // Create simple log file name: TestClass_TestMethod.log
         var newLogPath = Path.Combine(LogDirectory, $"{_baseFileName}_{methodName}.log");
