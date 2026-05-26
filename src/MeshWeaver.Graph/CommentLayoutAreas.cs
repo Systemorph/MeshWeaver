@@ -65,7 +65,7 @@ public static class CommentLayoutAreas
         var initialized = new[] { false, false }; // [0]=editState, [1]=repliesExpanded
 
         var parentPath = hubPath.Contains('/') ? hubPath[..hubPath.LastIndexOf('/')] : hubPath;
-        var permissionsStream = PermissionHelper.GetEffectivePermissions(host.Hub, parentPath);
+        var permissionsStream = host.Hub.GetEffectivePermissions(parentPath);
 
         return host.Workspace.GetMeshNodeStream()
             .CombineLatest(permissionsStream, (node, perms) =>
@@ -88,7 +88,7 @@ public static class CommentLayoutAreas
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
         var currentUser = accessService?.Context?.Name ?? "";
 
-        var permissionsStream = PermissionHelper.GetEffectivePermissions(host.Hub, hubPath);
+        var permissionsStream = host.Hub.GetEffectivePermissions(hubPath);
 
         return host.Workspace.GetMeshNodeStream()
             .CombineLatest(permissionsStream, (node, perms) =>

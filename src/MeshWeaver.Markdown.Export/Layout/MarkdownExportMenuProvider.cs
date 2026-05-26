@@ -44,7 +44,7 @@ public class MarkdownExportMenuProvider : INodeMenuProvider
             if (node is null || node.NodeType != "Markdown")
                 yield break;
 
-            await foreach (var perms in PermissionHelper.GetEffectivePermissions(host.Hub, hubPath)
+            await foreach (var perms in host.Hub.GetEffectivePermissions(hubPath)
                 .ToAsyncEnumerableSequence())
             {
                 if (!perms.HasFlag(Permission.Read))

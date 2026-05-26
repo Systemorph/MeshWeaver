@@ -305,7 +305,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
             b.Control.Data?.ToString()?.Contains("Add Assignment", StringComparison.OrdinalIgnoreCase) == true);
 
         addButton.Should().NotBe(default,
-            "the + Add Assignment button must render for an admin viewer — broken if PermissionHelper.CanDelete didn't surface the admin assignment");
+            "the + Add Assignment button must render for an admin viewer — broken if hub.CheckPermission(path, Permission.Delete) didn't surface the admin assignment");
     }
 
     /// <summary>

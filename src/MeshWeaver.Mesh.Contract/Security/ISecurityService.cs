@@ -1,11 +1,27 @@
+using System.ComponentModel;
 using System.Reactive;
 
 namespace MeshWeaver.Mesh.Security;
 
 /// <summary>
-/// Service for evaluating permissions and managing security configurations.
+/// 🚨 <b>Framework-internal.</b> Application code MUST go through
+/// <c>hub.CheckPermission(path, permission)</c> / <c>hub.GetEffectivePermissions(path)</c>
+/// (see <c>MeshWeaver.Mesh.HubPermissionExtensions</c>). The extensions resolve this
+/// service from the hub's <c>ServiceProvider</c> and forward; they're the public
+/// surface so the cache / impersonation plumbing can evolve without rippling
+/// through call sites.
+///
+/// <para>Only the four framework-internal callers reach in directly:</para>
+/// <list type="bullet">
+/// <item><c>MeshWeaver.Hosting.Security.AccessControlPipeline</c> — request-time validator.</item>
+/// <item><c>MeshWeaver.Hosting.Persistence.Query.StorageAdapterMeshQueryProvider</c> — secured query surface.</item>
+/// <item><c>MeshWeaver.Graph.Security.RlsNodeValidator</c> — row-level validator.</item>
+/// <item><c>MeshWeaver.Hosting.Security.SecurityService</c> itself.</item>
+/// </list>
+///
+/// <para>Service for evaluating permissions and managing security configurations.
 /// Provides row-level security for mesh nodes — permissions are derived from
-/// <c>AccessAssignment</c> MeshNodes in the node hierarchy.
+/// <c>AccessAssignment</c> MeshNodes in the node hierarchy.</para>
 ///
 /// <para><b>Surface contract — pure <see cref="IObservable{T}"/></b>. Per
 /// <c>Doc/Architecture/AsynchronousCalls.md</c>: any method that participates
@@ -14,6 +30,7 @@ namespace MeshWeaver.Mesh.Security;
 /// the only place this surface bridges to a <see cref="System.Threading.Tasks.Task"/>
 /// is the test edge (<c>.FirstAsync().ToTask(ct)</c>).</para>
 /// </summary>
+[EditorBrowsable(EditorBrowsableState.Advanced)]
 public interface ISecurityService
 {
     #region Permission Evaluation

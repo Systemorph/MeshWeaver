@@ -17,7 +17,7 @@ public static class MarkdownOverviewLayoutArea
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var permissionsStream = PermissionHelper.GetEffectivePermissions(host.Hub, hubPath);
+        var permissionsStream = host.Hub.GetEffectivePermissions(hubPath);
 
         return host.Workspace.GetMeshNodeStream()
             .CombineLatest(permissionsStream, (node, perms) =>
