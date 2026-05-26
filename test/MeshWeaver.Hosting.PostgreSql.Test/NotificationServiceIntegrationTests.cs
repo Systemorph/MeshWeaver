@@ -54,7 +54,7 @@ public class NotificationServiceIntegrationTests(PostgreSqlFixture fixture, ITes
             .AddGraph();
     }
 
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task CreateNotification_EndToEnd_LandsInNotificationsTable()
     {
         var ct = TestTimeout;
@@ -106,7 +106,7 @@ public class NotificationServiceIntegrationTests(PostgreSqlFixture fixture, ITes
             "the satellite must NOT land in mesh_nodes (regression would mean routing broke)");
     }
 
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task MultipleNotifications_AccumulateAndAreQueryable_ViaNodeTypeFilter()
     {
         var ct = TestTimeout;

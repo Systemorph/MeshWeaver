@@ -1,5 +1,5 @@
 using System;
-using Memex.Portal.Shared;
+using MeshWeaver.Blazor.Portal;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -25,7 +25,7 @@ using Xunit;
 namespace MeshWeaver.Acme.Test;
 
 /// <summary>
-/// Tests that the ACME organization root node is findable via search.
+/// Tests that the ACME space root node is findable via search.
 /// Validates the scope:subtree fix in SearchHub.ExecuteTextSearchAsync.
 /// </summary>
 public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
@@ -62,7 +62,7 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(dataDirectory)
             .AddAcme()
-            .AddOrganizationType()
+            .AddSpaceType()
             .AddRowLevelSecurity()
             .ConfigureServices(services =>
             {
@@ -98,7 +98,7 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
         while (DateTime.UtcNow < deadline)
         {
             results = await meshService.QueryAsync<MeshNode>(query, ct: ct).ToListAsync(ct);
-            if (results.Any(n => n.Path == "ACME" && n.NodeType == "Organization"))
+            if (results.Any(n => n.Path == "ACME" && n.NodeType == "Space"))
                 return results;
             await Task.Delay(200, ct);
         }
@@ -112,7 +112,7 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
         var results = await QueryUntilAcmeIndexedAsync(
             "*ACME* scope:subtree is:main limit:50", ct);
 
-        results.Should().Contain(n => n.Path == "ACME" && n.NodeType == "Organization",
+        results.Should().Contain(n => n.Path == "ACME" && n.NodeType == "Space",
             "scope:subtree should include the ACME root node itself");
     }
 
@@ -127,8 +127,8 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
         var results = await QueryUntilAcmeIndexedAsync(
             "*ACME* scope:descendants is:main limit:50", ct);
 
-        results.Should().Contain(n => n.Path == "ACME" && n.NodeType == "Organization",
-            "scope:descendants should include the ACME root node (NodeType: Organization)");
+        results.Should().Contain(n => n.Path == "ACME" && n.NodeType == "Space",
+            "scope:descendants should include the ACME root node (NodeType: Space)");
     }
 
     [Fact]
@@ -167,7 +167,7 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
     public async Task AcmeOrganization_IsAccessibleToAuthenticatedUser()
     {
         // This tests what the portal does when navigating to /ACME:
-        // SecurePersistenceServiceDecorator.HasReadAccessAsync → OrganizationAccessRule
+        // SecurePersistenceServiceDecorator.HasReadAccessAsync → SpaceAccessRule
         // → SecurityService.HasPermissionAsync("ACME", userId, Permission.Read)
         // The Public_Access.json at ACME/_Access grants Viewer to Public,
         // and SecurityService merges Public permissions as floor for authenticated users.
@@ -190,21 +190,21 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
 
         // Also verify the node is actually fetchable (not just permission-granted).
         // Path resolution for the ACME root reads samples/Graph/Data/ACME/index.md
-        // whose YAML frontmatter declares `NodeType: Organization`. On CI Linux
+        // whose YAML frontmatter declares `NodeType: Space`. On CI Linux
         // runners the FIRST read can return a node with NodeType="Markdown"
         // (the parser's fallback when frontmatter hasn't been bound yet, or a
         // cache miss that returns the JSON-shape default before the markdown
-        // parser runs). Poll until the typed Organization shape lands so the
+        // parser runs). Poll until the typed Space shape lands so the
         // assertion isn't flaky on cold cache.
         var nodeDeadline = DateTime.UtcNow.AddSeconds(25);
         MeshNode? node = null;
         while (DateTime.UtcNow < nodeDeadline)
         {
             node = await ReadNodeAsync("ACME");
-            if (node?.NodeType == "Organization") break;
+            if (node?.NodeType == "Space") break;
             await Task.Delay(200, ct);
         }
         node.Should().NotBeNull("ACME node should exist");
-        node!.NodeType.Should().Be("Organization");
+        node!.NodeType.Should().Be("Space");
     }
 }

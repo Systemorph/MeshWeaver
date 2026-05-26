@@ -247,7 +247,7 @@ public class OrleansThreadColdLoadHangPostgresTest(ITestOutputHelper output) : T
     /// PG cold-load repro of the exact prod symptom: open the sub-thread URL
     /// after a portal restart, expect activation + settle, NOT deadlock.
     /// </summary>
-    [Fact(Timeout = 180000)]
+    [Fact(Timeout = 60000)]
     public async Task SubThreadUrl_LoadedColdFromPostgres_ActivatesAndSettlesWithoutDeadlock()
     {
         if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable(ConnectionStringEnvVar)))

@@ -139,7 +139,7 @@ public class ThreadUrlResolutionTest(PostgreSqlFixture fixture, ITestOutputHelpe
     /// is null (exact match), and the matched node carries the right
     /// <c>NodeType</c> so the router picks the right layout area.
     /// </summary>
-    [Theory(Timeout = 120000)]
+    [Theory(Timeout = 60000)]
     [MemberData(nameof(SatelliteCases))]
     public async Task ResolvePath_SatelliteByFullPath_ReturnsSatelliteNode(
         string segment, string nodeType, bool contentNeeded)
@@ -200,7 +200,7 @@ public class ThreadUrlResolutionTest(PostgreSqlFixture fixture, ITestOutputHelpe
     /// and is dumped onto an unrelated page — invisible in CI until a
     /// customer complains.
     /// </summary>
-    [Theory(Timeout = 120000)]
+    [Theory(Timeout = 60000)]
     [MemberData(nameof(SatelliteCases))]
     public async Task ResolvePath_MissingSatellite_DoesNotFallBackToWrongNodeType(
         string segment, string nodeType, bool _)
@@ -251,7 +251,7 @@ public class ThreadUrlResolutionTest(PostgreSqlFixture fixture, ITestOutputHelpe
     /// is the one a grep on the prod-symptom URL surfaces, so a regression
     /// is searchable by URL.
     /// </summary>
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task ResolvePath_ProdShape_UserSlashUnderscoreThreadSlashId_Resolves()
     {
         var ct = TestTimeout;
@@ -301,7 +301,7 @@ public class ThreadUrlResolutionTest(PostgreSqlFixture fixture, ITestOutputHelpe
     /// threads table when the path-IN filter was missing; this test
     /// explicitly demonstrates the contract still holds after the fix.
     /// </summary>
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task ResolvePath_NestedThreadMessage_FourSegmentUrl_ReturnsMessageNode()
     {
         var ct = TestTimeout;

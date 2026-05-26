@@ -106,7 +106,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
         return response.Message.Node!.Path!;
     }
 
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task ExportPdf_RoundTrips_AsTypedResponse()
     {
         using var cts = new CancellationTokenSource(60.Seconds());
@@ -163,7 +163,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
     /// deserialization throws "The JSON payload for polymorphic interface or abstract type
     /// 'UiControl' must specify a type discriminator".
     /// </summary>
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task ExportPdfArea_RendersExportDocumentControl_ClientDeserializes()
     {
         using var cts = new CancellationTokenSource(60.Seconds());
@@ -213,7 +213,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
     /// the sub-hub too (see <c>PortalApplication.DefaultPortalConfig</c>).
     /// This test is green when the fix is present and red without it.
     /// </summary>
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task SubHub_WithExportTypesRegistered_DeserializesPolymorphicExportDocumentControl()
     {
         using var cts = new CancellationTokenSource(60.Seconds());
@@ -257,7 +257,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
     /// graceful-degradation contract: the stream completes with <c>null</c> rather than tearing
     /// down the pipeline.
     /// </summary>
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task SubHub_WithoutExportTypesRegistered_DegradesGracefullyToNull()
     {
         using var cts = new CancellationTokenSource(60.Seconds());
@@ -292,7 +292,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
             "instead of tearing down the observable pipeline.");
     }
 
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task ExportDocx_RoundTrips_AsTypedResponse()
     {
         using var cts = new CancellationTokenSource(60.Seconds());

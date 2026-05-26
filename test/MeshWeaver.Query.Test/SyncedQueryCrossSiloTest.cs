@@ -276,7 +276,7 @@ public class SyncedQueryCrossSiloTest(ITestOutputHelper output)
     /// invariant that lets every silo's <c>NodeTypeService._hubConfigurations</c>
     /// cache populate without per-silo recompilation.</para>
     /// </summary>
-    [Fact(Timeout = 240000)]
+    [Fact(Timeout = 60000)]
     public async Task DynamicCompile_OnSiloA_ResultIsObservableOnSiloB_ViaSync()
     {
         var ct = TestContext.Current.CancellationToken;

@@ -1,4 +1,4 @@
-using Memex.Portal.Shared;
+using MeshWeaver.Blazor.Portal;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -191,7 +191,7 @@ public class NodeTypeProgressAreaTest(ITestOutputHelper output) : MonolithMeshTe
             .ConfigureServices(s => s.AddFileSystemAssemblyStore(_assemblyStoreRoot))
             .AddPartitionedFileSystemPersistence(dataDirectory)
             .AddAcme()
-            .AddOrganizationType()
+            .AddSpaceType()
             .ConfigureServices(services =>
             {
                 services.Configure<CompilationCacheOptions>(o =>

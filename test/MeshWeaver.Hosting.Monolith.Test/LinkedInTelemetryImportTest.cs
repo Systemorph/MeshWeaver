@@ -68,7 +68,7 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
                 return services;
             });
 
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task LinkedInTelemetryImport_CompilesAndRendersImportArea()
     {
         // 60s CT; if 60s isn't enough then there's a real bug we need to fix

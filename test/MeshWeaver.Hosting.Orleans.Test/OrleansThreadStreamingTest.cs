@@ -127,7 +127,7 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
     /// sub-thread streams text → parent receives result.
     /// Traces every step to find where communication breaks.
     /// </summary>
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task DelegationFlow_SubThreadStreamsText_ParentCompletes()
     {
         var ct = new CancellationTokenSource(100.Seconds()).Token;

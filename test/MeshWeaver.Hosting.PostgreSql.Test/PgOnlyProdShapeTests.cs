@@ -51,7 +51,7 @@ public class PgOnlyProdShapeTests(PostgreSqlFixture fixture, ITestOutputHelper o
             .AddGraph();
     }
 
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task Write_AccessAssignment_LazyCreatesSchema()
     {
         var ct = TestTimeout;
@@ -92,7 +92,7 @@ public class PgOnlyProdShapeTests(PostgreSqlFixture fixture, ITestOutputHelper o
         readBack!.Path.Should().Be(path);
     }
 
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task Write_OrgPartition_RoutesByFirstSegment()
     {
         var ct = TestTimeout;
@@ -118,7 +118,7 @@ public class PgOnlyProdShapeTests(PostgreSqlFixture fixture, ITestOutputHelper o
         readBack.Should().NotBeNull("write went to {0}.mesh_nodes; read-back must hit the same partition", org);
     }
 
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task Read_SatelliteUnion_AcrossPartitionTables()
     {
         var ct = TestTimeout;

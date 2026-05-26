@@ -47,7 +47,7 @@ public class OrleansPostgresPathResolutionTest(ITestOutputHelper output)
 {
     private const string ConnectionStringEnvVar = "MESHWEAVER_LOCAL_PG_CS";
 
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task ResolvePath_UserPartition_InOrleansSilo()
     {
         var connectionString = Environment.GetEnvironmentVariable(ConnectionStringEnvVar);

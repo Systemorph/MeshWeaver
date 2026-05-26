@@ -10,7 +10,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using Memex.Portal.Shared;
+using MeshWeaver.Blazor.Portal;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -25,7 +25,7 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
 {
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
-            .AddOrganizationType()
+            .AddSpaceType()
             .AddMeshNodes(
                 new MeshNode("Roland", "User")
                 {
@@ -34,13 +34,13 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
                     State = MeshNodeState.Active,
                     Content = new User { Email = "rbuergi@systemorph.com" }
                 },
-                // Organization at root namespace (DefaultNamespace = "")
+                // Space at root namespace (DefaultNamespace = "")
                 new MeshNode("Acme")
                 {
                     Name = "Acme Corp",
-                    NodeType = "Organization",
+                    NodeType = "Space",
                     State = MeshNodeState.Active,
-                    Content = new Organization { Name = "Acme Corp" }
+                    Content = new Space { Name = "Acme Corp" }
                 },
                 // Second user for nodeType query tests
                 new MeshNode("Bob", "User")
@@ -123,32 +123,32 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 20000)]
-    public async Task AuthenticatedUser_CanQuery_OrganizationNodes_ByNodeType()
+    public async Task AuthenticatedUser_CanQuery_SpaceNodes_ByNodeType()
     {
         LoginAsUnprivilegedUser();
 
         var results = await MeshQuery.QueryAsync<MeshNode>(
-            "nodeType:Organization",
+            "nodeType:Space",
             ct: TestContext.Current.CancellationToken
         ).ToArrayAsync(TestContext.Current.CancellationToken);
 
-        Output.WriteLine($"Found {results.Length} Organization nodes");
+        Output.WriteLine($"Found {results.Length} Space nodes");
         foreach (var r in results)
             Output.WriteLine($"  - {r.Path}: {r.Name} (NodeType={r.NodeType})");
 
-        results.Should().HaveCountGreaterThanOrEqualTo(1, "All Organization nodes should be publicly readable");
+        results.Should().HaveCountGreaterThanOrEqualTo(1, "All Space nodes should be publicly readable");
         results.Should().Contain(n => n.Path == "Acme");
     }
 
     [Fact(Timeout = 30000)]
-    public async Task DynamicallyCreated_OrganizationNode_RequiresPartitionAccess()
+    public async Task DynamicallyCreated_SpaceNode_RequiresPartitionAccess()
     {
         // "Creator" Admin at root is pre-seeded via ConfigureMesh's static AccessAssignment.
         var orgNode = new MeshNode("Globex")
         {
             Name = "Globex Corp",
-            NodeType = "Organization",
-            Content = new Organization { Name = "Globex Corp" }
+            NodeType = "Space",
+            Content = new Space { Name = "Globex Corp" }
         };
         var created = await NodeFactory.CreateNode(orgNode);
         created.Should().NotBeNull();

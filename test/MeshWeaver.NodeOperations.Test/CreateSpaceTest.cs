@@ -1,4 +1,5 @@
 using System;
+using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -36,7 +37,7 @@ public class CreateSpaceTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             NodeType = SpaceNodeType.NodeType,
             Content = new Space { Name = "Test Space" }
         };
-        var created = await NodeFactory.CreateNode(spaceNode);
+        var created = await NodeFactory.CreateNode(spaceNode).ToTask(TestContext.Current.CancellationToken);
 
         created.Should().NotBeNull();
         created.State.Should().Be(MeshNodeState.Active);
@@ -48,6 +49,6 @@ public class CreateSpaceTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             spaceId, TestUsers.Admin.ObjectId, Permission.Update, TestTimeout);
         hasAdmin.Should().BeTrue("Creator should have Admin permissions on the space");
 
-        await NodeFactory.DeleteNode(spaceId);
+        await NodeFactory.DeleteNode(spaceId).ToTask(TestContext.Current.CancellationToken);
     }
 }

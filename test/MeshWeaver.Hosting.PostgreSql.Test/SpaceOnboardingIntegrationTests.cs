@@ -62,7 +62,7 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
             .AddSpaceType();
     }
 
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task UserOnboarding_CreatesPerUserPartition()
     {
         var ct = TestTimeout;
@@ -90,7 +90,7 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
         resolution!.Node.Should().NotBeNull();
     }
 
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task CreateSpace_RoutableAfterAdminPartitionWrite()
     {
         var ct = TestTimeout;
@@ -130,7 +130,7 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
             "post-create the Space partition must be routable");
     }
 
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task OnboardedUser_CanWriteAndReadInOwnNamespace()
     {
         var ct = TestTimeout;

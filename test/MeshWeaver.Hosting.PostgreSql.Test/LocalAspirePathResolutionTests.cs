@@ -75,7 +75,7 @@ public class LocalAspirePathResolutionTests : MonolithMeshTestBase
     /// <c>{username}.mesh_nodes</c> at <c>ns='' id={username}</c>) — this
     /// test verifies the routing layer SEES it, not that the data exists.
     /// </summary>
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task ResolvePath_ExistingUserPartition_FromLiveSubscription()
     {
         var connectionString = Environment.GetEnvironmentVariable(ConnectionStringEnvVar);

@@ -1,4 +1,4 @@
-using Memex.Portal.Shared;
+using MeshWeaver.Blazor.Portal;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -61,7 +61,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(dataDirectory)
             .AddAcme()
-            .AddOrganizationType()
+            .AddSpaceType()
             .ConfigureServices(services =>
             {
                 services.Configure<CompilationCacheOptions>(o =>

@@ -69,7 +69,7 @@ public class UserPartitionResolutionTests(PostgreSqlFixture fixture, ITestOutput
     /// the result drives the page layout. This test pins the resolver
     /// contract end-to-end — Postgres-backed.</para>
     /// </summary>
-    [Fact(Timeout = 90000)]
+    [Fact(Timeout = 60000)]
     public async Task ResolvePath_UserPartitionRoot_ReturnsUserNode()
     {
         const string username = "rbuergi_test_resolve";
@@ -152,7 +152,7 @@ public class UserPartitionResolutionTests(PostgreSqlFixture fixture, ITestOutput
     /// emits the persisted node. This is the second hop the portal needs —
     /// path resolution alone isn't enough if the hub never activates.
     /// </summary>
-    [Fact(Timeout = 90000)]
+    [Fact(Timeout = 60000)]
     public async Task GetMeshNodeStream_UserPartitionRoot_EmitsUserNode()
     {
         const string username = "rbuergi_test_stream";

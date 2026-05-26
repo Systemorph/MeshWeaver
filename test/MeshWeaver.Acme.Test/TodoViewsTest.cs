@@ -1,4 +1,4 @@
-using Memex.Portal.Shared;
+using MeshWeaver.Blazor.Portal;
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -57,7 +57,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(dataDirectory)
             .AddAcme()
-            .AddOrganizationType()
+            .AddSpaceType()
             .ConfigureServices(services =>
             {
                 services.Configure<CompilationCacheOptions>(o =>

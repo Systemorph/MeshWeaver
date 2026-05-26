@@ -45,7 +45,7 @@ public class PartitionLifecycleTests(PostgreSqlFixture fixture, ITestOutputHelpe
             .AddGraph();
     }
 
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task LazyCreate_FirstWrite_EnablesSubsequentReads()
     {
         var ct = TestTimeout;
@@ -71,7 +71,7 @@ public class PartitionLifecycleTests(PostgreSqlFixture fixture, ITestOutputHelpe
         readBack.Should().NotBeNull("lazy-created schema must serve reads immediately");
     }
 
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task DeleteNode_ThatDoesNotExist_Errors()
     {
         var ct = TestTimeout;
@@ -90,7 +90,7 @@ public class PartitionLifecycleTests(PostgreSqlFixture fixture, ITestOutputHelpe
             "delete-something-that-doesn't-exist must surface an error to the caller");
     }
 
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task Write_ReadBack_Delete_ReadAgain_Empty()
     {
         var ct = TestTimeout;
@@ -121,7 +121,7 @@ public class PartitionLifecycleTests(PostgreSqlFixture fixture, ITestOutputHelpe
         deleted.Should().BeTrue();
     }
 
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task PendingCreate_AcceptsWriteEvenAfterReadMiss()
     {
         var ct = TestTimeout;

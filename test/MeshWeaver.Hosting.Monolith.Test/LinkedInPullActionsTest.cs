@@ -40,7 +40,7 @@ public class LinkedInPullActionsTest(ITestOutputHelper output) : MonolithMeshTes
     private const string NodeTypePath = "Systemorph/LinkedInProfile";
     private const string SourceNamespace = "Systemorph/LinkedInProfile/Source";
 
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task LinkedInPullActions_CompilesAndRendersNoCredentialBranch()
     {
         var ct = new CancellationTokenSource(90.Seconds()).Token;

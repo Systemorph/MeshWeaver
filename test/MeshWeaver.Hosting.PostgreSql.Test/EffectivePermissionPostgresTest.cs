@@ -100,7 +100,7 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
         }
     }
 
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task CreateOrganization_HasPermission_ReturnsAdmin()
     {
         // 1) OrganizationNodeType is installed via ConfigureMesh above
@@ -179,7 +179,7 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
     /// If it fails: the synced query's Postgres path has a bug specific to
     /// distributed mode that the in-memory test cannot catch.
     /// </summary>
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task RuntimeCreateNode_AccessAssignment_PgBacked_GrantsPermission()
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();

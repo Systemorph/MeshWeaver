@@ -8,7 +8,7 @@ using System.Reactive.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
-using Memex.Portal.Shared;
+using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
@@ -25,12 +25,12 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
 /// Integration tests for dynamically configured Graph using real sample data.
-/// Tests verify that the ACME/Project sample data, Organization type,
+/// Tests verify that the ACME/Project sample data, Space type,
 /// and built-in Markdown type work end-to-end with real messages.
 /// </summary>
 /// <remarks>
 /// Uses AddPartitionedFileSystemPersistence with ACME sample data from samples/Graph/Data.
-/// Node types used: Markdown (built-in), Organization (via AddOrganizationType), ACME/Project (from sample data).
+/// Node types used: Markdown (built-in), Space (via AddSpaceType), ACME/Project (from sample data).
 /// </remarks>
 [Collection("DynamicGraphIntegrationTests")]
 public class DynamicGraphIntegrationTest : MonolithMeshTestBase
@@ -50,7 +50,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         return builder
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(TestPaths.SamplesGraphData)
-            .AddOrganizationType()
+            .AddSpaceType()
             .AddAcme()
             .ConfigureServices(services => services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = _cacheDirectory))
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas())
@@ -58,8 +58,8 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
             // Seed test hierarchy via AddMeshNodes (in-memory, not persisted to disk)
             .AddMeshNodes(
                 new MeshNode(TestPartition) { Name = "Test Data", NodeType = "Markdown" },
-                MeshNode.FromPath($"{TestPartition}/org1") with { Name = "Organization 1", NodeType = "Organization" },
-                MeshNode.FromPath($"{TestPartition}/org2") with { Name = "Organization 2", NodeType = "Organization" },
+                MeshNode.FromPath($"{TestPartition}/org1") with { Name = "Space 1", NodeType = "Space" },
+                MeshNode.FromPath($"{TestPartition}/org2") with { Name = "Space 2", NodeType = "Space" },
                 MeshNode.FromPath($"{TestPartition}/org1/proj1") with { Name = "Project 1", NodeType = "Markdown" },
                 MeshNode.FromPath($"{TestPartition}/org1/proj2") with { Name = "Project 2", NodeType = "Markdown" },
                 MeshNode.FromPath($"{TestPartition}/org1/proj1/item1") with { Name = "Item 1", NodeType = "Markdown" },
@@ -214,35 +214,35 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     #region Type Node Navigation Tests
 
     /// <summary>
-    /// Navigating to Organization should resolve to the Organization node type.
+    /// Navigating to Space should resolve to the Space node type.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task ResolvePath_Organization_ResolvesToOrganizationNode()
+    public async Task ResolvePath_Space_ResolvesToSpaceNode()
     {
         // Arrange
         var pathResolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
 
         // Act
-        var resolution = await pathResolver.ResolvePath("Organization").FirstAsync().ToTask();
+        var resolution = await pathResolver.ResolvePath("Space").FirstAsync().ToTask();
 
         // Assert
-        resolution.Should().NotBeNull("Organization should be resolvable");
-        resolution.Prefix.Should().Be("Organization");
+        resolution.Should().NotBeNull("Space should be resolvable");
+        resolution.Prefix.Should().Be("Space");
         resolution.Remainder.Should().BeNull();
     }
 
     /// <summary>
-    /// GetNodeAsync for Organization should return the NodeType definition node.
+    /// GetNodeAsync for Space should return the NodeType definition node.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task GetNodeAsync_Organization_ReturnsNodeTypeDefinition()
+    public async Task GetNodeAsync_Space_ReturnsNodeTypeDefinition()
     {
         // Act
-        var node = await ReadNodeAsync("Organization");
+        var node = await ReadNodeAsync("Space");
 
         // Assert
-        node.Should().NotBeNull("Organization node should exist");
-        node!.Path.Should().Be("Organization");
+        node.Should().NotBeNull("Space node should exist");
+        node!.Path.Should().Be("Space");
         node.NodeType.Should().Be("NodeType");
         node.Content.Should().BeOfType<NodeTypeDefinition>();
     }
@@ -251,7 +251,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     /// Navigating to type paths should work for real type definitions.
     /// </summary>
     [Theory]
-    [InlineData("Organization")]
+    [InlineData("Space")]
     [InlineData("ACME/Project")]
     [InlineData("ACME/Project/Todo")]
     public async Task ResolvePath_TypePaths_ResolveCorrectly(string typePath)
@@ -275,8 +275,8 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     public async Task TypeNodes_ExistInPersistence()
     {
         // Assert that type nodes exist
-        var orgType = await ReadNodeAsync("Organization");
-        orgType.Should().NotBeNull("Organization should exist in persistence");
+        var orgType = await ReadNodeAsync("Space");
+        orgType.Should().NotBeNull("Space should exist in persistence");
         orgType!.NodeType.Should().Be("NodeType");
 
         var projectType = await ReadNodeAsync("ACME/Project");
@@ -458,12 +458,12 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     #region Default Layout Area Tests
 
     /// <summary>
-    /// Tests that requesting the default layout area for an Organization node
+    /// Tests that requesting the default layout area for a Space node
     /// returns successfully without hanging.
-    /// This validates that default views are properly configured for Organization type.
+    /// This validates that default views are properly configured for Space type.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task Organization_GetDefaultLayoutArea_DoesNotHang()
+    public async Task Space_GetDefaultLayoutArea_DoesNotHang()
     {
         var orgAddress = new Address($"{TestPartition}/org1");
 
@@ -487,12 +487,12 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Tests that requesting an empty area (default view) for an Organization node works.
+    /// Tests that requesting an empty area (default view) for a Space node works.
     /// When area is empty/null, the default view should be returned (Details).
     /// This matches the pattern used in LayoutTest.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task Organization_GetEmptyArea_ReturnsDefaultView()
+    public async Task Space_GetEmptyArea_ReturnsDefaultView()
     {
         var orgAddress = new Address($"{TestPartition}/org1");
 
@@ -515,21 +515,21 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Tests that the Organization NodeType catalog renders correctly.
-    /// When navigating to Organization and requesting the Search area,
+    /// Tests that the Space NodeType catalog renders correctly.
+    /// When navigating to Space and requesting the Search area,
     /// it should render a StackControl with Search that contains either
-    /// organization thumbnails or "No items found" message.
+    /// space thumbnails or "No items found" message.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task OrganizationType_GetCatalog_ShowsOrganizations()
+    public async Task SpaceType_GetCatalog_ShowsSpaces()
     {
         // Arrange
-        var typeOrgAddress = new Address("Organization");
+        var typeOrgAddress = new Address("Space");
 
         // Get a client with data services configured
         var client = GetClient(c => c.AddData(data => data));
 
-        // Initialize Organization hub - this is a NodeType node
+        // Initialize Space hub - this is a NodeType node
         await client.Observe(new PingRequest(), o => o.WithTarget(typeOrgAddress)).FirstAsync().ToTask();
 
         // Act: Request Search area directly (the default view for NodeType)
@@ -550,30 +550,30 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         Output.WriteLine($"Catalog JSON (first 3000 chars): {json.Substring(0, Math.Min(3000, json.Length))}");
 
         // The Search area must render a MeshSearchControl with a namespace-scoped query
-        // so the user sees organization instances (or an empty-state) and not a bare shell.
+        // so the user sees space instances (or an empty-state) and not a bare shell.
         json.Should().Contain("MeshSearchControl",
             "the Search area must render a MeshSearchControl");
-        json.Should().Contain("Organization",
-            "the MeshSearchControl query must reference the Organization scope");
+        json.Should().Contain("Space",
+            "the MeshSearchControl query must reference the Space scope");
         json.Should().Contain("namespace:",
             "the MeshSearchControl must have a namespace filter in its query");
     }
 
     /// <summary>
-    /// Tests that QueryAsync with nodeType filter returns organizations.
+    /// Tests that QueryAsync with nodeType filter returns spaces.
     /// This tests the underlying query that the search uses.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task QueryAsync_NodeTypeOrg_ReturnsOrganizations()
+    public async Task QueryAsync_NodeTypeOrg_ReturnsSpaces()
     {
-        // Act - query for all nodes with nodeType Organization
-        var query = "nodeType:Organization scope:descendants";
+        // Act - query for all nodes with nodeType Space
+        var query = "nodeType:Space scope:descendants";
         var nodes = await MeshQuery.QueryAsync<MeshNode>(query, null, TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         foreach (var node in nodes)
             Output.WriteLine($"Found: {node.Path}");
 
         // Assert
-        nodes.Should().NotBeEmpty("Query should return organizations");
+        nodes.Should().NotBeEmpty("Query should return spaces");
         nodes.Should().Contain(n => n.Path == $"{TestPartition}/org1", "Should find org1");
         nodes.Should().Contain(n => n.Path == $"{TestPartition}/org2", "Should find org2");
     }
@@ -948,7 +948,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         return builder
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(TestPaths.SamplesGraphData)
-            .AddOrganizationType()
+            .AddSpaceType()
             .AddAcme()
             .ConfigureServices(services => services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = _cacheDirectory))
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas())

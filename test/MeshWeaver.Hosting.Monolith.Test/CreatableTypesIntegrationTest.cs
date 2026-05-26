@@ -1,5 +1,5 @@
 ﻿using System;
-using Memex.Portal.Shared;
+using MeshWeaver.Blazor.Portal;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -75,14 +75,14 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
 
     private static void SetupTestData(InMemoryStorageAdapter persistence)
     {
-        // Create Organization type (global - can be created at root level)
+        // Create Space type (global - can be created at root level)
         var orgTypeDef = new NodeTypeDefinition
         {
             Description = "An organization namespace"
         };
-        var orgTypeNode = MeshNode.FromPath("Organization") with
+        var orgTypeNode = MeshNode.FromPath("Space") with
         {
-            Name = "Organization",
+            Name = "Space",
             NodeType = "NodeType",
             Icon = "Building",
             Content = orgTypeDef
@@ -93,7 +93,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         var acmeCorpNode = MeshNode.FromPath("ACME") with
         {
             Name = "ACME Corporation",
-            NodeType = "Organization"
+            NodeType = "Space"
         };
         persistence.SaveNode(acmeCorpNode, SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
 
@@ -101,7 +101,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         var acmeNode = MeshNode.FromPath("ACME") with
         {
             Name = "ACME Software",
-            NodeType = "Organization"
+            NodeType = "Space"
         };
         persistence.SaveNode(acmeNode, SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
 
@@ -190,14 +190,14 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
                 .AddInMemoryPersistence(persistence)
                 .Configure<CompilationCacheOptions>(o => o.CacheDirectory = cacheDirectory))
             .AddGraph()
-            .AddOrganizationType()
+            .AddSpaceType()
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 
     [Fact(Timeout = 20000)]
     public async Task ACME_CreatableTypes_IncludesProjectAndGlobalTypes()
     {
-        // Act - ACME is an Organization, should be able to create ACME/Project
+        // Act - ACME is an Space, should be able to create ACME/Project
         var creatableTypes = await GetCreatableTypesAt("ACME", TestContext.Current.CancellationToken);
 
         // Assert - Should include ACME/Project (defined under ACME)
@@ -211,7 +211,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     /// Test that verifies the MeshNodePickerControl type queries for the Create form.
     /// Uses the EXACT same code path as CreateLayoutArea.BuildCreateNewFormAsync
     /// to build queries, then runs them like MeshNodePickerView.LoadResultsAsync does.
-    /// When at "ACME" (NodeType=Organization), should return Organization, Software/Project, and global types.
+    /// When at "ACME" (NodeType=Space), should return Space, Software/Project, and global types.
     /// </summary>
     [Fact(Timeout = 20000)]
     public async Task CreateForm_TypePicker_Queries_ReturnCorrectTypes()
@@ -220,7 +220,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         var meshConfiguration = Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>();
         var ct = TestContext.Current.CancellationToken;
 
-        // Simulate: user is at "ACME" (an Organization) and opens Create form
+        // Simulate: user is at "ACME" (an Space) and opens Create form
         var parentPath = "ACME";
 
         // === EXACT copy of CreateLayoutArea.BuildCreateNewFormAsync logic ===
@@ -231,7 +231,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             parentNode = await ReadNodeAsync(parentPath, ct);
             currentNodeType = parentNode?.NodeType;
         }
-        currentNodeType.Should().Be("Organization", "Software should be of NodeType Organization");
+        currentNodeType.Should().Be("Space", "Software should be of NodeType Space");
 
         var effectiveNamespace = parentPath;
         string defaultType;
@@ -249,7 +249,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
 
         Output.WriteLine($"parentPath={parentPath}, currentNodeType={currentNodeType}, effectiveNamespace={effectiveNamespace}, defaultType={defaultType}");
         effectiveNamespace.Should().Be("ACME");
-        defaultType.Should().Be("Organization");
+        defaultType.Should().Be("Space");
 
         // Build type queries — EXACT copy of production code
         var typeQueries = new List<string>();
@@ -278,9 +278,9 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         // Execute each query (same as MeshNodePickerView.LoadResultsAsync)
         var deduped = await ExecuteTypePickerQueries(typeQueries, meshQuery, ct);
 
-        // Assert: Organization itself should be in results (parent's own type)
-        deduped.Should().Contain(n => n.Path == "Organization",
-            "Organization type should be available when creating inside an Organization node");
+        // Assert: Space itself should be in results (parent's own type)
+        deduped.Should().Contain(n => n.Path == "Space",
+            "Space type should be available when creating inside an Space node");
 
         // Assert: ACME/Project should be in results (child type under ACME)
         deduped.Should().Contain(n => n.Path == "ACME/Project",
@@ -300,15 +300,15 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     {
         var ct = TestContext.Current.CancellationToken;
 
-        // At "ACME" (an Organization), the default type should be "Organization"
+        // At "ACME" (an Space), the default type should be "Space"
         var node = await ReadNodeAsync("ACME", ct);
         var currentNodeType = node?.NodeType;
 
-        currentNodeType.Should().Be("Organization");
+        currentNodeType.Should().Be("Space");
         // The form should default to the parent's NodeType, not "Markdown"
         var defaultType = currentNodeType ?? "Markdown";
-        defaultType.Should().Be("Organization",
-            "Default type should be Organization when creating inside an Organization node");
+        defaultType.Should().Be("Space",
+            "Default type should be Space when creating inside an Space node");
     }
 
     /// <summary>
@@ -342,8 +342,8 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Test that when on a NodeType definition page (e.g., "Organization" with NodeType="NodeType"),
-    /// the Create form defaults namespace to the type's parent namespace (root for Organization)
+    /// Test that when on a NodeType definition page (e.g., "Space" with NodeType="NodeType"),
+    /// the Create form defaults namespace to the type's parent namespace (root for Space)
     /// and default type to the type itself.
     /// </summary>
     [Fact(Timeout = 20000)]
@@ -353,22 +353,22 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         var meshConfiguration = Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>();
         var ct = TestContext.Current.CancellationToken;
 
-        // Simulate: user is on the "Organization" NodeType definition page and opens Create
-        var parentPath = "Organization";
+        // Simulate: user is on the "Space" NodeType definition page and opens Create
+        var parentPath = "Space";
 
         var parentNode = await ReadNodeAsync(parentPath, ct);
         var currentNodeType = parentNode?.NodeType;
 
-        parentNode.Should().NotBeNull("Organization node should exist");
-        currentNodeType.Should().Be("NodeType", "Organization is a NodeType definition");
+        parentNode.Should().NotBeNull("Space node should exist");
+        currentNodeType.Should().Be("NodeType", "Space is a NodeType definition");
 
         // When on a NodeType definition page, namespace should be the type's parent namespace
         var effectiveNamespace = parentNode!.Namespace ?? "";
-        effectiveNamespace.Should().BeEmpty("Organization is at root, so namespace should be root/empty");
+        effectiveNamespace.Should().BeEmpty("Space is at root, so namespace should be root/empty");
 
         // Default type should be the type definition itself
-        var defaultType = parentPath; // "Organization"
-        defaultType.Should().Be("Organization");
+        var defaultType = parentPath; // "Space"
+        defaultType.Should().Be("Space");
 
         // Build type queries for the type definition page
         var typeQueries = new List<string>();
@@ -383,9 +383,9 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
 
         var deduped = await ExecuteTypePickerQueries(typeQueries, meshQuery, ct);
 
-        // Organization should be in the type list
-        deduped.Should().Contain(n => n.Path == "Organization",
-            "Organization should be available as a type when on its definition page");
+        // Space should be in the type list
+        deduped.Should().Contain(n => n.Path == "Space",
+            "Space should be available as a type when on its definition page");
 
         // Global types should be available
         deduped.Should().Contain(n => n.Path == "Markdown",
@@ -1028,7 +1028,7 @@ public class CreatableTypesFileSystemTest : MonolithMeshTestBase
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(TestPaths.SamplesGraphData)
             .AddAcme()
-            .AddOrganizationType()
+            .AddSpaceType()
             .AddSystemorph()
             .AddGraph();
 
