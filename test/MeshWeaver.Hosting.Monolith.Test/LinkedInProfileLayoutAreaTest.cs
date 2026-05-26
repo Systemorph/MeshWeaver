@@ -50,9 +50,11 @@ public class LinkedInProfileLayoutAreaTest(ITestOutputHelper output) : MonolithM
     // UnauthorizedAccessException → IOException("file is being used by
     // another process") on Windows, after which the dynamic LayoutAreas
     // piece never compiles and Overview falls back to an empty render.
+    // Stable cache directory — the timestamped-subdir cache (a3ab9909e)
+    // gives each compile its own subdir so prior-process DLLs aren't touched.
     private static readonly string CacheDirectory = Path.Combine(
         Path.GetTempPath(),
-        $"MeshWeaverLinkedInProfileTests-{Guid.NewGuid():N}",
+        "MeshWeaverLinkedInProfileTests",
         ".mesh-cache");
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
