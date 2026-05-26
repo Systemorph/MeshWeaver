@@ -49,9 +49,11 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
     // UnauthorizedAccessException → IOException("file is being used by
     // another process") on Windows, after which the dynamic LayoutAreas
     // piece never compiles and Overview falls back to an empty render.
+    // Stable cache directory — the timestamped-subdir cache (a3ab9909e)
+    // gives each compile its own subdir so prior-process DLLs aren't touched.
     private static readonly string CacheDirectory = System.IO.Path.Combine(
         System.IO.Path.GetTempPath(),
-        $"MeshWeaverLinkedInTelemetryTests-{Guid.NewGuid():N}",
+        "MeshWeaverLinkedInTelemetryTests",
         ".mesh-cache");
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>

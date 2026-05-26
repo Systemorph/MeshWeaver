@@ -38,7 +38,9 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
 
     public CessionLayoutAreaTest(ITestOutputHelper output) : base(output)
     {
-        _cacheDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverCessionTests", Guid.NewGuid().ToString());
+        // Stable cache directory — the timestamped-subdir cache (a3ab9909e)
+        // gives each compile its own subdir so prior-process DLLs aren't touched.
+        _cacheDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverCessionTests");
         Directory.CreateDirectory(_cacheDirectory);
     }
 

@@ -46,7 +46,9 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     {
         var graphPath = TestPaths.SamplesGraph;
         var dataDirectory = TestPaths.SamplesGraphData;
-        var cacheDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverContentCollectionTests", System.Guid.NewGuid().ToString(), ".mesh-cache");
+        // Stable cache directory — the timestamped-subdir cache (a3ab9909e)
+        // gives each compile its own subdir so prior-process DLLs aren't touched.
+        var cacheDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverContentCollectionTests", ".mesh-cache");
         Directory.CreateDirectory(cacheDirectory);
 
         var configuration = new ConfigurationBuilder()
