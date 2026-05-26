@@ -3,6 +3,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 
 [assembly: InternalsVisibleTo("MeshWeaver.Connection.Orleans")]
+[assembly: InternalsVisibleTo("MeshWeaver.Hosting")]
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Monolith")]
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Orleans")]
 
@@ -13,7 +14,7 @@ namespace MeshWeaver.Mesh;
 /// Types are treated as mesh nodes with nodeType="NodeType".
 /// </summary>
 public class MeshConfiguration(
-    IReadOnlyDictionary<string, MeshNode> meshNodes,
+    IReadOnlyList<MeshNode> meshNodes,
     Func<MessageHubConfiguration, MessageHubConfiguration>? defaultNodeHubConfiguration = null,
     IReadOnlyList<string>? globalCreatableTypes = null,
     IReadOnlySet<string>? autocompleteExcludedNodeTypes = null,
@@ -53,10 +54,17 @@ public class MeshConfiguration(
     public static readonly IReadOnlySet<string> DefaultStreamRoutedAddressTypes =
         new HashSet<string>(StringComparer.Ordinal) { "portal", "client", "cache" };
 
-    /// <summary>
-    /// Registered mesh nodes by their key/path.
-    /// </summary>
-    public IReadOnlyDictionary<string, MeshNode> Nodes { get; } = meshNodes;
+    // No public Nodes / MeshNodes property. Static nodes registered via
+    // MeshBuilder.AddMeshNodes(...) flow through StaticMeshNodeListProvider
+    // (registered as an IStaticNodeProvider). Application code reads them via
+    // serviceProvider.EnumerateStaticNodes() / FindStaticNode(path).
+    //
+    // The internal AddMeshNodesList is exposed only for framework-internal
+    // consumers in MeshWeaver.Hosting that need to distinguish
+    // AddMeshNodes-seed nodes from other IStaticNodeProvider implementations
+    // (e.g., StaticNodeQueryProvider applies search-context exclusion to
+    // these specifically). Application code MUST use IStaticNodeProvider.
+    internal IReadOnlyList<MeshNode> AddMeshNodesList { get; } = meshNodes;
 
     /// <summary>
     /// Default configuration applied to all node hubs.
@@ -124,7 +132,7 @@ public class MeshConfiguration(
     private readonly Lazy<Dictionary<string, HashSet<string>>> _contextExcludedTypes = new(() =>
     {
         var map = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
-        foreach (var node in meshNodes.Values)
+        foreach (var node in meshNodes)
         {
             if (node.ExcludeFromContext == null || node.ExcludeFromContext.Count == 0)
                 continue;
@@ -168,7 +176,7 @@ public class MeshConfiguration(
     /// Used to determine whether to set MainNode on new instances.
     /// </summary>
     private readonly Lazy<HashSet<string>> _satelliteNodeTypes = new(() =>
-        meshNodes.Values
+        meshNodes
             .Where(n => n.IsSatelliteType)
             .Select(n => n.Path)
             .ToHashSet(StringComparer.OrdinalIgnoreCase));

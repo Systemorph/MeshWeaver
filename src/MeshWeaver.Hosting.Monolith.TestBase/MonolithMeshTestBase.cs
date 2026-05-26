@@ -669,12 +669,10 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// </summary>
     protected virtual void PreWarmNodeTypeHubs()
     {
-        var meshConfig = Mesh.ServiceProvider.GetService<MeshConfiguration>();
-        if (meshConfig is null) return;
         foreach (var nodeTypePath in new[] { "AccessAssignment", "PartitionAccessPolicy" })
         {
-            if (meshConfig.Nodes.TryGetValue(nodeTypePath, out var typeNode)
-                && typeNode.HubConfiguration is { } config)
+            var typeNode = Mesh.ServiceProvider.FindStaticNode(nodeTypePath);
+            if (typeNode?.HubConfiguration is { } config)
             {
                 _ = Mesh.GetHostedHub(new Address(nodeTypePath), config);
             }

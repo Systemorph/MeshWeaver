@@ -243,8 +243,12 @@ public static class MeshExtensions
         existingObs
             .Select(existing =>
             {
-                if (existing == null && meshConfig.Nodes.TryGetValue(node.Path, out var configNode))
-                    return configNode;
+                if (existing == null)
+                {
+                    var configNode = hub.ServiceProvider.FindStaticNode(node.Path);
+                    if (configNode is not null)
+                        return configNode;
+                }
                 return existing;
             })
             .SelectMany(existingNode =>
@@ -320,13 +324,7 @@ public static class MeshExtensions
                         {
                             typeExistsObs = Observable.Return(true);
                         }
-                        else if (meshConfig.Nodes.ContainsKey(node.NodeType))
-                        {
-                            typeExistsObs = Observable.Return(true);
-                        }
-                        else if (hub.ServiceProvider.GetServices<IStaticNodeProvider>()
-                            .SelectMany(p => p.GetStaticNodes())
-                            .Any(n => string.Equals(n.Path, node.NodeType, StringComparison.Ordinal)))
+                        else if (hub.ServiceProvider.FindStaticNode(node.NodeType) is not null)
                         {
                             typeExistsObs = Observable.Return(true);
                         }

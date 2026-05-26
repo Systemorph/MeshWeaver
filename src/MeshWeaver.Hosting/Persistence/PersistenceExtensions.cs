@@ -572,9 +572,8 @@ public static class PersistenceExtensions
                 sp.GetService<ILoggerFactory>());
         });
 
-        // Surface AddMeshNodes seed (held in MeshConfiguration.Nodes) as an
-        // IStaticNodeProvider so the seed is visible to the static-node fan-in.
-        services.AddSingleton<IStaticNodeProvider, MeshConfigurationStaticNodeProvider>();
+        // AddMeshNodes seed flows through StaticMeshNodeListProvider, registered
+        // in MeshBuilder.Build — no extra registration needed here.
 
         services.AddMeshCatalog();
 
@@ -629,8 +628,6 @@ public static class PersistenceExtensions
                 sp.GetService<ILoggerFactory>());
         });
         services.AddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<StaticNodeQueryProvider>());
-
-        services.AddSingleton<IStaticNodeProvider, MeshConfigurationStaticNodeProvider>();
 
         services.TryAddSingleton<IVersionQuery>(sp =>
         {

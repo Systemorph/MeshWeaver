@@ -374,10 +374,9 @@ internal class UnifiedReferenceAutocompleteProvider(
             }
         }
 
-        // Type definitions from mesh configuration
-        if (meshConfig != null)
+        // Type definitions from static node providers
         {
-            var topLevelNodes = meshConfig.Nodes.Values
+            var topLevelNodes = hub.ServiceProvider.EnumerateStaticNodes()
                 .Where(n => n.Segments.Count == 1)
                 .Where(n => string.IsNullOrEmpty(prefix) ||
                            n.Path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))

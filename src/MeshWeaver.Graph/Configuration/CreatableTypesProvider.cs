@@ -81,7 +81,7 @@ internal sealed class CreatableTypesProvider(
         var parentDefObs = ResolveParentNodeTypeDefinition(currentType);
 
         var typesObs = typeNodesObs.CombineLatest(parentDefObs, (typeNodes, parentDef) =>
-            BuildInfos(typeNodes, meshConfiguration, currentType, parentDef));
+            BuildInfos(typeNodes, meshConfiguration, hub.ServiceProvider, currentType, parentDef));
 
         // Outer security gate: only apply Create-permission filter for a
         // specific parent path. Root listing (nodePath == "") is global
@@ -185,8 +185,8 @@ internal sealed class CreatableTypesProvider(
             || string.Equals(currentType, MeshNode.NodeTypePath, StringComparison.Ordinal))
             return Observable.Return<NodeTypeDefinition?>(null);
 
-        if (meshConfiguration.Nodes.TryGetValue(currentType, out var staticNode)
-            && staticNode.Content is NodeTypeDefinition staticDef)
+        var staticNode = hub.ServiceProvider.FindStaticNode(currentType);
+        if (staticNode?.Content is NodeTypeDefinition staticDef)
             return Observable.Return<NodeTypeDefinition?>(staticDef);
 
         return hub.GetWorkspace().GetMeshNodeStream(currentType)
@@ -199,6 +199,7 @@ internal sealed class CreatableTypesProvider(
     private static IReadOnlyList<CreatableTypeInfo> BuildInfos(
         IReadOnlyList<MeshNode> queryNodes,
         MeshConfiguration meshConfiguration,
+        IServiceProvider serviceProvider,
         string? currentType,
         NodeTypeDefinition? parentDef)
     {
@@ -222,16 +223,16 @@ internal sealed class CreatableTypesProvider(
             result.Add(BuildInfoFromMeshNode(typeNode));
         }
 
-        // 2. Static AddMeshNodes-registered NodeType MeshNodes that aren't
+        // 2. Static IStaticNodeProvider-registered NodeType MeshNodes that aren't
         //    persisted (don't show up in the query). Filter on
         //    NodeType == MeshNode.NodeTypePath to grab only NodeType
         //    definitions, not arbitrary static nodes.
-        foreach (var (path, typeNode) in meshConfiguration.Nodes)
+        foreach (var typeNode in serviceProvider.EnumerateStaticNodes())
         {
             if (!string.Equals(typeNode.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal))
                 continue;
-            if (!Allowed(path)) continue;
-            if (!added.Add(path)) continue;
+            if (!Allowed(typeNode.Path)) continue;
+            if (!added.Add(typeNode.Path)) continue;
             result.Add(BuildInfoFromMeshNode(typeNode));
         }
 
@@ -247,7 +248,7 @@ internal sealed class CreatableTypesProvider(
                 foreach (var typePath in parentDef.CreatableTypes)
                 {
                     if (!added.Add(typePath)) continue;
-                    var info = BuildInfoFromConfig(typePath, meshConfiguration);
+                    var info = BuildInfoFromConfig(typePath, serviceProvider);
                     if (info is not null) result.Add(info);
                 }
             }
@@ -259,7 +260,7 @@ internal sealed class CreatableTypesProvider(
             foreach (var typePath in meshConfiguration.GlobalCreatableTypes)
             {
                 if (!added.Add(typePath)) continue;
-                var info = BuildInfoFromConfig(typePath, meshConfiguration);
+                var info = BuildInfoFromConfig(typePath, serviceProvider);
                 if (info is not null) result.Add(info);
             }
         }
@@ -283,9 +284,10 @@ internal sealed class CreatableTypesProvider(
     }
 
     private static CreatableTypeInfo? BuildInfoFromConfig(
-        string typePath, MeshConfiguration meshConfiguration)
+        string typePath, IServiceProvider serviceProvider)
     {
-        if (meshConfiguration.Nodes.TryGetValue(typePath, out var node))
+        var node = serviceProvider.FindStaticNode(typePath);
+        if (node is not null)
             return BuildInfoFromMeshNode(node);
         return new CreatableTypeInfo(
             NodeTypePath: typePath,

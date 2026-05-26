@@ -1119,8 +1119,8 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
 
         // Check if this hub path corresponds to a built-in node (registered via AddMeshNodes).
         // Built-in nodes (NodeType, Markdown, Agent, etc.) are pre-loaded — no persistence needed.
-        var meshConfig = Workspace.Hub.ServiceProvider.GetService<MeshConfiguration>();
-        if (meshConfig != null && meshConfig.Nodes.TryGetValue(_hubPath, out var builtInNode))
+        var builtInNode = Workspace.Hub.ServiceProvider.FindStaticNode(_hubPath);
+        if (builtInNode is not null)
         {
             _logger?.LogDebug("[DIAG-MeshDataSource] BUILT-IN node for hubPath='{HubPath}'", _hubPath);
             Workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);

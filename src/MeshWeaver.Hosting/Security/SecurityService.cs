@@ -108,19 +108,11 @@ internal class SecurityService : ISecurityService, IDisposable
             .SelectMany(p => p.GetStaticNodes())
             .ToList();
 
-        // Also include AccessAssignment AND PartitionAccessPolicy nodes from
-        // MeshConfiguration (e.g., PublicAdminAccess seeds, partition caps
-        // declared via AssignmentNodeFactory.Policy). The previous filter only
-        // accepted AccessAssignment, so PartitionAccessPolicy seeds added via
-        // AddMeshNodes were silently dropped — caps never applied, Admin saw
-        // Permission.All on every scope.
-        if (meshConfiguration != null)
-        {
-            allStaticNodes.AddRange(
-                meshConfiguration.Nodes.Values
-                    .Where(n => n.NodeType == "AccessAssignment"
-                                || n.NodeType == "PartitionAccessPolicy"));
-        }
+        // AccessAssignment / PartitionAccessPolicy nodes registered via
+        // AddMeshNodes (PublicAdminAccess seeds, AssignmentNodeFactory.Policy
+        // caps) flow in through staticNodeProviders — StaticMeshNodeListProvider
+        // surfaces every AddMeshNodes-registered node. No separate
+        // MeshConfiguration consult needed.
 
         // Collect PartitionAccessPolicy nodes from static providers (last-wins for duplicate namespaces)
         _staticPolicies = allStaticNodes
