@@ -9,8 +9,9 @@ namespace MeshWeaver.Mesh.Services;
 /// the routing layer, every per-instance hub that depends on a NodeType
 /// definition, <c>NodeTypeEnrichmentHelpers</c>, compile-activity hubs
 /// writing terminal state, path-resolution lookups — goes through the SAME
-/// handle. Reads (<see cref="GetStream"/>) and writes (<see cref="Update"/>)
+/// handle. Reads (<see cref="GetStream(string)"/>) and writes (<see cref="Update(string, Func{MeshNode, MeshNode})"/>)
 /// share the underlying stream so an update is always visible to every reader.
+/// (See the <c>GetStream</c> / <c>Update</c> overloads below.)
 ///
 /// <para><b>Not NodeType-specific.</b> The cache is path-keyed and works for
 /// any MeshNode: NodeType definitions, user partitions, activity nodes,
@@ -44,7 +45,7 @@ public interface IMeshNodeStreamCache
     /// <summary>
     /// Applies <paramref name="update"/> to the MeshNode at
     /// <paramref name="path"/> through the SAME cached
-    /// <c>MeshNodeStreamHandle</c> that <see cref="GetStream"/> reads. This is
+    /// <c>MeshNodeStreamHandle</c> that <see cref="GetStream(string)"/> reads. This is
     /// the canonical way for a non-owning hub (e.g. a compile-activity hub) to
     /// write terminal state: it MUST go through the one shared handle, not an
     /// ad-hoc <c>GetRemoteStream</c> — an ad-hoc stream is a separate
@@ -84,7 +85,7 @@ public interface IMeshNodeStreamCache
 
     /// <summary>
     /// Removes the cached <c>Replay(1)</c> entry for <paramref name="path"/>.
-    /// The per-path stream is rebuilt on the next <see cref="GetStream"/> call.
+    /// The per-path stream is rebuilt on the next <see cref="GetStream(string)"/> call.
     /// Called by <c>HandleDeleteNodeRequest</c> after the owning hub's persistence
     /// layer confirms the delete, so subsequent reads no longer see the stale
     /// pre-delete value. Idempotent — calling for an unknown path is a no-op.

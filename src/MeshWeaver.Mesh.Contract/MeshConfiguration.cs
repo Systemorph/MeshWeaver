@@ -25,14 +25,14 @@ public class MeshConfiguration(
     /// <summary>
     /// Address-type prefixes that route via the cluster-wide Orleans memory
     /// stream rather than grain activation. Populated by modules at startup
-    /// via <see cref="MeshBuilderExtensions.AddStreamRoutedAddressType"/>.
-    /// Defaults to <c>portal</c> + <c>client</c>; <see cref="MeshWeaver.Hosting"/>'s
+    /// via <c>MeshBuilderExtensions.AddStreamRoutedAddressType</c>.
+    /// Defaults to <c>portal</c> + <c>client</c>; <c>MeshWeaver.Hosting</c>'s
     /// MeshNodeStreamCache adds <c>cache</c> when its hub is wired.
     ///
     /// <para>The silo's <c>RoutingGrain.RouteMessage</c> consults this set
     /// instead of hard-coding string literals — see
     /// <c>Doc/Architecture/OrleansTestRoutingPattern.md</c>. Hubs at these
-    /// addresses must call <see cref="IRoutingService.RegisterStream(IMessageHub)"/>
+    /// addresses must call <c>IRoutingService.RegisterStream(IMessageHub)</c>
     /// in their <c>WithInitialization</c> so the cluster-wide memory stream
     /// dispatch reaches them.</para>
     /// </summary>
