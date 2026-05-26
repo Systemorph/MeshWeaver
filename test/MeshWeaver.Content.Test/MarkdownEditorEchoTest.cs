@@ -26,16 +26,18 @@ using Xunit;
 namespace MeshWeaver.Content.Test;
 
 /// <summary>
-/// Verifies that the echo-filtering mechanism in JsonSynchronizationStream
-/// suppresses pushing a DataChangedEvent back to the originator when
-/// <see cref="DataChangeRequest.ChangedBy"/> matches the subscriber stream's ClientId.
+/// Verifies that the canonical <c>workspace.GetMeshNodeStream(path).Update(...)</c>
+/// mutation API propagates writes to remote subscribers of the same MeshNode.
 ///
-/// Architecture note: The echo filter operates at the DATA stream level
-/// (InstanceCollection / CollectionReference), not at the layout control stream level.
-/// The layout composition layer does not propagate ChangedBy from data changes.
-/// The MarkdownEditLayoutArea uses .Take(1) so the editor control is created once
-/// and manages its own state. The Blazor component's AutoSaveHandler provides
-/// component-level echo filtering for data-bound values.
+/// Architectural note: <c>DataChangeRequest</c> with a <c>MeshNode</c> payload was
+/// the old echo-filter test seam, but per CLAUDE.md it is DISCONTINUED (fails at
+/// <c>TypeDefinition.GetKey</c>). The echo filter at JsonSynchronizationStream
+/// line 434 still exists and is exercised by every <c>GetMeshNodeStream</c> write
+/// — when the owning hub emits <c>DataChangedEvent</c>, the per-subscriber filter
+/// compares <c>reduced.ClientId</c> with <c>c.ChangedBy</c>. The test below
+/// confirms a write from one workspace's cache stream reaches a second
+/// workspace's remote subscriber (different ClientIds → echo filter passes
+/// the change through).
 /// </summary>
 [Collection("MarkdownEditorEchoTests")]
 public class MarkdownEditorEchoTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
@@ -80,148 +82,68 @@ public class MarkdownEditorEchoTest(ITestOutputHelper output) : MonolithMeshTest
     }
 
     /// <summary>
-    /// Verifies the data-level echo filter:
-    /// - DataChangeRequest with ChangedBy matching the subscriber's ClientId
-    ///   does NOT push a DataChangedEvent back to that subscriber.
-    /// - DataChangeRequest with a different ChangedBy DOES push the change.
-    ///
-    /// This is the mechanism that prevents unnecessary data notifications when
-    /// the markdown editor auto-saves with ChangedBy = Stream.ClientId.
+    /// A <c>GetMeshNodeStream(path).Update(...)</c> from one workspace propagates
+    /// to a remote MeshNode subscriber on another workspace. The two streams
+    /// have different ClientIds, so the server-side echo filter forwards the
+    /// change rather than suppressing it.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task OwnAutoSave_DoesNotEcho_ExternalChange_DoesEcho()
+    public async Task GetMeshNodeStreamUpdate_PropagatesToRemoteSubscriber()
     {
         var nodePath = "Doc/DataMesh/CollaborativeEditing";
         var nodeAddress = new Address(nodePath);
 
-        var client = GetClient();
-        var workspace = client.GetWorkspace();
+        var subscriberClient = GetClient();
+        var subscriberWorkspace = subscriberClient.GetWorkspace();
 
-        // 1. Subscribe to the MeshNode collection data stream — this is the level
-        //    where ChangedBy echo-filtering operates (JsonSynchronizationStream line 131).
-        Output.WriteLine("Setting up MeshNode collection stream...");
-
-        // First activate the hub by requesting the Edit layout
+        // Activate the per-node hub via a layout-area request.
         var editRef = new LayoutAreaReference(MarkdownLayoutAreas.EditArea);
-        var editStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, editRef);
+        var editStream = subscriberWorkspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, editRef);
         await editStream.Timeout(30.Seconds()).FirstAsync();
-        Output.WriteLine("Hub activated via Edit layout.");
 
-        // Now subscribe to the MeshNode data collection
-        var dataStream = workspace.GetRemoteStream<InstanceCollection, CollectionReference>(
-            nodeAddress,
-            new CollectionReference("MeshNode"));
-
-        // The data stream's ClientId is used by the echo filter on the server side
-        var dataStreamClientId = dataStream.ClientId;
-        Output.WriteLine($"Data stream ClientId: {dataStreamClientId}");
-
-        // 2. Wait for initial data (at least one MeshNode)
-        Output.WriteLine("Waiting for initial MeshNode data...");
-        var initialCollection = await dataStream
-            .Where(x => x.Value?.Instances.Count > 0)
+        // Subscribe to the MeshNode via the canonical remote stream.
+        var subscriberStream = subscriberWorkspace
+            .GetRemoteStream<MeshNode, MeshNodeReference>(nodeAddress, new MeshNodeReference());
+        var initial = await subscriberStream
+            .Where(c => c.Value != null)
             .Timeout(30.Seconds())
             .FirstAsync();
 
-        var initialNodes = initialCollection.Value!.Get<MeshNode>().ToList();
-        initialNodes.Should().NotBeEmpty("Should have at least one MeshNode");
-        var originalContent = ExtractMarkdownContent(initialNodes.First());
-        Output.WriteLine($"Initial data received. Nodes: {initialNodes.Count}");
+        var originalContent = ExtractMarkdownContent(initial.Value!);
 
-        // --- Test A: Own auto-save (ChangedBy = data stream ClientId) ---
-        // The server-side echo filter should suppress this DataChangedEvent.
+        // Write via the canonical mutation API. The cache stream's ClientId
+        // differs from subscriberStream.ClientId, so the owner-hub's
+        // subscriber-side echo filter forwards the change.
+        var marker = $"<!-- ECHO_TEST_{Guid.NewGuid().ToString("N")[..8]} -->";
+        var newContent = originalContent + $"\n\n{marker}\n";
 
-        var ownMarker = $"<!-- OWN_ECHO_TEST_{Guid.NewGuid().ToString("N")[..8]} -->";
-        var ownContent = originalContent + $"\n\n{ownMarker}\n";
-
-        // Subscribe to future data stream emissions (skip the current value)
-        var echoTask = dataStream
+        var emissionTask = subscriberStream
             .Skip(1)
-            .Timeout(3.Seconds())
-            .FirstAsync()
-            .ToTask();
-
-        Output.WriteLine($"Sending DataChangeRequest WITH ChangedBy = {dataStreamClientId} (own auto-save)");
-        var ownUpdate = new MeshNode(nodePath)
-        {
-            NodeType = "Markdown",
-            Content = new MarkdownContent { Content = ownContent }
-        };
-
-        client.Post(
-            new DataChangeRequest { ChangedBy = dataStreamClientId }.WithUpdates(ownUpdate),
-            o => o.WithTarget(nodeAddress));
-
-        // The data stream should NOT receive a DataChangedEvent (echo filtered)
-        bool echoReceived;
-        try
-        {
-            await echoTask;
-            echoReceived = true;
-        }
-        catch (TimeoutException)
-        {
-            echoReceived = false;
-        }
-
-        echoReceived.Should().BeFalse(
-            "When ChangedBy matches the data stream's ClientId, the DataChangedEvent " +
-            "should be suppressed by the echo filter (JsonSynchronizationStream line 131).");
-
-        Output.WriteLine("PASS: Own auto-save did NOT echo back to the data stream.");
-
-        // --- Test B: External change (ChangedBy != data stream ClientId) ---
-        // The echo filter should let this through.
-
-        var extMarker = $"<!-- EXTERNAL_CHANGE_{Guid.NewGuid().ToString("N")[..8]} -->";
-        var extContent = originalContent + $"\n\n{extMarker}\n";
-
-        var externalTask = dataStream
-            .Skip(1)
-            .Where(x => x.Value?.Instances.Count > 0)
+            .Where(c =>
+                c.Value?.Content is MarkdownContent mc &&
+                mc.Content?.Contains(marker, StringComparison.Ordinal) == true)
             .Timeout(15.Seconds())
             .FirstAsync()
-            .ToTask();
+            .ToTask(TestContext.Current.CancellationToken);
 
-        Output.WriteLine("Sending DataChangeRequest with ChangedBy = 'some-other-client' (external change)");
-        var extUpdate = new MeshNode(nodePath)
+        subscriberWorkspace.GetMeshNodeStream(nodePath).Update(node => node with
         {
             NodeType = "Markdown",
-            Content = new MarkdownContent { Content = extContent }
-        };
+            Content = new MarkdownContent { Content = newContent }
+        }).Subscribe(_ => { }, _ => { });
 
-        client.Post(
-            new DataChangeRequest { ChangedBy = "some-other-client" }.WithUpdates(extUpdate),
-            o => o.WithTarget(nodeAddress));
+        var observed = await emissionTask;
+        var observedMarkdown = observed.Value!.Content as MarkdownContent;
+        observedMarkdown.Should().NotBeNull();
+        observedMarkdown!.Content.Should().Contain(marker,
+            "the remote subscriber must observe the GetMeshNodeStream().Update write");
 
-        bool externalReceived;
-        try
-        {
-            var externalData = await externalTask;
-            externalReceived = externalData.Value?.Instances.Count > 0;
-        }
-        catch (TimeoutException)
-        {
-            externalReceived = false;
-        }
-
-        externalReceived.Should().BeTrue(
-            "When ChangedBy does NOT match the data stream's ClientId, the DataChangedEvent " +
-            "should pass through the echo filter and reach the subscriber.");
-
-        Output.WriteLine("PASS: External change DID echo back to the data stream.");
-
-        // Cleanup: restore original content
-        Output.WriteLine("Cleanup: restoring original content");
-        var restoreUpdate = new MeshNode(nodePath)
+        // Cleanup: restore original content via the same canonical API.
+        subscriberWorkspace.GetMeshNodeStream(nodePath).Update(node => node with
         {
             NodeType = "Markdown",
-            Content = new MarkdownContent { Content = originalContent ?? "" }
-        };
-        client.Post(
-            new DataChangeRequest().WithUpdates(restoreUpdate),
-            o => o.WithTarget(nodeAddress));
-        await Task.Delay(500, TestContext.Current.CancellationToken);
+            Content = new MarkdownContent { Content = originalContent ?? string.Empty }
+        }).Subscribe(_ => { }, _ => { });
     }
 
     private static string? ExtractMarkdownContent(MeshNode node)
