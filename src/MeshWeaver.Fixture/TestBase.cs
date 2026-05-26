@@ -19,13 +19,17 @@ public class TestBase : ServiceSetup, IAsyncLifetime
     {
         Output = output;
         FileOutput = new XUnitFileOutputHelper(output, GetType().Name);
-        
-        // Configure file logging integration
+
+        // Configure file logging integration. Log-level filters are bound
+        // from appsettings.json in ServiceSetup (see ServiceSetup.CreateServiceCollection
+        // → logging.AddConfiguration("Logging")). Flip the shared
+        // test/appsettings.json's "Logging:LogLevel:MeshWeaver" to "Debug"
+        // for hang-hunt runs.
         Services.AddSingleton(FileOutput);
         Services.AddLogging(logging =>
         {
-            logging.ClearProviders(); // Remove console and other default providers
-            logging.Services.AddSingleton<ILoggerProvider>(serviceProvider => 
+            logging.ClearProviders(); // Remove default providers
+            logging.Services.AddSingleton<ILoggerProvider>(serviceProvider =>
                 new XUnitFileLoggerProvider(() => FileOutput, serviceProvider));
         });
         
