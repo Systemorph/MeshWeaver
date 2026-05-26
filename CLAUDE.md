@@ -143,6 +143,15 @@ Every method writes the thread node via `hub.GetWorkspace().GetMeshNodeStream(th
 
 Full reference: [ThreadOperations.md](src/MeshWeaver.Documentation/Data/Architecture/ThreadOperations.md).
 
+**Activity operations** go through the matching `IMessageHub` extensions in `src/MeshWeaver.Mesh.Contract/HubActivityExtensions.cs`:
+
+```csharp
+hub.CancelActivity(activityPath);                                  // RequestedStatus = Cancelled
+hub.RequestActivityStatus(activityPath, ActivityStatus.Running);   // generic flip
+```
+
+Both write the activity node via `hub.GetWorkspace().GetMeshNodeStream(activityPath).Update(...)`; the activity hub's `WatchControlPlane` subscription reacts. Full reference: [ActivityOperations.md](src/MeshWeaver.Documentation/Data/Architecture/ActivityOperations.md).
+
 **Completion**: agent reaching terminal state writes `Status = Completed/Cancelled/Error` to the response cell via `PushToResponseMessage(...)` (stream.Update), AND creates a `Notification` MeshNode satellite at `{threadPath}/_Notification/{id}` via `EmitCompletionNotification`. The user's notification bell databinds to this — same source the tests assert on. Query shape: `path:{threadPath}/_Notification scope:children nodeType:Notification` (filter by nodeType for robustness when other satellite types live under the thread).
 
 **Observing completion**: subscribe to `workspace.GetRemoteStream<MeshNode>(path)` or `GetMeshNodeStream(path)` and wait for the relevant state on the node's `Content` (e.g. `MeshThread.Messages.Count >= 2`, `RequestedStatus = Cancelled`, `Status = Completed`). The GUI databinds the same way; tests do too.

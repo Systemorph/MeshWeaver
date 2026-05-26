@@ -64,26 +64,25 @@ The extensions are on `IMessageHub` — every caller already holds one (`Hub`, `
 
 The mutation methods are `void` / fire-and-forget. Callers observe state by subscribing to the thread node's remote stream — the same stream the chat view binds to:
 
+**100% reactive end-to-end**: no `FirstAsync().ToTask(ct)`, no `await`, no `Task<T>` boundary in application code. The UI re-renders when the stream ticks; a worker waiting for a round chains via `SelectMany`. See [AsynchronousCalls](AsynchronousCalls) → "Why `await` Deadlocks in Hub Handlers".
+
 ```csharp
 var thread = workspace.GetMeshNodeStream(threadPath)
     .Select(n => n.Content as MeshThread)
     .Where(t => t != null)
     .Select(t => t!);
 
-// Wait for the next round to complete.
-var responseId = await thread
+var sub = thread
     .Where(t => !t.IsExecuting && t.Messages.Count > baseline)
     .Select(t => t.Messages[^1])
-    .Take(1).Timeout(TimeSpan.FromSeconds(30))
-    .FirstAsync().ToTask(ct);
+    .Take(1)
+    .Subscribe(
+        responseId => Logger.LogInformation("Round finished, response {Id}", responseId),
+        ex => Logger.LogWarning(ex, "Thread stream errored for {Path}", threadPath));
+// Caller owns `sub` and disposes when the wait is no longer relevant.
 ```
 
-`ThreadFlow.SubmitAndWait` packages this exact pattern as a one-liner for tests:
-
-```csharp
-var responseId = await ThreadFlow.SubmitAndWait(client, threadPath, "ping")
-    .FirstAsync().ToTask(ct);
-```
+Tests bridge to `Task` exactly once at the assertion edge — see [WritingTests](WritingTests). `ThreadFlow.SubmitAndWait` packages submit + wait into one observable for that test-edge use.
 
 ## The one-shot callbacks
 
