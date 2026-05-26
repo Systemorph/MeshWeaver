@@ -73,7 +73,7 @@ public class OrleansAutoExecuteTest(ITestOutputHelper output) : OrleansSharedTes
     /// Response cell must be created, receive UpdateThreadMessageContent,
     /// and have final response text. Thread must end with IsExecuting=false.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task AutoExecute_CreatesResponseCell_And_CompletesExecution()
     {
         SharedOrleansFixture.SwappableFactory.SetInner(new AutoExecEchoChatClientFactory());
@@ -134,7 +134,7 @@ public class OrleansAutoExecuteTest(ITestOutputHelper output) : OrleansSharedTes
     /// Verifies that UpdateThreadMessageContent reaches the response grain (not the thread grain).
     /// The response cell should have text != "" and != "Allocating agent...".
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task AutoExecute_UpdateThreadMessageContent_RoutesToResponseGrain()
     {
         SharedOrleansFixture.SwappableFactory.SetInner(new AutoExecEchoChatClientFactory());
