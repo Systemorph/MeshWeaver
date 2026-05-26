@@ -267,7 +267,76 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
     #endregion
 
-    #region Concurrent Loading Tests
+}
+
+/// <summary>
+/// Concurrent-load stress test. Lives in its OWN test class (NOT shared mesh)
+/// because the multi-hub fan-out is sensitive to accumulated subscriber-stream
+/// state. <see cref="PageLoadingTest"/>'s 11 prior tests each leak a server-side
+/// LayoutAreaReference sync stream paired with the now-abandoned client/1 hub
+/// from that test; the LATEST client/1 (the one this concurrent test creates)
+/// becomes the routing destination for every leaked stream's outbound traffic.
+/// On the per-client action block, the new SubscribeAck + initial DataChangedEvent
+/// queue behind the leaked-stream emissions, blowing past the 20s
+/// per-stream wait even though each hub responds to Ping in &lt;100ms.
+///
+/// <para>Running this test in its OWN class (default <c>ShareMeshAcrossTests = false</c>)
+/// gives it a fresh mesh with no prior clients leaking. The 4-concurrent
+/// SubscribeRequest fan-out is the SUT; everything else is a clean slate.</para>
+/// </summary>
+[Collection("ConcurrentRequestsTest")]
+public class ConcurrentRequestsTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    private const int DefaultTimeoutSeconds = 20;
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+    {
+        var graphPath = TestPaths.SamplesGraph;
+        var dataDirectory = TestPaths.SamplesGraphData;
+        var cacheDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverConcurrentRequestsTest", ".mesh-cache");
+        Directory.CreateDirectory(cacheDirectory);
+
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Graph:Storage:SourceType"] = "FileSystem",
+                ["Graph:Storage:BasePath"] = graphPath
+            })
+            .Build();
+
+        var storageConfig = new ContentCollectionConfig
+        {
+            Name = "storage",
+            SourceType = "FileSystem",
+            BasePath = graphPath
+        };
+
+        return builder
+            .UseMonolithMesh()
+            .AddPartitionedFileSystemPersistence(dataDirectory)
+            .AddSpaceType()
+            .AddAcme()
+            .AddCornerstone()
+            .AddNorthwind()
+            .ConfigureServices(services =>
+            {
+                services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = cacheDirectory);
+                services.AddSingleton<IConfiguration>(configuration);
+                return services;
+            })
+            .ConfigureHub(hub => hub.AddContentCollections([storageConfig]))
+            .ConfigureDefaultNodeHub(config =>
+            {
+                var nodePath = config.Address.ToString();
+                config = config
+                    .AddContentCollections()
+                    .MapContentCollection("attachments", "storage", $"attachments/{nodePath}")
+                    .MapContentCollection("content", "storage", $"content/{nodePath}");
+
+                return config.AddDefaultLayoutAreas();
+            })
+            .AddGraph();
+    }
 
     /// <summary>
     /// Tests that multiple concurrent requests to different node types don't cause hanging.
@@ -328,6 +397,7 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             Output.WriteLine($"[{sw.ElapsedMilliseconds}ms] {path} loaded: {success}");
         }
     }
-
-    #endregion
 }
+
+[CollectionDefinition("ConcurrentRequestsTest", DisableParallelization = true)]
+public class ConcurrentRequestsTestCollection { }
