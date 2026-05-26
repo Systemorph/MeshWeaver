@@ -121,24 +121,20 @@ internal class PathResolutionService : IPathResolver
         // the AsyncLocal Context = system-security alive for the lifetime of
         // the query (the PG provider may capture context lazily on its first
         // emission, well past the chaining call).
+        // Routing is a SIMPLE PATH LOOKUP — never a synced subscription.
+        // We take only the FIRST emission (the Initial snapshot of which path
+        // prefixes exist) and dispose. No fan-out, no ongoing watching, no
+        // change deltas. If the resolver later needs to track new nodes, the
+        // caller re-asks; the cache that wraps this method invalidates on
+        // CreateNode/DeleteNode events.
         return Observable.Using(
             () => _accessService?.ImpersonateAsSystem() ?? System.Reactive.Disposables.Disposable.Empty,
             _ => _queryCore.ObserveQuery<MeshNode>(request, _hub.JsonSerializerOptions))
-            .Scan(
-                seed: ImmutableDictionary.Create<string, MeshNode>(StringComparer.OrdinalIgnoreCase),
-                accumulator: (set, change) => change.ChangeType switch
-                {
-                    QueryChangeType.Initial or QueryChangeType.Reset => change.Items
-                        .ToImmutableDictionary(n => n.Path, n => n, StringComparer.OrdinalIgnoreCase),
-                    QueryChangeType.Added or QueryChangeType.Updated =>
-                        change.Items.Aggregate(set, (s, n) => s.SetItem(n.Path, n)),
-                    QueryChangeType.Removed =>
-                        change.Items.Aggregate(set, (s, n) => s.Remove(n.Path)),
-                    _ => set
-                })
-            .Select<ImmutableDictionary<string, MeshNode>, AddressResolution?>(set =>
+            .Where(change => change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
+            .Take(1)
+            .Select<QueryResultChange<MeshNode>, AddressResolution?>(change =>
             {
-                var best = set.Values.OrderByDescending(n => n.Path.Length).FirstOrDefault();
+                var best = change.Items.OrderByDescending(n => n.Path.Length).FirstOrDefault();
                 if (best is null) return null;
                 var matchedSegments = best.Path.Split('/').Length;
                 return BuildResolution(best.Path, segments, matchedSegments, matchedNode: best);
