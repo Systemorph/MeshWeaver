@@ -92,8 +92,8 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
     [Fact(Timeout = 20000)]
     public void UserNodeType_IsRegistered()
     {
-        var meshConfig = Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>();
-        meshConfig.Nodes.TryGetValue("User", out var typeNode).Should().BeTrue();
+        var typeNode = Mesh.ServiceProvider.FindStaticNode("User");
+        typeNode.Should().NotBeNull("User node type should be registered as a static node");
         typeNode!.HubConfiguration.Should().NotBeNull(
             "User node type should be registered via AddGraph() Ã¢â€ â€™ AddUserType() with HubConfiguration");
     }
@@ -104,8 +104,8 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
     [Fact(Timeout = 20000)]
     public void UserNodeType_HasHubConfig_InMeshConfiguration()
     {
-        var meshConfig = Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>();
-        meshConfig.Nodes.TryGetValue("User", out var typeNode).Should().BeTrue();
+        var typeNode = Mesh.ServiceProvider.FindStaticNode("User");
+        typeNode.Should().NotBeNull("User node type should be registered as a static node");
         typeNode!.HubConfiguration.Should().NotBeNull(
             "User node type should have HubConfiguration in static MeshConfiguration");
     }

@@ -319,10 +319,8 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     [Fact(Timeout = 20000)]
     public void CreateForm_TypePicker_Items_ContainCreatableTypes()
     {
-        var meshConfiguration = Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>();
-
         // Exact same filter as CreateLayoutArea.BuildCreateNewForm
-        var creatableTypeNodes = meshConfiguration.Nodes.Values
+        var creatableTypeNodes = Mesh.ServiceProvider.EnumerateStaticNodes()
             .Where(n => n.ExcludeFromContext?.Contains("create") != true)
             .ToArray();
 
@@ -811,22 +809,23 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         persistedNode!.State.Should().Be(MeshNodeState.Transient, "Persisted node should be Transient");
         Output.WriteLine($"Node found: State={persistedNode.State}, Name={persistedNode.Name}");
 
-        // Diagnostic: Check what's in MeshConfiguration.Nodes
-        var meshConfig = Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>();
-        Output.WriteLine($"MeshConfiguration.Nodes contains {meshConfig.Nodes.Count} entries:");
-        foreach (var kv in meshConfig.Nodes)
+        // Diagnostic: Check what's in the static-node provider chain
+        var staticNodes = Mesh.ServiceProvider.EnumerateStaticNodes().ToList();
+        Output.WriteLine($"Static nodes contain {staticNodes.Count} entries:");
+        foreach (var n in staticNodes)
         {
-            Output.WriteLine($"  - {kv.Key}: HubConfig={(kv.Value.HubConfiguration != null ? "SET" : "NULL")}");
+            Output.WriteLine($"  - {n.Path}: HubConfig={(n.HubConfiguration != null ? "SET" : "NULL")}");
         }
 
-        // Diagnostic: Check if "Markdown" is in the configuration
-        if (meshConfig.Nodes.TryGetValue("Markdown", out var markdownNode))
+        // Diagnostic: Check if "Markdown" is in the static-node providers
+        var markdownNode = Mesh.ServiceProvider.FindStaticNode("Markdown");
+        if (markdownNode is not null)
         {
-            Output.WriteLine($"Found 'Markdown' in Configuration.Nodes: HubConfig={(markdownNode.HubConfiguration != null ? "SET" : "NULL")}");
+            Output.WriteLine($"Found 'Markdown' via FindStaticNode: HubConfig={(markdownNode.HubConfiguration != null ? "SET" : "NULL")}");
         }
         else
         {
-            Output.WriteLine($"WARNING: 'Markdown' NOT found in Configuration.Nodes!");
+            Output.WriteLine($"WARNING: 'Markdown' NOT found via FindStaticNode!");
         }
 
         // Diagnostic: ICreatableTypesProvider availability.

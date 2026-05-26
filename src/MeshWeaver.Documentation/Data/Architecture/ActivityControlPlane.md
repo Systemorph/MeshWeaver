@@ -186,24 +186,31 @@ gate. That gate races on CI when the workspace stream's `ReplaySubject(1)`
 emits a stale snapshot after the gate has been released — a flicker
 `Idle → Executing → Idle` in the same hub tick can dispatch twice. The
 production failure mode this caused was `Submit_DuringExecution_QueuedUntilRoundCompletes`:
-u2 ingested twice into `IngestedMessageIds`, two `StartExecutionTrigger`
-posts, two response cells, six messages in `thread.Messages` instead of four.
+u2 ingested twice into `IngestedMessageIds`, two response cells, six
+messages in `thread.Messages` instead of four.
 
-The right way: every "needs work" trigger has a paired field on the
-owning node. The watcher's predicate gates on **all three** of:
-1. The state field (`Status == Idle`),
-2. The work-to-do field (`PendingUserMessages.Count > 0`,
-   `RequestedReleasePath != LatestReleasePath`, etc.),
-3. The intent field (`Requested<X> is null`).
+The right way: the state-field check INSIDE the `stream.Update` lambda IS
+the single-flight gate. The hub's action block serialises the lambdas;
+the first lambda flips `Status`, every concurrent lambda re-reads
+`Status != Idle` and bails. No paired intent field is required when the
+state transition itself is atomic.
+
+For cross-process triggers (a non-owner hub wanting to drive a mutation
+on the owner), use a paired intent field — single-field RFC-7396 patches
+are merge-safe under `UpdateRemote`. The watcher consumes the intent and
+clears it in the same atomic Update.
 
 Existing pairs in the codebase:
 
-| Owning node            | Intent field             | Current-state field        | Cleared by                       |
-|------------------------|--------------------------|----------------------------|----------------------------------|
-| `MeshThread`           | `RequestedExecution`     | `Status` (Starting/Executing) | `HandleStartExecution` claim     |
-| `MeshThread`           | `RequestedCancellationAt`| Sub-thread's cancel watcher   | Sub-thread's CTS unwind          |
-| `NodeTypeDefinition`   | `RequestedReleasePath`   | `LatestReleasePath`           | `NodeTypeCompileActivityHandler` |
-| `ActivityLog`          | `RequestedStatus`        | `Status`                      | Activity hub on transition       |
+| Owning node            | Intent field                     | Current-state field           | Cleared by                       |
+|------------------------|----------------------------------|-------------------------------|----------------------------------|
+| `MeshThread`           | (none — Status transition gates) | `Status` (Starting/Executing) | `InstallServerWatcher` claim     |
+| `MeshThread`           | `RequestedCancellationAt`        | Sub-thread's cancel watcher   | Sub-thread's CTS unwind          |
+| `MeshThread`           | `RequestedResubmit`              | `Messages` / `PendingUserMessages` | `InstallResubmitWatcher`     |
+| `MeshThread`           | `RequestedDeleteFromMessageId`   | `Messages`                    | `InstallDeleteFromMessageWatcher`|
+| `MeshThread`           | `PendingFailures` (dict)         | Error cells in `Messages`     | `InstallFailureRecordWatcher`    |
+| `NodeTypeDefinition`   | `RequestedReleasePath`           | `LatestReleasePath`           | `NodeTypeCompileActivityHandler` |
+| `ActivityLog`          | `RequestedStatus`                | `Status`                      | Activity hub on transition       |
 
 Submission-watcher implementation pattern (the SOLE entry point for
 dispatching a new round on the thread hub):
@@ -212,29 +219,30 @@ dispatching a new round on the thread hub):
 threadHub.GetWorkspace().GetMeshNodeStream()
     .Where(n => n.Content is MeshThread t
         && t.Status == ThreadExecutionStatus.Idle
-        && t.PendingUserMessages.Count > 0
-        && t.RequestedExecution is null)        // ← intent field
+        && t.PendingUserMessages.Count > 0)
     .Subscribe(_ =>
     {
         workspace.GetMeshNodeStream().Update(node =>
         {
-            // 🚨 Re-check ALL THREE inside the lambda. The stream.Update lambda
-            // runs on the hub's action block — concurrent emissions race here
-            // and the SECOND lambda sees RequestedExecution != null and bails.
+            // 🚨 Re-check inside the lambda. The hub's action block serialises
+            // concurrent emissions — the SECOND lambda sees Status != Idle and bails.
             var t = node.Content as MeshThread;
             if (t is null
                 || t.Status != Idle
-                || t.PendingUserMessages.IsEmpty
-                || t.RequestedExecution is not null) return node;
-            return node with { Content = t with { RequestedExecution = DateTime.UtcNow } };
-        }).Subscribe(updated =>
-        {
-            if ((updated.Content as MeshThread)?.RequestedExecution is null)
-                return; // someone else won the race
-            threadHub.Post(new StartExecutionTrigger(threadPath), ...);
-        });
+                || t.PendingUserMessages.IsEmpty) return node;
+            return node with { Content = t with {
+                Status = StartingExecution,
+                ExecutionStartedAt = DateTime.UtcNow
+            }};
+        }).Subscribe(_ => { /* _Exec round watcher picks up Status=StartingExecution */ });
     });
 ```
+
+The `_Exec` hosted hub subscribes to the parent thread's stream via
+`IMeshNodeStreamCache.GetStream(threadPath)` and fires
+`DispatchAfterClaim` on each `Idle → StartingExecution` transition
+(`DistinctUntilChanged` on `ExecutionStartedAt`). No internal trigger
+event; the state transition IS the dispatch signal.
 
 Claim-handler pattern (clears the intent in the same atomic transition):
 
@@ -246,8 +254,7 @@ hub.GetWorkspace().GetMeshNodeStream().Update(node =>
     if (t.PendingUserMessages.IsEmpty) return node; // nothing to do
     return node with { Content = t with {
         Status = StartingExecution,
-        ExecutionStartedAt = DateTime.UtcNow,
-        RequestedExecution = null                  // ← clear intent atomically
+        ExecutionStartedAt = DateTime.UtcNow
     }};
 });
 ```
