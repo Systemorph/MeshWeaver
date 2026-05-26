@@ -27,7 +27,7 @@ namespace MeshWeaver.AI;
 /// - Hard rule: no await, no IMeshService.QueryAsync, no ObserveQuery, no client
 ///   SubmitMessageRequest. Only Hub.Post + RegisterCallback + workspace stream writes.
 /// </summary>
-public static class ThreadSubmission
+internal static class ThreadSubmission
 {
     // ═════════════════════════════════════════════════════════════════════
     // Pure helpers — unit-test surface
@@ -126,7 +126,7 @@ public static class ThreadSubmission
 /// one response cell per round, Claude-Code-style turn structure). The collection
 /// shape is kept for back-compat with downstream code that already iterates it.
 /// </summary>
-public sealed record RoundDispatch(
+internal sealed record RoundDispatch(
     ImmutableList<string> UserMessageIds,
     string ResponseMessageId,
     string? AgentName,

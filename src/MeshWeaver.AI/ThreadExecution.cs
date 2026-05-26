@@ -23,7 +23,7 @@ namespace MeshWeaver.AI;
 /// Handlers for thread message execution: submit, stream, cancel.
 /// Registered on the Thread hub via ThreadNodeType.
 /// </summary>
-public static class ThreadExecution
+internal static class ThreadExecution
 {
     // Cell-stream patches are not free — at this cap a 30s response generates
     // ~300 patches instead of token-rate. 100ms is below the perceptual threshold
@@ -88,7 +88,7 @@ public static class ThreadExecution
     /// Includes a startup recovery check for stale executing cells from crashed sessions.
     /// </summary>
 
-    public static MessageHubConfiguration AddThreadExecution(this MessageHubConfiguration configuration)
+    internal static MessageHubConfiguration AddThreadExecution(this MessageHubConfiguration configuration)
         => configuration
             // No verb-shaped triggers — every thread state mutation rides
             // workspace.GetMeshNodeStream().Update(...) on a control-plane
