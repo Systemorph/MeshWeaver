@@ -47,7 +47,7 @@ public static class AccessControlLayoutArea
         // from AccessService.Context.Roles was unreliable on the per-node hub
         // (CircuitContext lives on a different AccessService instance), so the
         // + Add Assignment button silently never rendered.
-        var isAdminStream = PermissionHelper.CanDelete(host.Hub, hubPath);
+        var isAdminStream = host.Hub.CheckPermission(hubPath, Permission.Delete);
 
         // Try to get the hub's own MeshNode stream. If the reducer isn't registered
         // (test or minimal hub configurations), fall through to a stream-less render

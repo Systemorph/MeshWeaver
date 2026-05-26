@@ -47,7 +47,7 @@ public static class DeleteLayoutArea
         // + Catch so a stuck permission lookup or a hanging descendant count can never
         // leave the user with an eternal spinner. We render conservatively on failure
         // (deny, zero descendants) rather than blocking.
-        var permissionsObs = PermissionHelper.GetEffectivePermissions(host.Hub, nodePath)
+        var permissionsObs = host.Hub.GetEffectivePermissions(nodePath)
             .Timeout(TimeSpan.FromSeconds(10))
             .Catch<Permission, Exception>(_ => Observable.Return(Permission.None));
 

@@ -45,7 +45,7 @@ public static class SettingsLayoutArea
         var tabId = host.Reference.Id?.ToString();
 
         var ownNode = host.Workspace.GetMeshNodeStream();
-        var permsStream = PermissionHelper.GetEffectivePermissions(host.Hub, hubPath);
+        var permsStream = host.Hub.GetEffectivePermissions(hubPath);
 
         return ownNode.CombineLatest(permsStream, (node, perms) => (Node: node, Perms: perms))
             .SelectMany(t => Observable.FromAsync(() =>

@@ -81,8 +81,7 @@ public static class GroupsLayoutArea
     }
 
     private static IObservable<bool> IsAdmin(IMessageHub hub, string nodePath)
-        => PermissionHelper.GetEffectivePermissions(hub, nodePath)
-            .Select(p => p.HasFlag(Permission.Delete));
+        => hub.CheckPermission(nodePath, Permission.Delete);
 
     private static UiControl? BuildGroupsPage(
         LayoutAreaHost host,

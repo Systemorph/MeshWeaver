@@ -560,13 +560,29 @@ internal class SecurityService : ISecurityService, IDisposable
             var workspace = _hub.GetWorkspace();
             var accessSvc = _hub.ServiceProvider.GetService<AccessService>();
             var nsQuery = string.IsNullOrEmpty(key) ? "_Access" : $"{key}/_Access";
-            IObservable<IEnumerable<MeshNode>> self;
-            using (accessSvc?.ImpersonateAsSystem())
-            {
-                self = workspace.GetQuery(
+            // 🚨 ImpersonateAsSystem must be HELD across the subscription
+            // lifetime, not just the call to GetQuery. The synced-query
+            // subscription opens lazily on first Subscribe; if the using
+            // block closes before then (always, the way `using` works), the
+            // upstream change-feed handlers run under whatever AsyncLocal
+            // AccessContext is active at subscribe-time — usually the hub's
+            // own address, which the AccessService.SetContext logger flags as
+            // "hub-shaped principal set as AccessContext — must never happen"
+            // (the 59-occurrence CI flake on commit 8af66d8d4).
+            //
+            // Observable.Using opens the scope on Subscribe and disposes
+            // it on Dispose — the scope is alive for every emission, every
+            // change-feed callback, every re-query that happens during the
+            // observable's lifetime.
+            var self = accessSvc is null
+                ? workspace.GetQuery(
                     $"$security-access:{key}",
-                    $"namespace:{nsQuery} nodeType:{SecurityCollections.AccessAssignmentNodeType}");
-            }
+                    $"namespace:{nsQuery} nodeType:{SecurityCollections.AccessAssignmentNodeType}")
+                : Observable.Using(
+                    () => accessSvc.ImpersonateAsSystem(),
+                    _ => workspace.GetQuery(
+                        $"$security-access:{key}",
+                        $"namespace:{nsQuery} nodeType:{SecurityCollections.AccessAssignmentNodeType}"));
 
             // Parent: recursive reference to the parent scope's cached
             // observable. Root scope folds in statics instead.
@@ -777,13 +793,18 @@ internal class SecurityService : ISecurityService, IDisposable
                 : $"namespace:{key} id:_Policy";
             // Same System-pin as ObserveScopeAssignments — policy lookup is
             // infrastructure; the secured surface would recurse via validators.
-            IObservable<IEnumerable<MeshNode>> self;
-            using (accessSvc?.ImpersonateAsSystem())
-            {
-                self = workspace.GetQuery(
+            // Observable.Using holds the impersonation scope for the entire
+            // subscription lifetime; see the matching ObserveScopeAssignments
+            // comment for the AccessContext-leak rationale.
+            var self = accessSvc is null
+                ? workspace.GetQuery(
                     $"$security-policy:{key}",
-                    $"{nsFilter} nodeType:{SecurityCollections.PartitionAccessPolicyNodeType}");
-            }
+                    $"{nsFilter} nodeType:{SecurityCollections.PartitionAccessPolicyNodeType}")
+                : Observable.Using(
+                    () => accessSvc.ImpersonateAsSystem(),
+                    _ => workspace.GetQuery(
+                        $"$security-policy:{key}",
+                        $"{nsFilter} nodeType:{SecurityCollections.PartitionAccessPolicyNodeType}"));
 
             // Parent: recursive reference to parent scope's cached policy map.
             // Root scope folds in statics instead.

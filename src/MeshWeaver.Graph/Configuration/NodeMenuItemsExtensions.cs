@@ -197,7 +197,7 @@ public static class NodeMenuItemsExtensions
             });
 
         return menuContext
-            .CombineLatest(PermissionHelper.GetEffectivePermissions(host.Hub, hubPath),
+            .CombineLatest(host.Hub.GetEffectivePermissions(hubPath),
                 (ctx, perms) => (ctx.menuPath, ctx.nodeName, ctx.menuNode, perms));
     }
 

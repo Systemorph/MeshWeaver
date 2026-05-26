@@ -37,7 +37,7 @@ public static class AccessAssignmentLayoutAreas
         var hubPath = host.Hub.Address.ToString();
         // There is always exactly one MeshNode per path — GetMeshNodeStream returns it.
         var ownNode = host.Workspace.GetMeshNodeStream();
-        var permsStream = PermissionHelper.GetEffectivePermissions(host.Hub, hubPath);
+        var permsStream = host.Hub.GetEffectivePermissions(hubPath);
 
         return ownNode.CombineLatest(permsStream, (node, perms) =>
             {
@@ -170,7 +170,7 @@ public static class AccessAssignmentLayoutAreas
     {
         var hubPath = host.Hub.Address.ToString();
         var ownNode = host.Workspace.GetMeshNodeStream();
-        var permsStream = PermissionHelper.GetEffectivePermissions(host.Hub, hubPath);
+        var permsStream = host.Hub.GetEffectivePermissions(hubPath);
 
         return ownNode.CombineLatest(permsStream, (node, perms) =>
             {

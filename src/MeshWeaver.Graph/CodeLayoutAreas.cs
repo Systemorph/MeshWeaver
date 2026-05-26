@@ -60,7 +60,7 @@ public static class CodeLayoutAreas
         // Caller's effective permissions: the Run button only renders when
         // Execute is granted. Live SecurityService observable — re-emits when
         // assignments change.
-        var permissionStream = PermissionHelper.GetEffectivePermissions(host.Hub, hubPath);
+        var permissionStream = host.Hub.GetEffectivePermissions(hubPath);
 
         return host.Workspace.GetMeshNodeStream()
             .CombineLatest(permissionStream, (node, perms) => (UiControl?)BuildContent(host, node, perms));

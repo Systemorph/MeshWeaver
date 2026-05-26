@@ -43,7 +43,7 @@ public static class ImportLayoutArea
     {
         var currentPath = host.Hub.Address.ToString();
 
-        return PermissionHelper.CanCreate(host.Hub, currentPath)
+        return host.Hub.CheckPermission(currentPath, Permission.Create)
             .Select(canCreate => canCreate
                 ? (UiControl?)BuildImportForm(host, currentPath)
                 : (UiControl?)Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;")

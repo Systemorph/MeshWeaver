@@ -63,7 +63,7 @@ public static class ApprovalExtensions
         LayoutAreaHost host, RenderingContext ctx)
     {
         var hubPath = host.Hub.Address.ToString();
-        await foreach (var perms in PermissionHelper.GetEffectivePermissions(host.Hub, hubPath)
+        await foreach (var perms in host.Hub.GetEffectivePermissions(hubPath)
             .ToAsyncEnumerableSequence())
         {
             if (perms.HasFlag(Permission.Update))

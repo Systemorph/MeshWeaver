@@ -173,7 +173,7 @@ public static class MeshNodeLayoutAreas
         var hubPath = host.Hub.Address.ToString();
         // CombineLatest with permission stream — pure observable composition, no await.
         return host.Workspace.GetMeshNodeStream().CombineLatest(
-            PermissionHelper.GetEffectivePermissions(host.Hub, hubPath),
+            host.Hub.GetEffectivePermissions(hubPath),
             (node, permissions) =>
             {
                 if (!permissions.HasFlag(Permission.Read))
@@ -1454,7 +1454,7 @@ public static class MeshNodeLayoutAreas
         var hubPath = host.Hub.Address.ToString();
 
         return host.Workspace.GetMeshNodeStream().CombineLatest(
-            PermissionHelper.GetEffectivePermissions(host.Hub, hubPath),
+            host.Hub.GetEffectivePermissions(hubPath),
             (node, permissions) =>
             {
                 if (!permissions.HasFlag(Permission.Update))

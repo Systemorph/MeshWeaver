@@ -277,7 +277,7 @@ public static class CommentsView
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
         var currentUser = accessService?.Context?.Name ?? "";
 
-        var permissionsStream = PermissionHelper.GetEffectivePermissions(host.Hub, nodePath);
+        var permissionsStream = host.Hub.GetEffectivePermissions(nodePath);
 
         // Reactive comment list via synced query — path-keyed dedup, all-Initial
         // gating, hub-level delete fast-path. Full snapshot per emission; just
