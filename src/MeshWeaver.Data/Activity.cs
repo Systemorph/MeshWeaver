@@ -17,7 +17,7 @@ public class Activity : ILogger, IDisposable
         ParentHub = parentHub ?? throw new ArgumentNullException(nameof(parentHub));
         Id = Guid.NewGuid().AsString();
         Address = AddressExtensions.CreateActivityAddress(Id);
-        Hub = parentHub.GetHostedHub(Address, conf => ConfigureActivityHub(this, conf));
+        Hub = parentHub.GetHostedHub(Address, conf => conf);
         logger = Hub.ServiceProvider.GetRequiredService<ILogger<Activity>>();
         this.autoClose = autoClose;
         activityLog = new(category) { StartVersion = (int)parentHub.Version };
@@ -107,23 +107,20 @@ public class Activity : ILogger, IDisposable
 
     private ActivityLog activityLog;
     private event EventHandler<ActivityLog>? LogChanged;
-    internal static MessageHubConfiguration ConfigureActivityHub(Activity activity, MessageHubConfiguration configuration)
-    {
-        return configuration
-                .WithHandler<CompleteActivityRequest>((_, request) => activity.HandleCompleteRequest(request))
-                .WithHandler<UpdateActivityLogRequest>((_, request) => activity.HandleUpdateActivityLogRequest(request))
-            ;
-    }
 
-    private IMessageDelivery HandleUpdateActivityLogRequest(IMessageDelivery<UpdateActivityLogRequest> request)
-    {
-        activityLog = request.Message.Update.Invoke(activityLog) with { Version = (int)Hub.Version };
-        LogChanged?.Invoke(this, activityLog);
-        return request.Processed();
-    }
-
-    private void RequestChange(Func<ActivityLog, ActivityLog> logAction)
-        => Hub.Post(new UpdateActivityLogRequest(logAction));
+    /// <summary>
+    /// Apply <paramref name="logAction"/> to <see cref="activityLog"/> on the
+    /// activity hub's action block, stamp the framework Version, and fire
+    /// <see cref="LogChanged"/>. Single-threaded by construction — no lock
+    /// needed because <see cref="IMessageHub.InvokeAsync(Action)"/> serialises
+    /// through the hub's <c>ActionBlock</c>.
+    /// </summary>
+    private void MutateLog(Func<ActivityLog, ActivityLog> logAction)
+        => Hub.InvokeAsync(() =>
+        {
+            activityLog = logAction(activityLog) with { Version = (int)Hub.Version };
+            LogChanged?.Invoke(this, activityLog);
+        });
 
 
     private ActivityLog ProcessActivityCompletion(ActivityLog log, ActivityStatus? status)
@@ -214,27 +211,32 @@ public class Activity : ILogger, IDisposable
     public Task<ActivityLog> Completion => completionSource.Task;
 
 
-    public IMessageDelivery HandleCompleteRequest(IMessageDelivery<CompleteActivityRequest> delivery)
+    /// <summary>
+    /// Runs on the activity hub's action block (scheduled by
+    /// <see cref="Complete(ActivityStatus?, Action{ActivityLog}?)"/>).
+    /// Replaces the old <c>CompleteActivityRequest</c> handler: the closure
+    /// is captured by <see cref="IMessageHub.InvokeAsync(Action)"/>, no
+    /// typed request message needed.
+    /// </summary>
+    private void HandleComplete(ActivityStatus? status, Action<ActivityLog>? completeAction)
     {
-        var request = delivery.Message;
-        if (request.CompleteAction != null)
+        if (completeAction != null)
         {
             // If already completed, invoke callback immediately with the final log
             if (completionSource.Task.IsCompleted)
             {
-                request.CompleteAction.Invoke(completionSource.Task.Result);
-                return delivery.Processed();
+                completeAction.Invoke(completionSource.Task.Result);
+                return;
             }
-            completedActions.Add(request.CompleteAction);
+            completedActions.Add(completeAction);
         }
-        RequestChange(log =>
+        MutateLog(log =>
         {
-            var ret = ProcessActivityCompletion(log, request.Status);
+            var ret = ProcessActivityCompletion(log, status);
             if (activityLog.Status > ActivityStatus.Running)
                 Hub.Dispose();
             return ret;
         });
-        return delivery.Processed();
     }
 
 
