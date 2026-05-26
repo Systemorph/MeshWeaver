@@ -35,7 +35,7 @@ public record ThreadExecutionContext
 }
 
 /// <summary>
-/// Control-plane intent payload for <see cref="ThreadSubmission.ApplyResubmit"/>.
+/// Control-plane intent payload for <see cref="WorkspaceThreadExtensions.ResubmitMessage"/>.
 /// Written into <see cref="Thread.RequestedResubmit"/> via a single-field
 /// <c>stream.Update</c> from any hub (own or cross-hub — single-field patches
 /// are RFC-7396-merge-safe so the framework's <c>UpdateRemote</c> staleness
@@ -52,7 +52,7 @@ public sealed record ResubmitIntent(
 
 /// <summary>
 /// Control-plane intent payload for
-/// <see cref="ThreadSubmission.ApplyRecordSubmissionFailure"/>. The caller
+/// <see cref="WorkspaceThreadExtensions.RecordSubmissionFailure"/>. The caller
 /// patches one entry into <see cref="Thread.PendingFailures"/> via a
 /// single-key <c>stream.Update</c> (RFC-7396 dict-SetItem is merge-safe).
 /// The owning thread hub's failure watcher creates the error cell, appends

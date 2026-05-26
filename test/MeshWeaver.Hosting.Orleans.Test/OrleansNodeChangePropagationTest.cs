@@ -129,13 +129,10 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
         //    Turn 2: calls delegate_to_agent (Executor)
         //    Turn 3: returns summary text after delegation completes
         Output.WriteLine("Posting ThreadInput.AppendUserInput (Create + Delegate chain)...");
-        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
-            {
-                Hub = client,
-                ThreadPath = threadPath,
-                UserText = "Create a doc and delegate updates to Executor",
-                ContextPath = "TestUser"
-            });
+        client.SubmitMessage(
+            threadPath,
+            "Create a doc and delegate updates to Executor",
+            contextPath: "TestUser");
             Output.WriteLine("ThreadInput.AppendUserInput succeeded Ã¢â‚¬â€ submission queued");
 
         // 4. Wait for message IDs
@@ -258,14 +255,11 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
             .FirstAsync()
             .ToTask(ct);
 
-        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
-            {
-                Hub = client,
-                ThreadPath = threadPath,
-                UserText = "First message",
-                ContextPath = "TestUser"
-            });
-            var msgIds = await twoMessages;
+        client.SubmitMessage(
+            threadPath,
+            "First message",
+            contextPath: "TestUser");
+        var msgIds = await twoMessages;
         Output.WriteLine($"Initial messages: [{string.Join(", ", msgIds)}]");
 
         // Wait for execution to complete
@@ -296,10 +290,10 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
             .FirstAsync()
             .ToTask(ct);
 
-        Output.WriteLine("Resubmitting via stream.Update (ApplyResubmit)...");
-        MeshWeaver.AI.ThreadSubmission.ApplyResubmit(
-            client, threadPath, msgIds[0],
-            newUserText: "Resubmitted message", agentName: null, modelName: null);
+        Output.WriteLine("Resubmitting via workspace.ResubmitMessage...");
+        client.ResubmitMessage(
+            threadPath, msgIds[0],
+            newUserText: "Resubmitted message");
 
         // 3. Wait for message IDs to change Ã¢â‚¬â€ if deadlocked, this times out
         var newMsgIds = await resubmittedMessages;

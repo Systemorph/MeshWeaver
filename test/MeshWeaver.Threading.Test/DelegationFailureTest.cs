@@ -62,13 +62,10 @@ public class DelegationFailureTest(ITestOutputHelper output) : MonolithMeshTestB
         createResp.Message.Success.Should().BeTrue(createResp.Message.Error);
         var threadPath = createResp.Message.Node!.Path!;
 
-        ThreadSubmission.Submit(new SubmitContext
-        {
-            Hub = client,
-            ThreadPath = threadPath,
-            UserText = "Do something that delegates",
-            ContextPath = ContextPath,
-        });
+        client.SubmitMessage(
+            threadPath,
+            "Do something that delegates",
+            contextPath: ContextPath);
 
         await Task.Delay(1000, ct);
 

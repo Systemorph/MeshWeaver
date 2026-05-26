@@ -133,14 +133,11 @@ public class OrleansReentrancyTest(ITestOutputHelper output) : TestBase(output)
 
         // Submit message — the ToolCallingReentrancyClient will call a tool
         Output.WriteLine("Submitting message...");
-        MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
-            {
-                Hub = client,
-                ThreadPath = threadPath,
-                UserText = "Call a tool please",
-                ContextPath = "User/TestUser"
-            });
-            Output.WriteLine("Submitted");
+        client.SubmitMessage(
+            threadPath,
+            "Call a tool please",
+            contextPath: "User/TestUser");
+        Output.WriteLine("Submitted");
 
         // Wait for message cells
         var msgIds = await twoMessages;

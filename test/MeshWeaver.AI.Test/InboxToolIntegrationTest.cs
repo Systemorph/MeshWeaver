@@ -191,11 +191,9 @@ public class InboxToolIntegrationTest : AITestBase
         var client = GetClient();
 
         // Round 1: submit u1 with the slow model so we have a window to interrupt.
-        ThreadSubmission.Submit(new SubmitContext
-        {
-            Hub = client, ThreadPath = threadPath, UserText = "First",
-            ModelName = "inbox-fake-slow", CreatedBy = "rbuergi@systemorph.com"
-        });
+        client.SubmitMessage(
+            threadPath, "First",
+            modelName: "inbox-fake-slow", createdBy: "rbuergi@systemorph.com");
 
         var roundOneStart = await WaitForThreadAsync(threadPath,
             t => t.IsExecuting && t.IngestedMessageIds.Count >= 1,
@@ -204,11 +202,9 @@ public class InboxToolIntegrationTest : AITestBase
         var u1 = roundOneStart.IngestedMessageIds[0];
 
         // While round 1 is running, queue u2.
-        ThreadSubmission.Submit(new SubmitContext
-        {
-            Hub = client, ThreadPath = threadPath, UserText = "Second",
-            ModelName = "inbox-fake-slow", CreatedBy = "rbuergi@systemorph.com"
-        });
+        client.SubmitMessage(
+            threadPath, "Second",
+            modelName: "inbox-fake-slow", createdBy: "rbuergi@systemorph.com");
 
         // Wait until u2 is queued (in PendingUserMessages but NOT yet ingested).
         var queuedState = await WaitForThreadAsync(threadPath,
@@ -249,11 +245,9 @@ public class InboxToolIntegrationTest : AITestBase
         var threadHub = await GetThreadHubAsync(threadPath, ct);
         var client = GetClient();
 
-        ThreadSubmission.Submit(new SubmitContext
-        {
-            Hub = client, ThreadPath = threadPath, UserText = "Lonely",
-            ModelName = "inbox-fake-slow", CreatedBy = "rbuergi@systemorph.com"
-        });
+        client.SubmitMessage(
+            threadPath, "Lonely",
+            modelName: "inbox-fake-slow", createdBy: "rbuergi@systemorph.com");
 
         var roundStart = await WaitForThreadAsync(threadPath,
             t => t.IsExecuting && t.IngestedMessageIds.Count == 1,
@@ -295,22 +289,18 @@ public class InboxToolIntegrationTest : AITestBase
         var client = GetClient();
 
         // Round 1.
-        ThreadSubmission.Submit(new SubmitContext
-        {
-            Hub = client, ThreadPath = threadPath, UserText = "First",
-            ModelName = "inbox-fake-slow", CreatedBy = "rbuergi@systemorph.com"
-        });
+        client.SubmitMessage(
+            threadPath, "First",
+            modelName: "inbox-fake-slow", createdBy: "rbuergi@systemorph.com");
         await WaitForThreadAsync(threadPath,
             t => t.IsExecuting && t.IngestedMessageIds.Count == 1, 10_000, ct);
 
         // Queue three follow-ups.
         foreach (var text in new[] { "Second", "Third", "Fourth" })
         {
-            ThreadSubmission.Submit(new SubmitContext
-            {
-                Hub = client, ThreadPath = threadPath, UserText = text,
-                ModelName = "inbox-fake-slow", CreatedBy = "rbuergi@systemorph.com"
-            });
+            client.SubmitMessage(
+                threadPath, text,
+                modelName: "inbox-fake-slow", createdBy: "rbuergi@systemorph.com");
         }
         await WaitForThreadAsync(threadPath,
             t => t.UserMessageIds.Count == 4, 5_000, ct);

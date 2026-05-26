@@ -78,13 +78,10 @@ public class CancelThreadExecutionTest(ITestOutputHelper output) : MonolithMeshT
         baselineThread!.IsExecuting.Should().BeFalse("thread should not be executing yet");
 
         // Submit via GUI handler â€” server generates message ids.
-        ThreadSubmission.Submit(new SubmitContext
-        {
-            Hub = client,
-            ThreadPath = threadPath,
-            UserText = "Tell me a long story",
-            ContextPath = ContextPath,
-        });
+        client.SubmitMessage(
+            threadPath,
+            "Tell me a long story",
+            contextPath: ContextPath);
 
         // Wait for ActiveMessageId so we know which response cell to watch.
         var executing = await workspace.GetMeshNodeStream(threadPath)

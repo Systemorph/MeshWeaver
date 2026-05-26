@@ -61,15 +61,12 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
         var threadPath = response.Message.Node!.Path!;
         Output.WriteLine($"Thread: {threadPath}");
 
-        // 2. Submit via the canonical API (Submit → ThreadInput.AppendUserInput
+        // 2. Submit via the canonical API (workspace.SubmitMessage → AppendUserInput
         //    → stream.Update on the thread node).
-        ThreadSubmission.Submit(new SubmitContext
-        {
-            Hub = client,
-            ThreadPath = threadPath,
-            UserText = "Test completion notification",
-            ContextPath = "TestUser",
-        });
+        client.SubmitMessage(
+            threadPath,
+            "Test completion notification",
+            contextPath: "TestUser");
 
         // 3. Observe the thread stream until BOTH messages exist.
         //    GetMeshNodeStream(path) is the canonical API — auto-dispatches own → local → remote.
@@ -172,13 +169,10 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
         gpResponse.Message.Success.Should().BeTrue(gpResponse.Message.Error);
         var gpPath = gpResponse.Message.Node!.Path!;
         Output.WriteLine($"Grandparent: {gpPath}");
-        ThreadSubmission.Submit(new SubmitContext
-        {
-            Hub = client,
-            ThreadPath = gpPath,
-            UserText = "First level work",
-            ContextPath = "TestUser",
-        });
+        client.SubmitMessage(
+            gpPath,
+            "First level work",
+            contextPath: "TestUser");
         var gpFinal = await workspace.GetMeshNodeStream(gpPath)
             .Select(node => node?.Content as MeshThread)
             .Where(t => t is { Status: ThreadExecutionStatus.Idle } && !string.IsNullOrEmpty(t.Summary))
@@ -200,13 +194,10 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
         childResponse.Message.Success.Should().BeTrue(childResponse.Message.Error);
         var childPath = childResponse.Message.Node!.Path!;
         Output.WriteLine($"Child: {childPath}");
-        ThreadSubmission.Submit(new SubmitContext
-        {
-            Hub = client,
-            ThreadPath = childPath,
-            UserText = "Second level work",
-            ContextPath = "TestUser",
-        });
+        client.SubmitMessage(
+            childPath,
+            "Second level work",
+            contextPath: "TestUser");
         var childRunningToIdle = await workspace.GetMeshNodeStream(childPath)
             .Select(node => node?.Content as MeshThread)
             .Where(t => t is not null)
@@ -262,13 +253,10 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
             createResp.Message.Success.Should().BeTrue(createResp.Message.Error);
             var threadPath = createResp.Message.Node!.Path!;
 
-            ThreadSubmission.Submit(new SubmitContext
-            {
-                Hub = client,
-                ThreadPath = threadPath,
-                UserText = "Hi",
-                ContextPath = "TestUser",
-            });
+            client.SubmitMessage(
+                threadPath,
+                "Hi",
+                contextPath: "TestUser");
 
             var threadAtIdle = await workspace.GetMeshNodeStream(threadPath)
                 .Select(node => node?.Content as MeshThread)

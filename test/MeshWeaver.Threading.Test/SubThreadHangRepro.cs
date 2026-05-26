@@ -121,13 +121,10 @@ public class SubThreadHangRepro(ITestOutputHelper output) : MonolithMeshTestBase
             .Timeout(10.Seconds())
             .ToTask(ct);
 
-        ThreadSubmission.Submit(new SubmitContext
-        {
-            Hub = client,
-            ThreadPath = parentPath,
-            UserText = "delegate this",
-            ContextPath = ContextPath,
-        });
+        client.SubmitMessage(
+            parentPath,
+            "delegate this",
+            contextPath: ContextPath);
 
         // Wait for the parent's response message to materialise and the
         // delegation tool call to be stamped with a DelegationPath. That path
@@ -236,13 +233,10 @@ public class SubThreadHangRepro(ITestOutputHelper output) : MonolithMeshTestBase
             .Timeout(10.Seconds())
             .ToTask(ct);
 
-        ThreadSubmission.Submit(new SubmitContext
-        {
-            Hub = client,
-            ThreadPath = parentPath,
-            UserText = "delegate this",
-            ContextPath = ContextPath,
-        });
+        client.SubmitMessage(
+            parentPath,
+            "delegate this",
+            contextPath: ContextPath);
 
         var subThreadPath = await WaitForDelegationPath(client, parentPath, ct);
         Output.WriteLine($"Sub-thread: {subThreadPath}");

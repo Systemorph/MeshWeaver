@@ -125,7 +125,7 @@ public class OrleansPortalFlowTest(ITestOutputHelper output) : OrleansSharedTest
             // drain into round 2 as a single multi-message round.
             string[] userTexts = ["First question", "Second question", "Third question"];
             foreach (var text in userTexts)
-                ThreadFlow.Submit(client, threadPath, text, contextPath: "TestUser");
+                client.SubmitMessage(threadPath, text, contextPath: "TestUser");
             Output.WriteLine($"Submitted {userTexts.Length} messages rapidly");
 
             // Wait for the thread to settle: Idle + all user messages ingested.

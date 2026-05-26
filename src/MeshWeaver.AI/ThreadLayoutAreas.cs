@@ -275,7 +275,7 @@ public static class ThreadLayoutAreas
                             .WithAppearance(isDone ? Appearance.Neutral : Appearance.Accent)
                             .WithIconStart(icon)
                             .WithClickAction(_ =>
-                                ThreadSubmission.MarkThreadDone(h.Hub, hubPath, !isDone));
+                                h.Hub.MarkThreadDone(hubPath, !isDone));
                     })));
 
         // Static container — never rebuilt

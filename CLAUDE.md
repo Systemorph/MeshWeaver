@@ -120,7 +120,20 @@ Full reference: [LocalDevWorkflow.md](src/MeshWeaver.Documentation/Data/Architec
 
 **Every mesh-node mutation goes through `workspace.GetMeshNodeStream(path).Update(current => modified)`. Every other API — `SubmitMessageRequest`/`SubmitMessageResponse` (deleted 2026-05-25), completion callbacks via `hub.Set<Action<...>>`, bespoke `IRequest`/`IResponse` pairs for state changes — IS DISCONTINUED. Do not add new code that uses those patterns; migrate existing code to `stream.Update` whenever you touch it.**
 
-**Thread submissions**: `ThreadSubmission.Submit(new SubmitContext { Hub, ThreadPath, UserText, ContextPath, ... })`. Internally writes `PendingUserMessages` via `stream.Update`. The submission watcher reacts, drains pending into Messages, allocates cells, and invokes `ThreadExecution.ExecuteMessageAsync(execHub, RoundParams, AccessContext?)` **directly as a method** — no message dispatch.
+**Thread submissions** go through the canonical `IMessageHub` extension surface defined in `src/MeshWeaver.AI/HubThreadExtensions.cs`:
+
+```csharp
+hub.StartThread(namespacePath, userText, agentName: ..., contextPath: ..., onCreated: ..., onError: ...);
+hub.SubmitMessage(threadPath, userText, agentName: ..., contextPath: ...);
+hub.ResubmitMessage(threadPath, userMessageId, newUserText: ...);
+hub.DeleteFromMessage(threadPath, atMessageId);
+hub.MarkThreadDone(threadPath, done);
+hub.RecordSubmissionFailure(threadPath, userMessageId, userText, errorMessage);
+```
+
+Every method writes the thread node via `hub.GetWorkspace().GetMeshNodeStream(threadPath).Update(...)` (or `CreateNodeRequest` for new-thread lifecycle). The per-thread submission watcher reacts to the resulting state changes, drains `PendingUserMessages` into `Messages`, allocates cells, and invokes `ThreadExecution.ExecuteMessageAsync(execHub, RoundParams, AccessContext?)` **directly as a method** — no message dispatch. **Tests, GUI, and agents all call these extensions — no other entry point**. The `SubmitContext` / `ResubmitContext` parameter bags and the old `ThreadSubmission.Submit/CreateThreadAndSubmit/Resubmit/Apply*` static methods are deleted (2026-05-27).
+
+Full reference: [ThreadOperations.md](src/MeshWeaver.Documentation/Data/Architecture/ThreadOperations.md).
 
 **Completion**: agent reaching terminal state writes `Status = Completed/Cancelled/Error` to the response cell via `PushToResponseMessage(...)` (stream.Update), AND creates a `Notification` MeshNode satellite at `{threadPath}/_Notification/{id}` via `EmitCompletionNotification`. The user's notification bell databinds to this — same source the tests assert on. Query shape: `path:{threadPath}/_Notification scope:children nodeType:Notification` (filter by nodeType for robustness when other satellite types live under the thread).
 

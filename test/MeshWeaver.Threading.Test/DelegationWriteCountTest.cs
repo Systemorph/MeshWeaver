@@ -95,13 +95,10 @@ public class DelegationWriteCountTest(ITestOutputHelper output) : MonolithMeshTe
             .Timeout(20.Seconds())
             .ToTask(ct);
 
-        ThreadSubmission.Submit(new SubmitContext
-        {
-            Hub = client,
-            ThreadPath = parentThreadPath,
-            UserText = "do it",
-            ContextPath = ContextPath
-        });
+        client.SubmitMessage(
+            parentThreadPath,
+            "do it",
+            contextPath: ContextPath);
 
         var parentMsgIds = await twoMessages;
         var parentRespId = parentMsgIds[1];

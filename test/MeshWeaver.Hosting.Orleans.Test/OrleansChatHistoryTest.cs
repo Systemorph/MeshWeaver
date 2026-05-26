@@ -72,13 +72,10 @@ public class OrleansChatHistoryTest(ITestOutputHelper output) : OrleansSharedTes
                 .ToTask(ct);
 
             // Stream-update submit - see RequestViaStreamUpdate.md.
-            MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext
-            {
-                Hub = client,
-                ThreadPath = ThreadPath,
-                UserText = "Third question - can you see history?",
-                ContextPath = "TestUser"
-            });
+            client.SubmitMessage(
+                ThreadPath,
+                "Third question - can you see history?",
+                contextPath: "TestUser");
             Output.WriteLine("Append dispatched");
 
             // Resolve message ids Ã¢â‚¬â€ last id is the new agent response cell.

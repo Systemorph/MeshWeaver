@@ -134,13 +134,10 @@ public class OrleansSubThreadAutoResumeTest(ITestOutputHelper output) : TestBase
             .Timeout(30.Seconds())
             .ToTask(ct);
 
-        ThreadSubmission.Submit(new SubmitContext
-        {
-            Hub = client,
-            ThreadPath = parentThreadPath,
-            UserText = "please delegate to the worker",
-            ContextPath = "User/TestUser"
-        });
+        client.SubmitMessage(
+            parentThreadPath,
+            "please delegate to the worker",
+            contextPath: "User/TestUser");
         Output.WriteLine("Submission posted.");
 
         var parentMsgIds = await twoMessages;

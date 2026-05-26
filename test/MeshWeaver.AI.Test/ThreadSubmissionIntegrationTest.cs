@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using System.Reactive.Threading.Tasks;
 using System.Reactive.Linq;
 using FluentAssertions;
+using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Layout;
@@ -64,14 +65,11 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         var threadPath = await SeedEmptyThreadAsync(ct);
         var client = GetClient();
 
-        ThreadSubmission.Submit(new SubmitContext
-        {
-            Hub = client,
-            ThreadPath = threadPath,
-            UserText = "Hello from test",
-            CreatedBy = "rbuergi@systemorph.com",
-            AuthorName = "Tester"
-        });
+        client.SubmitMessage(
+            threadPath,
+            "Hello from test",
+            createdBy: "rbuergi@systemorph.com",
+            authorName: "Tester");
 
         // Wait for the watcher to ingest the user message into a round.
         var committed = await WaitForThreadAsync(
@@ -94,14 +92,11 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         var threadCreatedTcs = new TaskCompletionSource<MeshNode>();
         var client = GetClient();
 
-        ThreadSubmission.CreateThreadAndSubmit(new SubmitContext
-        {
-            Hub = client,
-            Namespace = MonolithMeshTestBase.TestPartition,
-            UserText = "New thread first message",
-            CreatedBy = "rbuergi@systemorph.com",
-            OnThreadCreated = node => threadCreatedTcs.TrySetResult(node)
-        });
+        client.StartThread(
+            MonolithMeshTestBase.TestPartition,
+            "New thread first message",
+            createdBy: "rbuergi@systemorph.com",
+            onCreated: node => threadCreatedTcs.TrySetResult(node));
 
         var created = await threadCreatedTcs.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
         created.Path.Should().NotBeNullOrEmpty();
@@ -126,21 +121,9 @@ public class ThreadSubmissionIntegrationTest : AITestBase
 
         var client = GetClient();
 
-        ThreadSubmission.Submit(new SubmitContext
-        {
-            Hub = client, ThreadPath = threadPath, UserText = "First",
-            CreatedBy = "rbuergi@systemorph.com"
-        });
-        ThreadSubmission.Submit(new SubmitContext
-        {
-            Hub = client, ThreadPath = threadPath, UserText = "Second",
-            CreatedBy = "rbuergi@systemorph.com"
-        });
-        ThreadSubmission.Submit(new SubmitContext
-        {
-            Hub = client, ThreadPath = threadPath, UserText = "Third",
-            CreatedBy = "rbuergi@systemorph.com"
-        });
+        client.SubmitMessage(threadPath, "First", createdBy: "rbuergi@systemorph.com");
+        client.SubmitMessage(threadPath, "Second", createdBy: "rbuergi@systemorph.com");
+        client.SubmitMessage(threadPath, "Third", createdBy: "rbuergi@systemorph.com");
 
         // Wait for at least one round to commit.
         var committed = await WaitForThreadAsync(
@@ -175,11 +158,8 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         var client = GetClient();
 
         // Round 1: submit u1 and wait for it to complete.
-        ThreadSubmission.Submit(new SubmitContext
-        {
-            Hub = client, ThreadPath = threadPath, UserText = "First",
-            CreatedBy = "rbuergi@systemorph.com"
-        });
+        client.SubmitMessage(
+            threadPath, "First", createdBy: "rbuergi@systemorph.com");
         var afterRoundOne = await WaitForThreadAsync(
             threadPath,
             t => !t.IsExecuting && t.IngestedMessageIds.Count == 1 && t.Messages.Count == 2,
@@ -189,13 +169,10 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         var r1 = afterRoundOne.Messages[1];
 
         // Resubmit u1 with new text.
-        ThreadSubmission.Resubmit(new ResubmitContext
-        {
-            Hub = client,
-            ThreadPath = threadPath,
-            UserMessageIdToReplay = u1,
-            NewUserText = "First, revised"
-        });
+        client.ResubmitMessage(
+            threadPath,
+            u1,
+            newUserText: "First, revised");
 
         // The intermediate "truncated" state (Messages=[u1], IngestedMessageIds=[]) is racy â€”
         // the server watcher dispatches the new round almost immediately after the truncation
@@ -228,12 +205,11 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         // Simulate a failure path by invoking the production helper directly
         // (replaces the legacy ThreadSubmission.ApplyRecordSubmissionFailure post + handler).
         var fakeUserMsgId = Guid.NewGuid().ToString("N")[..8];
-        MeshWeaver.AI.ThreadSubmission.ApplyRecordSubmissionFailure(
-            client,
-            threadPath: threadPath,
-            userMessageId: fakeUserMsgId,
-            userText: "message that failed",
-            errorMessage: "network timeout");
+        client.RecordSubmissionFailure(
+            threadPath,
+            fakeUserMsgId,
+            "message that failed",
+            "network timeout");
 
         // Wait for the thread to reflect: user id appended + an error response cell appended
         // + user id marked as ingested (so watcher doesn't retry).
@@ -273,11 +249,9 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         var slowModel = "slow-model";
 
         // Submit u1 â€” triggers round 1.
-        ThreadSubmission.Submit(new SubmitContext
-        {
-            Hub = client, ThreadPath = threadPath, UserText = "First",
-            ModelName = slowModel, CreatedBy = "rbuergi@systemorph.com"
-        });
+        client.SubmitMessage(
+            threadPath, "First",
+            modelName: slowModel, createdBy: "rbuergi@systemorph.com");
 
         // Wait for round 1 to start (IsExecuting=true). This proves u1 has been ingested.
         var roundOneStart = await WaitForThreadAsync(
@@ -289,21 +263,12 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         var u1 = roundOneStart.IngestedMessageIds[0];
 
         // While round 1 is running, submit 3 more messages in quick succession.
-        ThreadSubmission.Submit(new SubmitContext
-        {
-            Hub = client, ThreadPath = threadPath, UserText = "Second",
-            ModelName = slowModel, CreatedBy = "rbuergi@systemorph.com"
-        });
-        ThreadSubmission.Submit(new SubmitContext
-        {
-            Hub = client, ThreadPath = threadPath, UserText = "Third",
-            ModelName = slowModel, CreatedBy = "rbuergi@systemorph.com"
-        });
-        ThreadSubmission.Submit(new SubmitContext
-        {
-            Hub = client, ThreadPath = threadPath, UserText = "Fourth",
-            ModelName = slowModel, CreatedBy = "rbuergi@systemorph.com"
-        });
+        client.SubmitMessage(threadPath, "Second",
+            modelName: slowModel, createdBy: "rbuergi@systemorph.com");
+        client.SubmitMessage(threadPath, "Third",
+            modelName: slowModel, createdBy: "rbuergi@systemorph.com");
+        client.SubmitMessage(threadPath, "Fourth",
+            modelName: slowModel, createdBy: "rbuergi@systemorph.com");
 
         // Observe: during round 1 execution, all three new user ids should appear in Messages
         // and UserMessageIds, but NOT yet in IngestedMessageIds â€” the server holds them back
@@ -360,11 +325,9 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         var slowModel = "slow-model";
 
         // Round 1: slow submit so the execution is in-flight when u2 arrives.
-        ThreadSubmission.Submit(new SubmitContext
-        {
-            Hub = client, ThreadPath = threadPath, UserText = "First (slow)",
-            ModelName = slowModel, CreatedBy = "rbuergi@systemorph.com"
-        });
+        client.SubmitMessage(
+            threadPath, "First (slow)",
+            modelName: slowModel, createdBy: "rbuergi@systemorph.com");
 
         await WaitForThreadAsync(
             threadPath,
@@ -374,11 +337,9 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         // Submit u2 while round 1 is still executing. Queue-don't-cancel: the current round
         // is NOT aborted â€” it completes naturally (tool calls finish, response persists).
         // The watcher holds u2 back until IsExecuting flips to false, then dispatches round 2.
-        ThreadSubmission.Submit(new SubmitContext
-        {
-            Hub = client, ThreadPath = threadPath, UserText = "Second",
-            ModelName = slowModel, CreatedBy = "rbuergi@systemorph.com"
-        });
+        client.SubmitMessage(
+            threadPath, "Second",
+            modelName: slowModel, createdBy: "rbuergi@systemorph.com");
 
         // Final: both rounds complete cleanly. [u1, r1, u2, r2].
         var final = await WaitForThreadAsync(
@@ -407,14 +368,11 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         var threadPath = await SeedEmptyThreadAsync(ct);
         var client = GetClient();
 
-        ThreadSubmission.Submit(new SubmitContext
-        {
-            Hub = client,
-            ThreadPath = threadPath,
-            UserText = "exactly once",
-            CreatedBy = "rbuergi@systemorph.com",
-            AuthorName = "Tester"
-        });
+        client.SubmitMessage(
+            threadPath,
+            "exactly once",
+            createdBy: "rbuergi@systemorph.com",
+            authorName: "Tester");
 
         // Wait for the round to settle.
         var settled = await WaitForThreadAsync(

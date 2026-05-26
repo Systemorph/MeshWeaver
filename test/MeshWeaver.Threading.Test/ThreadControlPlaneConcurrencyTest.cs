@@ -69,13 +69,10 @@ public class ThreadControlPlaneConcurrencyTest(ITestOutputHelper output) : Monol
         // Fire N submits in parallel. Each Submit generates its own user
         // message id and patches PendingUserMessages on the thread node.
         var submits = Enumerable.Range(0, N).Select(i => Task.Run(() =>
-            ThreadSubmission.Submit(new SubmitContext
-            {
-                Hub = client,
-                ThreadPath = threadPath,
-                UserText = $"msg-{i}",
-                ContextPath = ContextPath,
-            }), ct)).ToArray();
+            client.SubmitMessage(
+                threadPath,
+                $"msg-{i}",
+                contextPath: ContextPath), ct)).ToArray();
         await Task.WhenAll(submits);
 
         // Wait for all N submissions to reach UserMessageIds (ingested into
@@ -107,13 +104,13 @@ public class ThreadControlPlaneConcurrencyTest(ITestOutputHelper output) : Monol
         var threadPath = await CreateThreadAsync(client, "resubmit race", ct);
 
         // Submit msg1 and msg2 sequentially to populate the thread.
-        ThreadSubmission.Submit(new SubmitContext { Hub = client, ThreadPath = threadPath, UserText = "first", ContextPath = ContextPath });
+        client.SubmitMessage(threadPath, "first", contextPath: ContextPath);
         var afterFirst = await WaitForThreadAsync(workspace, threadPath,
             t => t.Status == ThreadExecutionStatus.Idle && t.UserMessageIds.Count >= 1,
             ct);
         var msg1 = afterFirst.UserMessageIds[0];
 
-        ThreadSubmission.Submit(new SubmitContext { Hub = client, ThreadPath = threadPath, UserText = "second", ContextPath = ContextPath });
+        client.SubmitMessage(threadPath, "second", contextPath: ContextPath);
         var afterSecond = await WaitForThreadAsync(workspace, threadPath,
             t => t.Status == ThreadExecutionStatus.Idle && t.UserMessageIds.Count >= 2,
             ct);
@@ -122,8 +119,8 @@ public class ThreadControlPlaneConcurrencyTest(ITestOutputHelper output) : Monol
         // Concurrent resubmits from two callers â€” both patch the SAME
         // RequestedResubmit field. RFC-7396 single-field merge: last write
         // wins. The watcher processes whoever lands second.
-        var raceA = Task.Run(() => ThreadSubmission.ApplyResubmit(client, threadPath, msg1, "first-rev", null, null), ct);
-        var raceB = Task.Run(() => ThreadSubmission.ApplyResubmit(client, threadPath, msg2, "second-rev", null, null), ct);
+        var raceA = Task.Run(() => client.ResubmitMessage(threadPath, msg1, newUserText: "first-rev"), ct);
+        var raceB = Task.Run(() => client.ResubmitMessage(threadPath, msg2, newUserText: "second-rev"), ct);
         await Task.WhenAll(raceA, raceB);
 
         // After both resubmits land + the watcher processes (potentially
@@ -151,18 +148,16 @@ public class ThreadControlPlaneConcurrencyTest(ITestOutputHelper output) : Monol
 
         var threadPath = await CreateThreadAsync(client, "delete + submit race", ct);
 
-        ThreadSubmission.Submit(new SubmitContext { Hub = client, ThreadPath = threadPath, UserText = "to delete", ContextPath = ContextPath });
+        client.SubmitMessage(threadPath, "to delete", contextPath: ContextPath);
         var afterFirst = await WaitForThreadAsync(workspace, threadPath,
             t => t.Status == ThreadExecutionStatus.Idle && t.UserMessageIds.Count >= 1,
             ct);
         var msg1 = afterFirst.UserMessageIds[0];
 
         // Race: delete msg1 while submitting msg2.
-        var raceDelete = Task.Run(() => ThreadSubmission.ApplyDeleteFromMessage(client, threadPath, msg1), ct);
-        var raceSubmit = Task.Run(() => ThreadSubmission.Submit(new SubmitContext
-        {
-            Hub = client, ThreadPath = threadPath, UserText = "new", ContextPath = ContextPath
-        }), ct);
+        var raceDelete = Task.Run(() => client.DeleteFromMessage(threadPath, msg1), ct);
+        var raceSubmit = Task.Run(() => client.SubmitMessage(
+            threadPath, "new", contextPath: ContextPath), ct);
         await Task.WhenAll(raceDelete, raceSubmit);
 
         var final = await workspace.GetMeshNodeStream(threadPath)
@@ -196,12 +191,10 @@ public class ThreadControlPlaneConcurrencyTest(ITestOutputHelper output) : Monol
         var errorMessage = "concurrent-failure-test";
 
         // Race: record a failure for msg(failedUserId) while submitting a real msg.
-        var raceFailure = Task.Run(() => ThreadSubmission.ApplyRecordSubmissionFailure(
-            client, threadPath, failedUserId, "doomed input", errorMessage), ct);
-        var raceSubmit = Task.Run(() => ThreadSubmission.Submit(new SubmitContext
-        {
-            Hub = client, ThreadPath = threadPath, UserText = "good", ContextPath = ContextPath
-        }), ct);
+        var raceFailure = Task.Run(() => client.RecordSubmissionFailure(
+            threadPath, failedUserId, "doomed input", errorMessage), ct);
+        var raceSubmit = Task.Run(() => client.SubmitMessage(
+            threadPath, "good", contextPath: ContextPath), ct);
         await Task.WhenAll(raceFailure, raceSubmit);
 
         var final = await workspace.GetMeshNodeStream(threadPath)
@@ -239,7 +232,7 @@ public class ThreadControlPlaneConcurrencyTest(ITestOutputHelper output) : Monol
 
         var threadPath = await CreateThreadAsync(client, "no re-dispatch", ct);
 
-        ThreadSubmission.Submit(new SubmitContext { Hub = client, ThreadPath = threadPath, UserText = "ping", ContextPath = ContextPath });
+        client.SubmitMessage(threadPath, "ping", contextPath: ContextPath);
         var afterRound = await WaitForThreadAsync(workspace, threadPath,
             t => t.Status == ThreadExecutionStatus.Idle && t.Messages.Count >= 2,
             ct);

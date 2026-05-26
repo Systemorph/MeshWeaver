@@ -189,10 +189,9 @@ public static class ThreadMessageLayoutAreas
                                 // the new user text — server watcher dispatches the next
                                 // round. No bespoke ThreadSubmission.ApplyResubmit needed. See
                                 // RequestViaStreamUpdate.md.
-                                ThreadSubmission.ApplyResubmit(
-                                    actx.Hub, threadPath, messageId,
-                                    newUserText: editedText ?? msg.Text ?? "",
-                                    agentName: null, modelName: null);
+                                actx.Hub.ResubmitMessage(
+                                    threadPath, messageId,
+                                    newUserText: editedText ?? msg.Text ?? "");
                             });
                         }));
 
@@ -255,10 +254,9 @@ public static class ThreadMessageLayoutAreas
                             }
                         }), o => o.WithTarget(new Address(threadPath)));
 
-                        // Stream-update resubmit — see RequestViaStreamUpdate.md.
-                        ThreadSubmission.ApplyResubmit(
-                            host.Hub, threadPath, messageId,
-                            newUserText: msg.Text, agentName: null, modelName: null);
+                        // Canonical resubmit via the IWorkspace extension surface.
+                        host.Hub.ResubmitMessage(
+                            threadPath, messageId, newUserText: msg.Text);
                     }));
         }
 
@@ -270,7 +268,7 @@ public static class ThreadMessageLayoutAreas
                 .WithClickAction(_ =>
                 {
                     // Stream-update delete — see RequestViaStreamUpdate.md.
-                    ThreadSubmission.ApplyDeleteFromMessage(host.Hub, threadPath, messageId);
+                    host.Hub.DeleteFromMessage(threadPath, messageId);
                 }));
 
         var container = Controls.Stack
@@ -442,7 +440,7 @@ public static class ThreadMessageLayoutAreas
                 .WithClickAction(_ =>
                 {
                     // Stream-update delete — see RequestViaStreamUpdate.md.
-                    ThreadSubmission.ApplyDeleteFromMessage(host.Hub, threadPath, messageId);
+                    host.Hub.DeleteFromMessage(threadPath, messageId);
                 }))
             .WithView(Controls.Button("Submit")
                 .WithAppearance(Appearance.Accent)
@@ -457,11 +455,10 @@ public static class ThreadMessageLayoutAreas
                             NodeType = ThreadMessageNodeType.NodeType, MainNode = threadPath,
                             Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
                         }), o => o.WithTarget(new Address(threadPath)));
-                        // Stream-update resubmit — see RequestViaStreamUpdate.md.
-                        ThreadSubmission.ApplyResubmit(
-                            actx.Hub, threadPath, messageId,
-                            newUserText: editedText ?? msg.Text ?? "",
-                            agentName: null, modelName: null);
+                        // Canonical resubmit via the IWorkspace extension surface.
+                        actx.Hub.ResubmitMessage(
+                            threadPath, messageId,
+                            newUserText: editedText ?? msg.Text ?? "");
                     });
                 }));
 

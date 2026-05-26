@@ -88,13 +88,10 @@ public class IsExecutingLifecycleTest(ITestOutputHelper output) : MonolithMeshTe
             .Timeout(10.Seconds())
             .ToTask(ct);
 
-        ThreadSubmission.Submit(new SubmitContext
-        {
-            Hub = client,
-            ThreadPath = threadPath,
-            UserText = "hello",
-            ContextPath = ContextPath,
-        });
+        client.SubmitMessage(
+            threadPath,
+            "hello",
+            contextPath: ContextPath);
 
         // 1) IsExecuting must flip to true within ~10s.
         var executingState = await executingTask;

@@ -7,25 +7,18 @@ using MeshThread = MeshWeaver.AI.Thread;
 namespace MeshWeaver.AI;
 
 /// <summary>
-/// GUI-shaped reactive primitives for driving a thread chat flow from any
-/// CLIENT — Blazor side panel, MCP clients, tests. Every helper is a tiny
-/// adapter over the same primitives the production view binds to:
+/// Reactive read-side primitives for observing a thread chat flow from any
+/// CLIENT — Blazor side panel, MCP clients, tests. Writes go through the
+/// canonical <see cref="WorkspaceThreadExtensions"/> surface
+/// (<c>workspace.SubmitMessage</c>, <c>workspace.StartThread</c>, etc.);
+/// this class only exposes the matching read-side primitives:
 /// <list type="bullet">
-///   <item><see cref="ThreadSubmission.Submit"/> for outbound user messages</item>
-///   <item><c>workspace.GetRemoteStream&lt;MeshNode&gt;(addr)</c> — the
-///         collection-subscription primitive — for inbound state. This
-///         matches the layout-area data-binding plumbing the chat view
-///         uses (the layout area runs on the thread hub itself and pushes
-///         a ThreadViewModel to the client; from outside the thread hub
-///         the equivalent direct primitive is the remote-collection
-///         stream).</item>
+///   <item><c>workspace.GetMeshNodeStream(path)</c> — the cache-routed,
+///         write-coherent thread stream</item>
+///   <item><see cref="SubmitAndWait"/> — convenience composition of
+///         <see cref="WorkspaceThreadExtensions.SubmitMessage"/> + a wait
+///         for the round to land</item>
 /// </list>
-///
-/// <para>Single source of truth for "what does the chat flow look like from
-/// outside the agent." If a test hand-rolls its own
-/// <c>GetRemoteStream</c>/<c>GetDataRequest</c> dance, it will diverge from
-/// what the GUI actually does and the test stops protecting the user-visible
-/// contract. Always go through this class.</para>
 ///
 /// <para><b>All methods return <see cref="IObservable{T}"/>.</b> Per
 /// <c>Doc/Architecture/AsynchronousCalls.md</c>: no <c>Task&lt;T&gt;</c> on the
@@ -38,25 +31,6 @@ namespace MeshWeaver.AI;
 /// </summary>
 public static class ThreadFlow
 {
-    /// <summary>
-    /// Submits a user message via <see cref="ThreadSubmission.Submit"/> (the
-    /// GUI path). Fire-and-forget — the watcher takes over. Use when the
-    /// caller intentionally piles up several pending submits or doesn't
-    /// need to wait for a single round.
-    /// </summary>
-    public static void Submit(
-        IMessageHub client, string threadPath, string userText,
-        string? contextPath = null, string? agentName = null, string? modelName = null)
-        => ThreadSubmission.Submit(new SubmitContext
-        {
-            Hub = client,
-            ThreadPath = threadPath,
-            UserText = userText,
-            ContextPath = contextPath,
-            AgentName = agentName,
-            ModelName = modelName,
-        });
-
     /// <summary>
     /// Live observable of the <see cref="MeshThread"/> at
     /// <paramref name="threadPath"/>. Subscribes via the cache-routed
@@ -148,7 +122,9 @@ public static class ThreadFlow
                 .Timeout(timeout.Value)
                 .SelectMany(baseline =>
                 {
-                    Submit(client, threadPath, userText, contextPath, agentName, modelName);
+                    client.SubmitMessage(
+                        threadPath, userText,
+                        agentName: agentName, modelName: modelName, contextPath: contextPath);
                     return thread
                         .Where(t => !t.IsExecuting && t.Messages.Count > baseline)
                         .Select(t => t.Messages[^1])

@@ -598,58 +598,63 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                         ? createdBy
                         : "";
 
-            var ctx = new SubmitContext
+            Action<string> onError = err => InvokeAsync(() =>
             {
-                Hub = Hub,
-                ThreadPath = string.IsNullOrEmpty(threadPath) ? null : threadPath,
-                Namespace = ns,
-                UserText = userMessageText!,
-                AgentName = selectedAgentInfo?.Name,
-                ModelName = selectedModelInfo?.Name,
-                ContextPath = initialContext,
-                Attachments = capturedAttachments,
-                CreatedBy = createdBy,
-                AuthorName = authorName,
-                OnError = err => InvokeAsync(() =>
-                {
-                    if (_isDisposed) return;
-                    Logger.LogWarning("[ThreadChat:{InstanceId}] Submit failed: {Error}", _instanceId, err);
-                    showSubmissionProgress = false;
-                    submissionHandler.ForceRelease();
-                    StateHasChanged();
-                }),
-                OnThreadCreated = node => InvokeAsync(() =>
-                {
-                    if (_isDisposed) return;
-                    Logger.LogInformation(
-                        "[Chat] Thread created path={Path} elapsed={Ms}ms",
-                        node.Path, perfSw.ElapsedMilliseconds);
-                    threadPath = node.Path;
-                    threadName = node.Name;
-                    UpdateSidePanelTitle();
-                    if (isCompact && !string.IsNullOrEmpty(node.Path))
-                    {
-                        NavigationManager.NavigateTo($"/{node.Path}");
-                    }
-                    else if (!string.IsNullOrEmpty(node.Path))
-                    {
-                        SidePanelState.SetContentPath(node.Path);
-                    }
-                    showSubmissionProgress = false;
-                    StateHasChanged();
-                })
-            };
+                if (_isDisposed) return;
+                Logger.LogWarning("[ThreadChat:{InstanceId}] Submit failed: {Error}", _instanceId, err);
+                showSubmissionProgress = false;
+                submissionHandler.ForceRelease();
+                StateHasChanged();
+            });
 
             if (string.IsNullOrEmpty(threadPath))
             {
                 showSubmissionProgress = isCompact;
                 Logger.LogInformation("[Chat] Creating thread + submitting message");
-                ThreadSubmission.CreateThreadAndSubmit(ctx);
+                Hub.StartThread(
+                    namespacePath: ns,
+                    userText: userMessageText!,
+                    agentName: selectedAgentInfo?.Name,
+                    modelName: selectedModelInfo?.Name,
+                    contextPath: initialContext,
+                    attachments: capturedAttachments,
+                    createdBy: createdBy,
+                    authorName: authorName,
+                    onCreated: node => InvokeAsync(() =>
+                    {
+                        if (_isDisposed) return;
+                        Logger.LogInformation(
+                            "[Chat] Thread created path={Path} elapsed={Ms}ms",
+                            node.Path, perfSw.ElapsedMilliseconds);
+                        threadPath = node.Path;
+                        threadName = node.Name;
+                        UpdateSidePanelTitle();
+                        if (isCompact && !string.IsNullOrEmpty(node.Path))
+                        {
+                            NavigationManager.NavigateTo($"/{node.Path}");
+                        }
+                        else if (!string.IsNullOrEmpty(node.Path))
+                        {
+                            SidePanelState.SetContentPath(node.Path);
+                        }
+                        showSubmissionProgress = false;
+                        StateHasChanged();
+                    }),
+                    onError: onError);
             }
             else
             {
                 Logger.LogInformation("[Chat] Submitting to thread {Thread}", threadPath);
-                ThreadSubmission.Submit(ctx);
+                Hub.SubmitMessage(
+                    threadPath: threadPath,
+                    userText: userMessageText!,
+                    agentName: selectedAgentInfo?.Name,
+                    modelName: selectedModelInfo?.Name,
+                    contextPath: initialContext,
+                    attachments: capturedAttachments,
+                    createdBy: createdBy,
+                    authorName: authorName,
+                    onError: onError);
             }
 
             // Claude-Code-style queue: input stays enabled so the user can keep typing while
@@ -1719,14 +1724,13 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 Type = ThreadMessageType.AgentResponse
             }
         }), o => o.WithTarget(new Address(threadPath)));
-        ThreadSubmission.ApplyResubmit(Hub, threadPath, id,
-            newUserText: state.Text ?? "", agentName: null, modelName: null);
+        Hub.ResubmitMessage(threadPath, id, newUserText: state.Text ?? "");
     }
 
     private void DeleteFromMessage(string id)
     {
         if (string.IsNullOrEmpty(threadPath)) return;
-        ThreadSubmission.ApplyDeleteFromMessage(Hub, threadPath, id);
+        Hub.DeleteFromMessage(threadPath, id);
     }
 
     // ─── Tool-call display helpers ────────────────────────────────────────
