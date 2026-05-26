@@ -413,24 +413,41 @@ public class InboxToolIntegrationTest : AITestBase
         return content!;
     }
 
+    /// <summary>
+    /// Stream-based wait: subscribes to the thread's MeshNode stream and
+    /// returns the first emission whose content matches <paramref name="predicate"/>.
+    /// Replaces the previous Task.Delay polling loop — that pattern reads a
+    /// potentially stale cached snapshot each poll cycle and races the
+    /// workspace's write propagation. The stream emits on every commit, so
+    /// the predicate sees every state transition exactly once.
+    /// See CLAUDE.md → "Never Task.Delay to wait for propagation".
+    /// </summary>
     private async Task<MeshThread> WaitForThreadAsync(
         string threadPath, Func<MeshThread, bool> predicate, int timeoutMs, CancellationToken ct)
     {
-        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
         MeshThread? last = null;
-        while (DateTime.UtcNow < deadline && !ct.IsCancellationRequested)
+        try
         {
-            last = await ReadThreadAsync(threadPath, ct);
-            if (predicate(last)) return last;
-            await Task.Delay(100, ct);
+            return await Mesh.GetWorkspace().GetMeshNodeStream(threadPath)
+                .Select(n => n.Content as MeshThread)
+                .Where(t => t is not null)
+                .Do(t => last = t)
+                .Where(t => predicate(t!))
+                .Take(1)
+                .Timeout(TimeSpan.FromMilliseconds(timeoutMs))
+                .ToTask(ct)!;
         }
-        last.Should().NotBeNull();
-        predicate(last!).Should().BeTrue(
-            $"condition not reached within {timeoutMs}ms for thread {threadPath}. " +
-            $"Last state: PendingUserMessages.Count={last!.PendingUserMessages.Count}, " +
-            $"IngestedMessageIds=[{string.Join(",", last.IngestedMessageIds)}], " +
-            $"IsExecuting={last.IsExecuting}");
-        return last!;
+        catch (TimeoutException)
+        {
+            last.Should().NotBeNull(
+                $"thread {threadPath} never emitted a MeshThread snapshot within {timeoutMs}ms");
+            predicate(last!).Should().BeTrue(
+                $"condition not reached within {timeoutMs}ms for thread {threadPath}. " +
+                $"Last state: PendingUserMessages.Count={last!.PendingUserMessages.Count}, " +
+                $"IngestedMessageIds=[{string.Join(",", last.IngestedMessageIds)}], " +
+                $"IsExecuting={last.IsExecuting}");
+            return last!;
+        }
     }
 
     /// <summary>
