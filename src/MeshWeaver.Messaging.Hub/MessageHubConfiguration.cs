@@ -349,7 +349,16 @@ public record MessageHubConfiguration
 
     internal ImmutableList<Func<AsyncPipelineConfig, AsyncPipelineConfig>> DeliveryPipeline { get; set; }
     internal TimeSpan? StartupTimeout { get; init; } //= new(0, 0, 30); // Default 10 seconds
-    internal TimeSpan RequestTimeout { get; init; } = new(0, 0, 30);
+    // Default 60s. The previous 30s default was hitting CI consistently on
+    // cross-hub forward chains (mesh hub → per-node hub → response) when the
+    // per-node hub's cold-cache initialization took >30s on slow Linux runners
+    // — a typical scenario for AcceMe TodoDataChangeWorkflowTest and Content
+    // tests where a Node's first activation reads + validates from persistence.
+    // The test client hub override (MonolithMeshTestBase.WithRequestTimeout(60s))
+    // covered the test-side post but intermediate sync/mesh hubs still
+    // followed the 30s default. 60s as a framework default matches that
+    // ceiling; anything genuinely longer than that is a real bug.
+    internal TimeSpan RequestTimeout { get; init; } = new(0, 1, 0);
 
     /// <summary>
     /// Quiescing-phase drain budget per hub. When <see cref="MessageHub.Dispose"/> fires,
