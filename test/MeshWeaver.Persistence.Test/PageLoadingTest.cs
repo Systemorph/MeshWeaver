@@ -40,7 +40,14 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     {
         var graphPath = TestPaths.SamplesGraph;
         var dataDirectory = TestPaths.SamplesGraphData;
-        var cacheDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverPageLoadingTests", Guid.NewGuid().ToString(), ".mesh-cache");
+        // Stable cache directory (no Guid.NewGuid()) so the compiled NodeType
+        // assemblies survive across test runs. The source files at
+        // TestPaths.SamplesGraph have stable LastModified — combined with
+        // CompilationCacheService.TryGetLatestCachedDllPath (timestamped
+        // subdir lookup), the second-and-onwards test invocations skip the
+        // 9 s Roslyn cold compile of Cornerstone/Insured / Northwind / etc.
+        // and complete inside the 10 s per-test timeout.
+        var cacheDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverPageLoadingTests", ".mesh-cache");
         Directory.CreateDirectory(cacheDirectory);
 
         var configuration = new ConfigurationBuilder()
@@ -99,31 +106,34 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     /// </summary>
     private async Task AssertNodeLoadsWithoutHanging(string nodePath, int timeoutSeconds = DefaultTimeoutSeconds)
     {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         var address = new Address(nodePath);
+        Output.WriteLine($"[{sw.ElapsedMilliseconds}ms] new Address({nodePath}) done");
         var client = GetClient(c => c
             .AddLayoutClient(cc => cc)
             .AddContentCollections());
+        Output.WriteLine($"[{sw.ElapsedMilliseconds}ms] GetClient done");
 
-        Output.WriteLine($"Testing default area loading for {nodePath}");
+        Output.WriteLine($"[{sw.ElapsedMilliseconds}ms] Sending PingRequest to {nodePath}");
 
-        // Initialize the hub
         await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        Output.WriteLine($"Hub initialized for {nodePath}");
+        Output.WriteLine($"[{sw.ElapsedMilliseconds}ms] Ping returned for {nodePath}");
 
         var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference(string.Empty); // Default area
+        var reference = new LayoutAreaReference(string.Empty);
+        Output.WriteLine($"[{sw.ElapsedMilliseconds}ms] About to GetRemoteStream for {nodePath}");
 
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(address, reference);
+        Output.WriteLine($"[{sw.ElapsedMilliseconds}ms] GetRemoteStream returned (subscribed below)");
 
-        // Must emit within timeout - catches infinite spinner
         var changeItem = await stream.Timeout(TimeSpan.FromSeconds(timeoutSeconds)).FirstAsync();
+        Output.WriteLine($"[{sw.ElapsedMilliseconds}ms] stream.FirstAsync returned");
         var value = changeItem.Value;
 
         var rawText = value.GetRawText();
-        Output.WriteLine($"Received value: {rawText.Substring(0, Math.Min(200, rawText.Length))}...");
+        Output.WriteLine($"[{sw.ElapsedMilliseconds}ms] {nodePath} text len={rawText.Length}");
 
         value.Should().NotBe(default(JsonElement), $"{nodePath} should load and emit a value");
-        Output.WriteLine($"{nodePath} loaded successfully");
     }
 
     /// <summary>
@@ -259,6 +269,7 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact(Timeout = 10000)]
     public async Task ConcurrentRequests_MultipleNodeTypes_AllLoadWithoutHanging()
     {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         var nodePaths = new[]
         {
             "Cornerstone/Microsoft",
@@ -270,7 +281,7 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var client = GetClient(c => c
             .AddLayoutClient(cc => cc)
             .AddContentCollections());
-        Output.WriteLine("Testing concurrent page loading across node types");
+        Output.WriteLine($"[{sw.ElapsedMilliseconds}ms] GetClient done; starting concurrent loads");
 
         var tasks = new List<Task<(string Path, bool Success)>>();
 
@@ -282,18 +293,22 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
                 try
                 {
                     var address = new Address(path);
+                    Output.WriteLine($"[{sw.ElapsedMilliseconds}ms] {path}: Ping starting");
                     await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+                    Output.WriteLine($"[{sw.ElapsedMilliseconds}ms] {path}: Ping returned");
 
                     var workspace = client.GetWorkspace();
                     var reference = new LayoutAreaReference(string.Empty);
                     var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(address, reference);
+                    Output.WriteLine($"[{sw.ElapsedMilliseconds}ms] {path}: GetRemoteStream returned, awaiting FirstAsync");
 
                     var changeItem = await stream.Timeout(TimeSpan.FromSeconds(DefaultTimeoutSeconds)).FirstAsync();
+                    Output.WriteLine($"[{sw.ElapsedMilliseconds}ms] {path}: FirstAsync returned");
                     return (path, changeItem.Value.ValueKind != JsonValueKind.Undefined);
                 }
                 catch (Exception ex)
                 {
-                    Output.WriteLine($"Error loading {path}: {ex.Message}");
+                    Output.WriteLine($"[{sw.ElapsedMilliseconds}ms] {path}: Error: {ex.GetType().Name}: {ex.Message}");
                     return (path, false);
                 }
             }));
@@ -304,7 +319,7 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         foreach (var (path, success) in results)
         {
             success.Should().BeTrue($"{path} should load successfully");
-            Output.WriteLine($"{path} loaded: {success}");
+            Output.WriteLine($"[{sw.ElapsedMilliseconds}ms] {path} loaded: {success}");
         }
     }
 
