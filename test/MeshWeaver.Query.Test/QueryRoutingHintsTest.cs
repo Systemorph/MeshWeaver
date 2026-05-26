@@ -133,7 +133,7 @@ public class QueryRoutingHintsTest
         };
 
         var config = new MeshConfiguration(
-            new Dictionary<string, MeshNode>(),
+            [],
             queryRoutingRules: rules);
 
         var parsed = _parser.Parse("nodeType:User");
@@ -165,7 +165,7 @@ public class QueryRoutingHintsTest
         };
 
         var config = new MeshConfiguration(
-            new Dictionary<string, MeshNode>(),
+            [],
             queryRoutingRules: rules);
 
         var parsed = _parser.Parse("namespace:Admin/_Access nodeType:AccessAssignment");
@@ -186,7 +186,7 @@ public class QueryRoutingHintsTest
         };
 
         var config = new MeshConfiguration(
-            new Dictionary<string, MeshNode>(),
+            [],
             queryRoutingRules: rules);
 
         var parsed = _parser.Parse("laptop"); // text search, no nodeType

@@ -29,7 +29,7 @@ namespace MeshWeaver.Mesh.Services;
 /// emission — strictly before any downstream <c>Subscribe</c> handler the
 /// caller adds. So callers can safely use the returned observable to drive
 /// the operation's response message, version-history writes,
-/// <see cref="IDataChangeNotifier"/> notifications, etc., knowing the
+/// in-process change-feed notifications, etc., knowing the
 /// mesh-change-feed publish already happened.</para>
 /// </summary>
 public static class StorageAdapterChangeFeedExtensions

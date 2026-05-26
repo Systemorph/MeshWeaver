@@ -39,7 +39,6 @@ public static class GraphExtensions
                 if (services.All(d => d.ServiceType != typeof(UnifiedReferenceAutocompleteProvider)))
                 {
                     services.AddScoped(sp => new UnifiedReferenceAutocompleteProvider(
-                        sp.GetService<MeshConfiguration>(),
                         sp.GetService<IMeshService>(),
                         sp.GetService<INavigationService>(),
                         sp.GetRequiredService<IMessageHub>(),

@@ -19,7 +19,6 @@ namespace MeshWeaver.Mesh.Completion;
 /// - "@" suggests top-level nodes globally (absolute paths)
 /// </summary>
 internal class UnifiedReferenceAutocompleteProvider(
-    MeshConfiguration? meshConfig,
     IMeshService? meshQuery,
     INavigationService? navigationContext,
     IMessageHub hub,
