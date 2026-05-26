@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
@@ -19,7 +19,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
 /// Orleans integration: portal/side-panel chat flow end-to-end.
-/// Uses <see cref="ThreadFlow"/> — the GUI-shaped static primitives — so
+/// Uses <see cref="ThreadFlow"/> â€” the GUI-shaped static primitives â€” so
 /// the test stays in lockstep with what the user actually sees. NO inline
 /// re-implementation of the flow.
 ///
@@ -39,7 +39,7 @@ public class OrleansPortalFlowTest(ITestOutputHelper output) : OrleansSharedTest
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
         => await base.GetClientAsync($"portal-{name}-{Guid.NewGuid():N}", "TestUser");
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task PortalFlow_CreateThread_CreateCells_Submit_ExecutionCompletes()
     {
         SharedOrleansFixture.SwappableFactory.SetInner(new PortalFlowEchoChatClientFactory());
@@ -56,7 +56,7 @@ public class OrleansPortalFlowTest(ITestOutputHelper output) : OrleansSharedTest
             Output.WriteLine($"Thread: {threadPath}");
 
             // Step 2: Submit via the GUI path + wait for the round to complete.
-            // ThreadFlow.SubmitAndWait returns the response message id —
+            // ThreadFlow.SubmitAndWait returns the response message id â€”
             // the server-allocated cell at Messages[^1] after IsExecuting flips
             // back to false.
             var responseMsgId = await ThreadFlow.SubmitAndWait(
@@ -66,7 +66,7 @@ public class OrleansPortalFlowTest(ITestOutputHelper output) : OrleansSharedTest
             Output.WriteLine($"Round complete. Response cell: {responseMsgId}");
 
             // Step 3: Verify the cells. Same workspace.GetMeshNodeStream
-            // primitive — read via ThreadFlow.ReadMessage.
+            // primitive â€” read via ThreadFlow.ReadMessage.
             var finalThread = await ThreadFlow.ReadThread(
                 client, threadPath,
                 t => t.Messages.Count >= 2).FirstAsync().ToTask(ct);
@@ -90,22 +90,22 @@ public class OrleansPortalFlowTest(ITestOutputHelper output) : OrleansSharedTest
 
     /// <summary>
     /// Mimics real user behavior: type and submit several messages rapidly
-    /// in succession. The user doesn't wait for each round to finish — they
+    /// in succession. The user doesn't wait for each round to finish â€” they
     /// pile up. The submission watcher's contract: every pending message
     /// gets ingested into <see cref="MeshThread.Messages"/> with a response.
     ///
     /// Flow:
-    /// 1. Submit msg1 → claim round 1, dispatch
+    /// 1. Submit msg1 â†’ claim round 1, dispatch
     /// 2. Submit msg2 immediately (lands in <see cref="MeshThread.PendingUserMessages"/>
     ///    while round 1 is running)
     /// 3. Submit msg3 immediately (joins the queue)
-    /// 4. Round 1 completes → watcher dispatches round 2 with the entire
+    /// 4. Round 1 completes â†’ watcher dispatches round 2 with the entire
     ///    pending queue drained ([msg2, msg3] share one response cell per
     ///    <see cref="ThreadSubmission.PlanNextRound"/> semantics)
     /// 5. Final state: every submitted text appears as a satellite cell,
     ///    thread is Idle, all UserMessageIds are ingested
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task RapidSubmits_PileUpAndAllIngest()
     {
         SharedOrleansFixture.SwappableFactory.SetInner(new PortalFlowEchoChatClientFactory());
@@ -119,7 +119,7 @@ public class OrleansPortalFlowTest(ITestOutputHelper output) : OrleansSharedTest
             var threadPath = createResp.Message.Node!.Path!;
             Output.WriteLine($"Thread: {threadPath}");
 
-            // Rapid-fire three submits — mimics a user typing follow-ups
+            // Rapid-fire three submits â€” mimics a user typing follow-ups
             // without waiting for the agent. Submits 2 + 3 should land in
             // PendingUserMessages while round 1 is still running, then
             // drain into round 2 as a single multi-message round.
@@ -144,7 +144,7 @@ public class OrleansPortalFlowTest(ITestOutputHelper output) : OrleansSharedTest
             Output.WriteLine($"UserMessageIds: [{string.Join(", ", finalThread.UserMessageIds)}]");
 
             // Verify every submitted text is present in the satellite cells.
-            // Reactive Merge across the user-cell streams — each stream is the
+            // Reactive Merge across the user-cell streams â€” each stream is the
             // GUI primitive ThreadFlow.ReadMessage (workspace.GetMeshNodeStream
             // + Where + Take(1)) which completes once the cell text is present.
             // .ToList() aggregates after every stream completes; .FirstAsync()

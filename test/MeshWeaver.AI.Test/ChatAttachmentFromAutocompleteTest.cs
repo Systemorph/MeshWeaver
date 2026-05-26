@@ -1,4 +1,4 @@
-using FluentAssertions;
+﻿using FluentAssertions;
 using MeshWeaver.AI;
 using Xunit;
 
@@ -25,7 +25,7 @@ public class ChatAttachmentFromAutocompleteTest
     }
 
     /// <summary>Tests content: prefix extraction.</summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void ContentReference_ExtractedCorrectly()
     {
         // When autocomplete inserts a content path, it uses the content: prefix
@@ -37,7 +37,7 @@ public class ChatAttachmentFromAutocompleteTest
     }
 
     /// <summary>Tests that lowercase agent/ paths are filtered as commands.</summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void AgentPaths_FilteredAsCommands()
     {
         // Agent paths starting with lowercase "agent/" should be filtered (they are commands)
@@ -46,7 +46,7 @@ public class ChatAttachmentFromAutocompleteTest
     }
 
     /// <summary>Tests that uppercase Agent/ paths are kept as references.</summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void AgentNamespacePaths_NotFiltered()
     {
         // Agent paths starting with uppercase "Agent/" are real namespace paths
@@ -56,7 +56,7 @@ public class ChatAttachmentFromAutocompleteTest
     }
 
     /// <summary>Tests case-insensitive deduplication of references.</summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void DuplicateReferences_DeduplicatedCaseInsensitive()
     {
         var paths = MarkdownReferenceExtractor.GetUniquePaths("@ACME/Reports and @acme/reports");
@@ -64,7 +64,7 @@ public class ChatAttachmentFromAutocompleteTest
     }
 
     /// <summary>Tests extraction of multiple references.</summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void MultipleReferences_AllExtracted()
     {
         var markdown = "compare @ACME/Reports with @Systemorph/Docs";
@@ -76,7 +76,7 @@ public class ChatAttachmentFromAutocompleteTest
     }
 
     /// <summary>Tests removal of content-prefixed references.</summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void RemoveReference_WithContentPrefix_Works()
     {
         var input = "see @content:docs/readme.md here";
@@ -85,7 +85,7 @@ public class ChatAttachmentFromAutocompleteTest
     }
 
     /// <summary>Tests graceful handling of empty/null input.</summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void EmptyOrNullText_HandledGracefully()
     {
         MarkdownReferenceExtractor.GetUniquePaths(null).Should().BeEmpty();
@@ -96,7 +96,7 @@ public class ChatAttachmentFromAutocompleteTest
     }
 
     /// <summary>Tests extraction of paths with hyphens and dots.</summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void PathWithHyphensAndDots_ExtractedCorrectly()
     {
         var markdown = "file @content:my-docs/report-2024.v2.md";
@@ -106,7 +106,7 @@ public class ChatAttachmentFromAutocompleteTest
     }
 
     /// <summary>Tests extraction of unified path with address prefix.</summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void UnifiedPathWithAddress_ExtractedCorrectly()
     {
         // Unified path format: {address}/{collectionName}:{filePath}
@@ -117,7 +117,7 @@ public class ChatAttachmentFromAutocompleteTest
     }
 
     /// <summary>Tests removal of unified path with address prefix.</summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void UnifiedPathWithAddress_RemovedCorrectly()
     {
         var input = "check @Systemorph/content:docs/guide.md here";
@@ -126,7 +126,7 @@ public class ChatAttachmentFromAutocompleteTest
     }
 
     /// <summary>Tests that references left in text are still extractable (text-left-in behavior).</summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void ReferencesLeftInText_StillExtractable()
     {
         var markdown = "check @ACME/Reports and @Systemorph/Docs please";
@@ -154,7 +154,7 @@ public class ChatAttachmentFromAutocompleteTest
     }
 
     /// <summary>Tests mixed references: addresses, content paths, and unified tags in one message.</summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void MixedReferences_AllExtracted()
     {
         var markdown = "Compare @ACME/Reports with @Org/content:readme.md and @Org/data:sales";

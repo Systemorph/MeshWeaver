@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
@@ -57,7 +57,7 @@ public class ThreadResumeTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         return response.Message.Node!.Path!;
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Resume_ThreadWithMessages_LoadsAllMessages()
     {
         var ct = new CancellationTokenSource(30.Seconds()).Token;
@@ -97,7 +97,7 @@ public class ThreadResumeTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         Output.WriteLine("Resume verified: all messages loaded correctly");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Resume_ThreadWithMultipleExchanges_LoadsAll()
     {
         var ct = new CancellationTokenSource(30.Seconds()).Token;

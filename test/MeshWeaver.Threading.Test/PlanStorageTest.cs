@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -38,7 +38,7 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         return base.ConfigureClient(configuration);
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task StorePlan_CreatesMarkdownNodeUnderThread()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -60,9 +60,9 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var planContent = @"## Plan: Set up project structure
 
 ### Steps
-1. Create Engineering department â€” `Create` â€” node under PlanTestOrg
-2. Create Marketing department â€” `Create` â€” node under PlanTestOrg
-3. Create README pages â€” `Create` â€” one per department
+1. Create Engineering department Ã¢â‚¬â€ `Create` Ã¢â‚¬â€ node under PlanTestOrg
+2. Create Marketing department Ã¢â‚¬â€ `Create` Ã¢â‚¬â€ node under PlanTestOrg
+3. Create README pages Ã¢â‚¬â€ `Create` Ã¢â‚¬â€ one per department
 
 ### Notes
 - All nodes use Markdown type
@@ -93,7 +93,7 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         content.ToString().Should().Contain("Set up project structure");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task StorePlan_PlanIsInThreadPartition()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -130,7 +130,7 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             "plan should appear as a child of the thread node");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task StorePlan_CanUpdateExistingPlan()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;

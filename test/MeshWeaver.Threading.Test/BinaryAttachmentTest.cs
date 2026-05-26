@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -14,7 +14,7 @@ namespace MeshWeaver.Threading.Test;
 /// </summary>
 public class BinaryAttachmentTest
 {
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void DataContent_Pdf_SerializesAsDocumentBlock()
     {
         // Simulate a PDF file
@@ -34,7 +34,7 @@ public class BinaryAttachmentTest
         type.Should().Be("document");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void DataContent_Image_SerializesAsImageBlock()
     {
         // Simulate a PNG file (PNG magic bytes)
@@ -47,7 +47,7 @@ public class BinaryAttachmentTest
         type.Should().Be("image");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void MixedContent_ChatMessage_ContainsTextAndBinary()
     {
         var pdfBytes = new byte[] { 0x25, 0x50, 0x44, 0x46 };
@@ -75,7 +75,7 @@ public class BinaryAttachmentTest
         pdf.Data.Length.Should().Be(4);
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void ClaudeContentBlock_WithSource_SerializesToCorrectJson()
     {
         // Simulate what AzureClaudeChatClient.BuildRequest produces
@@ -104,7 +104,7 @@ public class BinaryAttachmentTest
         json.Should().Contain($"\"data\":\"{base64Data}\"");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void BinaryExtensions_DetectedCorrectly()
     {
         var binaryExts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -120,7 +120,7 @@ public class BinaryAttachmentTest
         binaryExts.Contains(".json").Should().BeFalse();
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void ContentPath_Parsing_ExtractsNodePathAndFileName()
     {
         // Local path: content:report.pdf

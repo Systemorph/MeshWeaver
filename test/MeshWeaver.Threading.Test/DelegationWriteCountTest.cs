@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
@@ -36,7 +36,7 @@ namespace MeshWeaver.Threading.Test;
 /// the parent bubble's embedded sub-thread Streaming area.
 ///
 /// <para>This test catches a regression that would silently re-introduce
-/// the per-tick projection write — that pattern always risks duplicates
+/// the per-tick projection write â€” that pattern always risks duplicates
 /// because the FCC append and the projection write race on
 /// <c>DelegationPath</c>-by-lookup.</para>
 /// </summary>
@@ -46,11 +46,11 @@ public class DelegationWriteCountTest(ITestOutputHelper output) : MonolithMeshTe
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
-            // 🚨 The test waits for cell.Status terminal; subsequent
+            // ðŸš¨ The test waits for cell.Status terminal; subsequent
             // completion writes (thread.Status=Idle, parent NotifyParentCompletion,
             // EmitCompletionNotification) are fire-and-forget and land AFTER
             // the test exits. The default 500 ms quiesce budget is too tight
-            // for streaming-heavy rounds — observed 9 in-flight DataChangeRequests
+            // for streaming-heavy rounds â€” observed 9 in-flight DataChangeRequests
             // at dispose ("X pending callback(s) after 0.50s" failure mode).
             // 5 s wasn't enough on CI (run 26376715753 still leaked); bump to 15 s.
             // We still fail hard if writes don't drain within the longer window.
@@ -69,7 +69,7 @@ public class DelegationWriteCountTest(ITestOutputHelper output) : MonolithMeshTe
         return base.ConfigureClient(configuration).AddLayoutClient();
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Delegation_ParentToolCalls_ContainsExactlyOneEntryPerDelegationPath()
     {
         var ct = new CancellationTokenSource(60.Seconds()).Token;
@@ -147,24 +147,24 @@ public class DelegationWriteCountTest(ITestOutputHelper output) : MonolithMeshTe
 
         // 4) Verify the entry's terminal state is well-formed: Status non-Streaming.
         //    Result population depends on whether the underlying chat client emits
-        //    FunctionResultContent in its stream output (SDK-specific — Claude does,
+        //    FunctionResultContent in its stream output (SDK-specific â€” Claude does,
         //    test agents typically don't) OR on UpdateDelegationStatus stamping
         //    a Result via my mirror. The structural invariant we enforce here is
         //    "no duplicate entries per DelegationPath + Status reaches a terminal
-        //    value", not "Result is always populated" — that's a separate concern
+        //    value", not "Result is always populated" â€” that's a separate concern
         //    that depends on the chat client and is exercised by Orleans tests.
         var entry = delegationCalls[0];
         entry.Status.Should().NotBe(ToolCallStatus.Streaming,
             "delegation entry should be at a terminal status by the time the parent response is Completed");
     }
 
-    #region Fake agents — parent delegates once, sub completes quickly
+    #region Fake agents â€” parent delegates once, sub completes quickly
 
     private sealed class DelegatingParentClient : IChatClient
     {
         // FCC iterates: turn 1 should emit one FunctionCallContent, turn 2+ should
         // emit only text. Detecting via FunctionResultContent in `messages` is
-        // unreliable (different chat-client wrappers shape that differently —
+        // unreliable (different chat-client wrappers shape that differently â€”
         // FRC may or may not be propagated back to the model). Track it
         // explicitly with a counter so the test is fully deterministic.
         private int _streamingCallCount;

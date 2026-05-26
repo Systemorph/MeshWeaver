@@ -1,4 +1,4 @@
-#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
+﻿#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
 using System;
 using System.Collections.Generic;
@@ -30,7 +30,7 @@ using Xunit;
 namespace MeshWeaver.AI.Test;
 
 /// <summary>
-/// End-to-end integration test for the full thread → agent → response flow.
+/// End-to-end integration test for the full thread â†’ agent â†’ response flow.
 /// Uses a fake IChatClient to avoid real AI API calls while testing
 /// the complete pipeline: thread creation, message persistence,
 /// agent initialization, streaming response, and reply storage.
@@ -42,7 +42,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
 
     public ThreadAgentIntegrationTest(ITestOutputHelper output) : base(output) { }
 
-    // Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.
+    // Share Mesh/SP across [Fact]s â€” see MonolithMeshTestBase.ShareMeshAcrossTests.
     protected override bool ShareMeshAcrossTests => true;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -147,7 +147,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
     /// 5. Create reply ThreadMessage from streamed response
     /// 6. Verify thread contains both messages in order
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task FullFlow_CreateThread_SendMessage_StreamResponse_SaveReply()
     {
         var query = MeshQuery;
@@ -193,7 +193,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         });
         agentChat.SetThreadId(threadPath);
 
-        // 4. Choose agent — first ordered agent is the best match for context
+        // 4. Choose agent â€” first ordered agent is the best match for context
         var agents = await agentChat.GetOrderedAgentsAsync();
         agents.Should().NotBeEmpty("agents should be loaded from mesh test data");
         agentChat.SetSelectedAgent(agents[0].Name);
@@ -258,7 +258,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
     /// <summary>
     /// Tests the non-streaming response path with the same thread/message flow.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task FullFlow_CreateThread_SendMessage_NonStreamingResponse()
     {
         var query = MeshQuery;
@@ -314,7 +314,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
     /// <summary>
     /// Tests that switching thread IDs isolates conversation state.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task SwitchThread_IsolatesConversationState()
     {
         var query = MeshQuery;
@@ -379,7 +379,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         response1.ToString().Trim().Should().NotBeEmpty();
         response2.ToString().Trim().Should().NotBeEmpty();
 
-        // Thread persistence is now via MeshNodes — no separate IChatPersistenceService
+        // Thread persistence is now via MeshNodes â€” no separate IChatPersistenceService
     }
 
     #endregion

@@ -1,4 +1,4 @@
-#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
+﻿#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
 using System;
 using System.Collections.Generic;
@@ -174,7 +174,7 @@ public class DelegationTest
     /// 3. The delegation result from B flows back into A's response
     /// 4. B's session is created within A's execution scope (namespace)
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Delegation_BothSessionsCreated_ChildRunsInIsolatedContext()
     {
         // Arrange: Create agent B (the target/child)
@@ -255,7 +255,7 @@ public class DelegationTest
 
         // Assert: Sessions are isolated (different instances)
         childSession.Should().NotBeSameAs(parentSession,
-            "child session should be isolated from parent — B runs in its own namespace within A's execution");
+            "child session should be isolated from parent â€” B runs in its own namespace within A's execution");
 
         // Assert: Delegation was executed with correct parameters
         capturedAgentName.Should().Be("AgentB");
@@ -272,7 +272,7 @@ public class DelegationTest
 
         responseTexts.Should().NotBeEmpty("parent agent A should produce a response after delegation");
 
-        // The parent's final text should contain B's response (relayed via tool result → summary)
+        // The parent's final text should contain B's response (relayed via tool result â†’ summary)
         var fullResponse = string.Join(" ", responseTexts);
         fullResponse.Should().Contain(AgentBResponseText,
             "A's response should include B's delegation result");
@@ -283,7 +283,7 @@ public class DelegationTest
     /// The delegation tool result (containing B's response) appears as a function result
     /// in A's message history, proving B's execution is scoped within A's thread.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Delegation_ChildThreadInParentNamespace_ResultAppearsAsFunctionResultInParent()
     {
         // Arrange: Create agents
@@ -374,7 +374,7 @@ public class DelegationTest
     /// Verifies that delegation to a non-existent agent returns a failure result
     /// rather than throwing an exception, and the parent agent can still respond.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Delegation_TargetAgentNotFound_ReturnsFailureResult()
     {
         // Arrange: Create delegation tool with empty agents dictionary

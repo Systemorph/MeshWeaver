@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
@@ -42,7 +42,7 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
         return base.ConfigureClient(configuration).AddLayoutClient();
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task StreamingArea_WhenIdle_ReturnsNull()
     {
         var ct = new CancellationTokenSource(10.Seconds()).Token;
@@ -71,10 +71,10 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
             .FirstAsync();
 
         Output.WriteLine($"StreamingArea emission: ChangeType={first.ChangeType}");
-        // The area returns null when idle — the LayoutAreaView renders nothing
+        // The area returns null when idle â€” the LayoutAreaView renders nothing
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task StreamingArea_WhenExecuting_ReturnsStreamingCell()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -128,7 +128,7 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
         // The emission should contain the LayoutAreaControl pointing to the response message
     }
 
-    [Fact(Skip = "Layout-area observation chain doesn't propagate the executing→idle MeshNode transition within 10 s. Same threadStream.Update pattern works in ToolCallsVisibilityTest when read via threadStream directly — only the LayoutAreaReference→StreamingView→GetMeshNodeStream chain is slow. Needs investigation of whether StreamingView's GetMeshNodeStream subscribes to the same reducer the Update writes to.")]
+    [Fact(Skip = "Layout-area observation chain doesn't propagate the executingâ†’idle MeshNode transition within 10 s. Same threadStream.Update pattern works in ToolCallsVisibilityTest when read via threadStream directly â€” only the LayoutAreaReferenceâ†’StreamingViewâ†’GetMeshNodeStream chain is slow. Needs investigation of whether StreamingView's GetMeshNodeStream subscribes to the same reducer the Update writes to.")]
     public async Task StreamingArea_WhenExecutionCompletes_ReturnsNull()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;

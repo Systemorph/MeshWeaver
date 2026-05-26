@@ -38,7 +38,7 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
         return base.ConfigureClient(configuration).AddLayoutClient();
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task GetRemoteStream_CollectionReference_ReturnsMeshNode()
     {
         var ct = new CancellationTokenSource(10.Seconds()).Token;
@@ -67,7 +67,7 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
         Output.WriteLine($"Got single node: {node.Path}");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task UpdateMeshNode_SingleUpdate_MessagesChange()
     {
         var ct = new CancellationTokenSource(10.Seconds()).Token;
@@ -146,7 +146,7 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
         Output.WriteLine($"Back-sync verified: server Messages=[{string.Join(", ", serverContent.Messages)}]");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task UpdateMeshNode_MultipleUpdates_AccumulateMessages()
     {
         var ct = new CancellationTokenSource(10.Seconds()).Token;
@@ -245,7 +245,7 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
     /// Tests the ThreadsCatalog view injected via AddAI → AddThreadType → AddThreadLayoutAreas.
     /// Verifies that from a thread's Threads area we can create a new sub-thread (delegation).
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task ThreadsCatalog_CreateNewThread_Succeeds()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;

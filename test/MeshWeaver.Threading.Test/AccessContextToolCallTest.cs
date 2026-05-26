@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Threading;
@@ -27,7 +27,7 @@ public class AccessContextToolCallTest(ITestOutputHelper output) : MonolithMeshT
         => base.ConfigureMesh(builder)
             .AddSampleUsers();
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task AccessContextAIFunction_RestoresIdentity_BeforeToolCall()
     {
         var ct = new CancellationTokenSource(10.Seconds()).Token;
@@ -75,7 +75,7 @@ public class AccessContextToolCallTest(ITestOutputHelper output) : MonolithMeshT
         Output.WriteLine($"Tool saw context: {capturedContext.ObjectId}");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task AccessContextAIFunction_WithoutExecutionContext_DoesNotCrash()
     {
         var ct = new CancellationTokenSource(10.Seconds()).Token;
@@ -100,7 +100,7 @@ public class AccessContextToolCallTest(ITestOutputHelper output) : MonolithMeshT
         result.Should().NotBeNull();
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void DelegationDepthGuard_BlocksExcessiveNesting()
     {
         // Simulate a deeply nested thread path (depth 3 = 3 levels of _Thread)

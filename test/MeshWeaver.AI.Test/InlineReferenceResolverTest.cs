@@ -1,4 +1,4 @@
-#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
+﻿#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
 using System;
 using System.Collections.Generic;
@@ -30,7 +30,7 @@ namespace MeshWeaver.AI.Test;
 /// </summary>
 public class InlineReferenceResolverUnitTest
 {
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void ExtractSection_MatchesH2Heading_ReturnsSectionContent()
     {
         var markdown = """
@@ -53,7 +53,7 @@ public class InlineReferenceResolverUnitTest
         result.Should().NotContain("Final summary.");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void ExtractSection_NoMatchingSection_ReturnsFullText()
     {
         var markdown = """
@@ -66,7 +66,7 @@ public class InlineReferenceResolverUnitTest
         result.Should().Be(markdown);
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void ExtractSection_CaseInsensitive_MatchesSection()
     {
         var markdown = """
@@ -79,7 +79,7 @@ public class InlineReferenceResolverUnitTest
         result.Should().Contain("Content here.");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void ExtractSection_LastSection_ExtractsToEndOfDocument()
     {
         var markdown = """
@@ -119,7 +119,7 @@ public class InlineReferenceResolverIntegrationTest : MonolithMeshTestBase
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task ResolveAsync_NoReferences_ReturnsOriginalText()
     {
         var text = "This is plain text with no @@ references.";
@@ -130,7 +130,7 @@ public class InlineReferenceResolverIntegrationTest : MonolithMeshTestBase
         result.Should().Be(text);
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task ResolveAsync_WithDocumentationReference_ExpandsContent()
     {
         // The test data includes TestDoc/ChildDoc.md
@@ -146,7 +146,7 @@ public class InlineReferenceResolverIntegrationTest : MonolithMeshTestBase
         result.Should().Contain("namespace:", "expanded content should include child document text");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task ResolveAsync_WithNonExistentReference_LeavesReferenceUnchanged()
     {
         var text = "See @@NonExistent/Path/That/DoesNotExist for details";
@@ -158,7 +158,7 @@ public class InlineReferenceResolverIntegrationTest : MonolithMeshTestBase
         result.Should().Contain("@@NonExistent/Path/That/DoesNotExist");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task ResolveAsync_WithNestedReferences_ResolvesRecursively()
     {
         // ParentDoc.md contains @@TestDoc/ChildDoc
@@ -172,7 +172,7 @@ public class InlineReferenceResolverIntegrationTest : MonolithMeshTestBase
         result.Should().Contain("namespace:", "nested ChildDoc reference should be expanded");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task ResolveAsync_MultipleReferences_ExpandsAll()
     {
         var text = "Parent: @@TestDoc/ParentDoc\n\nChild: @@TestDoc/ChildDoc";

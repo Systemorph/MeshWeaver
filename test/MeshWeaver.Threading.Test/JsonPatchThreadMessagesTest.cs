@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -39,7 +39,7 @@ public class JsonPatchThreadMessagesTest(ITestOutputHelper output) : MonolithMes
         return base.ConfigureClient(configuration).AddLayoutClient();
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task CreateThread_ThenUpdateMessages_ProducesValidMeshNode()
     {
         var ct = new CancellationTokenSource(10.Seconds()).Token;

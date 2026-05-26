@@ -1,4 +1,4 @@
-#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
+﻿#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
 using System;
 using System.Collections.Generic;
@@ -33,7 +33,7 @@ public class AgentSelectionTest
     /// TodoAgent is defined at ACME/Project/TodoAgent
     /// When getting agents for ACME/ProductLaunch, TodoAgent should be found via the NodeType namespace.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task QueryAgentsAsync_ProductLaunchWithNodeType_FindsTodoAgentFromNodeTypeNamespace()
     {
         // Arrange
@@ -66,7 +66,7 @@ public class AgentSelectionTest
         };
 
         // Mock: Query for current node to get NodeType (no nodeType: filter in query).
-        // Production calls IMeshService.ObserveQuery<MeshNode> directly — mock that
+        // Production calls IMeshService.ObserveQuery<MeshNode> directly â€” mock that
         // (extension methods like QueryAsync can't be intercepted by NSubstitute).
         _meshQuery.ObserveQuery<MeshNode>(
                 Arg.Is<MeshQueryRequest>(r =>
@@ -109,7 +109,7 @@ public class AgentSelectionTest
     /// Scenario: When at a path without a custom NodeType, agents should still be found
     /// from the path's ancestor hierarchy.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task QueryAgentsAsync_PathWithoutNodeType_FindsAgentsFromPathHierarchy()
     {
         // Arrange
@@ -139,7 +139,7 @@ public class AgentSelectionTest
         };
 
         // Mock: Query for current node (no nodeType: filter in query).
-        // Production calls IMeshService.ObserveQuery<MeshNode> directly — mock that
+        // Production calls IMeshService.ObserveQuery<MeshNode> directly â€” mock that
         // (extension methods like QueryAsync can't be intercepted by NSubstitute).
         _meshQuery.ObserveQuery<MeshNode>(
                 Arg.Is<MeshQueryRequest>(r =>
@@ -167,7 +167,7 @@ public class AgentSelectionTest
     /// <summary>
     /// Tests agent ordering by Order then DisplayName.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void OrderByRelevance_OrdersByOrderThenDisplayName()
     {
         // Arrange
@@ -210,7 +210,7 @@ public class AgentSelectionTest
     /// Scenario: When AgentContext has pre-loaded AvailableAgents,
     /// the ordering should work based on Order.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void AgentContext_WithPreloadedAgents_OrdersByOrder()
     {
         // Arrange
@@ -266,7 +266,7 @@ public class AgentSelectionTest
     /// <summary>
     /// Mock <see cref="IMeshService.ObserveQuery{T}"/> by returning a single
     /// Initial <see cref="QueryResultChange{T}"/>. Production code subscribes,
-    /// takes the Initial, and processes <c>Items</c> — exactly what this fakes.
+    /// takes the Initial, and processes <c>Items</c> â€” exactly what this fakes.
     /// </summary>
     private static IObservable<QueryResultChange<MeshNode>> InitialChange(params MeshNode[] items)
         => Observable.Return(new QueryResultChange<MeshNode>

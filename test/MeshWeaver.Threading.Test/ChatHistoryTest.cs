@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
@@ -60,7 +60,7 @@ public class ChatHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var responseMsgId = await ThreadFlow.SubmitAndWait(client, threadPath, text,
             contextPath: ContextPath, timeout: 60.Seconds()).FirstAsync().ToTask(ct);
 
-        // CompletedAt is the deterministic "streaming finished" signal — only set
+        // CompletedAt is the deterministic "streaming finished" signal â€” only set
         // by the terminal PushToResponseMessage call in ExecuteMessageAsync. Beats
         // text-pattern matching against in-flight placeholders.
         var finalMessage = await ThreadFlow.ReadMessage(client, threadPath, responseMsgId,
@@ -70,7 +70,7 @@ public class ChatHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         return finalMessage.Text!;
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task ThreeMessages_AgentSeesFullHistory()
     {
         var ct = new CancellationTokenSource(60.Seconds()).Token;
@@ -90,7 +90,7 @@ public class ChatHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         response3.Should().Contain("6 messages", "third message: system + 4 history + 1 new");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task TwoMessages_NoDuplicates_CorrectRoles()
     {
         var ct = new CancellationTokenSource(60.Seconds()).Token;
@@ -107,7 +107,7 @@ public class ChatHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             "second call: system + 2 history (user+assistant) + 1 new user = 4 total");
     }
 
-    #region Echo LLM — responds with message count to verify history is passed
+    #region Echo LLM â€” responds with message count to verify history is passed
 
     private class EchoChatClient : IChatClient
     {

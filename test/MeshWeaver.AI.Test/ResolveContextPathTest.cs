@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -14,18 +14,18 @@ namespace MeshWeaver.AI.Test;
 /// <summary>
 /// Unit tests for <see cref="MeshOperations.ResolveContextPath"/>. Regression coverage for the
 /// 2026-04-15 prod bug where <c>CollaborationPlugin.SuggestEdit</c> / <c>AddComment</c> ignored
-/// the chat's context path — agents calling the tool with a relative path or bare display name
-/// had the request routed to a non-existent grain (e.g. "Final Report – AI Readiness Assessment"),
+/// the chat's context path â€” agents calling the tool with a relative path or bare display name
+/// had the request routed to a non-existent grain (e.g. "Final Report â€“ AI Readiness Assessment"),
 /// and the edits never applied.
 /// </summary>
 public class ResolveContextPathTest
 {
     /// <summary>Absolute paths (leading <c>@/</c> or multi-segment <c>@</c>) are returned unchanged.</summary>
     [Theory]
-    [InlineData("@/PartnerRe/AIConsulting/FinalReport", "@PartnerRe/AIConsulting/FinalReport")] // absolute @/ → keeps path
-    [InlineData("/PartnerRe/AIConsulting/FinalReport", "@PartnerRe/AIConsulting/FinalReport")] // absolute / → rewrites to @
-    [InlineData("@OrgA/Doc", "@OrgA/Doc")] // multi-segment already looks absolute → returned as-is
-    [InlineData("@Doc/Architecture/content:file.svg", "@Doc/Architecture/content:file.svg")] // colon with slash before → absolute
+    [InlineData("@/PartnerRe/AIConsulting/FinalReport", "@PartnerRe/AIConsulting/FinalReport")] // absolute @/ â†’ keeps path
+    [InlineData("/PartnerRe/AIConsulting/FinalReport", "@PartnerRe/AIConsulting/FinalReport")] // absolute / â†’ rewrites to @
+    [InlineData("@OrgA/Doc", "@OrgA/Doc")] // multi-segment already looks absolute â†’ returned as-is
+    [InlineData("@Doc/Architecture/content:file.svg", "@Doc/Architecture/content:file.svg")] // colon with slash before â†’ absolute
     public void AbsolutePaths_AreReturnedUnchanged(string input, string expected)
     {
         var chat = new StubChat(new AgentContext { Context = "PartnerRe/AIConsulting" });
@@ -33,7 +33,7 @@ public class ResolveContextPathTest
     }
 
     /// <summary>Relative bare names are prefixed with the chat's context path before routing.</summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void RelativeBareName_IsPrefixedWithContextPath()
     {
         // This is the bug scenario: agent passes just "FinalReport" (or @FinalReport), expecting
@@ -48,10 +48,10 @@ public class ResolveContextPathTest
     }
 
     /// <summary>Relative UCR prefix paths (e.g. <c>content/file</c>) resolve against the context.</summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void RelativeUnifiedPath_IsPrefixedWithContextPath()
     {
-        // "content/report.docx" — UCR prefix path; relative to context.
+        // "content/report.docx" â€” UCR prefix path; relative to context.
         var chat = new StubChat(new AgentContext { Context = "PartnerRe/AIConsulting" });
 
         MeshOperations.ResolveContextPath(chat, "@content/report.docx")
@@ -59,10 +59,10 @@ public class ResolveContextPathTest
     }
 
     /// <summary>Legacy colon-syntax relative paths (e.g. <c>content:file</c>) resolve against the context.</summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void RelativeColonPath_IsPrefixedWithContextPath()
     {
-        // Legacy colon syntax: "content:file.md" — no slash before colon, so relative.
+        // Legacy colon syntax: "content:file.md" â€” no slash before colon, so relative.
         var chat = new StubChat(new AgentContext { Context = "Doc/Architecture" });
 
         MeshOperations.ResolveContextPath(chat, "@content:icon.svg")
@@ -70,7 +70,7 @@ public class ResolveContextPathTest
     }
 
     /// <summary>Quoted paths from autocomplete are unwrapped before context resolution.</summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void QuotedPath_IsUnwrappedBeforeResolving()
     {
         // Autocomplete wraps spaced paths in quotes: "@content/My File.md"
@@ -81,7 +81,7 @@ public class ResolveContextPathTest
     }
 
     /// <summary>With no chat context, a relative path is returned verbatim (nothing to prefix).</summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void NoContext_RelativePath_ReturnsInputUnchanged()
     {
         var chat = new StubChat(context: null);
@@ -91,7 +91,7 @@ public class ResolveContextPathTest
     }
 
     /// <summary>Absolute paths still resolve (losing the leading slash) even without a chat context.</summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void NoContext_AbsolutePath_StillResolves()
     {
         var chat = new StubChat(context: null);
@@ -100,7 +100,7 @@ public class ResolveContextPathTest
     }
 
     /// <summary>An empty input produces an empty output regardless of context.</summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void EmptyPath_ReturnsEmpty()
     {
         var chat = new StubChat(new AgentContext { Context = "OrgA" });
@@ -109,7 +109,7 @@ public class ResolveContextPathTest
 
     /// <summary>
     /// Minimal <see cref="IAgentChat"/> stub exposing only <see cref="IAgentChat.Context"/>.
-    /// All other members throw — the method under test only reads Context.
+    /// All other members throw â€” the method under test only reads Context.
     /// </summary>
     private sealed class StubChat : IAgentChat
     {

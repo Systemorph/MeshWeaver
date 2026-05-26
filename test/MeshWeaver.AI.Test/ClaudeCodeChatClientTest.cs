@@ -1,4 +1,4 @@
-#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
+﻿#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
 using System.Collections.Generic;
 using FluentAssertions;
@@ -19,7 +19,7 @@ public class ClaudeCodeChatClientTest
         _client = new ClaudeCodeChatClient(_config);
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void BuildSystemPrompt_WithSystemMessages_ExtractsAndCombines()
     {
         // Arrange
@@ -37,7 +37,7 @@ public class ClaudeCodeChatClientTest
         result.Should().Be("You are PricingAgent\n\nBe helpful");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void BuildSystemPrompt_NoSystemMessages_ReturnsConfigPromptOnly()
     {
         // Arrange
@@ -54,7 +54,7 @@ public class ClaudeCodeChatClientTest
         result.Should().Be("Be helpful");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void BuildSystemPrompt_NoSystemMessagesNoConfig_ReturnsEmpty()
     {
         // Arrange
@@ -70,7 +70,7 @@ public class ClaudeCodeChatClientTest
         result.Should().BeEmpty();
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void BuildSystemPrompt_MultipleSystemMessages_CombinesAll()
     {
         // Arrange

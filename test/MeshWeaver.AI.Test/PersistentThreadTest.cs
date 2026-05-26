@@ -1,4 +1,4 @@
-#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
+﻿#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
 using System;
 using System.Collections.Generic;
@@ -18,9 +18,9 @@ namespace MeshWeaver.AI.Test;
 
 public class PersistentThreadTest
 {
-    #region Thread Record — PersistentThreadId & ProviderType
+    #region Thread Record â€” PersistentThreadId & ProviderType
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void Thread_PersistentThreadId_DefaultIsNull()
     {
         var thread = new Thread();
@@ -29,7 +29,7 @@ public class PersistentThreadTest
         thread.ProviderType.Should().BeNull();
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void Thread_WithPersistentThreadId_SetsValue()
     {
         var thread = new Thread
@@ -42,7 +42,7 @@ public class PersistentThreadTest
         thread.ProviderType.Should().Be("AzureFoundryPersistent");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void Thread_WithExpression_CopiesPersistentThreadId()
     {
         var original = new Thread
@@ -57,7 +57,7 @@ public class PersistentThreadTest
         copy.ProviderType.Should().Be("AzureFoundryUpdated");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void Thread_WithExpression_OverridesPersistentThreadId()
     {
         var original = new Thread
@@ -76,7 +76,7 @@ public class PersistentThreadTest
         updated.ProviderType.Should().Be("NewProvider");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void Thread_JsonRoundtrip_PreservesPersistentThreadId()
     {
         var thread = new Thread
@@ -93,7 +93,7 @@ public class PersistentThreadTest
         deserialized.ProviderType.Should().Be("AzureFoundryPersistent");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void Thread_JsonRoundtrip_NullPersistentFields_DeserializesAsNull()
     {
         // Simulate old JSON without persistent fields (backward compatibility)
@@ -106,7 +106,7 @@ public class PersistentThreadTest
         deserialized.ProviderType.Should().BeNull();
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void Thread_RecordEquality_IncludesPersistentFields()
     {
         var thread1 = new Thread
@@ -176,7 +176,7 @@ public class PersistentThreadTest
             => throw new NotImplementedException();
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void IChatClientFactory_IsPersistent_DefaultIsFalse()
     {
         IChatClientFactory factory = new NonPersistentTestFactory();
@@ -184,7 +184,7 @@ public class PersistentThreadTest
         factory.IsPersistent.Should().BeFalse();
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void IChatClientFactory_IsPersistent_CanBeOverriddenToTrue()
     {
         IChatClientFactory factory = new PersistentTestFactory();
@@ -215,7 +215,7 @@ public class PersistentThreadTest
         public Action<string>? UpdateDelegationStatus { get; set; }
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void IAgentChat_SetPersistentThreadId_DefaultIsNoOp()
     {
         IAgentChat chat = new MinimalAgentChat();
@@ -225,7 +225,7 @@ public class PersistentThreadTest
         action.Should().NotThrow();
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void IAgentChat_SetPersistentThreadId_NullDoesNotThrow()
     {
         IAgentChat chat = new MinimalAgentChat();

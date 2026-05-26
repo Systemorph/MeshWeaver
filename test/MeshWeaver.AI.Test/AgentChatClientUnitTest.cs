@@ -1,4 +1,4 @@
-#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
+﻿#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
 using System.Collections.Generic;
 using System.Linq;
@@ -15,7 +15,7 @@ public class AgentChatClientUnitTest
 {
     #region OrderAgentsForCreation
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void OrderAgentsForCreation_MixedTypes_ReturnsNonDelegatingThenDelegatingThenDefault()
     {
         var configs = new List<AgentConfiguration>
@@ -33,7 +33,7 @@ public class AgentChatClientUnitTest
         result[2].Id.Should().Be("Default", "default agent comes last");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void OrderAgentsForCreation_EmptyList_ReturnsEmpty()
     {
         var result = AgentChatClient.OrderAgentsForCreation(new List<AgentConfiguration>()).ToList();
@@ -41,7 +41,7 @@ public class AgentChatClientUnitTest
         result.Should().BeEmpty();
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void OrderAgentsForCreation_OnlyDefaultAgent_ReturnsSingleItem()
     {
         var configs = new List<AgentConfiguration>
@@ -54,7 +54,7 @@ public class AgentChatClientUnitTest
         result.Should().ContainSingle().Which.Id.Should().Be("Default");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void OrderAgentsForCreation_AllNonDelegating_ReturnsAll()
     {
         var configs = new List<AgentConfiguration>
@@ -70,7 +70,7 @@ public class AgentChatClientUnitTest
         result.Select(a => a.Id).Should().Equal("A", "B", "C");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void OrderAgentsForCreation_MultipleDelegatingAndDefault_DelegatingBeforeDefault()
     {
         var configs = new List<AgentConfiguration>
@@ -88,7 +88,7 @@ public class AgentChatClientUnitTest
         result[2].Id.Should().Be("Default");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void OrderAgentsForCreation_DefaultWithDelegations_TreatedAsDefault()
     {
         // An agent that is both default AND has delegations should appear in the default bucket
@@ -109,7 +109,7 @@ public class AgentChatClientUnitTest
 
     #region FindCyclicDelegations
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void FindCyclicDelegations_NoDelegations_ReturnsEmpty()
     {
         var configs = new List<AgentConfiguration>
@@ -123,7 +123,7 @@ public class AgentChatClientUnitTest
         result.Should().BeEmpty();
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void FindCyclicDelegations_OneWayDelegation_ReturnsEmpty()
     {
         var configs = new List<AgentConfiguration>
@@ -137,7 +137,7 @@ public class AgentChatClientUnitTest
         result.Should().BeEmpty();
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void FindCyclicDelegations_MutualDelegation_ReturnsBoth()
     {
         var configs = new List<AgentConfiguration>
@@ -152,7 +152,7 @@ public class AgentChatClientUnitTest
         result.Select(a => a.Id).Should().BeEquivalentTo("A", "B");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void FindCyclicDelegations_Chain_ReturnsEmpty()
     {
         var configs = new List<AgentConfiguration>
@@ -167,7 +167,7 @@ public class AgentChatClientUnitTest
         result.Should().BeEmpty();
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void FindCyclicDelegations_MixedCyclicAndNonCyclic_ReturnsOnlyCyclic()
     {
         var configs = new List<AgentConfiguration>
@@ -184,7 +184,7 @@ public class AgentChatClientUnitTest
         result.Select(a => a.Id).Should().BeEquivalentTo("A", "B");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void FindCyclicDelegations_EmptyInput_ReturnsEmpty()
     {
         var result = AgentChatClient.FindCyclicDelegations(new List<AgentConfiguration>()).ToList();
@@ -192,7 +192,7 @@ public class AgentChatClientUnitTest
         result.Should().BeEmpty();
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void FindCyclicDelegations_DelegationsWithNoMatchingTarget_ReturnsEmpty()
     {
         var configs = new List<AgentConfiguration>

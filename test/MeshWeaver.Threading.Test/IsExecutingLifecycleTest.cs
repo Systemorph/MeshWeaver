@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
@@ -23,11 +23,11 @@ using MeshThread = MeshWeaver.AI.Thread;
 namespace MeshWeaver.Threading.Test;
 
 /// <summary>
-/// 🚨 Repro for "chat stuck on Generating response..." — a single end-to-end
+/// ðŸš¨ Repro for "chat stuck on Generating response..." â€” a single end-to-end
 /// chat round that reactively asserts the full IsExecuting lifecycle.
 ///
 /// Drives the GUI handler (<see cref="ThreadSubmission.Submit"/>) and observes
-/// via <c>client.GetWorkspace().GetMeshNodeStream(path)</c> — the same reactive
+/// via <c>client.GetWorkspace().GetMeshNodeStream(path)</c> â€” the same reactive
 /// handle the Blazor view holds; if the streaming pipeline hangs, the
 /// IsExecuting=false wait times out and the test fails loud.
 /// </summary>
@@ -51,7 +51,7 @@ public class IsExecutingLifecycleTest(ITestOutputHelper output) : MonolithMeshTe
         return base.ConfigureClient(configuration).AddData();
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task SingleMessage_IsExecuting_FlipsTrueThenFalse_WithRealResponse()
     {
         var ct = new CancellationTokenSource(60.Seconds()).Token;
@@ -65,7 +65,7 @@ public class IsExecutingLifecycleTest(ITestOutputHelper output) : MonolithMeshTe
         var threadPath = createDelivery.Message.Node!.Path!;
 
         // Warm up the remote stream subscription BEFORE submit so the
-        // IsExecuting=true→false transition is captured. Same pattern
+        // IsExecuting=trueâ†’false transition is captured. Same pattern
         // ThreadFlow.SubmitAndWait uses.
         var baselineThread = await workspace.GetMeshNodeStream(threadPath)
             .Select(n => n.Content as MeshThread)
@@ -76,11 +76,11 @@ public class IsExecutingLifecycleTest(ITestOutputHelper output) : MonolithMeshTe
         baselineThread!.IsExecuting.Should().BeFalse("thread should not be executing yet");
 
         // Subscribe to the executing transition BEFORE submit. Wait for the
-        // committed `Executing` state — NOT just any non-Idle state — because
+        // committed `Executing` state â€” NOT just any non-Idle state â€” because
         // `IsExecuting` is true during the transient `StartingExecution`
         // claim window where `ActiveMessageId` is still null (the responseMsgId
         // is generated downstream by DispatchAfterClaim's commit, which flips
-        // Status → Executing AND stamps ActiveMessageId in one update).
+        // Status â†’ Executing AND stamps ActiveMessageId in one update).
         var executingTask = workspace.GetMeshNodeStream(threadPath)
             .Select(n => n.Content as MeshThread)
             .Where(t => t is { Status: ThreadExecutionStatus.Executing })
@@ -120,7 +120,7 @@ public class IsExecutingLifecycleTest(ITestOutputHelper output) : MonolithMeshTe
             timeout: 15.Seconds()).FirstAsync().ToTask(ct);
 
         finalMessage.Text.Should().Contain("I received",
-            "the Echo agent's streaming reply must reach the response cell — "
+            "the Echo agent's streaming reply must reach the response cell â€” "
             + "if this fails with the placeholder, the streaming Task.Run hung "
             + "but the parent flipped IsExecuting=false anyway, masking a real bug.");
 

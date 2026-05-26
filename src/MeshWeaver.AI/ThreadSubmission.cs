@@ -496,13 +496,24 @@ internal static class ThreadSubmissionServer
     public static IDisposable InstallServerWatcher(IMessageHub threadHub)
     {
         var logger = threadHub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
+        var threadPath = threadHub.Address.Path;
         return threadHub.GetWorkspace().GetMeshNodeStream()
+            .Do(n =>
+            {
+                if (n?.Content is MeshThread t)
+                {
+                    logger?.LogDebug(
+                        "[SubmissionWatcher] OBSERVE {ThreadPath} status={Status} pending={Pending} ingested={Ingested} userIds={UserIds}",
+                        threadPath, t.Status, t.PendingUserMessages.Count,
+                        t.IngestedMessageIds.Count, t.UserMessageIds.Count);
+                }
+            })
             .Select(NeedsDispatch)
             .Where(needs => needs)
             .Subscribe(
                 _ =>
                 {
-                    var threadPath = threadHub.Address.Path;
+                    logger?.LogDebug("[SubmissionWatcher] DISPATCH_TRIGGERED for {ThreadPath}", threadPath);
                     var workspace = threadHub.GetWorkspace();
                     workspace.GetMeshNodeStream().Update(node =>
                     {
@@ -511,6 +522,9 @@ internal static class ThreadSubmissionServer
                             || t.Status != ThreadExecutionStatus.Idle
                             || t.PendingUserMessages.IsEmpty)
                         {
+                            logger?.LogDebug(
+                                "[SubmissionWatcher] CLAIM_SKIPPED {ThreadPath} status={Status} pending={Pending} (re-check inside lambda)",
+                                threadPath, t?.Status, t?.PendingUserMessages.Count);
                             return node; // already running or no longer pending
                         }
                         logger?.LogInformation(
@@ -538,7 +552,7 @@ internal static class ThreadSubmissionServer
                 },
                 ex => logger?.LogWarning(ex,
                     "[SubmissionWatcher] stream errored for {ThreadPath}",
-                    threadHub.Address.Path));
+                    threadPath));
     }
 
     /// <summary>

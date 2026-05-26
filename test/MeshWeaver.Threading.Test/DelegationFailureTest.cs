@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
@@ -26,7 +26,7 @@ namespace MeshWeaver.Threading.Test;
 /// Verifies that a delegation that cannot complete (broken target) doesn't
 /// trap the parent thread when the user cancels. Submission goes through
 /// <see cref="ThreadSubmission.Submit"/>; cancel flips
-/// <c>RequestedCancellationAt</c> via the thread's MeshNode stream — same
+/// <c>RequestedCancellationAt</c> via the thread's MeshNode stream â€” same
 /// pattern the GUI's Stop button uses.
 /// </summary>
 public class DelegationFailureTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
@@ -49,7 +49,7 @@ public class DelegationFailureTest(ITestOutputHelper output) : MonolithMeshTestB
         return base.ConfigureClient(configuration).AddLayoutClient();
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task SubmitMessage_WithCancellation_DoesNotHangForever()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;

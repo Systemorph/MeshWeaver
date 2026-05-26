@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Linq;
 using FluentAssertions;
 using MeshWeaver.AI;
@@ -19,10 +19,10 @@ public class ModelProviderEmissionTest
     /// Config with ApiKey + Endpoint + Models emits a single ModelProvider node
     /// carrying the credentials (not WithPublicRead).
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void Emits_OneModelProviderPerCatalogSource_WithFullCredentials()
     {
-        // Config → ModelProvider node: ApiKey, Endpoint, Models all flow in.
+        // Config â†’ ModelProvider node: ApiKey, Endpoint, Models all flow in.
         // ModelProvider is NOT WithPublicRead, so the key is only visible to
         // callers with Permission.Api on the root namespace (system / admin).
         // Public LanguageModel siblings still carry no key (asserted below).
@@ -52,7 +52,7 @@ public class ModelProviderEmissionTest
     /// Per-model LanguageModel nodes are publicly readable: they reference the
     /// provider but carry no ApiKey/secret of their own.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void LanguageModelChildren_HaveProviderRefAndNoSecret()
     {
         var nodes = MakeProvider(
@@ -75,7 +75,7 @@ public class ModelProviderEmissionTest
             var def = node.Content.Should().BeOfType<ModelDefinition>().Subject;
             def.Provider.Should().Be("Anthropic");
             def.ProviderRef.Should().Be("_Provider/Anthropic");
-            def.ApiKeySecretRef.Should().BeNull("LanguageModel nodes are publicly readable — no secrets here");
+            def.ApiKeySecretRef.Should().BeNull("LanguageModel nodes are publicly readable â€” no secrets here");
         });
     }
 
@@ -83,7 +83,7 @@ public class ModelProviderEmissionTest
     /// Empty config section (no ApiKey, Endpoint, or Models) emits neither
     /// ModelProvider nor LanguageModel nodes.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void NoSignal_NoProviderNodeEmitted()
     {
         // Empty config section + no api key + no endpoint = nothing to emit.
@@ -101,7 +101,7 @@ public class ModelProviderEmissionTest
     /// Partial config (Endpoint only, no Models list) still emits a ModelProvider
     /// so user extensions can attach LanguageModel children to it.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void ProviderNodeEmitted_EvenIfModelsListEmpty_WhenEndpointOrKeyPresent()
     {
         // A partially-configured section (endpoint only) still emits a

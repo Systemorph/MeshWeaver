@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
@@ -26,7 +26,7 @@ namespace MeshWeaver.Threading.Test;
 /// <summary>
 /// Cancellation through the canonical path: <see cref="ThreadSubmission.Submit"/>
 /// dispatches the round; the cancel trigger is a stream.Update on the thread's
-/// own MeshNode (flipping <c>RequestedCancellationAt</c>) — same pattern the
+/// own MeshNode (flipping <c>RequestedCancellationAt</c>) â€” same pattern the
 /// Stop button uses in the GUI. State is observed via
 /// <c>client.GetWorkspace().GetMeshNodeStream(path)</c>.
 /// </summary>
@@ -50,7 +50,7 @@ public class CancelThreadExecutionTest(ITestOutputHelper output) : MonolithMeshT
         return base.ConfigureClient(configuration).AddLayoutClient();
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task CancelStream_StopsExecutionAndMarksAsCancelled()
     {
         var ct = new CancellationTokenSource(30.Seconds()).Token;
@@ -64,7 +64,7 @@ public class CancelThreadExecutionTest(ITestOutputHelper output) : MonolithMeshT
         var threadPath = createResp.Message.Node!.Path!;
 
         // Warm up the remote stream subscription BEFORE submit so the
-        // IsExecuting=true→false transition is captured. Same pattern
+        // IsExecuting=trueâ†’false transition is captured. Same pattern
         // IsExecutingLifecycleTest uses. Without this warm-up, the test races
         // the first cache.GetStream call (opened by _Exec's round watcher)
         // against the submission watcher's claim emission, and the chain
@@ -77,7 +77,7 @@ public class CancelThreadExecutionTest(ITestOutputHelper output) : MonolithMeshT
             .ToTask(ct);
         baselineThread!.IsExecuting.Should().BeFalse("thread should not be executing yet");
 
-        // Submit via GUI handler — server generates message ids.
+        // Submit via GUI handler â€” server generates message ids.
         ThreadSubmission.Submit(new SubmitContext
         {
             Hub = client,
@@ -95,16 +95,16 @@ public class CancelThreadExecutionTest(ITestOutputHelper output) : MonolithMeshT
             .ToTask(ct);
         var responseMsgId = executing!.ActiveMessageId!;
 
-        // Wait until the response cell shows "Generating response..." — the
+        // Wait until the response cell shows "Generating response..." â€” the
         // deterministic "streaming-loop-is-armed" signal: ExecuteMessageAsync
         // emits this AFTER setting the CTS and immediately before starting the
-        // streaming task. Cancelling earlier finds a null CTS → no-op.
+        // streaming task. Cancelling earlier finds a null CTS â†’ no-op.
         //
         // The server-flow path creates the response cell asynchronously after
         // flipping IsExecuting=true, so a fresh subscribe may race against the
         // CreateNode and hit a routing NotFound. RetryWhen with a short delay
         // covers that gap (same pattern the per-node hub's UpdateRemote uses
-        // internally — wait for the cell to materialise).
+        // internally â€” wait for the cell to materialise).
         await Observable.Defer(() => workspace.GetMeshNodeStream($"{threadPath}/{responseMsgId}"))
             .Select(n => (n.Content as ThreadMessage)?.Text ?? "")
             .Where(t => t.StartsWith("Generating response", StringComparison.Ordinal))
@@ -118,7 +118,7 @@ public class CancelThreadExecutionTest(ITestOutputHelper output) : MonolithMeshT
         var responseStream = workspace.GetMeshNodeStream($"{threadPath}/{responseMsgId}");
         Output.WriteLine("Streaming confirmed armed (response cell shows 'Generating response...')");
 
-        // Cancel via stream.Update — same path the Stop button uses (see
+        // Cancel via stream.Update â€” same path the Stop button uses (see
         // RequestViaStreamUpdate.md). Awaiting the post-update emission asserts
         // the write actually landed on the per-thread hub.
         var cancelled = await workspace.GetMeshNodeStream(threadPath)
@@ -143,7 +143,7 @@ public class CancelThreadExecutionTest(ITestOutputHelper output) : MonolithMeshT
         // by now. The monotonic-text guard in PushToResponseMessage can keep
         // the placeholder when cancel happens before ~500ms of streaming
         // (snapshot lengths stay below the placeholder's 22 chars), so we
-        // tolerate missing partial text — the core cancel guarantee is the
+        // tolerate missing partial text â€” the core cancel guarantee is the
         // Settled check above. If we DO see partial text, confirm it didn't
         // emit the FULL Long response (cancel must have stopped streaming).
         var partial = await responseStream
@@ -168,7 +168,7 @@ public class CancelThreadExecutionTest(ITestOutputHelper output) : MonolithMeshT
         }
         else
         {
-            Output.WriteLine("Response cell stayed on placeholder — cancel preempted streaming before " +
+            Output.WriteLine("Response cell stayed on placeholder â€” cancel preempted streaming before " +
                              "snapshot length exceeded the monotonic guard threshold. Cancel still worked " +
                              "(Settled=true above).");
         }

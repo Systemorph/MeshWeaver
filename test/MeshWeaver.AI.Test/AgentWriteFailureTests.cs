@@ -84,7 +84,7 @@ public class AgentWriteFailureTests : MonolithMeshTestBase
     // INVARIANT: every failure path returns a non-empty speaking error
     // =========================================================================
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task NoTool_EverReturnsEmpty_OnAnyInput()
     {
         var plugin = CreatePlugin();
@@ -112,7 +112,7 @@ public class AgentWriteFailureTests : MonolithMeshTestBase
     // CREATE â€” failure modes
     // =========================================================================
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Create_InvalidJson_ReturnsSpeakingError()
     {
         var plugin = CreatePlugin();
@@ -123,14 +123,14 @@ public class AgentWriteFailureTests : MonolithMeshTestBase
         result.Should().Contain("escape", because: "hint helps the agent on the common root cause");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Create_NullLiteral_ReturnsError()
     {
         var plugin = CreatePlugin();
         (await plugin.Create("null")).Should().Contain("null");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Create_MissingName_ReturnsSpeakingError()
     {
         var plugin = CreatePlugin();
@@ -147,7 +147,7 @@ public class AgentWriteFailureTests : MonolithMeshTestBase
         result.Should().Contain("name", because: "error must call out the field that's missing");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Create_SchemaInvalidContent_ReturnsErrorWithSchema()
     {
         var plugin = CreatePlugin();
@@ -172,7 +172,7 @@ public class AgentWriteFailureTests : MonolithMeshTestBase
     // UPDATE â€” failure modes (each entry failure must NOT halt the batch)
     // =========================================================================
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Update_InvalidJson_ReturnsSpeakingError()
     {
         var plugin = CreatePlugin();
@@ -180,7 +180,7 @@ public class AgentWriteFailureTests : MonolithMeshTestBase
         result.Should().StartWith("Invalid JSON:");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Update_EmptyArray_ReturnsNoNodesProvided()
     {
         var plugin = CreatePlugin();
@@ -188,7 +188,7 @@ public class AgentWriteFailureTests : MonolithMeshTestBase
         result.Should().Be("No nodes provided.");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Update_ArrayWithNullEntry_ReportsErrorForEntry()
     {
         var plugin = CreatePlugin();
@@ -197,7 +197,7 @@ public class AgentWriteFailureTests : MonolithMeshTestBase
         result.Should().Contain("null", because: "error must explain the null entry");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Update_MissingId_ReturnsSpeakingError()
     {
         var plugin = CreatePlugin();
@@ -212,7 +212,7 @@ public class AgentWriteFailureTests : MonolithMeshTestBase
         result.Should().Contain("id", because: "error must pinpoint the missing id");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Update_MissingName_ReturnsSpeakingError()
     {
         var plugin = CreatePlugin();
@@ -230,7 +230,7 @@ public class AgentWriteFailureTests : MonolithMeshTestBase
         result.Should().Contain("name", because: "empty name corrupts UI â€” error must call it out");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Update_MissingNodeType_ReturnsSpeakingError()
     {
         var plugin = CreatePlugin();
@@ -246,7 +246,7 @@ public class AgentWriteFailureTests : MonolithMeshTestBase
         result.Should().Contain("Patch", because: "error should direct the agent to Patch for partial updates");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Update_NullContent_ReturnsErrorWithSchema()
     {
         var plugin = CreatePlugin();
@@ -269,7 +269,7 @@ public class AgentWriteFailureTests : MonolithMeshTestBase
         (await plugin.Get($"@ACME/{uniqueId}")).Should().Contain("Widget");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Update_SchemaInvalidContent_ReturnsErrorWithSchema()
     {
         var plugin = CreatePlugin();
@@ -295,7 +295,7 @@ public class AgentWriteFailureTests : MonolithMeshTestBase
         result.Should().Contain("price");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Update_Batch_MixedValidAndInvalid_ReportsEachOutcome()
     {
         var plugin = CreatePlugin();
@@ -321,7 +321,7 @@ public class AgentWriteFailureTests : MonolithMeshTestBase
     // PATCH â€” failure modes
     // =========================================================================
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Patch_NonExistentPath_ReturnsSpeakingError()
     {
         var plugin = CreatePlugin();
@@ -329,7 +329,7 @@ public class AgentWriteFailureTests : MonolithMeshTestBase
         result.Should().Contain("not found");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Patch_FieldsIsJsonArray_ReturnsError()
     {
         var plugin = CreatePlugin();
@@ -342,7 +342,7 @@ public class AgentWriteFailureTests : MonolithMeshTestBase
         result.Should().Contain("JSON object", because: "error must explain what shape is expected");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Patch_FieldsInvalidJson_ReturnsSpeakingError()
     {
         var plugin = CreatePlugin();
@@ -358,7 +358,7 @@ public class AgentWriteFailureTests : MonolithMeshTestBase
             because: $"broken JSON must surface a real error, got: '{result}'");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Patch_ExplicitNullContent_RejectedWithSchema()
     {
         var plugin = CreatePlugin();
@@ -377,7 +377,7 @@ public class AgentWriteFailureTests : MonolithMeshTestBase
             because: "rejected patch must not overwrite persisted data");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Patch_SchemaInvalidContent_RejectedWithSchema()
     {
         var plugin = CreatePlugin();
@@ -396,7 +396,7 @@ public class AgentWriteFailureTests : MonolithMeshTestBase
             because: "shape-broken patch must not overwrite content");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Patch_EmptyName_Rejected()
     {
         var plugin = CreatePlugin();
@@ -410,7 +410,7 @@ public class AgentWriteFailureTests : MonolithMeshTestBase
         result.Should().Contain("empty");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Patch_EmptyFieldsObject_DoesNotBreakStream()
     {
         var plugin = CreatePlugin();
@@ -431,7 +431,7 @@ public class AgentWriteFailureTests : MonolithMeshTestBase
     // STREAM HEALTH â€” rejected writes must leave persisted state unchanged
     // =========================================================================
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task RejectedWrites_DoNotCorruptPersistedNode()
     {
         var plugin = CreatePlugin();

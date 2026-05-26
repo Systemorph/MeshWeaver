@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
@@ -28,7 +28,7 @@ namespace MeshWeaver.Threading.Test;
 ///   <item><see cref="ThreadSubmission.CreateThreadAndSubmit"/> creates the thread
 ///     with the first user message pre-seeded; the server watcher dispatches.</item>
 ///   <item>State is observed via <c>client.GetWorkspace().GetMeshNodeStream(path)</c>
-///     — same reactive handle the Blazor view holds.</item>
+///     â€” same reactive handle the Blazor view holds.</item>
 /// </list>
 /// </summary>
 public class AutoExecuteFlowTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
@@ -51,7 +51,7 @@ public class AutoExecuteFlowTest(ITestOutputHelper output) : MonolithMeshTestBas
         return base.ConfigureClient(configuration).AddData();
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task PortalFlow_CreateThread_CreateCells_Submit_ResponseWritten()
     {
         var ct = new CancellationTokenSource(30.Seconds()).Token;
@@ -77,7 +77,7 @@ public class AutoExecuteFlowTest(ITestOutputHelper output) : MonolithMeshTestBas
         Output.WriteLine($"Response: {response.Text[..Math.Min(80, response.Text.Length)]}");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task PortalFlow_ResponseCell_GetsUpdatedByExecution()
     {
         var ct = new CancellationTokenSource(30.Seconds()).Token;

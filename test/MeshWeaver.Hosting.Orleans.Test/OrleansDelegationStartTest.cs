@@ -56,7 +56,7 @@ public class OrleansDelegationStartTest(ITestOutputHelper output) : OrleansShare
     /// WatchForExecution should detect fresh execution and start streaming.
     /// Response cell should have agent text when execution completes.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Delegation_CreateCellsThenThread_ExecutionStartsAndCompletes()
     {
         SharedOrleansFixture.SwappableFactory.SetInner(new DelegationEchoChatClientFactory());

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
@@ -26,14 +26,14 @@ namespace MeshWeaver.Threading.Test;
 /// <summary>
 /// Proves that the control-plane patch pattern (single-field stream.Update
 /// observed by the owning hub's watcher) is race-free under concurrent
-/// callers — the invariant the thread-trigger removal depends on.
+/// callers â€” the invariant the thread-trigger removal depends on.
 ///
 /// Each test exercises a different control-plane field
 /// (<see cref="MeshThread.PendingUserMessages"/>,
 /// <see cref="MeshThread.RequestedResubmit"/>,
 /// <see cref="MeshThread.RequestedDeleteFromMessageId"/>,
 /// <see cref="MeshThread.PendingFailures"/>) and asserts that the
-/// post-watcher state is consistent — no duplicate ids, no doubled error
+/// post-watcher state is consistent â€” no duplicate ids, no doubled error
 /// cells, no second dispatch of the same round.
 /// </summary>
 public class ThreadControlPlaneConcurrencyTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
@@ -56,7 +56,7 @@ public class ThreadControlPlaneConcurrencyTest(ITestOutputHelper output) : Monol
         return base.ConfigureClient(configuration).AddData();
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task ConcurrentSubmissions_ProduceExactlyOneUserMessagePerSubmit()
     {
         var ct = new CancellationTokenSource(90.Seconds()).Token;
@@ -90,14 +90,14 @@ public class ThreadControlPlaneConcurrencyTest(ITestOutputHelper output) : Monol
             .ToTask(ct);
 
         final!.UserMessageIds.Count.Should().Be(N,
-            "exactly N submissions must produce N user message ids — no duplicates from re-emission, no drops from race");
+            "exactly N submissions must produce N user message ids â€” no duplicates from re-emission, no drops from race");
         final.UserMessageIds.Distinct().Count().Should().Be(N,
             "user message ids must be unique");
         final.IngestedMessageIds.Count.Should().Be(N,
             "all N user messages must be ingested by the watcher");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task ConcurrentResubmits_ConvergeToSingleConsistentState()
     {
         var ct = new CancellationTokenSource(90.Seconds()).Token;
@@ -119,7 +119,7 @@ public class ThreadControlPlaneConcurrencyTest(ITestOutputHelper output) : Monol
             ct);
         var msg2 = afterSecond.UserMessageIds[1];
 
-        // Concurrent resubmits from two callers — both patch the SAME
+        // Concurrent resubmits from two callers â€” both patch the SAME
         // RequestedResubmit field. RFC-7396 single-field merge: last write
         // wins. The watcher processes whoever lands second.
         var raceA = Task.Run(() => ThreadSubmission.ApplyResubmit(client, threadPath, msg1, "first-rev", null, null), ct);
@@ -142,7 +142,7 @@ public class ThreadControlPlaneConcurrencyTest(ITestOutputHelper output) : Monol
             "no duplicate user ids in the converged state");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task DeleteFromMessage_DuringNewSubmit_ProducesConsistentList()
     {
         var ct = new CancellationTokenSource(90.Seconds()).Token;
@@ -174,7 +174,7 @@ public class ThreadControlPlaneConcurrencyTest(ITestOutputHelper output) : Monol
             .ToTask(ct);
 
         final!.RequestedDeleteFromMessageId.Should().BeNull("delete intent must be cleared after the watcher applies it");
-        // Either msg1 was deleted (and any subsequent ids dropped — Messages doesn't contain msg1),
+        // Either msg1 was deleted (and any subsequent ids dropped â€” Messages doesn't contain msg1),
         // OR the submit landed atomically and msg1 is still in Messages alongside msg2's ids.
         // Both are valid; the invariant is no duplicates and no orphan ids.
         final.Messages.Distinct().Count().Should().Be(final.Messages.Count,
@@ -183,7 +183,7 @@ public class ThreadControlPlaneConcurrencyTest(ITestOutputHelper output) : Monol
             "no duplicate user ids");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task FailureRecord_ConcurrentWithSubmit_ProducesExactlyOneErrorCell()
     {
         var ct = new CancellationTokenSource(90.Seconds()).Token;
@@ -230,7 +230,7 @@ public class ThreadControlPlaneConcurrencyTest(ITestOutputHelper output) : Monol
             "an error cell id must follow the failed user id in Messages");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task StartingExecution_NoOpStreamUpdate_DoesNotReDispatch()
     {
         var ct = new CancellationTokenSource(90.Seconds()).Token;
@@ -246,13 +246,13 @@ public class ThreadControlPlaneConcurrencyTest(ITestOutputHelper output) : Monol
         var messagesAfterFirstRound = afterRound.Messages.Count;
 
         // Drive a no-op stream.Update on the thread. The submission watcher
-        // and _Exec round watcher must NOT re-dispatch — Messages.Count must
+        // and _Exec round watcher must NOT re-dispatch â€” Messages.Count must
         // stay the same.
         await workspace.GetMeshNodeStream(threadPath).Update(node => node)
             .Take(1).Timeout(10.Seconds()).ToTask(ct);
 
         // Poll the thread state for 2 seconds via Observable.Interval (no
-        // raw Task.Delay) — if a re-dispatch fires, the message count grows
+        // raw Task.Delay) â€” if a re-dispatch fires, the message count grows
         // and we see it; otherwise the polling completes cleanly.
         var maxObservedCount = await Observable.Interval(200.Milliseconds())
             .Take(10)
@@ -264,7 +264,7 @@ public class ThreadControlPlaneConcurrencyTest(ITestOutputHelper output) : Monol
             .ToTask(ct);
 
         maxObservedCount.Should().Be(messagesAfterFirstRound,
-            "Messages.Count must not grow after a no-op stream.Update — observing growth means a spurious re-dispatch");
+            "Messages.Count must not grow after a no-op stream.Update â€” observing growth means a spurious re-dispatch");
     }
 
     private async Task<string> CreateThreadAsync(IMessageHub client, string title, CancellationToken ct)

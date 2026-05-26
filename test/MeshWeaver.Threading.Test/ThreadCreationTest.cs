@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -43,21 +43,21 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         return base.ConfigureClient(configuration);
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task CreateThread_ViaCreateNodeRequest_UsesThreadPartitionAndSpeakingId()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
 
-        // Arrange â€” create context node so the node hub exists
+        // Arrange Ã¢â‚¬â€ create context node so the node hub exists
         var contextPath = "ACME";
         await NodeFactory.CreateNode(
             new MeshNode(contextPath) { Name = "ACME Corp", NodeType = "Markdown" });
 
-        // Act â€” send CreateNodeRequest to the context node's hub (production path)
+        // Act Ã¢â‚¬â€ send CreateNodeRequest to the context node's hub (production path)
         var client = GetClient();
         var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Hello, can you help me with this project?")), o => o.WithTarget(new Address(contextPath))).FirstAsync().ToTask();
 
-        // Assert â€” response
+        // Assert Ã¢â‚¬â€ response
         response.Message.Success.Should().BeTrue(response.Message.Error);
         response.Message.Node?.Path.Should().NotBeNullOrEmpty();
         response.Message.Node?.Name.Should().NotBeNullOrEmpty();
@@ -65,18 +65,18 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         var threadPath = response.Message.Node?.Path!;
         Output.WriteLine($"Created thread at: {threadPath}");
 
-        // Assert â€” path uses _Thread partition
+        // Assert Ã¢â‚¬â€ path uses _Thread partition
         threadPath.Should().Contain($"/{ThreadNodeType.ThreadPartition}/",
             "thread path must use _Thread partition: {namespace}/_Thread/{speakingId}");
         threadPath.Should().StartWith($"{contextPath}/",
             "thread path must start with the context node path");
 
-        // Assert â€” speaking ID is human-readable (derived from message text)
+        // Assert Ã¢â‚¬â€ speaking ID is human-readable (derived from message text)
         var speakingId = threadPath.Split('/').Last();
         speakingId.Should().Contain("hello",
             "speaking ID should be derived from the message text");
 
-        // Assert â€” retrieve node and verify MainNode (satellite auto-set, stream read)
+        // Assert Ã¢â‚¬â€ retrieve node and verify MainNode (satellite auto-set, stream read)
         var node = await ReadNodeAsync(threadPath, ct);
         node.Should().NotBeNull("thread node should be retrievable");
         node!.NodeType.Should().Be(ThreadNodeType.NodeType);
@@ -85,22 +85,22 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         node.MainNode.Should().NotBe(node.Path,
             "satellite MainNode must NOT be self-referencing");
 
-        // Assert â€” content is a MeshThread, and MainNode points to context
+        // Assert Ã¢â‚¬â€ content is a MeshThread, and MainNode points to context
         node.Content.Should().BeOfType<MeshThread>();
         node.MainNode.Should().Be(contextPath);
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task CreateThread_ViaCreateNodeRequest_OnDifferentContextNode()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
 
-        // Arrange â€” create a different context node
+        // Arrange Ã¢â‚¬â€ create a different context node
         var contextPath = "TestProject";
         await NodeFactory.CreateNode(
             new MeshNode(contextPath) { Name = "Test Project", NodeType = "Markdown" });
 
-        // Act â€” send to the context node's hub
+        // Act Ã¢â‚¬â€ send to the context node's hub
         var client = GetClient();
         var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "A thread on TestProject")), o => o.WithTarget(new Address(contextPath))).FirstAsync().ToTask();
 
@@ -112,7 +112,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
             "thread should be under {contextPath}/_Thread/{speakingId}");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task CreateThread_SpeakingId_IsDeterministicFromMessageText()
     {
         // Verify that GenerateSpeakingId produces readable slugs
@@ -130,7 +130,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         longId.Length.Should().BeLessThan(50, "speaking ID should be truncated for long messages");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task CreateThread_ViaIMeshCatalog_Succeeds()
     {
         // Arrange
@@ -154,7 +154,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         createdNode.Content.Should().BeOfType<MeshThread>();
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task CreateThread_WithMessageAsChildNode_Succeeds()
     {
         // Arrange - Create thread and then add a message as a child node
@@ -211,7 +211,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         childContent.Text.Should().Be("Hello, world!");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task CreateThread_CanBeRetrieved()
     {
         // Arrange
@@ -243,7 +243,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task GetDataRequest_ToNonExistentNode_ReturnsErrorNotEndlessMessages()
     {
         // A malformed path that mimics the bug. Posted through the CLIENT hub
-        // (same path the GUI takes) — the routing layer must reject within the
+        // (same path the GUI takes) â€” the routing layer must reject within the
         // timeout, not spin forever.
         var nonExistentPath = "User/Roland/User/Roland/IOvAlUVOUUubAUdRoDaPwQ";
         var client = GetClient();
@@ -267,7 +267,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task GetDataRequest_ToNonExistentThread_ReturnsErrorNotEndlessMessages()
     {
         // Thread path that looks valid but doesn't exist. Posted through the CLIENT
-        // — routing must complete (response or DeliveryFailure) within the timeout.
+        // â€” routing must complete (response or DeliveryFailure) within the timeout.
         var nonExistentPath = "User/TestUser/nonexistent123";
         var client = GetClient();
         var cts = new CancellationTokenSource(3.Seconds());
@@ -286,7 +286,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         }
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task CreateThread_AsDirectChild_FollowsPattern()
     {
         // Arrange - Verifies the flat thread pattern: {parentPath}/{threadId}
@@ -328,7 +328,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         await NodeFactory.DeleteNode(parentPath);
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task CreateThread_AsChildOfParent_Succeeds()
     {
         // Arrange - Test creating thread as direct child of a parent node
@@ -377,7 +377,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         await NodeFactory.DeleteNode(parentPath);
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void ThreadMessages_ToChatMessages_ConvertsCorrectly()
     {
         // Arrange - Use the extension method on a list of ThreadMessages
@@ -414,7 +414,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         chatMessages[1].AuthorName.Should().Be("Bot");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void ThreadMessages_ToChatMessages_ExcludesEditingPrompts()
     {
         // Arrange - EditingPrompt messages should be excluded from chat
@@ -452,7 +452,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         chatMessages[1].Text.Should().Be("Response");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void ThreadMessage_DefaultType_IsExecutedInput()
     {
         // Arrange & Act
@@ -466,7 +466,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         message.Type.Should().Be(ThreadMessageType.ExecutedInput);
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task CreateThreadMessage_WithDifferentTypes_PreservesType()
     {
         // Arrange
@@ -524,7 +524,7 @@ public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBa
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        // No PublicAdminAccess â€” permissions are enforced
+        // No PublicAdminAccess Ã¢â‚¬â€ permissions are enforced
         return ConfigureMeshBase(builder)
             .AddAI();
     }
@@ -546,7 +546,7 @@ public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBa
         await meshService.CreateNode(AssignmentNodeFactory.UserRole(ViewerUserId, "Viewer", "SecureProject")).FirstAsync().ToTask();
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task CreateThread_WithUpdatePermission_Succeeds()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -558,7 +558,7 @@ public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBa
         // SecurityService loads assignments via SyncedQuery which is eventually
         // consistent. On cold-start CI, the first HasPermissionAsync call can
         // return false before the synced query catches up. Stream-poll until
-        // admin has Create permission — replaces a hand-rolled while +
+        // admin has Create permission â€” replaces a hand-rolled while +
         // Task.Delay(100) loop.
         var hasCreate = await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
             .SelectMany(_ => Observable.FromAsync(() =>
@@ -573,7 +573,7 @@ public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBa
         await NodeFactory.CreateNode(
             new MeshNode("SecureProject") { Name = "Secure Project", NodeType = "Markdown" });
 
-        // Act â€” admin creates thread (has Update permission)
+        // Act Ã¢â‚¬â€ admin creates thread (has Update permission)
         var client = GetClient();
         var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("SecureProject", "Admin creating a thread")), o => o.WithTarget(new Address("SecureProject"))).FirstAsync().ToTask();
 
@@ -581,7 +581,7 @@ public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBa
         response.Message.Node?.Path.Should().Contain($"/{ThreadNodeType.ThreadPartition}/");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task CreateThread_WithoutUpdatePermission_IsDenied()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -590,7 +590,7 @@ public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBa
         TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = AdminUserId, Name = "Admin" });
 
         // Wait for the admin AccessAssignment from SetupAccessRightsAsync to land
-        // through SyncedQuery — same eventually-consistent race as the sibling
+        // through SyncedQuery â€” same eventually-consistent race as the sibling
         // test. Stream-poll until admin has Create permission.
         await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
             .SelectMany(_ => Observable.FromAsync(() =>
@@ -606,11 +606,11 @@ public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBa
         // Switch to viewer (Read+Execute only, no Update)
         TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = ViewerUserId, Name = "Viewer" });
 
-        // Act â€” viewer tries to create thread (lacks Thread permission)
+        // Act Ã¢â‚¬â€ viewer tries to create thread (lacks Thread permission)
         var client = GetClient();
         var act = async () => await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("SecureProject", "Viewer trying to create a thread")), o => o.WithTarget(new Address("SecureProject"))).FirstAsync().ToTask();
 
-        // Assert â€” should be denied (thrown as DeliveryFailureException)
+        // Assert Ã¢â‚¬â€ should be denied (thrown as DeliveryFailureException)
         var ex = await act.Should().ThrowAsync<Exception>();
         ex.Which.Message.Should().Contain("Access denied");
         Output.WriteLine($"Denial message: {ex.Which.Message}");

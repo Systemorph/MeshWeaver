@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -38,7 +38,7 @@ public class OrleansChatHistoryTest(ITestOutputHelper output) : OrleansSharedTes
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
         => await base.GetClientAsync($"hist-{name}-{Guid.NewGuid():N}", "TestUser");
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task ColdStart_AgentSeesAllPreviousMessages()
     {
         // Swap to echo factory
@@ -81,14 +81,14 @@ public class OrleansChatHistoryTest(ITestOutputHelper output) : OrleansSharedTes
             });
             Output.WriteLine("Append dispatched");
 
-            // Resolve message ids â€” last id is the new agent response cell.
+            // Resolve message ids Ã¢â‚¬â€ last id is the new agent response cell.
             var msgIds = await sixMessages;
             var responseMsgId = msgIds[^1];
             var responsePath = $"{ThreadPath}/{responseMsgId}";
             Output.WriteLine($"Response cell: {responseMsgId} (full list: [{string.Join(",", msgIds)}])");
 
             // Wait for the response cell text to fill in. Skip transient placeholders
-            // ("Allocating agent...", "Initializing...") â€” the EchoChatClient's final
+            // ("Allocating agent...", "Initializing...") Ã¢â‚¬â€ the EchoChatClient's final
             // streaming text always contains "received" once execution is done.
             ThreadMessage? responseMsg = null;
             for (var i = 0; i < 100; i++)

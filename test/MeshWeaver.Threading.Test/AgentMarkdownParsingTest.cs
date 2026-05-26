@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -33,7 +33,7 @@ public class AgentMarkdownParsingTest(ITestOutputHelper output) : MonolithMeshTe
     /// <summary>
     /// Verifies all built-in agent nodes load without exceptions.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void BuiltInAgentProvider_LoadsAllNodes()
     {
         var provider = new BuiltInAgentProvider();
@@ -55,7 +55,7 @@ public class AgentMarkdownParsingTest(ITestOutputHelper output) : MonolithMeshTe
     /// Verifies no agent instructions contain the literal "@path" placeholder
     /// which the AI agent would try to use as an actual address.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void AgentInstructions_NoLiteralPathPlaceholders()
     {
         var provider = new BuiltInAgentProvider();
@@ -92,7 +92,7 @@ public class AgentMarkdownParsingTest(ITestOutputHelper output) : MonolithMeshTe
         }
 
         violations.Should().BeEmpty(
-            "agent instructions must not contain literal '@path' — " +
+            "agent instructions must not contain literal '@path' â€” " +
             "the AI agent will try to use it as an actual address. " +
             "Use a real example node path instead.");
     }
@@ -101,7 +101,7 @@ public class AgentMarkdownParsingTest(ITestOutputHelper output) : MonolithMeshTe
     /// Verifies that @@ inline references in agent markdown point to nodes
     /// that actually exist (either as static nodes or in persistence).
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task AgentInstructions_InlineReferences_PointToExistingNodes()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -145,10 +145,10 @@ public class AgentMarkdownParsingTest(ITestOutputHelper output) : MonolithMeshTe
                         // Try reading via per-node stream
                         var found = await ReadNodeAsync(refPath, ct);
                         if (found == null)
-                            missingRefs.Add($"{node.Path}: @@{refPath} — node not found");
+                            missingRefs.Add($"{node.Path}: @@{refPath} â€” node not found");
                     }
                     // Content references (e.g., Doc/AI/content:inline-example.md) are harder
-                    // to validate statically — skip for now
+                    // to validate statically â€” skip for now
                 }
             }
         }

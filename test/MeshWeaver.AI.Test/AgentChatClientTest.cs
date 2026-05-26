@@ -1,4 +1,4 @@
-#pragma warning disable CS1591
+﻿#pragma warning disable CS1591
 
 using System;
 using System.IO;
@@ -46,7 +46,7 @@ public class AgentChatClientTest : MonolithMeshTestBase
             .AddFileSystemPersistence(TestDataPath)
             .AddGraph()
             // AddAI registers Agent NodeType + AgentConfiguration content type so
-            // .md files with `nodeType: Agent` deserialise into AgentConfiguration —
+            // .md files with `nodeType: Agent` deserialise into AgentConfiguration â€”
             // without this AgentPickerProjection.ProjectAgents filters them all out.
             .AddAI()
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
@@ -61,7 +61,7 @@ public class AgentChatClientTest : MonolithMeshTestBase
     /// - TodoAgent.md is located at ACME/Project/TodoAgent
     /// - Therefore TodoAgent should be found via the NodeType path, not via ancestors
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task AgentChatClient_InitializeAsync_FindsTodoAgentFromNodeTypeNamespace()
     {
         // Arrange - ACME/ProductLaunch has NodeType="ACME/Project", TodoAgent is at ACME/Project/TodoAgent
@@ -69,7 +69,7 @@ public class AgentChatClientTest : MonolithMeshTestBase
         var expectedNodeType = "ACME/Project";
         var expectedTodoAgentPath = "ACME/Project/TodoAgent";
 
-        // Static node read — no write before, catalog read is correct (no CQRS lag).
+        // Static node read â€” no write before, catalog read is correct (no CQRS lag).
         var productLaunchNode = await MeshQuery.QueryAsync<MeshNode>($"path:{contextPath}", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         productLaunchNode.Should().NotBeNull("ProductLaunch node should exist in test data");
 
@@ -80,7 +80,7 @@ public class AgentChatClientTest : MonolithMeshTestBase
         // Act - Create AgentChatClient using the mesh's service provider
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
 
-        // 1. Initialize then SetContext — SetContext re-inits the subscription with
+        // 1. Initialize then SetContext â€” SetContext re-inits the subscription with
         //    the context node's NodeType as nodeTypePath, which is what brings in
         //    agents at namespace:{NodeType} via scope:selfAndAncestors.
         chatClient.Initialize(contextPath);
@@ -114,13 +114,13 @@ public class AgentChatClientTest : MonolithMeshTestBase
     /// Tests that when at a node with generic NodeType (Markdown),
     /// agents are still found from the path hierarchy.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task AgentChatClient_InitializeAsync_FindsAgentsFromPathHierarchy()
     {
         // Arrange - Use a path that should have agents in hierarchy
         var contextPath = "ACME";
 
-        // Static node read — no write before, catalog read is correct (no CQRS lag).
+        // Static node read â€” no write before, catalog read is correct (no CQRS lag).
         var acmeNode = await MeshQuery.QueryAsync<MeshNode>($"path:{contextPath}", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         acmeNode.Should().NotBeNull("ACME node should exist in test data");
 

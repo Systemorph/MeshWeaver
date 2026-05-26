@@ -1,4 +1,4 @@
-#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
+﻿#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
 using System;
 using System.Collections.Generic;
@@ -68,7 +68,7 @@ public class MeshPluginTest : MonolithMeshTestBase
 
     #region CreateTools / CreateAllTools
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void CreateTools_ShouldReturnReadOnlyTools()
     {
         var mockChat = new MockAgentChat();
@@ -91,7 +91,7 @@ public class MeshPluginTest : MonolithMeshTestBase
         toolNames.Should().NotContain("Delete");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void CreateAllTools_ShouldIncludeWriteOperations()
     {
         var mockChat = new MockAgentChat();
@@ -122,7 +122,7 @@ public class MeshPluginTest : MonolithMeshTestBase
 
     #region Get
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Get_ExistingNode_ReturnsJsonWithNodeProperties()
     {
         var mockChat = new MockAgentChat();
@@ -150,7 +150,7 @@ public class MeshPluginTest : MonolithMeshTestBase
         doc.Should().NotBeNull();
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Get_NonExistentNode_ReturnsNotFound()
     {
         var mockChat = new MockAgentChat();
@@ -161,7 +161,7 @@ public class MeshPluginTest : MonolithMeshTestBase
         result.Should().StartWith("Not found");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Get_Children_ReturnsChildArray()
     {
         var mockChat = new MockAgentChat();
@@ -185,7 +185,7 @@ public class MeshPluginTest : MonolithMeshTestBase
         }
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Get_WithAtPrefix_ResolvesCorrectly()
     {
         var mockChat = new MockAgentChat();
@@ -214,7 +214,7 @@ public class MeshPluginTest : MonolithMeshTestBase
 
     #region Search
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Search_ByNodeType_ReturnsMatchingNodes()
     {
         var mockChat = new MockAgentChat();
@@ -236,7 +236,7 @@ public class MeshPluginTest : MonolithMeshTestBase
         }
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Search_WithBasePath_ScopesResults()
     {
         var mockChat = new MockAgentChat();
@@ -256,7 +256,7 @@ public class MeshPluginTest : MonolithMeshTestBase
         }
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Search_NoResults_ReturnsEmptyArray()
     {
         var mockChat = new MockAgentChat();
@@ -273,7 +273,7 @@ public class MeshPluginTest : MonolithMeshTestBase
 
     #region Create
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Create_ValidNode_ReturnsCreatedPath()
     {
         var mockChat = new MockAgentChat();
@@ -298,7 +298,7 @@ public class MeshPluginTest : MonolithMeshTestBase
         getResult.Should().NotStartWith("Not found");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Create_InvalidJson_ReturnsError()
     {
         var mockChat = new MockAgentChat();
@@ -309,7 +309,7 @@ public class MeshPluginTest : MonolithMeshTestBase
         result.Should().StartWith("Invalid JSON:");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Create_NullDeserialization_ReturnsError()
     {
         var mockChat = new MockAgentChat();
@@ -324,7 +324,7 @@ public class MeshPluginTest : MonolithMeshTestBase
 
     #region Update
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Update_ExistingNode_UpdatesSuccessfully()
     {
         var mockChat = new MockAgentChat();
@@ -364,7 +364,7 @@ public class MeshPluginTest : MonolithMeshTestBase
         getResult.Should().Contain("Updated Name");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Update_InvalidJson_ReturnsError()
     {
         var mockChat = new MockAgentChat();
@@ -375,7 +375,7 @@ public class MeshPluginTest : MonolithMeshTestBase
         result.Should().StartWith("Invalid JSON:");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Update_EmptyArray_ReturnsNoNodesProvided()
     {
         var mockChat = new MockAgentChat();
@@ -390,7 +390,7 @@ public class MeshPluginTest : MonolithMeshTestBase
 
     #region Delete
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Delete_ExistingNode_DeletesSuccessfully()
     {
         var mockChat = new MockAgentChat();
@@ -419,7 +419,7 @@ public class MeshPluginTest : MonolithMeshTestBase
         getResult.Should().StartWith("Not found");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Delete_InvalidJson_ReturnsError()
     {
         var mockChat = new MockAgentChat();
@@ -430,7 +430,7 @@ public class MeshPluginTest : MonolithMeshTestBase
         result.Should().StartWith("Invalid JSON:");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Delete_EmptyArray_ReturnsNoPathsProvided()
     {
         var mockChat = new MockAgentChat();
@@ -441,7 +441,7 @@ public class MeshPluginTest : MonolithMeshTestBase
         result.Should().Be("No paths provided.");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Delete_WithAtPrefix_ResolvesPath()
     {
         var mockChat = new MockAgentChat();
@@ -469,7 +469,7 @@ public class MeshPluginTest : MonolithMeshTestBase
 
     #region NavigateTo
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void NavigateTo_ValidPath_ReturnsNavigatingMessage()
     {
         var displayedControls = new List<LayoutAreaControl>();
@@ -486,7 +486,7 @@ public class MeshPluginTest : MonolithMeshTestBase
         displayedControls.Should().HaveCount(1, "DisplayLayoutArea should have been called once");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void NavigateTo_StripsAtPrefix()
     {
         var mockChat = new MockAgentChat();
@@ -502,7 +502,7 @@ public class MeshPluginTest : MonolithMeshTestBase
 
     #region CRUD Workflow (Create -> Get -> Update -> Delete)
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task FullCrudWorkflow_CreateGetUpdateDelete()
     {
         var mockChat = new MockAgentChat();
@@ -558,7 +558,7 @@ public class MeshPluginTest : MonolithMeshTestBase
 
     #region Write Tool Wiring
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task WriteToolWiring_WorkerAgent_GetsWriteTools()
     {
         // The Worker agent uses explicit Plugins (Mesh, WebSearch, etc.)
@@ -575,7 +575,7 @@ public class MeshPluginTest : MonolithMeshTestBase
             "Worker should have explicit plugins configured for write tool access");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task WriteToolWiring_AssistantAgent_DescriptionDoesNotMentionCreateOrDelete()
     {
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
@@ -605,7 +605,7 @@ public class MeshPluginTest : MonolithMeshTestBase
         => Mesh.GetHostedHub(new Address("ContentTest"),
             config => config.AddFileSystemContentCollection("test-content", _ => ContentTestPath));
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void ContentService_ListsCollectionConfigs()
     {
         var hub = GetContentHub();
@@ -617,7 +617,7 @@ public class MeshPluginTest : MonolithMeshTestBase
             "test-content collection should be registered");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task ContentService_BrowseRootFiles()
     {
         var hub = GetContentHub();
@@ -631,7 +631,7 @@ public class MeshPluginTest : MonolithMeshTestBase
         files.Should().Contain(f => f.Name == "data.json");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task ContentService_BrowseFolders()
     {
         var hub = GetContentHub();
@@ -644,7 +644,7 @@ public class MeshPluginTest : MonolithMeshTestBase
         folders.Should().Contain(f => f.Name == "images");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task ContentService_BrowseSubfolderFiles()
     {
         var hub = GetContentHub();
@@ -657,7 +657,7 @@ public class MeshPluginTest : MonolithMeshTestBase
         files.Should().Contain(f => f.Name == "logo.svg");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task ContentService_UploadAndBrowse()
     {
         var hub = GetContentHub();
@@ -679,7 +679,7 @@ public class MeshPluginTest : MonolithMeshTestBase
         await collection.DeleteFileAsync("/uploaded.txt");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task ContentCollection_GetFileContent()
     {
         var hub = GetContentHub();
@@ -695,7 +695,7 @@ public class MeshPluginTest : MonolithMeshTestBase
         text.Should().Contain("test file");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task ContentCollection_GetSubfolderFileContent()
     {
         var hub = GetContentHub();
@@ -748,7 +748,7 @@ public class MeshPluginTest : MonolithMeshTestBase
                 configuration = "config => config.WithContentType<ThisTypeDoesNotExist>()"
             }
         });
-        // Wrap "type" → "$type" for JsonPolymorphic
+        // Wrap "type" â†’ "$type" for JsonPolymorphic
         createJson = createJson.Replace("\"type\":", "\"$type\":");
         await plugin.Create(createJson);
 
@@ -822,7 +822,7 @@ public class MeshPluginTest : MonolithMeshTestBase
         }
         catch { /* expected */ }
 
-        // Get the NodeType itself — response should include compilationError.
+        // Get the NodeType itself â€” response should include compilationError.
         var result = await plugin.Get($"@{nodeTypePath}");
         result.Should().NotBeNullOrEmpty();
 

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -60,7 +60,7 @@ public class DelegationExecutionTest(ITestOutputHelper output) : MonolithMeshTes
         return response.Message.Node!.Path!;
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task DelegationSubThread_SubmitMessage_ProducesNavigableHierarchy()
     {
         var ct = new CancellationTokenSource(30.Seconds()).Token;
@@ -91,7 +91,7 @@ public class DelegationExecutionTest(ITestOutputHelper output) : MonolithMeshTes
         });
         Output.WriteLine($"Sub-thread created: {subThreadPath}");
 
-        // Submit via GUI handler — server generates message ids on the sub-thread.
+        // Submit via GUI handler â€” server generates message ids on the sub-thread.
         var subResponseMsgId = await ThreadFlow.SubmitAndWait(client, subThreadPath,
             "Find documents about reinsurance pricing models", contextPath: ContextPath).FirstAsync().ToTask(ct);
         Output.WriteLine($"Sub-thread response: {subResponseMsgId}");
@@ -120,7 +120,7 @@ public class DelegationExecutionTest(ITestOutputHelper output) : MonolithMeshTes
         subRespContent.Text.Should().NotBeNullOrEmpty();
 
         Output.WriteLine($"Sub-thread response: '{subRespContent.Text}'");
-        Output.WriteLine("Full hierarchy verified: parent → message → sub-thread → sub-messages");
+        Output.WriteLine("Full hierarchy verified: parent â†’ message â†’ sub-thread â†’ sub-messages");
     }
 
     #region Fake LLM

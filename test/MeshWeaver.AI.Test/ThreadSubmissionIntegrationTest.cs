@@ -1,4 +1,4 @@
-#pragma warning disable CS1591
+﻿#pragma warning disable CS1591
 
 using System;
 using System.Collections.Generic;
@@ -28,7 +28,7 @@ namespace MeshWeaver.AI.Test;
 /// Verifies that <c>Submit</c>/<c>CreateThreadAndSubmit</c>/<c>Resubmit</c> drive
 /// the server watcher to create output cells and commit ingested state,
 /// fully via Post + RegisterCallback + workspace stream subscriptions (no QueryAsync writes from the code path).
-/// Test assertions use QueryAsync/FirstAsync — allowed per CLAUDE.md for test code only.
+/// Test assertions use QueryAsync/FirstAsync â€” allowed per CLAUDE.md for test code only.
 /// </summary>
 public class ThreadSubmissionIntegrationTest : AITestBase
 {
@@ -55,9 +55,9 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         return base.ConfigureClient(configuration).AddLayoutClient();
     }
 
-    // ─── Submit into existing thread ───
+    // â”€â”€â”€ Submit into existing thread â”€â”€â”€
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Submit_ExistingThread_UserMessageIngested_OutputCellAppears()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -85,9 +85,9 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         committed.UserMessageIds.Should().ContainInOrder(committed.IngestedMessageIds[0]);
     }
 
-    // ─── CreateThreadAndSubmit ───
+    // â”€â”€â”€ CreateThreadAndSubmit â”€â”€â”€
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task CreateThreadAndSubmit_CreatesThreadAndFirstRound()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -116,9 +116,9 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         committed.Messages.Should().HaveCount(2);
     }
 
-    // ─── Batched ingestion ───
+    // â”€â”€â”€ Batched ingestion â”€â”€â”€
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Submit_ThreeRapidSubmissions_AllIngestedIntoOneRound()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -157,7 +157,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
 
         var final = await ReadThreadAsync(threadPath, ct);
         final.IngestedMessageIds.Should().HaveCount(3, "all three user messages should be ingested");
-        // Set-equal to UserMessageIds — dispatch is one user message per round
+        // Set-equal to UserMessageIds â€” dispatch is one user message per round
         // (Claude-Code-style turn structure), so the response cells interleave
         // with user cells in Messages, but UserMessageIds is the authoritative
         // list of user-input ids and must match IngestedMessageIds as a set.
@@ -165,9 +165,9 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         final.UserMessageIds.Should().HaveCount(3);
     }
 
-    // ─── Resubmit: truncates after the replayed message, new round dispatches ───
+    // â”€â”€â”€ Resubmit: truncates after the replayed message, new round dispatches â”€â”€â”€
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Resubmit_TruncatesAfterReplayedMessage_NewRoundCreated()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -197,7 +197,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
             NewUserText = "First, revised"
         });
 
-        // The intermediate "truncated" state (Messages=[u1], IngestedMessageIds=[]) is racy —
+        // The intermediate "truncated" state (Messages=[u1], IngestedMessageIds=[]) is racy â€”
         // the server watcher dispatches the new round almost immediately after the truncation
         // commits, often before we can observe it. Instead assert the end state: u1 is
         // ingested again, a NEW response cell (!= r1) follows, and IsExecuting is back to false.
@@ -214,9 +214,9 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         afterResubmit.UserMessageIds.Should().ContainSingle().Which.Should().Be(u1);
     }
 
-    // ─── Failure recovery: error renders as an assistant response cell ───
+    // â”€â”€â”€ Failure recovery: error renders as an assistant response cell â”€â”€â”€
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task SubmissionFailure_RecordsErrorAsOutputCell_InThreadMessages()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -259,9 +259,9 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         content.Text.Should().Contain("network timeout");
     }
 
-    // ─── Tool-call scenario: 3 rapid submits during a 1s "tool call" ───
+    // â”€â”€â”€ Tool-call scenario: 3 rapid submits during a 1s "tool call" â”€â”€â”€
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Submit_ThreeMessagesDuringActiveRound_QueuedThenBatchedIntoSecondRound()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -272,7 +272,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         // This gives us a deterministic window to submit u2/u3/u4 while round 1 is still executing.
         var slowModel = "slow-model";
 
-        // Submit u1 — triggers round 1.
+        // Submit u1 â€” triggers round 1.
         ThreadSubmission.Submit(new SubmitContext
         {
             Hub = client, ThreadPath = threadPath, UserText = "First",
@@ -306,7 +306,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         });
 
         // Observe: during round 1 execution, all three new user ids should appear in Messages
-        // and UserMessageIds, but NOT yet in IngestedMessageIds — the server holds them back
+        // and UserMessageIds, but NOT yet in IngestedMessageIds â€” the server holds them back
         // because the thread is busy.
         var pendingState = await WaitForThreadAsync(
             threadPath,
@@ -333,11 +333,11 @@ public class ThreadSubmissionIntegrationTest : AITestBase
 
         // Inbox-pattern dispatch: every entry in PendingUserMessages is drained
         // into a single round (one response cell per inbox drain). u1 lands while
-        // the thread is idle → round 1 drains {u1}, creates r1. u2/u3/u4 land
-        // during round 1 → they pile up in PendingUserMessages. When round 1
+        // the thread is idle â†’ round 1 drains {u1}, creates r1. u2/u3/u4 land
+        // during round 1 â†’ they pile up in PendingUserMessages. When round 1
         // ends, the watcher fires once and round 2 drains {u2, u3, u4} into a
         // single response cell r2. Final shape: [u1, r1, u2, u3, u4, r2].
-        // Not every input cell gets its own response cell — the design
+        // Not every input cell gets its own response cell â€” the design
         // explicitly batches mid-round submits into the next round.
         final.Messages.Should().HaveCount(6, "4 user cells + 2 response cells");
         final.Messages[0].Should().Be(u1, "u1 first");
@@ -346,12 +346,12 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         final.Messages.Should().Contain(final.UserMessageIds);
         var responseIds = final.Messages.Except(final.UserMessageIds).ToList();
         responseIds.Should().HaveCount(2,
-            "one response cell per inbox drain — round 1 drains {u1}, round 2 drains {u2,u3,u4}");
+            "one response cell per inbox drain â€” round 1 drains {u1}, round 2 drains {u2,u3,u4}");
     }
 
-    // ─── Queue-don't-cancel: new input during execution waits until round completes ───
+    // â”€â”€â”€ Queue-don't-cancel: new input during execution waits until round completes â”€â”€â”€
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Submit_DuringExecution_QueuedUntilRoundCompletes_ThenNextRoundDispatches()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -372,7 +372,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
             timeoutMs: 5_000, ct);
 
         // Submit u2 while round 1 is still executing. Queue-don't-cancel: the current round
-        // is NOT aborted — it completes naturally (tool calls finish, response persists).
+        // is NOT aborted â€” it completes naturally (tool calls finish, response persists).
         // The watcher holds u2 back until IsExecuting flips to false, then dispatches round 2.
         ThreadSubmission.Submit(new SubmitContext
         {
@@ -391,7 +391,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         final.Messages.Should().HaveCount(4);
     }
 
-    // ─── Single submit must produce exactly one response cell ───
+    // â”€â”€â”€ Single submit must produce exactly one response cell â”€â”€â”€
 
     /// <summary>
     /// Repro for the prod symptom: ONE submit produces TWO "Generating response" rounds.
@@ -400,7 +400,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
     /// IsExecuting=false + the user msg still unprocessed, dispatches a second round, second
     /// response cell is created.
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Submit_SingleSubmit_ProducesExactlyOneResponseCell()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -447,7 +447,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
             string.Join(",", responseCells.Select(c => c.Id)));
     }
 
-    // ─── Helpers ───
+    // â”€â”€â”€ Helpers â”€â”€â”€
 
     private async Task<string> SeedEmptyThreadAsync(CancellationToken ct)
     {
@@ -487,7 +487,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
             if (predicate(last)) return last;
             await Task.Delay(100, ct);
         }
-        // Predicate not satisfied in time — return whatever we saw last so the assertion error shows state.
+        // Predicate not satisfied in time â€” return whatever we saw last so the assertion error shows state.
         last.Should().NotBeNull();
         predicate(last!).Should().BeTrue(
             $"condition not reached within {timeoutMs}ms for thread {threadPath}. " +
@@ -497,7 +497,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         return last!;
     }
 
-    // ─── Fake chat client (minimal) ───
+    // â”€â”€â”€ Fake chat client (minimal) â”€â”€â”€
 
     private sealed class FakeChatClient : IChatClient
     {
@@ -525,7 +525,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
     }
 
     /// <summary>
-    /// Slow variant — delays ~1 second in the streaming response so tests can observe
+    /// Slow variant â€” delays ~1 second in the streaming response so tests can observe
     /// the IsExecuting=true state window and submit additional messages during a round.
     /// </summary>
     private sealed class SlowFakeChatClient : IChatClient

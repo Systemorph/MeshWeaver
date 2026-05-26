@@ -1,4 +1,4 @@
-#pragma warning disable CS1591
+﻿#pragma warning disable CS1591
 
 using System;
 using System.Collections.Generic;
@@ -16,7 +16,7 @@ namespace MeshWeaver.AI.Test;
 /// Unit tests for the kernel's stdout-capture pipeline: <see cref="LoggerTextWriter"/>
 /// (line-buffered TextWriter that flushes each completed line as a LogInformation
 /// entry) and <see cref="CapturingTextWriter"/> (process-wide Console.Out hook that
-/// routes to an AsyncLocal target). No mesh / no kernel — this is a pure check that
+/// routes to an AsyncLocal target). No mesh / no kernel â€” this is a pure check that
 /// the building blocks behave as <c>KernelExecutor</c> expects.
 /// </summary>
 public class KernelStdoutCaptureTest
@@ -30,7 +30,7 @@ public class KernelStdoutCaptureTest
             => Messages.Add(formatter(state, exception));
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void LoggerTextWriter_Buffers_Until_Newline()
     {
         var logger = new CapturingLogger();
@@ -39,13 +39,13 @@ public class KernelStdoutCaptureTest
         writer.Write("Hel");
         writer.Write("lo, ");
         writer.Write("World");
-        logger.Messages.Should().BeEmpty("no newline yet — should be buffered");
+        logger.Messages.Should().BeEmpty("no newline yet â€” should be buffered");
 
         writer.Write('\n');
         logger.Messages.Should().ContainSingle().Which.Should().Contain("Hello, World");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void LoggerTextWriter_Splits_On_Each_Newline()
     {
         var logger = new CapturingLogger();
@@ -59,7 +59,7 @@ public class KernelStdoutCaptureTest
         logger.Messages[2].Should().Contain("line three");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void LoggerTextWriter_Strips_CarriageReturn()
     {
         var logger = new CapturingLogger();
@@ -70,7 +70,7 @@ public class KernelStdoutCaptureTest
         logger.Messages.Should().ContainSingle().Which.Should().Be("hello");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void LoggerTextWriter_WriteLine_Flushes()
     {
         var logger = new CapturingLogger();
@@ -81,7 +81,7 @@ public class KernelStdoutCaptureTest
         logger.Messages.Should().ContainSingle().Which.Should().Contain("immediate");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void LoggerTextWriter_Dispose_Flushes_Pending_Buffer()
     {
         var logger = new CapturingLogger();
@@ -93,11 +93,11 @@ public class KernelStdoutCaptureTest
         logger.Messages.Should().ContainSingle().Which.Should().Contain("partial line");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task CapturingTextWriter_AsyncLocal_Isolates_Concurrent_Captures()
     {
         // Two concurrent "scripts" each capture into their own writer. Output
-        // from one must not leak into the other — the AsyncLocal target is what
+        // from one must not leak into the other â€” the AsyncLocal target is what
         // makes this safe across thread-pool continuations. A naive global swap
         // of Console.Out would mix the two streams.
         var captureA = new StringWriter();
@@ -123,7 +123,7 @@ public class KernelStdoutCaptureTest
         captureB.ToString().Should().Be("B-1B-2B-3", "writer B must only see B's writes");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void CapturingTextWriter_Outside_Scope_Falls_Back_To_Original()
     {
         // Without an active capture, writes should pass through to the

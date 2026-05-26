@@ -1,4 +1,4 @@
-#pragma warning disable CS1591
+﻿#pragma warning disable CS1591
 
 using System;
 using System.Collections.Generic;
@@ -53,9 +53,9 @@ public class InboxToolIntegrationTest : AITestBase
         return base.ConfigureClient(configuration).AddLayoutClient();
     }
 
-    // ─── check_inbox via the AIFunction surface ───
+    // â”€â”€â”€ check_inbox via the AIFunction surface â”€â”€â”€
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task CheckInbox_NoPending_ReturnsNoNewMessages()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -69,7 +69,7 @@ public class InboxToolIntegrationTest : AITestBase
         result.ToString().Should().Be("(no new messages)");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task CheckInbox_OnePending_ReturnsItAndDrainsTheQueue()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -100,11 +100,11 @@ public class InboxToolIntegrationTest : AITestBase
 
         afterDrain.PendingUserMessages.Should().NotContainKey(msgId);
         afterDrain.IngestedMessageIds.Should().Contain(msgId);
-        // IsExecuting unchanged — drain doesn't flip lifecycle flags.
+        // IsExecuting unchanged â€” drain doesn't flip lifecycle flags.
         afterDrain.IsExecuting.Should().BeTrue();
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task CheckInbox_MultiplePending_ReturnsAllInOrder_AndDrains()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -113,7 +113,7 @@ public class InboxToolIntegrationTest : AITestBase
 
         // Lock IsExecuting=true BEFORE appending so the server-side watcher
         // doesn't drain the queue during our setup. We're simulating "agent is
-        // mid-stream" — the real flow has the agent already executing when
+        // mid-stream" â€” the real flow has the agent already executing when
         // follow-ups arrive, and check_inbox is the only path that promotes
         // them out of PendingUserMessages.
         await SetIsExecutingAsync(threadHub, true, ct);
@@ -150,7 +150,7 @@ public class InboxToolIntegrationTest : AITestBase
         after.PendingUserMessages.Should().BeEmpty();
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task CheckInbox_TwoCallsBackToBack_SecondReturnsEmpty()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -180,9 +180,9 @@ public class InboxToolIntegrationTest : AITestBase
             "once a message has been delivered to the agent it must NOT be redelivered on the next call");
     }
 
-    // ─── Cancel-then-restart: ESC with pending messages ───
+    // â”€â”€â”€ Cancel-then-restart: ESC with pending messages â”€â”€â”€
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Cancel_WithPendingMessages_DispatchesNextRoundAfterCleanup()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -241,7 +241,7 @@ public class InboxToolIntegrationTest : AITestBase
             "all queued messages should be drained by the time round 2 is dispatched");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Cancel_NoPendingMessages_DoesNotDispatchAnotherRound()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -261,7 +261,7 @@ public class InboxToolIntegrationTest : AITestBase
         var u1 = roundStart.IngestedMessageIds[0];
         var initialMsgsCount = roundStart.Messages.Count;
 
-        // Cancel — no follow-ups queued.
+        // Cancel â€” no follow-ups queued.
         // Cancel via stream.Update (see RequestViaStreamUpdate.md). Awaiting
         // the post-update emission asserts the write actually landed.
         var cancelled = await client.GetWorkspace().GetMeshNodeStream(threadPath)
@@ -280,13 +280,13 @@ public class InboxToolIntegrationTest : AITestBase
 
         var final = await ReadThreadAsync(threadPath, ct);
         final.IsExecuting.Should().BeFalse(
-            "no pending messages → no phantom round should start");
+            "no pending messages â†’ no phantom round should start");
         final.IngestedMessageIds.Should().ContainSingle().Which.Should().Be(u1);
         final.Messages.Count.Should().Be(initialMsgsCount,
             "no new cells expected since nothing was queued");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Cancel_WithMultiplePending_RestartsAndDrainsAllInSubsequentRounds()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -335,9 +335,9 @@ public class InboxToolIntegrationTest : AITestBase
         final.PendingUserMessages.Should().BeEmpty();
     }
 
-    // ─── ViewModel projection ───
+    // â”€â”€â”€ ViewModel projection â”€â”€â”€
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void ExtractPendingTexts_EmptyThread_ReturnsEmpty()
     {
         var thread = new MeshThread();
@@ -345,7 +345,7 @@ public class InboxToolIntegrationTest : AITestBase
         texts.Should().BeEmpty();
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void ExtractPendingTexts_TwoPending_ReturnsInUserMessageIdsOrder()
     {
         var m1 = new ThreadMessage { Role = "user", Text = "alpha" };
@@ -362,14 +362,14 @@ public class InboxToolIntegrationTest : AITestBase
         texts.Should().ContainInOrder("alpha", "beta");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void ExtractPendingTexts_NullThread_ReturnsEmpty()
     {
         var texts = ThreadLayoutAreas.ExtractPendingTexts(null);
         texts.Should().BeEmpty();
     }
 
-    // ─── Helpers ───
+    // â”€â”€â”€ Helpers â”€â”€â”€
 
     private async Task<string> SeedEmptyThreadAsync(CancellationToken ct)
     {
@@ -396,7 +396,7 @@ public class InboxToolIntegrationTest : AITestBase
         await ReadNodeAsync(threadPath, ct);
         // Resolve the hub through the mesh service.
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        // GetHub is internal — we use the same trick as ThreadExecution: the
+        // GetHub is internal â€” we use the same trick as ThreadExecution: the
         // routed hub becomes accessible by sending a no-op delivery and
         // reading back the workspace. Easier: spin up a hosted hub at the
         // address.
@@ -459,12 +459,12 @@ public class InboxToolIntegrationTest : AITestBase
             .Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask(ct);
     }
 
-    // ─── Fake chat client + factory ───
+    // â”€â”€â”€ Fake chat client + factory â”€â”€â”€
 
     /// <summary>
     /// Slow fake that delays ~5 s in the streaming path so tests can race in
     /// follow-up submissions and ESC during the in-flight turn. 1.5 s wasn't
-    /// enough headroom on slow CI runners — the in-flight round could finish
+    /// enough headroom on slow CI runners â€” the in-flight round could finish
     /// before the test had time to submit the queued u2 + assert.
     /// </summary>
     private sealed class InboxFakeChatClient : IChatClient

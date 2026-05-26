@@ -1,4 +1,4 @@
-#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
+﻿#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
 using System;
 using System.Collections.Generic;
@@ -14,7 +14,7 @@ using Xunit;
 namespace MeshWeaver.AI.Test;
 
 /// <summary>
-/// Tests covering the <c>nodeType:LanguageModel</c> surface — the platform
+/// Tests covering the <c>nodeType:LanguageModel</c> surface â€” the platform
 /// reads <see cref="LanguageModelCatalogOptions.Sources"/> at mesh init
 /// time and emits one static <see cref="LanguageModelNodeType.NodeType"/>
 /// MeshNode per <c>{section}:Models[]</c> entry under
@@ -25,17 +25,17 @@ namespace MeshWeaver.AI.Test;
 /// </summary>
 public class LanguageModelNodeTypeTest
 {
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void Constants_NamespaceAndNodeType_AreStable()
     {
-        // Public mesh-query contract — anyone typing `namespace:Model
+        // Public mesh-query contract â€” anyone typing `namespace:Model
         // nodeType:LanguageModel` in a search box depends on these not
         // silently shifting.
         LanguageModelNodeType.NodeType.Should().Be("LanguageModel");
         LanguageModelNodeType.RootNamespace.Should().Be("Model");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void Provider_OneSection_OneNodePerModel()
     {
         var provider = MakeProvider(
@@ -54,7 +54,7 @@ public class LanguageModelNodeTypeTest
         modelNodes.Should().HaveCount(3);
         // LanguageModel children now live under the parent ModelProvider's
         // _Provider/{name} satellite path (mirrors the user-partition
-        // layout) — see ModelProviders.md for the path convention.
+        // layout) â€” see ModelProviders.md for the path convention.
         var expectedNs = $"{ModelProviderNodeType.RootNamespace}/Azure Claude";
         modelNodes.Should().AllSatisfy(n =>
         {
@@ -65,7 +65,7 @@ public class LanguageModelNodeTypeTest
             new[] { "claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5" });
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void Provider_ModelDefinition_CarriesIdProviderOrder()
     {
         var provider = MakeProvider(
@@ -84,11 +84,11 @@ public class LanguageModelNodeTypeTest
         def.Order.Should().Be(5);
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void Provider_TwoSourcesShareModelId_FirstWins()
     {
         // Two providers (e.g. Azure Claude + Direct Anthropic) both
-        // advertise claude-sonnet-4-6 — the lower-Order source wins. The
+        // advertise claude-sonnet-4-6 â€” the lower-Order source wins. The
         // picker shows it once, attributed to the winner.
         var provider = MakeProvider(
             new Dictionary<string, string?>
@@ -96,7 +96,7 @@ public class LanguageModelNodeTypeTest
                 ["Anthropic:Models:0"] = "claude-sonnet-4-6",
                 ["Direct:Models:0"] = "claude-sonnet-4-6"
             },
-            // Order matters — registered order = de-dup precedence.
+            // Order matters â€” registered order = de-dup precedence.
             new LanguageModelCatalogSource("Anthropic", "Azure Claude", 1),
             new LanguageModelCatalogSource("Direct", "Direct Anthropic", 99));
 
@@ -108,7 +108,7 @@ public class LanguageModelNodeTypeTest
         ((ModelDefinition)modelNodes[0].Content!).Provider.Should().Be("Azure Claude");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void Provider_EmptyCatalog_EmitsNothing()
     {
         // No catalog sources / no models in config = empty enumeration.
@@ -122,12 +122,12 @@ public class LanguageModelNodeTypeTest
         nodes.Should().BeEmpty();
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void Provider_PolicyEmittedOnlyWhenModelsExist()
     {
         // Provider seeds the read-only access policy IFF it actually has
         // model nodes to govern. Bring-your-own model nodes belong at
-        // sibling paths anyway — they don't need the partition's policy.
+        // sibling paths anyway â€” they don't need the partition's policy.
         var withModels = MakeProvider(
             new Dictionary<string, string?> { ["Anthropic:Models:0"] = "claude-sonnet-4-6" },
             new LanguageModelCatalogSource("Anthropic", "Azure Claude", 1));
@@ -142,10 +142,10 @@ public class LanguageModelNodeTypeTest
         nodes.Should().Contain(n => n.NodeType == LanguageModelNodeType.NodeType);
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void Provider_SectionWithEmptyOrWhitespaceModels_SkipsThem()
     {
-        // Aspire/AppHost env var defaults can be empty strings — the
+        // Aspire/AppHost env var defaults can be empty strings â€” the
         // provider must skip them, not emit nodes with empty ids.
         var provider = MakeProvider(
             new Dictionary<string, string?>
@@ -165,11 +165,11 @@ public class LanguageModelNodeTypeTest
         ids.Should().BeEquivalentTo(new[] { "claude-sonnet-4-6", "claude-haiku-4-5" });
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void Provider_MissingSection_NoCrash_NoNodes()
     {
         // Catalog source registered but the corresponding config section
-        // absent — provider warns + skips, doesn't throw.
+        // absent â€” provider warns + skips, doesn't throw.
         var provider = MakeProvider(
             new Dictionary<string, string?>(),
             new LanguageModelCatalogSource("MissingProvider", "Missing", 1));

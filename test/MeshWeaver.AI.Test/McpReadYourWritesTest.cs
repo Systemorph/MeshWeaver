@@ -241,7 +241,7 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
 
     // ---- ExecuteScript --------------------------------------------------------
 
-    [Fact(Timeout = 60_000)]
+    [Fact(Timeout = 30_000)]
     public async Task ExecuteScript_ForIsExecutableCodeNode_CompletesWithoutError()
     {
         // Seed the script directly via IMeshService (the "created through

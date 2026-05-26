@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
@@ -23,7 +23,7 @@ namespace MeshWeaver.Threading.Test;
 
 /// <summary>
 /// Verifies tool calls on response messages are visible via the canonical
-/// <c>client.GetWorkspace().GetMeshNodeStream(path)</c> reactive handle —
+/// <c>client.GetWorkspace().GetMeshNodeStream(path)</c> reactive handle â€”
 /// the same primitive the Blazor view consumes. Updates also go through
 /// the same handle (no ad-hoc <c>GetRemoteStream&lt;MeshNode, MeshNodeReference&gt;</c>).
 /// </summary>
@@ -38,7 +38,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
         return base.ConfigureClient(configuration).AddLayoutClient();
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task ResponseMessage_ToolCalls_VisibleViaRemoteStream()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -105,7 +105,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
         Output.WriteLine($"Tool calls visible: {msg.ToolCalls.Count} calls, delegation={msg.ToolCalls[1].DelegationPath}");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task ResponseMessage_ToolCallsUpdate_PropagatesViaStream()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -183,7 +183,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
         Output.WriteLine($"After update: {afterUpdate.ToolCalls.Count} tool calls - {afterUpdate.ToolCalls[0].DisplayName}");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Delegation_AppearsOnResponseMessage_ThenThreadGoesIdle()
     {
         var ct = new CancellationTokenSource(20.Seconds()).Token;
@@ -255,7 +255,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
         var delegations = await delegationAppeared;
         delegations.Should().HaveCount(1);
         delegations![0].DelegationPath.Should().Be(subThreadPath);
-        Output.WriteLine($"Phase 2: delegation appeared — {delegations[0].DisplayName}");
+        Output.WriteLine($"Phase 2: delegation appeared â€” {delegations[0].DisplayName}");
 
         var threadStream = workspace.GetMeshNodeStream(threadPath);
         await threadStream.Update(current =>
@@ -280,7 +280,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
     /// via the stream. The layout-area subscriptions must NOT cause runaway
     /// version increments (host.UpdateData re-triggering the stream).
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task ToolCallsUpdate_WithLayoutArea_NoFeedbackLoop()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -317,7 +317,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
         var client = GetClient();
         var workspace = client.GetWorkspace();
 
-        // Open the layout area — activates ThreadMessageLayoutAreas.Overview
+        // Open the layout area â€” activates ThreadMessageLayoutAreas.Overview
         // subscriptions (text + toolCalls + isExecuting).
         var layoutStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new Address(responsePath),
@@ -332,7 +332,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
 
         var responseStream = workspace.GetMeshNodeStream(responsePath);
 
-        // Record version BEFORE the update — we read it off the underlying
+        // Record version BEFORE the update â€” we read it off the underlying
         // sync stream, the same one the Update writes through.
         var streamForVersion = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
             new Address(responsePath), new MeshNodeReference());
@@ -365,7 +365,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
         var versionDelta = versionAfter - versionBefore;
         versionDelta.Should().BeLessThan(20,
             "a single tool call update should not cause runaway version increments. " +
-            $"Delta was {versionDelta} — indicates a feedback loop in layout area subscriptions");
+            $"Delta was {versionDelta} â€” indicates a feedback loop in layout area subscriptions");
         Output.WriteLine($"Version delta: {versionDelta} (no feedback loop)");
 
         await responseStream.Update(current =>

@@ -73,7 +73,7 @@ public class SchemaValidationTest : MonolithMeshTestBase
 
     #region Schema Retrieval
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void SchemaGeneration_ForTestProduct_ReturnsValidSchema()
     {
         // Use the NodeType's hub config to create a temporary hub and generate the schema.
@@ -104,7 +104,7 @@ public class SchemaValidationTest : MonolithMeshTestBase
         }
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void SchemaGeneration_ContainsExpectedProperties()
     {
         var typeNode = Mesh.ServiceProvider.FindStaticNode(TestNodeType);
@@ -132,7 +132,7 @@ public class SchemaValidationTest : MonolithMeshTestBase
 
     #region Content Validation â€” Valid Content
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Create_WithValidContent_Succeeds()
     {
         var plugin = CreatePlugin();
@@ -152,7 +152,7 @@ public class SchemaValidationTest : MonolithMeshTestBase
         result.Should().StartWith("Created:", because: "valid content should pass schema validation");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Create_WithPartialValidContent_Succeeds()
     {
         var plugin = CreatePlugin();
@@ -176,7 +176,7 @@ public class SchemaValidationTest : MonolithMeshTestBase
 
     #region Update â€” Null Content Rejection
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Update_WithNullContent_ReturnsValidationErrorAndSchema()
     {
         var plugin = CreatePlugin();
@@ -221,7 +221,7 @@ public class SchemaValidationTest : MonolithMeshTestBase
         afterReject.Should().Contain("Widget");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Update_WithMissingContent_ReturnsValidationErrorAndSchema()
     {
         var plugin = CreatePlugin();
@@ -257,7 +257,7 @@ public class SchemaValidationTest : MonolithMeshTestBase
         result.Should().Contain("Expected content schema");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Patch_WithExplicitNullContent_ReturnsValidationErrorAndSchema()
     {
         var plugin = CreatePlugin();
@@ -288,7 +288,7 @@ public class SchemaValidationTest : MonolithMeshTestBase
         afterReject.Should().Contain("Widget");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Patch_WithoutContentKey_PreservesExistingContent()
     {
         var plugin = CreatePlugin();
@@ -354,7 +354,7 @@ public class SchemaValidationTest : MonolithMeshTestBase
 
     #region Id Validation
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task Create_WithSlashInId_SanitizesAndCreates()
     {
         var plugin = CreatePlugin();

@@ -1,4 +1,4 @@
-#pragma warning disable CS1591
+﻿#pragma warning disable CS1591
 
 using System;
 using System.Collections.Immutable;
@@ -10,15 +10,15 @@ namespace MeshWeaver.AI.Test;
 
 /// <summary>
 /// Pure-logic tests for <see cref="InboxTool.Drain"/> and
-/// <see cref="InboxTool.FormatToolResult"/>. No hub, no async — exercises the
+/// <see cref="InboxTool.FormatToolResult"/>. No hub, no async â€” exercises the
 /// state-transition contract that the integration tests then verify
 /// end-to-end.
 /// </summary>
 public class InboxToolUnitTest
 {
-    // ─── Drain ───
+    // â”€â”€â”€ Drain â”€â”€â”€
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void Drain_EmptyPending_ReturnsEmptyResult_LeavesThreadUnchanged()
     {
         var thread = new MeshThread
@@ -36,7 +36,7 @@ public class InboxToolUnitTest
             "drain on empty inbox is a no-op");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void Drain_OnePending_ReturnsItAndMarksIngested()
     {
         var msg = new ThreadMessage { Role = "user", Text = "hello mid-stream" };
@@ -57,12 +57,12 @@ public class InboxToolUnitTest
         result.UpdatedThread.PendingUserMessages.Should().BeEmpty();
         result.UpdatedThread.IngestedMessageIds.Should().ContainInOrder("u1", "u2");
         result.UpdatedThread.IsExecuting.Should().BeTrue(
-            "drain must not flip the executing flag — the agent is still running");
+            "drain must not flip the executing flag â€” the agent is still running");
         result.UpdatedThread.Messages.Should().ContainInOrder(new[] { "u1", "r1", "u2" },
             "drain doesn't reorder Messages");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void Drain_ThreePendingInOrder_ReturnsAllInUserMessageIdsOrder()
     {
         var m1 = new ThreadMessage { Role = "user", Text = "one" };
@@ -83,10 +83,10 @@ public class InboxToolUnitTest
         result.DrainedTexts.Should().ContainInOrder("one", "two", "three");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void Drain_PendingNotInUserMessageIds_StillReturnedAtEnd()
     {
-        // Defensive case — pending entry whose id was never registered. We must
+        // Defensive case â€” pending entry whose id was never registered. We must
         // not silently drop it, otherwise it would survive forever.
         var orphan = new ThreadMessage { Role = "user", Text = "orphan text" };
         var thread = new MeshThread
@@ -102,14 +102,14 @@ public class InboxToolUnitTest
         result.UpdatedThread.PendingUserMessages.Should().BeEmpty();
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void Drain_DoesNotDoubleAddIngestedIds()
     {
         var msg = new ThreadMessage { Role = "user", Text = "x" };
         var thread = new MeshThread
         {
             UserMessageIds = ImmutableList.Create("u1"),
-            // u1 is somehow already ingested (defensive — race tolerance) but
+            // u1 is somehow already ingested (defensive â€” race tolerance) but
             // also pending. Drain should not produce duplicates.
             IngestedMessageIds = ImmutableList.Create("u1"),
             PendingUserMessages = ImmutableDictionary<string, ThreadMessage>.Empty
@@ -121,7 +121,7 @@ public class InboxToolUnitTest
         result.UpdatedThread.IngestedMessageIds.Should().ContainSingle().Which.Should().Be("u1");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void Drain_PreservesOtherThreadFields()
     {
         var msg = new ThreadMessage { Role = "user", Text = "x" };
@@ -147,15 +147,15 @@ public class InboxToolUnitTest
         updated.TokensUsed.Should().Be(42);
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void Drain_NullThread_Throws()
     {
         Assert.Throws<ArgumentNullException>(() => InboxTool.Drain(null!));
     }
 
-    // ─── FormatToolResult ───
+    // â”€â”€â”€ FormatToolResult â”€â”€â”€
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void FormatToolResult_Empty_NoNewMessages()
     {
         var drain = new InboxDrainResult(
@@ -167,7 +167,7 @@ public class InboxToolUnitTest
         InboxTool.FormatToolResult(drain).Should().Be("(no new messages)");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void FormatToolResult_SingleMessage_HumanReadablePrefix()
     {
         var drain = new InboxDrainResult(
@@ -182,7 +182,7 @@ public class InboxToolUnitTest
         result.Should().Contain("Can you also include the unit tests?");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void FormatToolResult_MultipleMessages_NumberedList()
     {
         var drain = new InboxDrainResult(
@@ -202,14 +202,14 @@ public class InboxToolUnitTest
         result.Should().Contain("3. third follow-up");
     }
 
-    // ─── Drain semantics for the inbox design ───
+    // â”€â”€â”€ Drain semantics for the inbox design â”€â”€â”€
     //
     // The inbox is the unified ingestion point. AppendUserInput writes to
     // PendingUserMessages + UserMessageIds only. Drain moves the queue into
     // Messages, marks IngestedMessageIds, and returns the satellite-cell
     // payloads so the caller can materialise them via CreateNode.
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void Drain_AppendsDrainedIdsToMessagesInSubmissionOrder()
     {
         var m1 = new ThreadMessage { Role = "user", Text = "one" };
@@ -232,7 +232,7 @@ public class InboxToolUnitTest
         result.UpdatedThread.IngestedMessageIds.Should().ContainInOrder("u0", "u1", "u2");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void Drain_IdAlreadyInMessages_NotAppendedTwice()
     {
         var msg = new ThreadMessage { Role = "user", Text = "x" };
@@ -249,7 +249,7 @@ public class InboxToolUnitTest
             "idempotent: re-ingest of an id already in Messages is a no-op on Messages");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void Drain_ReturnsThreadMessages_ForSatelliteCellMaterialisation()
     {
         var m1 = new ThreadMessage
@@ -278,15 +278,15 @@ public class InboxToolUnitTest
         result.DrainedMessages[1].Should().BeSameAs(m2);
     }
 
-    // ─── GUI-perspective ───
+    // â”€â”€â”€ GUI-perspective â”€â”€â”€
     //
     // The chat view binds to MeshThread.PendingUserMessages (queued / "not yet
     // picked up") and MeshThread.Messages (submitted / "picked up by inbox").
     // These tests pin the visible state transitions so a regression in
-    // either AppendUserInput (writes pending) or Drain (moves pending→messages)
+    // either AppendUserInput (writes pending) or Drain (moves pendingâ†’messages)
     // surfaces as a unit-test failure instead of a runtime visual glitch.
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void GuiPerspective_QueuedState_VisibleInPendingButNotInMessages()
     {
         // Setup mirrors what ThreadInput.AppendUserInput writes when a user
@@ -302,16 +302,16 @@ public class InboxToolUnitTest
         {
             UserMessageIds = ImmutableList.Create("u1"),
             PendingUserMessages = ImmutableDictionary<string, ThreadMessage>.Empty.Add("u1", msg),
-            // No Messages entry yet — inbox hasn't picked it up.
+            // No Messages entry yet â€” inbox hasn't picked it up.
         };
 
         thread.Messages.Should().BeEmpty("queued message must not be in Messages until the inbox picks it up");
         thread.PendingUserMessages.Should().ContainKey("u1",
-            "queued message lives in PendingUserMessages — the GUI renders it from this dict");
+            "queued message lives in PendingUserMessages â€” the GUI renders it from this dict");
         thread.PendingUserMessages["u1"].Text.Should().Be("hello");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void GuiPerspective_InboxPickup_MovesIdFromPendingToMessages()
     {
         // Setup: same as above (queued state).
@@ -326,14 +326,14 @@ public class InboxToolUnitTest
         var afterPickup = InboxTool.Drain(thread).UpdatedThread;
 
         afterPickup.PendingUserMessages.Should().NotContainKey("u1",
-            "after pickup, the id leaves PendingUserMessages — GUI removes the queued visual");
+            "after pickup, the id leaves PendingUserMessages â€” GUI removes the queued visual");
         afterPickup.Messages.Should().Contain("u1",
-            "after pickup, the id appears in Messages — GUI renders the materialised cell");
+            "after pickup, the id appears in Messages â€” GUI renders the materialised cell");
         afterPickup.IngestedMessageIds.Should().Contain("u1",
             "ingestion is tracked so a re-fire of the watcher doesn't double-dispatch");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void GuiPerspective_MultipleQueued_AllPickedUpInOneDrain()
     {
         // Three rapid submits while the thread is idle: all sit in pending in
@@ -360,11 +360,11 @@ public class InboxToolUnitTest
         afterPickup.IngestedMessageIds.Should().ContainInOrder("u1", "u2", "u3");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void GuiPerspective_MidStreamSubmit_VisibleInPendingDuringExecution()
     {
         // Round 1 is running (IsExecuting=true, response cell r1 active). A new
-        // user submission lands while streaming — it must show up in
+        // user submission lands while streaming â€” it must show up in
         // PendingUserMessages as a queued cell, NOT in Messages yet (the
         // currently-streaming response cell continues uninterrupted).
         var threadBefore = new MeshThread
@@ -387,9 +387,9 @@ public class InboxToolUnitTest
         threadAfterSubmit.IsExecuting.Should().BeTrue("the current round keeps running");
         threadAfterSubmit.ActiveMessageId.Should().Be("r1", "current response cell still streaming");
         threadAfterSubmit.Messages.Should().NotContain("u2",
-            "follow-up is NOT yet visible in Messages — GUI shows it as 'queued'");
+            "follow-up is NOT yet visible in Messages â€” GUI shows it as 'queued'");
         threadAfterSubmit.PendingUserMessages.Should().ContainKey("u2",
-            "follow-up is visible in PendingUserMessages — GUI renders the queued cell");
+            "follow-up is visible in PendingUserMessages â€” GUI renders the queued cell");
 
         // The agent's check_inbox tool drains the new pending entry. The same
         // response cell r1 continues; u2 moves into Messages between u1/r1
@@ -399,7 +399,7 @@ public class InboxToolUnitTest
         afterPickup.IsExecuting.Should().BeTrue("drain doesn't tear the round down");
         afterPickup.ActiveMessageId.Should().Be("r1", "still streaming to r1");
         afterPickup.Messages.Should().Contain("u2",
-            "follow-up has moved into Messages — GUI flips it from 'queued' to 'submitted'");
+            "follow-up has moved into Messages â€” GUI flips it from 'queued' to 'submitted'");
         afterPickup.PendingUserMessages.Should().NotContainKey("u2",
             "follow-up is no longer queued");
         afterPickup.IngestedMessageIds.Should().Contain("u2",

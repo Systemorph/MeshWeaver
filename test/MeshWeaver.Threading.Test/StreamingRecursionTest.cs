@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Linq;
 using FluentAssertions;
 using MeshWeaver.AI;
@@ -15,7 +15,7 @@ namespace MeshWeaver.Threading.Test;
 /// </summary>
 public class StreamingRecursionTest
 {
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void ToolCalls_WithDelegationPath_DoNotEmbed_LayoutAreaControl()
     {
         // A ThreadMessage with delegation tool calls (simulates streaming state)
@@ -30,7 +30,7 @@ public class StreamingRecursionTest
                     Name = "delegate_to_agent",
                     DisplayName = "Delegating to Executor",
                     DelegationPath = "Org/_Thread/parent/msg1/sub-thread",
-                    Result = null // In-progress — this was the trigger for recursive embed
+                    Result = null // In-progress â€” this was the trigger for recursive embed
                 },
                 new ToolCallEntry
                 {
@@ -57,7 +57,7 @@ public class StreamingRecursionTest
 
         // Verify the fix: in-progress delegations should be rendered as static links,
         // NOT as LayoutAreaControl(delegationPath, "Streaming")
-        // This is a design constraint test — the actual rendering is in StreamingCompact
+        // This is a design constraint test â€” the actual rendering is in StreamingCompact
         // but we verify the data model doesn't force recursion
         inProgress[0].DelegationPath.Should().NotBeNull();
         inProgress[0].Result.Should().BeNull("in-progress delegation has no result yet");
@@ -67,7 +67,7 @@ public class StreamingRecursionTest
         // which now renders static links instead of recursive embeds
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public void ThreadMessage_ToolCalls_AreImmutableList()
     {
         // Verify tool calls use ImmutableList (no mutable collections)

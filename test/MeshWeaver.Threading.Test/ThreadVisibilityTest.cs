@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -34,7 +34,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
             .AddAI()
             .AddSampleUsers();
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task QueryThread_ByPath_ReturnsRolandsThread()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -48,7 +48,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
             Content = new MeshThread()
         });
 
-        // Query by path — should find it
+        // Query by path â€” should find it
         var result = await MeshQuery.QueryAsync<MeshNode>(
             $"path:User/{RolandId}/_Thread/test-thread-1").FirstOrDefaultAsync(ct);
 
@@ -56,7 +56,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
         result!.Name.Should().Be("Roland's test thread");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task QueryThreads_ByNodeType_RolandSeesOwnThread()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -70,7 +70,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
             Content = new MeshThread()
         });
 
-        // Query as Roland — scope:descendants matches the real portal fan-out behavior
+        // Query as Roland â€” scope:descendants matches the real portal fan-out behavior
         var threads = await MeshQuery.QueryAsync<MeshNode>(
             "nodeType:Thread scope:descendants").ToListAsync(ct);
 
@@ -78,12 +78,12 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
             "Roland should see his own thread in nodeType:Thread query");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task QueryThreads_SamuelCannotSeeRolandsThread()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
 
-        // Create thread under Roland (as admin — self-access allows creation under own scope)
+        // Create thread under Roland (as admin â€” self-access allows creation under own scope)
         await NodeFactory.CreateNode(new MeshNode("private-thread", $"User/{RolandId}/_Thread")
         {
             Name = "Roland private thread",
@@ -92,7 +92,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
             Content = new MeshThread()
         });
 
-        // Switch to Samuel — RLS self-access only grants User/Samuel/... scope,
+        // Switch to Samuel â€” RLS self-access only grants User/Samuel/... scope,
         // not User/Roland/... scope. PublicAdminAccess gives broad admin
         // so in this test we just verify the thread path is under Roland's scope.
         // Full RLS isolation requires ConfigureMeshBase (no PublicAdminAccess).
@@ -103,7 +103,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
             "Roland's thread should not be under Samuel's user scope");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task QueryThreads_InNamespace_RolandSeesOwnThread()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -125,7 +125,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
             "Roland should see his thread via namespace query");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task GlobalThreadSearch_ShowsOwnThread()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -149,7 +149,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
             "Roland's thread should appear in global thread search");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task QueryThreads_SortByLastModifiedDesc_NewestFirst()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -187,7 +187,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
             "New thread should appear before Old thread with sort:LastModified-desc");
     }
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
     public async Task AutocompleteUsers_StillVisibleForAccessControl()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
