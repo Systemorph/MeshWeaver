@@ -199,7 +199,7 @@ public class QueryRoutingHintsTest
     [Fact]
     public void MeshConfiguration_ResolveRoutingHints_EmptyRules()
     {
-        var config = new MeshConfiguration(new Dictionary<string, MeshNode>());
+        var config = new MeshConfiguration([]);
 
         var parsed = _parser.Parse("nodeType:User");
         var hints = config.ResolveRoutingHints(parsed);

@@ -17,6 +17,40 @@ Use `hub.Observe(request)` ONLY for:
 
 Everything else — including every state machine, every "trigger work and observe progress" flow, every UI button that mutates a node — uses `stream.Update()`.
 
+## Staleness-safe cross-hub patches
+
+`workspace.GetMeshNodeStream(otherPath).Update(...)` from a non-owner hub
+(`UpdateRemote`) currently re-runs the lambda against the caller's
+snapshot, NOT the owner's current state. The framework then ships an
+RFC 7396 JSON-merge patch of the diff to the owner.
+
+That works correctly only when the patch is **idempotent under
+merge** — i.e. applying it twice produces the same result as applying
+it once. Two cases are merge-safe:
+
+1. **Single-field assignment**: `{ Foo: value }`. Merging twice = same.
+2. **Dict SetItem by key**: `{ Bag: { key: value } }`. Merging twice = same key+value.
+
+Two cases are NOT merge-safe:
+
+1. **List append / prepend**: `node with { Messages = Messages.Add(x) }`.
+   The diff becomes the WHOLE list (with `x` at the end). Two concurrent
+   appends from different hubs each compute a list ending in `x`; the
+   owner merges them in order and the last write wins, dropping the first.
+2. **List rewrite based on read-modify-write**: same root cause —
+   the patch is the new list, which doesn't account for concurrent
+   writers.
+
+**Design rule**: cross-hub mutations write a single intent field. The
+owning hub's watcher consumes the intent and runs the multi-list
+mutation locally (UpdateOwn — race-free on the action block).
+
+The thread refactor is the canonical example. Where the code used to
+post `ResubmitTrigger(threadPath, msgId, ...)`, it now writes
+`node with { Content = t with { RequestedResubmit = intent } }` — one
+field. The thread hub's resubmit watcher truncates `Messages`,
+re-queues `PendingUserMessages`, etc. — all on its own action block.
+
 ## Use the canonical helpers
 
 Don't roll your own watcher. Two helpers in `MeshWeaver.Mesh.Contract`

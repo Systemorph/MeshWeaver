@@ -90,29 +90,20 @@ public static class ThreadExecution
 
     public static MessageHubConfiguration AddThreadExecution(this MessageHubConfiguration configuration)
         => configuration
-            // SubmitMessageRequest was deleted 2026-05-25 — public submissions go
-            // through ThreadSubmission.Submit → ThreadInput.AppendUserInput →
-            // stream.Update writes PendingUserMessages on the thread node. The
-            // submission watcher (InstallSubmissionWatcher) reacts to that, the
-            // _Exec hosted hub runs the round, ExecuteMessageAsync is called
-            // directly as a method (no wire message). See CLAUDE.md →
-            // "GetMeshNodeStream().Update() is the ONLY mutation API".
-            // Two-stage round-start: the THREAD hub atomically claims the
-            // round (Status: Idle → StartingExecution) because the thread node
-            // is its own; the _Exec hosted hub (see InstallExecutionHub) takes
-            // over for the drain + cell creation + Status → Executing + stream.
-            .WithHandler<StartExecutionTrigger>(ThreadSubmission.HandleStartExecution)
-            // Internal cross-hub mutation triggers — when ThreadSubmission.Apply*
-            // is invoked from a non-owner hub, it posts these so the work lands
-            // in the per-thread hub's OWN context (UpdateRemote staleness
-            // currently double-writes lists like MeshThread.Messages).
-            .WithHandler<ResubmitTrigger>(ThreadSubmission.HandleResubmitTrigger)
-            .WithHandler<DeleteFromMessageTrigger>(ThreadSubmission.HandleDeleteFromMessageTrigger)
-            .WithHandler<RecordSubmissionFailureTrigger>(ThreadSubmission.HandleRecordSubmissionFailureTrigger)
-            // Delegation heartbeat: scans this thread's chat.ActiveDelegationPaths
-            // every HeartbeatInterval. Stale sub-threads get a CancelDelegationSubThread
-            // (heartbeat-driven). Same handler also processes user-Stop-button
-            // propagation when the parent thread's cancel watcher fans out.
+            // No verb-shaped triggers — every thread state mutation rides
+            // workspace.GetMeshNodeStream().Update(...) on a control-plane
+            // field, observed by an owning-hub watcher. See
+            // RequestViaStreamUpdate.md and ActivityControlPlane.md.
+            //
+            // Round dispatch (Idle → StartingExecution): InstallSubmissionWatcher
+            // claims directly on the thread hub's action block. The _Exec
+            // hosted hub (InstallExecutionHub) subscribes to the parent's
+            // stream and continues with Step B + C on its own action block.
+            //
+            // Resubmit / delete-from / submission-failure: callers patch
+            // RequestedResubmit / RequestedDeleteFromMessageId / PendingFailures
+            // via stream.Update; the three watchers below consume those intents
+            // on this hub's own action block.
             .WithHandler<MeshWeaver.AI.Delegation.HeartbeatTick>(
                 MeshWeaver.AI.Delegation.DelegationHandlers.HandleHeartbeatTick)
             .WithHandler<MeshWeaver.AI.Delegation.CancelDelegationSubThread>(
@@ -123,26 +114,134 @@ public static class ThreadExecution
             .WithInitialization(InstallCancellationWatcher)
             .WithInitialization(InstallExecutionHub)
             .WithInitialization(InstallSubmissionWatcher)
+            .WithInitialization(InstallResubmitWatcher)
+            .WithInitialization(InstallDeleteFromMessageWatcher)
+            .WithInitialization(InstallFailureRecordWatcher)
             .WithInitialization(InstallHeartbeatTicker);
 
     /// <summary>
-    /// Eagerly creates the <c>_Exec</c> hosted hub at thread hub init time.
-    /// Owns the <see cref="StartExecutionTrigger"/> handler (round-start: drain
-    /// pending into Messages, materialise user cells, allocate response cell,
-    /// then call <c>ExecuteMessageAsync</c> directly for the streaming pass).
+    /// Eagerly creates the <c>_Exec</c> hosted hub at thread hub init time and
+    /// installs its round watcher. The watcher subscribes to the parent thread
+    /// node's stream via the shared <see cref="IMeshNodeStreamCache"/>; on the
+    /// first emission per claim with <c>Status == StartingExecution</c>
+    /// (<see cref="System.Reactive.Linq.Observable.DistinctUntilChanged{TSource,TKey}(IObservable{TSource}, Func{TSource, TKey})"/>
+    /// on <c>ExecutionStartedAt</c>), invokes
+    /// <see cref="ThreadSubmissionServer.DispatchAfterClaim"/> to drain pending
+    /// into Messages, allocate the response cell, transition to
+    /// <c>Executing</c>, and start agent streaming.
     ///
-    /// <para>Eager creation matters: the submission watcher targets
-    /// <c>{threadAddress}/_Exec</c>, and the framework's hosted-hub routing
-    /// uses <see cref="HostedHubCreation.Never"/> when forwarding — so the
-    /// hub must already exist before the first watcher tick.</para>
+    /// <para>Eager creation matters: the parent thread hub flips
+    /// <c>Status → StartingExecution</c> as soon as the submission watcher
+    /// claims; if <c>_Exec</c> isn't running yet, the resulting transition
+    /// emission has no subscriber and the round stalls.</para>
     /// </summary>
     private static void InstallExecutionHub(IMessageHub threadHub)
     {
         threadHub.GetHostedHub(
             new Address($"{threadHub.Address}/_Exec"),
-            config => config
-                .WithHandler<StartExecutionTrigger>(HandleStartExecutionOnExec),
+            config => config.WithInitialization(InstallExecRoundWatcher),
             HostedHubCreation.Always);
+    }
+
+    private static void InstallResubmitWatcher(IMessageHub threadHub)
+    {
+        var sub = ThreadSubmissionServer.InstallResubmitWatcher(threadHub);
+        threadHub.RegisterForDisposal(sub);
+    }
+
+    private static void InstallDeleteFromMessageWatcher(IMessageHub threadHub)
+    {
+        var sub = ThreadSubmissionServer.InstallDeleteFromMessageWatcher(threadHub);
+        threadHub.RegisterForDisposal(sub);
+    }
+
+    private static void InstallFailureRecordWatcher(IMessageHub threadHub)
+    {
+        var sub = ThreadSubmissionServer.InstallFailureRecordWatcher(threadHub);
+        threadHub.RegisterForDisposal(sub);
+    }
+
+    /// <summary>
+    /// _Exec hosted hub's round watcher. Subscribes to the parent thread node's
+    /// stream via the shared <see cref="IMeshNodeStreamCache"/> and fires
+    /// <see cref="ThreadSubmissionServer.DispatchAfterClaim"/> for each
+    /// <c>Idle → StartingExecution</c> transition. <c>DistinctUntilChanged</c>
+    /// on <see cref="MeshThread.Status"/> (project first, then dedupe, then
+    /// filter) ensures the watcher fires ONLY on the transition itself —
+    /// other field updates (PendingUserMessages, PendingFailures, etc.) that
+    /// arrive while Status remains StartingExecution don't re-trigger dispatch.
+    ///
+    /// <para>Sets the round's <see cref="AccessContext"/> from
+    /// <see cref="MeshThread.CreatedBy"/> before dispatching so downstream
+    /// <c>CreateNodeRequest</c> calls (user cells, response cell) carry the
+    /// right user identity.</para>
+    /// </summary>
+    private static void InstallExecRoundWatcher(IMessageHub execHub)
+    {
+        var parentHub = execHub.Configuration.ParentHub
+            ?? throw new InvalidOperationException(
+                "_Exec hosted hub has no ParentHub — cannot resolve thread path");
+        var logger = execHub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
+        var threadPath = parentHub.Address.Path;
+        var cache = execHub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+
+        var sub = cache.GetStream(threadPath)
+            // Pair each emission with its current Status so DistinctUntilChanged
+            // dedupes on the Status field only — concurrent field updates that
+            // happen while Status stays StartingExecution must NOT re-fire.
+            .Select(n => new { Node = n, Status = (n?.Content as MeshThread)?.Status })
+            .DistinctUntilChanged(x => x.Status)
+            .Where(x => x.Status == ThreadExecutionStatus.StartingExecution)
+            .Select(x => x.Node)
+            .Subscribe(
+                node =>
+                {
+                    if (node?.Content is not MeshThread thread)
+                    {
+                        logger?.LogWarning(
+                            "[ExecRoundWatcher] thread node has no MeshThread content for {ThreadPath}",
+                            threadPath);
+                        return;
+                    }
+
+                    // Stamp the round's AccessContext from the thread node's
+                    // CreatedBy. The watcher fires on a stream scheduler where
+                    // AsyncLocal carries no useful identity.
+                    var accessService = execHub.ServiceProvider.GetService<MeshWeaver.Messaging.AccessService>();
+                    if (accessService != null && !string.IsNullOrEmpty(thread.CreatedBy))
+                    {
+                        accessService.SetContext(new MeshWeaver.Messaging.AccessContext
+                        {
+                            ObjectId = thread.CreatedBy,
+                            Name = thread.CreatedBy
+                        });
+                        logger?.LogDebug(
+                            "[ExecRoundWatcher] access context set: {User} for {ThreadPath}",
+                            thread.CreatedBy, threadPath);
+                    }
+
+                    ThreadSubmissionServer.DispatchAfterClaim(parentHub, node, logger,
+                        onFailure: () =>
+                        {
+                            logger?.LogWarning(
+                                "[ExecRoundWatcher] DispatchAfterClaim failed for {ThreadPath} — rolling Status back to Idle",
+                                threadPath);
+                            parentHub.GetWorkspace().GetMeshNodeStream().Update(n =>
+                            {
+                                var t = n.Content as MeshThread ?? new MeshThread();
+                                return t.Status == ThreadExecutionStatus.StartingExecution
+                                    ? n with { Content = t with { Status = ThreadExecutionStatus.Idle, ExecutionStartedAt = null } }
+                                    : n;
+                            }).Subscribe(
+                                _ => { },
+                                ex => logger?.LogWarning(ex,
+                                    "[ExecRoundWatcher] rollback Update failed for {ThreadPath}", threadPath));
+                        });
+                },
+                ex => logger?.LogWarning(ex,
+                    "[ExecRoundWatcher] stream errored for {ThreadPath}", threadPath));
+
+        execHub.RegisterForDisposal(sub);
     }
 
     /// <summary>
@@ -454,170 +553,13 @@ public static class ThreadExecution
         hub.RegisterForDisposal(sub);
     }
 
-    /// <summary>
-    /// Handler for <see cref="StartExecutionTrigger"/> on the <c>_Exec</c>
-    /// hosted hub. Executes one full pre-stream step of the round:
-    /// drains <see cref="MeshThread.PendingUserMessages"/> into
-    /// <see cref="MeshThread.Messages"/>, materialises the user satellite cells,
-    /// allocates a single response cell for the round, transitions
-    /// <c>Status: StartingExecution → Executing</c>, then posts
-    /// <see cref="SubmitMessageRequest"/> to itself so the existing
-    /// <see cref="ExecuteMessageAsync"/> handler picks up the streaming pass.
-    ///
-    /// <para><b>Hub topology.</b> Posted by the thread hub's
-    /// <see cref="ThreadSubmission.HandleStartExecution"/> after a successful
-    /// atomic claim (Status flipped Idle → StartingExecution). The atomic claim
-    /// stays on the thread hub because writes to the thread node serialise
-    /// naturally through its single data-source action block. The drain + cell
-    /// creation runs HERE on <c>_Exec</c> — the "execution does the move from
-    /// pending to Messages" rule.</para>
-    ///
-    /// <para><b>Reads/writes go through <see cref="IMeshNodeStreamCache"/></b>,
-    /// not <c>parentHub.GetWorkspace()</c>. The cache is the canonical path for
-    /// non-owning hubs: one shared handle per path opened on the mesh hub,
-    /// routing all updates through cross-hub messaging instead of touching the
-    /// thread hub's data source synchronously. This eliminates the deadlock
-    /// risk of <c>UpdateOwn</c>-on-parent-from-a-different-hub-thread and
-    /// keeps every reader (watcher, GUI, MCP) seeing the same stream.</para>
-    /// </summary>
-    internal static IMessageDelivery HandleStartExecutionOnExec(
-        IMessageHub execHub,
-        IMessageDelivery<StartExecutionTrigger> delivery)
-    {
-        var parentHub = execHub.Configuration.ParentHub
-            ?? throw new InvalidOperationException(
-                "_Exec hosted hub has no ParentHub — cannot resolve thread path");
-        var logger = execHub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
-        var threadPath = delivery.Message.ThreadPath;
-
-        if (!string.Equals(parentHub.Address.Path, threadPath, StringComparison.Ordinal))
-        {
-            logger?.LogWarning(
-                "[HandleStartExecutionOnExec] trigger landed on wrong _Exec hub: parent={Parent} threadPath={ThreadPath}",
-                parentHub.Address.Path, threadPath);
-            return delivery.Processed();
-        }
-
-        // Read the post-claim state through the shared mesh-node cache (single
-        // source of truth across all readers). The cache hydrates from the
-        // thread hub's stream via the mesh hub's workspace — one async hop
-        // behind the thread hub's own emissions. Without the Where guard,
-        // .Take(1) races and routinely returns the PRE-claim snapshot
-        // (Status=Idle) — the post-claim StartingExecution state hasn't yet
-        // propagated to the mesh-hub cache. The old code then bailed on the
-        // status check ("status=Idle — drop trigger") and the watcher had
-        // no reason to re-fire (Status was non-Idle on the thread hub),
-        // wedging the thread in StartingExecution forever. Symptom: every
-        // ThreadSubmissionIntegrationTest.Submit_* test hangs with
-        // IsExecuting=true / Messages=[].
-        //
-        // Fix: wait for the cache to receive an emission whose Status is one
-        // of the post-claim states. StartingExecution is the expected one
-        // (set by HandleStartExecution's claim). Executing / Completing /
-        // Idle / Done are not — they'd be a stale or out-of-order emission
-        // that the bail check should still drop.
-        var cache = execHub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-        cache.GetStream(threadPath)
-            .Where(n => (n?.Content as MeshThread)?.Status == ThreadExecutionStatus.StartingExecution)
-            .Take(1)
-            // 30 s, not 10 s — Orleans cold-start grain activation + cache hydration
-            // can run 15-25 s on a contended CI silo. The prior 10 s tripped on
-            // every Orleans.Test that goes through chat (delegation, portal flow,
-            // export, thread access — 8+ failures in CI run 26376715753 all
-            // showed `[HandleStartExecutionOnExec] cache read failed`).
-            .Timeout(TimeSpan.FromSeconds(30))
-            .Subscribe(
-                latest =>
-                {
-                    if (latest?.Content is not MeshThread thread)
-                    {
-                        logger?.LogWarning(
-                            "[HandleStartExecutionOnExec] thread node has no MeshThread content for {ThreadPath}",
-                            threadPath);
-                        return;
-                    }
-                    // Where filter guarantees Status==StartingExecution; redundant
-                    // assert kept for defensive logging if the predicate is ever
-                    // changed and a stale snapshot slips through.
-                    if (thread.Status != ThreadExecutionStatus.StartingExecution)
-                    {
-                        logger?.LogDebug(
-                            "[HandleStartExecutionOnExec] status={Status} (not StartingExecution) — drop trigger for {ThreadPath}",
-                            thread.Status, threadPath);
-                        return;
-                    }
-                    // Set the access context for this round INSIDE _Exec so
-                    // every downstream Post (cell creation, agent calls,
-                    // workspace writes via the cache) is stamped with the
-                    // right user identity. Resolve from the thread node's
-                    // CreatedBy — the watcher fires on a stream scheduler
-                    // where AsyncLocal carries no useful identity. The
-                    // delivery's AccessContext is the secondary source (set
-                    // by the framework when the thread hub posted the
-                    // trigger).
-                    var accessService = execHub.ServiceProvider.GetService<MeshWeaver.Messaging.AccessService>();
-                    var userCtx = delivery.AccessContext
-                        ?? (!string.IsNullOrEmpty(thread.CreatedBy)
-                            ? new MeshWeaver.Messaging.AccessContext { ObjectId = thread.CreatedBy!, Name = thread.CreatedBy! }
-                            : null);
-                    if (accessService != null && userCtx != null)
-                    {
-                        accessService.SetContext(userCtx);
-                        logger?.LogDebug(
-                            "[HandleStartExecutionOnExec] access context set: {User} for {ThreadPath}",
-                            userCtx.ObjectId, threadPath);
-                    }
-                    // Step B + C live in DispatchAfterClaim → DispatchRound,
-                    // which posts CreateNodeRequest for the user/response
-                    // cells under this AccessContext, and writes the commit
-                    // through IMeshNodeStreamCache.
-                    //
-                    // 🚨 onFailure rolls the thread back to Status=Idle so the
-                    // submission watcher's next emission sees a clean state and
-                    // re-dispatches. Without this, ANY error in user-cell or
-                    // response-cell creation OR the round-commit UpdateMeshNode
-                    // leaves the thread stuck at Status=StartingExecution
-                    // forever (the prod symptom 2026-05-21 with the
-                    // add-markus-kleiner thread). Post-deploy silo restarts +
-                    // CreateNodeRequest delivery failures are the typical
-                    // triggers. The guard inside the Update lambda prevents
-                    // clobbering if another actor already moved Status forward.
-                    ThreadSubmissionServer.DispatchAfterClaim(parentHub, latest, logger,
-                        onFailure: () =>
-                        {
-                            logger?.LogWarning(
-                                "[HandleStartExecutionOnExec] DispatchAfterClaim failed for {ThreadPath} — rolling Status back to Idle so the submission watcher can re-dispatch",
-                                threadPath);
-                            cache.Update(threadPath, node =>
-                            {
-                                if (node?.Content is not MeshThread t
-                                    || t.Status != ThreadExecutionStatus.StartingExecution)
-                                    return node!;
-                                return node with
-                                {
-                                    Content = t with
-                                    {
-                                        Status = ThreadExecutionStatus.Idle,
-                                        ActiveMessageId = null,
-                                        ExecutionStartedAt = null
-                                    }
-                                };
-                            }).Subscribe(
-                                _ => { },
-                                ex => logger?.LogWarning(ex,
-                                    "[HandleStartExecutionOnExec] Rollback to Idle failed for {ThreadPath}",
-                                    threadPath));
-                        });
-                },
-                ex => logger?.LogWarning(ex,
-                    "[HandleStartExecutionOnExec] cache read failed for {ThreadPath}", threadPath));
-
-        return delivery.Processed();
-    }
-
     // HandleSubmitMessage + HandleSubmitMessageLegacy deleted 2026-05-25.
-    // Public submissions go through ThreadSubmission.Submit → ThreadInput.AppendUserInput
-    // → the submission watcher. _Exec calls ExecuteMessageAsync directly (method, not message).
+    // HandleStartExecutionOnExec deleted with the trigger removal — _Exec's
+    // round watcher (InstallExecRoundWatcher) subscribes to the parent thread
+    // node's stream and fires DispatchAfterClaim on each Idle → StartingExecution
+    // transition. Public submissions go through ThreadSubmission.Submit →
+    // ThreadInput.AppendUserInput → the submission watcher; _Exec calls
+    // ExecuteMessageAsync directly (method, not message).
 
     /// <summary>
     /// Async handler on the _Exec hosted hub.

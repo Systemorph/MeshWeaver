@@ -42,10 +42,8 @@ public class UserOnboardingTest(ITestOutputHelper output) : MonolithMeshTestBase
     protected override void PreWarmNodeTypeHubs()
     {
         base.PreWarmNodeTypeHubs();
-        var meshConfig = Mesh.ServiceProvider.GetService<MeshConfiguration>();
-        if (meshConfig is null) return;
-        if (meshConfig.Nodes.TryGetValue("User", out var userTypeNode)
-            && userTypeNode.HubConfiguration is { } config)
+        var userTypeNode = Mesh.ServiceProvider.FindStaticNode("User");
+        if (userTypeNode?.HubConfiguration is { } config)
         {
             _ = Mesh.GetHostedHub(new Address("User"), config);
         }

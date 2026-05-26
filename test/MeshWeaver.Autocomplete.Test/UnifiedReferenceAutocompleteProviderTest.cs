@@ -67,7 +67,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     public void MeshConfig_HasTopLevelNodes()
     {
         // Verify the mesh configuration is populated with top-level nodes
-        var nodes = MeshConfig.Nodes.Values.ToArray();
+        var nodes = Mesh.ServiceProvider.EnumerateStaticNodes().ToArray();
 
         Output.WriteLine($"MeshConfig has {nodes.Length} total nodes:");
         foreach (var node in nodes.Take(20))

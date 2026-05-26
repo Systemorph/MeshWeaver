@@ -86,13 +86,13 @@ public static class AIExtensions
             // ExecuteMessageAsync directly as a method (no wire message).
             // See CLAUDE.md → "GetMeshNodeStream().Update() is the ONLY mutation API"
             // and Doc/Architecture/RequestViaStreamUpdate.md.
-            // Internal triggers — registered on the wire so a remote client's
-            // ThreadSubmission.Apply* call can land on the per-thread hub.
-            .WithType(typeof(ResubmitTrigger), nameof(ResubmitTrigger))
-            .WithType(typeof(DeleteFromMessageTrigger), nameof(DeleteFromMessageTrigger))
-            .WithType(typeof(RecordSubmissionFailureTrigger), nameof(RecordSubmissionFailureTrigger))
-            .WithType(typeof(StartExecutionTrigger), nameof(StartExecutionTrigger))
-            .WithType(typeof(ThreadMutationAck), nameof(ThreadMutationAck))
+            // Thread mutation triggers (ResubmitTrigger / DeleteFromMessageTrigger /
+            // RecordSubmissionFailureTrigger / StartExecutionTrigger / ThreadMutationAck)
+            // were deleted — ThreadSubmission.Apply* now writes control-plane fields
+            // (RequestedResubmit / RequestedDeleteFromMessageId / PendingFailures) on
+            // the thread node via stream.Update; the thread hub's watchers consume them.
+            .WithType(typeof(ResubmitIntent), nameof(ResubmitIntent))
+            .WithType(typeof(FailureRecord), nameof(FailureRecord))
             .WithType(typeof(ToolCallEntry), nameof(ToolCallEntry))
             .WithType(typeof(NodeChangeEntry), nameof(NodeChangeEntry))
             .WithType(typeof(ThreadExecutionContext), nameof(ThreadExecutionContext))

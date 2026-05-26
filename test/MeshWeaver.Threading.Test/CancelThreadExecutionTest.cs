@@ -66,9 +66,9 @@ public class CancelThreadExecutionTest(ITestOutputHelper output) : MonolithMeshT
         // Warm up the remote stream subscription BEFORE submit so the
         // IsExecuting=true→false transition is captured. Same pattern
         // IsExecutingLifecycleTest uses. Without this warm-up, the test races
-        // the first cache.GetStream call (opened by HandleStartExecutionOnExec)
-        // against the submission watcher's StartExecutionTrigger emission, and
-        // the chain can stall at Status=StartingExecution.
+        // the first cache.GetStream call (opened by _Exec's round watcher)
+        // against the submission watcher's claim emission, and the chain
+        // can stall at Status=StartingExecution.
         var baselineThread = await workspace.GetMeshNodeStream(threadPath)
             .Select(n => n.Content as MeshThread)
             .Where(t => t != null)
