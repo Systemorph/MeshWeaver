@@ -18,10 +18,13 @@ public class ServiceSetup
     {
         var services = new ServiceCollection();
         
-        // Add configuration
+        // Add configuration. reloadOnChange: true so flipping a log level in
+        // test/appsettings.json takes effect mid-run without restarting the
+        // test host (handy for the "tail the log file while the suite is
+        // running" hang-hunt workflow).
         var configuration = new ConfigurationBuilder()
             .SetBasePath(Directory.GetCurrentDirectory())
-            .AddJsonFile("appsettings.json", optional: true)
+            .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
             .Build();
         services.AddSingleton<IConfiguration>(configuration);
         
