@@ -200,6 +200,10 @@ internal class MeshNodeCompilationService(
         }
 
         var nodeName = cacheService.SanitizeNodeName(node.Path);
+        // GetDllPath returns the flat shorthand ({cacheDir}/{nodeName}.dll) —
+        // CompileToDiskAsync actually writes to a timestamped subdir.
+        // TryGetLatestCachedDllPath resolves to the newest valid subdir DLL,
+        // used below in the cache-hit branch so the load actually finds bytes.
         var dllPath = cacheService.GetDllPath(nodeName);
 
         // Resolve the owning NodeTypeDefinition once — used for source discovery
@@ -229,17 +233,20 @@ internal class MeshNodeCompilationService(
                         ? node.LastModified
                         : maxSourceLastModified;
 
-                    if (cacheService.IsDiskCacheEnabled
-                        && cacheService.IsCacheValid(nodeName, effectiveLastModified))
+                    if (cacheService.IsDiskCacheEnabled)
                     {
-                        logger.LogDebug(
-                            "Using cached assembly for {NodePath} (effectiveLastModified={EffectiveLastModified})",
-                            node.Path, effectiveLastModified);
-                        return Observable.Return<(string?, ActivityLog)>((
-                            dllPath,
-                            AppendInfo(log,
-                                $"Cache hit — returning {dllPath} (effective LastModified={effectiveLastModified:O}).")
-                                .Finish((int)hub.Version, ActivityStatus.Succeeded)));
+                        var cachedDllPath = cacheService.TryGetLatestCachedDllPath(nodeName, effectiveLastModified);
+                        if (cachedDllPath is not null)
+                        {
+                            logger.LogDebug(
+                                "Using cached assembly for {NodePath} at {DllPath} (effectiveLastModified={EffectiveLastModified})",
+                                node.Path, cachedDllPath, effectiveLastModified);
+                            return Observable.Return<(string?, ActivityLog)>((
+                                cachedDllPath,
+                                AppendInfo(log,
+                                    $"Cache hit — returning {cachedDllPath} (effective LastModified={effectiveLastModified:O}).")
+                                    .Finish((int)hub.Version, ActivityStatus.Succeeded)));
+                        }
                     }
 
                     return CompileCore(node, ntDef, selfPath, log, sourcesOverride);

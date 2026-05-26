@@ -27,6 +27,15 @@ internal interface ICompilationCacheService
     bool IsCacheValid(string nodeName, DateTimeOffset lastModified);
 
     /// <summary>
+    /// Returns the path of the newest cached DLL for <paramref name="nodeName"/>
+    /// whose write-time satisfies both the source-modified deadline and the
+    /// framework-DLL deadline. Returns null when no valid cache entry exists.
+    /// Use when you need the actual DLL path (not just whether the cache is
+    /// valid) — e.g., to feed an ALC LoadContext without re-running Roslyn.
+    /// </summary>
+    string? TryGetLatestCachedDllPath(string nodeName, DateTimeOffset lastModified);
+
+    /// <summary>
     /// Gets the modification timestamp of the MeshWeaver.Graph.dll framework assembly.
     /// Used for cache invalidation when the framework is updated.
     /// </summary>
@@ -477,40 +486,77 @@ internal class CompilationCacheService(
 
     /// <inheritdoc />
     public bool IsCacheValid(string nodeName, DateTimeOffset lastModified)
+        => TryGetLatestCachedDllPath(nodeName, lastModified) is not null;
+
+    /// <summary>
+    /// Returns the path of the newest cached DLL for <paramref name="nodeName"/>
+    /// whose write-time satisfies both the source-modified deadline and the
+    /// framework-DLL deadline. Returns null when no valid cache entry exists.
+    ///
+    /// <para>Layout: <see cref="CompileToDiskAsync"/> writes to
+    /// <c>{cacheDir}/{nodeName}_{ticks_hex}/{nodeName}.dll</c> so V1 and V2
+    /// historical compiles coexist (ALC-safety: each subdir is a unique load
+    /// context). The newest subdir's DLL is the live one; older subdirs are
+    /// holdover release artifacts. This method enumerates the subdirs, picks
+    /// the newest by write-time, and validates against the source/framework
+    /// timestamps — same logic the old flat layout used, lifted to the
+    /// timestamped-subdir reality.</para>
+    ///
+    /// <para>Without this method the flat lookup
+    /// (<c>{cacheDir}/{nodeName}.dll</c>) always misses, every test recompiles
+    /// from cold (9-15 s for non-trivial NodeTypes), and tests with a 10 s
+    /// timeout that touch dynamic NodeTypes time out reliably.</para>
+    /// </summary>
+    public string? TryGetLatestCachedDllPath(string nodeName, DateTimeOffset lastModified)
     {
         if (!_options.EnableCompilationCache)
-            return false;
+            return null;
 
         // Sticky invalidation — honored once and then cleared, so the next compile
-        // can write fresh artifacts and subsequent IsCacheValid calls go back to the
+        // can write fresh artifacts and subsequent calls go back to the
         // timestamp check.
         if (_invalidated.TryRemove(nodeName, out _))
         {
             logger.LogDebug("Cache forced-stale for {NodeName} by prior InvalidateCache", nodeName);
-            return false;
+            return null;
         }
 
-        var dllPath = GetDllPath(nodeName);
-        var pdbPath = GetPdbPath(nodeName);
-        var sourcePath = GetSourcePath(nodeName);
+        // Find the newest {nodeName}_*/{nodeName}.dll subdir. Direct
+        // EnumerateDirectories with a glob keeps the work O(historical-compiles)
+        // — typically 1-3 entries even on the hottest NodeTypes.
+        if (!Directory.Exists(_absoluteCacheDirectory))
+            return null;
 
-        // All files must exist
-        if (!File.Exists(dllPath))
+        DirectoryInfo? newest = null;
+        foreach (var dir in new DirectoryInfo(_absoluteCacheDirectory)
+                     .EnumerateDirectories($"{nodeName}_*"))
         {
-            logger.LogDebug("Cache miss for {NodeName}: DLL not found at {DllPath}", nodeName, dllPath);
-            return false;
+            var candidateDll = Path.Combine(dir.FullName, $"{nodeName}.dll");
+            if (!File.Exists(candidateDll))
+                continue;
+            if (newest is null || dir.LastWriteTimeUtc > newest.LastWriteTimeUtc)
+                newest = dir;
         }
+        if (newest is null)
+        {
+            logger.LogDebug("Cache miss for {NodeName}: no subdir matching {NodeName}_* contains a DLL", nodeName, nodeName);
+            return null;
+        }
+
+        var dllPath = Path.Combine(newest.FullName, $"{nodeName}.dll");
+        var pdbPath = Path.Combine(newest.FullName, $"{nodeName}.pdb");
+        var sourcePath = GetSourcePath(nodeName);
 
         if (!File.Exists(pdbPath))
         {
             logger.LogDebug("Cache miss for {NodeName}: PDB not found at {PdbPath}", nodeName, pdbPath);
-            return false;
+            return null;
         }
 
         if (_options.EnableSourceDebugging && !File.Exists(sourcePath))
         {
             logger.LogDebug("Cache miss for {NodeName}: Source not found at {SourcePath}", nodeName, sourcePath);
-            return false;
+            return null;
         }
 
         // Check if DLL is newer than the node's LastModified
@@ -522,7 +568,7 @@ internal class CompilationCacheService(
             logger.LogDebug(
                 "Cache stale for {NodeName}: DLL modified at {DllTime}, partition modified at {PartitionTime}",
                 nodeName, dllLastWrite, lastModified);
-            return false;
+            return null;
         }
 
         // Check 2: DLL must be newer than the framework DLL (MeshWeaver.Graph.dll)
@@ -532,11 +578,11 @@ internal class CompilationCacheService(
             logger.LogDebug(
                 "Cache stale for {NodeName}: DLL modified at {DllTime}, framework modified at {FrameworkTime}",
                 nodeName, dllLastWrite, frameworkTime);
-            return false;
+            return null;
         }
 
-        logger.LogDebug("Cache hit for {NodeName}", nodeName);
-        return true;
+        logger.LogDebug("Cache hit for {NodeName} at {DllPath}", nodeName, dllPath);
+        return dllPath;
     }
 
     /// <inheritdoc />
