@@ -35,11 +35,13 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
     // and reuses the dynamic NodeType DLL cache across [Fact]s.
     protected override bool ShareMeshAcrossTests => true;
 
-    // Per-session cache — Guid suffix prevents Windows file-lock collisions
-    // when a stale .dll from a prior test process is still loaded.
+    // Stable cache directory so compiled dynamic NodeType DLLs survive across
+    // test runs. The timestamped-subdir cache layout (a3ab9909e) writes each
+    // compile to a unique subdir so a stale DLL pinned by a prior process's
+    // ALC is never touched — no file-lock collision.
     private static readonly string SharedCacheDirectory = Path.Combine(
         Path.GetTempPath(),
-        $"MeshWeaverAcmeSearchTests-{Guid.NewGuid():N}",
+        "MeshWeaverAcmeSearchTests",
         ".mesh-cache");
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)

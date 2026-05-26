@@ -34,12 +34,12 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
 {
     // Per-session cache directory — appending a Guid prevents the Windows
     // file-lock collision where a stale .dll from a prior test process is
-    // still loaded in memory and File.Create on the cache write throws
-    // "process cannot access the file". Cache stays shared within the
-    // session (tests in this class), fresh across sessions.
+    // Stable cache directory — the timestamped-subdir cache (a3ab9909e)
+    // gives each compile its own subdir so prior-process DLLs aren't touched.
+    // File-lock collisions on the cache write are no longer possible.
     private static readonly string SharedCacheDirectory = Path.Combine(
         Path.GetTempPath(),
-        $"MeshWeaverTodoWorkflowTests-{Guid.NewGuid():N}",
+        "MeshWeaverTodoWorkflowTests",
         ".mesh-cache");
 
     // Local copy of test data - each test instance gets its own copy
