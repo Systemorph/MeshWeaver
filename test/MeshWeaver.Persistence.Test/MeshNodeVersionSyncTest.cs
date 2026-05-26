@@ -208,8 +208,10 @@ public record GraphRoot
         // Arrange - create a node with a specific version. Use a built-in
         // NodeType ("Group") so the per-node hub activates without waiting
         // for a Roslyn compile — this test exercises Version persistence,
-        // not NodeType compilation. A dynamic NodeType (e.g. "type/graph")
-        // would block CreateNode behind the slow-path compile and time out.
+        // not NodeType compilation. The compile cache can't help here
+        // because the test creates source nodes fresh on every run
+        // (LastModified=now), invalidating any prior cache entry against
+        // the source-timestamp gate.
         var nodeWithVersion = MeshNode.FromPath("test/versioned") with
         {
             Name = "Versioned Node",
