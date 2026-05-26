@@ -100,10 +100,9 @@ internal static class ThreadExecution
             // hosted hub (InstallExecutionHub) subscribes to the parent's
             // stream and continues with Step B + C on its own action block.
             //
-            // Resubmit / delete-from / submission-failure: callers patch
-            // RequestedResubmit / RequestedDeleteFromMessageId / PendingFailures
-            // via stream.Update; the three watchers below consume those intents
-            // on this hub's own action block.
+            // Resubmit / delete-from / submission-failure are now done inline
+            // by HubThreadExtensions — single stream.Update per operation, no
+            // intent fields, no per-operation watchers.
             .WithHandler<MeshWeaver.AI.Delegation.HeartbeatTick>(
                 MeshWeaver.AI.Delegation.DelegationHandlers.HandleHeartbeatTick)
             .WithHandler<MeshWeaver.AI.Delegation.CancelDelegationSubThread>(
@@ -113,9 +112,6 @@ internal static class ThreadExecution
             .WithInitialization(InstallCancellationWatcher)
             .WithInitialization(InstallExecutionHub)
             .WithInitialization(InstallSubmissionWatcher)
-            .WithInitialization(InstallResubmitWatcher)
-            .WithInitialization(InstallDeleteFromMessageWatcher)
-            .WithInitialization(InstallFailureRecordWatcher)
             .WithInitialization(InstallHeartbeatTicker);
 
     /// <summary>
@@ -142,24 +138,6 @@ internal static class ThreadExecution
             HostedHubCreation.Always);
     }
 
-    private static void InstallResubmitWatcher(IMessageHub threadHub)
-    {
-        var sub = ThreadSubmissionServer.InstallResubmitWatcher(threadHub);
-        threadHub.RegisterForDisposal(sub);
-    }
-
-    private static void InstallDeleteFromMessageWatcher(IMessageHub threadHub)
-    {
-        var sub = ThreadSubmissionServer.InstallDeleteFromMessageWatcher(threadHub);
-        threadHub.RegisterForDisposal(sub);
-    }
-
-    private static void InstallFailureRecordWatcher(IMessageHub threadHub)
-    {
-        var sub = ThreadSubmissionServer.InstallFailureRecordWatcher(threadHub);
-        threadHub.RegisterForDisposal(sub);
-    }
-
     /// <summary>
     /// _Exec hosted hub's round watcher. Subscribes to the parent thread node's
     /// stream via the shared <see cref="IMeshNodeStreamCache"/> and fires
@@ -167,7 +145,7 @@ internal static class ThreadExecution
     /// <c>Idle → StartingExecution</c> transition. <c>DistinctUntilChanged</c>
     /// on <see cref="MeshThread.Status"/> (project first, then dedupe, then
     /// filter) ensures the watcher fires ONLY on the transition itself —
-    /// other field updates (PendingUserMessages, PendingFailures, etc.) that
+    /// other field updates (PendingUserMessages, Messages, etc.) that
     /// arrive while Status remains StartingExecution don't re-trigger dispatch.
     ///
     /// <para>Sets the round's <see cref="AccessContext"/> from

@@ -6,6 +6,14 @@ This file provides guidance to AI agents working with this repository.
 
 **NEVER commit or push automatically.** Always wait for the user to explicitly ask.
 
+## 🚨🚨🚨 ABSOLUTE: Never change log levels in code for debug reasons
+
+**Editing `LogInformation` ↔ `LogDebug` ↔ `LogTrace` (or `appsettings.json` under `src/`) to dial verbosity up or down for a debugging session is FORBIDDEN.** Log levels in code reflect the production cost model — `Information` lines ship to App Insights and we pay per ingest. Changing them temporarily silently bleeds budget the next CI run.
+
+To turn the volume up for debugging, **edit the appsettings.json in the test's `bin/Debug/net10.0/` (or the equivalent runtime config)** — `reloadOnChange: true` is wired so the level flips mid-run without a rebuild. The src-tree `appsettings.json` and every `Log*` call in `src/` is committed contract.
+
+If a Log call is genuinely too noisy or too quiet at the level it's written, fix it permanently with a real commit message explaining the cost/value trade-off — don't sneak it in alongside an unrelated change.
+
 ## Test Triage
 
 When CI fails, **DO NOT run entire test projects** — iterate one test at a time:

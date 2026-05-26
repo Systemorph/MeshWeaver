@@ -100,7 +100,7 @@ When the thread node's `Content.PendingUserMessages` becomes non-empty AND `IsEx
 3. Flips `IsExecuting = true`, `Status = Executing`.
 4. Invokes `ThreadExecution.ExecuteMessageAsync(execHub, RoundParams, AccessContext?)` **directly as a method** — no message dispatch.
 
-Resubmit / DeleteFromMessage / MarkThreadDone / RecordSubmissionFailure each have a matching watcher arm that consumes the corresponding intent (`RequestedResubmit`, `RequestedDeleteFromMessageId`, `Status`, `PendingFailures`) and rewrites the thread state atomically.
+Resubmit / DeleteFromMessage / RecordSubmissionFailure each do the full thread-state mutation **inline** inside their hub extension method's `GetMeshNodeStream(threadPath).Update(...)` lambda. No intent fields, no per-operation watcher — only the submission watcher remains. `MarkThreadDone` likewise writes `Status` directly. Earlier intent-payload records (`ResubmitIntent`, `FailureRecord`) and matching thread-node fields (`RequestedResubmit`, `RequestedDeleteFromMessageId`, `PendingFailures`) were deleted (2026-05-27).
 
 ## What about `ThreadSubmission` and `ThreadExecution`?
 

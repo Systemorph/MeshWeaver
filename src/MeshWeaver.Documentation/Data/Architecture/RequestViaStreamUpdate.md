@@ -41,15 +41,20 @@ Two cases are NOT merge-safe:
    the patch is the new list, which doesn't account for concurrent
    writers.
 
-**Design rule**: cross-hub mutations write a single intent field. The
-owning hub's watcher consumes the intent and runs the multi-list
-mutation locally (UpdateOwn — race-free on the action block).
+**Design rule**: cross-hub mutations are a single `stream.Update(...)` on the
+target node. The action-block serialisation on the owning hub guarantees
+race-free merge; RFC-7396 patch semantics let the lambda touch only the
+fields it intends to change.
 
-The thread refactor is the canonical example. Where the code used to
-post `ResubmitTrigger(threadPath, msgId, ...)`, it now writes
-`node with { Content = t with { RequestedResubmit = intent } }` — one
-field. The thread hub's resubmit watcher truncates `Messages`,
-re-queues `PendingUserMessages`, etc. — all on its own action block.
+The thread refactor is the canonical example. The whole resubmit/delete-from/
+record-failure flow used to post bespoke `ResubmitTrigger` / `DeleteFromTrigger` /
+`RecordFailureTrigger` messages, then briefly used intent-field payloads
+(`RequestedResubmit`, `RequestedDeleteFromMessageId`, `PendingFailures`)
+consumed by per-operation watchers, and now does the **full mutation inline**
+inside the hub extension method's `stream.Update` lambda — truncate `Messages`,
+re-queue `PendingUserMessages`, etc. all in one patch. See
+`Doc/Architecture/ThreadOperations.md` for the public API
+(`hub.ResubmitMessage`, `hub.DeleteFromMessage`, `hub.RecordSubmissionFailure`).
 
 ## Use the canonical helpers
 

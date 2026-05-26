@@ -86,13 +86,10 @@ public static class AIExtensions
             // ExecuteMessageAsync directly as a method (no wire message).
             // See CLAUDE.md → "GetMeshNodeStream().Update() is the ONLY mutation API"
             // and Doc/Architecture/RequestViaStreamUpdate.md.
-            // Thread mutation triggers (ResubmitTrigger / DeleteFromMessageTrigger /
-            // RecordSubmissionFailureTrigger / StartExecutionTrigger / ThreadMutationAck)
-            // were deleted — ThreadSubmission.Apply* now writes control-plane fields
-            // (RequestedResubmit / RequestedDeleteFromMessageId / PendingFailures) on
-            // the thread node via stream.Update; the thread hub's watchers consume them.
-            .WithType(typeof(ResubmitIntent), nameof(ResubmitIntent))
-            .WithType(typeof(FailureRecord), nameof(FailureRecord))
+            // Thread mutation triggers and intent payloads (ResubmitIntent,
+            // FailureRecord, RequestedResubmit / RequestedDeleteFromMessageId /
+            // PendingFailures fields) were deleted — HubThreadExtensions does the
+            // full mutation inline via a single stream.Update on the thread node.
             .WithType(typeof(ToolCallEntry), nameof(ToolCallEntry))
             .WithType(typeof(NodeChangeEntry), nameof(NodeChangeEntry))
             .WithType(typeof(ThreadExecutionContext), nameof(ThreadExecutionContext))

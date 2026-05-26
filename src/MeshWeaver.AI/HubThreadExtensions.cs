@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
@@ -170,9 +171,14 @@ public static class HubThreadExtensions
 
     /// <summary>
     /// Truncates the thread after <paramref name="userMessageId"/> and re-queues
-    /// it as a new pending message by patching
-    /// <see cref="MeshThread.RequestedResubmit"/>. The thread hub's resubmit
-    /// watcher consumes the intent and re-dispatches.
+    /// it as a new pending user message. Single <c>stream.Update</c> on the
+    /// thread node: drops <c>Messages</c> after the resubmit point, removes the
+    /// id from <c>IngestedMessageIds</c>, puts the (optionally edited) user
+    /// message back into <c>PendingUserMessages</c>, and resets <c>Status</c>
+    /// to <c>Idle</c>. The submission watcher then dispatches the next round
+    /// naturally. The user cell's text — a separate node — is updated through
+    /// the shared <see cref="IMeshNodeStreamCache"/> when <paramref name="newUserText"/>
+    /// is supplied.
     /// </summary>
     public static void ResubmitMessage(
         this IMessageHub hub,
@@ -192,20 +198,89 @@ public static class HubThreadExtensions
 
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.HubThreadExtensions");
-        var intent = new ResubmitIntent(userMessageId, newUserText, agentName, modelName, DateTime.UtcNow);
+
         hub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
         {
-            var t = node.Content as MeshThread ?? new MeshThread();
-            return node with { Content = t with { RequestedResubmit = intent } };
+            var t = node.Content as MeshThread;
+            if (t is null) return node;
+
+            var idx = t.Messages.IndexOf(userMessageId);
+            if (idx < 0) return node; // id not in thread — no-op
+
+            var keep = t.Messages.Take(idx).ToImmutableList();
+            var trimmedUserIds = t.UserMessageIds
+                .Where(uid => keep.Contains(uid) || uid == userMessageId)
+                .ToImmutableList();
+            if (!trimmedUserIds.Contains(userMessageId))
+                trimmedUserIds = trimmedUserIds.Add(userMessageId);
+
+            var ingested = t.IngestedMessageIds.Remove(userMessageId);
+            var replayMessage = new ThreadMessage
+            {
+                Role = "user",
+                Text = newUserText ?? "",
+                Timestamp = DateTime.UtcNow,
+                Type = ThreadMessageType.ExecutedInput,
+                AgentName = agentName,
+                ModelName = modelName
+            };
+            var pending = t.PendingUserMessages.SetItem(userMessageId, replayMessage);
+
+            return node with
+            {
+                Content = t with
+                {
+                    Messages = keep,
+                    UserMessageIds = trimmedUserIds,
+                    IngestedMessageIds = ingested,
+                    PendingUserMessages = pending,
+                    Status = ThreadExecutionStatus.Idle,
+                    ActiveMessageId = null,
+                    ExecutionStartedAt = null,
+                    PendingAgentName = agentName ?? t.PendingAgentName,
+                    PendingModelName = modelName ?? t.PendingModelName
+                }
+            };
         }).Subscribe(
             _ => { },
             ex =>
             {
                 logger?.LogWarning(ex,
-                    "ResubmitMessage: patch failed for thread {ThreadPath} message {MessageId}",
+                    "ResubmitMessage: thread Update failed for {ThreadPath} message {MessageId}",
                     threadPath, userMessageId);
                 onError?.Invoke($"ResubmitMessage failed: {ex.Message}");
             });
+
+        // Cell-text update — the per-message satellite is a SEPARATE node, so
+        // it goes through the shared cache rather than the thread-node Update.
+        // Independent of the thread Update above; no ordering dependency. Only
+        // runs when the caller supplied new text.
+        if (!string.IsNullOrEmpty(newUserText))
+        {
+            var cellPath = $"{threadPath}/{userMessageId}";
+            var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+            cache.Update(cellPath, node =>
+            {
+                var existing = node.Content as ThreadMessage;
+                var nextContent = existing is not null
+                    ? existing with { Text = newUserText!, Timestamp = DateTime.UtcNow }
+                    : new ThreadMessage
+                    {
+                        Role = "user",
+                        Text = newUserText!,
+                        Timestamp = DateTime.UtcNow,
+                        Type = ThreadMessageType.ExecutedInput
+                    };
+                return node with
+                {
+                    NodeType = node.NodeType ?? ThreadMessageNodeType.NodeType,
+                    Content = nextContent
+                };
+            }).Subscribe(
+                _ => { },
+                ex => logger?.LogWarning(ex,
+                    "ResubmitMessage: cell-text Update failed for {CellPath}", cellPath));
+        }
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -214,10 +289,9 @@ public static class HubThreadExtensions
 
     /// <summary>
     /// Truncates <see cref="MeshThread.Messages"/> starting at
-    /// <paramref name="atMessageId"/> by patching
-    /// <see cref="MeshThread.RequestedDeleteFromMessageId"/>. The thread hub's
-    /// watcher consumes the request and rewrites Messages /
-    /// IngestedMessageIds atomically.
+    /// <paramref name="atMessageId"/> (exclusive — drops <paramref name="atMessageId"/>
+    /// and everything after). Single <c>stream.Update</c> on the thread node;
+    /// no watcher indirection.
     /// </summary>
     public static void DeleteFromMessage(
         this IMessageHub hub, string threadPath, string atMessageId)
@@ -230,13 +304,18 @@ public static class HubThreadExtensions
             ?.CreateLogger("MeshWeaver.AI.HubThreadExtensions");
         hub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
         {
-            var t = node.Content as MeshThread ?? new MeshThread();
-            if (t.RequestedDeleteFromMessageId == atMessageId) return node;
-            return node with { Content = t with { RequestedDeleteFromMessageId = atMessageId } };
+            var t = node.Content as MeshThread;
+            if (t is null) return node;
+            var idx = t.Messages.IndexOf(atMessageId);
+            if (idx < 0) return node; // id not in thread — no-op
+            return node with
+            {
+                Content = t with { Messages = t.Messages.Take(idx).ToImmutableList() }
+            };
         }).Subscribe(
             _ => { },
             ex => logger?.LogWarning(ex,
-                "DeleteFromMessage: patch failed for thread {ThreadPath} message {MessageId}",
+                "DeleteFromMessage: Update failed for thread {ThreadPath} message {MessageId}",
                 threadPath, atMessageId));
     }
 
@@ -283,11 +362,12 @@ public static class HubThreadExtensions
     // ═════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Records a failed submission by patching one entry into
-    /// <see cref="MeshThread.PendingFailures"/> on the target thread. The
-    /// thread hub's failure watcher consumes the entry and materialises an
-    /// error cell. Works from any hub (the patch is a dict SetItem,
-    /// RFC-7396-merge-safe).
+    /// Records a failed submission by creating an error satellite cell and
+    /// updating the thread node in one chained operation: <c>CreateNode</c>
+    /// for the error cell, then a single <c>stream.Update</c> on the thread
+    /// node to append both the user-message id and the error-cell id to
+    /// <c>Messages</c> + bookkeeping in <c>UserMessageIds</c> /
+    /// <c>IngestedMessageIds</c>. No intent indirection, no watcher.
     /// </summary>
     public static void RecordSubmissionFailure(
         this IMessageHub hub,
@@ -301,18 +381,51 @@ public static class HubThreadExtensions
             return;
 
         var errorCellId = Guid.NewGuid().ToString("N")[..8];
-        var record = new FailureRecord(userText, errorMessage, errorCellId, DateTime.UtcNow);
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.HubThreadExtensions");
-        hub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
+        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var workspace = hub.GetWorkspace();
+
+        var errorCell = new MeshNode(errorCellId, threadPath)
         {
-            var t = node.Content as MeshThread ?? new MeshThread();
-            if (t.PendingFailures.ContainsKey(userMessageId)) return node;
-            return node with { Content = t with { PendingFailures = t.PendingFailures.SetItem(userMessageId, record) } };
-        }).Subscribe(
-            _ => { },
-            ex => logger?.LogWarning(ex,
-                "RecordSubmissionFailure: patch failed for thread {ThreadPath} message {MessageId}",
-                threadPath, userMessageId));
+            NodeType = ThreadMessageNodeType.NodeType,
+            MainNode = threadPath,
+            Content = new ThreadMessage
+            {
+                Role = "assistant",
+                Text = $"**Submission failed:** {errorMessage}",
+                Timestamp = DateTime.UtcNow,
+                Type = ThreadMessageType.AgentResponse
+            }
+        };
+
+        meshService.CreateNode(errorCell)
+            .SelectMany(_ => workspace.GetMeshNodeStream(threadPath).Update(node =>
+            {
+                var t = node.Content as MeshThread ?? new MeshThread();
+                var msgs = t.Messages;
+                if (!msgs.Contains(userMessageId)) msgs = msgs.Add(userMessageId);
+                if (!msgs.Contains(errorCellId)) msgs = msgs.Add(errorCellId);
+                var userIds = t.UserMessageIds.Contains(userMessageId)
+                    ? t.UserMessageIds
+                    : t.UserMessageIds.Add(userMessageId);
+                var ingested = t.IngestedMessageIds.Contains(userMessageId)
+                    ? t.IngestedMessageIds
+                    : t.IngestedMessageIds.Add(userMessageId);
+                return node with
+                {
+                    Content = t with
+                    {
+                        Messages = msgs,
+                        UserMessageIds = userIds,
+                        IngestedMessageIds = ingested
+                    }
+                };
+            }))
+            .Subscribe(
+                _ => { },
+                ex => logger?.LogWarning(ex,
+                    "RecordSubmissionFailure: CreateNode+Update failed for {ThreadPath} message {MessageId}",
+                    threadPath, userMessageId));
     }
 }
