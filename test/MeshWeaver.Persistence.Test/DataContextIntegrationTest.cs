@@ -182,7 +182,14 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
             }
         }, SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
 
-        var cacheDirectory = Path.Combine(testDataDirectory, ".mesh-cache");
+        // Stable cache directory (separate from the per-class testDataDirectory)
+        // so the compiled type/graph DLL survives across test runs. The source
+        // for type/graph is identical across runs, so the cache hits via
+        // CompilationCacheService.TryGetLatestCachedDllPath and the test
+        // completes inside its 10 s timeout instead of paying the 10 s+
+        // Roslyn cold-compile cost on every invocation.
+        var cacheDirectory = Path.Combine(TestDirectoryBase, ".mesh-cache");
+        Directory.CreateDirectory(cacheDirectory);
 
         return builder
             .UseMonolithMesh()
