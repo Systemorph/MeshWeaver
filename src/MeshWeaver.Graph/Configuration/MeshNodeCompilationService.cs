@@ -38,16 +38,16 @@ internal class MeshNodeCompilationService(
     private JsonSerializerOptions JsonOptions => hub.JsonSerializerOptions;
     private readonly DynamicMeshNodeAttributeGenerator _attributeGenerator = new();
 
-    // Per-nodeName lock that serialises concurrent <see cref="CompileAsync"/> calls
-    // for the same NodeType. Without it, multiple instances activating in parallel
-    // (e.g. four FutuRe BusinessUnit hubs — EuropeRe, AmericasIns, AsiaRe, Group)
-    // race File.Create on the same .dll and the loser gets
-    // "The process cannot access the file because it is being used by another
-    // process". Roslyn's emit + the AssemblyLoadContext load hold the file open
-    // between the two, so the OS lock survives long enough for the second caller
-    // to hit it. Inside the lock we double-check the cache so the runner-up
-    // returns immediately instead of recompiling redundantly.
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _compileLocks = new(StringComparer.Ordinal);
+    // Per-nodeName single-flight: when two callers ask to compile the same
+    // NodeType concurrently, the first one's Task runs the compile; every
+    // other caller receives the SAME Task and awaits its result. No second
+    // call to CompileAsyncCore (which the old SemaphoreSlim shape forced —
+    // caller 2 waited for the semaphore, then re-entered the cache-check
+    // path even though caller 1 had just finished). Entries clear once the
+    // task settles so a future re-compile (e.g. after source edit) starts
+    // fresh.
+    private readonly ConcurrentDictionary<string, Lazy<Task<string?>>> _inflightCompiles =
+        new(StringComparer.Ordinal);
 
     // Query expansion lives in CodeQueryResolver now so the NodeType Configuration
     // side menu can evaluate the *same* queries the compiler uses — the Sources /
@@ -896,7 +896,7 @@ internal class MeshNodeCompilationService(
     /// Compiles CodeConfiguration into an assembly using Roslyn.
     /// Supports both disk-based and in-memory compilation.
     /// </summary>
-    private async Task<string?> CompileAsync(
+    private Task<string?> CompileAsync(
         CodeConfiguration? codeFile,
         string? hubConfiguration,
         IReadOnlyList<ContentCollectionConfig>? contentCollections,
@@ -904,15 +904,32 @@ internal class MeshNodeCompilationService(
         CancellationToken ct)
     {
         var nodeName = cacheService.SanitizeNodeName(node.Path);
-        var sem = _compileLocks.GetOrAdd(nodeName, _ => new SemaphoreSlim(1, 1));
-        await sem.WaitAsync(ct);
+        // Single-flight: GetOrAdd with Lazy<T> ensures the factory runs at
+        // most once even under concurrent entry. All callers receive the
+        // SAME Task and await its result. The continuation evicts the entry
+        // once the task settles so a future invalidation triggers a fresh
+        // compile instead of returning the stale completed task.
+        var lazy = _inflightCompiles.GetOrAdd(nodeName, n =>
+            new Lazy<Task<string?>>(() => RunCompileAndEvict(
+                codeFile, hubConfiguration, contentCollections, node, n, ct)));
+        return lazy.Value;
+    }
+
+    private async Task<string?> RunCompileAndEvict(
+        CodeConfiguration? codeFile,
+        string? hubConfiguration,
+        IReadOnlyList<ContentCollectionConfig>? contentCollections,
+        MeshNode node,
+        string nodeName,
+        CancellationToken ct)
+    {
         try
         {
             return await CompileAsyncCore(codeFile, hubConfiguration, contentCollections, node, nodeName, ct);
         }
         finally
         {
-            sem.Release();
+            _inflightCompiles.TryRemove(nodeName, out _);
         }
     }
 
