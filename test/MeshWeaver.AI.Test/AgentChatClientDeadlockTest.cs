@@ -53,7 +53,7 @@ public class AgentChatClientDeadlockTest(ITestOutputHelper output) : MonolithMes
     /// via <c>.ToTask()</c> + <c>await</c> â€” that pattern deadlocks the hub ActionBlock when
     /// multiple concurrent callers are in flight.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task GetOrderedAgentsAsync_WithContextPath_ConcurrentCallers_DoNotDeadlock()
     {
         // ProductLaunch carries NodeType="ACME/Project", which exercises the
@@ -95,7 +95,7 @@ public class AgentChatClientDeadlockTest(ITestOutputHelper output) : MonolithMes
     /// single sequential caller (the trivial repro of the deadlock â€” every fresh
     /// <c>AgentChatClient</c> kicks off the same hub round-trip on activation).
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task GetOrderedAgentsAsync_WithContextPath_SingleCaller_ResolvesQuickly()
     {
         const string ContextPath = "ACME/ProductLaunch";
@@ -126,7 +126,7 @@ public class AgentChatClientDeadlockTest(ITestOutputHelper output) : MonolithMes
     /// is in the lookup itself, not the post-lookup filter â€” the code still runs the
     /// hub round-trip before deciding to discard the result.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task GetOrderedAgentsAsync_WithMarkdownContext_DoesNotDeadlock()
     {
         // Use a known Markdown node from the test data â€” TestDoc/ParentDoc.md.

@@ -11,49 +11,49 @@ namespace MeshWeaver.Threading.Test;
 
 public class ToolStatusFormatterTest
 {
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Get_FormatsWithPath()
     {
         var call = MakeCall("Get", new() { ["path"] = "@org/Acme" });
         ToolStatusFormatter.Format(call).Should().Be("Fetching @org/Acme");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Search_FormatsWithQuery()
     {
         var call = MakeCall("Search", new() { ["query"] = "nodeType:Agent" });
         ToolStatusFormatter.Format(call).Should().Be("Searching \"nodeType:Agent\"");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Create_ShowsGenericMessage()
     {
         var call = MakeCall("Create", new() { ["node"] = "{}" });
         ToolStatusFormatter.Format(call).Should().Be("Creating node...");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void NavigateTo_FormatsWithPath()
     {
         var call = MakeCall("NavigateTo", new() { ["path"] = "@Doc/Architecture" });
         ToolStatusFormatter.Format(call).Should().Be("Navigating to @Doc/Architecture");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void SearchWeb_FormatsWithQuery()
     {
         var call = MakeCall("SearchWeb", new() { ["query"] = "MeshWeaver docs" });
         ToolStatusFormatter.Format(call).Should().Be("Searching web for \"MeshWeaver docs\"");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void FetchWebPage_FormatsWithUrl()
     {
         var call = MakeCall("FetchWebPage", new() { ["url"] = "https://example.com" });
         ToolStatusFormatter.Format(call).Should().Be("Fetching https://example.com");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void DelegateToAgent_FormatsWithAgentName()
     {
         // delegate_to_agent uses FormatDelegation which prepends the task summary
@@ -64,42 +64,42 @@ public class ToolStatusFormatterTest
         ToolStatusFormatter.Format(call).Should().Be("find info (Researcher)");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void DelegateToAgent_NoTask_FallsBackToBareForm()
     {
         var call = MakeCall("delegate_to_agent", new() { ["agentName"] = "Researcher" });
         ToolStatusFormatter.Format(call).Should().Be("Delegating to Researcher...");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void DelegateToSpecific_ExtractsNameFromFunctionName()
     {
         var call = MakeCall("delegate_to_Orchestrator", null);
         ToolStatusFormatter.Format(call).Should().Be("Delegating to Orchestrator...");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void HandoffToAgent_FormatsWithAgentName()
     {
         var call = MakeCall("handoff_to_agent", new() { ["agentName"] = "Worker" });
         ToolStatusFormatter.Format(call).Should().Be("Handing off to Worker...");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void StorePlan_ShowsGenericMessage()
     {
         var call = MakeCall("store_plan", new() { ["planContent"] = "## Plan" });
         ToolStatusFormatter.Format(call).Should().Be("Storing plan...");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Unknown_FallsBack()
     {
         var call = MakeCall("custom_tool", null);
         ToolStatusFormatter.Format(call).Should().Be("Calling custom_tool...");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void TruncatesLongValues()
     {
         var longPath = new string('x', 100);
@@ -109,7 +109,7 @@ public class ToolStatusFormatterTest
         result.Length.Should().BeLessThan(80);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void HandlesJsonElementArgs()
     {
         // Simulate args coming as JsonElement (common from AI framework)
@@ -122,14 +122,14 @@ public class ToolStatusFormatterTest
         ToolStatusFormatter.Format(call).Should().Be("Fetching @org/test");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void HandlesMissingArgs()
     {
         var call = MakeCall("Get", null);
         ToolStatusFormatter.Format(call).Should().Be("Fetching ...");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void AddComment_FormatsWithSelectedText()
     {
         var call = MakeCall("AddComment", new() { ["selectedText"] = "quarterly results" });
@@ -138,7 +138,7 @@ public class ToolStatusFormatterTest
 
     // --- Reference link conversion tests ---
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ConvertReferences_InlinePathBecomesLink()
     {
         var method = typeof(MeshWeaver.AI.ThreadMessageLayoutAreas)
@@ -150,7 +150,7 @@ public class ToolStatusFormatterTest
         result.Should().Contain("[`@User/rbuergi/agents-comparison`](/User/rbuergi/agents-comparison)");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ConvertReferences_AlreadyLinkedSkipped()
     {
         var method = typeof(MeshWeaver.AI.ThreadMessageLayoutAreas)
@@ -160,7 +160,7 @@ public class ToolStatusFormatterTest
         result.Should().NotContain("[[");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ConvertReferences_AbsolutePathPreserved()
     {
         var method = typeof(MeshWeaver.AI.ThreadMessageLayoutAreas)

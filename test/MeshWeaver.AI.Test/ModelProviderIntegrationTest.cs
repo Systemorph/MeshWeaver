@@ -1,4 +1,4 @@
-#pragma warning disable CS1591
+﻿#pragma warning disable CS1591
 
 using System;
 using System.Collections.Immutable;
@@ -24,7 +24,7 @@ namespace MeshWeaver.AI.Test;
 /// <summary>
 /// Integration tests covering the user-owned ModelProvider + LanguageModel
 /// flow against a real Monolith mesh. Exercises the same path the chat
-/// client takes: ModelDefinition.ProviderRef → ModelProvider node →
+/// client takes: ModelDefinition.ProviderRef â†’ ModelProvider node â†’
 /// (Endpoint, ApiKey) via <see cref="ChatClientCredentialResolver"/>.
 /// </summary>
 public class ModelProviderIntegrationTest : AITestBase
@@ -36,7 +36,7 @@ public class ModelProviderIntegrationTest : AITestBase
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
     private IWorkspace Workspace => Mesh.GetWorkspace();
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task UserOwnedModelProvider_ResolverFindsKeyViaProviderRef()
     {
         var ct = new CancellationTokenSource(20.Seconds()).Token;
@@ -84,7 +84,7 @@ public class ModelProviderIntegrationTest : AITestBase
         await MeshService.CreateNode(modelNode).FirstAsync().ToTask(ct);
 
         // 3. Pre-warm the resolver's snapshot via the same workspace.GetQuery
-        //    the resolver uses internally — see SyncedMeshNodeQueries.md.
+        //    the resolver uses internally â€” see SyncedMeshNodeQueries.md.
         await Workspace.GetQuery(
                 "warmup",
                 AgentPickerProjection.BuildModelQueries(currentPath: userId))
@@ -93,7 +93,7 @@ public class ModelProviderIntegrationTest : AITestBase
             .Timeout(15.Seconds())
             .ToTask(ct);
 
-        // 4. Resolve and verify. Poll via Observable.Interval — the
+        // 4. Resolve and verify. Poll via Observable.Interval â€” the
         //    resolver's internal IngestSnapshot is driven by the same
         //    cached observable, but the OnNext order between our
         //    Take(1) above and the resolver's subscription is not
@@ -105,16 +105,16 @@ public class ModelProviderIntegrationTest : AITestBase
             .Select(_ => resolver.Resolve(modelId))
             .Where(r => r.ApiKey != null)
             .Take(1).Timeout(10.Seconds()).ToTask(ct);
-        resolution.ApiKey.Should().Be(rawKey, "resolver follows ProviderRef → ModelProvider.ApiKey");
+        resolution.ApiKey.Should().Be(rawKey, "resolver follows ProviderRef â†’ ModelProvider.ApiKey");
         resolution.Endpoint.Should().Be("https://api.anthropic.com/v1/messages");
         resolution.Source.Should().StartWith("providerRef:");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Resolver_MissingProvider_ReturnsMissing()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
-        // Model node without a ProviderRef and no parent provider —
+        // Model node without a ProviderRef and no parent provider â€”
         // resolver should report Missing so the factory falls back to IOptions.
         var orphanId = $"orphan-model-{Guid.NewGuid():N}";
         var modelNs = $"{ModelProviderNodeType.RootNamespace}/NoSuchProvider";
@@ -145,13 +145,13 @@ public class ModelProviderIntegrationTest : AITestBase
         resolution.Source.Should().Be("missing");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Resolver_UnknownModelId_ReturnsMissing()
     {
         var ct = new CancellationTokenSource(10.Seconds()).Token;
         var resolver = Mesh.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
         resolver.EnsureSubscription();
-        // Wait via the same synced observable the resolver subscribes to —
+        // Wait via the same synced observable the resolver subscribes to â€”
         // once it emits any Initial snapshot, the resolver has been
         // notified too (same cache id, same upstream).
         await Workspace.GetQuery(AgentPickerProjection.ModelsQueryId, AgentPickerProjection.BuildModelQueries())
@@ -159,7 +159,7 @@ public class ModelProviderIntegrationTest : AITestBase
         resolver.Resolve("definitely-not-a-real-model-id").Should().Be(CredentialResolution.Missing);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task ResolverGetProviderForModel_ReturnsCachedProvider()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;

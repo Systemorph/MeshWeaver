@@ -34,7 +34,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
             .AddAI()
             .AddSampleUsers();
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task QueryThread_ByPath_ReturnsRolandsThread()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -56,7 +56,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
         result!.Name.Should().Be("Roland's test thread");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task QueryThreads_ByNodeType_RolandSeesOwnThread()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -78,7 +78,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
             "Roland should see his own thread in nodeType:Thread query");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task QueryThreads_SamuelCannotSeeRolandsThread()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -103,7 +103,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
             "Roland's thread should not be under Samuel's user scope");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task QueryThreads_InNamespace_RolandSeesOwnThread()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -125,7 +125,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
             "Roland should see his thread via namespace query");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task GlobalThreadSearch_ShowsOwnThread()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -149,7 +149,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
             "Roland's thread should appear in global thread search");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task QueryThreads_SortByLastModifiedDesc_NewestFirst()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -187,7 +187,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
             "New thread should appear before Old thread with sort:LastModified-desc");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task AutocompleteUsers_StillVisibleForAccessControl()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;

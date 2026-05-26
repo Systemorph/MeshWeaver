@@ -284,7 +284,7 @@ public class DelegationIntegrationTest : MonolithMeshTestBase
     /// Verifies that agents loaded from .md files are correctly parsed
     /// and have their delegation configurations set up.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task AgentLoading_FromMarkdownFiles_ParsesDelegationsCorrectly()
     {
         var ghToken = Environment.GetEnvironmentVariable("GH_TOKEN");

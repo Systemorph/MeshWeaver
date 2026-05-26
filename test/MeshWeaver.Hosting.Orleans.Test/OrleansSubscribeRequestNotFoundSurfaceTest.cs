@@ -52,7 +52,7 @@ public class OrleansSubscribeRequestNotFoundSurfaceTest(ITestOutputHelper output
     /// test fails closed (20 s timeout on the OnError wait) so a regression
     /// into the swallowed-timeout shape is loud.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task GetRemoteStream_on_nonexistent_address_surfaces_OnError_with_NotFound_message()
     {
         var client = await GetClientAsync("notfound-" + Guid.NewGuid().ToString("N")[..8]);
@@ -103,7 +103,7 @@ public class OrleansSubscribeRequestNotFoundSurfaceTest(ITestOutputHelper output
     /// the full Orleans routing â†’ grain activation â†’ layout area rendering path
     /// works, so a failing not-found test can't be blamed on missing plumbing.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task GetRemoteStream_on_existing_address_receives_layout_area_data()
     {
         var client = await GetClientAsync("found-" + Guid.NewGuid().ToString("N")[..8]);

@@ -18,7 +18,7 @@ public class InboxToolUnitTest
 {
     // â”€â”€â”€ Drain â”€â”€â”€
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Drain_EmptyPending_ReturnsEmptyResult_LeavesThreadUnchanged()
     {
         var thread = new MeshThread
@@ -36,7 +36,7 @@ public class InboxToolUnitTest
             "drain on empty inbox is a no-op");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Drain_OnePending_ReturnsItAndMarksIngested()
     {
         var msg = new ThreadMessage { Role = "user", Text = "hello mid-stream" };
@@ -62,7 +62,7 @@ public class InboxToolUnitTest
             "drain doesn't reorder Messages");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Drain_ThreePendingInOrder_ReturnsAllInUserMessageIdsOrder()
     {
         var m1 = new ThreadMessage { Role = "user", Text = "one" };
@@ -83,7 +83,7 @@ public class InboxToolUnitTest
         result.DrainedTexts.Should().ContainInOrder("one", "two", "three");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Drain_PendingNotInUserMessageIds_StillReturnedAtEnd()
     {
         // Defensive case â€” pending entry whose id was never registered. We must
@@ -102,7 +102,7 @@ public class InboxToolUnitTest
         result.UpdatedThread.PendingUserMessages.Should().BeEmpty();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Drain_DoesNotDoubleAddIngestedIds()
     {
         var msg = new ThreadMessage { Role = "user", Text = "x" };
@@ -121,7 +121,7 @@ public class InboxToolUnitTest
         result.UpdatedThread.IngestedMessageIds.Should().ContainSingle().Which.Should().Be("u1");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Drain_PreservesOtherThreadFields()
     {
         var msg = new ThreadMessage { Role = "user", Text = "x" };
@@ -147,7 +147,7 @@ public class InboxToolUnitTest
         updated.TokensUsed.Should().Be(42);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Drain_NullThread_Throws()
     {
         Assert.Throws<ArgumentNullException>(() => InboxTool.Drain(null!));
@@ -155,7 +155,7 @@ public class InboxToolUnitTest
 
     // â”€â”€â”€ FormatToolResult â”€â”€â”€
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void FormatToolResult_Empty_NoNewMessages()
     {
         var drain = new InboxDrainResult(
@@ -167,7 +167,7 @@ public class InboxToolUnitTest
         InboxTool.FormatToolResult(drain).Should().Be("(no new messages)");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void FormatToolResult_SingleMessage_HumanReadablePrefix()
     {
         var drain = new InboxDrainResult(
@@ -182,7 +182,7 @@ public class InboxToolUnitTest
         result.Should().Contain("Can you also include the unit tests?");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void FormatToolResult_MultipleMessages_NumberedList()
     {
         var drain = new InboxDrainResult(
@@ -209,7 +209,7 @@ public class InboxToolUnitTest
     // Messages, marks IngestedMessageIds, and returns the satellite-cell
     // payloads so the caller can materialise them via CreateNode.
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Drain_AppendsDrainedIdsToMessagesInSubmissionOrder()
     {
         var m1 = new ThreadMessage { Role = "user", Text = "one" };
@@ -232,7 +232,7 @@ public class InboxToolUnitTest
         result.UpdatedThread.IngestedMessageIds.Should().ContainInOrder("u0", "u1", "u2");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Drain_IdAlreadyInMessages_NotAppendedTwice()
     {
         var msg = new ThreadMessage { Role = "user", Text = "x" };
@@ -249,7 +249,7 @@ public class InboxToolUnitTest
             "idempotent: re-ingest of an id already in Messages is a no-op on Messages");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Drain_ReturnsThreadMessages_ForSatelliteCellMaterialisation()
     {
         var m1 = new ThreadMessage
@@ -286,7 +286,7 @@ public class InboxToolUnitTest
     // either AppendUserInput (writes pending) or Drain (moves pendingâ†’messages)
     // surfaces as a unit-test failure instead of a runtime visual glitch.
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void GuiPerspective_QueuedState_VisibleInPendingButNotInMessages()
     {
         // Setup mirrors what ThreadInput.AppendUserInput writes when a user
@@ -311,7 +311,7 @@ public class InboxToolUnitTest
         thread.PendingUserMessages["u1"].Text.Should().Be("hello");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void GuiPerspective_InboxPickup_MovesIdFromPendingToMessages()
     {
         // Setup: same as above (queued state).
@@ -333,7 +333,7 @@ public class InboxToolUnitTest
             "ingestion is tracked so a re-fire of the watcher doesn't double-dispatch");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void GuiPerspective_MultipleQueued_AllPickedUpInOneDrain()
     {
         // Three rapid submits while the thread is idle: all sit in pending in
@@ -360,7 +360,7 @@ public class InboxToolUnitTest
         afterPickup.IngestedMessageIds.Should().ContainInOrder("u1", "u2", "u3");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void GuiPerspective_MidStreamSubmit_VisibleInPendingDuringExecution()
     {
         // Round 1 is running (IsExecuting=true, response cell r1 active). A new

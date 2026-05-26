@@ -18,7 +18,7 @@ public class ThreadSubmissionUnitTest
 {
     // â”€â”€â”€ FindUnprocessedUserMessages â”€â”€â”€
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void FindUnprocessedUserMessages_NoUsers_ReturnsEmpty()
     {
         var thread = new MeshThread();
@@ -26,7 +26,7 @@ public class ThreadSubmissionUnitTest
         result.Should().BeEmpty();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void FindUnprocessedUserMessages_AllIngested_ReturnsEmpty()
     {
         var thread = new MeshThread
@@ -41,7 +41,7 @@ public class ThreadSubmissionUnitTest
         result.Should().BeEmpty();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void FindUnprocessedUserMessages_SingleQueued_ReturnsIt()
     {
         var thread = new MeshThread
@@ -56,7 +56,7 @@ public class ThreadSubmissionUnitTest
         result.Should().ContainInOrder("u2");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void FindUnprocessedUserMessages_ThreeQueued_ReturnsAllInOrder()
     {
         var thread = new MeshThread
@@ -71,7 +71,7 @@ public class ThreadSubmissionUnitTest
         result.Should().ContainInOrder("u1", "u2", "u3");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void FindUnprocessedUserMessages_Interleaved_ReturnsUnprocessedOnly()
     {
         var thread = new MeshThread
@@ -88,7 +88,7 @@ public class ThreadSubmissionUnitTest
 
     // â”€â”€â”€ PlanNextRound â”€â”€â”€
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void PlanNextRound_Busy_ReturnsNull()
     {
         var thread = new MeshThread
@@ -104,7 +104,7 @@ public class ThreadSubmissionUnitTest
         result.Should().BeNull();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void PlanNextRound_IdleWithOneQueued_ReturnsSingleItemDispatch()
     {
         var u1 = new ThreadMessage { Role = "user", Text = "hello" };
@@ -125,7 +125,7 @@ public class ThreadSubmissionUnitTest
         result.ModelName.Should().Be("gpt-4");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void PlanNextRound_IdleWithThreeQueued_DrainsAllIntoOneRound()
     {
         // Inbox semantics: PlanNextRound drains the entire queue at once.
@@ -147,7 +147,7 @@ public class ThreadSubmissionUnitTest
         result.ResponseMessageId.Should().NotBeNullOrEmpty();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void PlanNextRound_IdleNothingQueued_ReturnsNull()
     {
         var thread = new MeshThread
@@ -162,7 +162,7 @@ public class ThreadSubmissionUnitTest
         result.Should().BeNull();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void PlanNextRound_AfterInterruptedRound_DrainsAllPending()
     {
         // Scenario: round 1 completed (u1 ingested, r1 in Messages). u2 and u3

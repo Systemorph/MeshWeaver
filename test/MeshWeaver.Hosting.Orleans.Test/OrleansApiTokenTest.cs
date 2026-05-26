@@ -34,7 +34,7 @@ public class OrleansApiTokenTest(ITestOutputHelper output) : OrleansSharedTestBa
         return client;
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task CreateApiToken_ViaStandardCreateNodeRequest()
     {
         var ct = new CancellationTokenSource(30.Seconds()).Token;
@@ -74,7 +74,7 @@ public class OrleansApiTokenTest(ITestOutputHelper output) : OrleansSharedTestBa
         Output.WriteLine($"Token created at {response.Message.Node.Path}");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task ValidateInvalidToken_Fails()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;

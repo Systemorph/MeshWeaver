@@ -25,7 +25,7 @@ namespace MeshWeaver.AI.Test;
 /// </summary>
 public class LanguageModelNodeTypeTest
 {
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Constants_NamespaceAndNodeType_AreStable()
     {
         // Public mesh-query contract â€” anyone typing `namespace:Model
@@ -35,7 +35,7 @@ public class LanguageModelNodeTypeTest
         LanguageModelNodeType.RootNamespace.Should().Be("Model");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Provider_OneSection_OneNodePerModel()
     {
         var provider = MakeProvider(
@@ -65,7 +65,7 @@ public class LanguageModelNodeTypeTest
             new[] { "claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5" });
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Provider_ModelDefinition_CarriesIdProviderOrder()
     {
         var provider = MakeProvider(
@@ -84,7 +84,7 @@ public class LanguageModelNodeTypeTest
         def.Order.Should().Be(5);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Provider_TwoSourcesShareModelId_FirstWins()
     {
         // Two providers (e.g. Azure Claude + Direct Anthropic) both
@@ -108,7 +108,7 @@ public class LanguageModelNodeTypeTest
         ((ModelDefinition)modelNodes[0].Content!).Provider.Should().Be("Azure Claude");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Provider_EmptyCatalog_EmitsNothing()
     {
         // No catalog sources / no models in config = empty enumeration.
@@ -122,7 +122,7 @@ public class LanguageModelNodeTypeTest
         nodes.Should().BeEmpty();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Provider_PolicyEmittedOnlyWhenModelsExist()
     {
         // Provider seeds the read-only access policy IFF it actually has
@@ -142,7 +142,7 @@ public class LanguageModelNodeTypeTest
         nodes.Should().Contain(n => n.NodeType == LanguageModelNodeType.NodeType);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Provider_SectionWithEmptyOrWhitespaceModels_SkipsThem()
     {
         // Aspire/AppHost env var defaults can be empty strings â€” the
@@ -165,7 +165,7 @@ public class LanguageModelNodeTypeTest
         ids.Should().BeEquivalentTo(new[] { "claude-sonnet-4-6", "claude-haiku-4-5" });
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Provider_MissingSection_NoCrash_NoNodes()
     {
         // Catalog source registered but the corresponding config section

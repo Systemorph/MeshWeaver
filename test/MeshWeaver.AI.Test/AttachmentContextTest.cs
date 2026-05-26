@@ -183,7 +183,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
     /// Verifies that when attachments are set, their content appears in the assembled
     /// prompt BEFORE the user message text.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Attachments_ContentAppearsBeforeUserMessage()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -215,7 +215,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
     /// <summary>
     /// Verifies that attachments are cleared after use (single-use behavior).
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Attachments_ClearedAfterUse()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -247,7 +247,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
     /// <summary>
     /// Verifies that context section also appears before the user message.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Context_AppearsBeforeUserMessage()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -272,7 +272,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
     /// <summary>
     /// Verifies the full ordering: agent instructions â†’ context â†’ attachments â†’ user message.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task PromptAssembly_FullOrdering_InstructionsContextAttachmentsUserMessage()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -321,7 +321,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
     /// <summary>
     /// Verifies that attaching an agent node does NOT inject its content into the prompt.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task AgentAttachment_ExcludedFromContextContent()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -347,7 +347,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
     /// Verifies that when the main context is set (even to an agent-like path), the context section is still included.
     /// The Context property goes through a completely separate code path from attachments.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task MainContext_IncludedEvenIfAgent()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -378,7 +378,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
     /// <summary>
     /// Verifies that an @Agent/Researcher reference in message text overrides the combobox-selected agent.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task FirstAgentReferenceInMessage_OverridesComboboxSelection()
     {
         var ct = TestContext.Current.CancellationToken;

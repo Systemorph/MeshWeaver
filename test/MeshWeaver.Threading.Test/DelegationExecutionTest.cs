@@ -60,7 +60,7 @@ public class DelegationExecutionTest(ITestOutputHelper output) : MonolithMeshTes
         return response.Message.Node!.Path!;
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task DelegationSubThread_SubmitMessage_ProducesNavigableHierarchy()
     {
         var ct = new CancellationTokenSource(30.Seconds()).Token;

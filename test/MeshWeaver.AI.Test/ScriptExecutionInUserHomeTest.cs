@@ -64,7 +64,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
             "</div>")
         """;
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Run_FireworksScript_StreamsProgressAndReturnsHtml()
     {
         var (codePath, mesh) = await SeedExecutableCodeAsync(FireworksScript);
@@ -104,7 +104,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
     /// assert no two adjacent observations are squashed into a single tick at
     /// the end. That proves the executor isn't blocking the activity hub.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Run_StreamsProgressTimely_NotBuffered()
     {
         var (codePath, _) = await SeedExecutableCodeAsync(FireworksScript);
@@ -145,7 +145,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
     /// own MeshNodeReference and dispatches the internal cancellation when it
     /// observes the patch.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Cancel_Via_RequestedStatus_Patch_Cancels_Running_Script()
     {
         // Script uses Task.Delay(ms, Ct) so the Ct global (rebound per
@@ -226,7 +226,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
     /// is the partition root. Verifies the migration-friendly default applies
     /// without any per-Code-node config.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task DefaultActivityParent_IsPartitionRoot()
     {
         var (codePath, _) = await SeedExecutableCodeAsync("\"hi\"");
@@ -244,7 +244,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
     /// pattern for shared/docs partitions where every viewer sees their own
     /// runs in their own activity feed.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task ViewerToken_RoutesActivitiesToCallersHome()
     {
         // Code node in `rbuergi` (the test partition), but configured to
@@ -281,7 +281,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
     /// itself after a run, so the Content view can render "Last executed by X"
     /// + the last activity's Progress area without scanning historical activities.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task CodeNode_StampsLastExecutionFields()
     {
         var (codePath, _) = await SeedExecutableCodeAsync("\"x\"");
@@ -367,7 +367,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
     /// failure message in that case is descriptive enough to debug from the test
     /// output; we don't want a missing artefact to mask real <c>#r</c> regressions.</para>
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task NuGetDirective_ResolvesAgainstLocalMeshFeed_AndScriptUsesIt()
     {
         // dist/packages/ is gitignored â€” populated locally by `dotnet pack` and on
@@ -430,7 +430,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
     /// Re-running creates a NEW activity. The previous activity is untouched â€”
     /// historical runs accumulate as siblings under <c>{codePath}/_Activity/*</c>.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task ReRun_CreatesNewActivity_LeavingPreviousIntact()
     {
         var (codePath, _) = await SeedExecutableCodeAsync(

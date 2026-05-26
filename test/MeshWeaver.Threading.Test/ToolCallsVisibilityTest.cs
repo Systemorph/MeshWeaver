@@ -38,7 +38,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
         return base.ConfigureClient(configuration).AddLayoutClient();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task ResponseMessage_ToolCalls_VisibleViaRemoteStream()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -105,7 +105,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
         Output.WriteLine($"Tool calls visible: {msg.ToolCalls.Count} calls, delegation={msg.ToolCalls[1].DelegationPath}");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task ResponseMessage_ToolCallsUpdate_PropagatesViaStream()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -183,7 +183,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
         Output.WriteLine($"After update: {afterUpdate.ToolCalls.Count} tool calls - {afterUpdate.ToolCalls[0].DisplayName}");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Delegation_AppearsOnResponseMessage_ThenThreadGoesIdle()
     {
         var ct = new CancellationTokenSource(20.Seconds()).Token;
@@ -280,7 +280,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
     /// via the stream. The layout-area subscriptions must NOT cause runaway
     /// version increments (host.UpdateData re-triggering the stream).
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task ToolCallsUpdate_WithLayoutArea_NoFeedbackLoop()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;

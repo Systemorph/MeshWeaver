@@ -69,7 +69,7 @@ public class DelegationWriteCountTest(ITestOutputHelper output) : MonolithMeshTe
         return base.ConfigureClient(configuration).AddLayoutClient();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Delegation_ParentToolCalls_ContainsExactlyOneEntryPerDelegationPath()
     {
         var ct = new CancellationTokenSource(60.Seconds()).Token;

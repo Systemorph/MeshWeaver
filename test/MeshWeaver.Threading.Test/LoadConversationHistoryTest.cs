@@ -84,7 +84,7 @@ public class LoadConversationHistoryTest(ITestOutputHelper output) : MonolithMes
     // 60s timeout: two real ThreadFlow.SubmitAndWait calls + ReadThread predicate
     // waits â€” local runs ~3s, CI cold-start runs ~30s. Default 30s methodTimeout
     // tripped on CI (31.85s in run 26376715753).
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task AllCells_HaveText_ReturnsFullHistory()
     {
         var ct = new CancellationTokenSource(60.Seconds()).Token;
@@ -118,7 +118,7 @@ public class LoadConversationHistoryTest(ITestOutputHelper output) : MonolithMes
             "first question", FakeResponse, "second question", FakeResponse);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task SomeCellsMissing_ReturnsPartialHistory_AndWarns()
     {
         var ct = new CancellationTokenSource(60.Seconds()).Token;
@@ -153,7 +153,7 @@ public class LoadConversationHistoryTest(ITestOutputHelper output) : MonolithMes
         history.Select(m => m.Text!.TrimEnd()).Should().Equal("real question", FakeResponse);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task AllCellsMissing_ThrowsTimeoutException()
     {
         var ct = new CancellationTokenSource(60.Seconds()).Token;

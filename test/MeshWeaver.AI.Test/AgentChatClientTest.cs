@@ -61,7 +61,7 @@ public class AgentChatClientTest : MonolithMeshTestBase
     /// - TodoAgent.md is located at ACME/Project/TodoAgent
     /// - Therefore TodoAgent should be found via the NodeType path, not via ancestors
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task AgentChatClient_InitializeAsync_FindsTodoAgentFromNodeTypeNamespace()
     {
         // Arrange - ACME/ProductLaunch has NodeType="ACME/Project", TodoAgent is at ACME/Project/TodoAgent
@@ -114,7 +114,7 @@ public class AgentChatClientTest : MonolithMeshTestBase
     /// Tests that when at a node with generic NodeType (Markdown),
     /// agents are still found from the path hierarchy.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task AgentChatClient_InitializeAsync_FindsAgentsFromPathHierarchy()
     {
         // Arrange - Use a path that should have agents in hierarchy

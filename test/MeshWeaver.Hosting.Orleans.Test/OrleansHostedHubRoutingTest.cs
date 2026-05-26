@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
@@ -33,7 +33,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 ///   <item><see cref="RoutingGrain.RouteMessage"/> resolves the path, gets the
 ///   per-thread <see cref="MessageHubGrain"/>, calls <c>DeliverMessage</c>.</item>
 ///   <item>The grain's hub (configured by Thread's NodeType
-///   <see cref="ThreadNodeType.CreateMeshNode"/> Ã¢â€ â€™ <c>HubConfiguration</c> Ã¢â€ â€™
+///   <see cref="ThreadNodeType.CreateMeshNode"/> ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ <c>HubConfiguration</c> ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢
 ///   <see cref="ThreadExecution.AddThreadExecution"/>) handles the message and
 ///   posts a response.</item>
 ///   <item>The response routes back to the client memory stream and the test
@@ -41,7 +41,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// </list>
 ///
 /// <para>
-/// If this test fails, the basic "post Ã¢â€ â€™ per-grain hub Ã¢â€ â€™ response" round trip
+/// If this test fails, the basic "post ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ per-grain hub ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ response" round trip
 /// is broken. Many of the 17 ailing Orleans tests build on top of this round
 /// trip, so a green here is the prerequisite for diagnosing them.
 /// </para>
@@ -53,10 +53,10 @@ public class OrleansHostedHubRoutingTest(ITestOutputHelper output) : OrleansShar
 
     /// <summary>
     /// Foundation: the per-thread grain hub answers a request that has a synchronous
-    /// handler. Proves "client Ã¢â€ â€™ Orleans routing Ã¢â€ â€™ per-grain hub Ã¢â€ â€™ ResponseFor"
+    /// handler. Proves "client ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ Orleans routing ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ per-grain hub ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ ResponseFor"
     /// works end-to-end without any LLM, hosted-sub-hub, or watcher in the picture.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task PostToThreadHub_HandlerResponds_RoundTripsViaRouting()
     {
         var ct = new CancellationTokenSource(20.Seconds()).Token;
@@ -64,7 +64,7 @@ public class OrleansHostedHubRoutingTest(ITestOutputHelper output) : OrleansShar
 
         // 1. Create the Thread node so the per-thread grain has something to activate
         //    against. Use BuildThreadNode (NOT BuildThreadWithMessages) so no auto-execute
-        //    fires Ã¢â‚¬â€ we only want the hub to come up with the Thread NodeType's
+        //    fires ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â we only want the hub to come up with the Thread NodeType's
         //    HubConfiguration applied.
         var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Routing test (no LLM)", "TestUser");
         var threadPath = threadNode.Path!;
@@ -76,10 +76,10 @@ public class OrleansHostedHubRoutingTest(ITestOutputHelper output) : OrleansShar
             .FirstAsync().ToTask(ct);
         createResp.Message.Success.Should().BeTrue(createResp.Message.Error);
 
-        // 2. Post GetDataRequest at the per-thread address — generic round-trip
+        // 2. Post GetDataRequest at the per-thread address â€” generic round-trip
         //    that exercises the same routing layer and returns a response from
         //    the per-thread grain. Replaces the legacy MeshThread.RequestedCancellationAt flip
-        //    routing test (cancellation is now stream-update only — see
+        //    routing test (cancellation is now stream-update only â€” see
         //    RequestViaStreamUpdate.md).
         Output.WriteLine($"[Act] Posting GetDataRequest to {threadPath}");
         var response = await client.Observe(
@@ -107,12 +107,12 @@ public class OrleansHostedHubRoutingTest(ITestOutputHelper output) : OrleansShar
     /// on the Thread hub by <see cref="ThreadExecution.AddThreadExecution"/>. The handler
     /// calls <c>UpdateMeshNode</c> to push the new message id onto <see cref="MeshThread.Messages"/>
     /// and then posts a response. After the response arrives, a fresh GetDataRequest must
-    /// see the appended message id Ã¢â‚¬â€ if it doesn't, the per-grain workspace's
+    /// see the appended message id ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â if it doesn't, the per-grain workspace's
     /// <see cref="MeshNodeReference"/> reducer is not picking up local writes (which is
     /// the suspected root cause of the 17 polling-based test failures).
     /// </para>
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task ThreadHub_LocalWorkspaceWrite_VisibleViaGetDataRequest()
     {
         var ct = new CancellationTokenSource(20.Seconds()).Token;
@@ -139,7 +139,7 @@ public class OrleansHostedHubRoutingTest(ITestOutputHelper output) : OrleansShar
         //    HandleSubmitMessage runs `workspace.UpdateMeshNode(...)` to add
         //    the new user + response ids to MeshThread.Messages. Asserting
         //    on Messages.Count growing is the canary for "local workspace
-        //    write visible to grain-direct read" — the bug class behind the
+        //    write visible to grain-direct read" â€” the bug class behind the
         //    polling failures.
         Output.WriteLine("[Act] ThreadSubmission.Submit");
         MeshWeaver.AI.ThreadSubmission.Submit(new MeshWeaver.AI.SubmitContext

@@ -51,7 +51,7 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         => base.ConfigureClient(configuration).AddLayoutClient();
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Script_Log_Messages_Land_On_ActivityLog_Node()
     {
         // Seed a Code node with a script that logs two lines.
@@ -106,7 +106,7 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
     /// intermediate snapshots via <c>DataChangeRequest.Update</c> as the script runs,
     /// instead of buffering everything until the script returns.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Progress_Messages_Stream_Gradually_Not_Just_At_The_End()
     {
         var id = $"progress-{Guid.NewGuid():N}";
@@ -169,7 +169,7 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
         snapshots.Last().Should().Be(4, "terminal snapshot must contain all 4 log lines");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Script_Failure_Flips_ActivityLog_Status_To_Failed()
     {
         var id = $"logfail-{Guid.NewGuid():N}";

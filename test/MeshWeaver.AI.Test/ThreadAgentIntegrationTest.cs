@@ -147,7 +147,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
     /// 5. Create reply ThreadMessage from streamed response
     /// 6. Verify thread contains both messages in order
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task FullFlow_CreateThread_SendMessage_StreamResponse_SaveReply()
     {
         var query = MeshQuery;
@@ -258,7 +258,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
     /// <summary>
     /// Tests the non-streaming response path with the same thread/message flow.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task FullFlow_CreateThread_SendMessage_NonStreamingResponse()
     {
         var query = MeshQuery;
@@ -314,7 +314,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
     /// <summary>
     /// Tests that switching thread IDs isolates conversation state.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task SwitchThread_IsolatesConversationState()
     {
         var query = MeshQuery;

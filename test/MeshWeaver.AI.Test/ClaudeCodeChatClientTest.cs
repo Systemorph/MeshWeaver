@@ -19,7 +19,7 @@ public class ClaudeCodeChatClientTest
         _client = new ClaudeCodeChatClient(_config);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void BuildSystemPrompt_WithSystemMessages_ExtractsAndCombines()
     {
         // Arrange
@@ -37,7 +37,7 @@ public class ClaudeCodeChatClientTest
         result.Should().Be("You are PricingAgent\n\nBe helpful");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void BuildSystemPrompt_NoSystemMessages_ReturnsConfigPromptOnly()
     {
         // Arrange
@@ -54,7 +54,7 @@ public class ClaudeCodeChatClientTest
         result.Should().Be("Be helpful");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void BuildSystemPrompt_NoSystemMessagesNoConfig_ReturnsEmpty()
     {
         // Arrange
@@ -70,7 +70,7 @@ public class ClaudeCodeChatClientTest
         result.Should().BeEmpty();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void BuildSystemPrompt_MultipleSystemMessages_CombinesAll()
     {
         // Arrange

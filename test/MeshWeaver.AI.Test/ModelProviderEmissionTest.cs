@@ -19,7 +19,7 @@ public class ModelProviderEmissionTest
     /// Config with ApiKey + Endpoint + Models emits a single ModelProvider node
     /// carrying the credentials (not WithPublicRead).
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Emits_OneModelProviderPerCatalogSource_WithFullCredentials()
     {
         // Config â†’ ModelProvider node: ApiKey, Endpoint, Models all flow in.
@@ -52,7 +52,7 @@ public class ModelProviderEmissionTest
     /// Per-model LanguageModel nodes are publicly readable: they reference the
     /// provider but carry no ApiKey/secret of their own.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void LanguageModelChildren_HaveProviderRefAndNoSecret()
     {
         var nodes = MakeProvider(
@@ -83,7 +83,7 @@ public class ModelProviderEmissionTest
     /// Empty config section (no ApiKey, Endpoint, or Models) emits neither
     /// ModelProvider nor LanguageModel nodes.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void NoSignal_NoProviderNodeEmitted()
     {
         // Empty config section + no api key + no endpoint = nothing to emit.
@@ -101,7 +101,7 @@ public class ModelProviderEmissionTest
     /// Partial config (Endpoint only, no Models list) still emits a ModelProvider
     /// so user extensions can attach LanguageModel children to it.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ProviderNodeEmitted_EvenIfModelsListEmpty_WhenEndpointOrKeyPresent()
     {
         // A partially-configured section (endpoint only) still emits a

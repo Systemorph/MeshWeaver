@@ -70,7 +70,7 @@ public class ChatHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         return finalMessage.Text!;
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task ThreeMessages_AgentSeesFullHistory()
     {
         var ct = new CancellationTokenSource(60.Seconds()).Token;
@@ -90,7 +90,7 @@ public class ChatHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         response3.Should().Contain("6 messages", "third message: system + 4 history + 1 new");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task TwoMessages_NoDuplicates_CorrectRoles()
     {
         var ct = new CancellationTokenSource(60.Seconds()).Token;

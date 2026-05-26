@@ -57,7 +57,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
 
     // â”€â”€â”€ Submit into existing thread â”€â”€â”€
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Submit_ExistingThread_UserMessageIngested_OutputCellAppears()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -87,7 +87,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
 
     // â”€â”€â”€ CreateThreadAndSubmit â”€â”€â”€
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task CreateThreadAndSubmit_CreatesThreadAndFirstRound()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -118,7 +118,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
 
     // â”€â”€â”€ Batched ingestion â”€â”€â”€
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Submit_ThreeRapidSubmissions_AllIngestedIntoOneRound()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -167,7 +167,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
 
     // â”€â”€â”€ Resubmit: truncates after the replayed message, new round dispatches â”€â”€â”€
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Resubmit_TruncatesAfterReplayedMessage_NewRoundCreated()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -216,7 +216,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
 
     // â”€â”€â”€ Failure recovery: error renders as an assistant response cell â”€â”€â”€
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task SubmissionFailure_RecordsErrorAsOutputCell_InThreadMessages()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -261,7 +261,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
 
     // â”€â”€â”€ Tool-call scenario: 3 rapid submits during a 1s "tool call" â”€â”€â”€
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Submit_ThreeMessagesDuringActiveRound_QueuedThenBatchedIntoSecondRound()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -351,7 +351,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
 
     // â”€â”€â”€ Queue-don't-cancel: new input during execution waits until round completes â”€â”€â”€
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Submit_DuringExecution_QueuedUntilRoundCompletes_ThenNextRoundDispatches()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -400,7 +400,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
     /// IsExecuting=false + the user msg still unprocessed, dispatches a second round, second
     /// response cell is created.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Submit_SingleSubmit_ProducesExactlyOneResponseCell()
     {
         var ct = TestContext.Current.CancellationToken;

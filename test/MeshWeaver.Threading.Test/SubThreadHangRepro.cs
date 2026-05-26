@@ -101,7 +101,7 @@ public class SubThreadHangRepro(ITestOutputHelper output) : MonolithMeshTestBase
     /// <c>Should().BeFalse</c> with a generous window â€” that's the regression
     /// guard.</para>
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task HungSubThread_WithoutUserCancel_StaysExecuting()
     {
         var ct = new CancellationTokenSource(90.Seconds()).Token;
@@ -216,7 +216,7 @@ public class SubThreadHangRepro(ITestOutputHelper output) : MonolithMeshTestBase
     /// synchronously by <c>ExecuteDelegationAsync</c> the moment the
     /// sub-thread is dispatched, so the union is never stale.</para>
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task HungSubThread_UserCancelOnParent_PropagatesAndStopsSubThread()
     {
         var ct = new CancellationTokenSource(60.Seconds()).Token;

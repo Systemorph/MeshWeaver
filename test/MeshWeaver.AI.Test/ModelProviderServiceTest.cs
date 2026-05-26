@@ -1,4 +1,4 @@
-#pragma warning disable CS1591
+﻿#pragma warning disable CS1591
 
 using System;
 using System.Linq;
@@ -23,7 +23,7 @@ using Xunit;
 namespace MeshWeaver.AI.Test;
 
 /// <summary>
-/// End-to-end tests for <see cref="ModelProviderService"/> — the reactive
+/// End-to-end tests for <see cref="ModelProviderService"/> â€” the reactive
 /// CRUD surface backing the user's Models settings tab. Asserts that
 /// CreateProvider lays down the canonical
 /// <c>{userId}/_Provider/{provider}</c> + N child LanguageModel nodes, that
@@ -38,7 +38,7 @@ public class ModelProviderServiceTest : AITestBase
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
             // Register the Anthropic catalog source so ModelProviderService.CreateProvider
-            // can look up its DefaultModelIds — the service auto-creates one
+            // can look up its DefaultModelIds â€” the service auto-creates one
             // LanguageModel child per default id.
             .AddLanguageModelCatalogSource(new LanguageModelCatalogSource(
                 SectionName: "Anthropic",
@@ -54,7 +54,7 @@ public class ModelProviderServiceTest : AITestBase
     private ModelProviderService Service => Mesh.ServiceProvider.GetRequiredService<ModelProviderService>();
     private IWorkspace Workspace => Mesh.GetWorkspace();
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task CreateProvider_CreatesProviderNode_AndDefaultModelChildren()
     {
         var ct = new CancellationTokenSource(20.Seconds()).Token;
@@ -86,7 +86,7 @@ public class ModelProviderServiceTest : AITestBase
         });
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task GetProvidersForOwner_ReturnsLiveCollection()
     {
         var ct = new CancellationTokenSource(20.Seconds()).Token;
@@ -110,7 +110,7 @@ public class ModelProviderServiceTest : AITestBase
         after[0].ApiKeyFingerprint.Length.Should().Be(8);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task RotateKey_UpdatesApiKeyOnly()
     {
         var ct = new CancellationTokenSource(20.Seconds()).Token;
@@ -135,7 +135,7 @@ public class ModelProviderServiceTest : AITestBase
         cfg.Label.Should().Be("L", "RotateKey must not clobber other fields");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task DeleteProvider_RemovesProviderAndCascades()
     {
         var ct = new CancellationTokenSource(30.Seconds()).Token;

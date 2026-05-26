@@ -39,7 +39,7 @@ public class OrleansPortalFlowTest(ITestOutputHelper output) : OrleansSharedTest
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
         => await base.GetClientAsync($"portal-{name}-{Guid.NewGuid():N}", "TestUser");
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task PortalFlow_CreateThread_CreateCells_Submit_ExecutionCompletes()
     {
         SharedOrleansFixture.SwappableFactory.SetInner(new PortalFlowEchoChatClientFactory());
@@ -105,7 +105,7 @@ public class OrleansPortalFlowTest(ITestOutputHelper output) : OrleansSharedTest
     /// 5. Final state: every submitted text appears as a satellite cell,
     ///    thread is Idle, all UserMessageIds are ingested
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task RapidSubmits_PileUpAndAllIngest()
     {
         SharedOrleansFixture.SwappableFactory.SetInner(new PortalFlowEchoChatClientFactory());

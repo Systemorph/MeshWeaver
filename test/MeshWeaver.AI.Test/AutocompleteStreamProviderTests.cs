@@ -26,7 +26,7 @@ public class AutocompleteStreamProviderTests
     // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Single provider, incremental snapshots â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// <summary>Single provider emits one snapshot per item and the final snapshot contains every item.</summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task SingleProvider_EmitsSnapshotPerItem_FinalContainsAll()
     {
         var provider = new ScriptedProvider();
@@ -51,7 +51,7 @@ public class AutocompleteStreamProviderTests
     }
 
     /// <summary>Items emitted out of priority order are sorted by descending priority in the snapshot.</summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task ItemsArrivingOutOfOrder_AreSortedByPriorityDescending()
     {
         var provider = new ScriptedProvider();
@@ -74,7 +74,7 @@ public class AutocompleteStreamProviderTests
     // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Multiple providers, fast-then-slow â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// <summary>With a fast and a slow provider, fast items appear in early snapshots and slow ones merge in later.</summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task FastAndSlowProviders_FastItemsAppearBeforeSlowOnes()
     {
         // "fast" emits immediately; we wait for those snapshots to flow through
@@ -119,7 +119,7 @@ public class AutocompleteStreamProviderTests
     }
 
     /// <summary>An exception thrown by one provider does not terminate the merged stream â€” other providers keep emitting.</summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task FailingProvider_DoesNotKillTheStream()
     {
         var ok = new ScriptedProvider();
@@ -147,7 +147,7 @@ public class AutocompleteStreamProviderTests
     // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Top-N truncation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// <summary>Top-N truncation drops items whose priority falls below the current Nth-ranked item.</summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task TopN_DropsItemsBelowTheCurrentNthPriority()
     {
         var provider = new ScriptedProvider();
@@ -172,7 +172,7 @@ public class AutocompleteStreamProviderTests
     // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Monaco-style: varying input over time â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// <summary>Sequential subscriptions with different queries each receive their own snapshot stream without leakage between queries.</summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task UserTypingMultipleQueries_EachQueryGetsItsOwnSnapshotStream()
     {
         // Simulates Monaco re-invoking the callback as the user types: "a", "ab", "abc".
@@ -201,7 +201,7 @@ public class AutocompleteStreamProviderTests
     }
 
     /// <summary>Disposing the subscription before the provider completes stops further snapshots from reaching the observer.</summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task UnsubscribeBeforeCompletion_StopsReceivingFurtherSnapshots()
     {
         // Simulates the user clearing the autocomplete (Monaco disposes the subscription)

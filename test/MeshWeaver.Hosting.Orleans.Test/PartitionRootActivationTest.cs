@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Threading;
@@ -22,8 +22,8 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// <para>Scenario: a user (or org) partition is registered with the
 /// <see cref="MeshWeaver.Mesh.Services.IPartitionStorageProvider"/> but has
 /// NO MeshNode in the primary <c>mesh_nodes</c> table at the bare partition
-/// path — content lives only in satellites (<c>_UserActivity</c>,
-/// <c>_Access</c>, …). The path resolver's storage step returns
+/// path â€” content lives only in satellites (<c>_UserActivity</c>,
+/// <c>_Access</c>, â€¦). The path resolver's storage step returns
 /// <c>(null, 0)</c>; only the partition-root fallback can produce a
 /// resolution for the bare path.</para>
 ///
@@ -34,7 +34,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// subscribes with <c>Where(r =&gt; r.Node is not null)</c>, so the null-Node
 /// resolution was filtered out, the source observable never emitted,
 /// <c>_hubReady</c> stayed pending forever, and every <c>DeliverMessage</c>
-/// to that grain (the user's home address — <c>/rbuergi</c>, <c>/sglauser</c>)
+/// to that grain (the user's home address â€” <c>/rbuergi</c>, <c>/sglauser</c>)
 /// timed out at exactly 30 s with "Response did not arrive on time".</para>
 ///
 /// <para>This test pings a bare partition path with no MeshNode and asserts
@@ -45,7 +45,7 @@ public class PartitionRootActivationTest(ITestOutputHelper output)
     : OrleansTestBase<PartitionRootSiloConfigurator>(output)
 {
     /// <summary>
-    /// Tight budget — pre-fix prod symptom was a 30 s Orleans response timeout
+    /// Tight budget â€” pre-fix prod symptom was a 30 s Orleans response timeout
     /// because the grain's <c>_hubReady</c> never completed. Post-fix the
     /// activation chain synthesizes a placeholder MeshNode for the partition
     /// root and the ping responds in &lt; 1 s. 5 s leaves comfortable headroom
@@ -54,7 +54,7 @@ public class PartitionRootActivationTest(ITestOutputHelper output)
     /// </summary>
     private static readonly TimeSpan FastBudget = TimeSpan.FromSeconds(5);
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task BarePartitionPath_NoMeshNode_RespondsToPing()
     {
         var ct = new CancellationTokenSource(FastBudget).Token;
@@ -63,7 +63,7 @@ public class PartitionRootActivationTest(ITestOutputHelper output)
         // A bare partition-root path. With InMemoryPartitionStorageProvider
         // (the silo's partition provider, registered via
         // AddPartitionedInMemoryPersistence), every non-empty first segment
-        // matches — exactly the prod shape after the hosted-service seed
+        // matches â€” exactly the prod shape after the hosted-service seed
         // pass registers user partitions. No MeshNode is ever written at the
         // bare path; pre-fix this stranded grain activation.
         var partitionRoot = $"partitionroot-{Guid.NewGuid():N}";
@@ -71,7 +71,7 @@ public class PartitionRootActivationTest(ITestOutputHelper output)
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
         // Ping the grain at the bare partition path. PingRequest is the
-        // canonical hub-readiness probe — handled by the default hub config
+        // canonical hub-readiness probe â€” handled by the default hub config
         // installed via ConfigureDefaultNodeHub (no NodeType required).
         var response = await client
             .Observe(new PingRequest(), o => o.WithTarget(new Address(partitionRoot)))
@@ -85,17 +85,17 @@ public class PartitionRootActivationTest(ITestOutputHelper output)
         // (CancellationException) or at the 30 s Orleans response promise.
         response.Should().NotBeNull(
             "the partition-root fallback must synthesize a MeshNode so MessageHubGrain " +
-            "activates — null Node strands activation on Where(r.Node is not null), and " +
+            "activates â€” null Node strands activation on Where(r.Node is not null), and " +
             "DeliverMessage burns the 30 s Orleans response budget on every request " +
             "(prod symptom: /rbuergi start screen blank, 30 s 'Response did not arrive on time')");
 
         sw.Elapsed.Should().BeLessThan(
             FastBudget,
-            "ping against a bare-partition root must respond fast — pre-fix this hung " +
+            "ping against a bare-partition root must respond fast â€” pre-fix this hung " +
             $"the full 30 s grain timeout. Actual: {sw.Elapsed.TotalSeconds:0.0}s.");
 
         Output.WriteLine(
-            $"PASSED — bare partition '{partitionRoot}' activated in {sw.Elapsed.TotalMilliseconds:0}ms");
+            $"PASSED â€” bare partition '{partitionRoot}' activated in {sw.Elapsed.TotalMilliseconds:0}ms");
     }
 }
 

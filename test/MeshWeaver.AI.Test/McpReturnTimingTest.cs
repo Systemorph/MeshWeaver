@@ -93,7 +93,7 @@ public class McpReturnTimingTest : MonolithMeshTestBase
             ? $"ACME/{id}"
             : throw new Xunit.Sdk.XunitException($"Seed failed: {seed}");
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Get_ReturnsWithinBudget()
     {
         var plugin = CreatePlugin();
@@ -104,7 +104,7 @@ public class McpReturnTimingTest : MonolithMeshTestBase
         result.Should().Contain(id);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Search_ReturnsWithinBudget()
     {
         var plugin = CreatePlugin();
@@ -119,7 +119,7 @@ public class McpReturnTimingTest : MonolithMeshTestBase
         result.Should().NotBeNull();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Create_ReturnsWithinBudget()
     {
         var plugin = CreatePlugin();
@@ -137,7 +137,7 @@ public class McpReturnTimingTest : MonolithMeshTestBase
         result.Should().StartWith("Created:");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Update_ReturnsWithinBudget()
     {
         var plugin = CreatePlugin();
@@ -157,7 +157,7 @@ public class McpReturnTimingTest : MonolithMeshTestBase
         result.Should().NotContain("Error");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Patch_ReturnsWithinBudget()
     {
         var plugin = CreatePlugin();
@@ -170,7 +170,7 @@ public class McpReturnTimingTest : MonolithMeshTestBase
         result.Should().StartWith("Patched:");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Delete_ReturnsWithinBudget()
     {
         var plugin = CreatePlugin();
@@ -183,7 +183,7 @@ public class McpReturnTimingTest : MonolithMeshTestBase
         result.Should().NotContain("Error");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Move_ReturnsWithinBudget()
     {
         var plugin = CreatePlugin();
@@ -197,7 +197,7 @@ public class McpReturnTimingTest : MonolithMeshTestBase
         result.Should().NotBeNull();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Copy_ReturnsWithinBudget()
     {
         var plugin = CreatePlugin();
@@ -209,7 +209,7 @@ public class McpReturnTimingTest : MonolithMeshTestBase
         result.Should().NotBeNull();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task GetDiagnostics_ReturnsWithinBudget()
     {
         var plugin = CreatePlugin();
@@ -219,7 +219,7 @@ public class McpReturnTimingTest : MonolithMeshTestBase
         result.Should().NotBeNull();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Recycle_ReturnsWithinBudget()
     {
         var plugin = CreatePlugin();

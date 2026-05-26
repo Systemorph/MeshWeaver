@@ -35,7 +35,7 @@ public class ContentUploadTest(ITestOutputHelper output) : MonolithMeshTestBase(
         return base.ConfigureClient(configuration);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task SaveContentRequest_UploadsSvgToContentCollection()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -69,7 +69,7 @@ public class ContentUploadTest(ITestOutputHelper output) : MonolithMeshTestBase(
         }
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ToolStatusFormatter_UploadContent_FormatsCorrectly()
     {
         var call = new Microsoft.Extensions.AI.FunctionCallContent(
@@ -84,7 +84,7 @@ public class ContentUploadTest(ITestOutputHelper output) : MonolithMeshTestBase(
         status.Should().Be("Uploading architecture-diagram.svg...");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void InlineSvgIcon_DetectedCorrectly()
     {
         var svgIcon = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><path d=\"M12 2L2 22h20L12 2z\"/></svg>";

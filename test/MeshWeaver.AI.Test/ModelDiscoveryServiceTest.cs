@@ -1,4 +1,4 @@
-#pragma warning disable CS1591
+﻿#pragma warning disable CS1591
 
 using System;
 using System.Collections.Immutable;
@@ -20,7 +20,7 @@ using Xunit;
 namespace MeshWeaver.AI.Test;
 
 /// <summary>
-/// Tests for <see cref="ModelDiscoveryService"/> — the hierarchical
+/// Tests for <see cref="ModelDiscoveryService"/> â€” the hierarchical
 /// walk over namespace ancestors AND NodeType ancestors. Asserts that:
 /// <list type="bullet">
 ///   <item>(a) <c>GetModelsAtNode</c> returns the satellite at one path.</item>
@@ -73,7 +73,7 @@ public class ModelDiscoveryServiceTest : AITestBase
         }).FirstAsync().ToTask(ct);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task GetModelsAtNode_ReturnsSatelliteSubtree()
     {
         var ct = new CancellationTokenSource(20.Seconds()).Token;
@@ -92,14 +92,14 @@ public class ModelDiscoveryServiceTest : AITestBase
             && n.Path == $"{owner}/_Provider/Anthropic/claude-opus-4-7");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task GetModelsForNodeHierarchy_UnionsAncestorLevels()
     {
         var ct = new CancellationTokenSource(30.Seconds()).Token;
         var owner = $"org-{Guid.NewGuid():N}";
         var child = $"{owner}/Project1";
 
-        // Two providers — one at the org level, one at the child level.
+        // Two providers â€” one at the org level, one at the child level.
         await CreateUserProvider(owner, "Anthropic", "claude-sonnet-4-6", ct);
         await CreateUserProvider(child, "OpenAI", "gpt-4o-mini", ct);
 
@@ -117,7 +117,7 @@ public class ModelDiscoveryServiceTest : AITestBase
             "ancestor org's ModelProvider is also unioned in");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task GetEffectiveModels_CombinesNodePathAndNodeTypePath()
     {
         var ct = new CancellationTokenSource(30.Seconds()).Token;
@@ -139,12 +139,12 @@ public class ModelDiscoveryServiceTest : AITestBase
         snapshot.Should().Contain(n => n.Path == $"{nodeTypePath}/_Provider/OpenAI");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Service_RegisteredOnTopLevelMeshHub_NotPerThreadHub()
     {
         // Resolving the service from the mesh hub's ServiceProvider must
         // succeed. The contract is that callers reach into the top-level
-        // mesh hub for this — never their own per-thread/per-exec hub
+        // mesh hub for this â€” never their own per-thread/per-exec hub
         // (which may be blocked by an in-flight handler).
         var fromMesh = Mesh.ServiceProvider.GetService<ModelDiscoveryService>();
         fromMesh.Should().NotBeNull("ModelDiscoveryService is registered as a top-level singleton");

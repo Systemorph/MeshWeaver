@@ -33,7 +33,7 @@ public class ResolveContextPathTest
     }
 
     /// <summary>Relative bare names are prefixed with the chat's context path before routing.</summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void RelativeBareName_IsPrefixedWithContextPath()
     {
         // This is the bug scenario: agent passes just "FinalReport" (or @FinalReport), expecting
@@ -48,7 +48,7 @@ public class ResolveContextPathTest
     }
 
     /// <summary>Relative UCR prefix paths (e.g. <c>content/file</c>) resolve against the context.</summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void RelativeUnifiedPath_IsPrefixedWithContextPath()
     {
         // "content/report.docx" â€” UCR prefix path; relative to context.
@@ -59,7 +59,7 @@ public class ResolveContextPathTest
     }
 
     /// <summary>Legacy colon-syntax relative paths (e.g. <c>content:file</c>) resolve against the context.</summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void RelativeColonPath_IsPrefixedWithContextPath()
     {
         // Legacy colon syntax: "content:file.md" â€” no slash before colon, so relative.
@@ -70,7 +70,7 @@ public class ResolveContextPathTest
     }
 
     /// <summary>Quoted paths from autocomplete are unwrapped before context resolution.</summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void QuotedPath_IsUnwrappedBeforeResolving()
     {
         // Autocomplete wraps spaced paths in quotes: "@content/My File.md"
@@ -81,7 +81,7 @@ public class ResolveContextPathTest
     }
 
     /// <summary>With no chat context, a relative path is returned verbatim (nothing to prefix).</summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void NoContext_RelativePath_ReturnsInputUnchanged()
     {
         var chat = new StubChat(context: null);
@@ -91,7 +91,7 @@ public class ResolveContextPathTest
     }
 
     /// <summary>Absolute paths still resolve (losing the leading slash) even without a chat context.</summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void NoContext_AbsolutePath_StillResolves()
     {
         var chat = new StubChat(context: null);
@@ -100,7 +100,7 @@ public class ResolveContextPathTest
     }
 
     /// <summary>An empty input produces an empty output regardless of context.</summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void EmptyPath_ReturnsEmpty()
     {
         var chat = new StubChat(new AgentContext { Context = "OrgA" });

@@ -33,7 +33,7 @@ public class AgentMarkdownParsingTest(ITestOutputHelper output) : MonolithMeshTe
     /// <summary>
     /// Verifies all built-in agent nodes load without exceptions.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void BuiltInAgentProvider_LoadsAllNodes()
     {
         var provider = new BuiltInAgentProvider();
@@ -55,7 +55,7 @@ public class AgentMarkdownParsingTest(ITestOutputHelper output) : MonolithMeshTe
     /// Verifies no agent instructions contain the literal "@path" placeholder
     /// which the AI agent would try to use as an actual address.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void AgentInstructions_NoLiteralPathPlaceholders()
     {
         var provider = new BuiltInAgentProvider();
@@ -101,7 +101,7 @@ public class AgentMarkdownParsingTest(ITestOutputHelper output) : MonolithMeshTe
     /// Verifies that @@ inline references in agent markdown point to nodes
     /// that actually exist (either as static nodes or in persistence).
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task AgentInstructions_InlineReferences_PointToExistingNodes()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;

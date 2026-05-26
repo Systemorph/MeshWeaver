@@ -43,7 +43,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         return base.ConfigureClient(configuration);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task CreateThread_ViaCreateNodeRequest_UsesThreadPartitionAndSpeakingId()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -90,7 +90,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         node.MainNode.Should().Be(contextPath);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task CreateThread_ViaCreateNodeRequest_OnDifferentContextNode()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -112,7 +112,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
             "thread should be under {contextPath}/_Thread/{speakingId}");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task CreateThread_SpeakingId_IsDeterministicFromMessageText()
     {
         // Verify that GenerateSpeakingId produces readable slugs
@@ -130,7 +130,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         longId.Length.Should().BeLessThan(50, "speaking ID should be truncated for long messages");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task CreateThread_ViaIMeshCatalog_Succeeds()
     {
         // Arrange
@@ -154,7 +154,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         createdNode.Content.Should().BeOfType<MeshThread>();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task CreateThread_WithMessageAsChildNode_Succeeds()
     {
         // Arrange - Create thread and then add a message as a child node
@@ -211,7 +211,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         childContent.Text.Should().Be("Hello, world!");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task CreateThread_CanBeRetrieved()
     {
         // Arrange
@@ -286,7 +286,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         }
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task CreateThread_AsDirectChild_FollowsPattern()
     {
         // Arrange - Verifies the flat thread pattern: {parentPath}/{threadId}
@@ -328,7 +328,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         await NodeFactory.DeleteNode(parentPath);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task CreateThread_AsChildOfParent_Succeeds()
     {
         // Arrange - Test creating thread as direct child of a parent node
@@ -377,7 +377,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         await NodeFactory.DeleteNode(parentPath);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ThreadMessages_ToChatMessages_ConvertsCorrectly()
     {
         // Arrange - Use the extension method on a list of ThreadMessages
@@ -414,7 +414,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         chatMessages[1].AuthorName.Should().Be("Bot");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ThreadMessages_ToChatMessages_ExcludesEditingPrompts()
     {
         // Arrange - EditingPrompt messages should be excluded from chat
@@ -452,7 +452,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         chatMessages[1].Text.Should().Be("Response");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ThreadMessage_DefaultType_IsExecutedInput()
     {
         // Arrange & Act
@@ -466,7 +466,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         message.Type.Should().Be(ThreadMessageType.ExecutedInput);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task CreateThreadMessage_WithDifferentTypes_PreservesType()
     {
         // Arrange
@@ -546,7 +546,7 @@ public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBa
         await meshService.CreateNode(AssignmentNodeFactory.UserRole(ViewerUserId, "Viewer", "SecureProject")).FirstAsync().ToTask();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task CreateThread_WithUpdatePermission_Succeeds()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -581,7 +581,7 @@ public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBa
         response.Message.Node?.Path.Should().Contain($"/{ThreadNodeType.ThreadPartition}/");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task CreateThread_WithoutUpdatePermission_IsDenied()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;

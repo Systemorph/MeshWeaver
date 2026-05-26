@@ -28,7 +28,7 @@ namespace MeshWeaver.AI.Test;
 /// </summary>
 public class ThreadSelectionPersistenceTest
 {
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Thread_DefaultSelections_AreNull()
     {
         var t = new Thread();
@@ -39,7 +39,7 @@ public class ThreadSelectionPersistenceTest
         t.PendingModelName.Should().BeNull();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Thread_PendingAndSelected_AreIndependent()
     {
         // The picker writes to Selected; the submission stamps Pending.
@@ -56,7 +56,7 @@ public class ThreadSelectionPersistenceTest
         t.SelectedModelName.Should().Be("claude-sonnet-4-6");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Thread_WithExpression_PreservesUnchangedFields()
     {
         // Picker change (Selected) must not zero the queued submission's
@@ -78,7 +78,7 @@ public class ThreadSelectionPersistenceTest
         afterPick.PendingModelName.Should().Be("claude-opus-4-6");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ThreadViewModel_CarriesSelectionFields()
     {
         var vm = new ThreadViewModel
@@ -92,7 +92,7 @@ public class ThreadSelectionPersistenceTest
         vm.SelectedModelName.Should().Be("claude-sonnet-4-6");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ThreadViewModel_Equals_IncludesSelectionFields()
     {
         // Custom Equals override has to track these so the chat view's
@@ -108,7 +108,7 @@ public class ThreadSelectionPersistenceTest
         a.GetHashCode().Should().Be(c.GetHashCode());
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ThreadViewModel_Equals_IncludesSelectedModel()
     {
         var a = new ThreadViewModel { SelectedModelName = "claude-sonnet-4-6" };

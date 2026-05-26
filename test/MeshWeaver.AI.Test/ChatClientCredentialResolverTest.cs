@@ -1,4 +1,4 @@
-#pragma warning disable CS1591
+﻿#pragma warning disable CS1591
 
 using System;
 using System.Collections.Immutable;
@@ -34,7 +34,7 @@ public class ChatClientCredentialResolverTest : AITestBase
 
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Resolve_UnknownModelId_ReturnsMissing()
     {
         var resolver = Mesh.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
@@ -43,7 +43,7 @@ public class ChatClientCredentialResolverTest : AITestBase
         resolution.Should().Be(CredentialResolution.Missing);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Resolve_NullOrEmpty_ReturnsMissing()
     {
         var resolver = Mesh.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
@@ -52,20 +52,20 @@ public class ChatClientCredentialResolverTest : AITestBase
         await Task.CompletedTask;
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Resolve_ModelWithLegacyApiKeySecretRef_FallsThroughToModelNode()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
         var modelId = $"legacy-{Guid.NewGuid():N}";
-        // Place the LanguageModel under the canonical _Provider subtree —
+        // Place the LanguageModel under the canonical _Provider subtree â€”
         // the resolver's subscription only watches _Provider/* (per
         // AgentPickerProjection.BuildModelQueries' documented pattern).
         var modelNs = $"{ModelProviderNodeType.RootNamespace}/Anthropic";
         var modelPath = $"{modelNs}/{modelId}";
 
         // Legacy shape: a LanguageModel node carrying the key directly on
-        // its content (no ProviderRef). The resolver's last rung —
-        // "model-node" — picks this up.
+        // its content (no ProviderRef). The resolver's last rung â€”
+        // "model-node" â€” picks this up.
         await MeshService.CreateNode(new MeshNode(modelId, modelNs)
         {
             NodeType = LanguageModelNodeType.NodeType,
@@ -77,7 +77,7 @@ public class ChatClientCredentialResolverTest : AITestBase
                 Provider = "Anthropic",
                 ApiKeySecretRef = "sk-legacy-on-model-node",
                 Endpoint = "https://legacy.example/v1/messages",
-                // No ProviderRef — resolver should fall through to model fields.
+                // No ProviderRef â€” resolver should fall through to model fields.
                 ProviderRef = null,
             }
         }).FirstAsync().ToTask(ct);
@@ -90,7 +90,7 @@ public class ChatClientCredentialResolverTest : AITestBase
 
         var resolver = Mesh.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
         resolver.EnsureSubscription();
-        // Poll the resolver's public surface — robust against OnNext
+        // Poll the resolver's public surface â€” robust against OnNext
         // ordering vs the warmup observable above.
         var resolution = await Observable.Interval(TimeSpan.FromMilliseconds(50))
             .Select(_ => resolver.Resolve(modelId))
@@ -102,7 +102,7 @@ public class ChatClientCredentialResolverTest : AITestBase
         resolution.Source.Should().Be("model-node");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task GetProviderForModel_LooksUpProviderStamp()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;

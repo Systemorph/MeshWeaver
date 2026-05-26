@@ -13,7 +13,7 @@ public class MarkdownReferenceExtractorTest
 {
     #region ExtractReferences â€” Direct @path syntax
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ExtractReferences_DirectPath_ExtractsPath()
     {
         var refs = MarkdownReferenceExtractor.ExtractReferences("Check @MeshWeaver/Documentation/AI for details");
@@ -23,7 +23,7 @@ public class MarkdownReferenceExtractorTest
         refs[0].OriginalText.Should().Be("@MeshWeaver/Documentation/AI");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ExtractReferences_MultipleDirect_ExtractsAll()
     {
         var refs = MarkdownReferenceExtractor.ExtractReferences(
@@ -34,7 +34,7 @@ public class MarkdownReferenceExtractorTest
         refs[1].Path.Should().Be("Northwind/Sales");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ExtractReferences_DirectPathWithDots_ExtractsFull()
     {
         var refs = MarkdownReferenceExtractor.ExtractReferences("See @path/to/file.md here");
@@ -43,7 +43,7 @@ public class MarkdownReferenceExtractorTest
         refs[0].Path.Should().Be("path/to/file.md");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ExtractReferences_DirectPathWithDashes_ExtractsFull()
     {
         var refs = MarkdownReferenceExtractor.ExtractReferences("See @my-org/my-project for info");
@@ -52,7 +52,7 @@ public class MarkdownReferenceExtractorTest
         refs[0].Path.Should().Be("my-org/my-project");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ExtractReferences_DirectPathWithUnderscores_ExtractsFull()
     {
         var refs = MarkdownReferenceExtractor.ExtractReferences("See @my_org/my_project for info");
@@ -65,7 +65,7 @@ public class MarkdownReferenceExtractorTest
 
     #region ExtractReferences â€” Parentheses @(path) syntax
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ExtractReferences_ParenthesesPath_ExtractsPath()
     {
         var refs = MarkdownReferenceExtractor.ExtractReferences("See @(path with spaces) for details");
@@ -75,7 +75,7 @@ public class MarkdownReferenceExtractorTest
         refs[0].OriginalText.Should().Be("@(path with spaces)");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ExtractReferences_ParenthesesQuotedPath_ExtractsPath()
     {
         var refs = MarkdownReferenceExtractor.ExtractReferences("See @(\"quoted path with spaces\") for details");
@@ -89,7 +89,7 @@ public class MarkdownReferenceExtractorTest
 
     #region ExtractReferences â€” Quoted @"path" syntax
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ExtractReferences_QuotedPath_ExtractsPath()
     {
         var refs = MarkdownReferenceExtractor.ExtractReferences("See @\"path with spaces\" for details");
@@ -103,7 +103,7 @@ public class MarkdownReferenceExtractorTest
 
     #region ExtractReferences â€” Filtering known commands
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ExtractReferences_AgentCommand_IsFiltered()
     {
         var refs = MarkdownReferenceExtractor.ExtractReferences("Use @agent/TodoAgent for tasks");
@@ -111,7 +111,7 @@ public class MarkdownReferenceExtractorTest
         refs.Should().BeEmpty("@agent/ prefix is a known command, not a reference");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ExtractReferences_ModelCommand_IsFiltered()
     {
         var refs = MarkdownReferenceExtractor.ExtractReferences("Switch to @model/gpt-4 for this");
@@ -119,7 +119,7 @@ public class MarkdownReferenceExtractorTest
         refs.Should().BeEmpty("@model/ prefix is a known command, not a reference");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ExtractReferences_MixedCommandAndPath_ExtractsOnlyPath()
     {
         var refs = MarkdownReferenceExtractor.ExtractReferences(
@@ -133,7 +133,7 @@ public class MarkdownReferenceExtractorTest
 
     #region ExtractReferences â€” Overlap handling and priority
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ExtractReferences_ParenthesesTakesPriorityOverDirect()
     {
         // @(MeshWeaver/Docs) should be extracted as parentheses syntax,
@@ -145,7 +145,7 @@ public class MarkdownReferenceExtractorTest
         refs[0].OriginalText.Should().Be("@(MeshWeaver/Docs)");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ExtractReferences_SortedByStartIndex()
     {
         var refs = MarkdownReferenceExtractor.ExtractReferences(
@@ -163,25 +163,25 @@ public class MarkdownReferenceExtractorTest
 
     #region ExtractReferences â€” Edge cases
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ExtractReferences_Null_ReturnsEmpty()
     {
         MarkdownReferenceExtractor.ExtractReferences(null).Should().BeEmpty();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ExtractReferences_Empty_ReturnsEmpty()
     {
         MarkdownReferenceExtractor.ExtractReferences("").Should().BeEmpty();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ExtractReferences_NoReferences_ReturnsEmpty()
     {
         MarkdownReferenceExtractor.ExtractReferences("Just plain text without any references").Should().BeEmpty();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ExtractReferences_AtSignAlone_ReturnsEmpty()
     {
         // Bare @ should not match (the regex requires at least one path character after @)
@@ -192,7 +192,7 @@ public class MarkdownReferenceExtractorTest
 
     #region GetUniquePaths
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void GetUniquePaths_DuplicateReferences_ReturnsDistinct()
     {
         var paths = MarkdownReferenceExtractor.GetUniquePaths(
@@ -202,7 +202,7 @@ public class MarkdownReferenceExtractorTest
         paths[0].Should().Be("ACME/ProductLaunch");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void GetUniquePaths_CaseInsensitiveDuplication()
     {
         var paths = MarkdownReferenceExtractor.GetUniquePaths(
@@ -211,7 +211,7 @@ public class MarkdownReferenceExtractorTest
         paths.Should().ContainSingle("case-insensitive comparison should deduplicate");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void GetUniquePaths_MultipleDistinct_ReturnsAll()
     {
         var paths = MarkdownReferenceExtractor.GetUniquePaths(
@@ -222,13 +222,13 @@ public class MarkdownReferenceExtractorTest
         paths.Should().Contain("Northwind/Sales");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void GetUniquePaths_NullInput_ReturnsEmpty()
     {
         MarkdownReferenceExtractor.GetUniquePaths(null).Should().BeEmpty();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void GetUniquePaths_FiltersCommands()
     {
         var paths = MarkdownReferenceExtractor.GetUniquePaths(
@@ -242,7 +242,7 @@ public class MarkdownReferenceExtractorTest
 
     #region RemoveReferenceByPath
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void RemoveReferenceByPath_DirectPath_RemovesAndCleansWhitespace()
     {
         var result = MarkdownReferenceExtractor.RemoveReferenceByPath(
@@ -251,7 +251,7 @@ public class MarkdownReferenceExtractorTest
         result.Should().Be("Check for details");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void RemoveReferenceByPath_ParenthesesPath_Removes()
     {
         var result = MarkdownReferenceExtractor.RemoveReferenceByPath(
@@ -260,7 +260,7 @@ public class MarkdownReferenceExtractorTest
         result.Should().Be("Check for details");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void RemoveReferenceByPath_QuotedPath_Removes()
     {
         var result = MarkdownReferenceExtractor.RemoveReferenceByPath(
@@ -269,7 +269,7 @@ public class MarkdownReferenceExtractorTest
         result.Should().Be("Check for details");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void RemoveReferenceByPath_CaseInsensitive_Removes()
     {
         var result = MarkdownReferenceExtractor.RemoveReferenceByPath(
@@ -278,7 +278,7 @@ public class MarkdownReferenceExtractorTest
         result.Should().Be("Check for details");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void RemoveReferenceByPath_NonExistentPath_ReturnsOriginal()
     {
         const string original = "Check @ACME/ProductLaunch for details";
@@ -287,7 +287,7 @@ public class MarkdownReferenceExtractorTest
         result.Should().Be(original);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void RemoveReferenceByPath_RemovesOnlyFirst_WhenDuplicate()
     {
         var result = MarkdownReferenceExtractor.RemoveReferenceByPath(
@@ -297,7 +297,7 @@ public class MarkdownReferenceExtractorTest
         result.Should().Contain("@ACME/ProductLaunch");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void RemoveReferenceByPath_AtStartOfString_Removes()
     {
         var result = MarkdownReferenceExtractor.RemoveReferenceByPath(
@@ -306,7 +306,7 @@ public class MarkdownReferenceExtractorTest
         result.Should().Be("is great");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void RemoveReferenceByPath_AtEndOfString_Removes()
     {
         var result = MarkdownReferenceExtractor.RemoveReferenceByPath(
@@ -319,7 +319,7 @@ public class MarkdownReferenceExtractorTest
 
     #region RemoveReference
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void RemoveReference_ValidReference_Removes()
     {
         const string markdown = "Hello @World/Test goodbye";
@@ -331,7 +331,7 @@ public class MarkdownReferenceExtractorTest
         result.Should().Be("Hello goodbye");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void RemoveReference_NullMarkdown_ReturnsNull()
     {
         var reference = new ExtractedReference("path", 0, 5, "@path");
@@ -340,7 +340,7 @@ public class MarkdownReferenceExtractorTest
         result.Should().BeNull();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void RemoveReference_EmptyMarkdown_ReturnsEmpty()
     {
         var reference = new ExtractedReference("path", 0, 5, "@path");
@@ -349,7 +349,7 @@ public class MarkdownReferenceExtractorTest
         result.Should().BeEmpty();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void RemoveReference_InvalidPosition_ReturnsOriginal()
     {
         const string markdown = "Hello @World/Test goodbye";
@@ -360,7 +360,7 @@ public class MarkdownReferenceExtractorTest
         result.Should().Be(markdown);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void RemoveReference_TextMovedButStillPresent_FindsBySearch()
     {
         // Simulate text that has been modified so the original position doesn't match,
@@ -378,7 +378,7 @@ public class MarkdownReferenceExtractorTest
 
     #region Position tracking
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ExtractReferences_PositionTracking_MatchesOriginalText()
     {
         const string markdown = "Start @First/Path middle @Second/Path end";
@@ -391,7 +391,7 @@ public class MarkdownReferenceExtractorTest
         }
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ExtractReferences_EndIndex_IsExclusive()
     {
         const string markdown = "@Test/Path rest of text";

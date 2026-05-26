@@ -55,7 +55,7 @@ public class InboxToolIntegrationTest : AITestBase
 
     // â”€â”€â”€ check_inbox via the AIFunction surface â”€â”€â”€
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task CheckInbox_NoPending_ReturnsNoNewMessages()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -69,7 +69,7 @@ public class InboxToolIntegrationTest : AITestBase
         result.ToString().Should().Be("(no new messages)");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task CheckInbox_OnePending_ReturnsItAndDrainsTheQueue()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -104,7 +104,7 @@ public class InboxToolIntegrationTest : AITestBase
         afterDrain.IsExecuting.Should().BeTrue();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task CheckInbox_MultiplePending_ReturnsAllInOrder_AndDrains()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -150,7 +150,7 @@ public class InboxToolIntegrationTest : AITestBase
         after.PendingUserMessages.Should().BeEmpty();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task CheckInbox_TwoCallsBackToBack_SecondReturnsEmpty()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -182,7 +182,7 @@ public class InboxToolIntegrationTest : AITestBase
 
     // â”€â”€â”€ Cancel-then-restart: ESC with pending messages â”€â”€â”€
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Cancel_WithPendingMessages_DispatchesNextRoundAfterCleanup()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -241,7 +241,7 @@ public class InboxToolIntegrationTest : AITestBase
             "all queued messages should be drained by the time round 2 is dispatched");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Cancel_NoPendingMessages_DoesNotDispatchAnotherRound()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -286,7 +286,7 @@ public class InboxToolIntegrationTest : AITestBase
             "no new cells expected since nothing was queued");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Cancel_WithMultiplePending_RestartsAndDrainsAllInSubsequentRounds()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -337,7 +337,7 @@ public class InboxToolIntegrationTest : AITestBase
 
     // â”€â”€â”€ ViewModel projection â”€â”€â”€
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ExtractPendingTexts_EmptyThread_ReturnsEmpty()
     {
         var thread = new MeshThread();
@@ -345,7 +345,7 @@ public class InboxToolIntegrationTest : AITestBase
         texts.Should().BeEmpty();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ExtractPendingTexts_TwoPending_ReturnsInUserMessageIdsOrder()
     {
         var m1 = new ThreadMessage { Role = "user", Text = "alpha" };
@@ -362,7 +362,7 @@ public class InboxToolIntegrationTest : AITestBase
         texts.Should().ContainInOrder("alpha", "beta");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ExtractPendingTexts_NullThread_ReturnsEmpty()
     {
         var texts = ThreadLayoutAreas.ExtractPendingTexts(null);

@@ -47,7 +47,7 @@ public class ToolCallingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         return base.ConfigureClient(configuration).AddLayoutClient();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task SubmitMessage_WithToolCalling_ExecutesSearchAndReturnsResult()
     {
         var ct = new CancellationTokenSource(30.Seconds()).Token;

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
@@ -26,7 +26,7 @@ namespace MeshWeaver.Threading.Test;
 /// a message id whose satellite cell was never materialised (or was
 /// deleted). Anything that does <c>workspace.GetMeshNodeStream({thread}/{id})</c>
 /// or a raw <c>GetDataRequest</c> targeting that path waits indefinitely for
-/// an emission/response that will never come — the per-node hub for the
+/// an emission/response that will never come â€” the per-node hub for the
 /// missing path has no data to serve, no NotFound is surfaced fast enough
 /// to be useful, and downstream subscribers (the chat view's bubble
 /// subscriptions, the header's <c>CollectUpdatedNodes</c>, the activity
@@ -38,7 +38,7 @@ namespace MeshWeaver.Threading.Test;
 ///         <c>IMeshNodeStreamCache.GetStream</c> within a fast deadline
 ///         (the happy path).</item>
 ///   <item>The <b>missing</b> satellite path does NOT emit anything
-///         populated within the same window — proving the cold-observable
+///         populated within the same window â€” proving the cold-observable
 ///         starvation pattern. Callers MUST guard themselves with a
 ///         <c>Timeout(...)</c> or a side-channel probe (the missing-message
 ///         5 s probe in ThreadChatView relies on this).</item>
@@ -50,15 +50,15 @@ namespace MeshWeaver.Threading.Test;
 /// timeout, causing the HTTP response to hang past 30 s and leaking
 /// hub callbacks into <c>QUIESCE-TIMEOUT</c>. The fix is two-layered:
 /// (a) caller-side timeout/probe to surface "missing" inside 5 s,
-/// (b) make sure the GUI renders a "— message missing —" placeholder
+/// (b) make sure the GUI renders a "â€” message missing â€”" placeholder
 /// instead of a forever skeleton. This test only pins layer (a)'s
-/// underlying invariant — the cache starvation — which is what the
+/// underlying invariant â€” the cache starvation â€” which is what the
 /// caller-side probes assume.</para>
 /// </summary>
 public class MissingSatelliteTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     /// <summary>
-    /// Per-test mesh — we mutate a Thread node's Messages list to inject a
+    /// Per-test mesh â€” we mutate a Thread node's Messages list to inject a
     /// fabricated id; isolated state avoids cross-test pollution.
     /// </summary>
     protected override bool ShareMeshAcrossTests => false;
@@ -72,7 +72,7 @@ public class MissingSatelliteTest(ITestOutputHelper output) : MonolithMeshTestBa
         return base.ConfigureClient(configuration);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task ValidSatellite_Emits_MissingSatellite_StarvesUntilDeadline()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -91,7 +91,7 @@ public class MissingSatelliteTest(ITestOutputHelper output) : MonolithMeshTestBa
             Content = new MeshThread
             {
                 CreatedBy = TestUsers.Admin.ObjectId,
-                // Both ids in Messages — the chat view will iterate the list
+                // Both ids in Messages â€” the chat view will iterate the list
                 // and try to render a bubble for each, including the missing one.
                 Messages = ImmutableList.Create(validId, missingId)
             }
@@ -127,14 +127,14 @@ public class MissingSatelliteTest(ITestOutputHelper output) : MonolithMeshTestBa
                 .ToTask(ct);
         }
         validEmission.Should().NotBeNull(
-            "the existing satellite must emit via the cache within 5 s — happy path");
+            "the existing satellite must emit via the cache within 5 s â€” happy path");
         (validEmission!.Content as ThreadMessage)?.Text.Should().Be("I exist");
 
         // 3) Missing path: same subscription shape, but no satellite exists.
         // The cache stream surfaces the NotFound as
-        // OnError(DeliveryFailureException) — fast (sub-second), NOT a 5 s
+        // OnError(DeliveryFailureException) â€” fast (sub-second), NOT a 5 s
         // cold-observable wait. Critical that callers attach an onError
-        // handler — without it the exception is unhandled and crashes the
+        // handler â€” without it the exception is unhandled and crashes the
         // Blazor circuit (prod 2026-05-24 symptom: "still crashing / stuck
         // on progress screen" after the SSR fix). ThreadChatView's
         // SyncMessageSubscriptions now subscribes with an onError that
@@ -153,7 +153,7 @@ public class MissingSatelliteTest(ITestOutputHelper output) : MonolithMeshTestBa
 
         await badRead.Should().ThrowAsync<DeliveryFailureException>(
             "missing satellite paths must surface as DeliveryFailureException on the " +
-            "cache stream. Callers MUST attach an onError handler to Subscribe — " +
+            "cache stream. Callers MUST attach an onError handler to Subscribe â€” " +
             "without it the exception is unhandled and propagates up the Blazor " +
             "circuit, crashing the page (the 'still crashing / progress stuck' prod " +
             "symptom this test was added for).");
@@ -177,7 +177,7 @@ public class MissingSatelliteTest(ITestOutputHelper output) : MonolithMeshTestBa
         }
         await done.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
         capturedError.Should().NotBeNull(
-            "the onError handler must fire — proving that a caller that attaches one " +
+            "the onError handler must fire â€” proving that a caller that attaches one " +
             "(like ThreadChatView's bubble subscription) catches the failure and can " +
             "render a 'missing' placeholder instead of taking down the circuit.");
         capturedError.Should().BeOfType<DeliveryFailureException>();

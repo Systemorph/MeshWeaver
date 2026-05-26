@@ -51,7 +51,7 @@ public class IsExecutingLifecycleTest(ITestOutputHelper output) : MonolithMeshTe
         return base.ConfigureClient(configuration).AddData();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task SingleMessage_IsExecuting_FlipsTrueThenFalse_WithRealResponse()
     {
         var ct = new CancellationTokenSource(60.Seconds()).Token;

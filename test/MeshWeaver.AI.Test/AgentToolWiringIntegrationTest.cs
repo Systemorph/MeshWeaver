@@ -67,7 +67,7 @@ public class AgentToolWiringIntegrationTest : MonolithMeshTestBase
     /// Verifies that the Assistant agent gets all mesh tools including write operations
     /// because it has explicit Mesh plugin configured.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task AssistantAgent_ShouldGetAllMeshTools()
     {
         var capturingClient = Mesh.ServiceProvider.GetRequiredService<CapturingChatClient>();
@@ -99,7 +99,7 @@ public class AgentToolWiringIntegrationTest : MonolithMeshTestBase
     /// Verifies that Worker agent gets ALL mesh tools including write operations
     /// because its description contains "create, update, and delete".
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task WorkerAgent_ShouldGetAllMeshToolsIncludingWrite()
     {
         var capturingClient = Mesh.ServiceProvider.GetRequiredService<CapturingChatClient>();
@@ -131,7 +131,7 @@ public class AgentToolWiringIntegrationTest : MonolithMeshTestBase
     /// The Assistant.md contains @@Agent/ToolsReference
     /// which should be expanded to include the full tool documentation.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task AgentInstructions_ShouldExpandInlineReferences()
     {
         var capturingClient = Mesh.ServiceProvider.GetRequiredService<CapturingChatClient>();

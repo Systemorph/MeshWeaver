@@ -38,7 +38,7 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
         return base.ConfigureClient(configuration);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task SubThread_CreatedUnderResponseMessage_HasCorrectPath()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -101,7 +101,7 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
             "sub-thread MainNode should be the content entity for access control");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task SubThread_WithMessages_IsNavigableHierarchy()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -231,7 +231,7 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
         outputMsg.ToolCalls[1].Name.Should().Be("Get");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task SubThread_ToolCallsAggregatedToParent()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -270,7 +270,7 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
         parentToolCalls[1].Name.Should().Be("Get");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task SubThread_ToolCalls_PrefixedWithAgentName()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -294,7 +294,7 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
         forwarded.DelegationPath.Should().Be("thread/msg/sub1");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task SubThread_PlanAndDelegations_CoexistUnderThread()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;

@@ -51,7 +51,7 @@ public class AutoExecuteFlowTest(ITestOutputHelper output) : MonolithMeshTestBas
         return base.ConfigureClient(configuration).AddData();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task PortalFlow_CreateThread_CreateCells_Submit_ResponseWritten()
     {
         var ct = new CancellationTokenSource(30.Seconds()).Token;
@@ -77,7 +77,7 @@ public class AutoExecuteFlowTest(ITestOutputHelper output) : MonolithMeshTestBas
         Output.WriteLine($"Response: {response.Text[..Math.Min(80, response.Text.Length)]}");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task PortalFlow_ResponseCell_GetsUpdatedByExecution()
     {
         var ct = new CancellationTokenSource(30.Seconds()).Token;

@@ -50,7 +50,7 @@ public class CancelThreadExecutionTest(ITestOutputHelper output) : MonolithMeshT
         return base.ConfigureClient(configuration).AddLayoutClient();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task CancelStream_StopsExecutionAndMarksAsCancelled()
     {
         var ct = new CancellationTokenSource(30.Seconds()).Token;

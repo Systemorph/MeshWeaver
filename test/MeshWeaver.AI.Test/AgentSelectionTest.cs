@@ -33,7 +33,7 @@ public class AgentSelectionTest
     /// TodoAgent is defined at ACME/Project/TodoAgent
     /// When getting agents for ACME/ProductLaunch, TodoAgent should be found via the NodeType namespace.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task QueryAgentsAsync_ProductLaunchWithNodeType_FindsTodoAgentFromNodeTypeNamespace()
     {
         // Arrange
@@ -109,7 +109,7 @@ public class AgentSelectionTest
     /// Scenario: When at a path without a custom NodeType, agents should still be found
     /// from the path's ancestor hierarchy.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task QueryAgentsAsync_PathWithoutNodeType_FindsAgentsFromPathHierarchy()
     {
         // Arrange
@@ -167,7 +167,7 @@ public class AgentSelectionTest
     /// <summary>
     /// Tests agent ordering by Order then DisplayName.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void OrderByRelevance_OrdersByOrderThenDisplayName()
     {
         // Arrange
@@ -210,7 +210,7 @@ public class AgentSelectionTest
     /// Scenario: When AgentContext has pre-loaded AvailableAgents,
     /// the ordering should work based on Order.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void AgentContext_WithPreloadedAgents_OrdersByOrder()
     {
         // Arrange

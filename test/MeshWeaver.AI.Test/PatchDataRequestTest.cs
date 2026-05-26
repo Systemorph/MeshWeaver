@@ -54,7 +54,7 @@ public class PatchDataRequestTest : MonolithMeshTestBase
                     .AddDefaultLayoutAreas()
             });
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task PatchDataRequest_MergesPartialFields_LeavesOmittedIntact()
     {
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();

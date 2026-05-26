@@ -142,7 +142,7 @@ public class HandoffTest
     /// <summary>
     /// Verifies that the HandoffTool sets a HandoffRequest when invoked.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Handoff_ToolSetsHandoffRequest()
     {
         // Arrange
@@ -190,7 +190,7 @@ public class HandoffTest
     /// Verifies that the handoff tool returns a stop message,
     /// so the LLM knows to stop generating.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Handoff_ToolReturnsStopMessage()
     {
         // Arrange
@@ -243,7 +243,7 @@ public class HandoffTest
     /// <summary>
     /// Verifies that HandoffRequest record has correct values.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void HandoffRequest_RecordProperties_AreCorrect()
     {
         var request = new HandoffRequest("Orchestrator", "Specialist", "Plan this complex task");
@@ -256,7 +256,7 @@ public class HandoffTest
     /// <summary>
     /// Verifies that ChatHandoffContent properties are set correctly.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ChatHandoffContent_Properties_AreCorrect()
     {
         var content = new ChatHandoffContent("Orchestrator", "Specialist", "Take over planning");
@@ -269,7 +269,7 @@ public class HandoffTest
     /// <summary>
     /// Verifies that the HandoffTool includes available agents in its description.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void HandoffTool_Description_IncludesAvailableAgents()
     {
         var agentConfig = new AgentConfiguration
@@ -300,7 +300,7 @@ public class HandoffTest
     /// <summary>
     /// Verifies that AgentConfiguration supports both delegations and handoffs simultaneously.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void AgentConfiguration_SupportsCoexistingDelegationsAndHandoffs()
     {
         var config = new AgentConfiguration

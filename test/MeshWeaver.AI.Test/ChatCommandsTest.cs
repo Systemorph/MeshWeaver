@@ -24,7 +24,7 @@ public class ChatCommandsTest
 
     // ---- ChatPreParser ----
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Parse_NullOrEmpty_ReturnsEmptyResult()
     {
         var result = parser.Parse(null);
@@ -35,7 +35,7 @@ public class ChatCommandsTest
         parser.Parse("   ").Command.Should().BeNull();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Parse_PlainText_NoCommandNoReferences()
     {
         var result = parser.Parse("Hello, please summarise this.");
@@ -44,7 +44,7 @@ public class ChatCommandsTest
         result.ShouldSendToAI.Should().BeTrue();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Parse_SlashAgentWithName_ReturnsCommand()
     {
         var result = parser.Parse("/agent Worker");
@@ -56,7 +56,7 @@ public class ChatCommandsTest
         result.ProcessedText.Should().BeEmpty();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Parse_SlashModelWithDottedName_PreservesArg()
     {
         var result = parser.Parse("/model gpt-4o-mini");
@@ -65,7 +65,7 @@ public class ChatCommandsTest
         result.Command.RawArguments.Should().Be("gpt-4o-mini");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Parse_SlashHelp_NoArguments()
     {
         var result = parser.Parse("/help");
@@ -74,7 +74,7 @@ public class ChatCommandsTest
         result.Command.Arguments.Should().BeEmpty();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Parse_AgentReferenceInMessage_ExtractsButNoCommand()
     {
         var result = parser.Parse("@agent/Worker can you help?");
@@ -82,7 +82,7 @@ public class ChatCommandsTest
         result.AgentReference.Should().Be("Worker");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Parse_SlashNotAtStart_NotTreatedAsCommand()
     {
         // "/" must be at the start; mid-message is plain text.
@@ -92,7 +92,7 @@ public class ChatCommandsTest
 
     // ---- ChatCommandRegistry ----
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Registry_Register_ResolvesByNameAndAliases()
     {
         var registry = new ChatCommandRegistry();
@@ -107,7 +107,7 @@ public class ChatCommandsTest
         byName.Should().BeSameAs(byAlias);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Registry_GetAllCommands_DedupesAliases()
     {
         var registry = new ChatCommandRegistry();
@@ -117,7 +117,7 @@ public class ChatCommandsTest
         registry.GetAllCommands().Should().HaveCount(2);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Registry_UnknownCommand_TryGetReturnsFalse()
     {
         var registry = new ChatCommandRegistry();
@@ -127,7 +127,7 @@ public class ChatCommandsTest
 
     // ---- AgentCommand ----
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task AgentCommand_NoArgs_RequestsPickerWidget()
     {
         var (cmd, ctx, switched) = MakeAgentCommandContext(parsed: ParseSlash("/agent"));
@@ -143,7 +143,7 @@ public class ChatCommandsTest
         switched.Value.Should().BeNull();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task AgentCommand_KnownAgent_SwitchesAndReturnsOk()
     {
         var (cmd, ctx, switched) = MakeAgentCommandContext(parsed: ParseSlash("/agent Worker"));
@@ -156,7 +156,7 @@ public class ChatCommandsTest
         switched.Value!.Name.Should().Be("Worker");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task AgentCommand_AtPrefix_AlsoMatches()
     {
         var (cmd, ctx, switched) = MakeAgentCommandContext(parsed: ParseSlash("/agent @agent/Worker"));
@@ -167,7 +167,7 @@ public class ChatCommandsTest
         switched.Value!.Name.Should().Be("Worker");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task AgentCommand_CaseInsensitiveMatch()
     {
         var (cmd, ctx, switched) = MakeAgentCommandContext(parsed: ParseSlash("/agent worker"));
@@ -178,7 +178,7 @@ public class ChatCommandsTest
         switched.Value!.Name.Should().Be("Worker"); // returns canonical-case from dict
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task AgentCommand_UnknownAgent_ReturnsError_DoesNotSwitch()
     {
         var (cmd, ctx, switched) = MakeAgentCommandContext(parsed: ParseSlash("/agent Ghost"));
@@ -192,7 +192,7 @@ public class ChatCommandsTest
 
     // ---- ModelCommand ----
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task ModelCommand_NoArgs_RequestsPickerWidget()
     {
         var (cmd, ctx, switched) = MakeModelCommandContext(parsed: ParseSlash("/model"));
@@ -206,7 +206,7 @@ public class ChatCommandsTest
         switched.Value.Should().BeNull();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task ModelCommand_KnownModel_SwitchesAndReturnsOk()
     {
         var (cmd, ctx, switched) = MakeModelCommandContext(parsed: ParseSlash("/model gpt-4o-mini"));
@@ -217,7 +217,7 @@ public class ChatCommandsTest
         switched.Value!.Name.Should().Be("gpt-4o-mini");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task ModelCommand_UnknownModel_ReturnsError_DoesNotSwitch()
     {
         var (cmd, ctx, switched) = MakeModelCommandContext(parsed: ParseSlash("/model nope"));

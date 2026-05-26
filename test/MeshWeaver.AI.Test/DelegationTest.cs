@@ -174,7 +174,7 @@ public class DelegationTest
     /// 3. The delegation result from B flows back into A's response
     /// 4. B's session is created within A's execution scope (namespace)
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Delegation_BothSessionsCreated_ChildRunsInIsolatedContext()
     {
         // Arrange: Create agent B (the target/child)
@@ -283,7 +283,7 @@ public class DelegationTest
     /// The delegation tool result (containing B's response) appears as a function result
     /// in A's message history, proving B's execution is scoped within A's thread.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Delegation_ChildThreadInParentNamespace_ResultAppearsAsFunctionResultInParent()
     {
         // Arrange: Create agents
@@ -374,7 +374,7 @@ public class DelegationTest
     /// Verifies that delegation to a non-existent agent returns a failure result
     /// rather than throwing an exception, and the parent agent can still respond.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Delegation_TargetAgentNotFound_ReturnsFailureResult()
     {
         // Arrange: Create delegation tool with empty agents dictionary

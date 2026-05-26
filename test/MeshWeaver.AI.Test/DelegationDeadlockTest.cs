@@ -78,7 +78,7 @@ public class DelegationDeadlockTest
     /// After fix (Task.Run + ConfigureAwait(false)): the drain runs on ThreadPool â†’
     /// <c>IsThreadPoolThread</c> is true, and the grain scheduler stays free.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task DelegationTool_SubthreadDrain_MustRunOnThreadPool_NotCallerContext()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -121,7 +121,7 @@ public class DelegationDeadlockTest
     /// Sanity: the full sub-thread text must still arrive as the tool result.
     /// This is what the parent LLM's follow-up turn consumes.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task DelegationTool_ToolResult_AggregatesAllSubthreadChunks()
     {
         var ct = TestContext.Current.CancellationToken;

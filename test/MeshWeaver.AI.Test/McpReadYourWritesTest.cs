@@ -85,7 +85,7 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
 
     // ---- Get ------------------------------------------------------------------
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Get_AfterCreate_SeesFreshContent()
     {
         var plugin = CreatePlugin();
@@ -102,7 +102,7 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
         got.Should().Contain("Original");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Get_AfterPatch_SeesUpdatedName()
     {
         var plugin = CreatePlugin();
@@ -118,7 +118,7 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
             because: "Get must return current content, not an indexed snapshot from before the Patch");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Get_NonExistentPath_ReturnsNotFoundWithinTimeout()
     {
         var plugin = CreatePlugin();
@@ -133,7 +133,7 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
 
     // ---- Patch ----------------------------------------------------------------
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Patch_ImmediatelyAfterCreate_MergesWithFreshContent()
     {
         var plugin = CreatePlugin();
@@ -148,7 +148,7 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
             because: "Patch must see the just-Created node; query-lagged reads would 404");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Patch_TwiceInARow_PreservesFirstPatchesChanges()
     {
         var plugin = CreatePlugin();
@@ -167,7 +167,7 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
         got.Should().Contain("Widgets");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Patch_NonExistentPath_ReturnsNotFound()
     {
         var plugin = CreatePlugin();
@@ -180,7 +180,7 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
 
     // ---- Update ---------------------------------------------------------------
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Update_AfterCreate_VersionBumps()
     {
         var plugin = CreatePlugin();
@@ -216,7 +216,7 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
 
     // ---- GetDiagnostics -------------------------------------------------------
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task GetDiagnostics_ForNodeOnRegisteredType_ReturnsStatusJson()
     {
         var plugin = CreatePlugin();
@@ -230,7 +230,7 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
             because: "GetDiagnostics on an instance resolves to its NodeType â€” refactor must preserve this shape");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task GetDiagnostics_NonExistentPath_ReturnsUnknown()
     {
         var plugin = CreatePlugin();
@@ -241,7 +241,7 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
 
     // ---- ExecuteScript --------------------------------------------------------
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task ExecuteScript_ForIsExecutableCodeNode_CompletesWithoutError()
     {
         // Seed the script directly via IMeshService (the "created through
@@ -291,7 +291,7 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
     // Timeout includes the cold class init for the first [Fact] in this
     // ShareMeshAcrossTests class â€” building the SP + AddGraph + AddAI is
     // ~3-7s alone.
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task ExecuteScript_ForNonExecutableCodeNode_ReportsError()
     {
         var id = $"noexec-{Guid.NewGuid():N}";
@@ -341,7 +341,7 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
 
     // ---- Delete + Get --------------------------------------------------------
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task Get_AfterDelete_ReturnsNotFound()
     {
         var plugin = CreatePlugin();

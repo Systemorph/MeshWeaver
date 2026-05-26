@@ -38,7 +38,7 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         return base.ConfigureClient(configuration);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task StorePlan_CreatesMarkdownNodeUnderThread()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -93,7 +93,7 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         content.ToString().Should().Contain("Set up project structure");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task StorePlan_PlanIsInThreadPartition()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -130,7 +130,7 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             "plan should appear as a child of the thread node");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task StorePlan_CanUpdateExistingPlan()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;

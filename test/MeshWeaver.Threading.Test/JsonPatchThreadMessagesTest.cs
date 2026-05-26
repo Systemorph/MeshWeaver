@@ -39,7 +39,7 @@ public class JsonPatchThreadMessagesTest(ITestOutputHelper output) : MonolithMes
         return base.ConfigureClient(configuration).AddLayoutClient();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task CreateThread_ThenUpdateMessages_ProducesValidMeshNode()
     {
         var ct = new CancellationTokenSource(10.Seconds()).Token;

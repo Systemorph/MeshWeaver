@@ -20,7 +20,7 @@ public class PersistentThreadTest
 {
     #region Thread Record â€” PersistentThreadId & ProviderType
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Thread_PersistentThreadId_DefaultIsNull()
     {
         var thread = new Thread();
@@ -29,7 +29,7 @@ public class PersistentThreadTest
         thread.ProviderType.Should().BeNull();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Thread_WithPersistentThreadId_SetsValue()
     {
         var thread = new Thread
@@ -42,7 +42,7 @@ public class PersistentThreadTest
         thread.ProviderType.Should().Be("AzureFoundryPersistent");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Thread_WithExpression_CopiesPersistentThreadId()
     {
         var original = new Thread
@@ -57,7 +57,7 @@ public class PersistentThreadTest
         copy.ProviderType.Should().Be("AzureFoundryUpdated");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Thread_WithExpression_OverridesPersistentThreadId()
     {
         var original = new Thread
@@ -76,7 +76,7 @@ public class PersistentThreadTest
         updated.ProviderType.Should().Be("NewProvider");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Thread_JsonRoundtrip_PreservesPersistentThreadId()
     {
         var thread = new Thread
@@ -93,7 +93,7 @@ public class PersistentThreadTest
         deserialized.ProviderType.Should().Be("AzureFoundryPersistent");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Thread_JsonRoundtrip_NullPersistentFields_DeserializesAsNull()
     {
         // Simulate old JSON without persistent fields (backward compatibility)
@@ -106,7 +106,7 @@ public class PersistentThreadTest
         deserialized.ProviderType.Should().BeNull();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void Thread_RecordEquality_IncludesPersistentFields()
     {
         var thread1 = new Thread
@@ -176,7 +176,7 @@ public class PersistentThreadTest
             => throw new NotImplementedException();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void IChatClientFactory_IsPersistent_DefaultIsFalse()
     {
         IChatClientFactory factory = new NonPersistentTestFactory();
@@ -184,7 +184,7 @@ public class PersistentThreadTest
         factory.IsPersistent.Should().BeFalse();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void IChatClientFactory_IsPersistent_CanBeOverriddenToTrue()
     {
         IChatClientFactory factory = new PersistentTestFactory();
@@ -215,7 +215,7 @@ public class PersistentThreadTest
         public Action<string>? UpdateDelegationStatus { get; set; }
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void IAgentChat_SetPersistentThreadId_DefaultIsNoOp()
     {
         IAgentChat chat = new MinimalAgentChat();
@@ -225,7 +225,7 @@ public class PersistentThreadTest
         action.Should().NotThrow();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void IAgentChat_SetPersistentThreadId_NullDoesNotThrow()
     {
         IAgentChat chat = new MinimalAgentChat();

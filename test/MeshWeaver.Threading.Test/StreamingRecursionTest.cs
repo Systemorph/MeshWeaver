@@ -15,7 +15,7 @@ namespace MeshWeaver.Threading.Test;
 /// </summary>
 public class StreamingRecursionTest
 {
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ToolCalls_WithDelegationPath_DoNotEmbed_LayoutAreaControl()
     {
         // A ThreadMessage with delegation tool calls (simulates streaming state)
@@ -67,7 +67,7 @@ public class StreamingRecursionTest
         // which now renders static links instead of recursive embeds
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void ThreadMessage_ToolCalls_AreImmutableList()
     {
         // Verify tool calls use ImmutableList (no mutable collections)

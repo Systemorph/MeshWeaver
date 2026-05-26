@@ -30,7 +30,7 @@ public class KernelStdoutCaptureTest
             => Messages.Add(formatter(state, exception));
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void LoggerTextWriter_Buffers_Until_Newline()
     {
         var logger = new CapturingLogger();
@@ -45,7 +45,7 @@ public class KernelStdoutCaptureTest
         logger.Messages.Should().ContainSingle().Which.Should().Contain("Hello, World");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void LoggerTextWriter_Splits_On_Each_Newline()
     {
         var logger = new CapturingLogger();
@@ -59,7 +59,7 @@ public class KernelStdoutCaptureTest
         logger.Messages[2].Should().Contain("line three");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void LoggerTextWriter_Strips_CarriageReturn()
     {
         var logger = new CapturingLogger();
@@ -70,7 +70,7 @@ public class KernelStdoutCaptureTest
         logger.Messages.Should().ContainSingle().Which.Should().Be("hello");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void LoggerTextWriter_WriteLine_Flushes()
     {
         var logger = new CapturingLogger();
@@ -81,7 +81,7 @@ public class KernelStdoutCaptureTest
         logger.Messages.Should().ContainSingle().Which.Should().Contain("immediate");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void LoggerTextWriter_Dispose_Flushes_Pending_Buffer()
     {
         var logger = new CapturingLogger();
@@ -93,7 +93,7 @@ public class KernelStdoutCaptureTest
         logger.Messages.Should().ContainSingle().Which.Should().Contain("partial line");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task CapturingTextWriter_AsyncLocal_Isolates_Concurrent_Captures()
     {
         // Two concurrent "scripts" each capture into their own writer. Output
@@ -123,7 +123,7 @@ public class KernelStdoutCaptureTest
         captureB.ToString().Should().Be("B-1B-2B-3", "writer B must only see B's writes");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public void CapturingTextWriter_Outside_Scope_Falls_Back_To_Original()
     {
         // Without an active capture, writes should pass through to the

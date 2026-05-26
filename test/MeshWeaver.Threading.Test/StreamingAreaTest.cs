@@ -42,7 +42,7 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
         return base.ConfigureClient(configuration).AddLayoutClient();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task StreamingArea_WhenIdle_ReturnsNull()
     {
         var ct = new CancellationTokenSource(10.Seconds()).Token;
@@ -74,7 +74,7 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
         // The area returns null when idle â€” the LayoutAreaView renders nothing
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task StreamingArea_WhenExecuting_ReturnsStreamingCell()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;

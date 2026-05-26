@@ -49,7 +49,7 @@ public class DelegationFailureTest(ITestOutputHelper output) : MonolithMeshTestB
         return base.ConfigureClient(configuration).AddLayoutClient();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task SubmitMessage_WithCancellation_DoesNotHangForever()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;

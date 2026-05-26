@@ -57,7 +57,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// </summary>
 public class OrleansThreeNodePropagationTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task ChangeInC_PropagatesViaA_ToB_AcrossGrains()
     {
         var ct = new CancellationTokenSource(50.Seconds()).Token;

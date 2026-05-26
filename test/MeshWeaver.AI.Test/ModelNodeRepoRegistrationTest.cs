@@ -1,4 +1,4 @@
-#pragma warning disable CS1591
+﻿#pragma warning disable CS1591
 
 using System;
 using System.Linq;
@@ -69,7 +69,7 @@ public class ModelNodeRepoRegistrationTest : AITestBase
     private IWorkspace Workspace => Mesh.GetWorkspace();
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task StaticLanguageModel_AccessibleViaGetMeshNodeStream()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -89,7 +89,7 @@ public class ModelNodeRepoRegistrationTest : AITestBase
             "ProviderRef points at the parent ModelProvider so the resolver can chase the credential");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task StaticModelProvider_AccessibleViaGetMeshNodeStream()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -110,7 +110,7 @@ public class ModelNodeRepoRegistrationTest : AITestBase
         cfg.ApiKey.Should().Be("sk-test", "config-supplied credential lands on the static ModelProvider node");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task SyncedQuery_NamespaceProvider_ReturnsModelProviderNodes()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -125,10 +125,10 @@ public class ModelNodeRepoRegistrationTest : AITestBase
 
         snapshot.Should().Contain(n => n.Path == "_Provider/Anthropic"
             && n.NodeType == ModelProviderNodeType.NodeType,
-            "the synced query routes through every IMeshQueryProvider — static nodes must surface");
+            "the synced query routes through every IMeshQueryProvider â€” static nodes must surface");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task QueryAsync_NamespaceProvider_ReturnsCatalog()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
@@ -144,7 +144,7 @@ public class ModelNodeRepoRegistrationTest : AITestBase
         results.Should().Contain(n => n.Path == "_Provider/Anthropic");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task PickerQueries_ReturnBothLanguageModelAndModelProviderNodes()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
