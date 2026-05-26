@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 using MeshWeaver.AI;
@@ -49,7 +50,11 @@ public abstract class OrleansTestBase<TSiloConfigurator>(ITestOutputHelper outpu
 
     protected IMessageHub ClientMesh => Cluster.Client.ServiceProvider.GetRequiredService<IMessageHub>();
 
-    protected static Address CreateClientAddress(string? id = null) => new("client", id ?? "1");
+    // Unique-per-call when id is null. See MonolithMeshTestBase.CreateClientAddress
+    // for the routing-table partitioning rationale (leaked server-side sync
+    // streams from prior tests' client hubs flooding the latest client/1's
+    // action block).
+    protected static Address CreateClientAddress(string? id = null) => new("client", id ?? Guid.NewGuid().ToString("N")[..12]);
 
     /// <summary>
     /// Initial silo count for the <see cref="TestCluster"/>. Default 1 — tests that
@@ -69,8 +74,32 @@ public abstract class OrleansTestBase<TSiloConfigurator>(ITestOutputHelper outpu
         await Cluster.DeployAsync();
     }
 
+    /// <summary>
+    /// Per-test-method client tracking. Every GetClientAsync() is appended;
+    /// DisposeAsync disposes them before the cluster teardown so leaked
+    /// server-side sync streams (paired with the abandoned client hubs)
+    /// complete cleanly. Without this, cross-test mesh state accumulates
+    /// inside the silo's hosted-hub registry — Orleans grains keep the
+    /// previous client's sync subscriptions live until the cluster shuts
+    /// down, which on shared-cluster suites is too late to recover the
+    /// elapsed budget.
+    /// </summary>
+    private readonly List<IMessageHub> _clientsCreated = new();
+
     public override async ValueTask DisposeAsync()
     {
+        IMessageHub[] snapshot;
+        lock (_clientsCreated)
+        {
+            snapshot = _clientsCreated.ToArray();
+            _clientsCreated.Clear();
+        }
+        foreach (var client in snapshot)
+        {
+            try { client.Dispose(); }
+            catch { /* best-effort */ }
+        }
+
         if (Cluster is not null)
             await Cluster.DisposeAsync();
         await base.DisposeAsync();
@@ -110,6 +139,7 @@ public abstract class OrleansTestBase<TSiloConfigurator>(ITestOutputHelper outpu
         });
         Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
             .RegisterStream(client.Address, client.DeliverMessage);
+        lock (_clientsCreated) _clientsCreated.Add(client);
         return client;
     }
 }
