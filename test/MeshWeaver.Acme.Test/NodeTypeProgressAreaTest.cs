@@ -65,11 +65,12 @@ public class NodeTypeProgressAreaTest(ITestOutputHelper output) : MonolithMeshTe
 {
     private const string NodeTypePath = "ACME/Project/Todo";
 
-    // Per-class disk cache for the compile output. Guid suffix prevents Windows
-    // file-lock collisions across test runs.
+    // Stable cache directory so compiled NodeType DLLs survive across runs.
+    // The timestamped-subdir cache (a3ab9909e) prevents file-lock collisions
+    // since each compile writes to its own {nodeName}_{ticks_hex}/ subdir.
     private static readonly string SharedCacheDirectory = Path.Combine(
         Path.GetTempPath(),
-        $"MeshWeaverNodeTypeProgressTests-{Guid.NewGuid():N}",
+        "MeshWeaverNodeTypeProgressTests",
         ".mesh-cache");
 
     // Per-test-instance IAssemblyStore root. Must be a fresh GUID-tagged path per

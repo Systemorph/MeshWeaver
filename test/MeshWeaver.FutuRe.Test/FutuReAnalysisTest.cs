@@ -46,16 +46,18 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     protected override bool ShareMeshAcrossTests => true;
 
 
-    // Per-session cache directory keyed on Guid.NewGuid so a stale DLL pinned by a
-    // prior test process's AssemblyLoadContext (or a newer framework DLL invalidating
-    // the timestamp check) can't break compilation. The default bin/.mesh-cache and
-    // any stable temp directory are shared across runs, so InvalidateCache hits
-    // UnauthorizedAccessException → IOException("file is being used by another
-    // process") on Windows, after which dynamic NodeType DLLs (FutuRe_LocalAnalysis,
-    // FutuRe_GroupAnalysis) never compile and Overview falls back to an empty render.
+    // Stable cache directory so compiled dynamic NodeType DLLs
+    // (FutuRe_LocalAnalysis, FutuRe_GroupAnalysis) survive across test runs.
+    //
+    // Earlier this used Guid.NewGuid() per session because the flat-layout
+    // cache hit IOException("file is being used by another process") when
+    // InvalidateCache tried to delete a DLL still pinned by a prior process's
+    // ALC. With the timestamped-subdir cache (a3ab9909e), each compile writes
+    // to {cacheDir}/{nodeName}_{ticks_hex}/ so the prior session's DLL is
+    // never touched — InvalidateCache no longer races file locks.
     private static readonly string SharedCacheDirectory = Path.Combine(
         Path.GetTempPath(),
-        $"MeshWeaverFutuReTests-{Guid.NewGuid():N}",
+        "MeshWeaverFutuReTests",
         ".mesh-cache");
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
