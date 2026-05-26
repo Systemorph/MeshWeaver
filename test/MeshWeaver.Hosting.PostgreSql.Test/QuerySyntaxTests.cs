@@ -307,11 +307,11 @@ public class QuerySyntaxTests
         await SeedTestDataAsync();
 
         // Build a MeshConfiguration where "Bug" type is excluded from "search" context
-        var typeNodes = new Dictionary<string, MeshNode>
+        var typeNodes = new MeshNode[]
         {
-            ["Bug"] = new MeshNode("Bug") { NodeType = "NodeType", Name = "Bug", ExcludeFromContext = ["search"] },
-            ["Story"] = new MeshNode("Story") { NodeType = "NodeType", Name = "Story" },
-            ["Person"] = new MeshNode("Person") { NodeType = "NodeType", Name = "Person" }
+            new("Bug") { NodeType = "NodeType", Name = "Bug", ExcludeFromContext = ["search"] },
+            new("Story") { NodeType = "NodeType", Name = "Story" },
+            new("Person") { NodeType = "NodeType", Name = "Person" }
         };
         var meshConfig = new MeshConfiguration(typeNodes);
 
@@ -330,10 +330,10 @@ public class QuerySyntaxTests
     {
         await SeedTestDataAsync();
 
-        var typeNodes = new Dictionary<string, MeshNode>
+        var typeNodes = new MeshNode[]
         {
-            ["Bug"] = new MeshNode("Bug") { NodeType = "NodeType", Name = "Bug", ExcludeFromContext = ["search"] },
-            ["Story"] = new MeshNode("Story") { NodeType = "NodeType", Name = "Story" }
+            new("Bug") { NodeType = "NodeType", Name = "Bug", ExcludeFromContext = ["search"] },
+            new("Story") { NodeType = "NodeType", Name = "Story" }
         };
         var meshConfig = new MeshConfiguration(typeNodes);
 
@@ -351,10 +351,10 @@ public class QuerySyntaxTests
     {
         await SeedTestDataAsync();
 
-        var typeNodes = new Dictionary<string, MeshNode>
+        var typeNodes = new MeshNode[]
         {
-            ["Bug"] = new MeshNode("Bug") { NodeType = "NodeType", Name = "Bug", ExcludeFromContext = ["search"] },
-            ["Story"] = new MeshNode("Story") { NodeType = "NodeType", Name = "Story" }
+            new("Bug") { NodeType = "NodeType", Name = "Bug", ExcludeFromContext = ["search"] },
+            new("Story") { NodeType = "NodeType", Name = "Story" }
         };
         var meshConfig = new MeshConfiguration(typeNodes);
 
@@ -372,10 +372,10 @@ public class QuerySyntaxTests
     {
         await SeedTestDataAsync();
 
-        var typeNodes = new Dictionary<string, MeshNode>
+        var typeNodes = new MeshNode[]
         {
-            ["Person"] = new MeshNode("Person") { NodeType = "NodeType", Name = "Person", ExcludeFromContext = ["search"] },
-            ["Story"] = new MeshNode("Story") { NodeType = "NodeType", Name = "Story" }
+            new("Person") { NodeType = "NodeType", Name = "Person", ExcludeFromContext = ["search"] },
+            new("Story") { NodeType = "NodeType", Name = "Story" }
         };
         var meshConfig = new MeshConfiguration(typeNodes);
 
@@ -399,11 +399,11 @@ public class QuerySyntaxTests
     {
         await SeedTestDataAsync();
 
-        var typeNodes = new Dictionary<string, MeshNode>
+        var typeNodes = new MeshNode[]
         {
-            ["Bug"] = new MeshNode("Bug") { NodeType = "NodeType", Name = "Bug", ExcludeFromContext = ["create"] },
-            ["Person"] = new MeshNode("Person") { NodeType = "NodeType", Name = "Person", ExcludeFromContext = ["create"] },
-            ["Story"] = new MeshNode("Story") { NodeType = "NodeType", Name = "Story" }
+            new("Bug") { NodeType = "NodeType", Name = "Bug", ExcludeFromContext = ["create"] },
+            new("Person") { NodeType = "NodeType", Name = "Person", ExcludeFromContext = ["create"] },
+            new("Story") { NodeType = "NodeType", Name = "Story" }
         };
         var meshConfig = new MeshConfiguration(typeNodes);
 

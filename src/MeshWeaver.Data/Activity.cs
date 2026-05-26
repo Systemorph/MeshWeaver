@@ -34,9 +34,7 @@ public class Activity : ILogger, IDisposable
     public ConcurrentBag<Activity> SubActivities { get; } = new();
 
     public void Complete(ActivityStatus? activityStatus, Action<ActivityLog>? completeAction)
-    {
-        Hub.Post(new CompleteActivityRequest(activityStatus) { CompleteAction = completeAction });
-    }
+        => Hub.InvokeAsync(() => HandleComplete(activityStatus, completeAction));
 
     public void Complete(Action<ActivityLog>? completeAction = null)
         => Complete(null, completeAction);
@@ -50,9 +48,7 @@ public class Activity : ILogger, IDisposable
         => LogMessage(message, LogLevel.Information, scopes);
 
     public void LogMessage(string message, LogLevel logLevel, IReadOnlyCollection<KeyValuePair<string, object>>? scopes = null)
-    {
-        Hub.Post(new UpdateActivityLogRequest(log => log with { Messages = log.Messages.Add(new LogMessage(message, logLevel) { Scopes = scopes }) }));
-    }
+        => MutateLog(log => log with { Messages = log.Messages.Add(new LogMessage(message, logLevel) { Scopes = scopes }) });
 
     public Task<ActivityLog> GetLogAsync()
     {
@@ -62,15 +58,10 @@ public class Activity : ILogger, IDisposable
     }
 
     public void RecordAffectedPaths(IEnumerable<string> paths)
-    {
-        Hub.Post(new UpdateActivityLogRequest(log =>
-            log with { AffectedPaths = log.AffectedPaths.AddRange(paths) }));
-    }
+        => MutateLog(log => log with { AffectedPaths = log.AffectedPaths.AddRange(paths) });
 
     public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-    {
-        Hub.Post(new UpdateActivityLogRequest(log => log with { Messages = log.Messages.Add(new LogMessage(formatter.Invoke(state, exception), logLevel)) }));
-    }
+        => MutateLog(log => log with { Messages = log.Messages.Add(new LogMessage(formatter.Invoke(state, exception), logLevel)) });
 
     public bool IsEnabled(LogLevel logLevel) => logger.IsEnabled(logLevel);
 
@@ -89,7 +80,7 @@ public class Activity : ILogger, IDisposable
 
     private void UpdateSubActivity(object? sender, ActivityLog subLog)
     {
-        Hub.Post(new UpdateActivityLogRequest(log =>
+        MutateLog(log =>
         {
             var existing = log.SubActivities.FirstOrDefault(l => l.Id == subLog.Id);
             log = log with
@@ -98,11 +89,12 @@ public class Activity : ILogger, IDisposable
                 Version = (int)Hub.Version
             };
 
-            // Check if all sub-activities are complete
+            // Check if all sub-activities are complete — schedule completion on the
+            // action block so it runs AFTER this lambda's mutation commits.
             if (autoClose && log.SubActivities.All(subAct => subAct.Status != ActivityStatus.Running))
-                Hub.Post(new CompleteActivityRequest(null), options => options.WithTarget(Hub.Address));
+                Hub.InvokeAsync(() => HandleComplete(null, null));
             return log;
-        }));
+        });
     }
 
     public void Dispose()

@@ -96,7 +96,7 @@ public class NodeTypeEnrichmentDoubleCallTest
     }
 
     private static MeshConfiguration EmptyMeshConfiguration() =>
-        new(new Dictionary<string, MeshNode>());
+        new(Array.Empty<MeshNode>());
 
     /// <summary>
     /// Prod-shape repro. A dynamic NodeType whose compile never settles drives
