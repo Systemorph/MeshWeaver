@@ -117,11 +117,6 @@ public static class ThreadExecution
                 MeshWeaver.AI.Delegation.DelegationHandlers.HandleHeartbeatTick)
             .WithHandler<MeshWeaver.AI.Delegation.CancelDelegationSubThread>(
                 MeshWeaver.AI.Delegation.DelegationHandlers.HandleCancelDelegationSubThread)
-            // Delegation Subscribe-callback continuations posted onto the parent
-            // thread hub's action block so they run serialized with other hub work
-            // (not on the mesh-service reply thread or workspace synced-query thread).
-            .WithHandler<DelegationDispatchedTrigger>(HandleDelegationDispatched)
-            .WithHandler<DelegationTerminalTrigger>(HandleDelegationTerminal)
             .WithInitialization(SetThreadHubIdentity)
             .WithInitialization(RecoverStaleExecutingThread)
             .WithInitialization(WatchForExecution)
@@ -485,82 +480,6 @@ public static class ThreadExecution
     /// risk of <c>UpdateOwn</c>-on-parent-from-a-different-hub-thread and
     /// keeps every reader (watcher, GUI, MCP) seeing the same stream.</para>
     /// </summary>
-    /// <summary>
-    /// Handles <see cref="DelegationDispatchedTrigger"/> on the parent thread hub —
-    /// runs inside the action block, serialized with all other hub operations.
-    /// EmitDelegationEvent + sub-thread stream subscription wiring happen here so
-    /// the AgentChatClient state mutation doesn't race with hub-pipeline reads.
-    /// </summary>
-    internal static IMessageDelivery HandleDelegationDispatched(
-        IMessageHub hub, IMessageDelivery<DelegationDispatchedTrigger> delivery)
-    {
-        var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
-        var chat = hub.Get<AgentChatClient>();
-        if (chat is null)
-        {
-            logger?.LogWarning(
-                "[DelegationDispatched] no AgentChatClient on hub {Hub}; skipping CallId={CallId} sub={Path}",
-                hub.Address, delivery.Message.CallId, delivery.Message.SubThreadPath);
-            return delivery.Processed();
-        }
-
-        var callId = delivery.Message.CallId;
-        var subThreadPath = delivery.Message.SubThreadPath;
-        logger?.LogInformation(
-            "[DelegationDispatched] hub={Hub} EMIT_DISPATCHED sub={Path}", hub.Address, subThreadPath);
-        chat.EmitDelegationEvent(
-            new MeshWeaver.AI.Delegation.DelegationEvent(callId, subThreadPath,
-                MeshWeaver.AI.Delegation.DelegationLifecycle.Dispatched));
-
-        // Sub-thread stream subscription — on Running→Idle, post Terminal trigger
-        // back to THIS hub so the EmitDelegationEvent(Terminal) also runs serialised.
-        var workspace = hub.GetWorkspace();
-        var sawRunning = false;
-        workspace.GetMeshNodeStream(subThreadPath).Subscribe(
-            node =>
-            {
-                if (node?.Content is not MeshThread t) return;
-                if (t.Status is ThreadExecutionStatus.Executing
-                             or ThreadExecutionStatus.StartingExecution
-                             or ThreadExecutionStatus.Completing)
-                {
-                    sawRunning = true;
-                }
-                else if (sawRunning && t.Status == ThreadExecutionStatus.Idle)
-                {
-                    hub.Post(
-                        new DelegationTerminalTrigger(callId, subThreadPath),
-                        o => o.WithTarget(hub.Address));
-                }
-            },
-            ex => logger?.LogWarning(ex,
-                "[DelegationDispatched] sub-thread stream errored sub={Path}", subThreadPath));
-
-        return delivery.Processed();
-    }
-
-    /// <summary>
-    /// Handles <see cref="DelegationTerminalTrigger"/> on the parent thread hub.
-    /// Emits the Terminal delegation event so the cancel-watcher + tool-call
-    /// stamper drop the entry. Runs inside the action block.
-    /// </summary>
-    internal static IMessageDelivery HandleDelegationTerminal(
-        IMessageHub hub, IMessageDelivery<DelegationTerminalTrigger> delivery)
-    {
-        var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
-        var chat = hub.Get<AgentChatClient>();
-        if (chat is null) return delivery.Processed();
-
-        var callId = delivery.Message.CallId;
-        var subThreadPath = delivery.Message.SubThreadPath;
-        logger?.LogInformation(
-            "[DelegationTerminal] hub={Hub} EMIT_TERMINAL sub={Path}", hub.Address, subThreadPath);
-        chat.EmitDelegationEvent(
-            new MeshWeaver.AI.Delegation.DelegationEvent(callId, subThreadPath,
-                MeshWeaver.AI.Delegation.DelegationLifecycle.Terminal));
-        return delivery.Processed();
-    }
-
     internal static IMessageDelivery HandleStartExecutionOnExec(
         IMessageHub execHub,
         IMessageDelivery<StartExecutionTrigger> delivery)

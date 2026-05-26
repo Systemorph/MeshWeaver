@@ -52,27 +52,4 @@ internal record RecordSubmissionFailureTrigger(
 /// </summary>
 internal record StartExecutionTrigger(string ThreadPath) : IRequest<ThreadMutationAck>;
 
-/// <summary>
-/// Posted by <see cref="ChatClientAgentFactory.ExecuteDelegationAsync"/>'s
-/// <c>meshService.CreateNode(...).Subscribe(...)</c> callback so the
-/// continuation runs inside the PARENT thread hub's action block —
-/// serialised with all other hub operations. Without this, the Subscribe
-/// callback would execute on the mesh-service reply thread and race the
-/// hub's own action block when calling <c>EmitDelegationEvent</c>.
-/// </summary>
-internal record DelegationDispatchedTrigger(
-    string CallId,
-    string SubThreadPath) : IRequest<ThreadMutationAck>;
-
-/// <summary>
-/// Posted from the sub-thread node stream subscription (set up inside
-/// <see cref="DelegationDispatchedTrigger"/>'s handler) when the sub-thread's
-/// MeshNode transitions from Running → Idle (= terminal). The handler emits
-/// the Terminal delegation event on the parent's hub pipeline. Same
-/// rationale as DelegationDispatchedTrigger.
-/// </summary>
-internal record DelegationTerminalTrigger(
-    string CallId,
-    string SubThreadPath) : IRequest<ThreadMutationAck>;
-
 internal record ThreadMutationAck(bool Ok, string? Error = null);
