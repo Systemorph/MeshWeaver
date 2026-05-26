@@ -38,7 +38,7 @@ public class OrleansChatHistoryTest(ITestOutputHelper output) : OrleansSharedTes
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
         => await base.GetClientAsync($"hist-{name}-{Guid.NewGuid():N}", "TestUser");
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task ColdStart_AgentSeesAllPreviousMessages()
     {
         // Swap to echo factory

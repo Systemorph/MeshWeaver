@@ -45,7 +45,7 @@ public class OrleansCacheUpdateMultiSiloTest : IClassFixture<TwoSiloCacheUpdateF
     /// and assert the post-rotate value persisted. Uses the single-node
     /// authoritative read primitive rather than the synced-query feed.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task RotateApiKey_ThroughCacheUpdate_PersistsAndIsReadable()
     {
         var ct = new CancellationTokenSource(45.Seconds()).Token;

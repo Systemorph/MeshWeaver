@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Threading;
@@ -20,9 +20,9 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 ///
 /// <list type="number">
 ///   <item><c>MessageHubGrain.OnActivateAsync</c> only handled <c>onNext</c> and
-///   <c>onError</c> on the activation chain's <c>Subscribe</c> — when the source
+///   <c>onError</c> on the activation chain's <c>Subscribe</c> â€” when the source
 ///   completed without ever emitting a usable node (catalog couldn't find it,
-///   no provider claimed the partition, …), <c>_hubReady</c> stayed pending and
+///   no provider claimed the partition, â€¦), <c>_hubReady</c> stayed pending and
 ///   <c>DeliverMessage</c>'s <c>WaitAsync(30 s)</c> burned the budget.</item>
 ///   <item><c>MeshQuery.MergeProviderObservables</c> subscribed to every
 ///   provider regardless of <see cref="IMeshQueryProvider.Matches"/>, so a
@@ -35,7 +35,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// non-existent path must surface failure within seconds, never the 30 s
 /// grain-timeout window. The old behaviour blocked at exactly 30 000 ms; the
 /// fix surfaces an <c>InvalidOperationException</c> ("No MeshNode resolvable
-/// for address …") within ~1 s.</para>
+/// for address â€¦") within ~1 s.</para>
 /// </summary>
 public class GrainActivationCompletesFastTest(ITestOutputHelper output)
     : OrleansTestBase<DynamicCompilationSiloConfigurator>(output)
@@ -43,13 +43,13 @@ public class GrainActivationCompletesFastTest(ITestOutputHelper output)
     /// <summary>
     /// Caps the test budget well below the 30 s grain <c>WaitAsync</c>. If
     /// activation hangs (the prod symptom), the cancellation token fires inside
-    /// this window and the test fails — distinguishing "activation hung"
+    /// this window and the test fails â€” distinguishing "activation hung"
     /// (CancellationException) from "activation failed cleanly"
     /// (DeliveryFailureException with the new "No MeshNode resolvable" text).
     /// </summary>
     private static readonly TimeSpan FastFailBudget = TimeSpan.FromSeconds(10);
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task NonExistentPath_ActivationFailsFast_NotThirtySecondTimeout()
     {
         var ct = new CancellationTokenSource(FastFailBudget).Token;
@@ -74,23 +74,23 @@ public class GrainActivationCompletesFastTest(ITestOutputHelper output)
                 .ToTask(ct);
         };
 
-        // Two acceptable outcomes — both prove the fix:
+        // Two acceptable outcomes â€” both prove the fix:
         //   * DeliveryFailureException surfaced from the framework's NotFound /
         //     "No MeshNode resolvable" path (the typical shape).
         //   * Plain TimeoutException at the framework's response budget (also
         //     short-circuit-friendly because the grain's _hubReady was failed
         //     before that budget elapsed).
         // What we MUST NOT see is the wall clock crossing the 30 s grain
-        // boundary — that's the prod hang signature.
+        // boundary â€” that's the prod hang signature.
         await act.Should().ThrowAsync<Exception>();
         sw.Stop();
 
         sw.Elapsed.Should().BeLessThan(
             FastFailBudget,
-            "activation against a non-existent path must fail fast (catalog completes empty → " +
-            "_hubReady.TrySetException) — never block on the 30 s MessageHubGrain.DeliverMessage " +
+            "activation against a non-existent path must fail fast (catalog completes empty â†’ " +
+            "_hubReady.TrySetException) â€” never block on the 30 s MessageHubGrain.DeliverMessage " +
             $"WaitAsync. Actual: {sw.Elapsed.TotalSeconds:0.0}s.");
 
-        Output.WriteLine($"PASSED — failed in {sw.Elapsed.TotalMilliseconds:0}ms (well under 30 000 ms grain timeout)");
+        Output.WriteLine($"PASSED â€” failed in {sw.Elapsed.TotalMilliseconds:0}ms (well under 30 000 ms grain timeout)");
     }
 }

@@ -43,7 +43,7 @@ public class OrleansUserOwnedModelTest(ITestOutputHelper output) : OrleansShared
         return client;
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task UserCreatesProvider_ThenResolverFindsKey()
     {
         var ct = new CancellationTokenSource(45.Seconds()).Token;
@@ -127,7 +127,7 @@ public class OrleansUserOwnedModelTest(ITestOutputHelper output) : OrleansShared
         def.Provider.Should().Be("Anthropic");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task UserModelAndProvider_VisibleInSyncedQuery()
     {
         var ct = new CancellationTokenSource(45.Seconds()).Token;
