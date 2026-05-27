@@ -533,7 +533,16 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
                 })
                 .SubscribeOn(TaskPoolScheduler.Default)
                 .Replay(1)
-                .RefCount();
+                // AutoConnect(0): connect the upstream synced query
+                // immediately and keep it alive for the cache singleton's
+                // lifetime. RefCount() was the wrong primitive here — when
+                // subscriber count drops to 0 between calls the Replay
+                // buffer is retained but the upstream is disconnected, so a
+                // subsequent Take(1) / FirstAsync after a runtime
+                // AccessAssignment write sees the STALE cached snapshot
+                // before the synced-query's Added event lands. AutoConnect(0)
+                // keeps the upstream pumping live updates into Replay(1).
+                .AutoConnect(0);
 
             var updated = current.Add(id, stream);
             if (Interlocked.CompareExchange(ref _queries, updated, current) == current)
