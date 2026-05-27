@@ -585,6 +585,17 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     private long _instanceInitRssBytes;
     private long _instanceInitRssAnonBytes;
 
+    // Watchdog: track when the test method actually started so DisposeAsync
+    // can fail loudly on silent deadlocks. xUnit v3's [Fact(Timeout=N)] is
+    // cooperative cancellation — if a test ignores the ct, the await blocks
+    // past the deadline and xUnit eventually reports Passed with the actual
+    // (multi-minute) duration. The watchdog below catches that uniformly.
+    private DateTimeOffset _testMethodStartedAt;
+    /// <summary>Soft cap — anything above this gets a warning in the test log.</summary>
+    protected virtual TimeSpan TestSoftDeadline => TimeSpan.FromSeconds(30);
+    /// <summary>Hard cap — anything above this throws at DisposeAsync, failing the test class.</summary>
+    protected virtual TimeSpan TestHardDeadline => TimeSpan.FromSeconds(60);
+
     public override async ValueTask InitializeAsync()
     {
         var sw = Stopwatch.StartNew();
@@ -626,6 +637,11 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             try { _instanceInitRssBytes = Process.GetCurrentProcess().WorkingSet64; }
             catch { _instanceInitRssBytes = 0; }
             _instanceInitRssAnonBytes = ReadRssAnonBytes();
+
+            // Mark "test method about to run" — DisposeAsync uses this to
+            // compute actual test-method duration and apply the soft/hard
+            // deadlines (see TestSoftDeadline / TestHardDeadline).
+            _testMethodStartedAt = DateTimeOffset.UtcNow;
         }
         catch (Exception ex)
         {
@@ -1055,6 +1071,33 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         var sw = Stopwatch.StartNew();
         Exception? disposeException = null;
         TestPhaseTrace(testName, "DISPOSE_START");
+
+        // Watchdog: compute actual test-method duration. xUnit v3's
+        // [Fact(Timeout=N)] is cooperative — a test that ignores the ct
+        // happily blocks past its declared timeout and gets reported as
+        // Passed. We catch every such silent deadlock here, uniformly.
+        TimeSpan? testMethodElapsed = _testMethodStartedAt == default
+            ? null
+            : DateTimeOffset.UtcNow - _testMethodStartedAt;
+        if (testMethodElapsed is { } elapsed)
+        {
+            if (elapsed > TestHardDeadline)
+            {
+                var msg = $"{testName} ran {elapsed.TotalSeconds:F1}s — exceeded HARD deadline " +
+                    $"({TestHardDeadline.TotalSeconds:F0}s). xUnit's [Fact(Timeout=...)] is " +
+                    $"cooperative; this test almost certainly ignored its CancellationToken " +
+                    $"and silently hung past its declared timeout. Fix: thread the test's " +
+                    $"CancellationToken through every async call.";
+                FileOutput.WriteLine("[WATCHDOG-HARD] " + msg);
+                disposeException = new TimeoutException(msg);
+            }
+            else if (elapsed > TestSoftDeadline)
+            {
+                FileOutput.WriteLine(
+                    $"[WATCHDOG-SOFT] {testName} ran {elapsed.TotalSeconds:F1}s — exceeded soft " +
+                    $"deadline ({TestSoftDeadline.TotalSeconds:F0}s). Investigate the slow path.");
+            }
+        }
 
         // Shared-mesh classes never dispose the Mesh per-test — that's the entire
         // point of opting in (avoid rebuilding the Autofac container's compiled
