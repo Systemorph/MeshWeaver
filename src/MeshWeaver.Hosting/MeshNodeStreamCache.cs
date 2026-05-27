@@ -495,17 +495,36 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
     /// query surface short-circuits to raw upstream and no per-hub
     /// AsyncLocal AccessContext leaks in.
     /// </summary>
-    // Lock-free atomic-swap over ImmutableDictionary. Avoids the
-    // ConcurrentDictionary footgun where the value factory can be invoked
-    // multiple times concurrently for the same key (only one value wins,
-    // but every loser's factory side-effects already ran and leaked).
+    // Thread-safety contract for GetQuery():
     //
-    // The stream itself IS the cache: Replay(1).RefCount() caches the latest
-    // snapshot and shares one upstream subscription across all consumers.
-    // SubscribeOn(TaskPoolScheduler) ensures the heavy SyncedQueryMeshNodes
-    // construction + upstream subscription run on the thread pool — never on
-    // the calling hub's action block. First subscriber triggers the Defer;
-    // subsequent subscribers attach to the already-cached Replay(1) snapshot.
+    //   1. CREATION is lock-free atomic-swap over an ImmutableDictionary.
+    //      N concurrent threads racing for the same id each construct a
+    //      fresh observable chain; exactly one CAS-winner installs into
+    //      the map. Avoids the ConcurrentDictionary footgun where the
+    //      value factory can be invoked multiple times concurrently and
+    //      every loser's side-effects leak.
+    //
+    //   2. CAS-LOSERS DO NOT LEAK because AutoConnect(1) is lazy —
+    //      the upstream IMeshQueryCore subscription only opens when a
+    //      consumer attaches Subscribe. Losers' discarded chains have
+    //      no subscribers and never connect.
+    //
+    //   3. SUBSCRIPTION is thread-safe via ReplaySubject's internal lock
+    //      (which backs .Replay(1)). Multiple threads calling .Subscribe
+    //      on the cached observable serialise through the subject's
+    //      gate; each subscriber sees OnNext invocations serially within
+    //      itself.
+    //
+    //   4. EMISSIONS are serialised through .Synchronized() after the
+    //      Replay buffer — defence-in-depth so downstream observers that
+    //      assume single-threaded callbacks (the common case) hold even
+    //      under heavy concurrent emission load from the change feed.
+    //
+    //   5. EVENTUAL CONSISTENCY: the upstream stays connected for the
+    //      cache singleton's lifetime (AutoConnect(1) never disconnects).
+    //      Change-feed events flow into Replay(1) in real time, so new
+    //      subscribers attaching at any later point see the current
+    //      snapshot, not a stale Initial.
     private System.Collections.Immutable.ImmutableDictionary<object, IObservable<IEnumerable<MeshNode>>> _queries =
         System.Collections.Immutable.ImmutableDictionary<object, IObservable<IEnumerable<MeshNode>>>.Empty;
 
@@ -548,7 +567,14 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
                 // Take(1) / FirstAsync after a runtime AccessAssignment
                 // write sees the STALE cached snapshot. AutoConnect(1)
                 // keeps the upstream connected forever once first subscribed.
-                .AutoConnect(1);
+                .AutoConnect(1)
+                // Defence-in-depth: serialise OnNext/Error/Completed across
+                // any downstream observer that assumes single-threaded
+                // callbacks. ReplaySubject already does this, but wrapping
+                // the public observable makes the contract explicit at the
+                // API surface — readers don't have to know Rx's internal
+                // serialisation semantics to trust the cache is safe.
+                .Synchronize();
 
             var updated = current.Add(id, stream);
             if (Interlocked.CompareExchange(ref _queries, updated, current) == current)
