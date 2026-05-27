@@ -567,14 +567,12 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
                 // Take(1) / FirstAsync after a runtime AccessAssignment
                 // write sees the STALE cached snapshot. AutoConnect(1)
                 // keeps the upstream connected forever once first subscribed.
-                .AutoConnect(1)
-                // Defence-in-depth: serialise OnNext/Error/Completed across
-                // any downstream observer that assumes single-threaded
-                // callbacks. ReplaySubject already does this, but wrapping
-                // the public observable makes the contract explicit at the
-                // API surface — readers don't have to know Rx's internal
-                // serialisation semantics to trust the cache is safe.
-                .Synchronize();
+                .AutoConnect(1);
+                // ReplaySubject (backing Replay(1)) already serialises
+                // OnNext/Subscribe internally — no .Synchronize() needed.
+                // Adding it would route every emission through an additional
+                // gate lock, contending with concurrent subscribers under
+                // load.
 
             var updated = current.Add(id, stream);
             if (Interlocked.CompareExchange(ref _queries, updated, current) == current)
