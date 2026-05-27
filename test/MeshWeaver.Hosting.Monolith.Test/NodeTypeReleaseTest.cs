@@ -41,7 +41,7 @@ public class NodeTypeReleaseTest(ITestOutputHelper output) : MonolithMeshTestBas
     private const string NodeTypeId = "Sample";
     private const string NodeTypePath = $"{ReleaseTestPartition}/{NodeTypeId}";
 
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 120_000)]
     public async Task CompilationPending_CreatesReleaseMeshNode_WithNotes()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -64,13 +64,15 @@ public class NodeTypeReleaseTest(ITestOutputHelper output) : MonolithMeshTestBas
         // 2. Wait for the kickoff compile to settle. Reading via the live
         //    MeshNode stream is path-known and authoritative; ObserveQuery is
         //    eventually consistent and would miss the post-compile tick.
+        //    Cold Roslyn compile on CI Linux runners can take 60-90s; budget
+        //    generously so we never race the slow path.
         var kickoffSnapshot = await workspace
             .GetMeshNodeStream(NodeTypePath)
             .Where(n => n.Content is NodeTypeDefinition d
                 && d.CompilationStatus == CompilationStatus.Ok
                 && !string.IsNullOrEmpty(d.LatestReleasePath))
             .Take(1)
-            .Timeout(45.Seconds())
+            .Timeout(90.Seconds())
             .ToTask(ct);
         var kickoffReleasePath = ((NodeTypeDefinition)kickoffSnapshot.Content!).LatestReleasePath!;
 

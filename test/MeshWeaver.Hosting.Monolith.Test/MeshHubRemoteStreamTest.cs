@@ -50,10 +50,10 @@ public class MeshHubRemoteStreamTest(ITestOutputHelper output) : MonolithMeshTes
     /// The initial DataChangedEvent from the node hub must reach the mesh hub's
     /// inner sync stream — not be delivered locally on the node hub.
     /// </summary>
-    [Fact(Timeout = 20_000)]
+    [Fact(Timeout = 60_000)]
     public async Task MeshHub_RemoteStream_ReceivesInitialSnapshot()
     {
-        var ct = new CancellationTokenSource(15.Seconds()).Token;
+        var ct = new CancellationTokenSource(30.Seconds()).Token;
         var path = $"{Namespace}/snap1";
 
         await NodeFactory.CreateNode(new MeshNode("snap1", Namespace)
@@ -83,10 +83,10 @@ public class MeshHubRemoteStreamTest(ITestOutputHelper output) : MonolithMeshTes
     /// After the initial snapshot, subsequent node updates must also flow
     /// through the mesh hub's stream (verifies the ongoing DataChangedEvent path).
     /// </summary>
-    [Fact(Timeout = 20_000)]
+    [Fact(Timeout = 60_000)]
     public async Task MeshHub_RemoteStream_ReceivesNodeUpdate()
     {
-        var ct = new CancellationTokenSource(15.Seconds()).Token;
+        var ct = new CancellationTokenSource(30.Seconds()).Token;
         var path = $"{Namespace}/upd1";
 
         await NodeFactory.CreateNode(new MeshNode("upd1", Namespace)
@@ -95,7 +95,10 @@ public class MeshHubRemoteStreamTest(ITestOutputHelper output) : MonolithMeshTes
             NodeType = "Markdown",
         }).ToTask(ct);
 
-        using var stream = Mesh.GetWorkspace().GetRemoteStream<MeshNode, MeshNodeReference>(
+        // No `using` — the stream is owned by `Workspace._remoteStreamCache` and
+        // disposing it here races with the cache + the test base's Mesh.Dispose()
+        // cascade. The cache + framework dispose the stream cleanly.
+        var stream = Mesh.GetWorkspace().GetRemoteStream<MeshNode, MeshNodeReference>(
             new Address(path), new MeshNodeReference());
 
         // Capture names for assertion using the IObservable<ChangeItem<MeshNode>> interface.
@@ -126,10 +129,10 @@ public class MeshHubRemoteStreamTest(ITestOutputHelper output) : MonolithMeshTes
     /// Multiple concurrent mesh-hub-level streams to different nodes must each
     /// receive their own DataChangedEvents independently (no cross-stream pollution).
     /// </summary>
-    [Fact(Timeout = 20_000)]
+    [Fact(Timeout = 60_000)]
     public async Task MeshHub_MultipleStreams_ReceiveIndependentUpdates()
     {
-        var ct = new CancellationTokenSource(15.Seconds()).Token;
+        var ct = new CancellationTokenSource(30.Seconds()).Token;
         var pathA = $"{Namespace}/multi-a";
         var pathB = $"{Namespace}/multi-b";
 

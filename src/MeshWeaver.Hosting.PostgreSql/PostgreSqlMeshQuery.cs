@@ -613,18 +613,21 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
                             .Where(n => parsedFilters.Any(f =>
                                 PathMatcher.ShouldNotify(n.Path, f.BasePath, f.Scope)))
                             .Subscribe(changeBuffer));
-                    // 🚨 Strict unit-of-work: Concat() ensures each batch's
-                    // RunQuery() (one DB connection from the pool, one read)
-                    // completes BEFORE the next batch's RunQuery starts. Without
-                    // Concat, .Subscribe(batch => RunQuery().Subscribe(...))
-                    // lets overlapping async DB reads race on the shared
-                    // currentItems dictionary that ProcessBatch mutates.
+                    // 🚨 Strict unit-of-work + zero debounce: every change
+                    // triggers its own RunQuery, serialised via Concat so the
+                    // shared currentItems dictionary is never raced. Buffer
+                    // was a debouncer that batched changes for 100 ms before
+                    // re-querying; that 100 ms was a race window — a
+                    // subscriber attaching after a CreateNode but before the
+                    // debounce flush saw the stale Replay(1) snapshot
+                    // (RuntimeCreateNode_AccessAssignment-style flakes).
+                    // Trading throughput (one RunQuery per change vs batched)
+                    // for correctness: every subscriber sees every change as
+                    // soon as the persistence layer has emitted it.
                     disposables.Add(
                         changeBuffer
-                            .Buffer(DefaultDebounceInterval)
-                            .Where(batch => batch.Count > 0)
-                            .Select(batch => RunQuery()
-                                .Select(newResults => (batch, newResults)))
+                            .Select(n => RunQuery()
+                                .Select(newResults => (batch: (IList<DataChangeNotification>)new[] { n }, newResults)))
                             .Concat()
                             .Subscribe(
                                 t => ProcessBatch(t.batch, t.newResults, currentItems, firstParsed, observer),
