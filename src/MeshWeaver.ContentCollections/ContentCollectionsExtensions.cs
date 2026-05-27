@@ -479,6 +479,13 @@ public static class ContentCollectionsExtensions
                             SourceType = "FileSystem",
                             BasePath = basePath,
                             Address = configuration.Address,
+                            // Must opt in explicitly — the wire-default flip in
+                            // 95f840f34 made ExposeInChildren default to false
+                            // (so types that don't set it get filtered out of
+                            // GetAllCollectionConfigs and ContentAutocompleteProvider).
+                            // Filesystem collections registered via this builder
+                            // are user-facing and meant to surface in children.
+                            ExposeInChildren = true,
                             Settings = new Dictionary<string, string> { ["BasePath"] = basePath }
                         };
 
