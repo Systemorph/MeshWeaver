@@ -435,8 +435,11 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
             Tags = ["updated", "complex"]
         };
 
-        // act
-        var response = await client.Observe(DataChangeRequest.Update([updatedData]), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        // act — target THIS client (not a fresh one). `CreateClientAddress()`
+        // returns a unique address per call since 8cc34791f, so it no longer
+        // matches `client.Address`; routing the update through `client` keeps
+        // the workspace we read from below subscribed to the same data path.
+        var response = await client.Observe(DataChangeRequest.Update([updatedData]), o => o.WithTarget(client.Address)).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
 
         // assert
         response.Message.Should().BeOfType<DataChangeResponse>();
