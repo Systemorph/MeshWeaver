@@ -112,6 +112,31 @@ The `await foreach` blocks hub X's action block from processing the next message
 
 The current mitigation is `Task.Run` to detach the long-running body from the action block (see `ThreadExecution.ExecuteMessageAsync`). That's a sanctioned pattern for streaming bodies that contain awaits which need the actor's own scheduler to complete. See [Thread Execution Streaming](ThreadExecutionStreaming) for the worked example.
 
+## `SubscribeOn(TaskPoolScheduler.Default)` inside a grain-hosted service
+
+`IMeshNodeStreamCache.GetQuery` and `MeshQuery.ObserveQuery` / `.Query` wrap their inner observables with `SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default)`. When the cache hub runs inside an Orleans grain, this is **intentional and correct** — here's what actually happens:
+
+1. **The grain method call (`GetQuery(id, queries)`) runs on the grain scheduler.** Orleans serializes; the `Interlocked.CompareExchange` on the cache's `_queries` dictionary is safe by virtue of the grain's single-threaded execution. The method returns an `IObservable<T>` description and the grain releases.
+
+2. **`Subscribe` is called outside the grain method's scope** — typically from a downstream consumer (a layout area, a validator, another service). The grain doesn't hold its lock for this.
+
+3. **`SubscribeOn(TaskPoolScheduler.Default)`** then shifts the subscribe-time work — constructing `SyncedQueryMeshNodes`, opening the upstream `IMeshQueryCore.ObserveQuery` subscription, opening DB connections / change feeds — onto a thread-pool thread. That's the right place for I/O. Without this offload, those subscriptions would otherwise run on whatever thread happened to call `Subscribe`, including the grain scheduler if the caller is mid-handler.
+
+4. **Emissions** (`OnNext` to the cache's `Replay(1).RefCount()` and onward to downstream subscribers) flow on whatever thread the upstream emits from — PostgreSQL change-feed threads, Orleans observer dispatchers, etc. The cache's internal `Replay(1)` buffer is thread-safe; reads from it by other subscribers are also safe.
+
+### The bug shape this does **not** create — and the bug shape it does **not** fix
+
+The pattern is safe with respect to the cache's own state. The risk that remains is a *consumer-side* bug: if a downstream observer's `OnNext` directly mutates grain state (without going through a grain interface call), that's a single-threading violation. The fix lives at the consumer, not at the cache:
+
+```csharp
+// In a consumer that holds grain affinity:
+cache.GetQuery(id, queries)
+    .ObserveOn(grainContext.Scheduler)   // ← re-enter the grain for callbacks
+    .Subscribe(snapshot => /* now safe to touch grain state */);
+```
+
+The `SubscribeOn` at the cache layer doesn't widen this risk — the upstream change-feed emissions were already coming from background threads regardless of `SubscribeOn`. The offload only shifts the *subscribe-time work*, which is exactly what you want off the grain.
+
 ## Cross-references
 
 - [Asynchronous Calls](AsynchronousCalls) — the actor-model rules this implements.

@@ -260,8 +260,12 @@ public class MeshQuery : IMeshQueryCore
     {
         var matched = SelectMatchingProviders(NamespacesForRequest(request));
         return MergeProviderObservables(
-            matched.Select(p => p.ObserveQuery<T>(request, Options)).ToList(),
-            request);
+                matched.Select(p => p.ObserveQuery<T>(request, Options)).ToList(),
+                request)
+            // Push the upstream subscription onto the thread pool so the
+            // calling hub's action block isn't blocked while providers open
+            // their connections / start their change feeds.
+            .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default);
     }
 
     /// <summary>
@@ -280,7 +284,11 @@ public class MeshQuery : IMeshQueryCore
             return Observable.Return((IReadOnlyList<QueryResult>)Array.Empty<QueryResult>());
         var streams = matched.Select(p => p.Query(request, Options)).ToList();
         return Observable.CombineLatest(streams)
-            .Select(snapshots => MergeSnapshots(snapshots));
+            .Select(snapshots => MergeSnapshots(snapshots))
+            // Provider Query() opens connection-pool / change-feed
+            // subscriptions on Subscribe — keep that off the calling hub's
+            // action block.
+            .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default);
     }
 
     /// <summary>
@@ -442,14 +450,15 @@ public class MeshQuery : IMeshQueryCore
             || string.Equals(request.UserId, WellKnownUsers.System, StringComparison.Ordinal);
         var matched = SelectMatchingProviders(NamespacesForRequest(request));
         return MergeProviderObservables(
-            matched.Select(p => isSystem
-                ? (p is IMeshQueryCore core
-                    ? core.ObserveQuery<T>(request, options)
-                    : p.ObserveQuery<T>(request, options))
-                // Real user: ALWAYS hit the secured provider surface
-                // (validators apply per-result RLS for request.UserId).
-                : p.ObserveQuery<T>(request, options)).ToList(),
-            request);
+                matched.Select(p => isSystem
+                    ? (p is IMeshQueryCore core
+                        ? core.ObserveQuery<T>(request, options)
+                        : p.ObserveQuery<T>(request, options))
+                    // Real user: ALWAYS hit the secured provider surface
+                    // (validators apply per-result RLS for request.UserId).
+                    : p.ObserveQuery<T>(request, options)).ToList(),
+                request)
+            .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default);
     }
 
     /// <summary>
