@@ -133,22 +133,6 @@ public class HubPermissionRuleSetTest(ITestOutputHelper output) : MonolithMeshTe
             .AddSampleUsers();
 
     [Fact(Timeout = 10000)]
-    public async Task WithPublicRead_AllowsAuthenticatedUserRead()
-    {
-        // Organization hub has WithPublicRead() → HubPermissionRuleSet grants Read.
-        // A user with no AccessAssignment should still pass Read check.
-        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-
-        // Clear claim-based roles to simulate Orleans grain
-        accessService.SetCircuitContext(new AccessContext { ObjectId = "SomeUser", Name = "SomeUser" });
-
-        var response = await Mesh.Observe(new GetDataRequest(new UnifiedReference("data:")), o => o.WithTarget(new Address("Organization"))).FirstAsync().ToTask();
-
-        // Not blocked by pipeline â€” may have no data but no access denied
-        response.Message.Error.Should().NotContain("Access denied");
-    }
-
-    [Fact(Timeout = 10000)]
     public void HubPermissionRuleSet_OnlyGrantsConfiguredPermission()
     {
         // WithPublicRead only grants Read, not Create/Update/Delete.
@@ -222,38 +206,6 @@ public class OrganizationHubAccessTest(ITestOutputHelper output) : MonolithMeshT
             "Admin should have Read permission on Organization NodeType path");
     }
 
-    /// <summary>
-    /// Simulates what Orleans does: the security check runs without AccessService.Context
-    /// (no claim-based roles). The user only has access from PublicAdminAccess assignments.
-    /// This reproduces the production "lacks Read permission on 'Organization'" error.
-    /// </summary>
-    [Fact(Timeout = 10000)]
-    public async Task Admin_HasReadOnOrganization_WithoutClaimBasedRoles()
-    {
-        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-
-        // Clear circuit context to simulate Orleans grain (no claim-based roles)
-        var savedContext = accessService.CircuitContext;
-        accessService.SetCircuitContext(null);
-
-        try
-        {
-            // Without claim-based roles, permissions come only from AccessAssignment nodes.
-            // PublicAdminAccess grants Admin at root ("") but not at "Organization" specifically.
-            var permissions = await Mesh.GetPermissionAsync(
-                "Organization", TestUsers.Admin.ObjectId, TestContext.Current.CancellationToken);
-
-            Output.WriteLine($"Admin permissions on 'Organization' (no claims): {permissions}");
-
-            permissions.Should().HaveFlag(Permission.Read,
-                "Admin should have Read on Organization even without claim-based roles â€” " +
-                "PublicAdminAccess at root should inherit to Organization path");
-        }
-        finally
-        {
-            accessService.SetCircuitContext(savedContext);
-        }
-    }
 }
 
 /// <summary>

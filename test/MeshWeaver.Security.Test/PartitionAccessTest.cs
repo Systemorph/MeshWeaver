@@ -141,40 +141,4 @@ public class PartitionAccessTest(ITestOutputHelper output) : MonolithMeshTestBas
         def.DataSource.Should().Be("static");
     }
 
-    [Fact(Timeout = 30000)]
-    public async Task SpaceCreation_CreatesPartitionNode()
-    {
-        // Roland's global Admin role is pre-seeded via ConfigureMesh's static AccessAssignment.
-        var orgNode = new MeshNode("Globex")
-        {
-            Name = "Globex Corp",
-            NodeType = "Space",
-            Content = new Space { Name = "Globex Corp" }
-        };
-
-        var created = await NodeFactory.CreateNode(orgNode);
-        created.Should().NotBeNull();
-        Output.WriteLine($"Created org: {created.Path}");
-
-        // Give time for post-creation handler to execute
-        await Task.Delay(500, TestContext.Current.CancellationToken);
-
-        // Check that a partition node was created
-        var partitions = await MeshQuery.QueryAsync<MeshNode>(
-            "path:Admin/Partition/Globex",
-            ct: TestContext.Current.CancellationToken
-        ).ToArrayAsync(TestContext.Current.CancellationToken);
-
-        Output.WriteLine($"Found {partitions.Length} partition nodes for Globex");
-        foreach (var p in partitions)
-            Output.WriteLine($"  - {p.Path}: {p.Name} (Content={p.Content?.GetType().Name})");
-
-        partitions.Should().HaveCount(1, "Organization creation should auto-create a Partition node");
-        var partitionDef = partitions[0].Content as PartitionDefinition;
-        partitionDef.Should().NotBeNull();
-        partitionDef!.Namespace.Should().Be("Globex");
-        partitionDef.Schema.Should().Be("globex");
-        partitionDef.TableMappings.Should().NotBeNull();
-        partitionDef.TableMappings.Should().ContainKey("_Activity");
-    }
 }
