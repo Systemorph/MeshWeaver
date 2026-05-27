@@ -20,7 +20,7 @@ namespace MeshWeaver.Query.Test;
 
 /// <summary>
 /// Behavioural tests for <see cref="SyncedQueryMeshNodes"/> and the
-/// hub-cached <see cref="SyncedQueryRegistry"/> retrieval surface
+/// hub-cached IMeshNodeStreamCache retrieval surface
 /// (<see cref="SyncedQueryDataSourceExtensions.GetQuery(IWorkspace, object)"/>
 /// and the get-or-create
 /// <see cref="SyncedQueryDataSourceExtensions.GetQuery(IWorkspace, object, string)"/>).
@@ -81,7 +81,7 @@ public class SyncedQueryTest(ITestOutputHelper output)
     /// <summary>
     /// <c>workspace.GetQuery(name, query)</c> spins up a new
     /// <see cref="SyncedQueryMeshNodes"/> after hub instantiation and caches
-    /// its inner observable in the hub-level <see cref="SyncedQueryRegistry"/>.
+    /// its inner observable in the process-wide IMeshNodeStreamCache.
     /// Subsequent <c>GetQuery(name)</c> with no query string returns the
     /// same cached inner observable — the outer per-user RLS wrapper
     /// (<c>WrapWithPerUserRls</c>) is computed per-call, so the test checks
@@ -101,9 +101,9 @@ public class SyncedQueryTest(ITestOutputHelper output)
         // differ between calls. The actual contract is that the REGISTRY's
         // inner observable is the same: a single SyncedQueryMeshNodes upstream
         // for the id, shared via Replay(1).RefCount(). That's what we assert.
-        var registry = SyncedQueryDataSourceExtensions.RegistryFor(Mesh.GetWorkspace());
-        var innerA = registry.Get("$dyn-cache");
-        var innerB = registry.Get("$dyn-cache");
+        var cache = Mesh.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        var innerA = cache.GetQuery("$dyn-cache");
+        var innerB = cache.GetQuery("$dyn-cache");
         innerA.Should().NotBeNull("the registry caches the inner observable on first GetQuery(name, query) call");
         ReferenceEquals(innerA, innerB).Should().BeTrue(
             "two registry lookups for the same id return the same cached inner observable");
@@ -302,9 +302,9 @@ public class SyncedQueryTest(ITestOutputHelper output)
         _ = CreateQuery("$share-test");
         _ = Mesh.GetWorkspace().GetQuery("$share-test");
 
-        var registry = SyncedQueryDataSourceExtensions.RegistryFor(Mesh.GetWorkspace());
-        var innerA = registry.Get("$share-test");
-        var innerB = registry.Get("$share-test");
+        var cache = Mesh.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        var innerA = cache.GetQuery("$share-test");
+        var innerB = cache.GetQuery("$share-test");
         ReferenceEquals(innerA, innerB).Should().BeTrue(
             "registry hands back the same inner observable for the same name");
     }
