@@ -613,15 +613,22 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
                             .Where(n => parsedFilters.Any(f =>
                                 PathMatcher.ShouldNotify(n.Path, f.BasePath, f.Scope)))
                             .Subscribe(changeBuffer));
+                    // 🚨 Strict unit-of-work: Concat() ensures each batch's
+                    // RunQuery() (one DB connection from the pool, one read)
+                    // completes BEFORE the next batch's RunQuery starts. Without
+                    // Concat, .Subscribe(batch => RunQuery().Subscribe(...))
+                    // lets overlapping async DB reads race on the shared
+                    // currentItems dictionary that ProcessBatch mutates.
                     disposables.Add(
                         changeBuffer
                             .Buffer(DefaultDebounceInterval)
                             .Where(batch => batch.Count > 0)
-                            .Subscribe(batch =>
-                                disposables.Add(
-                                    RunQuery().Subscribe(
-                                        newResults => ProcessBatch(batch, newResults, currentItems, firstParsed, observer),
-                                        ex => observer.OnError(ex)))));
+                            .Select(batch => RunQuery()
+                                .Select(newResults => (batch, newResults)))
+                            .Concat()
+                            .Subscribe(
+                                t => ProcessBatch(t.batch, t.newResults, currentItems, firstParsed, observer),
+                                ex => observer.OnError(ex)));
 
                     // 2) Snapshot + clear early backlog under lock; gate further early-capture.
                     lock (earlyLock)
@@ -648,12 +655,21 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
                     // Drain the early backlog as one immediate batch — these events
                     // fired DURING the initial query window, so we re-query and
                     // apply diffs against the just-populated currentItems.
+                    //
+                    // 🚨 Push through changeBuffer instead of running a parallel
+                    // RunQuery(). The live pipeline above uses .Concat() to
+                    // serialize batches; sending the backlog through the same
+                    // subject queues it BEHIND any live batch already in flight,
+                    // preserving strict unit-of-work ordering for currentItems
+                    // mutations. Posting on a thread-pool tick avoids stack
+                    // recursion through the live Subscribe.
                     if (backlog.Length > 0)
                     {
-                        disposables.Add(
-                            RunQuery().Subscribe(
-                                newResults => ProcessBatch(backlog.ToList(), newResults, currentItems, firstParsed, observer),
-                                ex => observer.OnError(ex)));
+                        Scheduler.Default.Schedule(() =>
+                        {
+                            foreach (var n in backlog)
+                                changeBuffer.OnNext(n);
+                        });
                     }
                 },
                 ex => observer.OnError(ex)));
