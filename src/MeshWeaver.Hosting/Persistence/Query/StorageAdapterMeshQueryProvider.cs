@@ -1,4 +1,5 @@
 ﻿using System.Reactive.Disposables;
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
@@ -1086,15 +1087,23 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                                 .Where(n => scopeFilters.Any(sf =>
                                     PathMatcher.ShouldNotify(n.Path, sf.BasePath, sf.Scope)))
                                 .Subscribe(changeBuffer));
+                        // 🚨 Strict unit-of-work: Concat() ensures each batch's
+                        // RunQuery() (one persistence read, one ProcessBatch
+                        // mutation of currentItems) completes BEFORE the next
+                        // batch's RunQuery starts. Without Concat,
+                        // .Subscribe(batch => RunQuery().Subscribe(...)) lets
+                        // overlapping async reads race the shared currentItems
+                        // dictionary.
                         disposables.Add(
                             changeBuffer
                                 .Buffer(DefaultDebounceInterval)
                                 .Where(batch => batch.Count > 0)
-                                .Subscribe(batch =>
-                                    disposables.Add(
-                                        RunQuery(cts.Token).Subscribe(
-                                            newResults => ProcessBatch(batch, newResults, currentItems, parsedQuery, observer),
-                                            ex => observer.OnError(ex)))));
+                                .Select(batch => RunQuery(cts.Token)
+                                    .Select(newResults => (batch, newResults)))
+                                .Concat()
+                                .Subscribe(
+                                    t => ProcessBatch(t.batch, t.newResults, currentItems, parsedQuery, observer),
+                                    ex => observer.OnError(ex)));
 
                         lock (earlyLock)
                         {
@@ -1113,12 +1122,16 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                             Timestamp = DateTimeOffset.UtcNow,
                         });
 
+                        // Push backlog through the same Concat-serialized
+                        // pipeline rather than running a parallel RunQuery
+                        // that would race the first live batch.
                         if (backlog.Length > 0)
                         {
-                            disposables.Add(
-                                RunQuery(cts.Token).Subscribe(
-                                    newResults => ProcessBatch(backlog.ToList(), newResults, currentItems, parsedQuery, observer),
-                                    ex => observer.OnError(ex)));
+                            Scheduler.Default.Schedule(() =>
+                            {
+                                foreach (var n in backlog)
+                                    changeBuffer.OnNext(n);
+                            });
                         }
                     },
                     ex => observer.OnError(ex)));
