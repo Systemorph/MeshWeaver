@@ -283,7 +283,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     {
         using var scope = Mesh.ServiceProvider.CreateScope();
         var accessService = scope.ServiceProvider.GetRequiredService<AccessService>();
-        var sec = scope.ServiceProvider.GetRequiredService<SecurityService>();
+        var sec = scope.ServiceProvider.GetRequiredService<IMessageHub>();
 
         const string userId = "delivery-admin";
 
@@ -323,7 +323,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         // Roles onto the SAME scope where SecurityService runs.
         using var scope = Mesh.ServiceProvider.CreateScope();
         var accessService = scope.ServiceProvider.GetRequiredService<AccessService>();
-        var sec = scope.ServiceProvider.GetRequiredService<SecurityService>();
+        var sec = scope.ServiceProvider.GetRequiredService<IMessageHub>();
 
         const string userId = "claim-only-admin";
 

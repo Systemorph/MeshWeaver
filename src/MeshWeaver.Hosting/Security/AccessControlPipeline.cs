@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reflection;
 using MeshWeaver.Data;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using MeshWeaver.Messaging.Security;
@@ -58,8 +59,7 @@ public static class AccessControlPipeline
                 if (attr == null)
                     return next.Invoke(delivery, ct);
 
-                var securityService = hub.ServiceProvider.GetService<SecurityService>();
-                if (securityService == null)
+                if (hub.Configuration.Get<EffectivePermissionsDelegate>() is null)
                     return next.Invoke(delivery, ct);
 
                 var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
@@ -120,7 +120,7 @@ public static class AccessControlPipeline
                 // ImpersonateAsSystem scope. See ResolveIdentity's comment.
                 var effectiveUserId = userId ?? WellKnownUsers.Anonymous;
                 pendingChecks.ToObservable()
-                    .Select(check => securityService.HasPermission(check.Path, effectiveUserId, check.Permission)
+                    .Select(check => hub.CheckPermission(check.Path, effectiveUserId, check.Permission)
                         // HasPermission rides the live AccessAssignment synced
                         // stream — a hot, never-completing observable. Take(1)
                         // closes each inner so Concat below actually advances
@@ -211,10 +211,9 @@ public static class AccessControlPipeline
         var ownPath = hub.Address.ToString();
         logger?.LogDebug("[GP] enter hub={Hub}", ownPath);
 
-        var sec = hub.ServiceProvider.GetService<SecurityService>();
-        if (sec is null)
+        if (hub.Configuration.Get<EffectivePermissionsDelegate>() is null)
         {
-            logger?.LogDebug("[GP] sec is null → posting None");
+            logger?.LogDebug("[GP] RLS not enabled → posting None");
             hub.Post(new GetPermissionResponse(Permission.None), o => o.ResponseFor(request));
             return request.Processed();
         }
@@ -232,7 +231,7 @@ public static class AccessControlPipeline
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         var userId = ResolveIdentity(request, accessService) ?? WellKnownUsers.Anonymous;
 
-        sec.GetEffectivePermissions(ownPath, userId)
+        hub.GetEffectivePermissions(ownPath, userId)
             .Take(1)
             .Subscribe(perms =>
             {

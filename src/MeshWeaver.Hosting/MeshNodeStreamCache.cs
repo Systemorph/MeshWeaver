@@ -313,7 +313,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
         // is wired up by AddRowLevelSecurity → AddAccessControlPipeline on every
         // per-node hub; without RLS the message has no handler and the feature
         // makes no sense.
-        if (meshHub.ServiceProvider.GetService<SecurityService>() is null)
+        if (meshHub.Configuration.Get<EffectivePermissionsDelegate>() is null)
             return shared;
 
         // Capture the caller's identity synchronously, on the caller's thread,

@@ -200,11 +200,11 @@ UI, permission evaluator, RLS validator) gets the cached
 | Per-user `MemoryCache` with a `Timeout()` fallback. | First permission check after process start waits the full Timeout (e.g. 2 s) while the upstream synced query warms; the fallback emits empty roles and the UI looks "logged out". | The Replay(1) is fed by the static provider's nodes *synchronously* on first subscribe. There is no "warm-up window" to time out against. |
 | Reading the entity via `IMeshQueryCore.QueryAsync` (CQRS read side). | Index-lag staleness after writes; missed Initial emissions. | Reads come from the local workspace's synced collection, which folds `Added`/`Updated`/`Removed` deltas verbatim. See [CQRS and Content Access](CqrsAndContentAccess). |
 | Reaching for `ConfigResolver.ResolveConfigurationAsync` on every per-node activation. | Every grain activation does a Postgres round-trip + an extra async resolution before the hub can answer messages. | The static repo carries enough state for the activation; user extensions arrive lazily via the same synced collection. |
-| Caching at the application service ("`SecurityService._userScopeRolesCache`"). | Cache invalidation is its own deadlock surface; runtime updates need a separate invalidation hook. | No application cache. The synced collection *is* the cache, kept consistent by `IDataChangeNotifier`. |
+| Caching at the application service ("`PermissionEvaluator._userScopeRolesCache`"). | Cache invalidation is its own deadlock surface; runtime updates need a separate invalidation hook. | No application cache. The synced collection *is* the cache, kept consistent by `IDataChangeNotifier`. |
 
 # Applying this to Roles & AccessAssignments
 
-Today `SecurityService` hand-rolls a per-user `MemoryCache` over a
+Today `PermissionEvaluator` hand-rolls a per-user `MemoryCache` over a
 synced AccessAssignment query and falls through a 2 s `Timeout()` on
 first use — that fallback fires hundreds of times during a single
 thread render and is the dominant cost of opening a chat. Migrating
@@ -215,7 +215,7 @@ the surface to this pattern means:
 2. Add a `BuiltInAccessAssignmentProvider` for baseline assignments
    (e.g. `Public → Viewer` on shipped namespaces) so the synced
    collection has a non-empty Initial on a blank mesh.
-3. Replace `SecurityService.GetUserScopeRolesStream` with a
+3. Replace `PermissionEvaluator.GetUserScopeRolesStream` with a
    workspace-local consumer of the same `workspace.GetQuery(id,
    BuildRoleAssignmentQueries(...))` projection that Agent/Model use.
    No `Timeout`, no `Catch`-to-empty fallback — the Replay(1)
@@ -223,7 +223,7 @@ the surface to this pattern means:
    arrives.
 
 See [Access Control](AccessControl) for the role / assignment data
-model and the per-hub `SecurityService` evaluator that consumes the
+model and the per-hub `PermissionEvaluator` evaluator that consumes the
 projection.
 
 # References

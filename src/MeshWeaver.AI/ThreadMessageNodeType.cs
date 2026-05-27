@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using MeshWeaver.Messaging;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Security;
 using MeshWeaver.Mesh.Security;
@@ -52,7 +53,7 @@ public static class ThreadMessageNodeType
         builder.ConfigureServices(services =>
         {
             services.AddSingleton<INodeTypeAccessRule>(sp =>
-                new SatelliteAccessRule(NodeType, sp.GetService<SecurityService>() ?? new NullSecurityService()));
+                new SatelliteAccessRule(NodeType, sp.GetRequiredService<IMessageHub>()));
             return services;
         });
         return builder;

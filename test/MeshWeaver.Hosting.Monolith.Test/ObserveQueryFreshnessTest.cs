@@ -318,7 +318,7 @@ public class ObserveQueryFreshnessTest(ITestOutputHelper output) : MonolithMeshT
         const string scope = "RepoTest3";
         const string userId = "test-user-3";
         var ct = TestContext.Current.CancellationToken;
-        var sec = Mesh.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Security.SecurityService>();
+        // permission check on Mesh hub
 
         // Create AccessAssignment first.
         await MeshService.CreateNode(AssignmentNodeFactory.UserRole(userId, "Admin", scope))
@@ -326,7 +326,7 @@ public class ObserveQueryFreshnessTest(ITestOutputHelper output) : MonolithMeshT
 
         // SecurityService subscribe — must emit a permission-set with Create within 5s.
         // This is the EXACT chain WaitForPermissionAsync depends on.
-        var perm = await sec.GetEffectivePermissions(scope, userId)
+        var perm = await Mesh.GetEffectivePermissions(scope, userId)
             .Where(p => p.HasFlag(MeshWeaver.Mesh.Security.Permission.Create))
             .Timeout(TimeSpan.FromSeconds(5))
             .FirstAsync()
@@ -346,14 +346,14 @@ public class ObserveQueryFreshnessTest(ITestOutputHelper output) : MonolithMeshT
     {
         var ct = TestContext.Current.CancellationToken;
         var meshAddress = Mesh.Address.ToFullString();
-        var sec = Mesh.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Security.SecurityService>();
+        // permission check on Mesh hub
 
         Output.WriteLine($"meshAddress = '{meshAddress}'");
 
         await MeshService.CreateNode(AssignmentNodeFactory.UserRole(meshAddress, "Admin", "Impersonate"))
             .FirstAsync().ToTask(ct);
 
-        var perm = await sec.GetEffectivePermissions("Impersonate", meshAddress)
+        var perm = await Mesh.GetEffectivePermissions("Impersonate", meshAddress)
             .Where(p => p.HasFlag(MeshWeaver.Mesh.Security.Permission.Create))
             .Timeout(TimeSpan.FromSeconds(5))
             .FirstAsync()

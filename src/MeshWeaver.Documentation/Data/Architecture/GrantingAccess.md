@@ -8,7 +8,7 @@ order: 25
 Permissions in MeshWeaver are data — they live as `AccessAssignment` MeshNodes
 in `_Access` satellite namespaces. There is no admin UI; you grant access by
 *creating an AccessAssignment node* (via MCP, a hub message, or the migration
-runner) and the SecurityService picks it up via its synced query.
+runner) and the PermissionEvaluator picks it up via its synced query.
 
 This page is the recipe.
 
@@ -24,14 +24,14 @@ Three fields decide what the assignment *grants*:
 | `roles[].role`   | The role names the user gets at this scope (typically `Admin` or `Editor`). |
 
 🚨 **Both `path` (via the `/_Access/` segment) and `mainNode` matter.** The
-SecurityService's `SatelliteAccessRule` uses `mainNode` to decide which
+PermissionEvaluator's `SatelliteAccessRule` uses `mainNode` to decide which
 partition / subtree the assignment binds to. If `mainNode` is empty for a
 non-global assignment, the assignment is silently ignored and the user gets
 zero permissions. Symptom: `Access denied: user 'X' lacks Read permission on
 '{scope}/Y'` even though the AccessAssignment exists at `{scope}/_Access/X_Access`.
 
 🚨 **The namespace must end in `/_Access`** (or equal `_Access` globally).
-SecurityService's synced query routes only those, and a path containing
+PermissionEvaluator's synced query routes only those, and a path containing
 `_Access` segment lands in the partition's `access` table. Anywhere else and
 the assignment never reaches the security pipeline.
 
@@ -74,7 +74,7 @@ new MeshNode("rbuergi_Access", "rbuergi/_Access")
 }
 ```
 
-After the create, the SecurityService's synced query picks the new node up
+After the create, the PermissionEvaluator's synced query picks the new node up
 within ~1 second and `partition_access` + `user_effective_permissions` rebuild
 via the `access_changed` Postgres trigger. No restart needed.
 
@@ -179,5 +179,5 @@ After creating the assignment:
 
 - `src/MeshWeaver.Graph/Configuration/AccessAssignmentNodeType.cs` — the NodeType definition + post-create handler that rebuilds permissions.
 - `src/MeshWeaver.Graph/Security/RlsNodeValidator.cs` — the read-side enforcer that surfaces `Access denied`.
-- `src/MeshWeaver.Hosting/Security/SecurityService.cs` — the synced query that aggregates AccessAssignments per user.
+- `src/MeshWeaver.Hosting/Security/PermissionEvaluator.cs` — the synced query that aggregates AccessAssignments per user.
 - `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlSchemaInitializer.cs` — the `access_changed` trigger that rebuilds `partition_access` + `user_effective_permissions` after every assignment write.

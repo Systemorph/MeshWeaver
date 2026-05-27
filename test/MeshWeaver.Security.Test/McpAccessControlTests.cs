@@ -196,14 +196,14 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         //      inherited Viewer. Without (3), the test can race ahead while
         //      the policy synced query still has the empty initial emission,
         //      and User1 ends up reading Confidential through inheritance.
-        var sec = Mesh.ServiceProvider.GetRequiredService<SecurityService>();
-        var waitUser1Read = sec.GetEffectivePermissions("SharedOrg", User1)
+        // hub is Mesh — permission checks use hub.GetEffectivePermissions
+        var waitUser1Read = Mesh.GetEffectivePermissions("SharedOrg", User1)
             .Where(p => p.HasFlag(Permission.Read))
             .Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask(TestTimeout);
-        var waitUser2Update = sec.GetEffectivePermissions("SharedOrg/Confidential", User2)
+        var waitUser2Update = Mesh.GetEffectivePermissions("SharedOrg/Confidential", User2)
             .Where(p => p.HasFlag(Permission.Update))
             .Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask(TestTimeout);
-        var waitBreakActive = sec.GetEffectivePermissions("SharedOrg/Confidential", User1)
+        var waitBreakActive = Mesh.GetEffectivePermissions("SharedOrg/Confidential", User1)
             .Where(p => !p.HasFlag(Permission.Read))
             .Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask(TestTimeout);
         // 4. User2 has Read at PrivateOrg/Secret — the Admin-on-PrivateOrg
@@ -211,7 +211,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         //    Without this probe McpUpdate_User1CannotUpdatePrivateOrg_User2Can
         //    races ahead and the User2 read of PrivateOrg/Secret returns null
         //    because the AccessAssignment synced query hasn't landed yet.
-        var waitUser2PrivateOrg = sec.GetEffectivePermissions("PrivateOrg/Secret", User2)
+        var waitUser2PrivateOrg = Mesh.GetEffectivePermissions("PrivateOrg/Secret", User2)
             .Where(p => p.HasFlag(Permission.Read))
             .Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask(TestTimeout);
         await Task.WhenAll(waitUser1Read, waitUser2Update, waitBreakActive, waitUser2PrivateOrg);

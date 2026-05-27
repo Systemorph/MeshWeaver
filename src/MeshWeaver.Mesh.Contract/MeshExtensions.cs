@@ -550,7 +550,6 @@ public static class MeshExtensions
         var opts = hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions();
         var persistence = hub.ServiceProvider.GetRequiredService<IStorageAdapter>();
         var storage = hub.ServiceProvider.GetRequiredService<IStorageAdapter>();
-        var securityService = hub.ServiceProvider.GetService<SecurityService>();
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
         var meshHub = ResolveMeshHub(hub);
@@ -637,7 +636,7 @@ public static class MeshExtensions
                 //    operation). Descendants are validated by their own per-node
                 //    hub when fan-out fires a non-recursive DeleteNodeRequest at
                 //    each leaf's address — never load all descendant nodes upfront.
-                return CheckDeletePermissionForNode(securityService, senderUserId, rootNode, logger)
+                return CheckDeletePermissionForNode(hub, senderUserId, rootNode, logger)
                     .SelectMany(denied =>
                     {
                         if (denied)
@@ -1083,20 +1082,17 @@ public static class MeshExtensions
     /// Returns <c>true</c> if delete is denied.
     /// </summary>
     private static IObservable<bool> CheckDeletePermissionForNode(
-        SecurityService? securityService,
+        IMessageHub hub,
         string userId,
         MeshNode node,
         ILogger logger)
     {
-        if (securityService == null)
-            return Observable.Return(false);
-
         var pathToCheck = node.MainNode ?? node.Path;
 
         // Take(1) closes the inner observable — GetEffectivePermissions rides
         // the live AccessAssignment synced query and is hot, so without Take(1)
         // the .Select chain never completes and the handler hangs.
-        return securityService.GetEffectivePermissions(pathToCheck, userId)
+        return hub.GetEffectivePermissions(pathToCheck, userId)
             .Take(1)
             .Select(perms =>
             {

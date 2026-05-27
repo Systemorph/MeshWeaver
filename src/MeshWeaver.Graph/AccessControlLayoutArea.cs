@@ -29,9 +29,9 @@ public static class AccessControlLayoutArea
     public static IObservable<UiControl?> AccessControl(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var securityService = host.Hub.ServiceProvider.GetService<SecurityService>();
+        var rlsEnabled = host.Hub.Configuration.Get<EffectivePermissionsDelegate>() != null;
 
-        if (securityService == null)
+        if (!rlsEnabled)
         {
             return Observable.Return<UiControl?>(
                 Controls.Stack.WithView(
@@ -68,7 +68,7 @@ public static class AccessControlLayoutArea
                 host, node: null, hubPath, isAdmin,
                 inherited: [],
                 userNodeLookup: new Dictionary<string, MeshNode>(),
-                securityService,
+                rlsEnabled,
                 activePolicy: null));
         }
 
@@ -77,14 +77,14 @@ public static class AccessControlLayoutArea
                     host, change?.Value, hubPath, isAdmin,
                     inherited: [],
                     userNodeLookup: new Dictionary<string, MeshNode>(),
-                    securityService,
+                    rlsEnabled,
                     activePolicy: null))
             .Catch<UiControl?, Exception>(_ => isAdminStream.Select(isAdmin =>
                 (UiControl?)BuildAccessControlPage(
                     host, node: null, hubPath, isAdmin,
                     inherited: [],
                     userNodeLookup: new Dictionary<string, MeshNode>(),
-                    securityService,
+                    rlsEnabled,
                     activePolicy: null)));
     }
 
@@ -104,7 +104,7 @@ public static class AccessControlLayoutArea
         bool isAdmin,
         IReadOnlyList<(AccessAssignment Assignment, string SourcePath, MeshNode Node)> inherited,
         Dictionary<string, MeshNode> userNodeLookup,
-        SecurityService? securityService,
+        bool rlsEnabled,
         PartitionAccessPolicy? activePolicy)
     {
         var stack = Controls.Stack.WithStyle("padding: 24px; gap: 24px; width: 100%;");
@@ -123,7 +123,7 @@ public static class AccessControlLayoutArea
                 $"<strong>Partition Policy Active</strong> — Allowed: <strong>{allowed}</strong>.{breakText}</div>"));
         }
 
-        if (isAdmin && securityService != null)
+        if (isAdmin && rlsEnabled)
         {
             var policyExists = activePolicy != null;
             var buttonLabel = policyExists ? "Edit Policy" : "Set Policy";

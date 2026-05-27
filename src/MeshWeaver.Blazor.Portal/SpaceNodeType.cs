@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
+using MeshWeaver.Messaging;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Domain;
 using MeshWeaver.Graph;
@@ -100,7 +101,7 @@ public static class SpaceNodeType
         builder.ConfigureServices(services =>
         {
             services.AddSingleton<INodeTypeAccessRule>(sp =>
-                new SpaceAccessRule(sp.GetService<SecurityService>() ?? new NullSecurityService()));
+                new SpaceAccessRule(sp.GetRequiredService<IMessageHub>()));
             services.AddSingleton<INodePostCreationHandler>(sp =>
                 new SpacePostCreationHandler(
                     sp.GetRequiredService<IMeshService>(),
@@ -176,7 +177,7 @@ public static class SpaceNodeType
     /// Read: requires partition Read permission. Create/Update/Delete: requires
     /// appropriate permission (via <see cref="SecurityService"/>).
     /// </summary>
-    private class SpaceAccessRule(SecurityService securityService) : INodeTypeAccessRule
+    private class SpaceAccessRule(IMessageHub hub) : INodeTypeAccessRule
     {
         public string NodeType => SpaceNodeType.NodeType;
 
@@ -189,16 +190,16 @@ public static class SpaceNodeType
                 return Observable.Return(false);
 
             if (context.Operation == NodeOperation.Read)
-                return securityService.HasPermission(context.Node.Path, userId, Permission.Read);
+                return hub.CheckPermission(context.Node.Path, userId, Permission.Read);
 
             if (context.Operation == NodeOperation.Create)
             {
                 var parentPath = context.Node.GetParentPath() ?? context.Node.Path;
-                return securityService.HasPermission(parentPath, userId, Permission.Create);
+                return hub.CheckPermission(parentPath, userId, Permission.Create);
             }
 
             if (context.Operation is NodeOperation.Update or NodeOperation.Delete)
-                return securityService.HasPermission(context.Node.Path, userId, Permission.Update);
+                return hub.CheckPermission(context.Node.Path, userId, Permission.Update);
 
             return Observable.Return(false);
         }

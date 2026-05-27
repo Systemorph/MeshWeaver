@@ -235,7 +235,7 @@ public static class ThreadNodeType
             services.AddSingleton<INodeTypeAccessRule>(sp =>
                 new MeshWeaver.Graph.Security.SatelliteAccessRule(
                     NodeType,
-                    sp.GetService<SecurityService>() ?? new NullSecurityService()));
+                    sp.GetRequiredService<IMessageHub>()));
             return services;
         });
         return builder;

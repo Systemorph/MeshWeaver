@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.Data;
+using MeshWeaver.Messaging;
 using MeshWeaver.Graph.Security;
 using MeshWeaver.Markdown.Collaboration;
 using MeshWeaver.Mesh;
@@ -36,7 +37,7 @@ public static class CommentNodeType
         builder.ConfigureServices(services =>
         {
             services.AddSingleton<INodeTypeAccessRule>(sp =>
-                new SatelliteAccessRule(NodeType, sp.GetService<SecurityService>() ?? new NullSecurityService()));
+                new SatelliteAccessRule(NodeType, sp.GetRequiredService<IMessageHub>()));
             return services;
         });
         // Register all comment and collaborative editing domain types

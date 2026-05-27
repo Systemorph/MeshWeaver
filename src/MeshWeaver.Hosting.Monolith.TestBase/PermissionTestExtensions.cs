@@ -63,9 +63,8 @@ public static class PermissionTestExtensions
         // until-polling probe) saw the probe's identity instead of the
         // DevLogin admin context the test had set, and the delete failed
         // with "Delete permission denied".
-        var sec = hub.ServiceProvider.GetRequiredService<SecurityService>();
         if (until == null)
-            return await sec.GetEffectivePermissions(path, userId).FirstAsync().ToTask(ct);
+            return await hub.GetEffectivePermissions(path, userId).FirstAsync().ToTask(ct);
 
         // Wait for the predicate to match. SecurityService.GetEffectivePermissions
         // is a hot observable backed by per-scope synced AccessAssignment
@@ -77,7 +76,7 @@ public static class PermissionTestExtensions
         // rather than hanging.
         // 90s matches WaitForPermissionAsync default — see comment there.
         var t = timeout ?? TimeSpan.FromSeconds(90);
-        return await sec.GetEffectivePermissions(path, userId)
+        return await hub.GetEffectivePermissions(path, userId)
             .Where(until)
             .Timeout(t)
             .FirstAsync()
@@ -108,7 +107,6 @@ public static class PermissionTestExtensions
         CancellationToken ct = default,
         TimeSpan? timeout = null)
     {
-        var sec = hub.ServiceProvider.GetRequiredService<SecurityService>();
         // 90s default: locally these tests complete in 9-15s; CI's cold-start
         // synced AccessAssignment query has been observed >40s on slow Linux
         // runners, which the previous 40s default hit consistently in
@@ -116,7 +114,7 @@ public static class PermissionTestExtensions
         // 90s is the upper bound a test would still feel responsive at —
         // anything longer than that and there's a real bug worth surfacing.
         var t = timeout ?? TimeSpan.FromSeconds(90);
-        return sec.GetEffectivePermissions(path, userId)
+        return hub.GetEffectivePermissions(path, userId)
             .Where(p => p.HasFlag(permission))
             .Timeout(t)
             .FirstAsync()

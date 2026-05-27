@@ -11,44 +11,47 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 namespace MeshWeaver.Hosting.Security;
 
 /// <summary>
-/// Extension methods for configuring Row-Level Security services.
+/// Extension methods for configuring Row-Level Security.
 /// </summary>
 public static class SecurityServiceExtensions
 {
     /// <summary>
-    /// Adds Row-Level Security services to the mesh.
-    /// This includes:
-    /// - SecurityService for permission evaluation (uses unsecured IStorageAdapter directly)
-    /// - RlsNodeValidator for enforcing permissions on CRUD operations
-    /// - AccessControlPipeline for checking RequiresPermissionAttribute on incoming messages
-    /// - PersistenceService handles secure query filtering via SecurityService (implements IStorageAdapter)
+    /// Adds Row-Level Security to the mesh. Registers:
+    /// <list type="bullet">
+    /// <item><see cref="EffectivePermissionsDelegate"/> →
+    ///   <see cref="PermissionEvaluator.GetEffectivePermissions"/> injected
+    ///   into every per-node hub's <c>MessageHubConfiguration</c>, so every
+    ///   <c>hub.CheckPermission</c> / <c>hub.GetEffectivePermissions</c>
+    ///   resolves the real algorithm. Without this registration the default
+    ///   delegate returns <c>Permission.All</c> (no gating). Consumers that
+    ///   need a feature-flag check ask
+    ///   <c>hub.Configuration.Get&lt;EffectivePermissionsDelegate&gt;() is not null</c>.</item>
+    /// <item><see cref="RlsNodeValidator"/> — enforces permissions on CRUD
+    ///   operations through <c>hub.CheckPermission</c>.</item>
+    /// <item><see cref="AccessControlPipeline"/> — request-time permission
+    ///   pipeline for inbound messages on every per-node hub.</item>
+    /// </list>
     ///
-    /// Storage structure:
-    /// - Access/ - Global roles (Admin with null namespace) and custom role definitions
-    /// - {namespace}/Access/ - Access assignments for each namespace
+    /// <para>The algorithm itself lives in <see cref="PermissionEvaluator"/>
+    /// (Mesh.Contract) as static functions over <see cref="IMeshNodeStreamCache"/>.
+    /// There is no <c>SecurityService</c> class anymore — application code
+    /// MUST go through <c>HubPermissionExtensions</c>.</para>
     /// </summary>
     public static MeshBuilder AddRowLevelSecurity(this MeshBuilder builder)
     {
         return builder
             .ConfigureServices(services =>
             {
-                // Per-hub scoped — each hub gets its own SecurityService instance
-                // that reads from THAT hub's workspace (its synced
-                // AccessAssignments collection). RlsNodeValidator runs in the
-                // same scope and resolves the local SecurityService.
-                services.TryAddScoped<SecurityService, RlsSecurityService>();
                 services.AddScoped<INodeValidator, RlsNodeValidator>();
-
                 return services;
             })
-            // The synced AccessAssignments collection is intentionally NOT
-            // registered here — a cross-hub query for "nodeType:AccessAssignment"
-            // triggers infinite recursive hub construction at the AccessAssignment
-            // NodeType hub. SecurityService instead reads static AccessAssignment
-            // nodes directly from MeshConfiguration / IStaticNodeProvider at
-            // construction time. Live mutations: re-construct the SecurityService
-            // (or wire a separate refresh mechanism) — TODO.
+            // Mesh hub: needed wherever code calls hub.CheckPermission on the
+            // mesh address (delete handlers, routing-time checks, tests).
+            .ConfigureHub(c => c.AddRowLevelSecurity())
+            // Per-node hubs: RLS + AccessControlPipeline for request-time
+            // permission checks.
             .ConfigureDefaultNodeHub(c => c
+                .AddRowLevelSecurity()
                 .AddAccessControlPipeline());
     }
 }

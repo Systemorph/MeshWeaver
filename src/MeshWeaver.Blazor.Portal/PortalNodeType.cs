@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.AI;
+using MeshWeaver.Messaging;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Graph.Security;
 using MeshWeaver.Mesh;
@@ -25,7 +26,7 @@ public static class PortalNodeType
         builder.ConfigureServices(services =>
         {
             services.AddSingleton<INodeTypeAccessRule>(sp =>
-                new SatelliteAccessRule(NodeType, sp.GetService<SecurityService>() ?? new NullSecurityService()));
+                new SatelliteAccessRule(NodeType, sp.GetRequiredService<IMessageHub>()));
             return services;
         });
         return builder;
