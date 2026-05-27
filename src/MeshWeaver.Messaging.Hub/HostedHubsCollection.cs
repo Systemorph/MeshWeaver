@@ -150,18 +150,31 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
         {
             logger.LogError(ex, "Error during hosted hubs disposal after {elapsed}ms", totalStopwatch.ElapsedMilliseconds);
 
-            // Log status of each disposal task
+            // Per-task diagnostic dump. Only the actually-failed tasks are
+            // logged at Error — the rest are noise (IsCompleted=True /
+            // IsFaulted=False is the *successful* outcome that just got
+            // dragged into this catch by the parent operation. Logging those
+            // at Error each per hub × per test was the largest single
+            // contributor to CI test-log bloat).
             for (var i = 0; i < disposalTasks.Length; i++)
             {
                 var task = disposalTasks[i];
                 var hubAddress = hubAddresses[i];
 
-                logger.LogError("Hub {address} disposal task status: IsCompleted={isCompleted}, IsFaulted={isFaulted}, IsCanceled={isCanceled}",
-                    hubAddress, task.IsCompleted, task.IsFaulted, task.IsCanceled);
-
                 if (task.IsFaulted && task.Exception != null)
                 {
-                    logger.LogError("Hub {address} disposal exception: {exception}", hubAddress, task.Exception.GetBaseException());
+                    logger.LogError("Hub {address} disposal exception: {exception}",
+                        hubAddress, task.Exception.GetBaseException());
+                }
+                else if (task.IsCanceled)
+                {
+                    logger.LogWarning("Hub {address} disposal was canceled", hubAddress);
+                }
+                else
+                {
+                    logger.LogDebug(
+                        "Hub {address} disposal task status: IsCompleted={isCompleted}, IsFaulted={isFaulted}, IsCanceled={isCanceled}",
+                        hubAddress, task.IsCompleted, task.IsFaulted, task.IsCanceled);
                 }
             }
         }
