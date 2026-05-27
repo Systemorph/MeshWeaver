@@ -82,6 +82,11 @@ public class NodeTypeEnrichmentDoubleCallTest
         public IObservable<MeshNode> Update(string path, Func<MeshNode, MeshNode> update, System.Text.Json.JsonSerializerOptions options)
             => Update(path, update);
         public void Invalidate(string path) { }
+        public IObservable<IEnumerable<MeshNode>> GetQuery(object id, params string[] queries)
+            => Observable.Never<IEnumerable<MeshNode>>();
+        public IObservable<IEnumerable<MeshNode>>? GetQuery(object id) => null;
+        public IObservable<IEnumerable<MeshNode>> GetQuery(object id, System.Text.Json.JsonSerializerOptions options, params string[] queries)
+            => Observable.Never<IEnumerable<MeshNode>>();
     }
 
     private static (IMessageHub Hub, HangingStreamCache Cache) BuildMeshHub()

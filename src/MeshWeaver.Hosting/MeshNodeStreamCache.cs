@@ -484,6 +484,68 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
     /// (the upstream observable doesn't emit "deleted" — the per-node hub is
     /// gone). Idempotent.
     /// </summary>
+    /// <summary>
+    /// Process-wide synced-query cache. Replaces the legacy
+    /// <c>ConditionalWeakTable&lt;IWorkspace, SyncedQueryRegistry&gt;</c> in
+    /// <c>SyncedQueryDataSourceExtensions</c> — one registry, one set of
+    /// upstream subscriptions, regardless of how many workspaces ask. The
+    /// SyncedQueryMeshNodes runs on the cache hub's workspace so its
+    /// SubscribeRequests carry <c>MeshNodeCacheIdentity</c>; the secured
+    /// query surface short-circuits to raw upstream and no per-hub
+    /// AsyncLocal AccessContext leaks in.
+    /// </summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<object, Lazy<IObservable<IEnumerable<MeshNode>>>> _queries = new();
+
+    public IObservable<IEnumerable<MeshNode>> GetQuery(object id, params string[] queries)
+    {
+        if (queries is null || queries.Length == 0)
+            throw new ArgumentException("At least one query string is required.", nameof(queries));
+        return _queries.GetOrAdd(id,
+            _ => new Lazy<IObservable<IEnumerable<MeshNode>>>(() =>
+            {
+                // Late-bind the SyncedQueryMeshNodes type from MeshWeaver.Graph
+                // via the cache hub's workspace. Graph references Mesh.Contract
+                // (where this interface lives) so we can't reach back from
+                // Mesh.Contract; the cache lives in Hosting which DOES reference
+                // Graph, so create-with-reflection isn't necessary — the type is
+                // available at the call site.
+                var typeSource = new global::MeshWeaver.Graph.SyncedQueryMeshNodes(
+                    cacheHub.GetWorkspace(), id, queries);
+                return typeSource.StreamUpdates();
+            }, System.Threading.LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+    }
+
+    public IObservable<IEnumerable<MeshNode>>? GetQuery(object id)
+        => _queries.TryGetValue(id, out var lazy) ? lazy.Value : null;
+
+    public IObservable<IEnumerable<MeshNode>> GetQuery(object id, JsonSerializerOptions options, params string[] queries)
+    {
+        var raw = GetQuery(id, queries);
+        if (options is null) return raw;
+        // Round-trip each emitted MeshNode's Content through the caller's
+        // JsonSerializerOptions so consumers see typed domain instances
+        // (AccessAssignment, PartitionAccessPolicy, etc.) rather than the
+        // raw JsonElement the cache hub stores. Same shape as
+        // GetStream(path, options).
+        return System.Reactive.Linq.Observable.Select(raw, items =>
+            (IEnumerable<MeshNode>)items.Select(node => DeserializeContent(node, options)).ToArray());
+    }
+
+    private static MeshNode DeserializeContent(MeshNode node, JsonSerializerOptions options)
+    {
+        if (node.Content is not System.Text.Json.JsonElement je || je.ValueKind != System.Text.Json.JsonValueKind.Object)
+            return node;
+        try
+        {
+            var deserialized = System.Text.Json.JsonSerializer.Deserialize<object>(je.GetRawText(), options);
+            return deserialized is null ? node : node with { Content = deserialized };
+        }
+        catch
+        {
+            return node;
+        }
+    }
+
     public void Invalidate(string path)
     {
         if (_streams.TryRemove(path, out var lazyEntry))

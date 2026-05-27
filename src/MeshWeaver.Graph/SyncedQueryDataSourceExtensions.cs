@@ -32,24 +32,11 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class SyncedQueryDataSourceExtensions
 {
-    /// <summary>
-    /// Per-workspace lazy registry of named synced mesh-queries.
-    /// Auto-initialised on first <c>GetQuery(...)</c> call for the workspace
-    /// — no DI registration required. Garbage-collected with the workspace.
-    /// </summary>
-    private static readonly ConditionalWeakTable<IWorkspace, SyncedQueryRegistry> _registries = new();
-
-    /// <summary>
-    /// Resolves the per-workspace synced-query registry — used internally by
-    /// <see cref="GetQuery(IWorkspace, object)"/> /
-    /// <see cref="WithMeshQuery"/> and by the framework's
-    /// <c>HandleDeleteNodeRequest</c> to walk every registered synced query
-    /// and route a synchronous <see cref="SyncedQueryMeshNodes.NotifyDeleted"/>
-    /// for each path the query owns.
-    /// </summary>
-    internal static SyncedQueryRegistry RegistryFor(IWorkspace workspace) =>
-        _registries.GetValue(workspace, _ => new SyncedQueryRegistry());
-
+    // The legacy per-workspace ConditionalWeakTable<IWorkspace, SyncedQueryRegistry>
+    // was deleted: every workspace.GetQuery / hub.GetQuery now delegates to the
+    // process-wide IMeshNodeStreamCache singleton. One registry, one set of
+    // upstream subscriptions, one place to evolve. See PermissionApi.md +
+    // SyncedMeshNodeQueries.md.
 
     /// <summary>
     /// Registers a synced <see cref="MeshNode"/> collection on this data context.
@@ -115,12 +102,12 @@ public static class SyncedQueryDataSourceExtensions
         string? collectionName = null)
     {
         var typeSource = new SyncedQueryMeshNodes(ds.Workspace, ds.Id, query, collectionName);
-        // Register in the workspace's lazy per-workspace registry so callers
-        // can look it up later via workspace.GetQuery(id) — O(1) name-keyed
-        // lookup, no TypeSources iteration. Registering both the typesource
-        // and its cached stream lets the framework's delete handler walk
-        // every synced query and push direct NotifyDeleted events.
-        RegistryFor(ds.Workspace).Register(ds.Id, typeSource, typeSource.StreamUpdates());
+        // The typesource attaches directly to the data source — the workspace
+        // pipeline finds it via TypeSources iteration. Callers that need to
+        // observe the same path-keyed snapshot from elsewhere should use the
+        // centralised cache (`hub.GetQuery(id, query)` / `workspace.GetQuery`)
+        // — the legacy per-workspace registry was deleted; one cache, one
+        // upstream subscription per unique id.
         return ds.WithTypeSource(typeof(MeshNode), typeSource);
     }
 
@@ -138,7 +125,8 @@ public static class SyncedQueryDataSourceExtensions
     public static IObservable<IEnumerable<MeshNode>>? GetQuery(
         this IWorkspace workspace, object id)
     {
-        var inner = RegistryFor(workspace).Get(id);
+        var cache = workspace.Hub.ServiceProvider.GetService<IMeshNodeStreamCache>();
+        var inner = cache?.GetQuery(id);
         return inner is null ? null : WrapWithPerUserRls(workspace, inner);
     }
 
@@ -198,23 +186,15 @@ public static class SyncedQueryDataSourceExtensions
         if (queries is null || queries.Length == 0)
             throw new ArgumentException("At least one query string is required.", nameof(queries));
 
-        var registry = RegistryFor(workspace);
-        // Cache by raw `id` ONLY — legacy contract: same id → same observable.
-        // The cross-user-leak protection happens via the per-SUBSCRIBE RLS
-        // filter (PerUserRlsFilter below): the upstream snapshot is shared
-        // under System (cheap, one subscription per query); each subscriber
-        // gets a Where()-projected view filtered to the nodes THEIR identity
-        // can Read on. Two users sharing the same id never see each other's
-        // restricted content because the filter captures the user at Subscribe
-        // time and asks SecurityService per emission.
-        var existing = registry.Get(id);
-        if (existing is not null)
-            return WrapWithPerUserRls(workspace, existing);
-
-        var typeSource = new SyncedQueryMeshNodes(workspace, id, queries);
-        var observable = typeSource.StreamUpdates();
-        registry.Register(id, typeSource, observable);
-        return WrapWithPerUserRls(workspace, observable);
+        // Single source of truth: the process-wide IMeshNodeStreamCache. The
+        // synced query is hosted on the cache hub's workspace (under
+        // MeshNodeCacheIdentity), so the upstream subscription is system-
+        // identity-flagged and no per-hub AsyncLocal AccessContext can leak
+        // into the query layer. Per-user RLS filtering wraps at the caller's
+        // workspace level via WrapWithPerUserRls below.
+        var cache = workspace.Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        var upstream = cache.GetQuery(id, queries);
+        return WrapWithPerUserRls(workspace, upstream);
     }
 
     /// <summary>

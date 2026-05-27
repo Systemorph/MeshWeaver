@@ -249,9 +249,9 @@ public class SyncedQueryCrossSiloTest(ITestOutputHelper output)
         // differ. The contract is that the REGISTRY's cached inner observable
         // is the same — that's the shared upstream subscription that backs
         // both wrappers.
-        var registry = SyncedQueryDataSourceExtensions.RegistryFor(siloA.Workspace);
-        var innerA = registry.Get("$xsilo-a-cache");
-        var innerB = registry.Get("$xsilo-a-cache");
+        var cache = siloA.Workspace.Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        var innerA = cache.GetQuery("$xsilo-a-cache");
+        var innerB = cache.GetQuery("$xsilo-a-cache");
         ReferenceEquals(innerA, innerB).Should().BeTrue(
             "registry hands back the same inner observable for the same name");
         await Task.CompletedTask;

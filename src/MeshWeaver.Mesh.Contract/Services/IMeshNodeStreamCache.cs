@@ -91,4 +91,44 @@ public interface IMeshNodeStreamCache
     /// pre-delete value. Idempotent — calling for an unknown path is a no-op.
     /// </summary>
     void Invalidate(string path);
+
+    /// <summary>
+    /// Process-wide synced-query cache: returns the cached
+    /// <c>IObservable&lt;IEnumerable&lt;MeshNode&gt;&gt;</c> for the named query,
+    /// creating it on first call. Replaces the legacy per-workspace registry
+    /// (<c>ConditionalWeakTable&lt;IWorkspace, SyncedQueryRegistry&gt;</c>) so
+    /// every consumer sees one shared subscription regardless of which hub
+    /// they originate from.
+    ///
+    /// <para>The upstream synced query subscribes via the cache hub's
+    /// workspace (under <c>MeshNodeCacheIdentity</c>), so the subscription
+    /// runs under a system-flagged identity and no per-hub AsyncLocal
+    /// AccessContext can leak into the query layer. Per-user RLS filtering
+    /// happens at <em>subscribe</em> time on the caller side — the wrap
+    /// captures the subscriber's <c>AccessService.Context</c> and applies
+    /// <c>HasPermission</c> per emission.</para>
+    ///
+    /// <para>Application code SHOULD prefer <c>hub.GetQuery(id, queries)</c>
+    /// or <c>workspace.GetQuery(id, queries)</c> — both delegate here.</para>
+    /// </summary>
+    IObservable<IEnumerable<MeshNode>> GetQuery(object id, params string[] queries);
+
+    /// <summary>
+    /// Lookup-only overload: returns the cached observable for
+    /// <paramref name="id"/>, or <c>null</c> if no synced query has been
+    /// registered with that id (no get-or-create).
+    /// </summary>
+    IObservable<IEnumerable<MeshNode>>? GetQuery(object id);
+
+    /// <summary>
+    /// Typed-content overload: each emitted <see cref="MeshNode"/>'s
+    /// <c>Content</c> is round-tripped through <paramref name="options"/>
+    /// at the cache boundary so the caller sees typed domain instances
+    /// (e.g. <c>AccessAssignment</c>, <c>PartitionAccessPolicy</c>)
+    /// rather than raw <see cref="System.Text.Json.JsonElement"/>. Decouples
+    /// the process-singleton cache (domain-type-agnostic by design) from
+    /// every domain type a tenant happens to register — same mechanism as
+    /// <see cref="GetStream(string, JsonSerializerOptions)"/>.
+    /// </summary>
+    IObservable<IEnumerable<MeshNode>> GetQuery(object id, JsonSerializerOptions options, params string[] queries);
 }
