@@ -588,7 +588,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     /// </summary>
     [Theory]
     [InlineData("ACME/Project/Source/code", "ACME/Project")]
-    [InlineData("Organization/Source/Organization", "Organization")]
+    [InlineData("Space/Source/Space", "Space")]
     [InlineData("a/b/Source/c", "a/b")]
     public void CodeNode_ParentPathParsing_StripsTwoSegments(string codePath, string expectedParent)
     {

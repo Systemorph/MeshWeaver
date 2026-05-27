@@ -172,7 +172,7 @@ public class HubPermissionRuleSetTest(ITestOutputHelper output) : MonolithMeshTe
         accessService.SetCircuitContext(null);
 
         var permissions = await Mesh.GetPermissionAsync(
-            "Organization", TestUsers.Admin.ObjectId, TestContext.Current.CancellationToken);
+            "Space", TestUsers.Admin.ObjectId, TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Permissions without claims: {permissions}");
 
@@ -198,12 +198,12 @@ public class OrganizationHubAccessTest(ITestOutputHelper output) : MonolithMeshT
     public async Task Admin_HasReadPermissionOnOrganizationPath()
     {
         var permissions = await Mesh.GetPermissionAsync(
-            "Organization", TestUsers.Admin.ObjectId, TestContext.Current.CancellationToken);
+            "Space", TestUsers.Admin.ObjectId, TestContext.Current.CancellationToken);
 
-        Output.WriteLine($"Admin permissions on 'Organization': {permissions}");
+        Output.WriteLine($"Admin permissions on 'Space': {permissions}");
 
         permissions.Should().HaveFlag(Permission.Read,
-            "Admin should have Read permission on Organization NodeType path");
+            "Admin should have Read permission on Space NodeType path");
     }
 
 }

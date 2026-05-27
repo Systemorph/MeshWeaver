@@ -90,13 +90,23 @@ internal static class PermissionEvaluator
         var staticNodes = CollectStaticAccessAssignments(hub);
         var staticPolicies = CollectStaticPolicies(hub);
 
+        // 🚨 Capture AccessContext on the CALLER'S thread before any Rx
+        // scheduler hop. AsyncLocal does NOT flow through SubscribeOn/
+        // ObserveOn — when the .Select lambdas below land on TaskPool
+        // (because cache.GetQuery uses SubscribeOn(TaskPoolScheduler)),
+        // accessService.Context is null or contaminated. CircuitContext is
+        // mesh-global so it survives, but Bearer-token Roles claims live in
+        // AccessContext.Roles and we need that snapshot here.
+        var capturedContext = accessService?.Context;
+        var capturedCircuitContext = accessService?.CircuitContext;
+
         // Claim-first composition: static + claim-based roles available
         // synchronously. Emit immediately; then enrich asynchronously with
         // the synced AccessAssignment query (so long-lived subscribers see
         // updates as runtime grants land).
         var staticOnlyScopeRoles = ComputeStaticOnlyScopeRoles(staticNodes, userId, hub.JsonSerializerOptions);
         var staticOnlyDeniedScopeRoles = ComputeStaticOnlyDeniedScopeRoles(staticNodes, userId, hub.JsonSerializerOptions);
-        var fast = ComputeRoleState(staticOnlyScopeRoles, nodePath, userId, accessService, staticPolicies, staticOnlyDeniedScopeRoles);
+        var fast = ComputeRoleState(staticOnlyScopeRoles, nodePath, userId, capturedContext, capturedCircuitContext, staticPolicies, staticOnlyDeniedScopeRoles);
 
         var enriched = ObserveEffectiveAssignments(hub, cache, nodePath, staticNodes)
             .CombineLatest(
@@ -106,7 +116,7 @@ internal static class PermissionEvaluator
                     var (granted, denied) = ComputeScopeRoles(userId, nodes, staticNodes, hub.JsonSerializerOptions);
                     return (Granted: granted, Denied: denied, RuntimePolicies: policies);
                 })
-            .Select(snap => ComputeRoleState(snap.Granted, nodePath, userId, accessService, staticPolicies, snap.Denied, snap.RuntimePolicies));
+            .Select(snap => ComputeRoleState(snap.Granted, nodePath, userId, capturedContext, capturedCircuitContext, staticPolicies, snap.Denied, snap.RuntimePolicies));
 
         var seed = fast.RoleIds.Count > 0
             ? Observable.Return(fast)
@@ -146,7 +156,10 @@ internal static class PermissionEvaluator
                 return withPublic.Select(p =>
                 {
                     p &= permissionCap;
-                    var currentContext = accessService?.Context ?? accessService?.CircuitContext;
+                    // Use the snapshot captured on caller's thread, NOT
+                    // accessService.Context (AsyncLocal doesn't flow through
+                    // the Rx schedulers cache.GetQuery uses).
+                    var currentContext = capturedContext ?? capturedCircuitContext;
                     if (currentContext?.IsApiToken == true && !p.HasFlag(Permission.Api))
                         p = Permission.None;
                     logger?.LogTrace("User {UserId} has permissions {Permissions} on node {NodePath} (cap: {Cap})",
@@ -322,7 +335,10 @@ internal static class PermissionEvaluator
         ImmutableDictionary<string, ImmutableHashSet<string>> scopeToRoles,
         string nodePath,
         string userId,
-        AccessService? accessService,
+        // Captured snapshots from the caller's thread (not read via
+        // AsyncLocal here — this method may run on a Rx scheduler thread).
+        AccessContext? capturedContext,
+        AccessContext? capturedCircuitContext,
         IReadOnlyDictionary<string, PartitionAccessPolicy> staticPolicies,
         ImmutableDictionary<string, ImmutableHashSet<string>>? scopeToDeniedRoles = null,
         ImmutableDictionary<string, PartitionAccessPolicy>? runtimePolicies = null)
@@ -359,11 +375,8 @@ internal static class PermissionEvaluator
                 roleIds = roleIds.Add(Role.Admin.Id);
         }
 
-        if (accessService is not null)
-        {
-            AddClaimRoles(accessService.Context);
-            AddClaimRoles(accessService.CircuitContext);
-        }
+        AddClaimRoles(capturedContext);
+        AddClaimRoles(capturedCircuitContext);
 
         void AddClaimRoles(AccessContext? ctx)
         {
