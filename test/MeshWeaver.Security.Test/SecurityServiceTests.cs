@@ -30,7 +30,7 @@ namespace MeshWeaver.Security.Test;
 /// Unit tests for the SecurityService implementation.
 /// All AccessAssignment / PartitionAccessPolicy nodes are seeded statically via
 /// <see cref="MeshBuilder.AddMeshNodes"/>; permissions are read through the reactive
-/// <see cref="ISecurityService"/> surface bridged via <c>.FirstAsync().ToTask(ct)</c>.
+/// <see cref="SecurityService"/> surface bridged via <c>.FirstAsync().ToTask(ct)</c>.
 /// </summary>
 public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -194,7 +194,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     /// <summary>
     /// Regression for the 2026-05-01 cleanup-session bug:
     /// AccessAssignment created at runtime (via <see cref="IMeshService.CreateNode"/>)
-    /// must propagate to <see cref="ISecurityService.GetEffectivePermissions"/>.
+    /// must propagate to <see cref="SecurityService.GetEffectivePermissions"/>.
     /// Previously the synced AccessAssignment query was set up lazily inside
     /// <c>GetUserScopeRolesStream</c> with a per-user keep-alive subscription —
     /// when no permission check had been issued for that user yet, the synced
@@ -283,7 +283,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     {
         using var scope = Mesh.ServiceProvider.CreateScope();
         var accessService = scope.ServiceProvider.GetRequiredService<AccessService>();
-        var sec = scope.ServiceProvider.GetRequiredService<ISecurityService>();
+        var sec = scope.ServiceProvider.GetRequiredService<SecurityService>();
 
         const string userId = "delivery-admin";
 
@@ -323,7 +323,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         // Roles onto the SAME scope where SecurityService runs.
         using var scope = Mesh.ServiceProvider.CreateScope();
         var accessService = scope.ServiceProvider.GetRequiredService<AccessService>();
-        var sec = scope.ServiceProvider.GetRequiredService<ISecurityService>();
+        var sec = scope.ServiceProvider.GetRequiredService<SecurityService>();
 
         const string userId = "claim-only-admin";
 
@@ -362,7 +362,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
 
     /// <summary>
     /// Companion regression: the new AccessAssignment must also be observable
-    /// through <see cref="ISecurityService.HasPermission(string, string, Permission)"/> —
+    /// through <see cref="SecurityService.HasPermission(string, string, Permission)"/> —
     /// the path the AccessControlPipeline actually calls. (The bug surfaced as
     /// MCP <c>compile</c> being denied because HasPermission returned false even
     /// though the AccessAssignment row existed in the database.)
@@ -465,7 +465,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     [Fact(Timeout = 20000)]
     public Task GetRole_ReturnsBuiltInRole()
     {
-        // Built-in roles are static — assert directly. The (gone) ISecurityService.GetRole
+        // Built-in roles are static — assert directly. The (gone) SecurityService.GetRole
         // surface is no longer reachable from tests; the per-hub scoped service handles
         // role merging at permission-evaluation time.
         Role.Admin.Permissions.Should().Be(Permission.All);

@@ -307,7 +307,7 @@ public static class SettingsLayoutArea
     internal static UiControl BuildEffectiveAccessTab(LayoutAreaHost host, StackControl stack, MeshNode? node)
     {
         var hubPath = host.Hub.Address.ToString();
-        var securityService = host.Hub.ServiceProvider.GetService<ISecurityService>();
+        var securityService = host.Hub.ServiceProvider.GetService<SecurityService>();
         if (securityService == null)
         {
             return stack.WithView(Controls.Html(

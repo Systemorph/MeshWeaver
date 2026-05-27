@@ -58,7 +58,7 @@ public record Space
 /// dedicated <c>Partition</c> MeshNode emitted for a Space.
 ///
 /// Access rules: Read/Create/Update/Delete controlled by partition-level
-/// permissions via <see cref="ISecurityService"/>. Space instances live in
+/// permissions via <see cref="SecurityService"/>. Space instances live in
 /// their own partition and mirror to <c>auth.mesh_nodes</c> via the V27 mirror
 /// trigger (extended to include <c>Space</c> in V28) so a single-schema query
 /// over <c>auth</c> can list every Space in the mesh.
@@ -100,7 +100,7 @@ public static class SpaceNodeType
         builder.ConfigureServices(services =>
         {
             services.AddSingleton<INodeTypeAccessRule>(sp =>
-                new SpaceAccessRule(sp.GetService<ISecurityService>() ?? new NullSecurityService()));
+                new SpaceAccessRule(sp.GetService<SecurityService>() ?? new NullSecurityService()));
             services.AddSingleton<INodePostCreationHandler>(sp =>
                 new SpacePostCreationHandler(
                     sp.GetRequiredService<IMeshService>(),
@@ -174,9 +174,9 @@ public static class SpaceNodeType
     /// <summary>
     /// DI-registered access rule for Space nodes.
     /// Read: requires partition Read permission. Create/Update/Delete: requires
-    /// appropriate permission (via <see cref="ISecurityService"/>).
+    /// appropriate permission (via <see cref="SecurityService"/>).
     /// </summary>
-    private class SpaceAccessRule(ISecurityService securityService) : INodeTypeAccessRule
+    private class SpaceAccessRule(SecurityService securityService) : INodeTypeAccessRule
     {
         public string NodeType => SpaceNodeType.NodeType;
 

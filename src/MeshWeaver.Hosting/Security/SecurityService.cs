@@ -20,7 +20,7 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.Hosting.Security;
 
 /// <summary>
-/// Implementation of ISecurityService providing row-level security for mesh nodes.
+/// Implementation of SecurityService providing row-level security for mesh nodes.
 /// Permissions are derived from AccessAssignment MeshNodes in the node hierarchy.
 /// - AccessAssignment MeshNodes: namespace = scope, id = {Subject}_Access, content has Id + Roles[] array
 /// - Permission evaluation walks AccessAssignment nodes from root to target path.
@@ -29,10 +29,10 @@ namespace MeshWeaver.Hosting.Security;
 /// IMPORTANT: This service uses the UNSECURED persistence core directly to avoid
 /// circular dependency (security checking cannot go through security-filtered persistence).
 /// </summary>
-internal class SecurityService : ISecurityService, IDisposable
+public sealed class RlsSecurityService : SecurityService, IDisposable
 {
     private readonly AccessService _accessService;
-    private readonly ILogger<SecurityService> _logger;
+    private readonly ILogger<RlsSecurityService> _logger;
     private readonly IMessageHub _hub;
 
     // Keep-alive Subscribe handles for the two long-standing synced-query
@@ -93,10 +93,10 @@ internal class SecurityService : ISecurityService, IDisposable
     // lookup" — policies follow the same shape.
     private readonly IMemoryCache _scopePoliciesCache = new MemoryCache(new MemoryCacheOptions());
 
-    public SecurityService(
+    public RlsSecurityService(
         AccessService accessService,
         IMessageHub hub,
-        ILogger<SecurityService> logger,
+        ILogger<RlsSecurityService> logger,
         IEnumerable<IStaticNodeProvider> staticNodeProviders,
         MeshConfiguration? meshConfiguration = null)
     {
@@ -169,7 +169,7 @@ internal class SecurityService : ISecurityService, IDisposable
 
     #region Permission Evaluation
 
-    public IObservable<bool> HasPermission(string nodePath, Permission permission)
+    public override IObservable<bool> HasPermission(string nodePath, Permission permission)
     {
         var context = _accessService.Context ?? _accessService.CircuitContext;
         var userId = context?.ObjectId;
@@ -178,7 +178,7 @@ internal class SecurityService : ISecurityService, IDisposable
         return HasPermission(nodePath, userId, permission);
     }
 
-    public IObservable<bool> HasPermission(string nodePath, string userId, Permission permission)
+    public override IObservable<bool> HasPermission(string nodePath, string userId, Permission permission)
     {
         if (permission == Permission.None)
             return Observable.Return(true);
@@ -186,7 +186,7 @@ internal class SecurityService : ISecurityService, IDisposable
             .Select(p => p.HasFlag(permission));
     }
 
-    public IObservable<Permission> GetEffectivePermissions(string nodePath)
+    public override IObservable<Permission> GetEffectivePermissions(string nodePath)
     {
         var context = _accessService.Context ?? _accessService.CircuitContext;
         var userId = context?.ObjectId;
@@ -195,7 +195,7 @@ internal class SecurityService : ISecurityService, IDisposable
         return GetEffectivePermissions(nodePath, userId);
     }
 
-    public IObservable<Permission> GetEffectivePermissions(string nodePath, string userId)
+    public override IObservable<Permission> GetEffectivePermissions(string nodePath, string userId)
     {
         if (string.IsNullOrEmpty(userId))
             userId = WellKnownUsers.Anonymous;
@@ -1010,7 +1010,7 @@ internal class SecurityService : ISecurityService, IDisposable
 
     #region Role Definitions
 
-    public IObservable<Role?> GetRole(string roleId)
+    public override IObservable<Role?> GetRole(string roleId)
     {
         if (string.IsNullOrEmpty(roleId))
             return Observable.Return<Role?>(null);
@@ -1033,7 +1033,7 @@ internal class SecurityService : ISecurityService, IDisposable
             });
     }
 
-    public IObservable<Role> GetRoles()
+    public override IObservable<Role> GetRoles()
     {
         // Snapshot — built-in roles always present (in case the synced query
         // hasn't surfaced their static MeshNodes yet), then any custom roles
@@ -1070,7 +1070,7 @@ internal class SecurityService : ISecurityService, IDisposable
     #region Partition Access Policies
 
     /// <inheritdoc />
-    public IObservable<PartitionAccessPolicy?> GetPolicy(string targetNamespace)
+    public override IObservable<PartitionAccessPolicy?> GetPolicy(string targetNamespace)
     {
         var ns = targetNamespace ?? "";
         // ObserveAllPolicies returns a namespace → policy map. Read by namespace

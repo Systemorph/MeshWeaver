@@ -201,12 +201,12 @@ public static class SyncedQueryDataSourceExtensions
     /// Wraps the shared (System-loaded) synced query observable with a
     /// per-subscriber RLS filter. The filter captures the subscriber's
     /// AccessContext at Subscribe time and uses
-    /// <see cref="ISecurityService.HasPermission"/> to drop nodes the
+    /// <see cref="SecurityService.HasPermission"/> to drop nodes the
     /// subscriber can't Read on. Bypasses for System / no AsyncLocal — those
     /// callers are infrastructure and need the full snapshot.
     ///
     /// <para>🚨 Service resolution is DEFERRED to Subscribe time. Resolving
-    /// <see cref="ISecurityService"/> at wrap time recurses through Autofac
+    /// <see cref="SecurityService"/> at wrap time recurses through Autofac
     /// when SecurityService's own constructor calls
     /// <c>workspace.GetQuery("Security:_Access", ...)</c> — the GetService
     /// call back into the half-constructed SecurityService spins the resolve
@@ -224,11 +224,11 @@ public static class SyncedQueryDataSourceExtensions
         // System here and short-circuit to the raw upstream — no per-user
         // filter, no service resolution, no recursion.
         //
-        // ISecurityService is resolved LAZILY inside Observable.Defer so the
+        // SecurityService is resolved LAZILY inside Observable.Defer so the
         // user-path resolution happens at Subscribe time (after SecurityService
         // is fully constructed). Resolving it at wrap time would recurse:
         // SecurityService.ctor → ObserveScopeAssignments → workspace.GetQuery →
-        // WrapWithPerUserRls → GetService<ISecurityService> → Autofac tries to
+        // WrapWithPerUserRls → GetService<SecurityService> → Autofac tries to
         // create SecurityService again → ~200 deep stack overflow (2026-05-22).
         var sp = workspace.Hub.ServiceProvider;
         var accessService = sp.GetService<AccessService>();
@@ -241,7 +241,7 @@ public static class SyncedQueryDataSourceExtensions
 
         return Observable.Defer(() =>
         {
-            var securityService = sp.GetService<ISecurityService>();
+            var securityService = sp.GetService<SecurityService>();
             if (securityService is null)
                 return upstream;
 

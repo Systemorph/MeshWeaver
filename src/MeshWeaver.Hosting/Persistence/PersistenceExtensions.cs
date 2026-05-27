@@ -113,7 +113,7 @@ public static class PersistenceExtensions
     /// <summary>
     /// Registers <see cref="IMeshQueryCore"/> as a singleton on the top-most
     /// mesh hub's service container. Resolves to <see cref="StorageAdapterMeshQueryProvider"/>,
-    /// the unsecured surface (no <c>ISecurityService</c> dep) used by
+    /// the unsecured surface (no <c>SecurityService</c> dep) used by
     /// <see cref="SyncedQueryMeshNodes"/> and other infrastructure paths
     /// (NavigationService, VUserHelper, etc.).
     ///

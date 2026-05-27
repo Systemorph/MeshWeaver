@@ -25,7 +25,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 /// Protocol:
 /// 1) Install OrganizationNodeType
 /// 2) Create Organization "Systemorph"
-/// 3) Ask ISecurityService.HasPermission → should NOT return None
+/// 3) Ask SecurityService.HasPermission → should NOT return None
 /// </summary>
 [Collection("PostgreSql")]
 public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOutputHelper output)
@@ -154,7 +154,7 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
         };
         await NodeFactory.CreateNode(orgNode);
 
-        // 4) Ask ISecurityService.HasPermission for this node
+        // 4) Ask SecurityService.HasPermission for this node
         var permissions = await Mesh.GetPermissionAsync(
             "Systemorph", TestUsers.Admin.ObjectId, TestTimeout);
 

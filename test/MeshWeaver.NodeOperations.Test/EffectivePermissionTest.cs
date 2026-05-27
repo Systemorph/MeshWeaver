@@ -22,7 +22,7 @@ namespace MeshWeaver.NodeOperations.Test;
 /// Protocol:
 /// 1) Install SpaceNodeType
 /// 2) Create Space "Systemorph"
-/// 3) Ask ISecurityService.HasPermission → should NOT return None
+/// 3) Ask SecurityService.HasPermission → should NOT return None
 /// </summary>
 public class EffectivePermissionTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {

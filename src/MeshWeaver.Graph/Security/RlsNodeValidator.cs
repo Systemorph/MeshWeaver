@@ -12,12 +12,12 @@ namespace MeshWeaver.Graph.Security;
 /// </summary>
 public class RlsNodeValidator : INodeValidator
 {
-    private readonly ISecurityService _securityService;
+    private readonly SecurityService _securityService;
     private readonly ILogger<RlsNodeValidator> _logger;
     private readonly IReadOnlyDictionary<string, INodeTypeAccessRule> _accessRules;
 
     public RlsNodeValidator(
-        ISecurityService securityService,
+        SecurityService securityService,
         ILogger<RlsNodeValidator> logger,
         IEnumerable<INodeTypeAccessRule> accessRules)
     {
@@ -80,7 +80,7 @@ public class RlsNodeValidator : INodeValidator
         // pass to the next step in the chain.
         //
         // Take(1) closes the final stream: CheckPermission rides
-        // ISecurityService.HasPermission, which is hot and never completes
+        // SecurityService.HasPermission, which is hot and never completes
         // (lives on the live AccessAssignment synced query). Without Take(1)
         // the .Concat() in RunCreationValidatorsObs would wait forever on the
         // first validator and the create handler would never post a response.

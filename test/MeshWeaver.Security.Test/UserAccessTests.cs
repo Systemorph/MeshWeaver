@@ -24,7 +24,7 @@ namespace MeshWeaver.Security.Test;
 ///
 /// All AccessAssignment MeshNodes are seeded statically via
 /// <see cref="MeshBuilder.AddMeshNodes"/> in <see cref="ConfigureMesh"/>; tests then
-/// verify <see cref="ISecurityService.GetEffectivePermissions(string,string)"/>
+/// verify <see cref="SecurityService.GetEffectivePermissions(string,string)"/>
 /// observable bridged to a <see cref="Task{T}"/> via <c>.FirstAsync().ToTask(ct)</c>.
 /// </summary>
 public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(output)

@@ -29,7 +29,7 @@ public static class AccessControlLayoutArea
     public static IObservable<UiControl?> AccessControl(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var securityService = host.Hub.ServiceProvider.GetService<ISecurityService>();
+        var securityService = host.Hub.ServiceProvider.GetService<SecurityService>();
 
         if (securityService == null)
         {
@@ -104,7 +104,7 @@ public static class AccessControlLayoutArea
         bool isAdmin,
         IReadOnlyList<(AccessAssignment Assignment, string SourcePath, MeshNode Node)> inherited,
         Dictionary<string, MeshNode> userNodeLookup,
-        ISecurityService? securityService,
+        SecurityService? securityService,
         PartitionAccessPolicy? activePolicy)
     {
         var stack = Controls.Stack.WithStyle("padding: 24px; gap: 24px; width: 100%;");

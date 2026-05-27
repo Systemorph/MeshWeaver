@@ -130,7 +130,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 20000)]
     public Task AccessControl_NoRLS_ShowsWarning()
     {
-        // ISecurityService is scoped per hub — root provider can't resolve it directly.
+        // SecurityService is scoped per hub — root provider can't resolve it directly.
         // The fact that the per-node hub has it is verified implicitly by the other
         // tests' GetPermissionRequest round-trips returning real values.
         return Task.CompletedTask;

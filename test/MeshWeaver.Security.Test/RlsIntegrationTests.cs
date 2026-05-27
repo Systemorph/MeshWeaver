@@ -683,7 +683,7 @@ public class SecurePersistenceDecoratorTests(ITestOutputHelper output) : Monolit
     public async Task SecureDecorator_CanBeCreated()
     {
         // Verify the security pipeline responds — round-trip GetPermissionRequest
-        // proves the per-node hub has its scoped ISecurityService wired.
+        // proves the per-node hub has its scoped SecurityService wired.
         var perms = await Mesh.GetPermissionAsync("smoke", "anyone", TestTimeout);
         perms.Should().Be(Permission.None);
         await Task.CompletedTask;

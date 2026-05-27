@@ -528,7 +528,7 @@ public static class MeshExtensions
     /// <item><description><b>Collect.</b> Root + (recursive) descendants via
     /// <see cref="IStorageAdapter"/> (storage adapter — no workspace/type-source detour).</description></item>
     /// <item><description><b>Permission.</b> Check <see cref="Permission.Delete"/> for
-    /// every path via <see cref="ISecurityService"/>. Any denial fails the whole op
+    /// every path via <see cref="SecurityService"/>. Any denial fails the whole op
     /// with the full list of denied paths in the <see cref="ActivityLog"/>.</description></item>
     /// <item><description><b>Validate.</b> Run <see cref="INodeValidator"/> chain for
     /// every node. Errors block; warnings block unless
@@ -550,7 +550,7 @@ public static class MeshExtensions
         var opts = hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions();
         var persistence = hub.ServiceProvider.GetRequiredService<IStorageAdapter>();
         var storage = hub.ServiceProvider.GetRequiredService<IStorageAdapter>();
-        var securityService = hub.ServiceProvider.GetService<ISecurityService>();
+        var securityService = hub.ServiceProvider.GetService<SecurityService>();
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
         var meshHub = ResolveMeshHub(hub);
@@ -1083,7 +1083,7 @@ public static class MeshExtensions
     /// Returns <c>true</c> if delete is denied.
     /// </summary>
     private static IObservable<bool> CheckDeletePermissionForNode(
-        ISecurityService? securityService,
+        SecurityService? securityService,
         string userId,
         MeshNode node,
         ILogger logger)
