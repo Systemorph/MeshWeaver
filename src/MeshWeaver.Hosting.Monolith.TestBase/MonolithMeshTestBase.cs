@@ -508,11 +508,19 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// init (post-init memory naturally includes mesh + hosted hubs that should
     /// be live).</para>
     /// </summary>
+    // Forced full-GC at dispose is opt-in. Default OFF — across 200+ tests the
+    // 2× GC2 + WaitForPendingFinalizers added ~1.5s per test (5+ minutes of
+    // pure GC suite-wide). Enable when chasing a leak:
+    //     MESHWEAVER_TEST_FORCE_GC=1
+    private static readonly bool ForceGcAtDispose =
+        Environment.GetEnvironmentVariable("MESHWEAVER_TEST_FORCE_GC") is { Length: > 0 } v
+        && (v == "1" || string.Equals(v, "true", StringComparison.OrdinalIgnoreCase));
+
     private static void TestMemTrace(string testClass, string phase, bool forceGc)
     {
         try
         {
-            if (forceGc)
+            if (forceGc && ForceGcAtDispose)
             {
                 // Two passes — finalizers may queue more work the first time round.
                 GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
