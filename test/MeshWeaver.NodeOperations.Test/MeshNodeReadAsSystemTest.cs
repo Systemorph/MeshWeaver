@@ -178,7 +178,7 @@ public class MeshNodeReadAsSystemTest(ITestOutputHelper output) : MonolithMeshTe
     /// wraps each subscriber with a per-user RLS filter
     /// (<c>WrapWithPerUserRls</c>). The filter captures the subscriber's
     /// AccessContext at Subscribe time and uses
-    /// <see cref="ISecurityService.HasPermission"/> to drop nodes the
+    /// <see cref="SecurityService.HasPermission"/> to drop nodes the
     /// subscriber can't Read.
     ///
     /// <para>So: ambient privileged user (Admin) sees the full set; ambient

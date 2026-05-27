@@ -26,7 +26,7 @@ public static class PartitionNodeType
             services.AddSingleton<IStaticNodeProvider, PartitionNodeProvider>();
             services.AddSingleton<IStaticNodeProvider, DefaultPartitionProvider>();
             services.AddSingleton<INodeTypeAccessRule>(sp =>
-                new PartitionAccessRule(sp.GetService<ISecurityService>() ?? new NullSecurityService()));
+                new PartitionAccessRule(sp.GetService<SecurityService>() ?? new NullSecurityService()));
             return services;
         });
         builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
@@ -66,7 +66,7 @@ public static class PartitionNodeType
     /// <summary>
     /// Access rule: Read for all authenticated users, Create/Update/Delete for Admin only.
     /// </summary>
-    private class PartitionAccessRule(ISecurityService securityService) : INodeTypeAccessRule
+    private class PartitionAccessRule(SecurityService securityService) : INodeTypeAccessRule
     {
         public string NodeType => PartitionNodeType.NodeType;
 

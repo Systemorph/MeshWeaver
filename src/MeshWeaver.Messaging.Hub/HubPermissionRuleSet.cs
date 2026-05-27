@@ -4,8 +4,8 @@ namespace MeshWeaver.Messaging;
 
 /// <summary>
 /// Hub-level permission rules checked by the AccessControlPipeline.
-/// These rules are evaluated before ISecurityService — if any rule grants
-/// the required permission, the ISecurityService check is skipped.
+/// These rules are evaluated before SecurityService — if any rule grants
+/// the required permission, the SecurityService check is skipped.
 /// Configured via WithPublicRead() and similar hub configuration methods.
 /// </summary>
 public record HubPermissionRuleSet
@@ -33,7 +33,7 @@ public static class HubPermissionExtensions
 {
     /// <summary>
     /// Adds a hub-level permission rule that the AccessControlPipeline checks
-    /// before falling back to ISecurityService.
+    /// before falling back to SecurityService.
     /// </summary>
     public static MessageHubConfiguration AddHubPermissionRule(
         this MessageHubConfiguration config,

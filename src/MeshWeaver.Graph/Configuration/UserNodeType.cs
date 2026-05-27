@@ -39,7 +39,7 @@ public static class UserNodeType
         {
             services.AddSingleton<IStaticNodeProvider, UserNodeProvider>();
             services.AddSingleton<INodeTypeAccessRule>(sp =>
-                new UserAccessRule(sp.GetService<ISecurityService>() ?? new NullSecurityService()));
+                new UserAccessRule(sp.GetService<SecurityService>() ?? new NullSecurityService()));
             services.AddSingleton<INodePostCreationHandler>(sp =>
                 new UserScopeGrantHandler(sp.GetRequiredService<IMeshService>()));
             return services;
@@ -147,7 +147,7 @@ public static class UserNodeType
     /// DI-registered access rule for User nodes — reliable fallback when hub-config
     /// rules haven't been cached yet (e.g. during first onboarding).
     /// </summary>
-    private class UserAccessRule(ISecurityService securityService) : INodeTypeAccessRule
+    private class UserAccessRule(SecurityService securityService) : INodeTypeAccessRule
     {
         public string NodeType => UserNodeType.NodeType;
 
@@ -236,7 +236,7 @@ public static class UserNodeType
         var permsChannel = System.Threading.Channels.Channel.CreateBounded<Permission>(
             new System.Threading.Channels.BoundedChannelOptions(1) { FullMode = System.Threading.Channels.BoundedChannelFullMode.DropOldest });
 
-        var securityService = host.Hub.ServiceProvider.GetService<ISecurityService>();
+        var securityService = host.Hub.ServiceProvider.GetService<SecurityService>();
         if (securityService == null)
             yield break;
 

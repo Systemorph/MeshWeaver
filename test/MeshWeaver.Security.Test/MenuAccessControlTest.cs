@@ -48,7 +48,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
     /// <summary>
     /// Creates a client hub with an AccessContext for the test user.
     /// The AccessContext flows through the message delivery pipeline to the node hub,
-    /// enabling server-side permission checks via ISecurityService.
+    /// enabling server-side permission checks via SecurityService.
     /// </summary>
     private IMessageHub GetClientWithUser(string userId = TestUserId)
     {

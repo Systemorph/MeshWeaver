@@ -39,7 +39,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     private readonly AccessService? accessService;
     private readonly MeshConfiguration? meshConfiguration;
     // 🚨 Lazy<INodeValidator> — NOT bare INodeValidator. RlsNodeValidator
-    // (the only non-test impl) takes ISecurityService at construction time.
+    // (the only non-test impl) takes SecurityService at construction time.
     // SecurityService warms up by subscribing to a synced query during its
     // own ctor → reaches StorageAdapterMeshQueryProvider → resolving
     // INodeValidators eagerly would re-enter SecurityService and cycle.
@@ -62,7 +62,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
 
     public StorageAdapterMeshQueryProvider(
         IStorageAdapter persistence,
-        // 🚨 NO ISecurityService here — that parameter created the Autofac
+        // 🚨 NO SecurityService here — that parameter created the Autofac
         // cycle SecurityService → SyncedQueryMeshNodes → IMeshQueryCore →
         // StorageAdapterMeshQueryProvider → SecurityService. Per-node read
         // filtering on the secured IMeshQueryProvider surface goes through
@@ -985,7 +985,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     /// security-filtered <see cref="QueryAsync"/> (IMeshQueryProvider surface) and the raw
     /// <see cref="QueryCoreAsync"/> (IMeshQueryCore surface). The latter is what
     /// SecurityService consumes via SyncedQueryMeshNodes — it must NOT re-enter
-    /// ISecurityService for filtering, otherwise the DI container detects a cycle.
+    /// SecurityService for filtering, otherwise the DI container detects a cycle.
     /// </summary>
     private IObservable<QueryResultChange<T>> ObserveQueryInternal<T>(
         MeshQueryRequest request,

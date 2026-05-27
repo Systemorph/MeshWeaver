@@ -14,7 +14,7 @@ namespace MeshWeaver.Graph.Security;
 ///   for Comment nodes, Thread for Thread/ThreadMessage nodes, Update otherwise)
 /// - Update/Delete: requires Update on MainNode
 /// </summary>
-public class SatelliteAccessRule(string nodeType, ISecurityService securityService) : INodeTypeAccessRule
+public class SatelliteAccessRule(string nodeType, SecurityService securityService) : INodeTypeAccessRule
 {
     public string NodeType => nodeType;
 

@@ -8,11 +8,11 @@ namespace MeshWeaver.Mesh;
 /// <summary>
 /// Canonical client-side surface for permission checks. Mirrors the shape of
 /// <c>HubActivityExtensions</c> / <c>HubThreadExtensions</c>: callers ask the
-/// hub for an answer; the extension resolves <see cref="ISecurityService"/>
+/// hub for an answer; the extension resolves <see cref="SecurityService"/>
 /// and forwards. Application code MUST go through this surface — never reach
-/// into <see cref="ISecurityService"/> directly.
+/// into <see cref="SecurityService"/> directly.
 ///
-/// <para><b>Caching</b>: behind the scenes <see cref="ISecurityService"/>
+/// <para><b>Caching</b>: behind the scenes <see cref="SecurityService"/>
 /// composes against the process-wide <c>IMeshNodeStreamCache</c> for
 /// AccessAssignment and PartitionAccessPolicy lookups (one shared sync
 /// subscription per scope under <c>WellKnownUsers.System</c>) — every caller
@@ -30,14 +30,14 @@ public static class HubPermissionExtensions
     /// Effective permissions for the current user (resolved from
     /// <see cref="AccessService.Context"/> / <see cref="AccessService.CircuitContext"/>)
     /// on <paramref name="nodePath"/>. Returns <see cref="Permission.All"/> when
-    /// no <see cref="ISecurityService"/> is registered (RLS disabled).
+    /// no <see cref="SecurityService"/> is registered (RLS disabled).
     /// </summary>
     public static IObservable<Permission> GetEffectivePermissions(
         this IMessageHub hub,
         string nodePath)
     {
         ArgumentNullException.ThrowIfNull(hub);
-        var securityService = hub.ServiceProvider.GetService<ISecurityService>();
+        var securityService = hub.ServiceProvider.GetService<SecurityService>();
         return securityService is null
             ? Observable.Return(Permission.All)
             : securityService.GetEffectivePermissions(nodePath);
@@ -55,7 +55,7 @@ public static class HubPermissionExtensions
         string userId)
     {
         ArgumentNullException.ThrowIfNull(hub);
-        var securityService = hub.ServiceProvider.GetService<ISecurityService>();
+        var securityService = hub.ServiceProvider.GetService<SecurityService>();
         return securityService is null
             ? Observable.Return(Permission.All)
             : securityService.GetEffectivePermissions(nodePath, userId);

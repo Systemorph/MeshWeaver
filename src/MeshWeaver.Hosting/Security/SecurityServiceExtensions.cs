@@ -18,10 +18,10 @@ public static class SecurityServiceExtensions
     /// <summary>
     /// Adds Row-Level Security services to the mesh.
     /// This includes:
-    /// - ISecurityService for permission evaluation (uses unsecured IStorageAdapter directly)
+    /// - SecurityService for permission evaluation (uses unsecured IStorageAdapter directly)
     /// - RlsNodeValidator for enforcing permissions on CRUD operations
     /// - AccessControlPipeline for checking RequiresPermissionAttribute on incoming messages
-    /// - PersistenceService handles secure query filtering via ISecurityService (implements IStorageAdapter)
+    /// - PersistenceService handles secure query filtering via SecurityService (implements IStorageAdapter)
     ///
     /// Storage structure:
     /// - Access/ - Global roles (Admin with null namespace) and custom role definitions
@@ -36,7 +36,7 @@ public static class SecurityServiceExtensions
                 // that reads from THAT hub's workspace (its synced
                 // AccessAssignments collection). RlsNodeValidator runs in the
                 // same scope and resolves the local SecurityService.
-                services.TryAddScoped<ISecurityService, SecurityService>();
+                services.TryAddScoped<SecurityService, RlsSecurityService>();
                 services.AddScoped<INodeValidator, RlsNodeValidator>();
 
                 return services;

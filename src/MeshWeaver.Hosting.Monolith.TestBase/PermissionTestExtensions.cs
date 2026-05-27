@@ -14,8 +14,8 @@ namespace MeshWeaver.Hosting.Monolith.TestBase;
 /// Test helpers for querying effective permissions via the
 /// <see cref="GetPermissionRequest"/> / <see cref="GetPermissionResponse"/>
 /// request-response pair. Lets tests stay scope-agnostic — the per-node hub
-/// receives the request and resolves its scoped <see cref="ISecurityService"/>.
-/// Tests should NOT call <c>ServiceProvider.GetRequiredService&lt;ISecurityService&gt;()</c>
+/// receives the request and resolves its scoped <see cref="SecurityService"/>.
+/// Tests should NOT call <c>ServiceProvider.GetRequiredService&lt;SecurityService&gt;()</c>
 /// directly (it's scoped, not available from the root provider).
 /// </summary>
 public static class PermissionTestExtensions
@@ -33,7 +33,7 @@ public static class PermissionTestExtensions
 
     /// <summary>
     /// Wait-for-predicate overload: subscribes to
-    /// <see cref="ISecurityService.GetEffectivePermissions(string,string)"/>
+    /// <see cref="SecurityService.GetEffectivePermissions(string,string)"/>
     /// (a hot observable backed by the workspace's synced AccessAssignment
     /// query) and returns the first emission satisfying <paramref name="until"/>.
     ///
@@ -63,7 +63,7 @@ public static class PermissionTestExtensions
         // until-polling probe) saw the probe's identity instead of the
         // DevLogin admin context the test had set, and the delete failed
         // with "Delete permission denied".
-        var sec = hub.ServiceProvider.GetRequiredService<ISecurityService>();
+        var sec = hub.ServiceProvider.GetRequiredService<SecurityService>();
         if (until == null)
             return await sec.GetEffectivePermissions(path, userId).FirstAsync().ToTask(ct);
 
@@ -108,7 +108,7 @@ public static class PermissionTestExtensions
         CancellationToken ct = default,
         TimeSpan? timeout = null)
     {
-        var sec = hub.ServiceProvider.GetRequiredService<ISecurityService>();
+        var sec = hub.ServiceProvider.GetRequiredService<SecurityService>();
         // 90s default: locally these tests complete in 9-15s; CI's cold-start
         // synced AccessAssignment query has been observed >40s on slow Linux
         // runners, which the previous 40s default hit consistently in

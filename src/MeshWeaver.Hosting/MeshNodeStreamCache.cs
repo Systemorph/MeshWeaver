@@ -68,7 +68,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
     /// Maximum time we wait for the owning per-node hub to answer
     /// <see cref="GetPermissionRequest"/>. The handler is synchronous
     /// (`AccessControlPipeline.HandleGetPermission` resolves the local
-    /// <see cref="ISecurityService"/> and posts a response immediately)
+    /// <see cref="SecurityService"/> and posts a response immediately)
     /// once the hub is active. The catch is Orleans cold-start: the per-node
     /// grain may take 5-10s to activate on first touch (cluster placement,
     /// MeshNode hydration, SecurityService warm-up). 15s covers cold start
@@ -312,7 +312,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
         // is wired up by AddRowLevelSecurity → AddAccessControlPipeline on every
         // per-node hub; without RLS the message has no handler and the feature
         // makes no sense.
-        if (meshHub.ServiceProvider.GetService<ISecurityService>() is null)
+        if (meshHub.ServiceProvider.GetService<SecurityService>() is null)
             return shared;
 
         // Capture the caller's identity synchronously, on the caller's thread,

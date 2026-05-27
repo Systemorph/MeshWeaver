@@ -10,10 +10,10 @@ namespace MeshWeaver.Mesh.Security;
 /// Replies with <see cref="GetPermissionResponse"/>.
 ///
 /// <para><b>Why request/response and not a direct service call?</b>
-/// <see cref="ISecurityService"/> is registered <c>Scoped</c> per hub, so it
+/// <see cref="SecurityService"/> is registered <c>Scoped</c> per hub, so it
 /// cannot be resolved from the root mesh service provider. Cross-hub callers
 /// (tests, other hubs, the portal) post this request and the receiving hub
-/// resolves its scoped <c>ISecurityService</c> against its own address.</para>
+/// resolves its scoped <c>SecurityService</c> against its own address.</para>
 /// </summary>
 public record GetPermissionRequest : IRequest<GetPermissionResponse>;
 

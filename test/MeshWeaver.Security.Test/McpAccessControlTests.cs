@@ -196,7 +196,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         //      inherited Viewer. Without (3), the test can race ahead while
         //      the policy synced query still has the empty initial emission,
         //      and User1 ends up reading Confidential through inheritance.
-        var sec = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        var sec = Mesh.ServiceProvider.GetRequiredService<SecurityService>();
         var waitUser1Read = sec.GetEffectivePermissions("SharedOrg", User1)
             .Where(p => p.HasFlag(Permission.Read))
             .Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask(TestTimeout);
@@ -222,7 +222,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
     /// <c>McpMeshPlugin.Search</c> rides) reflects the supplied predicate for
     /// the CURRENT ambient access context. The per-result <c>RlsNodeValidator</c>
     /// is validated by the queried partition hub's own scoped
-    /// <see cref="ISecurityService"/> — distinct from the mesh-hub one settled
+    /// <see cref="SecurityService"/> — distinct from the mesh-hub one settled
     /// by <see cref="SetupTestData"/>'s probes, with per-scope synced
     /// AccessAssignment/Policy queries that settle independently. Call after
     /// <c>LoginWithToken</c> so the wait runs under the same context the

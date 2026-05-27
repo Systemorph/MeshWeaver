@@ -42,7 +42,7 @@ public static class AccessControlPipeline
             // hub's configuration only — no DI resolution at registration time.
             var hubPermissions = hub.Configuration.Get<HubPermissionRuleSet>();
 
-            // CRITICAL: do NOT resolve ISecurityService / AccessService /
+            // CRITICAL: do NOT resolve SecurityService / AccessService /
             // ILoggerFactory at pipeline-registration time. This callback runs
             // synchronously inside MessageService.ctor (which is itself being
             // resolved by Autofac during MessageHub construction). Resolving
@@ -58,7 +58,7 @@ public static class AccessControlPipeline
                 if (attr == null)
                     return next.Invoke(delivery, ct);
 
-                var securityService = hub.ServiceProvider.GetService<ISecurityService>();
+                var securityService = hub.ServiceProvider.GetService<SecurityService>();
                 if (securityService == null)
                     return next.Invoke(delivery, ct);
 
@@ -201,7 +201,7 @@ public static class AccessControlPipeline
     /// Sync handler for <see cref="GetPermissionRequest"/>. The hub always
     /// evaluates permissions on its OWN path (<c>hub.Address.ToString()</c>) —
     /// the request never carries a path; routing decides which hub responds.
-    /// Resolves the per-hub scoped <see cref="ISecurityService"/> and replies
+    /// Resolves the per-hub scoped <see cref="SecurityService"/> and replies
     /// via Subscribe — no await, no scope juggling at the caller site.
     /// </summary>
     internal static IMessageDelivery HandleGetPermission(IMessageHub hub, IMessageDelivery<GetPermissionRequest> request)
@@ -211,7 +211,7 @@ public static class AccessControlPipeline
         var ownPath = hub.Address.ToString();
         logger?.LogDebug("[GP] enter hub={Hub}", ownPath);
 
-        var sec = hub.ServiceProvider.GetService<ISecurityService>();
+        var sec = hub.ServiceProvider.GetService<SecurityService>();
         if (sec is null)
         {
             logger?.LogDebug("[GP] sec is null → posting None");

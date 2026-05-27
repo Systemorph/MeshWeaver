@@ -23,7 +23,7 @@ namespace MeshWeaver.Security.Test;
 /// All AccessAssignment nodes are seeded via static <see cref="MeshBuilder.AddMeshNodes"/>
 /// (preferred) or via runtime <see cref="IMeshService.CreateNode"/> (when the test exercises
 /// the create/delete lifecycle itself). Reads use the reactive
-/// <see cref="ISecurityService.GetEffectivePermissions(string,string)"/> surface bridged
+/// <see cref="SecurityService.GetEffectivePermissions(string,string)"/> surface bridged
 /// to <see cref="Task{T}"/> via <c>.FirstAsync().ToTask(ct)</c>.
 /// </summary>
 public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
@@ -224,7 +224,7 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
     [Fact(Timeout = 20000)]
     public async Task AccessControl_NoRLS_ShowsWarningMessage()
     {
-        // RLS sanity: any GetPermissionRequest round-trip should work; skip explicit ISecurityService check.
+        // RLS sanity: any GetPermissionRequest round-trip should work; skip explicit SecurityService check.
         await Mesh.GetPermissionAsync("smoke", "anyone", TestTimeout);
     }
 

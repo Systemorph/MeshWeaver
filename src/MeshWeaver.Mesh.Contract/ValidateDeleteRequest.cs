@@ -13,7 +13,7 @@ namespace MeshWeaver.Mesh;
 /// outcome.
 ///
 /// <para><b>Separation of concerns.</b> The central handler already checks
-/// <see cref="Permission.Delete"/> via <see cref="ISecurityService"/> BEFORE
+/// <see cref="Permission.Delete"/> via <see cref="SecurityService"/> BEFORE
 /// issuing this request, so validator code can focus on domain constraints
 /// ("this is the last admin", "this has open obligations") rather than
 /// repeating permission checks.</para>

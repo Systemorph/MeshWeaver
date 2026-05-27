@@ -318,7 +318,7 @@ public class ObserveQueryFreshnessTest(ITestOutputHelper output) : MonolithMeshT
         const string scope = "RepoTest3";
         const string userId = "test-user-3";
         var ct = TestContext.Current.CancellationToken;
-        var sec = Mesh.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Security.ISecurityService>();
+        var sec = Mesh.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Security.SecurityService>();
 
         // Create AccessAssignment first.
         await MeshService.CreateNode(AssignmentNodeFactory.UserRole(userId, "Admin", scope))
@@ -346,7 +346,7 @@ public class ObserveQueryFreshnessTest(ITestOutputHelper output) : MonolithMeshT
     {
         var ct = TestContext.Current.CancellationToken;
         var meshAddress = Mesh.Address.ToFullString();
-        var sec = Mesh.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Security.ISecurityService>();
+        var sec = Mesh.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Security.SecurityService>();
 
         Output.WriteLine($"meshAddress = '{meshAddress}'");
 

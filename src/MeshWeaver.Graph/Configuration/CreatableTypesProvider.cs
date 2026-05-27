@@ -20,7 +20,7 @@ namespace MeshWeaver.Graph.Configuration;
 /// individual instances — visibility of an instance has nothing to do
 /// with whether a type is offered to a user who has Create permission
 /// at <paramref name="nodePath"/>. The Create-permission gate runs at
-/// the outer level via <see cref="ISecurityService.HasPermission"/>.</para>
+/// the outer level via <see cref="SecurityService.HasPermission"/>.</para>
 ///
 /// <para>Sources merged into the result (deduped by NodeType path):</para>
 /// <list type="number">
@@ -41,7 +41,7 @@ namespace MeshWeaver.Graph.Configuration;
 internal sealed class CreatableTypesProvider(
     IMessageHub hub,
     MeshConfiguration meshConfiguration,
-    ISecurityService? securityService = null) : ICreatableTypesProvider
+    SecurityService? securityService = null) : ICreatableTypesProvider
 {
     public IObservable<IReadOnlyList<CreatableTypeInfo>> GetCreatableTypes(
         string? nodePath, MeshNode? parentNode)

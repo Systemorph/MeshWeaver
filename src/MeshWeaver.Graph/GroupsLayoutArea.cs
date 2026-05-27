@@ -31,7 +31,7 @@ public static class GroupsLayoutArea
     public static IObservable<UiControl?> Groups(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var securityService = host.Hub.ServiceProvider.GetService<ISecurityService>();
+        var securityService = host.Hub.ServiceProvider.GetService<SecurityService>();
 
         if (securityService == null)
         {
