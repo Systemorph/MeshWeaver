@@ -288,7 +288,7 @@ public record GetPermissionRequest : IRequest<GetPermissionResponse>;
 public record GetPermissionResponse(Permission Permissions);
 ```
 
-The request carries no path — the receiving hub answers for ITS OWN path. Callers route the request to the per-node hub at the path they care about; routing decides which hub responds. The handler (`AccessControlPipeline.HandleGetPermission`) resolves the per-hub-scoped `ISecurityService` and evaluates against the caller's `delivery.AccessContext`.
+The request carries no path — the receiving hub answers for ITS OWN path. Callers route the request to the per-node hub at the path they care about; routing decides which hub responds. The handler (`AccessControlPipeline.HandleGetPermission`) resolves the per-hub-scoped `SecurityService` and evaluates against the caller's `delivery.AccessContext`.
 
 ## Worked example — Blazor data binding → SyncStream → owner update
 

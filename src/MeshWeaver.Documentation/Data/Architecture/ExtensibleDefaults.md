@@ -223,7 +223,7 @@ the surface to this pattern means:
    arrives.
 
 See [Access Control](AccessControl) for the role / assignment data
-model and the per-hub `ISecurityService` evaluator that consumes the
+model and the per-hub `SecurityService` evaluator that consumes the
 projection.
 
 # References

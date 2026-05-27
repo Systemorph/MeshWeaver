@@ -24,7 +24,7 @@ hub.GetEffectivePermissions(nodePath);
 hub.CheckPermission(nodePath, "alice", Permission.Update);
 ```
 
-The rest of this document covers the **internals** that back those extensions: AccessAssignment node shape, the recursive scope walk, the per-scope synced subscriptions cached on `IMeshNodeStreamCache` under system identity, the RLS validator wired into the storage adapter. Don't resolve `ISecurityService` directly from application code — it's framework-internal infrastructure that the extension wraps.
+The rest of this document covers the **internals** that back those extensions: AccessAssignment node shape, the recursive scope walk, the per-scope synced subscriptions cached on `IMeshNodeStreamCache` under system identity, the RLS validator wired into the storage adapter. Don't resolve `SecurityService` directly from application code — it's framework-internal infrastructure that the extension wraps.
 
 # Core Concepts
 
@@ -157,10 +157,10 @@ A computed `EffectiveAssignments` virtual collection then merges
 ## Evaluation Flow — fully local, zero round-trips
 
 The check happens **inside** the resource's per-node hub via a
-**hub-scoped `ISecurityService`** that reads from the hub's own
+**hub-scoped `SecurityService`** that reads from the hub's own
 workspace. No cross-hub request, no global singleton, no storage walk.
 
-Every per-node hub registers an `ISecurityService` as scoped DI in its
+Every per-node hub registers an `SecurityService` as scoped DI in its
 own service container. The instance closes over the hub's `IWorkspace`
 and answers from these synced virtual data sources:
 
@@ -179,7 +179,7 @@ and answers from these synced virtual data sources:
 sequenceDiagram
     participant Client
     participant Pipeline as AccessControlPipeline (in resource hub)
-    participant SecSvc as ISecurityService (hub-scoped)
+    participant SecSvc as SecurityService (hub-scoped)
     participant Workspace as Hub workspace
     Client->>Pipeline: deliver MyMessage[RequiresPermission(Update)] target=ACME/Project
     Pipeline->>SecSvc: HasPermission(userId, Update)
@@ -259,7 +259,7 @@ Access control uses these shipped node types:
 - **Content**: `AccessAssignment` record with `Id` and `Roles[]` array
 - **Path pattern**: `{scope}/_Access/{Subject}_Access`
 - **Name pattern**: `{Subject} Access`
-- Created via `ISecurityService.AddUserRole(...)` (returns `IObservable<Unit>`; subscribe to drive) or directly via `IMeshService.CreateNode(...)` for advanced cases
+- Created via `SecurityService.AddUserRole(...)` (returns `IObservable<Unit>`; subscribe to drive) or directly via `IMeshService.CreateNode(...)` for advanced cases
 - One node per subject per scope — multiple roles are stored in the `Roles` array
 
 ## User
@@ -286,9 +286,9 @@ Access control uses these shipped node types:
 - **Content**: `Role` record (Id, DisplayName, Permissions, IsInheritable)
 - Custom roles extend the built-in set
 
-# ISecurityService — hub-scoped, 100% IObservable
+# SecurityService — hub-scoped, 100% IObservable
 
-`ISecurityService` is registered **scoped per per-node hub**, never as
+`SecurityService` is registered **scoped per per-node hub**, never as
 a singleton. Each instance closes over the hub's `IWorkspace` and
 answers reads from the synced virtual collections listed above. Writes
 post `CreateNodeRequest` / `UpdateNodeRequest` / `DeleteNodeRequest`
@@ -349,7 +349,7 @@ all users) and lets each sub-query emit an empty Initial fast,
 removing the warm-up window the timeout was guarding against.
 
 ```csharp
-// Inside the global ISecurityService.
+// Inside the global SecurityService.
 private IObservable<IEnumerable<MeshNode>> ObserveEffectiveAssignments(
     string scope, string? nodeTypePath)
 {
@@ -399,7 +399,7 @@ existing `ComputeRoleState` does today; only the *source* changes.
 is at the test edge or grain-lifecycle boundary.
 
 ```csharp
-public interface ISecurityService
+public abstract class SecurityService
 {
     // Read — answers from the hub's own workspace synchronously.
     IObservable<bool>       HasPermission(string userId, Permission permission);
@@ -438,7 +438,7 @@ protocol used for `MeshNodeReference`.
 
 ```
 ┌──────────────────────────────────────┐
-│  ISecurityService.AddUserRole(...)   │
+│  SecurityService.AddUserRole(...)   │
 └──────────────────┬───────────────────┘
                    │ workspace.UpdateMeshNode (or stream.Update for collections)
                    ▼
@@ -619,7 +619,7 @@ public class RlsNodeValidator : INodeValidator
             _ => Permission.None
         };
 
-        // ISecurityService is hub-scoped and reads from the local workspace's
+        // SecurityService is hub-scoped and reads from the local workspace's
         // synced collections — no cross-hub round-trip, no TTL.
         return securityService
             .HasPermission(context.UserId, requiredPermission)
@@ -895,7 +895,7 @@ The `AccessControlPipeline` is a delivery pipeline step registered by `AddRowLev
 
 1. Reads the `RequiresPermissionAttribute` from the message type (cached per type)
 2. Calls `GetPermissionChecks()` to get the list of `(path, permission)` pairs
-3. Checks each pair against `ISecurityService.HasPermission(...)` (returns `IObservable<bool>` — composed into the pipeline, never awaited)
+3. Checks each pair against `SecurityService.HasPermission(...)` (returns `IObservable<bool>` — composed into the pipeline, never awaited)
 4. If any check fails → sends `DeliveryFailure(ErrorType.Unauthorized)` back to sender
 
 Messages without `[RequiresPermission]` pass through unchecked. System messages (`PingRequest`, `InitializeHubRequest`, etc.) are not annotated and are always allowed.
@@ -908,7 +908,7 @@ Enable row-level security in your mesh configuration:
 var builder = new MeshBuilder()
     .UseMonolithMesh()
     .AddFileSystemPersistence(dataPath)
-    .AddRowLevelSecurity();  // Registers ISecurityService, RlsNodeValidator, etc.
+    .AddRowLevelSecurity();  // Registers SecurityService, RlsNodeValidator, etc.
 ```
 
 # Best Practices
@@ -917,7 +917,7 @@ var builder = new MeshBuilder()
 2. **Use deny sparingly** — deny overrides only the specific role, not all permissions
 3. **Anonymous for unauthenticated access** — configure Anonymous user with Viewer role on namespaces that should be visible without login
 3. **Public for authenticated baseline** — configure Public user with Viewer role on namespaces that all logged-in users should access
-4. **No manual caching** — `ISecurityService` is hub-scoped and reads from the local workspace's synced `AccessAssignments` / `Policies` / `Roles` collections. Those collections are kept live by the synced query data source; there is no separate TTL cache to invalidate.
+4. **No manual caching** — `SecurityService` is hub-scoped and reads from the local workspace's synced `AccessAssignments` / `Policies` / `Roles` collections. Those collections are kept live by the synced query data source; there is no separate TTL cache to invalidate.
 5. **Fail closed** — no roles assigned means no permissions (Permission.None)
 6. **Audit via MeshNodes** — AccessAssignment nodes provide a clear audit trail of who has access to what
 7. **Use ImpersonateAsHub() for hub operations** — when a hub needs to perform operations as itself, use `PostOptions.ImpersonateAsHub()` instead of setting identity on `AccessService` directly

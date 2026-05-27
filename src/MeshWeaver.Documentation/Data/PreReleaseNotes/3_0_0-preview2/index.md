@@ -19,7 +19,7 @@ The single largest theme of this release. Every hub-reachable code path now retu
 
 - **`IMeshService` write APIs** (`CreateNode`, `UpdateNode`, `DeleteNode`, `MoveNode`) return `IObservable<T>` — call `Subscribe` to fire the side effect.
 - **`IMeshStorage` writes** are reactive end-to-end; `GetNodeAsync` is replaced by `IObservable<MeshNode?> GetNode`.
-- **`ISecurityService`** is hub-scoped, fully local, observable; `GetPolicy` / `GetPermissionRequest` flow through observable streams with a synchronous fast path for built-in roles and a per-user scope-roles cache.
+- **`SecurityService`** is hub-scoped, fully local, observable; `GetPolicy` / `GetPermissionRequest` flow through observable streams with a synchronous fast path for built-in roles and a per-user scope-roles cache.
 - **Navigation** exposes `IObservable<NavigationContext?>` — the old event + retry timer is gone.
 - **Hub initialization hooks are synchronous** — async hooks were a deadlock magnet; they're now disallowed at the framework level.
 - **`hub.Observe(...)`** replaces the obsolete `RegisterCallback` / `AwaitResponse` overloads in production code.
@@ -186,7 +186,7 @@ Reference: `AI/ProviderConfiguration.md`.
 
 ## Migrating from preview1
 
-- **Replace `Task`-returning surfaces with `IObservable<T>`** in any user code that talked to `IMeshService` / `IMeshStorage` / `ISecurityService` / navigation. The old async extensions are `[Obsolete]`. Subscribe to fire side effects.
+- **Replace `Task`-returning surfaces with `IObservable<T>`** in any user code that talked to `IMeshService` / `IMeshStorage` / `SecurityService` / navigation. The old async extensions are `[Obsolete]`. Subscribe to fire side effects.
 - **Replace `QueryAsync(path:X)` / `ObserveQuery` single-node reads** with `workspace.GetMeshNodeStream(path)` (or `GetRemoteStream<MeshNode, MeshNodeReference>` for explicit cross-hub).
 - **Replace bespoke `XxxRequest/XxxResponse` operation messages** that have inputs + progress + output with the activity-control-plane pattern (Code MeshNode template + form inputs + `RequestedStatus = Running` trigger).
 - **`_Source` / `_Test`** are now `Source` / `Test`. Migration v9 handles existing DBs; update embedded references in your own samples.

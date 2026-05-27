@@ -7,7 +7,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # Permission API — `hub.CheckPermission()` / `hub.GetEffectivePermissions()`
 
-> **🚨 Default surface for every permission check.** Layout areas, click actions, MCP plugins, agent tools — all of them. If you find yourself resolving `ISecurityService` from DI or calling `PermissionHelper.GetEffectivePermissions`, stop and use the hub extension instead.
+> **🚨 Default surface for every permission check.** Layout areas, click actions, MCP plugins, agent tools — all of them. If you find yourself resolving `SecurityService` from DI or calling `PermissionHelper.GetEffectivePermissions`, stop and use the hub extension instead.
 
 ```csharp
 using MeshWeaver.Mesh;
@@ -27,7 +27,7 @@ All four methods return `IObservable<T>` — no `Task<T>`, no `await`, no `.Firs
 
 ## What it does behind the scenes
 
-`HubPermissionExtensions` resolves the process-wide `ISecurityService` from the hub's service provider and forwards. `ISecurityService` composes its effective-permission computation against the **process-wide `IMeshNodeStreamCache`** under `WellKnownUsers.System` identity:
+`HubPermissionExtensions` resolves the process-wide `SecurityService` from the hub's service provider and forwards. `SecurityService` composes its effective-permission computation against the **process-wide `IMeshNodeStreamCache`** under `WellKnownUsers.System` identity:
 
 - **AccessAssignment** subtree (`namespace:{scope}/_Access nodeType:AccessAssignment`) is cached once per scope, shared across every hub asking the same question.
 - **PartitionAccessPolicy** chain (one node per scope) is also cached once per scope.
@@ -41,15 +41,15 @@ Three reasons:
 
 1. **One place to fix.** The pre-extension world had `PermissionHelper.GetEffectivePermissions`, direct `_securityService.GetEffectivePermissions` calls in layout areas, ad-hoc `workspace.GetQuery("namespace:…/_Access …")` walks, and a few inlined "check `Permission.Read` via `_Access` query" patterns. When the cache identity / claim-first emission semantics changed, every site needed a separate edit. Now there's one extension; the cache lives in `MeshNodeStreamCache`, the policy chain lives in `SecurityService`, and the call sites all read `hub.CheckPermission`.
 
-2. **Hub-scoped resolution.** The extension uses `hub.ServiceProvider`, so when a click handler is on the layout-area hub, the resolution finds the layout hub's `ISecurityService`; when MCP code is on the mesh hub, it finds the mesh hub's. Application code never needs to thread `IMessageHub` plus `ISecurityService` through DI — the hub already has both.
+2. **Hub-scoped resolution.** The extension uses `hub.ServiceProvider`, so when a click handler is on the layout-area hub, the resolution finds the layout hub's `SecurityService`; when MCP code is on the mesh hub, it finds the mesh hub's. Application code never needs to thread `IMessageHub` plus `SecurityService` through DI — the hub already has both.
 
 3. **Cancellable / composable.** Returning `IObservable<bool>` gives the caller a stream that re-emits when the underlying AccessAssignment set changes. The Blazor side panel and MCP autocomplete already wire to that — flipping a role propagates within ~30 s without manual reload.
 
 ## Don't do this
 
 ```csharp
-// ❌ Direct ISecurityService resolution from application code
-var sec = host.Hub.ServiceProvider.GetRequiredService<ISecurityService>();
+// ❌ Direct SecurityService resolution from application code
+var sec = host.Hub.ServiceProvider.GetRequiredService<SecurityService>();
 var perms = await sec.GetEffectivePermissions(path).FirstAsync().ToTask();
 
 // ❌ PermissionHelper static — legacy, prefer the extension
@@ -70,7 +70,7 @@ var content = hub.CheckPermission(nodePath, Permission.Read)
 
 ## Sanctioned exceptions
 
-The new API replaces application-code callers of `ISecurityService`. The following framework-internal callers stay on the direct interface because they live inside the security infrastructure itself:
+The new API replaces application-code callers of `SecurityService`. The following framework-internal callers stay on the direct interface because they live inside the security infrastructure itself:
 
 - `MeshWeaver.Hosting.Security.AccessControlPipeline` — the request-time validator that runs `HasPermission` synchronously on every inbound delivery; it owns the cache primitives the extension uses.
 - `MeshWeaver.Hosting.Persistence.Query.StorageAdapterMeshQueryProvider` — the secured-query surface that applies per-node validators using the same cache.
