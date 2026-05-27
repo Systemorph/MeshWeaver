@@ -25,7 +25,7 @@ public static class ActivityNodeType
         builder.ConfigureServices(services =>
         {
             services.AddSingleton<INodeTypeAccessRule>(sp =>
-                new SatelliteAccessRule(NodeType, sp.GetService<SecurityService>() ?? new NullSecurityService()));
+                new SatelliteAccessRule(NodeType, sp.GetRequiredService<IMessageHub>()));
             return services;
         });
         return builder;

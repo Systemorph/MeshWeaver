@@ -241,17 +241,17 @@ public static class SyncedQueryDataSourceExtensions
 
         return Observable.Defer(() =>
         {
-            var securityService = sp.GetService<SecurityService>();
-            if (securityService is null)
+            var hub = workspace.Hub;
+            if (hub.Configuration.Get<EffectivePermissionsDelegate>() is null)
                 return upstream;
-
             // Per-user filter: for each emission, filter to nodes the user
-            // has Read on. SecurityService caches per-scope so repeated
-            // checks for the same user are cheap.
+            // has Read on. PermissionEvaluator caches per-scope via the
+            // process-wide IMeshNodeStreamCache so repeated checks for the
+            // same user are cheap.
             return upstream.SelectMany(snapshot =>
                 snapshot.ToObservable()
                     .SelectMany(node =>
-                        securityService.HasPermission(node.Path ?? string.Empty, userId, Permission.Read)
+                        hub.CheckPermission(node.Path ?? string.Empty, userId, Permission.Read)
                             .Take(1)
                             .Where(hasPerm => hasPerm)
                             .Select(_ => node))

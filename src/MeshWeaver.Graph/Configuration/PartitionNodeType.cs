@@ -5,6 +5,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph.Configuration;
@@ -26,7 +27,7 @@ public static class PartitionNodeType
             services.AddSingleton<IStaticNodeProvider, PartitionNodeProvider>();
             services.AddSingleton<IStaticNodeProvider, DefaultPartitionProvider>();
             services.AddSingleton<INodeTypeAccessRule>(sp =>
-                new PartitionAccessRule(sp.GetService<SecurityService>() ?? new NullSecurityService()));
+                new PartitionAccessRule(sp.GetRequiredService<IMessageHub>()));
             return services;
         });
         builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
@@ -66,7 +67,7 @@ public static class PartitionNodeType
     /// <summary>
     /// Access rule: Read for all authenticated users, Create/Update/Delete for Admin only.
     /// </summary>
-    private class PartitionAccessRule(SecurityService securityService) : INodeTypeAccessRule
+    private class PartitionAccessRule(IMessageHub hub) : INodeTypeAccessRule
     {
         public string NodeType => PartitionNodeType.NodeType;
 
@@ -82,7 +83,7 @@ public static class PartitionNodeType
                 return Observable.Return(false);
 
             // Only admins can create/update/delete partitions
-            return securityService.HasPermission(context.Node.Path, userId, Permission.Update);
+            return hub.CheckPermission(context.Node.Path, userId, Permission.Update);
         }
     }
 }

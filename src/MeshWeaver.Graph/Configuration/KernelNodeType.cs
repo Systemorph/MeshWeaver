@@ -32,7 +32,7 @@ public static class KernelNodeType
             .ConfigureServices(services =>
             {
                 services.AddSingleton<INodeTypeAccessRule>(sp =>
-                    new SatelliteAccessRule(NodeType, sp.GetService<SecurityService>() ?? new NullSecurityService()));
+                    new SatelliteAccessRule(NodeType, sp.GetRequiredService<IMessageHub>()));
                 services.AddSingleton<IKernelHubConfigurator, KernelHubConfiguratorAdapter>();
                 return services;
             });

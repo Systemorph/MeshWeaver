@@ -39,7 +39,7 @@ public static class UserNodeType
         {
             services.AddSingleton<IStaticNodeProvider, UserNodeProvider>();
             services.AddSingleton<INodeTypeAccessRule>(sp =>
-                new UserAccessRule(sp.GetService<SecurityService>() ?? new NullSecurityService()));
+                new UserAccessRule(sp.GetRequiredService<IMessageHub>()));
             services.AddSingleton<INodePostCreationHandler>(sp =>
                 new UserScopeGrantHandler(sp.GetRequiredService<IMeshService>()));
             return services;
@@ -147,7 +147,7 @@ public static class UserNodeType
     /// DI-registered access rule for User nodes — reliable fallback when hub-config
     /// rules haven't been cached yet (e.g. during first onboarding).
     /// </summary>
-    private class UserAccessRule(SecurityService securityService) : INodeTypeAccessRule
+    private class UserAccessRule(IMessageHub hub) : INodeTypeAccessRule
     {
         public string NodeType => UserNodeType.NodeType;
 
@@ -172,7 +172,7 @@ public static class UserNodeType
                     return Observable.Return(!string.IsNullOrEmpty(userId));
                 if (string.IsNullOrEmpty(userId))
                     return Observable.Return(false);
-                return securityService.HasPermission(nodePath, userId, Permission.Read);
+                return hub.CheckPermission(nodePath, userId, Permission.Read);
             }
 
             if (string.IsNullOrEmpty(userId))
@@ -236,11 +236,7 @@ public static class UserNodeType
         var permsChannel = System.Threading.Channels.Channel.CreateBounded<Permission>(
             new System.Threading.Channels.BoundedChannelOptions(1) { FullMode = System.Threading.Channels.BoundedChannelFullMode.DropOldest });
 
-        var securityService = host.Hub.ServiceProvider.GetService<SecurityService>();
-        if (securityService == null)
-            yield break;
-
-        using var sub = securityService.GetEffectivePermissions("", viewerId)
+        using var sub = host.Hub.GetEffectivePermissions("", viewerId)
             .FirstAsync()
             .Subscribe(
                 perm => { permsChannel.Writer.TryWrite(perm); permsChannel.Writer.TryComplete(); },

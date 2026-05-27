@@ -2,6 +2,7 @@ using System.Reactive.Linq;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Graph.Security;
 
@@ -14,7 +15,7 @@ namespace MeshWeaver.Graph.Security;
 ///   for Comment nodes, Thread for Thread/ThreadMessage nodes, Update otherwise)
 /// - Update/Delete: requires Update on MainNode
 /// </summary>
-public class SatelliteAccessRule(string nodeType, SecurityService securityService) : INodeTypeAccessRule
+public class SatelliteAccessRule(string nodeType, IMessageHub hub) : INodeTypeAccessRule
 {
     public string NodeType => nodeType;
 
@@ -42,11 +43,11 @@ public class SatelliteAccessRule(string nodeType, SecurityService securityServic
             var fallbackPermission = StandardPathPermission(context);
             return fallbackPermission == Permission.None
                 ? Observable.Return(true)
-                : securityService.HasPermission(fallbackPath, userId, fallbackPermission);
+                : hub.CheckPermission(fallbackPath, userId, fallbackPermission);
         }
 
         var permission = MainNodeDelegatedPermission(context);
-        return securityService.HasPermission(mainNodePath, userId, permission);
+        return hub.CheckPermission(mainNodePath, userId, permission);
     }
 
     /// <summary>

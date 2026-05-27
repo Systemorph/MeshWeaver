@@ -2,6 +2,7 @@
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph.Security;
@@ -12,16 +13,16 @@ namespace MeshWeaver.Graph.Security;
 /// </summary>
 public class RlsNodeValidator : INodeValidator
 {
-    private readonly SecurityService _securityService;
+    private readonly IMessageHub _hub;
     private readonly ILogger<RlsNodeValidator> _logger;
     private readonly IReadOnlyDictionary<string, INodeTypeAccessRule> _accessRules;
 
     public RlsNodeValidator(
-        SecurityService securityService,
+        IMessageHub hub,
         ILogger<RlsNodeValidator> logger,
         IEnumerable<INodeTypeAccessRule> accessRules)
     {
-        _securityService = securityService;
+        _hub = hub;
         _logger = logger;
         _accessRules = accessRules
             .GroupBy(r => r.NodeType, StringComparer.OrdinalIgnoreCase)
@@ -141,9 +142,9 @@ public class RlsNodeValidator : INodeValidator
         var effectiveUserId = userId ?? WellKnownUsers.Anonymous;
 
         IObservable<bool> hasPermissionObs = requiredPermission == Permission.Comment
-            ? _securityService.GetEffectivePermissions(pathToCheck, effectiveUserId)
+            ? _hub.GetEffectivePermissions(pathToCheck, effectiveUserId)
                 .Select(p => p.HasFlag(Permission.Comment) || p.HasFlag(Permission.Update))
-            : _securityService.HasPermission(pathToCheck, effectiveUserId, requiredPermission);
+            : _hub.CheckPermission(pathToCheck, effectiveUserId, requiredPermission);
 
         return hasPermissionObs.Select(hasPermission =>
         {

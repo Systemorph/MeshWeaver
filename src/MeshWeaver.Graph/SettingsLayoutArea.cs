@@ -307,8 +307,7 @@ public static class SettingsLayoutArea
     internal static UiControl BuildEffectiveAccessTab(LayoutAreaHost host, StackControl stack, MeshNode? node)
     {
         var hubPath = host.Hub.Address.ToString();
-        var securityService = host.Hub.ServiceProvider.GetService<SecurityService>();
-        if (securityService == null)
+        if (host.Hub.Configuration.Get<EffectivePermissionsDelegate>() is null)
         {
             return stack.WithView(Controls.Html(
                 "<p style=\"color: var(--warning-color);\">Row-Level Security is not enabled.</p>"));
@@ -353,7 +352,7 @@ public static class SettingsLayoutArea
                                 ctx.Host.UpdateData(resultId, "<p style=\"color: var(--warning-color);\">Please enter a user ID.</p>");
                                 return Observable.Empty<(string UserId, Permission Perms)>();
                             }
-                            return securityService.GetEffectivePermissions(hubPath, userId)
+                            return host.Hub.GetEffectivePermissions(hubPath, userId)
                                 .Take(1)
                                 .Select(perms => (UserId: userId, Perms: perms));
                         })

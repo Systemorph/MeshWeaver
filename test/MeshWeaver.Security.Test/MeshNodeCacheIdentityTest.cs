@@ -59,10 +59,9 @@ public class MeshNodeCacheIdentityTest(ITestOutputHelper output) : MonolithMeshT
     [Fact(Timeout = 10000)]
     public async Task CacheIdentity_HasOnlyReadPermission()
     {
-        var securityService = Mesh.ServiceProvider.GetRequiredService<SecurityService>();
+        // hub is Mesh — permission checks use hub.GetEffectivePermissions
 
-        var permissions = await securityService
-            .GetEffectivePermissions("any/path", CacheIdentityAddress)
+        var permissions = await Mesh.GetEffectivePermissions("any/path", CacheIdentityAddress)
             .Take(1)
             .Timeout(5.Seconds())
             .ToTask(TestTimeout);
@@ -81,9 +80,8 @@ public class MeshNodeCacheIdentityTest(ITestOutputHelper output) : MonolithMeshT
     [Fact(Timeout = 10000)]
     public async Task CacheIdentity_FlagBreakdown()
     {
-        var securityService = Mesh.ServiceProvider.GetRequiredService<SecurityService>();
-        var permissions = await securityService
-            .GetEffectivePermissions("any/path", CacheIdentityAddress)
+        // hub is Mesh — permission checks use hub.GetEffectivePermissions
+        var permissions = await Mesh.GetEffectivePermissions("any/path", CacheIdentityAddress)
             .Take(1).Timeout(5.Seconds()).ToTask(TestTimeout);
 
         permissions.HasFlag(Permission.Read).Should().BeTrue(

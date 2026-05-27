@@ -40,8 +40,7 @@ namespace MeshWeaver.Graph.Configuration;
 /// </summary>
 internal sealed class CreatableTypesProvider(
     IMessageHub hub,
-    MeshConfiguration meshConfiguration,
-    SecurityService? securityService = null) : ICreatableTypesProvider
+    MeshConfiguration meshConfiguration) : ICreatableTypesProvider
 {
     public IObservable<IReadOnlyList<CreatableTypeInfo>> GetCreatableTypes(
         string? nodePath, MeshNode? parentNode)
@@ -87,10 +86,13 @@ internal sealed class CreatableTypesProvider(
         // specific parent path. Root listing (nodePath == "") is global
         // metadata — anyone navigating to "Create" at root sees the full
         // type set; the Create operation itself is gated at the receiver.
-        if (securityService is null || string.IsNullOrEmpty(nodePath))
+        if (string.IsNullOrEmpty(nodePath))
             return typesObs;
 
-        return securityService.HasPermission(nodePath, Permission.Create)
+        // Outer security gate is unconditional now — when RLS is not
+        // configured, the EffectivePermissionsDelegate default returns
+        // Permission.All, so the filter is a no-op.
+        return hub.CheckPermission(nodePath, Permission.Create)
             .CombineLatest(typesObs, (canCreate, types) =>
                 canCreate ? types : (IReadOnlyList<CreatableTypeInfo>)[]);
     }

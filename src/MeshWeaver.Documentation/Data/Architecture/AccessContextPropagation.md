@@ -204,7 +204,7 @@ Correct shape: protocol messages stamp `protocol/sync-stream`; user-data message
 
 ### Example 4 — `system-security` (true infrastructure)
 
-`accessService.ImpersonateAsSystem()` switches the baton to `"system-security"`, granted `Permission.All` unconditionally by `SecurityService`. Use **only** for genuine framework infrastructure with no user context AND no narrower sanctioned identity that fits — schema migration, framework-level bootstrap, internal recursive lookups inside `SecurityService` itself.
+`accessService.ImpersonateAsSystem()` switches the baton to `"system-security"`, granted `Permission.All` unconditionally by `PermissionEvaluator`. Use **only** for genuine framework infrastructure with no user context AND no narrower sanctioned identity that fits — schema migration, framework-level bootstrap, internal recursive lookups inside `PermissionEvaluator` itself.
 
 Every `ImpersonateAsSystem` callsite is a deliberate choice to bypass all access checks. Grep for them; review each. If a narrower identity (like `cache/mesh-node-cache`) would suffice, use that instead.
 
@@ -288,7 +288,7 @@ public record GetPermissionRequest : IRequest<GetPermissionResponse>;
 public record GetPermissionResponse(Permission Permissions);
 ```
 
-The request carries no path — the receiving hub answers for ITS OWN path. Callers route the request to the per-node hub at the path they care about; routing decides which hub responds. The handler (`AccessControlPipeline.HandleGetPermission`) resolves the per-hub-scoped `SecurityService` and evaluates against the caller's `delivery.AccessContext`.
+The request carries no path — the receiving hub answers for ITS OWN path. Callers route the request to the per-node hub at the path they care about; routing decides which hub responds. The handler (`AccessControlPipeline.HandleGetPermission`) resolves the per-hub-scoped `PermissionEvaluator` and evaluates against the caller's `delivery.AccessContext`.
 
 ## Worked example — Blazor data binding → SyncStream → owner update
 
