@@ -70,8 +70,10 @@ public class SyncedQueryCrossSiloTest(ITestOutputHelper output)
                     .WithVirtualDataSource($"$xsilo-{suffix}", vs =>
                         vs.WithMeshQuery(query))));
         var workspace = hub.GetWorkspace();
-        var observable = workspace.GetQuery($"$xsilo-{suffix}")
-            ?? throw new InvalidOperationException($"Synced query not registered on silo '{suffix}'");
+        // GetQuery(id, query) get-or-creates the centralised cache entry for
+        // this id — replaces the legacy per-workspace registry that
+        // WithMeshQuery used to populate.
+        var observable = workspace.GetQuery($"$xsilo-{suffix}", query);
         return new SiloHandle(suffix, hub, workspace, observable);
     }
 
@@ -312,8 +314,8 @@ public class SyncedQueryCrossSiloTest(ITestOutputHelper output)
                         vs.WithMeshQuery(nodeTypeQuery)));
             });
 
-        var collA = hubA.GetWorkspace().GetQuery("$compile-a")!.Replay(1).RefCount();
-        var collB = hubB.GetWorkspace().GetQuery("$compile-b")!.Replay(1).RefCount();
+        var collA = hubA.GetWorkspace().GetQuery("$compile-a", nodeTypeQuery).Replay(1).RefCount();
+        var collB = hubB.GetWorkspace().GetQuery("$compile-b", nodeTypeQuery).Replay(1).RefCount();
         using var keepA = collA.Subscribe();
         using var keepB = collB.Subscribe();
 

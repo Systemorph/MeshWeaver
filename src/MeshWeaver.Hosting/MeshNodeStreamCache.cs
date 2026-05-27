@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
@@ -494,29 +495,55 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
     /// query surface short-circuits to raw upstream and no per-hub
     /// AsyncLocal AccessContext leaks in.
     /// </summary>
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<object, Lazy<IObservable<IEnumerable<MeshNode>>>> _queries = new();
+    // Lock-free atomic-swap over ImmutableDictionary. Avoids the
+    // ConcurrentDictionary footgun where the value factory can be invoked
+    // multiple times concurrently for the same key (only one value wins,
+    // but every loser's factory side-effects already ran and leaked).
+    //
+    // The stream itself IS the cache: Replay(1).RefCount() caches the latest
+    // snapshot and shares one upstream subscription across all consumers.
+    // SubscribeOn(TaskPoolScheduler) ensures the heavy SyncedQueryMeshNodes
+    // construction + upstream subscription run on the thread pool — never on
+    // the calling hub's action block. First subscriber triggers the Defer;
+    // subsequent subscribers attach to the already-cached Replay(1) snapshot.
+    private System.Collections.Immutable.ImmutableDictionary<object, IObservable<IEnumerable<MeshNode>>> _queries =
+        System.Collections.Immutable.ImmutableDictionary<object, IObservable<IEnumerable<MeshNode>>>.Empty;
 
     public IObservable<IEnumerable<MeshNode>> GetQuery(object id, params string[] queries)
     {
         if (queries is null || queries.Length == 0)
             throw new ArgumentException("At least one query string is required.", nameof(queries));
-        return _queries.GetOrAdd(id,
-            _ => new Lazy<IObservable<IEnumerable<MeshNode>>>(() =>
-            {
-                // Late-bind the SyncedQueryMeshNodes type from MeshWeaver.Graph
-                // via the cache hub's workspace. Graph references Mesh.Contract
-                // (where this interface lives) so we can't reach back from
-                // Mesh.Contract; the cache lives in Hosting which DOES reference
-                // Graph, so create-with-reflection isn't necessary — the type is
-                // available at the call site.
-                var typeSource = new global::MeshWeaver.Graph.SyncedQueryMeshNodes(
-                    cacheHub.GetWorkspace(), id, queries);
-                return typeSource.StreamUpdates();
-            }, System.Threading.LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+
+        while (true)
+        {
+            var current = _queries;
+            if (current.TryGetValue(id, out var existing))
+                return existing;
+
+            // Deferred + thread-pool subscribe-on + Replay(1).RefCount: a
+            // shared cached observable. The lambda inside Defer runs on the
+            // first subscriber's thread (TaskPoolScheduler thanks to
+            // SubscribeOn), constructs the SyncedQueryMeshNodes, and the
+            // Replay(1) caches its emissions for all later subscribers.
+            var stream = Observable.Defer(() =>
+                {
+                    var typeSource = new global::MeshWeaver.Graph.SyncedQueryMeshNodes(
+                        cacheHub.GetWorkspace(), id, queries);
+                    return typeSource.StreamUpdates();
+                })
+                .SubscribeOn(TaskPoolScheduler.Default)
+                .Replay(1)
+                .RefCount();
+
+            var updated = current.Add(id, stream);
+            if (Interlocked.CompareExchange(ref _queries, updated, current) == current)
+                return stream;
+            // CAS lost — another thread won concurrently; retry the read.
+        }
     }
 
     public IObservable<IEnumerable<MeshNode>>? GetQuery(object id)
-        => _queries.TryGetValue(id, out var lazy) ? lazy.Value : null;
+        => _queries.TryGetValue(id, out var stream) ? stream : null;
 
     public IObservable<IEnumerable<MeshNode>> GetQuery(object id, JsonSerializerOptions options, params string[] queries)
     {
