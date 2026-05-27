@@ -448,7 +448,7 @@ public class AgentFileParserTest
     {
         var node = new MeshNode("test")
         {
-            NodeType = "Organization",
+            NodeType = "Space",
             Content = new { Id = "test" }
         };
         _parser.CanSerialize(node).Should().BeFalse();

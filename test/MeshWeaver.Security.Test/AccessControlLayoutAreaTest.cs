@@ -39,7 +39,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
             .AddRowLevelSecurity()
             .ConfigureDefaultNodeHub(c => c.AddDefaultLayoutAreas())
             .AddMeshNodes(
-                MeshNode.FromPath("ACME") with { Name = "ACME", NodeType = "Organization" },
+                MeshNode.FromPath("ACME") with { Name = "ACME", NodeType = "Space" },
                 MeshNode.FromPath("ACME/Project") with { Name = "Project", NodeType = "Project" },
                 MeshNode.FromPath("ACME/Documentation") with { Name = "Documentation", NodeType = "Markdown" },
                 // Static role seeds — fixture-time setup (preferred, declarative).

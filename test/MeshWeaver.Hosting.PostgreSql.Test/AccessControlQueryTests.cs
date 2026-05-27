@@ -269,8 +269,8 @@ public class AccessControlQueryTests
             TestContext.Current.CancellationToken);
 
         // Seed a NodeType definition and a regular node â€” no access grants at all
-        await adapter.WriteAsync(new MeshNode("Organization", "") { Name = "Organization", NodeType = "NodeType" }, _options, TestContext.Current.CancellationToken);
-        await adapter.WriteAsync(new MeshNode("ACME", "") { Name = "ACME Corp", NodeType = "Organization" }, _options, TestContext.Current.CancellationToken);
+        await adapter.WriteAsync(new MeshNode("Space", "") { Name = "Space", NodeType = "NodeType" }, _options, TestContext.Current.CancellationToken);
+        await adapter.WriteAsync(new MeshNode("ACME", "") { Name = "ACME Corp", NodeType = "Space" }, _options, TestContext.Current.CancellationToken);
         await adapter.WriteAsync(new MeshNode("Secret", "Private") { Name = "Secret", NodeType = "Document" }, _options, TestContext.Current.CancellationToken);
 
         // Query as unknown user with zero grants
@@ -282,8 +282,8 @@ public class AccessControlQueryTests
             results.Add(item);
 
         var paths = results.Cast<MeshNode>().Select(n => n.Path).ToList();
-        paths.Should().Contain("Organization", "NodeType definitions are always publicly readable");
-        paths.Should().NotContain("ACME", "Organization instances require explicit grants");
+        paths.Should().Contain("Space", "NodeType definitions are always publicly readable");
+        paths.Should().NotContain("ACME", "Space instances require explicit grants");
         paths.Should().NotContain("Private/Secret", "Regular nodes require explicit grants");
     }
 
@@ -430,14 +430,14 @@ public class AccessControlQueryTests
     }
 
     /// <summary>
-    /// Seeds the node_type_permissions table with public-read entries for User and Organization.
+    /// Seeds the node_type_permissions table with public-read entries for User and Space.
     /// </summary>
     private async Task SeedPublicReadPermissionsAsync()
     {
         var ac = _fixture.AccessControl;
         await ac.SyncNodeTypePermissionsAsync([
             new NodeTypePermission("User", PublicRead: true),
-            new NodeTypePermission("Organization", PublicRead: true)
+            new NodeTypePermission("Space", PublicRead: true)
         ], TestContext.Current.CancellationToken);
     }
 
@@ -448,7 +448,7 @@ public class AccessControlQueryTests
         await SeedPublicReadPermissionsAsync();
         var adapter = _fixture.StorageAdapter;
 
-        // Seed User and Organization nodes (public-read types) plus a regular node
+        // Seed User and Space nodes (public-read types) plus a regular node
         await adapter.WriteAsync(new MeshNode("Roland", "User")
         {
             Name = "Roland",
@@ -458,7 +458,7 @@ public class AccessControlQueryTests
         await adapter.WriteAsync(new MeshNode("Acme")
         {
             Name = "Acme Corp",
-            NodeType = "Organization"
+            NodeType = "Space"
         }, _options, TestContext.Current.CancellationToken);
 
         await adapter.WriteAsync(new MeshNode("Secret", "Private")
@@ -479,7 +479,7 @@ public class AccessControlQueryTests
 
         var paths = results.Select(n => n.Path).ToList();
         paths.Should().Contain("User/Roland", "User nodes are publicly readable");
-        paths.Should().Contain("Acme", "Organization nodes are publicly readable");
+        paths.Should().Contain("Acme", "Space nodes are publicly readable");
         paths.Should().NotContain("Private/Secret", "Document nodes still require explicit grants");
     }
 
@@ -517,7 +517,7 @@ public class AccessControlQueryTests
 
         await adapter.WriteAsync(new MeshNode("Roland", "User") { Name = "Roland", NodeType = "User" }, _options, TestContext.Current.CancellationToken);
         await adapter.WriteAsync(new MeshNode("Alice", "User") { Name = "Alice", NodeType = "User" }, _options, TestContext.Current.CancellationToken);
-        await adapter.WriteAsync(new MeshNode("Acme") { Name = "Acme", NodeType = "Organization" }, _options, TestContext.Current.CancellationToken);
+        await adapter.WriteAsync(new MeshNode("Acme") { Name = "Acme", NodeType = "Space" }, _options, TestContext.Current.CancellationToken);
 
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 

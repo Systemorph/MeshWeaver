@@ -445,7 +445,7 @@ public class MarkdownFileParserTest
     [Fact(Timeout = 20000)]
     public void CanSerialize_WithOtherNodeType_ReturnsFalse()
     {
-        var node = new MeshNode("doc") { NodeType = "Organization", Content = new { Id = "test" } };
+        var node = new MeshNode("doc") { NodeType = "Space", Content = new { Id = "test" } };
         _parser.CanSerialize(node).Should().BeFalse();
     }
 

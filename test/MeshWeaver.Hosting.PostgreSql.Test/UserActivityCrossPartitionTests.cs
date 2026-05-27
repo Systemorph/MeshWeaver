@@ -57,7 +57,7 @@ public class UserActivityCrossPartitionTests
             await adapter.WriteAsync(new MeshNode(org)
             {
                 Name = $"{org} Corp",
-                NodeType = "Organization",
+                NodeType = "Space",
                 State = MeshNodeState.Active,
             }, _options, ct);
 
@@ -93,7 +93,7 @@ public class UserActivityCrossPartitionTests
             var ac = new PostgreSqlAccessControl(ds);
             await ac.GrantAsync(org, "testuser", "Read", isAllow: true, ct);
             await ac.SyncNodeTypePermissionsAsync(
-                [new NodeTypePermission("Organization", PublicRead: true),
+                [new NodeTypePermission("Space", PublicRead: true),
                  new NodeTypePermission("Markdown", PublicRead: true)], ct);
         }
 
@@ -246,7 +246,7 @@ public class UserActivityCrossPartitionTests
         var ct = TestContext.Current.CancellationToken;
         var partitions = await SetupMultiOrgWithThreadsAsync(ct);
 
-        // Main content nodes (Organization, Markdown) should be found
+        // Main content nodes (Space, Markdown) should be found
         var results = await CallSearchAcrossSchemasAsync(
             "", "testuser", "last_modified DESC", 50, ct);
 

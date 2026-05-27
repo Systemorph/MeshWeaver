@@ -128,7 +128,7 @@ public class QueryTests
         await _fixture.StorageAdapter.WriteAsync(new MeshNode("ACME")
         {
             Name = "ACME Corp",
-            NodeType = "Organization"
+            NodeType = "Space"
         }, _options, TestContext.Current.CancellationToken);
 
         var request = MeshQueryRequest.FromQuery("path:ACME scope:subtree");
@@ -151,7 +151,7 @@ public class QueryTests
         await _fixture.StorageAdapter.WriteAsync(new MeshNode("ACME")
         {
             Name = "ACME Corp",
-            NodeType = "Organization"
+            NodeType = "Space"
         }, _options, TestContext.Current.CancellationToken);
         await _fixture.StorageAdapter.WriteAsync(new MeshNode("Project", "ACME")
         {

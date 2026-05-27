@@ -78,7 +78,7 @@ public class PostgreSqlPartitionedMeshQueryMappingTests
     [InlineData("namespace:partition")]
     [InlineData("namespace:partition/doc")]
     [InlineData("nodeType:Markdown")]
-    [InlineData("nodeType:Organization")]
+    [InlineData("nodeType:Space")]
     public void ResolveTable_FallsBackToMeshNodes_WhenNoSatelliteHint(string query)
     {
         var parsed = _parser.Parse(query);

@@ -577,12 +577,12 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
 
     /// <summary>
     /// Test that data:TypeName parses correctly for data type references.
-    /// Example: @Systemorph/data:Organization should reference Organization type.
+    /// Example: @Systemorph/data:Space should reference Space type.
     /// </summary>
     [Fact(Timeout = 20000)]
     public void DataTypeReference_ParsesCorrectly()
     {
-        var markdown = "@Systemorph/data:Organization";
+        var markdown = "@Systemorph/data:Space";
         var extension = new LayoutAreaMarkdownExtension();
         var pipeline = new Markdig.MarkdownPipelineBuilder().Use(extension).Build();
         var document = Markdig.Markdown.Parse(markdown, pipeline);
@@ -590,7 +590,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
         layoutArea.Address.Should().Be("Systemorph");
         layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.DataAreaName);
-        layoutArea.Id.Should().Be("Organization");
+        layoutArea.Id.Should().Be("Space");
         layoutArea.IsInline.Should().BeFalse();
     }
 
@@ -613,12 +613,12 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     }
 
     /// <summary>
-    /// Test that keyword without colon with path parses correctly (e.g., @Systemorph/data/Organization).
+    /// Test that keyword without colon with path parses correctly (e.g., @Systemorph/data/Space).
     /// </summary>
     [Fact(Timeout = 20000)]
     public void KeywordWithoutColon_DataWithPath_ParsesCorrectly()
     {
-        var markdown = "@Systemorph/data/Organization";
+        var markdown = "@Systemorph/data/Space";
         var extension = new LayoutAreaMarkdownExtension();
         var pipeline = new MarkdownPipelineBuilder().Use(extension).Build();
         var document = Markdig.Markdown.Parse(markdown, pipeline);
@@ -626,7 +626,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
         layoutArea.Address.Should().Be("Systemorph");
         layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.DataAreaName);
-        layoutArea.Id.Should().Be("Organization");
+        layoutArea.Id.Should().Be("Space");
         layoutArea.IsInline.Should().BeFalse();
     }
 

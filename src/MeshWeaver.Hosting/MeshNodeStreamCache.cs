@@ -533,16 +533,22 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
                 })
                 .SubscribeOn(TaskPoolScheduler.Default)
                 .Replay(1)
-                // AutoConnect(0): connect the upstream synced query
-                // immediately and keep it alive for the cache singleton's
-                // lifetime. RefCount() was the wrong primitive here — when
-                // subscriber count drops to 0 between calls the Replay
-                // buffer is retained but the upstream is disconnected, so a
-                // subsequent Take(1) / FirstAsync after a runtime
-                // AccessAssignment write sees the STALE cached snapshot
-                // before the synced-query's Added event lands. AutoConnect(0)
-                // keeps the upstream pumping live updates into Replay(1).
-                .AutoConnect(0);
+                // AutoConnect(1): connect the upstream on the FIRST subscriber
+                // and keep it alive thereafter (AutoConnect doesn't track
+                // disconnect). Lazy connect matters under CAS contention —
+                // every CAS retry below constructs a fresh observable; with
+                // AutoConnect(0) every loser's chain Connect()s eagerly and
+                // leaks an upstream IMeshQueryCore subscription. With
+                // AutoConnect(1) the loser's discarded chain has no
+                // subscribers and never connects.
+                //
+                // RefCount() was the wrong primitive here — when subscriber
+                // count drops to 0 between calls the Replay buffer is
+                // retained but the upstream is disconnected, so a subsequent
+                // Take(1) / FirstAsync after a runtime AccessAssignment
+                // write sees the STALE cached snapshot. AutoConnect(1)
+                // keeps the upstream connected forever once first subscribed.
+                .AutoConnect(1);
 
             var updated = current.Add(id, stream);
             if (Interlocked.CompareExchange(ref _queries, updated, current) == current)

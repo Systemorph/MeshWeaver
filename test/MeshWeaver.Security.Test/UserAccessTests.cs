@@ -50,7 +50,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
                 // accessObject defaults to the userId so the test's per-user-id queries find each.
                 AssignmentNodeFactory.UserRole("MultiUser_MW", "Viewer", "MeshWeaver"),
                 AssignmentNodeFactory.UserRole("MultiUser", "Editor", "ACME"),
-                AssignmentNodeFactory.UserRole("InheritUser", "Admin", "Organization"),
+                AssignmentNodeFactory.UserRole("InheritUser", "Admin", "Space"),
                 // OverrideUser_Org is a separate principal in ExactMatch_TakesPrecedence —
                 // OverrideUser must NOT inherit OverrideUser_Org's grant.
                 AssignmentNodeFactory.UserRole("OverrideUser_Org", "Viewer", "Org"),
@@ -209,9 +209,9 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-        var permParent = await Mesh.GetPermissionAsync("Organization", "InheritUser", TestTimeout);
-        var permChild = await Mesh.GetPermissionAsync("Organization/Team", "InheritUser", TestTimeout);
-        var permGrandchild = await Mesh.GetPermissionAsync("Organization/Team/Project", "InheritUser", TestTimeout);
+        var permParent = await Mesh.GetPermissionAsync("Space", "InheritUser", TestTimeout);
+        var permChild = await Mesh.GetPermissionAsync("Space/Team", "InheritUser", TestTimeout);
+        var permGrandchild = await Mesh.GetPermissionAsync("Space/Team/Project", "InheritUser", TestTimeout);
         var permSibling = await Mesh.GetPermissionAsync("OtherOrg", "InheritUser", TestTimeout);
 
         permParent.Should().Be(Permission.All);
