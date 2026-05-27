@@ -172,6 +172,26 @@ public static class SyncedQueryDataSourceExtensions
     /// system tasks (no AsyncLocal identity) share a single System-loaded
     /// cache keyed under the well-known <c>system-security</c> user.</para>
     /// </summary>
+    /// <summary>
+    /// Hub-shorthand: <c>hub.GetQuery(id, queries)</c> is the canonical
+    /// surface for getting a synced <see cref="MeshNode"/> collection.
+    /// Resolves the workspace from the hub and delegates to the workspace
+    /// overload. Application code should prefer this over poking at the
+    /// workspace directly — same shape as <c>hub.CheckPermission</c>,
+    /// <c>hub.GetMeshNodeStream</c>, <c>hub.StartThread</c>.
+    /// </summary>
+    public static IObservable<IEnumerable<MeshNode>>? GetQuery(
+        this IMessageHub hub, object id)
+        => hub.GetWorkspace().GetQuery(id);
+
+    /// <summary>
+    /// Hub-shorthand: get-or-create overload. See workspace-side overload for
+    /// the per-user RLS contract and cache semantics.
+    /// </summary>
+    public static IObservable<IEnumerable<MeshNode>> GetQuery(
+        this IMessageHub hub, object id, params string[] queries)
+        => hub.GetWorkspace().GetQuery(id, queries);
+
     public static IObservable<IEnumerable<MeshNode>> GetQuery(
         this IWorkspace workspace, object id, params string[] queries)
     {
