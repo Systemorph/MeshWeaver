@@ -1090,7 +1090,14 @@ public class CreatableTypesFileSystemTest : MonolithMeshTestBase
             "Query should find ACME/Project/Todo as a child NodeType of ACME/Project");
     }
 
-    [Fact(Timeout = 20000)]
+    // 60s: the synced-query path through CreatableTypesProvider has a 15 s
+    // per-query inner timeout (see CreatableTypesProvider.QueryTypeNodes);
+    // 20 s left no margin on Linux CI when one of the merged queries hit
+    // its Timeout(15s, Empty) and the test still needed time for the
+    // Aggregate to flush + downstream emission to land. 60 s gives the
+    // happy path the same finish time it has locally (~14 s) while
+    // covering the slow path.
+    [Fact(Timeout = 60000)]
     public async Task FileSystem_ProductLaunch_CreatableTypes_ShouldIncludeTodo()
     {
         // Use the synced-query provider to enumerate creatable types.
