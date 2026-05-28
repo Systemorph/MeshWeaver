@@ -34,6 +34,14 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
     // slow path without masking a genuine hang.
     private CancellationToken TestTimeout => new CancellationTokenSource(90.Seconds()).Token;
 
+    // The base class watchdog defaults are 30 s soft / 60 s hard. CI's slow
+    // hub-activation pushes Delete_FromNodeHub_Succeeds past the 60 s hard
+    // deadline (run 26557749128) even though the test's own [Fact(Timeout)]
+    // and TestTimeout were generously sized. Override both so the watchdog
+    // tracks the same ceiling the test budgets allow.
+    protected override TimeSpan TestSoftDeadline => TimeSpan.FromSeconds(60);
+    protected override TimeSpan TestHardDeadline => TimeSpan.FromSeconds(120);
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder);
 
