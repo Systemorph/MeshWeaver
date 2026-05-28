@@ -1,4 +1,3 @@
-using System.Reactive.Linq;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Messaging;
@@ -28,9 +27,16 @@ namespace MeshWeaver.Messaging;
 /// wraps its return with <see cref="CarryAccessContext{T}"/> internally. The
 /// helper captures <see cref="AccessService.Context"/> at the moment the
 /// primitive runs (the caller's thread, where AsyncLocal is correct) and
-/// re-stamps it on every emission of the returned pipeline. Callers never
-/// need a per-Subscribe wrapper — they keep writing the natural
-/// <c>meshService.CreateNode(node).Subscribe(...)</c> shape and the
+/// re-stamps it on every emission of the returned pipeline via a per-callback
+/// <see cref="AccessService.SwitchAccessContext"/> scope. The scope is created
+/// on entry to each <c>OnNext</c>/<c>OnError</c>/<c>OnCompleted</c> callback
+/// and disposed as the callback returns — AsyncLocal is touched ONLY for the
+/// duration of the callback, so no value can leak into the surrounding
+/// logical execution context (the 2026-05-22 leak that drove the temporary
+/// pass-through is closed by this scoping).</para>
+///
+/// <para>Callers never need a per-Subscribe wrapper — they keep writing the
+/// natural <c>meshService.CreateNode(node).Subscribe(...)</c> shape and the
 /// framework guarantees the operation runs under their identity regardless
 /// of where Subscribe lands.</para>
 ///
@@ -45,18 +51,30 @@ public static class AccessContextCaptureExtensions
     /// Captures <see cref="AccessService.Context"/> (falling back to
     /// <see cref="AccessService.CircuitContext"/>) at the moment this method
     /// runs, and returns an observable that restores that captured context
-    /// on every emission via <see cref="AccessService.SetContext"/>.
+    /// on every emission via a per-callback <see cref="AccessService.SwitchAccessContext"/>
+    /// scope.
     ///
     /// <para>Capture is eager — performed on the caller's thread synchronously
     /// — so the captured value reflects the AsyncLocal the framework primitive
     /// was invoked under. Restore happens on whatever thread the downstream
     /// emission lands on, immediately before the subscriber observes the
-    /// value.</para>
+    /// value, and is rolled back as the subscriber's callback returns.</para>
     ///
     /// <para>Pass-through when no <see cref="AccessService"/> is registered
     /// (rare — usually only minimal test fixtures) or when no context is set
     /// (background flows must use explicit <see cref="AccessService.ImpersonateAsSystem"/>
     /// / <see cref="AccessService.ImpersonateAsHub"/>).</para>
+    ///
+    /// <para><b>Leak-fix (2026-05-28).</b> The earlier capture-and-restore
+    /// implementation (reverted 2026-05-22) called
+    /// <c>access.SetContext(captured)</c> on each emission without restoring.
+    /// That mutated AsyncLocal on whatever thread Subscribe ran on (often
+    /// the caller's) and left the captured value live for every subsequent
+    /// operation on that logical execution context — the McpUpdate user1/user2
+    /// cross-contamination bug. This implementation creates a
+    /// <see cref="IDisposable"/> scope per callback and disposes it before the
+    /// callback returns, so AsyncLocal is restored to its prior value on every
+    /// path (success, error, completion). No long-lived mutation, no leak.</para>
     /// </summary>
     /// <param name="source">Cold observable returned by a framework primitive.</param>
     /// <param name="services">DI scope used to resolve <see cref="AccessService"/>.</param>
@@ -64,34 +82,7 @@ public static class AccessContextCaptureExtensions
         this IObservable<T> source, IServiceProvider services)
     {
         var access = services.GetService<AccessService>();
-        if (access is null) return source;
-
-        // 🚨 2026-05-22: this method used to set `access.SetContext(captured)`
-        // both at Subscribe time and on every emission. That mutated AsyncLocal
-        // on whatever thread Subscribe ran on (often the caller's), with NO
-        // restore — leaking the captured identity into the caller's logical
-        // execution context indefinitely.
-        //
-        // Symptom: McpUpdate tests showed user1's identity used for a request
-        // freshly authenticated as user2. Earlier user1 call → wrap set
-        // Context=user1 on the test thread → later user2 LoginWithToken set
-        // CircuitContext=user2 but Context was still user1 → CaptureContext
-        // returns Context (priority over CircuitContext) → user1 stamped on
-        // the user2 delivery.
-        //
-        // The premise that motivated the SetContext — "downstream chained
-        // operators (Select/SelectMany) re-call CaptureContext on the
-        // Subscribe thread and need AsyncLocal set" — is wrong for the
-        // common framework primitives: ConfigurePost already stamps
-        // delivery.AccessContext from the captured value, so identity rides
-        // ON the delivery and the receiver's UserServiceDeliveryPipeline
-        // sets/restores AsyncLocal under proper try/finally. Chained
-        // operators inside the framework primitives that need the identity
-        // can read it from `captured` directly in their closure.
-        //
-        // Net effect: this is now a pass-through. Kept as an extension point
-        // so callsites don't change, but it no longer mutates AsyncLocal.
-        return source;
+        return CarryAccessContext(source, access);
     }
 
     /// <summary>
@@ -104,10 +95,67 @@ public static class AccessContextCaptureExtensions
     public static IObservable<T> CarryAccessContext<T>(
         this IObservable<T> source, AccessService? access)
     {
-        // See the IServiceProvider overload for the full reasoning: this method
-        // is now a pass-through. Identity rides on delivery.AccessContext via
-        // PostOptions; the receiver's UserServiceDeliveryPipeline sets/restores
-        // AsyncLocal under try/finally. Mutating AsyncLocal here leaked.
-        return source;
+        if (access is null) return source;
+
+        // 🚨 Capture by value at invocation time. The captured snapshot rides
+        // the closure on the returned observable; it is NEVER re-read from
+        // AsyncLocal at emission time. Future calls to access.SetContext(null)
+        // or scope disposals on the caller's thread don't affect what this
+        // pipeline restores.
+        //
+        // We capture Context ONLY, not CircuitContext. PostPipeline reads
+        // `Context ?? CircuitContext` itself at post time, so a null capture
+        // doesn't lose CircuitContext for downstream Posts — but synthesising
+        // CircuitContext here would leak the Blazor circuit identity into
+        // background-Subscribe code paths the user never asked for (the
+        // 757d2a296 anti-pattern).
+        var captured = access.Context;
+        if (captured is null) return source;
+
+        return new CarryAccessContextObservable<T>(source, access, captured);
+    }
+
+    /// <summary>
+    /// Wraps a cold observable so every emission to the subscriber happens
+    /// inside an <see cref="AccessService.SwitchAccessContext"/> scope keyed
+    /// to <paramref name="captured"/>. The scope is per-callback (entered on
+    /// OnNext/OnError/OnCompleted, disposed on return) so AsyncLocal is
+    /// touched only for the lifetime of the subscriber's callback.
+    /// </summary>
+    private sealed class CarryAccessContextObservable<T>(
+        IObservable<T> source, AccessService access, AccessContext captured) : IObservable<T>
+    {
+        public IDisposable Subscribe(IObserver<T> observer) =>
+            source.Subscribe(new RestoringObserver<T>(observer, access, captured));
+    }
+
+    /// <summary>
+    /// Forwards each notification to the inner observer inside an
+    /// <see cref="AccessService.SwitchAccessContext"/> scope. The scope
+    /// covers the synchronous body of the subscriber's callback only;
+    /// AsyncLocal is restored as soon as the callback returns. The
+    /// dispose path also enters the scope so any teardown code observes
+    /// the captured identity.
+    /// </summary>
+    private sealed class RestoringObserver<T>(
+        IObserver<T> inner, AccessService access, AccessContext captured) : IObserver<T>
+    {
+        public void OnNext(T value)
+        {
+            using (access.SwitchAccessContext(captured))
+                inner.OnNext(value);
+        }
+
+        public void OnError(Exception error)
+        {
+            using (access.SwitchAccessContext(captured))
+                inner.OnError(error);
+        }
+
+        public void OnCompleted()
+        {
+            using (access.SwitchAccessContext(captured))
+                inner.OnCompleted();
+        }
     }
 }
