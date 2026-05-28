@@ -179,6 +179,14 @@ internal static class ThreadSubmissionServer
     {
         var logger = threadHub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
         var threadPath = threadHub.Address.Path;
+        // 🚨 Identity note: the claim Update below is an OWN write on the thread
+        // hub — it doesn't cross a hub boundary, doesn't post a PatchDataRequest,
+        // doesn't pass through any RLS gate. The action block serialises and the
+        // owning hub IS the writer; ambient AsyncLocal at the Subscribe callback
+        // doesn't matter for this specific transition. The real identity-needing
+        // work happens in `ExecRoundWatcher` (DispatchAfterClaim creates satellite
+        // cells and posts cross-hub messages) — see ThreadExecution.cs where the
+        // FromNode scope is applied.
         return threadHub.GetWorkspace().GetMeshNodeStream()
             .Do(n =>
             {

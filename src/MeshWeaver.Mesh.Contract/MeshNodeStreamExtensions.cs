@@ -73,6 +73,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     private readonly IWorkspace _workspace;
     private readonly string? _path;
     private readonly IMeshNodeStreamCache? _cache;
+    private readonly JsonSerializerOptions _jsonOptions;
 
     internal MeshNodeStreamHandle(IWorkspace workspace, string? path = null,
         IMeshNodeStreamCache? cache = null)
@@ -80,6 +81,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
         _workspace = workspace;
         _path = path;
         _cache = cache;
+        _jsonOptions = workspace.Hub.JsonSerializerOptions;
     }
 
     private bool IsOwn => _path is null
@@ -113,10 +115,24 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// 🚨 Every emission passes through <see cref="EnsureTypedContent"/> so the
+    /// subscriber always sees a typed <see cref="MeshNode.Content"/> — never a
+    /// raw <see cref="JsonElement"/>. Different data sources store Content in
+    /// different shapes (InMemory keeps typed instances, file-system / Postgres
+    /// round-trip through JSON serialization and land as JsonElement). Without
+    /// the boundary conversion, every callsite that pattern-matches
+    /// <c>node.Content is MyType t</c> would have to remember to re-deserialise,
+    /// and the silent <c>?? new MyType()</c> fallback (writing a default-valued
+    /// content over a real one) is the bug class behind the CheckInbox /
+    /// AppendUserInput silent-Status-reset failure mode. Round-trip is no-op
+    /// when Content is already typed.
+    /// </remarks>
     public IDisposable Subscribe(IObserver<MeshNode> observer)
     {
         try
         {
+            var typedObserver = new TypedContentObserver(observer, _jsonOptions);
             // 🚨 Cross-hub reads route through IMeshNodeStreamCache (when one is
             // registered): one shared process-wide upstream subscription per
             // path. The cache holds the upstream alive; ad-hoc GetRemoteStream
@@ -126,18 +142,78 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             if (_cache is not null && !IsOwn && _path is not null)
                 return _cache.GetStream(_path)
                     .Where(n => n is not null)
-                    .Subscribe(observer);
+                    .Subscribe(typedObserver);
 
             return GetStream()
                 .Where(change => change.Value != null)
                 .Select(change => change.Value!)
-                .Subscribe(observer);
+                .Subscribe(typedObserver);
         }
         catch (Exception ex)
         {
             observer.OnError(ex);
             return Disposable.Empty;
         }
+    }
+
+    /// <summary>
+    /// Observer that round-trips <see cref="MeshNode.Content"/> through the
+    /// workspace's <see cref="JsonSerializerOptions"/> when it arrives as a
+    /// raw <see cref="JsonElement"/>. No-op when Content is already typed.
+    /// Applied at the <see cref="MeshNodeStreamHandle"/> boundary so every
+    /// subscriber sees the same typed shape regardless of how the underlying
+    /// data source stores the value.
+    /// </summary>
+    private sealed class TypedContentObserver(IObserver<MeshNode> inner, JsonSerializerOptions jsonOptions) : IObserver<MeshNode>
+    {
+        public void OnNext(MeshNode value) => inner.OnNext(EnsureTypedContent(value, jsonOptions));
+        public void OnError(Exception error) => inner.OnError(error);
+        public void OnCompleted() => inner.OnCompleted();
+    }
+
+    /// <summary>
+    /// Deserialises <paramref name="node"/>'s Content if it arrived as a
+    /// raw <see cref="JsonElement"/>. Pass-through when Content is null or
+    /// already typed. Uses <see cref="JsonSerializerOptions"/>'s polymorphic
+    /// <c>$type</c> discriminator to land on the concrete domain type
+    /// (e.g. <c>MeshThread</c>, <c>NodeTypeDefinition</c>).
+    /// </summary>
+    internal static MeshNode EnsureTypedContent(MeshNode node, JsonSerializerOptions jsonOptions)
+    {
+        if (node.Content is JsonElement je)
+        {
+            try
+            {
+                return node with { Content = je.Deserialize<object>(jsonOptions) };
+            }
+            catch
+            {
+                // Deserialisation failure — leave the JsonElement so the caller
+                // can decide. Throwing here would surface as OnError on every
+                // subscriber, breaking otherwise-functional reads.
+                return node;
+            }
+        }
+        return node;
+    }
+
+    /// <summary>
+    /// Serialises <paramref name="node"/>'s Content to a <see cref="JsonElement"/>
+    /// using the workspace's <see cref="JsonSerializerOptions"/>. Pass-through
+    /// when Content is null or already a JsonElement. Used on the outbound
+    /// path of <see cref="Update"/> so the patch the framework computes on the
+    /// wire is self-describing (the <c>$type</c> discriminator is written by
+    /// the caller's TypeRegistry-aware options, which the cache hub may not
+    /// have).
+    /// </summary>
+    internal static MeshNode EnsureSerialisedContent(MeshNode node, JsonSerializerOptions jsonOptions)
+    {
+        if (node.Content is null or JsonElement)
+            return node;
+        return node with
+        {
+            Content = JsonSerializer.SerializeToElement(node.Content, jsonOptions)
+        };
     }
 
     /// <summary>
@@ -156,7 +232,33 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     /// </list>
     /// </summary>
     public IObservable<MeshNode> Update(Func<MeshNode, MeshNode> update)
-        => new RequireSubscribeObservable<MeshNode>(
+    {
+        // 🚨 Typed-Content wrap (read direction): the lambda sees Content
+        // already deserialised to its registered domain type (e.g. MeshThread,
+        // NodeTypeDefinition). Without this, lambdas that pattern-match
+        // `node.Content as MyType` silently fall back to the
+        // `?? new MyType()` default whenever the underlying data source
+        // happens to store Content as a raw JsonElement (file-system /
+        // Postgres / Cosmos all round-trip through JSON serialisation;
+        // InMemory keeps typed). The default-valued fallback then overwrites
+        // every other field on the next stream.Update — see
+        // ThreadInput.AppendUserInput + the CheckInbox flake (test sets
+        // Status=Executing, AppendUserInput's `node.Content as MeshThread ??
+        // new MeshThread()` quietly resets it to Idle when Content arrives
+        // as JsonElement, the SubmissionWatcher then sees Idle+pending and
+        // dispatches a round the test was trying to prevent).
+        //
+        // No outbound serialisation: the cold pipeline downstream (UpdateOwn
+        // writes typed into the data source's collection; UpdateRemote /
+        // cache.Update run JsonSerializer.SerializeToNode on the typed
+        // updated node before computing the patch) handles either typed or
+        // JsonElement equivalently. Forcing JsonElement on the output broke
+        // OWN-path equality checks (data source dedup compares by
+        // reference / structural equality; serialise-deserialise breaks
+        // reference and can perturb structural).
+        Func<MeshNode, MeshNode> wrappedUpdate = node => update(EnsureTypedContent(node, _jsonOptions));
+
+        return new RequireSubscribeObservable<MeshNode>(
             // 🚨 CarryAccessContext is the cross-cutting "AccessContext survives
             // Subscribe()" wrap. Capture happens here — synchronously — on the
             // caller's thread where MessageHub has already set AsyncLocal from
@@ -171,13 +273,19 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             // subscribed to, so the patch is observed in order. Own writes and
             // cache-less writes fall back to the direct paths.
             (IsOwn
-                ? UpdateOwn(update)
+                ? UpdateOwn(wrappedUpdate)
                 : _cache is not null && _path is not null
-                    ? _cache.Update(_path, update)
-                    : UpdateRemote(update))
-                .CarryAccessContext(_workspace.Hub.ServiceProvider),
+                    ? _cache.Update(_path, wrappedUpdate)
+                    : UpdateRemote(wrappedUpdate))
+                .CarryAccessContext(_workspace.Hub.ServiceProvider)
+                // The post-update emission also goes through the typed
+                // converter — callers chaining `.Select(node => node.Content as MyType)`
+                // off the Update's returned observable get the same typed
+                // shape as Subscribe.
+                .Select(node => EnsureTypedContent(node, _jsonOptions)),
             $"MeshNodeStreamHandle.Update(path='{_path ?? "<own>"}')",
             _workspace.Hub.ServiceProvider);
+    }
 
     private IObservable<MeshNode> UpdateOwn(Func<MeshNode, MeshNode> update)
         => Observable.Create<MeshNode>(observer =>

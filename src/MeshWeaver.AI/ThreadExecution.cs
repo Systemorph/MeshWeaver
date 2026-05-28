@@ -162,6 +162,7 @@ internal static class ThreadExecution
         var threadPath = parentHub.Address.Path;
         var cache = execHub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
 
+        var accessService = execHub.ServiceProvider.GetService<MeshWeaver.Messaging.AccessService>();
         var sub = cache.GetStream(threadPath)
             // Pair each emission with its current Status so DistinctUntilChanged
             // dedupes on the Status field only — concurrent field updates that
@@ -181,39 +182,40 @@ internal static class ThreadExecution
                         return;
                     }
 
-                    // Stamp the round's AccessContext from the thread node's
-                    // CreatedBy. The watcher fires on a stream scheduler where
-                    // AsyncLocal carries no useful identity.
-                    var accessService = execHub.ServiceProvider.GetService<MeshWeaver.Messaging.AccessService>();
-                    if (accessService != null && !string.IsNullOrEmpty(thread.CreatedBy))
+                    // 🚨 Thread execution ALWAYS runs under the thread owner's
+                    // identity. The cache stream's emission scheduler doesn't
+                    // carry the originating user's AsyncLocal — without this
+                    // scope, every read/write inside DispatchAfterClaim
+                    // (drain pending, allocate response cell, stream LLM
+                    // output) would be stamped with the cache identity, and
+                    // the owning hub's RLS would deny. The access check that
+                    // gated the dispatch already happened (the user with no
+                    // access to the thread couldn't have flipped Status to
+                    // StartingExecution).
+                    using (MeshWeaver.Mesh.Security.AccessContextScope.FromNode(node, accessService, logger))
                     {
-                        accessService.SetContext(new MeshWeaver.Messaging.AccessContext
-                        {
-                            ObjectId = thread.CreatedBy,
-                            Name = thread.CreatedBy
-                        });
                         logger?.LogDebug(
                             "[ExecRoundWatcher] access context set: {User} for {ThreadPath}",
-                            thread.CreatedBy, threadPath);
-                    }
+                            thread.CreatedBy ?? "(system fallback)", threadPath);
 
-                    ThreadSubmissionServer.DispatchAfterClaim(parentHub, node, logger,
-                        onFailure: () =>
-                        {
-                            logger?.LogWarning(
-                                "[ExecRoundWatcher] DispatchAfterClaim failed for {ThreadPath} — rolling Status back to Idle",
-                                threadPath);
-                            parentHub.GetWorkspace().GetMeshNodeStream().Update(n =>
+                        ThreadSubmissionServer.DispatchAfterClaim(parentHub, node, logger,
+                            onFailure: () =>
                             {
-                                var t = n.Content as MeshThread ?? new MeshThread();
-                                return t.Status == ThreadExecutionStatus.StartingExecution
-                                    ? n with { Content = t with { Status = ThreadExecutionStatus.Idle, ExecutionStartedAt = null } }
-                                    : n;
-                            }).Subscribe(
-                                _ => { },
-                                ex => logger?.LogWarning(ex,
-                                    "[ExecRoundWatcher] rollback Update failed for {ThreadPath}", threadPath));
-                        });
+                                logger?.LogWarning(
+                                    "[ExecRoundWatcher] DispatchAfterClaim failed for {ThreadPath} — rolling Status back to Idle",
+                                    threadPath);
+                                parentHub.GetWorkspace().GetMeshNodeStream().Update(n =>
+                                {
+                                    var t = n.Content as MeshThread ?? new MeshThread();
+                                    return t.Status == ThreadExecutionStatus.StartingExecution
+                                        ? n with { Content = t with { Status = ThreadExecutionStatus.Idle, ExecutionStartedAt = null } }
+                                        : n;
+                                }).Subscribe(
+                                    _ => { },
+                                    ex => logger?.LogWarning(ex,
+                                        "[ExecRoundWatcher] rollback Update failed for {ThreadPath}", threadPath));
+                            });
+                    }
                 },
                 ex => logger?.LogWarning(ex,
                     "[ExecRoundWatcher] stream errored for {ThreadPath}", threadPath));
