@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.ComponentModel;
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Text;
 using System.Text.Json;
@@ -256,7 +257,17 @@ public static class DelegationTool
             // and Emits Dispatched; the parent's TCS is resolved by the Idle subscription
             // above which reads Thread.Summary). No await foreach, no Task.Run, no
             // Observable.Create wrapper.
+            //
+            // SubscribeOn(TaskPoolScheduler.Default): the parent agent loop's
+            // continuation (Orleans grain scheduler in prod, single-threaded pump in
+            // the DelegationDeadlockTest) MUST NOT host the sub-thread drain. The
+            // typical executeAsync impl is Observable.Create<async> over an
+            // IAsyncEnumerable, which captures the Subscribe-time SynchronizationContext
+            // for every MoveNextAsync — if that's the grain scheduler, every sub-thread
+            // continuation posts back through it and wedges the grain. Hop the Subscribe
+            // to ThreadPool so the entire drain runs free of the caller's context.
             executeAsync(agentName, task, context, cancellationToken)
+            .SubscribeOn(TaskPoolScheduler.Default)
             .Subscribe(
                 chunk => sb.Append(chunk),
                 ex =>

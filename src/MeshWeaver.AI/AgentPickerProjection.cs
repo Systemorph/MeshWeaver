@@ -99,14 +99,18 @@ public static class AgentPickerProjection
     /// <list type="number">
     ///   <item>system catalog: <c>namespace:{rootNamespace}</c></item>
     ///   <item>per-context inheritance: <c>path:{currentPath} scope:ancestors</c>
-    ///         — Agent nodes whose path IS an ancestor of currentPath.</item>
-    ///   <item>per-NodeType inheritance: <c>path:{nodeTypePath} scope:ancestors</c>
-    ///         — Agent nodes inherited up the NodeType chain.</item>
+    ///         — Agent nodes whose path IS an ancestor of currentPath. Walks
+    ///         UP the content path collecting ancestor-placed agents.</item>
+    ///   <item>per-NodeType namespace inheritance:
+    ///         <c>namespace:{nodeTypePath} scope:selfAndAncestors</c> —
+    ///         agents declared in the NodeType's own namespace OR any
+    ///         ancestor namespace inherit DOWN to the NodeType. e.g. for
+    ///         NodeType <c>ACME/Project</c> this matches TodoAgent.md at
+    ///         <c>ACME/Project/TodoAgent</c> (namespace <c>ACME/Project</c> = self)
+    ///         AND any agent declared at namespace <c>ACME</c> or root.
+    ///         <c>selfAndAncestors</c> ≡ <c>AncestorsAndSelf</c> in
+    ///         <see cref="PathMatcher"/>.</item>
     /// </list>
-    /// <para><c>path:X scope:ancestors</c> (NOT <c>namespace:X scope:selfAndAncestors</c>)
-    /// is the correct shape: agents are placed AT paths and inherited DOWN; the query
-    /// walks UP the path tree from the content's path collecting ancestor-placed agents.
-    /// Self is excluded (the content's own path isn't an Agent itself).</para>
     /// </summary>
     private static string[] BuildQueries(string nodeType, string rootNamespace, string? currentPath, string? nodeTypePath)
     {
@@ -117,7 +121,7 @@ public static class AgentPickerProjection
         if (!string.IsNullOrEmpty(currentPath))
             queries.Add($"path:{currentPath} nodeType:{nodeType} scope:ancestors");
         if (!string.IsNullOrEmpty(nodeTypePath))
-            queries.Add($"path:{nodeTypePath} nodeType:{nodeType} scope:ancestors");
+            queries.Add($"namespace:{nodeTypePath} nodeType:{nodeType} scope:selfAndAncestors");
         return queries.ToArray();
     }
 
