@@ -326,6 +326,57 @@ probe and surfaces the denial.
 Full propagation model (capture-at-call, restore-at-emission across Subscribe
 boundaries): [AccessContextPropagation.md](AccessContextPropagation.md).
 
+## 🚨 `Content` is always typed at the `GetMeshNodeStream` boundary
+
+Every emission and Update lambda passing through
+`workspace.GetMeshNodeStream(path?)` is round-tripped through the workspace's
+`JsonSerializerOptions` — so `node.Content` is **always** the registered
+domain type (e.g. `MeshThread`, `NodeTypeDefinition`, `AgentConfiguration`),
+**never** a raw `JsonElement`. The handle's read path runs a
+`TypedContentObserver` between the underlying sync stream and the subscriber;
+the write path wraps the caller's lambda so the deserialised value goes in
+and the (re-)serialised `JsonElement` comes out before the patch lands on
+the wire.
+
+```csharp
+// ✅ Right — `Content` is the typed MeshThread no matter where the data
+//    source stores it (InMemory keeps typed instances; file-system /
+//    Postgres / Cosmos round-trip through JSON and would otherwise land
+//    as JsonElement).
+workspace.GetMeshNodeStream().Update(node =>
+{
+    if (node.Content is not MeshThread t) return node;   // pattern match Just Works
+    return node with { Content = t with { Status = ThreadExecutionStatus.Executing } };
+});
+```
+
+**Why this matters — the anti-pattern this rule eliminates:**
+
+```csharp
+// ❌ WRONG — silently lossy. When Content arrives as JsonElement, the cast
+//    fails, the `?? new MeshThread()` fallback overwrites every other field
+//    with defaults (Status=Idle, pending={}, etc.), and the next stream.Update
+//    persists that default-valued thread. Symptom: tests set Status=Executing,
+//    the next AppendUserInput resets it to Idle, the SubmissionWatcher then
+//    dispatches a round nobody asked for.
+workspace.GetMeshNodeStream().Update(node =>
+{
+    var thread = node.Content as MeshThread ?? new MeshThread();   // ← silent overwrite
+    return node with { Content = thread with { Status = ... } };
+});
+```
+
+The handle's deserialisation wrap eliminates the JsonElement case at the
+boundary. Callers no longer need the `?? new TFoo()` fallback — if Content
+is genuinely absent or wrong-shaped, the pattern match fails cleanly and
+the lambda can return `node` unchanged.
+
+**Where the wrap lives:** `MeshNodeStreamHandle.TypedContentObserver`
+(read path) + `MeshNodeStreamHandle.Update`'s `wrappedUpdate` (write path)
+in `src/MeshWeaver.Mesh.Contract/MeshNodeStreamExtensions.cs`. Helpers
+`EnsureTypedContent(node, options)` and `EnsureSerialisedContent(node, options)`
+are reusable by any other primitive that needs the same shape guarantee.
+
 ## Where scope walks live
 
 `scope:children / scope:descendants / scope:subtree / scope:hierarchy /

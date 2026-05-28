@@ -73,6 +73,7 @@ internal static class NodeTypeCompilationHelpers
     {
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.CompileWatcher");
+        var accessService = hub.ServiceProvider.GetService<MeshWeaver.Messaging.AccessService>();
 
         var installSeq = System.Threading.Interlocked.Increment(ref _watcherInstallCount);
         logger?.LogDebug(
@@ -220,12 +221,29 @@ internal static class NodeTypeCompilationHelpers
                         return;
                     }
                     logger?.LogDebug(
-                        "Compile watcher: saw Pending for {HubPath} — posting DispatchCompileTrigger to OWN hub",
+                        "Compile watcher: saw Pending for {HubPath} — posting DispatchCompileTrigger to OWN hub (system identity)",
                         hubPath);
-                    // Fire-and-forget. ActionBlock picks it up and runs
-                    // HandleDispatchCompile on the hub's thread.
-                    hub.Post(new DispatchCompileTrigger(pendingNode!),
-                        o => o.WithTarget(hub.Address));
+                    // 🚨 Compilation runs under SYSTEM identity — circumventing
+                    // RLS by design. The access check that gates compilation is
+                    // upstream: the user has to be permitted to flip
+                    // RequestedReleaseAt on the NodeType's MeshNode (checked by
+                    // the owning hub's AccessControl pipeline at submit time).
+                    // Once requested, the compile activity runs as
+                    // system-security so it can read every source file across
+                    // the mesh, write the activity log without per-flag RLS
+                    // probing, and emit the compiled assembly. NOT FromNode —
+                    // compile-as-the-last-editor-of-the-NodeType would deny
+                    // access to source files owned by other users.
+                    using (MeshWeaver.Mesh.Security.AccessContextScope.AsSystem(accessService))
+                    {
+                        // Fire-and-forget. ActionBlock picks it up and runs
+                        // HandleDispatchCompile on the hub's thread; the
+                        // delivery.AccessContext is stamped with system identity
+                        // so every downstream write inside the activity bypasses
+                        // RLS.
+                        hub.Post(new DispatchCompileTrigger(pendingNode!),
+                            o => o.WithTarget(hub.Address));
+                    }
                 },
                 ex => logger?.LogWarning(ex,
                     "Compile watcher faulted for {HubPath}", hub.Address.Path));

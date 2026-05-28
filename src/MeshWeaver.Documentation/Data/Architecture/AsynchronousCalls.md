@@ -130,6 +130,36 @@ The Subscribe-mandatory contract isn't just MeshNode updates. Any IObservable re
 - `meshService.MoveNode(...)` / `meshService.CreateTransient(node)` — cold; subscribe.
 - `remoteStream.Update(current => updated, ex => …)` — `ex` callback fires on the stream's hub; the returned `void` IS the subscription. (But the patch routing is hub.Post, so this is hot — the exception in the lambda below is the only way to surface `OnError` here.)
 
+## 🚨 `MeshNode.Content` is always typed at the `GetMeshNodeStream` boundary
+
+`MeshNodeStreamHandle.Subscribe` and `MeshNodeStreamHandle.Update` round-trip `node.Content` through the workspace's `JsonSerializerOptions` at the boundary. The Subscribe path runs a `TypedContentObserver` that deserialises any `JsonElement` to its registered domain type before delivery; the Update path wraps the caller's lambda so the input is typed and the output is re-serialised back to `JsonElement` before the patch hits the wire.
+
+This eliminates the silent default-fallback bug class:
+
+```csharp
+// ❌ Before — silently lossy whenever Content arrived as JsonElement (file-system /
+//    Postgres / Cosmos all round-trip through JSON; only InMemory keeps typed).
+//    `as MeshThread` returns null on JsonElement, the `?? new MeshThread()`
+//    fallback overwrites every other field with defaults (Status=Idle, pending={}),
+//    next stream.Update persists that default thread — silent data corruption.
+workspace.GetMeshNodeStream().Update(node =>
+{
+    var t = node.Content as MeshThread ?? new MeshThread();
+    return node with { Content = t with { PendingUserMessages = pending } };
+});
+
+// ✅ After — the framework hands the lambda a typed MeshThread regardless of
+//    underlying storage. If Content is genuinely null/wrong-shaped the cast
+//    fails and the lambda returns `node` unchanged — no silent overwrite.
+workspace.GetMeshNodeStream().Update(node =>
+{
+    if (node.Content is not MeshThread t) return node;
+    return node with { Content = t with { PendingUserMessages = pending } };
+});
+```
+
+Full treatment with the read-side rule + helpers (`EnsureTypedContent`, `EnsureSerialisedContent`): [CqrsAndContentAccess.md → "Content is always typed at the GetMeshNodeStream boundary"](xref:Architecture/CqrsAndContentAccess).
+
 ## 🚨 `No handler found for message type X` is almost always a serialization/type-registry bug
 
 When a routed `IRequest<T>` comes back as a `DeliveryFailure` saying *"No handler found for message type X"*, the handler usually IS registered via `WithHandler<X>(...)` on the target hub. The framework's `FinishDelivery` only emits this when an `IRequest<T>` reached the hub but no `Register<T>(...)` filter matched — and the most common reason is the message arriving on the wire **deserialized as a different type** (or as `JsonElement`) because the receiving hub's `ITypeRegistry` is missing the `WithType(typeof(X), nameof(X))` entry that the sender used as the `$type` discriminator.
