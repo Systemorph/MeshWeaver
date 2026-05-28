@@ -8,6 +8,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -109,6 +110,51 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
     // runs at most once per key, even when multiple GetOrAdd calls race.
     private readonly ConcurrentDictionary<string, Lazy<Entry>> _streams = new();
     private readonly ConcurrentDictionary<(string Path, string UserId), AccessEntry> _access = new();
+
+    // 🚨 Per-path serial Update queue. Concurrent mirror-side Updates on the
+    // SAME path race their `current` snapshot — each call's lambda runs against
+    // the same initial state, so each computes a patch with field overrides
+    // that REPLACE rather than merge. RFC 7396 merges JSON objects key-by-key
+    // (safe for ImmutableDictionary), but REPLACES JSON arrays (catastrophic
+    // for ImmutableList — the owner sees only the last patch's array value,
+    // every earlier append lost). Symptom: 3 rapid SubmitMessage calls land
+    // only 1 entry in MeshThread.UserMessageIds at the owner.
+    //
+    // Fix: serialize Update calls per path on the MIRROR side via Concat
+    // over a Subject. Each call appends a cold observable; Concat subscribes
+    // them serially — call N+1's Handle.Update only runs after call N's
+    // Update completes, so call N+1's Take(1) on the remote stream sees call
+    // N's echo (the cache's shared stream was updated by the patch landing on
+    // the owner). Result: each lambda computes its diff against the freshest
+    // state, and no two patches carry overlapping array replacements.
+    //
+    // Cost: per-path Update throughput drops from "parallel posts" to "one
+    // round-trip per Update". Acceptable because (a) the OWNER serialized
+    // anyway, so the apparent parallelism was illusory; (b) the only paths
+    // with multi-write contention are thread/inbox nodes whose single-digit-
+    // per-second write rate is far below the round-trip ceiling.
+    //
+    // Storage: `MemoryCache` with 10-minute sliding expiration. The queue
+    // is reusable per path but unbounded retention would leak Subjects for
+    // every node ever written. Sliding expiry tears down the Subject (and
+    // its Concat subscription) for paths quiet for 10 minutes — a fresh
+    // write recreates a fresh queue, no behaviour change for the caller.
+    // Eviction callback completes the Subject so the Concat chain unwinds.
+    private readonly MemoryCache _updateQueues = new(new MemoryCacheOptions
+    {
+        // No size limit — we trim by time, not count.
+    });
+
+    private static readonly TimeSpan UpdateQueueSlidingExpiration = TimeSpan.FromMinutes(10);
+
+    private sealed record UpdateQueueEntry(Subject<UpdateRequest> Subject, IDisposable ConcatSubscription);
+
+    private readonly record struct UpdateRequest(
+        Func<MeshNode, MeshNode> Update,
+        ReplaySubject<MeshNode> Result,
+        string Path,
+        long Seq,
+        DateTimeOffset EnteredAt);
 
     /// <summary>Cached effective-permission probe with expiry.</summary>
     private sealed record AccessEntry(Permission Permissions, DateTimeOffset ValidUntil);
@@ -403,18 +449,151 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
             $"User '{user.ObjectId}' lacks Read permission on '{path}'"));
     }
 
-    public IObservable<MeshNode> Update(string path, Func<MeshNode, MeshNode> update) =>
+    public IObservable<MeshNode> Update(string path, Func<MeshNode, MeshNode> update)
+    {
         // The underlying MeshNodeStreamHandle.Update already wraps with
         // CarryAccessContext, so writes through the cache automatically carry
         // the caller's user identity into the partition write. No additional
         // wrap needed here. See AccessContextPropagation.md.
         //
-        // Concurrency: serialization happens at the OWNING HUB, not here. The
-        // hub for `path` is single-threaded — its action block processes
-        // UpdateNodeRequest deliveries in order, so concurrent cache.Update
-        // calls reach the same hub and are naturally serialized. No semaphore
-        // or lock at this layer.
-        GetEntry(path).Handle.Update(update);
+        // Per-path mirror-side serialization: see the _updateQueues field
+        // comment. Concurrent in-mirror Update calls would otherwise race
+        // their `current` snapshot and emit overlapping array-replacement
+        // patches that the RFC 7396 owner-side merge cannot resolve (lists
+        // collapse to the last writer). Serializing per path makes each
+        // lambda observe its predecessor's effect.
+        var queue = GetOrCreateUpdateQueue(path);
+        var result = new ReplaySubject<MeshNode>();
+        var seq = System.Threading.Interlocked.Increment(ref _updateSeq);
+        logger.LogDebug(
+            "[UpdateQueue] ENQUEUE path={Path} seq={Seq} enteredAt={EnteredAt}",
+            path, seq, DateTimeOffset.UtcNow);
+        queue.OnNext(new UpdateRequest(update, result, path, seq, DateTimeOffset.UtcNow));
+        return result;
+    }
+
+    private long _updateSeq;
+
+    /// <summary>
+    /// Returns the per-path Subject that the serial-Update Concat consumes.
+    /// Backed by <see cref="MemoryCache"/> with sliding expiration so paths
+    /// that go quiet release their Subject + Concat subscription. A fresh
+    /// write after eviction transparently recreates the queue — eviction is
+    /// invisible to callers.
+    ///
+    /// 🚨 The cached VALUE is a <see cref="Lazy{T}"/>, not the Subject
+    /// directly, because <see cref="MemoryCacheExtensions.GetOrCreate"/>
+    /// is NOT atomic — the factory can run more than once under contention,
+    /// and only ONE result wins per key. Losers would orphan a Subject +
+    /// Concat subscription that never gets evicted (their eviction
+    /// callback is never registered with the cache). Wrapping in
+    /// <c>Lazy&lt;T&gt;(ThreadSafety.ExecutionAndPublication)</c> ensures
+    /// the heavy work (new Subject, build observable, Subscribe) runs at
+    /// most once per key even when multiple GetOrCreate calls race. Same
+    /// pattern as <see cref="_streams"/>'s <c>Lazy&lt;Entry&gt;</c>.
+    /// </summary>
+    private Subject<UpdateRequest> GetOrCreateUpdateQueue(string path) =>
+        _updateQueues.GetOrCreate(path, entry =>
+        {
+            entry.SlidingExpiration = UpdateQueueSlidingExpiration;
+            var lazy = new Lazy<UpdateQueueEntry>(() =>
+            {
+                var subject = new Subject<UpdateRequest>();
+                var sub = BuildUpdateQueueObservable(path, subject).Subscribe();
+                return new UpdateQueueEntry(subject, sub);
+            }, LazyThreadSafetyMode.ExecutionAndPublication);
+            // Eviction (sliding-expiry timeout, manual Remove, or process
+            // shutdown) tears down the long-lived Concat subscription and
+            // completes the Subject — otherwise the Concat keeps response-
+            // subjects rooted forever. Only fires if the Lazy was actually
+            // materialised; an unrealised Lazy has no subscription to leak.
+            entry.RegisterPostEvictionCallback((key, value, reason, state) =>
+            {
+                logger.LogDebug(
+                    "[UpdateQueue] EVICTED path={Path} reason={Reason}",
+                    key, reason);
+                if (value is Lazy<UpdateQueueEntry> { IsValueCreated: true } lz)
+                {
+                    try { lz.Value.ConcatSubscription.Dispose(); } catch { /* best-effort */ }
+                    try { lz.Value.Subject.OnCompleted(); } catch { /* best-effort */ }
+                }
+            });
+            return lazy;
+        })!.Value.Subject;
+
+    /// <summary>
+    /// Builds the per-path Concat pipeline that processes <see cref="UpdateRequest"/>s
+    /// serially: each request waits for its patch's echo from the owner before
+    /// the next inner observable subscribes. The echo wait closes the
+    /// concurrent-snapshot race on ImmutableList fields (see field comment on
+    /// <see cref="_updateQueues"/>). 3-second timeout — long enough for typical
+    /// hub action-block + routing roundtrip, short enough that a missing echo
+    /// doesn't dominate suite runtime. Per-stage timing logs (Debug/Trace) catch
+    /// hangs: ENQUEUE → START → LOCAL_EMIT → ECHO_CANDIDATE* → ECHO_RECEIVED →
+    /// COMPLETE. Missing ECHO_RECEIVED with FAILED warning = patch's echo never
+    /// arrived in 3s; missing LOCAL_EMIT = Handle.Update itself hung.
+    /// </summary>
+    private static readonly TimeSpan EchoWaitTimeout = TimeSpan.FromSeconds(3);
+
+    private IObservable<MeshNode> BuildUpdateQueueObservable(string path, Subject<UpdateRequest> subject) =>
+        subject
+            .Select(req => Observable.Defer<MeshNode>(() =>
+            {
+                var waitedToStart = (DateTimeOffset.UtcNow - req.EnteredAt).TotalMilliseconds;
+                logger.LogDebug(
+                    "[UpdateQueue] START path={Path} seq={Seq} waitedInQueue={WaitedMs}ms",
+                    path, req.Seq, waitedToStart);
+                DateTimeOffset? updatedLastModified = null;
+                var localEmittedAt = DateTimeOffset.MinValue;
+                var entry = GetEntry(path);
+                return entry.Handle.Update(req.Update)
+                    .Do(node =>
+                    {
+                        updatedLastModified = node.LastModified;
+                        localEmittedAt = DateTimeOffset.UtcNow;
+                        logger.LogDebug(
+                            "[UpdateQueue] LOCAL_EMIT path={Path} seq={Seq} updatedLastModified={LastModified} elapsedFromStart={ElapsedMs}ms",
+                            path, req.Seq, updatedLastModified, (localEmittedAt - req.EnteredAt).TotalMilliseconds);
+                        req.Result.OnNext(node);
+                    })
+                    .SelectMany(_ => entry.Shared
+                        .Do(n => logger.LogTrace(
+                            "[UpdateQueue] ECHO_CANDIDATE path={Path} seq={Seq} candidateLastModified={CandidateLM} target={TargetLM} match={Match}",
+                            path, req.Seq, n?.LastModified, updatedLastModified,
+                            n is not null && updatedLastModified.HasValue && n.LastModified >= updatedLastModified.Value))
+                        .Where(n => updatedLastModified.HasValue
+                                    && n is not null
+                                    && n.LastModified >= updatedLastModified.Value)
+                        .Take(1)
+                        .Timeout(EchoWaitTimeout))
+                    .Do(_ => logger.LogDebug(
+                        "[UpdateQueue] ECHO_RECEIVED path={Path} seq={Seq} echoLatency={EchoMs}ms",
+                        path, req.Seq, (DateTimeOffset.UtcNow - localEmittedAt).TotalMilliseconds))
+                    .Catch<MeshNode, Exception>(ex =>
+                    {
+                        if (ex is TimeoutException)
+                            logger.LogDebug(
+                                "[UpdateQueue] ECHO_TIMEOUT path={Path} seq={Seq} (proceeding without echo confirmation; next Update will still see post-patch state via the owner's action-block ordering)",
+                                path, req.Seq);
+                        else
+                            logger.LogWarning(ex,
+                                "[UpdateQueue] FAILED path={Path} seq={Seq} elapsedMs={ElapsedMs}",
+                                path, req.Seq, (DateTimeOffset.UtcNow - req.EnteredAt).TotalMilliseconds);
+                        // Don't propagate echo timeouts to the caller — the local
+                        // OnNext already fired and the caller has their value.
+                        if (ex is not TimeoutException)
+                            req.Result.OnError(ex);
+                        return Observable.Empty<MeshNode>();
+                    })
+                    .Finally(() =>
+                    {
+                        logger.LogDebug(
+                            "[UpdateQueue] COMPLETE path={Path} seq={Seq} totalElapsed={ElapsedMs}ms",
+                            path, req.Seq, (DateTimeOffset.UtcNow - req.EnteredAt).TotalMilliseconds);
+                        req.Result.OnCompleted();
+                    });
+            }))
+            .Concat();
 
     /// <summary>
     /// Caller-typed read: every emitted MeshNode's <c>Content</c> is round-tripped
@@ -445,7 +624,9 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
             var updated = update(typed);
             return ConvertContentTypedToJsonElement(updated, options);
         };
-        return GetEntry(path).Handle.Update(wrapped);
+        // Route through the same per-path serial queue as the untyped Update —
+        // typed and untyped writers to the same path must not race each other.
+        return Update(path, wrapped);
     }
 
     private static MeshNode ConvertContentJsonElementToTyped(MeshNode node, JsonSerializerOptions options)

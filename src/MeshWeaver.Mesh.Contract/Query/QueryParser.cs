@@ -462,6 +462,7 @@ public partial class QueryParser
                         "ancestorsandself" => QueryScope.AncestorsAndSelf,
                         "selfandancestors" => QueryScope.AncestorsAndSelf,
                         "myselfandancestors" => QueryScope.AncestorsAndSelf, // legacy alias
+                        "selfanddescendants" => QueryScope.Subtree,           // alias for symmetry with selfAndAncestors
                         _ => QueryScope.Exact
                     };
                     continue;
