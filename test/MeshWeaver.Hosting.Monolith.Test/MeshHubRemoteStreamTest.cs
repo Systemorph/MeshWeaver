@@ -102,9 +102,15 @@ public class MeshHubRemoteStreamTest(ITestOutputHelper output) : MonolithMeshTes
             new Address(path), new MeshNodeReference());
 
         // Capture names for assertion using the IObservable<ChangeItem<MeshNode>> interface.
+        // Concurrent-safe accumulator + lock — Subscribe handler and the
+        // assertion lambda below both read/write under the same lock so the
+        // List<T> snapshot is stable when FluentAssertions inspects it.
+        // Since 486e8d22b made every change emit individually (no Buffer),
+        // the `await stream.Where(V2).FirstAsync()` synchronisation point can
+        // fire BEFORE this independent Subscribe handler has executed for V2.
         var names = new List<string?>();
         using var sub = ((IObservable<ChangeItem<MeshNode>>)stream)
-            .Subscribe(ci => { if (ci.Value?.Name is { } n) names.Add(n); });
+            .Subscribe(ci => { if (ci.Value?.Name is { } n) lock (names) names.Add(n); });
 
         // Wait for the initial snapshot — proves subscription routing works.
         var initial = await stream
@@ -122,7 +128,19 @@ public class MeshHubRemoteStreamTest(ITestOutputHelper output) : MonolithMeshTes
             .FirstAsync()
             .ToTask(ct);
 
-        names.Should().Contain("V1").And.Contain("V2");
+        // Poll until BOTH names appear — the separate `sub` Subscribe handler
+        // runs independently of the `await … FirstAsync()` synchronisation
+        // above, and per-change emissions can interleave such that the await
+        // resolves before the sub handler has appended V2.
+        await Observable.Interval(50.Milliseconds()).StartWith(0L)
+            .Where(_ => { lock (names) return names.Contains("V1") && names.Contains("V2"); })
+            .FirstAsync()
+            .Timeout(5.Seconds())
+            .ToTask(ct);
+
+        string?[] snapshot;
+        lock (names) snapshot = names.ToArray();
+        snapshot.Should().Contain("V1").And.Contain("V2");
     }
 
     /// <summary>
