@@ -25,7 +25,14 @@ namespace MeshWeaver.NodeOperations.Test;
 /// </summary>
 public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private CancellationToken TestTimeout => new CancellationTokenSource(45.Seconds()).Token;
+    // 90 s: Linux CI's per-message-hub activation routinely takes >45 s when
+    // the suite is mid-run with many AccessAssignment / PartitionAccessPolicy
+    // synced queries firing in the background — Delete_FromNodeHub_Succeeds
+    // hits a STALE-CALLBACK at GetDataRequest@{nodePath}(44+s) in CI. The
+    // earlier revert of this bump (195d1b6d1) flipped the test back to red.
+    // Locally the test completes in ~10 s; the higher ceiling absorbs the
+    // slow path without masking a genuine hang.
+    private CancellationToken TestTimeout => new CancellationTokenSource(90.Seconds()).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder);
@@ -103,6 +110,8 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
         // Assert — entire subtree should be gone. Poll because the recursive
         // delete fan-out (root → mid → deep) writes per-leaf in order; a
         // one-shot subtree query can race the bottom-most delete in CI.
+        // 30 s deadline absorbs the slower CI path that was timing out the
+        // previous 15 s ceiling on Linux runners.
         await Observable.Interval(TimeSpan.FromMilliseconds(50))
             .StartWith(0L)
             .SelectMany(_ => Observable.FromAsync(() => MeshQuery
@@ -110,7 +119,7 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
                 .ToListAsync(TestTimeout).AsTask()))
             .Where(items => items.Count == 0)
             .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(15))
+            .Timeout(TimeSpan.FromSeconds(30))
             .ToTask(TestContext.Current.CancellationToken);
     }
 
@@ -182,7 +191,7 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
     ///   var nodeFactory = host.Hub.ServiceProvider.GetRequiredService&lt;IMeshService&gt;();
     ///   await nodeFactory.DeleteNode(nodePath);
     /// </summary>
-    [Fact(Timeout = 60_000)]
+    [Fact(Timeout = 120_000)]
     public async Task Delete_FromNodeHub_Succeeds()
     {
         // Arrange â€” create a node and get its hub via the routing service
