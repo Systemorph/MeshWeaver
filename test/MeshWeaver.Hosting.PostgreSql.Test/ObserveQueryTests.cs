@@ -239,34 +239,43 @@ public class ObserveQueryTests : IAsyncLifetime
         var changes = new List<QueryResultChange<MeshNode>>();
         var request = MeshQueryRequest.FromQuery("namespace:ACME/Project");
 
+        // Since 486e8d22b (Buffer(100 ms) → per-change Concat), three rapid
+        // writes arrive as three separate `Added` emissions. The List<T>
+        // accumulator + polling-lambda enumeration would race with the
+        // Subscribe handler's Add — guard both ends with the same lock so
+        // enumeration takes a stable snapshot.
         using var sub = _query.ObserveQuery<MeshNode>(request, _options)
-            .Subscribe(c => changes.Add(c));
+            .Subscribe(c => { lock (changes) changes.Add(c); });
 
         await WaitForChanges(changes, 1); // Initial (empty)
 
-        // Act: add 3 nodes in rapid succession (within the 100ms debounce window)
+        // Act: add 3 nodes in rapid succession.
         await WriteNode("Story1", "ACME/Project", "Story");
         await WriteNode("Story2", "ACME/Project", "Story");
         await WriteNode("Story3", "ACME/Project", "Story");
 
         // Wait until the accumulator captured all 3 Story IDs through Added
-        // emissions (possibly batched into one). Replaces a fixed 2s Task.Delay
-        // — the actual time-to-batch under load is variable; polling the
-        // accumulator with Observable.Interval is both faster on the happy
-        // path and gives us a 15 s deadline that surfaces a real test failure
-        // instead of hiding the symptom under a generous fixed wait.
+        // emissions (one batched emission OR three separate — assertion below
+        // accepts either shape).
         await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
-            .Where(_ => changes.Where(c => c.ChangeType == QueryChangeType.Added)
-                .SelectMany(c => c.Items)
-                .Select(n => n.Id)
-                .Distinct()
-                .Count() >= 3)
+            .Where(_ =>
+            {
+                QueryResultChange<MeshNode>[] snap;
+                lock (changes) snap = changes.ToArray();
+                return snap.Where(c => c.ChangeType == QueryChangeType.Added)
+                    .SelectMany(c => c.Items)
+                    .Select(n => n.Id)
+                    .Distinct()
+                    .Count() >= 3;
+            })
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(15))
             .ToTask(ct);
 
-        // Assert: all 3 nodes should appear as Added (possibly batched into one emission)
-        var addedChanges = changes.Where(c => c.ChangeType == QueryChangeType.Added).ToList();
+        // Assert: all 3 nodes should appear as Added (one or more emissions).
+        QueryResultChange<MeshNode>[] finalSnap;
+        lock (changes) finalSnap = changes.ToArray();
+        var addedChanges = finalSnap.Where(c => c.ChangeType == QueryChangeType.Added).ToList();
         addedChanges.Should().NotBeEmpty();
         var allAddedItems = addedChanges.SelectMany(c => c.Items).ToList();
         allAddedItems.Select(n => n.Id).Should().BeEquivalentTo(["Story1", "Story2", "Story3"]);
