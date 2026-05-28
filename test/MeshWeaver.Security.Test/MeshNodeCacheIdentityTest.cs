@@ -232,4 +232,147 @@ public class MeshNodeCacheIdentityTest(ITestOutputHelper output) : MonolithMeshT
                 "cache identity must be allowed to read — hydration depends on it");
         }
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Cross-cutting AccessContext propagation through cache.Update
+    // ─────────────────────────────────────────────────────────────────────
+    // The tests below pin the contract documented in AsynchronousCalls.md:1120-1137
+    // (and corollaries in CqrsAndContentAccess.md). The promise:
+    //   "Every framework write primitive automatically captures the caller's
+    //    AccessContext at invocation time and re-stamps it on every emission
+    //    of the returned cold pipeline."
+    //
+    // Today (post-commit 178734555) `IMeshNodeStreamCache.Update` routes through
+    // a per-path Subject → Concat → Subscribe queue. The Concat thread inherits
+    // whatever AsyncLocal value happens to be current — usually null on a fresh
+    // ThreadPool thread, or `sync/<streamid>` if the upstream emission was a
+    // workspace-driven echo. The framework wrap `CarryAccessContext` is a
+    // pass-through (AccessContextCaptureExtensions.cs:63-94), so the caller's
+    // identity is NOT restored on the OnNext callback.
+    //
+    // PR2 of the AccessContext-propagation plan will reintroduce a leak-free
+    // per-callback restore inside the framework primitive. These tests are the
+    // regression suite that pin the desired behaviour. They are EXPECTED to fail
+    // on the current code (`CarryAccessContext` no-op) and pass after PR2.
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// When a caller invokes <see cref="IMeshNodeStreamCache.Update"/> under
+    /// their AccessContext, the OnNext callback of the returned cold observable
+    /// MUST observe the caller's identity on AsyncLocal — even though the
+    /// callback fires on the per-path serial Concat queue's thread (which has
+    /// no AsyncLocal value of its own).
+    ///
+    /// <para>This is the most direct test of "AccessContext rides for free" on
+    /// the cache.Update primitive. Without the framework wrap restoring the
+    /// captured context per callback, the OnNext lambda observes whatever
+    /// AsyncLocal is current on the Concat scheduler — typically null.</para>
+    ///
+    /// <para>Failure mode under current code: <c>observed</c> is null because
+    /// <c>CarryAccessContext</c> is pass-through and the Concat thread did not
+    /// inherit the test's AsyncLocal value through the Subject hop.</para>
+    /// </summary>
+    [Fact(Timeout = 20000)]
+    public async Task CacheUpdate_Concat_PreservesCallerIdentity()
+    {
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var cache = Mesh.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        TestUsers.DevLogin(Mesh);
+
+        // 1. Create a node under admin identity so the cache has something to read.
+        var nodePath = $"CacheIdProbe/CacheUpdateIdentity_{Guid.NewGuid().AsString()}";
+        var node = MeshNode.FromPath(nodePath) with
+        {
+            Name = "Original",
+            NodeType = "Markdown"
+        };
+        await meshService.CreateNode(node).Take(1).Timeout(10.Seconds()).ToTask(TestTimeout);
+
+        // 2. Switch to a real user — Alice — and call cache.Update under her identity.
+        //    The OnNext callback's observed AsyncLocal value is the contract.
+        var alice = new AccessContext { ObjectId = "alice@example.com", Name = "Alice" };
+
+        var observedContext = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        using (accessService.SwitchAccessContext(alice))
+        {
+            cache.Update(nodePath, n => n with { Name = "Updated by Alice" })
+                .Subscribe(
+                    _ => observedContext.TrySetResult(accessService.Context?.ObjectId),
+                    ex => observedContext.TrySetException(ex));
+        }
+
+        var observed = await observedContext.Task.WaitAsync(15.Seconds(), TestTimeout);
+
+        observed.Should().Be("alice@example.com",
+            because: "cache.Update's returned cold observable must restore the caller's " +
+                     "captured AccessContext on every OnNext callback. The per-path serial " +
+                     "Concat queue runs the inner observable on a ThreadPool thread with no " +
+                     "AsyncLocal of its own, so without the framework wrap doing a leak-free " +
+                     "per-callback restore (PR2 of the AccessContext propagation plan), this " +
+                     "callback observes either null or the Concat thread's stale ambient value.");
+    }
+
+    /// <summary>
+    /// Same contract for the synchronous Subscribe inside a <c>using</c>
+    /// scope: when the caller invokes <see cref="IMeshNodeStreamCache.Update"/>
+    /// and immediately disposes the <see cref="AccessService.SwitchAccessContext"/>
+    /// scope, the captured identity must still ride the cold observable's
+    /// emissions. This pins that the wrap captures by VALUE at call time, not
+    /// by reference to the live AsyncLocal slot.
+    ///
+    /// <para>Failure mode under current code: same as
+    /// <see cref="CacheUpdate_Concat_PreservesCallerIdentity"/> — the
+    /// callback observes null because <c>CarryAccessContext</c> is
+    /// pass-through. The added value of this test is locking down the
+    /// capture-by-value semantic so future refactors can't quietly switch
+    /// to a "read AsyncLocal at emission time" implementation that would
+    /// observe the post-dispose value.</para>
+    /// </summary>
+    [Fact(Timeout = 20000)]
+    public async Task CacheUpdate_AfterCallerScopeDisposed_StillCarriesCapturedIdentity()
+    {
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var cache = Mesh.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        TestUsers.DevLogin(Mesh);
+
+        var nodePath = $"CacheIdProbe/CapturedAfterDispose_{Guid.NewGuid().AsString()}";
+        var node = MeshNode.FromPath(nodePath) with
+        {
+            Name = "Original",
+            NodeType = "Markdown"
+        };
+        await meshService.CreateNode(node).Take(1).Timeout(10.Seconds()).ToTask(TestTimeout);
+
+        var bob = new AccessContext { ObjectId = "bob@example.com", Name = "Bob" };
+        var observedContext = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        IObservable<MeshNode> updateObservable;
+        using (accessService.SwitchAccessContext(bob))
+        {
+            // Build the cold observable INSIDE the using — capture must happen
+            // at this moment. We Subscribe OUTSIDE the using so the scope is
+            // already disposed by the time the inner Defer body runs on the
+            // Concat thread.
+            updateObservable = cache.Update(nodePath, n => n with { Name = "Updated by Bob" });
+        }
+
+        // Scope disposed — AsyncLocal is back to whatever DevLogin left it.
+        // The framework wrap's captured value must STILL be Bob.
+        updateObservable.Subscribe(
+            _ => observedContext.TrySetResult(accessService.Context?.ObjectId),
+            ex => observedContext.TrySetException(ex));
+
+        var observed = await observedContext.Task.WaitAsync(15.Seconds(), TestTimeout);
+
+        observed.Should().Be("bob@example.com",
+            because: "the framework primitive must capture the caller's AccessContext by " +
+                     "VALUE at Update(...) call time. Subscribing after the caller's scope " +
+                     "is disposed must still observe Bob inside the OnNext callback. If the " +
+                     "wrap reads AsyncLocal at emission time instead, this test would " +
+                     "observe DevLogin's admin (or null) — the capture-by-value contract " +
+                     "is what makes the wrap safe across scope-elided Subscribe sites.");
+    }
 }

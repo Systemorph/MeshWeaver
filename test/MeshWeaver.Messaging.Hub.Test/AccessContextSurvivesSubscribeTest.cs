@@ -160,19 +160,21 @@ public class AccessContextSurvivesSubscribeTest : IDisposable
     }
 
     /// <summary>
-    /// Test 5 — pass-through means the wrap doesn't manufacture identity per
-    /// subscriber. With ambient Context cleared before emission, both
-    /// concurrent subscribers see null on their emission thread — there is
-    /// no capture-and-restore. Pinning this prevents accidental
-    /// reintroduction of the AsyncLocal leak.
+    /// Test 5 — capture-by-value semantic. Two wraps are created under
+    /// different ambient Contexts; the calling thread's AsyncLocal is then
+    /// cleared. Each wrap must restore its OWN captured identity per emission
+    /// — independently of what AsyncLocal happens to be on the emitting thread.
+    ///
+    /// <para>This pins the leak-free per-callback scope (2026-05-28). The
+    /// scope is entered before each OnNext callback and disposed as the
+    /// callback returns, so the captured value is restored for the duration
+    /// of the subscriber's body but NEVER leaks into the caller's logical
+    /// execution context. After the callbacks return, AsyncLocal is back to
+    /// whatever it was on the emitting thread (here: null).</para>
     /// </summary>
     [Fact]
-    public async Task PassThrough_Does_Not_Restore_Captured_Identity_Per_Subscriber()
+    public async Task Captured_Context_Restored_Per_Wrap_Even_After_AmbientCleared()
     {
-        // Two subjects wrapped under different ambient values, then ambient
-        // cleared before emission. Under the OLD capture-and-restore model
-        // each subscriber would see its captured identity. Under the current
-        // pass-through model both see null.
         _access.SetContext(new AccessContext { ObjectId = "alice", Name = "Alice" });
         var aliceSubject = new Subject<int>();
         var aliceWrapped = aliceSubject.CarryAccessContext(_serviceProvider);
@@ -182,6 +184,9 @@ public class AccessContextSurvivesSubscribeTest : IDisposable
         var bobWrapped = bobSubject.CarryAccessContext(_serviceProvider);
 
         // Clear ambient so the test thread doesn't see either captured value.
+        // The wraps already captured 'alice' and 'bob' respectively — those
+        // captured values ride the closure and must be restored on every
+        // emission via the per-callback SwitchAccessContext scope.
         _access.SetContext(null);
 
         var aliceObserved = new ConcurrentBag<string?>();
@@ -201,11 +206,20 @@ public class AccessContextSurvivesSubscribeTest : IDisposable
             .Timeout(TimeSpan.FromSeconds(5))
             .ToTask(ct);
 
-        aliceObserved.Should().OnlyContain(id => id == null,
-            because: "pass-through doesn't restore captured identity per emission — ambient " +
-                     "Context was null on the emitting thread, so the subscriber sees null.");
-        bobObserved.Should().OnlyContain(id => id == null,
-            because: "symmetric — the wrap doesn't synthesize identity from a captured value.");
+        aliceObserved.Should().OnlyContain(id => id == "alice",
+            because: "the wrap captured 'alice' at wrap construction time and restores it on " +
+                     "every emission via the per-callback SwitchAccessContext scope. The " +
+                     "subscriber's body observes 'alice' even though ambient was cleared to " +
+                     "null on the test thread before any emission.");
+        bobObserved.Should().OnlyContain(id => id == "bob",
+            because: "symmetric — each wrap restores its own captured identity per emission.");
+
+        // Leak-free contract: after all callbacks have returned, the test
+        // thread's AsyncLocal must be back to what we set it to (null).
+        _access.Context.Should().BeNull(
+            because: "the per-callback scope must DISPOSE after each emission — never " +
+                     "leak the captured value into the caller's logical execution context. " +
+                     "This is the leak-fix the 2026-05-22 revert was protecting against.");
     }
 
     /// <summary>
