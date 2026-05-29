@@ -43,7 +43,15 @@ public static class VUserHelper
         // — the page-open crash a real user just hit on the sub-thread URL.
         var meshHub = hub.GetMeshHub();
 
-        using (accessService.ImpersonateAsHub(hub))
+        // Provisioning a guest VUser node is an infrastructure write, so it runs as
+        // the well-known system identity — NOT ImpersonateAsHub(hub). For an
+        // anonymous session `hub` is `portal/anonymous`, a hub-shaped principal;
+        // RestoreUserContextOnEmission's leak-guard rejects hub-shaped principals
+        // ("SetContext: hub-shaped principal … must never happen") and logged an
+        // Error on every anonymous request. `system-security` is a real principal
+        // with Permission.All, so it passes the guard. Subscribe stays INSIDE the
+        // scope so the emission-side context is system, not the leaked hub identity.
+        using (accessService.ImpersonateAsSystem())
         {
             hub.Observe<CreateNodeResponse>(
                     new CreateNodeRequest(userNode),
