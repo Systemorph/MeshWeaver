@@ -26,6 +26,11 @@ public partial class LayoutAreaView
     public override async Task SetParametersAsync(ParameterView parameters)
     {
         await base.SetParametersAsync(parameters);
+        // ViewModel is declared `required` but Blazor's parameter pipeline still
+        // feeds null through transient binding races (navigation, stream tear-down).
+        // Mirror the guard in BlazorView.BindData — re-renders will arrive with a
+        // populated ViewModel once the upstream parameter resolves.
+        if (ViewModel is null) return;
         BindViewModel();
         var hadStream = AreaStream is not null;
         if (AreaStream is not null
@@ -39,7 +44,7 @@ public partial class LayoutAreaView
         }
 
         Logger.LogDebug("[LAV] SET_PARAMS area={Area} addr={Address} ref={Ref} preRender={PreRender} hadStream={HadStream} keepStream={KeepStream}",
-            Area, Address, ViewModel?.Reference, !IsNotPreRender, hadStream, AreaStream is not null);
+            Area, Address, ViewModel.Reference, !IsNotPreRender, hadStream, AreaStream is not null);
 
         // Only bind stream when already in interactive mode (not during prerender)
         // try/catch: during navigation, old circuit's hub may already be disposing
@@ -55,6 +60,7 @@ public partial class LayoutAreaView
 
     private void BindViewModel()
     {
+        if (ViewModel is null) return;
         DataBind(ViewModel.ProgressMessage, x => x.progressMessage);
         DataBind(ViewModel.ShowProgress, x => x.showProgress);
         DataBind(ViewModel.Reference.Layout ?? ViewModel.Reference.Area, x => x.Area);

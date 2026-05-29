@@ -59,7 +59,44 @@ internal class DefaultPartitionProvider : IStaticNodeProvider
         // (via UserAccessRule), children require explicit access (via UserScopeGrantHandler).
         foreach (var ns in new[] { "Portal", "Kernel" })
             yield return CreatePublicViewerAccess(ns);
+
+        // Global Admin grant for the system identity. Mirrors the
+        // PermissionEvaluator.GetEffectivePermissions fast-path
+        // (`system-security` → Permission.All) as an explicit data-model rule so
+        // every code path that consults AccessAssignment — auditing, the layout
+        // ACL view, the access-control catalog — sees the same answer the
+        // evaluator returns at runtime.
+        //
+        // Operational motivator: TrackActivity (NavigationService /
+        // UserContextMiddleware) fires under whatever AccessContext is current,
+        // and that context can transiently be `system-security` (e.g. mid
+        // ImpersonateAsSystem). The activity tracker writes to
+        // `{userId}/_UserActivity/{encodedPath}` — for `userId = system-security`
+        // that lands in the global `_UserActivity` partition, which still needs
+        // Create permission. Global scope grants Admin on EVERY partition's
+        // `_UserActivity` satellite tree (and everything else system writes touch).
+        yield return CreateSystemAdminAccess();
     }
+
+    /// <summary>
+    /// Creates the global AccessAssignment granting <see cref="WellKnownUsers.System"/>
+    /// the Admin role at root scope. Namespace = <c>_Access</c> (the canonical global
+    /// access-grant scope per <c>feedback_access_assignment_namespace</c>); MainNode = ""
+    /// so the grant applies to every partition via namespace inheritance.
+    /// </summary>
+    private static MeshNode CreateSystemAdminAccess() =>
+        new($"{WellKnownUsers.System}_Access", "_Access")
+        {
+            NodeType = "AccessAssignment",
+            Name = $"{WellKnownUsers.System} Access",
+            MainNode = "",
+            Content = new AccessAssignment
+            {
+                AccessObject = WellKnownUsers.System,
+                DisplayName = "System identity (internal operations)",
+                Roles = [new RoleAssignment { Role = "Admin" }]
+            }
+        };
 
     /// <summary>
     /// Creates a top-level partition for a global satellite namespace

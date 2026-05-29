@@ -50,15 +50,32 @@ public class DocumentationNodeProvider : IStaticNodeProvider
             }
         };
 
-        // Grant all authenticated users read access to documentation
-        yield return new MeshNode($"{WellKnownUsers.Public}_Access", RootNamespace)
+        // Read access for both authenticated users (Public) and unauthenticated
+        // visitors (Anonymous). Namespace MUST end in /_Access and MainNode MUST
+        // point at the partition root; SecurityService silently drops assignments
+        // that don't follow that shape (see feedback_access_assignment_namespace).
+        yield return new MeshNode($"{WellKnownUsers.Public}_Access", $"{RootNamespace}/_Access")
         {
             NodeType = "AccessAssignment",
             Name = $"{WellKnownUsers.Public} Access",
+            MainNode = RootNamespace,
             Content = new AccessAssignment
             {
                 AccessObject = WellKnownUsers.Public,
                 DisplayName = "All authenticated users",
+                Roles = [new RoleAssignment { Role = "Viewer" }]
+            }
+        };
+
+        yield return new MeshNode($"{WellKnownUsers.Anonymous}_Access", $"{RootNamespace}/_Access")
+        {
+            NodeType = "AccessAssignment",
+            Name = $"{WellKnownUsers.Anonymous} Access",
+            MainNode = RootNamespace,
+            Content = new AccessAssignment
+            {
+                AccessObject = WellKnownUsers.Anonymous,
+                DisplayName = "Unauthenticated visitors",
                 Roles = [new RoleAssignment { Role = "Viewer" }]
             }
         };

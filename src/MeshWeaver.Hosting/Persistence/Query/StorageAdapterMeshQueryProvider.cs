@@ -1130,7 +1130,11 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                             Scheduler.Default.Schedule(() =>
                             {
                                 foreach (var n in backlog)
-                                    changeBuffer.OnNext(n);
+                                {
+                                    if (disposables.IsDisposed) return;
+                                    try { changeBuffer.OnNext(n); }
+                                    catch (ObjectDisposedException) { return; }
+                                }
                             });
                         }
                     },
