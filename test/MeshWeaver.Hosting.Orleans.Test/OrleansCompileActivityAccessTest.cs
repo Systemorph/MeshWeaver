@@ -735,6 +735,150 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
             .FirstAsync().Timeout(10.Seconds()).ToTask(ct);
         after.Message.Should().NotBeNull("the grain stays responsive after user-context activation");
     }
+
+    /// <summary>
+    /// Regression guard for the 2026-05-29 framework-redeploy gap: a dynamic
+    /// NodeType whose assembly was compiled against a PREVIOUS MeshWeaver build
+    /// (<c>CompiledFrameworkVersion != FrameworkVersion</c>, but <c>Status=Ok</c>
+    /// and the <c>LatestAssembly{Collection,Path}</c> fields populated) must
+    /// SELF-HEAL on the next instance activation — exactly like the "assembly
+    /// bytes missing from store" case already does.
+    ///
+    /// <para><see cref="NodeTypeCompilationHelpers.HasUsableBuild"/> returns
+    /// false purely on the framework-version mismatch, so before the fix
+    /// <c>EnrichWithNodeType</c> skipped straight to a bare "Compilation failed"
+    /// overlay with an EMPTY code block — no diagnostic captured, because the
+    /// compile never actually failed. Symptom: after every deploy, every dynamic
+    /// NodeType rendered the scary overlay until an operator manually recompiled
+    /// it (the <c>rbuergi/CatBond</c> "Compilation failed / empty code block"
+    /// the user hit immediately after a binary rebuild). The fix routes the
+    /// framework-stale case through <c>TriggerRecompileAndRetry</c> (Pending flip
+    /// → watcher rebuilds under SYSTEM identity → fresh
+    /// <c>CompiledFrameworkVersion</c>), bounded by <c>MaxRecompileAttempts</c>.</para>
+    ///
+    /// <para>This test compiles a clean dynamic type (<c>Status=Ok</c>, FV=live),
+    /// then MUTATES <c>CompiledFrameworkVersion</c> to a bogus value to simulate
+    /// the binary being redeployed under the type's feet, then activates a FRESH
+    /// instance. The instance enrichment must auto-recompile and re-stamp the
+    /// LIVE framework version (recompiling on the same binary reproduces the same
+    /// FrameworkVersion) — seeing the live value again, after we forced the bogus
+    /// one, proves a real self-heal recompile ran. Without the fix the bogus
+    /// version sticks and the instance gets the error overlay, so the heal-wait
+    /// below times out.</para>
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task FrameworkStaleAssembly_SelfHealsOnInstanceActivation()
+    {
+        var ct = new CancellationTokenSource(110.Seconds()).Token;
+
+        var typeId = $"FwStale{Guid.NewGuid():N}";
+        var typePath = $"TestUser/{typeId}";
+        await SeedAsSystem(MeshNode.FromPath(typePath) with
+        {
+            Name = typeId,
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition
+            {
+                Description = "Framework-stale self-heal regression guard",
+                Configuration = $"config => config.WithContentType<{typeId}>()"
+            }
+        }, ct);
+        await SeedAsSystem(new MeshNode("code", $"{typePath}/Source")
+        {
+            Name = "code",
+            NodeType = "Code",
+            Content = new CodeConfiguration
+            {
+                Code = $$"""
+                    public record {{typeId}}
+                    {
+                        public string Title { get; init; } = string.Empty;
+                    }
+                    """,
+                Language = "csharp"
+            }
+        }, ct);
+        Output.WriteLine($"Seeded dynamic NodeType + Code at {typePath}");
+
+        var client = await GetClientAsync($"fwstale-{Guid.NewGuid():N}", userId: "TestUser");
+        var siloHub = ((InProcessSiloHandle)Cluster.Silos[0]).SiloHost.Services
+            .GetRequiredService<IMessageHub>();
+
+        // 1. Activate the NodeType → first-build compile → settle Ok with a real
+        //    assembly stamped with the LIVE framework version.
+        await client.Observe(new GetDataRequest(new MeshNodeReference()),
+                o => o.WithTarget(new Address(typePath)))
+            .FirstAsync().Timeout(20.Seconds()).ToTask(ct);
+        var firstOk = await siloHub.GetWorkspace().GetMeshNodeStream(typePath)
+            .Where(n => n.Content is NodeTypeDefinition d
+                && d.CompilationStatus == CompilationStatus.Ok
+                && !string.IsNullOrEmpty(d.LatestAssemblyPath)
+                && !string.IsNullOrEmpty(d.CompiledFrameworkVersion))
+            .Take(1).Timeout(60.Seconds()).ToTask(ct);
+        var liveFv = ((NodeTypeDefinition)firstOk.Content!).CompiledFrameworkVersion!;
+        Output.WriteLine($"First compile Ok; live framework version = {liveFv}");
+
+        // 2. Simulate a redeploy: stamp a bogus CompiledFrameworkVersion while
+        //    leaving Status=Ok and the assembly fields intact. HasUsableBuild now
+        //    returns false purely on the framework mismatch — the exact
+        //    post-deploy shape. Status stays Ok, so NOTHING auto-recompiles yet
+        //    (the first-build kickoff needs null, the compile watcher needs
+        //    Pending) — only an instance activation can trigger the self-heal.
+        var bogusFv = $"STALE-FRAMEWORK-{Guid.NewGuid():N}";
+        var streamCache = siloHub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        using (SiloAccessService.ImpersonateAsSystem())
+        {
+            await streamCache.Update(typePath, curr =>
+            {
+                if (curr?.Content is not NodeTypeDefinition cd) return curr!;
+                return curr with { Content = cd with { CompiledFrameworkVersion = bogusFv } };
+            }).FirstAsync().ToTask(ct);
+        }
+        // Confirm the bogus version is the live persisted state before we activate.
+        await siloHub.GetWorkspace().GetMeshNodeStream(typePath)
+            .Where(n => n.Content is NodeTypeDefinition d && d.CompiledFrameworkVersion == bogusFv)
+            .Take(1).Timeout(20.Seconds()).ToTask(ct);
+        Output.WriteLine($"Stamped bogus framework version {bogusFv} (simulated redeploy)");
+
+        // 3. Activate a FRESH instance of the type. Its enrichment reads the
+        //    NodeType, sees HasUsableBuild=false (framework mismatch), and must
+        //    route through TriggerRecompileAndRetry — NOT the bare error overlay.
+        //    Activation blocks on the self-heal recompile, so allow the full
+        //    SlowPathTimeout window.
+        var instancePath = $"{typePath}/Inst";
+        await SeedAsSystem(MeshNode.FromPath(instancePath) with
+        {
+            Name = "Inst",
+            NodeType = typePath,
+            Content = System.Text.Json.JsonSerializer.SerializeToElement(new { Title = "instance" })
+        }, ct);
+        await client.Observe(new GetDataRequest(new MeshNodeReference()),
+                o => o.WithTarget(new Address(instancePath)))
+            .FirstAsync().Timeout(90.Seconds()).ToTask(ct);
+        Output.WriteLine($"Activated instance {instancePath} — self-heal should have fired.");
+
+        // 4. The self-heal must have recompiled the NodeType and re-stamped the
+        //    LIVE framework version. Seeing liveFv again — after we forced
+        //    bogusFv — proves a real recompile ran via the self-heal path.
+        var healed = await siloHub.GetWorkspace().GetMeshNodeStream(typePath)
+            .Where(n => n.Content is NodeTypeDefinition d
+                && d.CompilationStatus == CompilationStatus.Ok
+                && d.CompiledFrameworkVersion == liveFv)
+            .Take(1).Timeout(60.Seconds()).ToTask(ct);
+        ((NodeTypeDefinition)healed.Content!).CompiledFrameworkVersion.Should().Be(liveFv,
+            "framework-stale enrichment must self-heal: TriggerRecompileAndRetry flips " +
+            "the NodeType to Pending, the watcher rebuilds it against the CURRENT framework, " +
+            "and CompiledFrameworkVersion returns to the live value. Before the fix the bogus " +
+            "version stuck and every instance got a bare \"Compilation failed\" overlay with " +
+            "an empty code block — the symptom the user hit after a binary rebuild.");
+        Output.WriteLine("NodeType self-healed: live framework version restored via recompile.");
+
+        // 5. The instance grain stays responsive after the heal.
+        var after = await client.Observe(new GetDataRequest(new MeshNodeReference()),
+                o => o.WithTarget(new Address(instancePath)))
+            .FirstAsync().Timeout(10.Seconds()).ToTask(ct);
+        after.Message.Should().NotBeNull("the instance stays responsive after the self-heal recompile");
+    }
 }
 
 /// <summary>
