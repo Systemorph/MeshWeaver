@@ -9,6 +9,19 @@ MeshPlugin provides tools for interacting with the mesh data graph.
 
 **IMPORTANT**: Examples below use `Doc/Architecture` as a sample node path. Always use the actual node path from the user's context instead.
 
+## Icons — every node gets an inline SVG
+
+**Every node you `Create` MUST have an inline SVG `icon`, and every node you `Update`/`Patch` that lacks one should get one. This applies to ALL node types — NodeTypes, data instances, Markdown pages, agents, scripts, everything — not just Markdown.**
+
+- The value must start with `<svg` (inline markup, rendered directly into the page). **Never** a file path (`/static/…​.svg`), **never** an emoji, **never** blank.
+- **Use `currentColor` for `fill`/`stroke` instead of hard-coded colours.** Inline icons render inheriting the surrounding text colour, so `currentColor` keeps them legible in **both light and dark mode**. A hard-coded dark stroke (e.g. `#0f172a`) disappears on a dark background — that is the #1 icon bug. For multi-colour illustrative icons, pick colours that read on both light and dark surfaces.
+- Set an explicit `width`/`height` (e.g. `24`) and a `viewBox` so the icon renders crisply inside the ~48px icon box.
+- Make it **distinct and topical** — design the glyph to represent that node's subject (a hurricane swirl for a storm bond, a seismograph trace for an earthquake bond, a shield-and-bolt for an insurance-linked security). Distinct icons make the navigator scannable.
+
+```svg
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h3l2-6 4 14 3-9 1.6 4H22"/></svg>
+```
+
 ## Path Rules
 
 **Every tool argument that expects a node reference MUST be the node's `path` property — never its `name`, `id`, or any human-readable label.** When `Get` / `Search` returns a MeshNode, you will see both `name` ("Final Report – AI Readiness Assessment & 100-Day Plan") and `path` ("PartnerRe/AIConsulting/FinalReport"). **Use the `path` value.** Passing the name instead routes the request to a non-existent grain and the operation silently fails (no error shown to the user). If you only know the display name, call `Search('name:"...the name..."')` first and read the `path` field off the match.
@@ -263,7 +276,7 @@ Creates a new node in the mesh. The node is validated before being persisted.
 | `name` | string | Yes | Descriptive human-readable title. Make it clear and meaningful. |
 | `nodeType` | string | Yes | Type category (must match an existing NodeType) |
 | `category` | string | No | Grouping category |
-| `icon` | string | **Yes** | Inline SVG icon (start with `<svg`) — **ALWAYS** create a unique, visually appealing SVG that represents the node's topic. Never leave blank. |
+| `icon` | string | **Yes** | Inline SVG icon (start with `<svg`) — **ALWAYS** create a unique, visually appealing SVG that represents the node's topic. Use `currentColor` for fill/stroke so it adapts to light/dark theme, and set `width`/`height`/`viewBox`. Never a file path, never blank. See **Icons** above. |
 | `order` | int | No | Sort order (lower values appear first) |
 | `content` | object | Depends on type | Type-specific data model content |
 
