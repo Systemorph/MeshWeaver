@@ -99,9 +99,9 @@ Full reference: [Deployment.md](src/MeshWeaver.Documentation/Data/Architecture/D
 ```bash
 dotnet build                                              # Build solution
 dotnet test test/MeshWeaver.Data.Test --no-restore        # Run one test project
-dotnet run --project memex/Memex.Portal.Monolith          # Dev portal (https://localhost:7122)
-dotnet run --project memex/aspire/Memex.AppHost           # Aspire (requires Docker)
-aspire run --project memex/aspire/Memex.AppHost           # Aspire via CLI (registers with `aspire mcp`)
+dotnet run --project memex/Memex.Portal.Monolith          # Monolith standalone (https://localhost:7122, http://localhost:5022)
+dotnet run --project memex/aspire/Memex.AppHost           # Aspire (requires Docker) — portal at https://localhost:7202, http://localhost:5202
+aspire run --project memex/aspire/Memex.AppHost           # Aspire via CLI (registers with `aspire mcp`) — same URLs as above
 ```
 
 ### Restarting just the Portal (no full Aspire restart)
@@ -270,7 +270,8 @@ Full treatment: [CqrsAndContentAccess.md](src/MeshWeaver.Documentation/Data/Arch
 | Environment | Base URL |
 |---|---|
 | Prod | `https://memex.meshweaver.cloud` |
-| Dev | `http://localhost:5000` (Memex.Portal.Monolith) |
+| Dev — Aspire (`memex/aspire/Memex.AppHost`) | `https://localhost:7202` (HTTP fallback `http://localhost:5202`) |
+| Dev — Monolith standalone (`memex/Memex.Portal.Monolith`) | `https://localhost:7122` (HTTP fallback `http://localhost:5022`) |
 
 ## `@/` is Local-Only
 
