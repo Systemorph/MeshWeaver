@@ -9,6 +9,7 @@ using MeshWeaver.Data.Persistence;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Data.Validation;
 using MeshWeaver.Domain;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using MeshWeaver.Utils;
@@ -501,6 +502,7 @@ public static class DataExtensions
     private static IMessageDelivery HandlePatchDataRequest(
         IMessageHub hub, IMessageDelivery<PatchDataRequest> request)
     {
+        var hubPath = hub.Address.ToString();
         try
         {
             var reference = request.Message.Reference;
@@ -522,8 +524,15 @@ public static class DataExtensions
             dynamic? stream = getStream.Invoke(hub.GetWorkspace(), new object?[] { reference, null });
             if (stream is null)
             {
+                var nodeErr = new MeshNodeError(
+                    MeshNodeErrorCode.NotFound,
+                    hubPath,
+                    $"No stream resolved for reference {reference.GetType().Name}");
                 hub.Post(new PatchDataResponse(false, hub.Version)
-                    { Error = $"No stream resolved for reference {reference.GetType().Name}" },
+                    {
+                        Error = nodeErr.Message,
+                        NodeError = nodeErr,
+                    },
                     o => o.ResponseFor(request));
                 return request.Processed();
             }
@@ -550,10 +559,35 @@ public static class DataExtensions
         }
         catch (Exception ex)
         {
-            hub.Post(new PatchDataResponse(false, hub.Version) { Error = ex.Message },
+            var nodeErr = ClassifyPatchException(ex, hubPath);
+            hub.Post(new PatchDataResponse(false, hub.Version)
+                {
+                    Error = nodeErr.Message,
+                    NodeError = nodeErr,
+                },
                 o => o.ResponseFor(request));
         }
         return request.Processed();
+    }
+
+    /// <summary>
+    /// Maps owner-side patch exceptions to structured <see cref="MeshNodeError"/>
+    /// codes. Unknown exception types fall through as
+    /// <see cref="MeshNodeErrorCode.Unknown"/> with the exception type prefixed
+    /// — visible at the consumer GUI so the gap is diagnosable, not silent.
+    /// </summary>
+    private static MeshNodeError ClassifyPatchException(Exception ex, string path)
+    {
+        var (code, prefix) = ex switch
+        {
+            UnauthorizedAccessException => (MeshNodeErrorCode.AccessDenied, "Access denied"),
+            System.Text.Json.JsonException => (MeshNodeErrorCode.Deserialization, "Patch deserialization failed"),
+            InvalidOperationException ioe when ioe.Message.Contains("Patch must be a JSON object", StringComparison.OrdinalIgnoreCase)
+                => (MeshNodeErrorCode.Deserialization, "Patch deserialization failed"),
+            ArgumentException => (MeshNodeErrorCode.Validation, "Validation failed"),
+            _ => (MeshNodeErrorCode.Unknown, ex.GetType().Name),
+        };
+        return new MeshNodeError(code, path, $"{prefix}: {ex.Message}", ex.StackTrace);
     }
 
     /// <summary>
@@ -610,6 +644,7 @@ public static class DataExtensions
         IMessageHub hub,
         IMessageDelivery<PatchDataRequest> request)
     {
+        var hubPath = hub.Address.ToString();
         stream
             .Take(1)
             .Subscribe(change =>
@@ -629,8 +664,16 @@ public static class DataExtensions
                     var merged = System.Text.Json.JsonSerializer.Deserialize<T>(mergedJson, jsonOpts);
                     if (merged is null)
                     {
+                        var nodeErr = new MeshNodeError(
+                            MeshNodeErrorCode.Deserialization,
+                            hubPath,
+                            "Merged value deserialised to null",
+                            patchText);
                         hub.Post(new PatchDataResponse(false, hub.Version)
-                            { Error = "Merged value deserialised to null" },
+                            {
+                                Error = nodeErr.Message,
+                                NodeError = nodeErr,
+                            },
                             o => o.ResponseFor(request));
                         return;
                     }
@@ -646,11 +689,12 @@ public static class DataExtensions
                     // is preserved (caller's RegisterCallback fires after the
                     // commit lands, before any subsequent Get).
                     var ackPosted = 0;
-                    void AckOnce(bool success, string? error = null)
+                    void AckOnce(bool success, MeshNodeError? error = null)
                     {
                         if (System.Threading.Interlocked.Exchange(ref ackPosted, 1) != 0) return;
                         var resp = new PatchDataResponse(success, hub.Version);
-                        if (error is not null) resp = resp with { Error = error };
+                        if (error is not null)
+                            resp = resp with { Error = error.Message, NodeError = error };
                         hub.Post(resp, o => o.ResponseFor(request));
                     }
 
@@ -658,7 +702,9 @@ public static class DataExtensions
                         .Skip(1)
                         .Take(1)
                         .Timeout(TimeSpan.FromSeconds(5))
-                        .Subscribe(_ => AckOnce(true), ex => AckOnce(false, ex.Message));
+                        .Subscribe(
+                            _ => AckOnce(true),
+                            ex => AckOnce(false, ClassifyPatchException(ex, hubPath)));
                     hub.RegisterForDisposal(postSub);
 
                     // Route via the hub's DataChangeRequest pipeline — the workspace
@@ -669,7 +715,12 @@ public static class DataExtensions
                 }
                 catch (Exception ex)
                 {
-                    hub.Post(new PatchDataResponse(false, hub.Version) { Error = ex.Message },
+                    var nodeErr = ClassifyPatchException(ex, hubPath);
+                    hub.Post(new PatchDataResponse(false, hub.Version)
+                        {
+                            Error = nodeErr.Message,
+                            NodeError = nodeErr,
+                        },
                         o => o.ResponseFor(request));
                 }
             });

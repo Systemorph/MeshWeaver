@@ -1,3 +1,4 @@
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using MeshWeaver.Messaging.Security;
@@ -32,5 +33,25 @@ public record PatchDataResponse(bool Success, long Version)
     /// </summary>
     public ActivityLog? Log { get; init; }
 
+    /// <summary>
+    /// Free-text legacy error message. Prefer <see cref="NodeError"/> for
+    /// structured failures — consumers can switch on the typed
+    /// <see cref="MeshNodeErrorCode"/> instead of pattern-matching strings.
+    /// Kept for back-compat with callers that only read <see cref="Error"/>.
+    /// </summary>
     public string? Error { get; init; }
+
+    /// <summary>
+    /// Structured failure payload — populated by the owner-side handler when
+    /// the operation fails with a recognizable cause (access denied,
+    /// deserialization, conflict, etc.). Consumers translate this to a
+    /// <see cref="MeshNodeStreamException"/> at the
+    /// <c>MeshNodeStreamHandle</c> boundary; the Blazor layout-area pipeline
+    /// renders a typed error card per <see cref="MeshNodeErrorCode"/>.
+    /// <para>Both <see cref="NodeError"/> and <see cref="Error"/> are
+    /// populated on failure — the latter is filled from
+    /// <see cref="MeshNodeError.Message"/> so legacy string-only callers
+    /// keep working.</para>
+    /// </summary>
+    public MeshNodeError? NodeError { get; init; }
 }
