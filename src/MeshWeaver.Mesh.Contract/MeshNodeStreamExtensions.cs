@@ -640,8 +640,36 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             // For strict consistency (rare), callers re-read
                             // via GetMeshNodeStream(path).Take(1) after the
                             // patch — that DOES go to the owner.
-                            observer.OnNext(updated);
-                            observer.OnCompleted();
+                            //
+                            // 🚨 Restore the caller's identity around OnNext.
+                            // We're inside `initialSub.Subscribe`'s callback,
+                            // which fires on the remote-stream emission thread
+                            // — opened under ImpersonateAsSystem (line ~110)
+                            // for infrastructure routing, so AsyncLocal
+                            // Context = system-security here. Without the
+                            // explicit restore, the caller's Subscribe(_ =>
+                            // …) sees `accessService.Context = system-security`
+                            // instead of their user identity. CarryAccessContext
+                            // (line 285) doesn't help because it captures only
+                            // `Context`, not `CircuitContext` — pure
+                            // CircuitContext callers (Blazor circuits, tests
+                            // that SetCircuitContext) see system-security.
+                            // The eagerly-captured `capturedContextAtEntry`
+                            // already does the Context ?? CircuitContext
+                            // fallback we need.
+                            if (accessServiceAtEntry is not null && capturedContextAtEntry is not null)
+                            {
+                                using (accessServiceAtEntry.SwitchAccessContext(capturedContextAtEntry))
+                                {
+                                    observer.OnNext(updated);
+                                    observer.OnCompleted();
+                                }
+                            }
+                            else
+                            {
+                                observer.OnNext(updated);
+                                observer.OnCompleted();
+                            }
 
                             // Fire-and-forget response check. Errors logged to
                             // the diag channel; observable readers care about
