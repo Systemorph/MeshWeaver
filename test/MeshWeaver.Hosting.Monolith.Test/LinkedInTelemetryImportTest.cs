@@ -68,17 +68,11 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
                 return services;
             });
 
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 60000)]
     public async Task LinkedInTelemetryImport_CompilesAndRendersImportArea()
     {
-        // 120s wall clock (was 60s — local pass in ~13s, CI consistently
-        // tripped at the 60s wall). The bulk of CI time is Roslyn cold-start
-        // on Linux runners (the per-test-class .mesh-cache directory is
-        // never reused across CI runs, so every run pays the full first-
-        // compile cost). Two sequential C# compiles (LinkedInProfile +
-        // LinkedInTelemetryImport) routinely cost 40-60s of cold-start on
-        // shared runners. Bump the wall to give render time after compile
-        // — the inner `ct` budget stays at 60s for the in-test waits.
+        // 60s CT; if 60s isn't enough then there's a real bug we need to fix
+        // (per user direction: max 60s, log out to see what's happening).
         var ct = new CancellationTokenSource(60.Seconds()).Token;
 
         await NodeFactory.CreateNode(new MeshNode("LinkedInProfile", "Systemorph")

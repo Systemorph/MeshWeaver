@@ -45,7 +45,14 @@ internal static class NodeTypeEnrichmentHelpers
     /// HubConfiguration short-circuits to the cached result) — see
     /// <c>NodeTypeEnrichmentDoubleCallTest</c>.</para>
     /// </summary>
-    private static readonly TimeSpan SlowPathTimeout = TimeSpan.FromSeconds(30);
+    // Reactive wait with a sane upper bound — NOT a "make the number bigger"
+    // fix. A wedged owning grain never responds no matter how long we wait, so
+    // the budget's only jobs are to (a) outlast a legitimate cold first-compile
+    // and (b) then surface the overlay instead of hanging activation forever.
+    // 60s is the agreed cap. Correctness comes from the activity FINISHING and
+    // DISPOSING (writing the terminal NodeType state), which consumers observe
+    // via this same stream.Where(settled) — not from a longer timeout.
+    private static readonly TimeSpan SlowPathTimeout = TimeSpan.FromSeconds(60);
 
     public static IObservable<MeshNode> EnrichWithNodeType(
         IMessageHub meshHub,
