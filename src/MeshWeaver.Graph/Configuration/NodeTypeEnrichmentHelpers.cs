@@ -563,6 +563,42 @@ internal static class NodeTypeEnrichmentHelpers
                 });
         }
 
+        // HasUsableBuild was false. Before overlaying an error, distinguish the
+        // framework-stale sub-case: Status=Ok AND the assembly fields ARE
+        // populated, so the ONLY HasUsableBuild condition that failed is the
+        // CompiledFrameworkVersion == FrameworkVersion equality — i.e. the DLL
+        // was built against a PREVIOUS MeshWeaver build (a redeploy changed the
+        // FrameworkVersion hash). The bytes are ABI-incompatible, not absent.
+        // This is the exact analogue of the "bytes missing from store" self-heal
+        // in the HasUsableBuild==true branch above: flip the NodeType to Pending
+        // so the compile watcher rebuilds it under SYSTEM identity (no inbound
+        // AccessContext → no "lacks Create" loop), then recurse on the fresh
+        // terminal state — bounded by MaxRecompileAttempts. Without this, every
+        // dynamic NodeType shows a bare "Compilation failed" overlay after every
+        // deploy until an operator manually recompiles it.
+        if (def.CompilationStatus == CompilationStatus.Ok
+            && !string.IsNullOrEmpty(def.LatestAssemblyCollection)
+            && !string.IsNullOrEmpty(def.LatestAssemblyPath)
+            && compilationService is not null)
+        {
+            if (recompileAttempts >= MaxRecompileAttempts)
+            {
+                logger?.LogWarning(
+                    "EnrichWithNodeType: {NodeType} assembly is compiled against framework {Compiled} but the live framework is {Live}; still ABI-stale after {Attempts} recompile attempt(s) — overlaying recompile prompt",
+                    nodeType, def.CompiledFrameworkVersion ?? "(null)",
+                    NodeTypeCompilationHelpers.FrameworkVersion, recompileAttempts);
+                return Observable.Return(
+                    WithCompilationErrorOverlay(node, nodeType,
+                        "Built against a previous framework version",
+                        meshConfiguration,
+                        guidance: "This type's compiled assembly targets an older MeshWeaver build, so the current process can't load it. Click **Recompile** (or call `compile` via MCP) to rebuild it against the current framework — no source changes are needed."));
+            }
+            return TriggerRecompileAndRetry(
+                node, nodeType, meshConfiguration, compilationService, meshHub,
+                logger, recompileAttempts,
+                reason: $"'{nodeType}' assembly compiled against framework '{def.CompiledFrameworkVersion}' but live framework is '{NodeTypeCompilationHelpers.FrameworkVersion}' — ABI-stale, recompiling");
+        }
+
         var error = def.CompilationError ?? "Compilation failed";
         return Observable.Return(
             WithCompilationErrorOverlay(node, nodeType, error, meshConfiguration));
@@ -708,7 +744,8 @@ internal static class NodeTypeEnrichmentHelpers
         MeshNode node,
         string nodeType,
         string? error,
-        MeshConfiguration meshConfiguration)
+        MeshConfiguration meshConfiguration,
+        string? guidance = null)
     {
         var baseConfig = string.IsNullOrEmpty(error)
             ? (node.HubConfiguration ?? meshConfiguration.DefaultNodeHubConfiguration)
@@ -717,38 +754,45 @@ internal static class NodeTypeEnrichmentHelpers
         if (string.IsNullOrEmpty(error))
             return node with { HubConfiguration = baseConfig };
 
-        var overlay = CreateCompilationErrorConfiguration(error);
+        var overlay = CreateCompilationErrorConfiguration(error, guidance);
         Func<MessageHubConfiguration, MessageHubConfiguration> composed = baseConfig != null
             ? (config => overlay(baseConfig(config)))
             : overlay;
         return node with { HubConfiguration = composed };
     }
 
+    // Default guidance for a genuine Roslyn failure (Status=Error with captured
+    // diagnostics). Other overlay callers (e.g. the framework-stale recompile
+    // prompt) pass their own actionable guidance instead.
+    private const string DefaultCompilationErrorGuidance =
+        "Fix the source code or the NodeType's `sources` list, then use the **Recycle** menu to flush the cached grain (or call `GetDiagnostics` via MCP to re-check).";
+
     private static Func<MessageHubConfiguration, MessageHubConfiguration>
-        CreateCompilationErrorConfiguration(string errorMessage)
+        CreateCompilationErrorConfiguration(string errorMessage, string? guidance)
     {
         return config => config.AddLayout(layout =>
             layout.WithView(MeshNodeLayoutAreas.OverviewArea, (host, ctx) =>
-                Observable.Return<UiControl?>(BuildCompilationErrorMarkdown(errorMessage))));
+                Observable.Return<UiControl?>(BuildCompilationErrorMarkdown(errorMessage, guidance))));
     }
 
-    private static UiControl BuildCompilationErrorMarkdown(string errorMessage)
+    private static UiControl BuildCompilationErrorMarkdown(string errorMessage, string? guidance)
     {
         var newlineIdx = errorMessage.IndexOf('\n');
         var header = newlineIdx >= 0 ? errorMessage[..newlineIdx].TrimEnd(':') : errorMessage;
         var body = newlineIdx >= 0 ? errorMessage[(newlineIdx + 1)..].TrimEnd() : string.Empty;
 
-        var markdown =
-$@"> **⚠ {header}**
->
-> Fix the source code or the NodeType's `sources` list, then use the **Recycle** menu to flush the cached grain (or call `GetDiagnostics` via MCP to re-check).
-
-```text
-{body}
-```";
+        var sb = new System.Text.StringBuilder();
+        sb.Append("> **⚠ ").Append(header).Append("**\n>\n> ");
+        sb.Append(guidance ?? DefaultCompilationErrorGuidance);
+        // Only emit the diagnostics code fence when there's actually a body to
+        // show. A single-line message (the generic "Compilation failed" fallback
+        // or the framework-stale prompt) previously rendered an EMPTY ```text```
+        // block here — the confusing artifact users reported.
+        if (!string.IsNullOrEmpty(body))
+            sb.Append("\n\n```text\n").Append(body).Append("\n```");
 
         return Controls.Stack
             .WithStyle("padding: 16px;")
-            .WithView(Controls.Markdown(markdown));
+            .WithView(Controls.Markdown(sb.ToString()));
     }
 }
