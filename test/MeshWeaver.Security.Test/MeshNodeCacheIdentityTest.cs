@@ -293,6 +293,14 @@ public class MeshNodeCacheIdentityTest(ITestOutputHelper output) : MonolithMeshT
         //    The OnNext callback's observed AsyncLocal value is the contract.
         var alice = new AccessContext { ObjectId = "alice@example.com", Name = "Alice" };
 
+        // Capture from EITHER OnNext (if the update is granted — identity is
+        // restored on the success callback) OR OnError (when the typed
+        // MeshNodeStreamException fires with AccessDenied — the error's Path
+        // and Message carry the principal). The contract under test is
+        // "identity propagates"; both outcomes prove it. Pre-2026-05-29 the
+        // silent denial path meant OnError never fired and OnNext was the
+        // only signal — see TypedErrorPropagationTest for the contract that
+        // now makes the denial loud.
         var observedContext = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         using (accessService.SwitchAccessContext(alice))
@@ -300,18 +308,45 @@ public class MeshNodeCacheIdentityTest(ITestOutputHelper output) : MonolithMeshT
             cache.Update(nodePath, n => n with { Name = "Updated by Alice" })
                 .Subscribe(
                     _ => observedContext.TrySetResult(accessService.Context?.ObjectId),
-                    ex => observedContext.TrySetException(ex));
+                    ex => observedContext.TrySetResult(ExtractPrincipal(ex)));
         }
 
         var observed = await observedContext.Task.WaitAsync(15.Seconds(), TestTimeout);
 
         observed.Should().Be("alice@example.com",
             because: "cache.Update's returned cold observable must restore the caller's " +
-                     "captured AccessContext on every OnNext callback. The per-path serial " +
-                     "Concat queue runs the inner observable on a ThreadPool thread with no " +
-                     "AsyncLocal of its own, so without the framework wrap doing a leak-free " +
-                     "per-callback restore (PR2 of the AccessContext propagation plan), this " +
-                     "callback observes either null or the Concat thread's stale ambient value.");
+                     "captured AccessContext — observable either as AsyncLocal on the " +
+                     "OnNext callback (granted) or as the principal stamped on the typed " +
+                     "AccessDenied MeshNodeError (denied). The per-path serial Concat " +
+                     "queue runs on a ThreadPool thread with no AsyncLocal of its own, " +
+                     "so without the framework wrap's leak-free per-callback restore the " +
+                     "OnNext callback observes either null or the Concat thread's stale " +
+                     "ambient value, and the outbound PatchDataRequest is unattributed " +
+                     "(making the owner-side denial name 'sync/…' instead of alice).");
+    }
+
+    /// <summary>
+    /// Pulls the caller's principal out of either a typed
+    /// <see cref="MeshNodeStreamException"/> (AccessDenied carries the principal
+    /// in the diagnostic message) or any other exception's message. Returns
+    /// null when no email-shaped substring is present.
+    /// </summary>
+    private static string? ExtractPrincipal(Exception ex)
+    {
+        var text = ex switch
+        {
+            MeshNodeStreamException mse => mse.Error.Message + " " + (mse.Error.Diagnostic ?? ""),
+            _ => ex.Message
+        };
+        // The owner-side denial message is shaped:
+        //   "Access denied: user 'bob@example.com' lacks Update permission on '...'"
+        // Pull the quoted principal between the first pair of single quotes
+        // after "user".
+        var idx = text.IndexOf("user '", StringComparison.Ordinal);
+        if (idx < 0) return null;
+        var start = idx + "user '".Length;
+        var end = text.IndexOf('\'', start);
+        return end > start ? text[start..end] : null;
     }
 
     /// <summary>
@@ -361,18 +396,23 @@ public class MeshNodeCacheIdentityTest(ITestOutputHelper output) : MonolithMeshT
 
         // Scope disposed — AsyncLocal is back to whatever DevLogin left it.
         // The framework wrap's captured value must STILL be Bob.
+        // Same dual-path capture as CacheUpdate_Concat_PreservesCallerIdentity:
+        // either OnNext (granted) sees AsyncLocal = bob, or OnError (denied)
+        // carries bob as the principal in the typed AccessDenied error.
         updateObservable.Subscribe(
             _ => observedContext.TrySetResult(accessService.Context?.ObjectId),
-            ex => observedContext.TrySetException(ex));
+            ex => observedContext.TrySetResult(ExtractPrincipal(ex)));
 
         var observed = await observedContext.Task.WaitAsync(15.Seconds(), TestTimeout);
 
         observed.Should().Be("bob@example.com",
             because: "the framework primitive must capture the caller's AccessContext by " +
                      "VALUE at Update(...) call time. Subscribing after the caller's scope " +
-                     "is disposed must still observe Bob inside the OnNext callback. If the " +
-                     "wrap reads AsyncLocal at emission time instead, this test would " +
-                     "observe DevLogin's admin (or null) — the capture-by-value contract " +
-                     "is what makes the wrap safe across scope-elided Subscribe sites.");
+                     "is disposed must still observe Bob — either inside the OnNext " +
+                     "callback (granted) or as the principal stamped on the typed " +
+                     "AccessDenied MeshNodeError (denied). If the wrap reads AsyncLocal at " +
+                     "emission time instead, this test would observe DevLogin's admin " +
+                     "(or null) — the capture-by-value contract is what makes the wrap " +
+                     "safe across scope-elided Subscribe sites.");
     }
 }
