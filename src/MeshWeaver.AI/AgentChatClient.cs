@@ -953,7 +953,22 @@ public class AgentChatClient : IAgentChat
         if (!string.IsNullOrEmpty(currentAgentName) && agents.TryGetValue(currentAgentName, out var selectedAgent))
             return selectedAgent;
 
-        // 4. Use the synced ordered list — best match for context, kept fresh
+        // 4. Prefer the configuration-marked default agent (IsDefault=true).
+        //    🚨 Without this, the fallback below routes to loadedAgents[0]
+        //    which depends on AgentOrderingHelper.OrderByRelevance — order
+        //    can vary across runs because the synced query's emission timing
+        //    is non-deterministic. Concrete failure: SubThreadHangRepro's
+        //    second [Fact] routed to NodeInitializer instead of the
+        //    Assistant default, sending the test through
+        //    HangingSubAgentChatClient (which hangs forever) instead of
+        //    DelegatingParentChatClient. Symptom: STREAM_BEGIN logs, then
+        //    no further activity — first MoveNext on the inner client never
+        //    returns.
+        var defaultAgentInfo = loadedAgents.FirstOrDefault(a => a.AgentConfiguration?.IsDefault == true);
+        if (defaultAgentInfo is not null && agents.TryGetValue(defaultAgentInfo.Name, out var defaultAgent))
+            return defaultAgent;
+
+        // 5. Use the synced ordered list — best match for context, kept fresh
         // by the workspace synced query (see Initialize).
         if (loadedAgents.Count > 0)
         {
@@ -962,7 +977,7 @@ public class AgentChatClient : IAgentChat
                 return agent;
         }
 
-        // 5. Return first agent as fallback
+        // 6. Return first agent as fallback
         return agents.Values.FirstOrDefault();
     }
     /// <inheritdoc />
@@ -1131,8 +1146,16 @@ public class AgentChatClient : IAgentChat
         logger.LogDebug("[AgentChatClient] {Count} agents: [{Agents}]",
             loadedAgents.Count, string.Join(", ", loadedAgents.Select(a => a.Name)));
 
+        // 🚨 Do NOT pre-wipe `agents` here. CreateAgentsSync builds the new
+        // dict LOCALLY and atomic-swaps at the end (see "Atomic publish"
+        // comment in CreateAgentsSync). Wiping here would leave `agents`
+        // empty for the entire rebuild window — concurrent SelectAgent
+        // calls would return null and the request would surface as
+        // "No suitable agent found to handle the request." (the
+        // SubThreadHangRepro second-Fact symptom). Keep the OLD dict in
+        // place; readers see EITHER the old full dict OR the new full
+        // dict, never an empty intermediate.
         agentsInitialized = false;
-        agents = ImmutableDictionary<string, ChatClientAgent>.Empty;
         CreateAgentsSync();
     }
 
@@ -1186,7 +1209,21 @@ public class AgentChatClient : IAgentChat
         var createdAgents = ImmutableDictionary<string, ChatClientAgent>.Empty;
         var orderedConfigs = OrderAgentsForCreation(configs);
 
-        // 🚨 Per-agent try/catch is mandatory: factory misconfig (e.g. an
+        // 🚨 Build the dict LOCALLY, then ATOMICALLY swap into `agents` at
+        // the end. The previous shape mutated the shared `agents` field per
+        // iteration (one-by-one SetItem) — every concurrent SelectAgent
+        // saw a PARTIAL dict, biased toward agents added first
+        // (Researcher, Versioning, DescriptionWriter, …). The default
+        // Assistant is added LAST per `OrderAgentsForCreation`, so during
+        // the window, SelectAgent's `loadedAgents[0]` lookup (which finds
+        // "Assistant" in loadedAgents) ran `agents.TryGetValue("Assistant")`
+        // → false → fell through to `agents.Values.FirstOrDefault()` →
+        // returned a non-default agent. Concrete failure:
+        // SubThreadHangRepro's second [Fact] routed to DescriptionWriter
+        // (HangingSubAgentChatClient) instead of Assistant
+        // (DelegatingParentChatClient) — hung forever.
+        //
+        // Per-agent try/catch is mandatory: factory misconfig (e.g. an
         // Azure Foundry endpoint not set) throws inside CreateAgent and used
         // to escape the synced-query Subscribe callback as an unhandled
         // exception that killed the portal process. Now we log + skip the
@@ -1200,7 +1237,6 @@ public class AgentChatClient : IAgentChat
             {
                 var agent = factory.CreateAgent(agentConfig, this, createdAgents, configs, effectiveModel);
                 createdAgents = createdAgents.SetItem(agentConfig.Id, agent);
-                agents = agents.SetItem(agentConfig.Id, agent);
             }
             catch (Exception ex)
             {
@@ -1221,7 +1257,6 @@ public class AgentChatClient : IAgentChat
             {
                 var updatedAgent = factory.CreateAgent(agentConfig, this, createdAgents, configs, effectiveModel);
                 createdAgents = createdAgents.SetItem(agentConfig.Id, updatedAgent);
-                agents = agents.SetItem(agentConfig.Id, updatedAgent);
             }
             catch (Exception ex)
             {
@@ -1231,6 +1266,9 @@ public class AgentChatClient : IAgentChat
             }
         }
 
+        // Atomic publish — readers see EITHER the previous full dict OR the
+        // new full dict, never a half-built one.
+        agents = createdAgents;
         agentsInitialized = true;
         logger.LogDebug("[AgentChatClient] Created {Count} agents", agents.Count);
     }
