@@ -72,6 +72,16 @@ flowchart LR
     end
 ```
 
+## NodeTypes are nodes too
+
+Because a type *is* a node, you work with it exactly like any other node:
+
+- It has a **path** (`Type/Claim`), a `Name`, an `Icon`, and `Content` (its `NodeTypeDefinition`). Its *own* `nodeType` is the literal `"NodeType"`.
+- You **navigate to it** in the portal, **query for it** (`nodeType:NodeType`), version it, and grant access on it — the same machinery that serves data instances.
+- A node's `nodeType` field is **the path of that type node**, not an opaque tag. Follow it to reach the definition: the portal's **Settings → Metadata** view renders the Node Type as a link straight to the type's `Configuration` area.
+
+This is what "self-describing" means in practice: to learn how `Insurance/Claims/CLM-2024-001` behaves, open its `nodeType` — `Type/Claim` — and read the same fields you'd read on any node.
+
 ## NodeType Configuration
 
 Each NodeType node contains:

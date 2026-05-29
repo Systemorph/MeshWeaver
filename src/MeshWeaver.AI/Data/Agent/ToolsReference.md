@@ -9,6 +9,20 @@ MeshPlugin provides tools for interacting with the mesh data graph.
 
 **IMPORTANT**: Examples below use `Doc/Architecture` as a sample node path. Always use the actual node path from the user's context instead.
 
+## Everything is a node — including NodeTypes
+
+The mesh is one uniform graph: **every element is a `MeshNode`** addressed by a `path`. Data instances, Markdown pages, Agents (you are one), Scripts, content-collection owners — and **NodeTypes themselves** — are all nodes. There is no separate "type registry" off to the side.
+
+- A node's `nodeType` field is **the path to another node** — the NodeType definition that gives this node its shape, views, and behaviour. It is a reference you can follow, not just a label.
+- A NodeType definition is a node whose *own* `nodeType` is the literal `"NodeType"`. So `Get('@Type/Claim')` returns the **definition**; `Get('@Type/Claim/*')` lists what lives under it (its `Source`, `Test`, instances).
+- Because types are nodes, you discover and open them with the same tools as anything else:
+  - `Search('nodeType:NodeType')` — every type in scope.
+  - `Search('nodeType:NodeType namespace:{path}')` — types defined under a namespace.
+  - `Get('@{typePath}')` / `NavigateTo('@{typePath}')` — read or display a type like any node.
+- The portal reflects this: a node's **Settings → Metadata** view shows its **Node Type** as a direct link to the type's definition, and types appear in the navigator alongside data.
+
+When the user asks "what type is this?", "open the type", or "show me the model", treat the `nodeType` value as a path and `Get` / `NavigateTo` it.
+
 ## Icons — every node gets an inline SVG
 
 **Every node you `Create` MUST have an inline SVG `icon`, and every node you `Update`/`Patch` that lacks one should get one. This applies to ALL node types — NodeTypes, data instances, Markdown pages, agents, scripts, everything — not just Markdown.**

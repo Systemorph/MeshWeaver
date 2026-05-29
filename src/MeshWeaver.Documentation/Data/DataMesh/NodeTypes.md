@@ -4,7 +4,7 @@ Category: Documentation
 Description: Everything about designing, compiling, referencing packages from, and testing node types.
 ---
 
-A **node type** is a piece of data living in the mesh whose shape is defined by a C# record and whose behavior (layouts, data sources, initial data) is declared by configuration code. Node types are compiled on demand from `Source/*.cs` files; you never need to redeploy the portal to add or change one.
+A **node type** is itself a `MeshNode` — its *own* `nodeType` is the literal `"NodeType"` and its `Content` is a `NodeTypeDefinition`. Its shape is defined by a C# record and its behavior (layouts, data sources, initial data) is declared by configuration code. Because a type is just another node, you browse it, query for it (`nodeType:NodeType`), version it, grant access on it, and open it in the navigator like any other node — and a data node's `nodeType` field is the **path** to the type node that gives it its shape (the Settings → Metadata view links straight to it). Node types are compiled on demand from `Source/*.cs` files; you never need to redeploy the portal to add or change one.
 
 This chapter pulls together everything a node-type author needs:
 
