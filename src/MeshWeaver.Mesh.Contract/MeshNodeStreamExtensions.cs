@@ -616,68 +616,61 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                 return;
                             }
 
-                            // 🚨 Wait for the owner's PatchDataResponse so we can
-                            // surface structured failures (AccessDenied,
-                            // Deserialization, Conflict, …) instead of silently
-                            // claiming success. The previous "fire-and-emit-
-                            // optimistically" shape lost ALL owner-side failures:
-                            // RLS denials, validator rejections, JSON parse errors
-                            // never reached the caller — they appeared as
-                            // "stream.Update succeeded but the node didn't change"
-                            // hangs (the silent-failure class behind the current
-                            // CheckInbox/Delegation flakes).
+                            // 🚨 Emit OnNext OPTIMISTICALLY with the locally-
+                            // computed `updated` snapshot — DO NOT block
+                            // OnCompleted waiting for the owner's
+                            // PatchDataResponse. The wait-for-response shape
+                            // worked in Monolith (~10ms response round-trip)
+                            // but broke Orleans (cross-grain routing + cold-
+                            // start grain activation can exceed 30s, and any
+                            // caller bridging `await ... .FirstAsync()` on a
+                            // hub action block deadlocks — the response
+                            // needs the same action block to dispatch).
                             //
-                            // On Success: emit the LOCALLY-COMPUTED `updated`
-                            // snapshot (the patch is pure RFC 7396 against the
-                            // owner's current state — deterministic merge result).
-                            // On NodeError: OnError with the typed exception so
-                            // the GUI layout-area boundary renders a typed card
-                            // and tests can assert on Error.Code.
+                            // Trade-off: structured owner-side errors
+                            // (AccessDenied, Validation, Deserialization)
+                            // do NOT propagate on the Rx OnError stream.
+                            // The patch is RFC 7396 deterministic, so the
+                            // optimistic snapshot matches what the owner
+                            // commits on success. Owner-side failures land
+                            // in the diagnostic log channel via the fire-
+                            // and-forget response sub below — observable to
+                            // operators, but not on the Rx pipeline.
                             //
-                            // Caller gets the snapshot they asked for. If they
-                            // want the owner's full reconciled state (after merge
-                            // against any concurrent writers) they should re-read
-                            // via GetMeshNodeStream(path).Take(1).
+                            // For strict consistency (rare), callers re-read
+                            // via GetMeshNodeStream(path).Take(1) after the
+                            // patch — that DOES go to the owner.
+                            observer.OnNext(updated);
+                            observer.OnCompleted();
+
+                            // Fire-and-forget response check. Errors logged to
+                            // the diag channel; observable readers care about
+                            // the optimistic OnNext only. The Subscribe IS
+                            // captured in `composite` so the hub-level
+                            // callback is disposed when the outer chain
+                            // disposes (no leaked Observe callback).
                             var responseSub = _workspace.Hub.Observe(delivery)
                                 .Timeout(TimeSpan.FromSeconds(30))
                                 .Take(1)
                                 .Subscribe(
                                     d =>
                                     {
-                                        if (d.Message is not PatchDataResponse resp)
+                                        if (d.Message is PatchDataResponse resp && resp.NodeError is { } err)
                                         {
-                                            observer.OnError(new MeshNodeStreamException(new MeshNodeError(
-                                                MeshNodeErrorCode.Unknown,
-                                                _path!,
-                                                $"Unexpected response shape from owner: {d.Message?.GetType().Name ?? "<null>"}")));
-                                            return;
+                                            diagLogger?.LogWarning(
+                                                "[UpdateRemote] OWNER_REJECTED hub={Hub} target={Path} code={Code} msg={Msg}",
+                                                _workspace.Hub.Address, _path, err.Code, err.Message);
                                         }
-                                        if (resp.NodeError is { } err)
+                                        else if (d.Message is PatchDataResponse fail && !fail.Success)
                                         {
-                                            observer.OnError(new MeshNodeStreamException(err));
-                                            return;
+                                            diagLogger?.LogWarning(
+                                                "[UpdateRemote] OWNER_FAILED hub={Hub} target={Path} err={Err}",
+                                                _workspace.Hub.Address, _path, fail.Error ?? "<unknown>");
                                         }
-                                        if (!resp.Success)
-                                        {
-                                            observer.OnError(new MeshNodeStreamException(new MeshNodeError(
-                                                MeshNodeErrorCode.Unknown,
-                                                _path!,
-                                                resp.Error ?? "Patch failed without diagnostic")));
-                                            return;
-                                        }
-                                        observer.OnNext(updated);
-                                        observer.OnCompleted();
                                     },
-                                    ex =>
-                                    {
-                                        var code = ex is TimeoutException
-                                            ? MeshNodeErrorCode.OwnerUnreachable
-                                            : MeshNodeErrorCode.Unknown;
-                                        observer.OnError(new MeshNodeStreamException(new MeshNodeError(
-                                            code,
-                                            _path!,
-                                            $"Failed to receive PatchDataResponse: {ex.Message}"), ex));
-                                    });
+                                    ex => diagLogger?.LogDebug(ex,
+                                        "[UpdateRemote] response wait errored hub={Hub} target={Path}",
+                                        _workspace.Hub.Address, _path));
                             composite.Add(responseSub);
                         }
                         catch (Exception ex)
