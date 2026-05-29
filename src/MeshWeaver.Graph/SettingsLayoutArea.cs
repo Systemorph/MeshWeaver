@@ -67,8 +67,15 @@ public static class SettingsLayoutArea
         bool canEdit,
         IReadOnlyList<SettingsMenuItemDefinition> items)
     {
+        // `settings-splitter` (standard-page-layout.css) gives each pane a definite-height
+        // flex context so the right content pane scrolls internally — mirrors the treatment
+        // PortalLayoutBase applies to its outer `.body-splitter`. Height fills the parent
+        // `.layout-area-container` (flex column) rather than a viewport-minus-magic-number
+        // guess, which was overshooting the real header/messagebar height and clipping the
+        // bottom of the content out of reach.
         var settingsPage = Controls.Splitter
-            .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%").WithHeight("calc(100vh - 100px)"))
+            .WithClass("settings-splitter")
+            .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%").WithHeight("100%"))
             .WithView(
                 BuildNavMenu(node, hubAddress, hubPath, items, tabId),
                 skin => skin.WithSize("280px").WithMin("200px").WithMax("400px").WithCollapsible(true)
@@ -80,7 +87,11 @@ public static class SettingsLayoutArea
 
         if (!canEdit)
         {
+            // Fill the layout-area-container as a flex column: the banner takes its natural
+            // height and the splitter (flex: 1, min-height: 0) shrinks to fill the rest, so
+            // the inner content pane still scrolls.
             return Controls.Stack.WithWidth("100%")
+                .WithStyle("height: 100%; min-height: 0; display: flex; flex-direction: column; overflow: hidden;")
                 .WithView(Controls.Html(
                     "<div style=\"padding: 8px 16px; background: var(--neutral-layer-3); border-bottom: 1px solid var(--neutral-stroke-rest); " +
                     "color: var(--neutral-foreground-hint); font-size: 0.85rem; text-align: center;\">Read-only — you do not have edit permissions</div>"))
@@ -156,14 +167,15 @@ public static class SettingsLayoutArea
         string tabId,
         IReadOnlyList<SettingsMenuItemDefinition> items)
     {
-        // `height: 100%` on a fluent-stack inside a splitter pane is unreliable —
-        // the pane has a height but the stack's percentage often resolves against
-        // its natural content size. Pin a `max-height` and `overflow-y: auto`
-        // explicitly so long tabs (Metadata + many fields, Access Control,
-        // Effective Access) scroll instead of overflowing the page.
+        // `settings-content-pane` (standard-page-layout.css) makes this stack `flex: 1;
+        // min-height: 0; overflow-y: auto` inside the definite-height splitter pane, so long
+        // tabs (Metadata + many fields, Access Control, Effective Access) scroll within the
+        // pane instead of overflowing the page. The pane gets its height from the splitter —
+        // no viewport-minus-magic-number guess, which previously clipped the bottom out of reach.
         var stack = Controls.Stack
+            .WithClass("settings-content-pane")
             .WithWidth("100%")
-            .WithStyle("padding: 24px; max-height: calc(100vh - 100px); overflow-y: auto; overflow-x: hidden;");
+            .WithStyle("padding: 24px;");
 
         var matchedItem = items.FirstOrDefault(i => i.Id == tabId)
             ?? items.FirstOrDefault();
@@ -392,23 +404,60 @@ public static class SettingsLayoutArea
             .WithView(Controls.Stack.WithWidth("100%").WithStyle("padding: 16px; gap: 12px;").WithView(content));
     }
 
+    // Responsive metadata grid: label/value cells flow into as many columns as the width
+    // allows — one column on narrow screens, several on a wide one — instead of a fixed
+    // two-column (label | value) layout that wasted horizontal space.
+    private const string MetaGridStyle =
+        "display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); " +
+        "gap: 14px 28px; font-size: 0.9rem; align-items: start;";
+
     private static UiControl BuildIdentitySection(MeshNodeMetadata meta)
     {
-        var grid = Controls.Stack.WithWidth("100%").WithStyle("display: grid; grid-template-columns: 140px 1fr; gap: 8px 16px; font-size: 0.9rem;");
+        var grid = Controls.Stack.WithWidth("100%").WithStyle(MetaGridStyle);
+        // Node Type first, as a direct link to the type's Configuration area.
+        grid = AddNodeTypeField(grid, meta.NodeType);
         grid = AddReadOnlyField(grid, "Id", meta.Id);
         grid = AddReadOnlyField(grid, "Namespace", meta.Namespace);
-        grid = AddReadOnlyField(grid, "Node Type", meta.NodeType);
         grid = AddReadOnlyField(grid, "State", meta.State.ToString());
         grid = AddReadOnlyField(grid, "Version", meta.Version.ToString());
         return grid;
     }
 
+    /// <summary>
+    /// Node Type cell: NodeTypes are themselves MeshNodes, so the type name links straight
+    /// to the type definition's Configuration area (same pattern as the header meta row).
+    /// </summary>
+    private static StackControl AddNodeTypeField(StackControl grid, string? nodeType)
+    {
+        string valueHtml;
+        if (string.IsNullOrEmpty(nodeType) || nodeType == MeshNode.NodeTypePath)
+        {
+            valueHtml = $"<span style=\"word-break: break-word;\">{System.Web.HttpUtility.HtmlEncode(nodeType ?? "—")}</span>";
+        }
+        else
+        {
+            var href = MeshNodeLayoutAreas.BuildUrl(nodeType, NodeTypeLayoutAreas.ConfigurationArea);
+            var label = nodeType.Contains('/') ? nodeType.Split('/').Last() : nodeType;
+            valueHtml =
+                $"<a href=\"{System.Web.HttpUtility.HtmlEncode(href)}\" " +
+                "style=\"color: var(--accent-fill-rest); font-weight: 500; text-decoration: none; word-break: break-word;\">" +
+                $"{System.Web.HttpUtility.HtmlEncode(label)}</a>";
+        }
+        return grid.WithView(Controls.Html(BuildMetaCell("Node Type", valueHtml)));
+    }
+
     private static StackControl AddReadOnlyField(StackControl grid, string label, string? value)
     {
-        return grid
-            .WithView(Controls.Html($"<span style=\"color: var(--neutral-foreground-hint); font-weight: 500;\">{System.Web.HttpUtility.HtmlEncode(label)}</span>"))
-            .WithView(Controls.Html($"<span>{System.Web.HttpUtility.HtmlEncode(value ?? "—")}</span>"));
+        var valueHtml = $"<span style=\"word-break: break-word;\">{System.Web.HttpUtility.HtmlEncode(value ?? "—")}</span>";
+        return grid.WithView(Controls.Html(BuildMetaCell(label, valueHtml)));
     }
+
+    private static string BuildMetaCell(string label, string valueHtml) =>
+        "<div style=\"display: flex; flex-direction: column; gap: 2px; min-width: 0;\">" +
+        "<span style=\"color: var(--neutral-foreground-hint); font-weight: 600; font-size: 0.72rem; " +
+        $"text-transform: uppercase; letter-spacing: 0.04em;\">{System.Web.HttpUtility.HtmlEncode(label)}</span>" +
+        valueHtml +
+        "</div>";
 
     private static UiControl BuildDisplaySection(LayoutAreaHost host, string dataId)
     {
@@ -689,7 +738,7 @@ public static class SettingsLayoutArea
 
     private static UiControl BuildTimestampsSection(MeshNodeMetadata meta)
     {
-        var grid = Controls.Stack.WithWidth("100%").WithStyle("display: grid; grid-template-columns: 140px 1fr; gap: 8px 16px; font-size: 0.9rem;");
+        var grid = Controls.Stack.WithWidth("100%").WithStyle(MetaGridStyle);
         grid = AddReadOnlyField(grid, "Created",
             meta.CreatedDate == default ? "—" : meta.CreatedDate.ToString("yyyy-MM-dd HH:mm:ss zzz"));
         grid = AddReadOnlyField(grid, "Last Modified",
