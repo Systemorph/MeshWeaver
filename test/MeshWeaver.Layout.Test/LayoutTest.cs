@@ -26,6 +26,23 @@ namespace MeshWeaver.Layout.Test;
 public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 {
     private const string StaticView = nameof(StaticView);
+    private const string RecursiveView = nameof(RecursiveView);
+
+    /// <summary>
+    /// A pathologically deep, self-similar control tree (a single-child stack
+    /// nested far beyond <c>LayoutAreaHost.MaxRenderDepth</c>) ending in a leaf
+    /// marker. Models the rbuergi/CatBond crash shape: a layout that recurses
+    /// through RenderArea → Render → RenderArea. With the depth guard the render
+    /// stops with a visible error before the leaf; without it the server would
+    /// fail-fast on a stack overflow.
+    /// </summary>
+    private static UiControl BuildDeeplyNestedStack()
+    {
+        UiControl current = Controls.Markdown("DEEP_LEAF_MARKER");
+        for (var i = 0; i < 120; i++)
+            current = Controls.Stack.WithView(current, "child");
+        return current;
+    }
 
 
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
@@ -72,6 +89,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                     .WithView(nameof(StartWithLoadingView), StartWithLoadingView)
                     .WithView(nameof(StartWithDelayedView), StartWithDelayedView)
                     .WithView(nameof(StartWithSubjectView), StartWithSubjectView)
+                    .WithView(RecursiveView, BuildDeeplyNestedStack())
             );
     }
 
@@ -110,6 +128,67 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         );
 
         areaControls.Should().HaveCount(2).And.AllBeOfType<HtmlControl>();
+    }
+
+    /// <summary>
+    /// Regression guard: a self-similar / recursive layout must NOT crash the
+    /// server. Before the <c>LayoutAreaHost</c> render-depth guard, rendering a
+    /// control tree that recurses through RenderArea (a container embedding
+    /// itself, or — as in prod — a dynamic NodeType's Overview that references
+    /// its own area) blew the stack and fail-fasted the whole process
+    /// (exit 0xC0000409), taking every tenant down. The guard converts that into
+    /// a visible "Layout recursion detected" error at a safe depth.
+    ///
+    /// <para>We register a 120-deep single-child stack ending in a leaf marker
+    /// and walk the rendered chain on the client. The walk must terminate in the
+    /// recursion-error control around the depth limit, and must NEVER reach the
+    /// deep leaf below it.</para>
+    /// </summary>
+    [HubFact]
+    public async Task DeeplyNestedLayout_DoesNotCrashServer_SurfacesRecursionError()
+    {
+        var reference = new LayoutAreaReference(RecursiveView);
+        var workspace = GetClient().GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(),
+            reference
+        );
+
+        var area = reference.Area!;
+        string? recursionErrorText = null;
+        var sawDeepLeaf = false;
+
+        // Walk down the single-child chain. With the guard the chain terminates
+        // in a "Layout recursion detected" MarkdownControl at ~MaxRenderDepth;
+        // the DEEP_LEAF_MARKER beneath it must never render.
+        for (var depth = 0; depth < 130; depth++)
+        {
+            var control = await stream.GetControlStream(area)
+                .Timeout(10.Seconds())
+                .FirstAsync(x => x != null);
+
+            if (control is MarkdownControl md)
+            {
+                var text = md.Markdown?.ToString() ?? string.Empty;
+                if (text.Contains("DEEP_LEAF_MARKER")) sawDeepLeaf = true;
+                if (text.Contains("Layout recursion detected")) recursionErrorText = text;
+                break;
+            }
+
+            if (control is StackControl { Areas.Count: > 0 } stack)
+            {
+                area = stack.Areas[0].Area!.ToString()!;
+                continue;
+            }
+
+            break;
+        }
+
+        recursionErrorText.Should().NotBeNull(
+            "a deeply self-similar layout must surface a visible 'Layout recursion detected' " +
+            "error instead of recursing until the server fail-fasts with a stack overflow");
+        sawDeepLeaf.Should().BeFalse(
+            "rendering must stop at the depth guard, before reaching the deeply-nested leaf");
     }
 
     private static async Task<UiControl?> ViewWithProgress(LayoutAreaHost area, RenderingContext ctx, CancellationToken ct)

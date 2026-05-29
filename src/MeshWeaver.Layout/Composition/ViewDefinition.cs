@@ -13,6 +13,15 @@ public record RenderingContext(string Area)
     public string DisplayName { get; init; } = Area.Wordify() ?? Area;
     public RenderingContext? Parent { get; init; }
 
+    /// <summary>
+    /// Nesting depth of this context — 0 for a top-level area, incremented by
+    /// <c>GetContextForArea</c> for every nested child area. The render path
+    /// (<c>LayoutAreaHost.RenderArea</c>) uses this as a recursion guard: a
+    /// self-referential / cyclic control tree would otherwise recurse until the
+    /// stack overflows, which is a fatal, uncatchable process crash.
+    /// </summary>
+    public int Depth { get; init; }
+
     public static implicit operator RenderingContext(string s) => new(s);
 };
 
