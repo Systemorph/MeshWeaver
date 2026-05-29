@@ -11,7 +11,7 @@ namespace MeshWeaver.Mesh.Security;
 /// <c>HubPermissionExtensions</c> reads it back at every permission check.
 /// When no delegate is configured, the default returns
 /// <see cref="Permission.All"/> (no gating). <c>AddRowLevelSecurity()</c>
-/// configures the real <see cref="PermissionEvaluator.GetEffectivePermissions"/>
+/// configures the real <see cref="PermissionEvaluator.GetEffectivePermissions(MeshWeaver.Messaging.IMessageHub, string, string)"/>
 /// on the default node hub.
 ///
 /// <para>Choosing the implementation at <em>configuration</em> time — not at

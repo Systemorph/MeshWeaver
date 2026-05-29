@@ -11,7 +11,7 @@ namespace MeshWeaver.Mesh;
 /// asks the hub for an answer; the extension dispatches through an
 /// <see cref="EffectivePermissionsDelegate"/> registered in DI at startup
 /// time. When <c>AddRowLevelSecurity()</c> ran, that delegate is
-/// <see cref="PermissionEvaluator.GetEffectivePermissions"/>; otherwise it's
+/// <see cref="PermissionEvaluator.GetEffectivePermissions(MeshWeaver.Messaging.IMessageHub, string, string)"/>; otherwise it's
 /// the default <c>Observable.Return(Permission.All)</c>. <strong>No runtime
 /// branching at the call site</strong> — same lambda for both worlds.
 ///
