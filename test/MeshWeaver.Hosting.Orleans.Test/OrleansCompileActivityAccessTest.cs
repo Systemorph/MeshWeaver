@@ -459,6 +459,282 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
             "as principal). Either way no activity row lands. Pin against the " +
             "MessageHubConfiguration.cs:328-342 deletion.");
     }
+
+    /// <summary>
+    /// Regression guard for the 2026-05-29 wedge: a per-NodeType grain must stay
+    /// RESPONSIVE while its first-build compile is in flight. The compile is
+    /// dispatched to a separate Activity hub (fire-and-forget); the NodeType
+    /// hub's own action-block must never block waiting on it. The prod symptom
+    /// was the opposite — every <c>DeliverMessage</c> to the grain broke its 30s
+    /// promise and <c>GetPermissionRequest</c> timed out at 15s while a compile
+    /// churned, so instances rendered the "compile did not settle" overlay.
+    ///
+    /// <para>We activate the grain (which kicks off the first-build compile),
+    /// then immediately fire a SECOND request to the SAME grain and require it
+    /// to answer well inside the Orleans 30s promise window. A wedged pump makes
+    /// that Observe time out. We then require the NodeType to settle Ok and to
+    /// keep answering afterwards.</para>
+    /// </summary>
+    [Fact(Timeout = 90000)]
+    public async Task NodeTypeHub_StaysResponsive_WhileFirstBuildCompileInFlight()
+    {
+        var ct = new CancellationTokenSource(80.Seconds()).Token;
+
+        var typeId = $"Responsive{Guid.NewGuid():N}";
+        var typePath = $"TestUser/{typeId}";
+        await SeedAsSystem(MeshNode.FromPath(typePath) with
+        {
+            Name = typeId,
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition
+            {
+                Description = "Grain-responsiveness-during-compile regression guard",
+                Configuration = $"config => config.WithContentType<{typeId}>()"
+            }
+        }, ct);
+        await SeedAsSystem(new MeshNode("code", $"{typePath}/Source")
+        {
+            Name = "code",
+            NodeType = "Code",
+            Content = new CodeConfiguration
+            {
+                Code = $$"""
+                    public record {{typeId}}
+                    {
+                        public string Title { get; init; } = string.Empty;
+                    }
+                    """,
+                Language = "csharp"
+            }
+        }, ct);
+        Output.WriteLine($"Seeded dynamic NodeType + Code at {typePath} (no build yet)");
+
+        var client = await GetClientAsync($"responsive-{Guid.NewGuid():N}", userId: "TestUser");
+
+        // First read activates the per-NodeType grain and kicks off the
+        // first-build compile (InstallCompileWatcher → Pending → dispatch).
+        await client.Observe(new GetDataRequest(new MeshNodeReference()),
+                o => o.WithTarget(new Address(typePath)))
+            .FirstAsync().Timeout(20.Seconds()).ToTask(ct);
+        Output.WriteLine("First (activating) read returned; compile kicked off.");
+
+        // PROBE: a second request to the SAME grain must come back promptly while
+        // the compile runs on the Activity hub. A wedged grain (the prod bug)
+        // would let this Observe run past the Orleans 30s promise and time out
+        // here at 10s.
+        var probe = await client.Observe(new GetDataRequest(new MeshNodeReference()),
+                o => o.WithTarget(new Address(typePath)))
+            .FirstAsync().Timeout(10.Seconds()).ToTask(ct);
+        probe.Message.Should().NotBeNull(
+            "the NodeType grain must answer a second request promptly WHILE its " +
+            "first-build compile runs on the Activity hub — the action-block pump " +
+            "must not block on the compile (the 2026-05-29 wedge symptom)");
+        Output.WriteLine("Responsiveness probe returned while compile in flight.");
+
+        // The compile must finish and settle Ok (a clean dynamic type compiles).
+        var siloHub = ((InProcessSiloHandle)Cluster.Silos[0]).SiloHost.Services
+            .GetRequiredService<IMessageHub>();
+        var settled = await siloHub.GetWorkspace().GetMeshNodeStream(typePath)
+            .Where(n => n.Content is NodeTypeDefinition d
+                && d.CompilationStatus is CompilationStatus.Ok or CompilationStatus.Error)
+            .Take(1).Timeout(60.Seconds()).ToTask(ct);
+        ((NodeTypeDefinition)settled.Content!).CompilationStatus.Should().Be(
+            CompilationStatus.Ok, "a clean dynamic NodeType must finish compiling");
+        Output.WriteLine("NodeType settled Ok.");
+
+        // Post-settle: the grain is still responsive — no lingering wedge.
+        var after = await client.Observe(new GetDataRequest(new MeshNodeReference()),
+                o => o.WithTarget(new Address(typePath)))
+            .FirstAsync().Timeout(10.Seconds()).ToTask(ct);
+        after.Message.Should().NotBeNull(
+            "the grain stays responsive after the compile settles");
+    }
+
+    /// <summary>
+    /// Regression guard for the 2026-05-29 wedge ROOT CAUSE: a NodeType that
+    /// comes up persisted as <c>CompilationStatus = Compiling</c> must
+    /// RE-TRIGGER its compile on init and settle to a terminal status.
+    ///
+    /// <para>When the process dies (or the per-NodeType grain deactivates) AFTER
+    /// the <c>Pending → Compiling</c> flip but BEFORE the terminal Ok/Error
+    /// write-back, the on-disk JSON freezes at <c>Compiling</c>. Before the
+    /// recovery kickoff (<see cref="NodeTypeCompilationHelpers.InstallCompileWatcher"/>)
+    /// NOTHING re-drove that state on the next activation — the first-build
+    /// kickoff needs <c>CompilationStatus is null</c>, the compile watcher needs
+    /// <c>Pending</c>, and the release-request watcher only fires when the status
+    /// is SETTLED. So the NodeType sat in <c>Compiling</c> forever, every
+    /// instance hub fell back to the default config (no <c>MeshNodeReference</c>
+    /// reducer), and the instance page rendered nothing — the
+    /// <c>rbuergi/CatBond/AtlanticBond</c> "I get nothing" symptom the user hit.</para>
+    ///
+    /// <para>The fix: on the first emission at hub init, if status is
+    /// <c>Compiling</c>, find the recorded compile activity; if it is not
+    /// actually running (missing / terminal / stale start) the compile is
+    /// orphaned, so flip <c>Compiling → Pending</c> and let the watcher dispatch
+    /// a fresh compile. This test seeds the source first, then seeds the NodeType
+    /// already pinned to <c>Compiling</c> with NO live activity — exactly the
+    /// shape a hard restart leaves behind — and requires it to recover to
+    /// <c>Ok</c>. Without the recovery kickoff the wait below never completes and
+    /// the test times out (the prod wedge).</para>
+    /// </summary>
+    [Fact(Timeout = 90000)]
+    public async Task NodeTypeHub_StrandedInCompiling_RecompilesOnInit()
+    {
+        var ct = new CancellationTokenSource(80.Seconds()).Token;
+
+        var typeId = $"Stranded{Guid.NewGuid():N}";
+        var typePath = $"TestUser/{typeId}";
+
+        // Seed the source FIRST so the recovery-triggered compile — which fires
+        // the moment the NodeType grain activates — finds it.
+        await SeedAsSystem(new MeshNode("code", $"{typePath}/Source")
+        {
+            Name = "code",
+            NodeType = "Code",
+            Content = new CodeConfiguration
+            {
+                Code = $$"""
+                    public record {{typeId}}
+                    {
+                        public string Title { get; init; } = string.Empty;
+                    }
+                    """,
+                Language = "csharp"
+            }
+        }, ct);
+
+        // Seed the NodeType STRANDED: persisted as Compiling, no live activity
+        // (LastCompilationActivityPath null), with a stale start timestamp. This
+        // is exactly the on-disk shape a hard restart leaves behind when the
+        // process died mid-compile, before the terminal Ok/Error write-back.
+        await SeedAsSystem(MeshNode.FromPath(typePath) with
+        {
+            Name = typeId,
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition
+            {
+                Description = "Stranded-in-Compiling recovery regression guard",
+                Configuration = $"config => config.WithContentType<{typeId}>()",
+                CompilationStatus = CompilationStatus.Compiling,
+                LastCompilationActivityPath = null,
+                LastCompileStartedAt = DateTimeOffset.UtcNow - TimeSpan.FromMinutes(10)
+            }
+        }, ct);
+        Output.WriteLine($"Seeded STRANDED NodeType (CompilationStatus=Compiling, no activity) at {typePath}");
+
+        // Activate the grain. The recovery kickoff in InstallCompileWatcher fires
+        // on the first emission, sees Compiling + no running activity, and flips
+        // Compiling → Pending — which the watcher turns into a fresh compile.
+        var client = await GetClientAsync($"stranded-{Guid.NewGuid():N}", userId: "TestUser");
+        await client.Observe(new GetDataRequest(new MeshNodeReference()),
+                o => o.WithTarget(new Address(typePath)))
+            .FirstAsync().Timeout(20.Seconds()).ToTask(ct);
+        Output.WriteLine("Grain activated; recovery kickoff should have re-triggered the compile.");
+
+        // The stranded NodeType must un-strand and settle Ok. Without the
+        // recovery kickoff this Where never completes (status stays Compiling
+        // forever) and the test times out — exactly the prod wedge.
+        var siloHub = ((InProcessSiloHandle)Cluster.Silos[0]).SiloHost.Services
+            .GetRequiredService<IMessageHub>();
+        var settled = await siloHub.GetWorkspace().GetMeshNodeStream(typePath)
+            .Where(n => n.Content is NodeTypeDefinition d
+                && d.CompilationStatus is CompilationStatus.Ok or CompilationStatus.Error)
+            .Take(1).Timeout(60.Seconds()).ToTask(ct);
+        var settledDef = (NodeTypeDefinition)settled.Content!;
+        Output.WriteLine($"Settled status: {settledDef.CompilationStatus}, " +
+            $"error: {settledDef.CompilationError ?? "(none)"}");
+
+        settledDef.CompilationStatus.Should().Be(CompilationStatus.Ok,
+            "a NodeType stranded in Compiling on init must recover — the recovery " +
+            "kickoff re-triggers the orphaned compile (flip Compiling→Pending) and " +
+            "a clean dynamic type compiles. Before the recovery branch the NodeType " +
+            "sat in Compiling forever and every instance rendered nothing.");
+    }
+
+    /// <summary>
+    /// Repro for the 2026-05-29 activation self-deadlock — the case we hadn't
+    /// covered before: activating a per-NodeType grain under a NON-System user
+    /// AccessContext (the GUI-render shape, not the System kickoff path).
+    ///
+    /// <para>Before the fix, <see cref="NodeTypeCompilationHelpers.InstallSourcesWatcher"/>
+    /// read its source set via <c>workspace.GetQuery</c> under the inbound user
+    /// context, so <c>WrapWithPerUserRls</c> issued a <c>CheckPermission</c>
+    /// round-trip per source node. For a source path UNDER the NodeType, that
+    /// resolves the ancestor's Read by routing a <c>GetPermissionRequest</c>
+    /// BACK to the same single-threaded, non-reentrant grain — a call-chain
+    /// cycle that deadlocks activation (Orleans request-scheduling). The grain
+    /// wedged, the compile's terminal write-back never landed, and the NodeType
+    /// never reached Ok (the <c>rbuergi/CatBond/AtlanticBond</c> "renders
+    /// nothing" + endless-GetPermissionRequest-timeout symptom).</para>
+    ///
+    /// <para>The fix reads source discovery as System (break-the-cycle), so no
+    /// self-<c>CheckPermission</c> is issued. This test activates the NodeType
+    /// as a real user and requires it to settle Ok and stay responsive. With the
+    /// bug the grain self-deadlocks and the waits below time out.</para>
+    /// </summary>
+    [Fact(Timeout = 90000)]
+    public async Task SourcesWatcher_UserContextActivation_SettlesWithoutSelfDeadlock()
+    {
+        var ct = new CancellationTokenSource(80.Seconds()).Token;
+
+        var typeId = $"SelfDeadlock{Guid.NewGuid():N}";
+        var typePath = $"TestUser/{typeId}";
+        await SeedAsSystem(MeshNode.FromPath(typePath) with
+        {
+            Name = typeId,
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition
+            {
+                Description = "Activation self-deadlock repro — source under NodeType, user-context activation",
+                Configuration = $"config => config.WithContentType<{typeId}>()"
+            }
+        }, ct);
+        // Source node UNDER the NodeType — its ancestor permission check is what
+        // routed a GetPermissionRequest back into the NodeType grain.
+        await SeedAsSystem(new MeshNode("code", $"{typePath}/Source")
+        {
+            Name = "code",
+            NodeType = "Code",
+            Content = new CodeConfiguration
+            {
+                Code = $$"""
+                    public record {{typeId}} { public string Title { get; init; } = string.Empty; }
+                    """,
+                Language = "csharp"
+            }
+        }, ct);
+        Output.WriteLine($"Seeded {typePath} + Source/code");
+
+        // Activate the per-NodeType grain AS TestUser (the GUI-render shape): the
+        // inbound user AccessContext rides into the grain via
+        // AccessContextGrainCallFilter, so the activation — and the
+        // InstallSourcesWatcher source read — runs under TestUser, not System.
+        var client = await GetClientAsync($"selfdl-{Guid.NewGuid():N}", userId: "TestUser");
+        await client.Observe(new GetDataRequest(new MeshNodeReference()),
+                o => o.WithTarget(new Address(typePath)))
+            .FirstAsync().Timeout(20.Seconds()).ToTask(ct);
+        Output.WriteLine("Activated NodeType grain under TestUser context.");
+
+        // The NodeType MUST settle to terminal Ok (a clean dynamic type compiles).
+        // With the self-deadlock the grain wedges and the compile's terminal
+        // write-back never lands → this Where never completes → timeout.
+        var siloHub = ((InProcessSiloHandle)Cluster.Silos[0]).SiloHost.Services
+            .GetRequiredService<IMessageHub>();
+        var settled = await siloHub.GetWorkspace().GetMeshNodeStream(typePath)
+            .Where(n => n.Content is NodeTypeDefinition d
+                && d.CompilationStatus is CompilationStatus.Ok or CompilationStatus.Error)
+            .Take(1).Timeout(60.Seconds()).ToTask(ct);
+        ((NodeTypeDefinition)settled.Content!).CompilationStatus.Should().Be(
+            CompilationStatus.Ok,
+            "the NodeType must compile + settle Ok under user-context activation; " +
+            "a grain wedged by the source-watcher self-CheckPermission cycle never reaches Ok");
+
+        // And the grain is still responsive — the watcher didn't block the pump.
+        var after = await client.Observe(new GetDataRequest(new MeshNodeReference()),
+                o => o.WithTarget(new Address(typePath)))
+            .FirstAsync().Timeout(10.Seconds()).ToTask(ct);
+        after.Message.Should().NotBeNull("the grain stays responsive after user-context activation");
+    }
 }
 
 /// <summary>
