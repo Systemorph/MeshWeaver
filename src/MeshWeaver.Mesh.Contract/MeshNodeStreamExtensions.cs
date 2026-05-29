@@ -163,10 +163,30 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     /// Applied at the <see cref="MeshNodeStreamHandle"/> boundary so every
     /// subscriber sees the same typed shape regardless of how the underlying
     /// data source stores the value.
+    /// <para>
+    /// When <see cref="EnsureTypedContent"/> throws (deserialization /
+    /// missing TypeRegistry entry), the exception is routed to
+    /// <see cref="IObserver{T}.OnError"/> so subscribers see the typed
+    /// <see cref="MeshNodeStreamException"/> in their error handler — never
+    /// up the producer stack where it would tear down unrelated streams.
+    /// </para>
     /// </summary>
     private sealed class TypedContentObserver(IObserver<MeshNode> inner, JsonSerializerOptions jsonOptions) : IObserver<MeshNode>
     {
-        public void OnNext(MeshNode value) => inner.OnNext(EnsureTypedContent(value, jsonOptions));
+        public void OnNext(MeshNode value)
+        {
+            MeshNode typed;
+            try
+            {
+                typed = EnsureTypedContent(value, jsonOptions);
+            }
+            catch (System.Exception ex)
+            {
+                inner.OnError(ex);
+                return;
+            }
+            inner.OnNext(typed);
+        }
         public void OnError(Exception error) => inner.OnError(error);
         public void OnCompleted() => inner.OnCompleted();
     }
@@ -177,6 +197,20 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     /// already typed. Uses <see cref="JsonSerializerOptions"/>'s polymorphic
     /// <c>$type</c> discriminator to land on the concrete domain type
     /// (e.g. <c>MeshThread</c>, <c>NodeTypeDefinition</c>).
+    /// <para>
+    /// 🚨 Throws <see cref="MeshNodeStreamException"/> with
+    /// <see cref="MeshNodeErrorCode.Deserialization"/> when deserialization
+    /// fails — the diagnostic carries the (truncated) raw JSON and the
+    /// discriminator value so callers can pinpoint the missing TypeRegistry
+    /// entry. The previous swallow-and-return-untyped behaviour silently
+    /// fed JsonElement back to subscribers, which then fell back to
+    /// <c>node.Content as MyType ?? new MyType()</c> and overwrote every
+    /// other field on the next stream.Update — the silent-corruption bug
+    /// class behind CheckInbox / AppendUserInput / ThreadStreamingIdentity
+    /// flakes. Loud failure here is the contract: subscribers get OnError
+    /// with the typed exception; the GUI layout-area boundary renders a
+    /// typed error card; tests can assert on <c>Error.Code</c>.
+    /// </para>
     /// </summary>
     internal static MeshNode EnsureTypedContent(MeshNode node, JsonSerializerOptions jsonOptions)
     {
@@ -186,15 +220,42 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             {
                 return node with { Content = je.Deserialize<object>(jsonOptions) };
             }
-            catch
+            catch (System.Text.Json.JsonException ex)
             {
-                // Deserialisation failure — leave the JsonElement so the caller
-                // can decide. Throwing here would surface as OnError on every
-                // subscriber, breaking otherwise-functional reads.
-                return node;
+                throw new MeshNodeStreamException(BuildDeserializationError(node, je, ex), ex);
+            }
+            catch (System.NotSupportedException ex)
+            {
+                // JsonSerializer raises NotSupportedException when the
+                // polymorphic discriminator names a type that isn't
+                // registered in the consumer hub's options — the recurring
+                // "type 'X' is not registered in this hub's TypeRegistry"
+                // footgun. Same translation: surface loudly with the raw
+                // JSON snippet so the caller can see which discriminator
+                // value is missing.
+                throw new MeshNodeStreamException(BuildDeserializationError(node, je, ex), ex);
             }
         }
         return node;
+    }
+
+    private static MeshNodeError BuildDeserializationError(
+        MeshNode node, JsonElement je, System.Exception ex)
+    {
+        // Truncate the raw JSON snippet to keep diagnostics readable while
+        // still preserving the discriminator + first few fields — usually
+        // enough to identify which TypeRegistry entry is missing.
+        const int maxJsonChars = 400;
+        var raw = je.GetRawText();
+        var snippet = raw.Length <= maxJsonChars ? raw : raw[..maxJsonChars] + "…";
+        var discriminator = je.ValueKind == JsonValueKind.Object && je.TryGetProperty("$type", out var t)
+            ? t.GetString() ?? "<null>"
+            : "<no $type>";
+        return new MeshNodeError(
+            MeshNodeErrorCode.Deserialization,
+            node.Path ?? "<unknown>",
+            $"Failed to deserialize MeshNode.Content (discriminator $type='{discriminator}'): {ex.Message}",
+            snippet);
     }
 
     /// <summary>
@@ -233,6 +294,29 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     /// </summary>
     public IObservable<MeshNode> Update(Func<MeshNode, MeshNode> update)
     {
+        // 🚨 AccessContext capture for the LAMBDA invocation. The user's
+        // `update` lambda runs on whatever thread the underlying writer fires
+        // it on — for UpdateRemote that's the remote stream's emission thread
+        // (workspace emission scheduler, AsyncLocal NOT flowed); for UpdateOwn
+        // that's the data source's action block (a dedicated worker thread,
+        // also no AsyncLocal flow). Without re-stamping, the lambda sees a
+        // null AccessContext.Context and any downstream framework call that
+        // reads `Context ?? CircuitContext` to attribute writes (e.g. inner
+        // satellite-node Updates inside the lambda, IDataChangeNotifier
+        // emissions, audit logs) sees null → owner-side RLS denies → silent
+        // failure (chat hangs, delegations never stamp, inboxes stay empty).
+        // The diagnostic for this exact shape is
+        // TypedErrorPropagationTest.AccessContext_PreservedAcrossSubscribeAndUpdateHops.
+        //
+        // Capture order: prefer the per-delivery Context (set by the message
+        // hub before invoking handlers), fall back to CircuitContext (set by
+        // long-lived test fixtures / Blazor circuits). Matches what
+        // UpdateRemote already captures eagerly for the outbound
+        // PatchDataRequest's WithAccessContext.
+        var accessService = _workspace.Hub.ServiceProvider
+            .GetService<MeshWeaver.Messaging.AccessService>();
+        var capturedForLambda = accessService?.Context ?? accessService?.CircuitContext;
+
         // 🚨 Typed-Content wrap (read direction): the lambda sees Content
         // already deserialised to its registered domain type (e.g. MeshThread,
         // NodeTypeDefinition). Without this, lambdas that pattern-match
@@ -256,7 +340,19 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
         // OWN-path equality checks (data source dedup compares by
         // reference / structural equality; serialise-deserialise breaks
         // reference and can perturb structural).
-        Func<MeshNode, MeshNode> wrappedUpdate = node => update(EnsureTypedContent(node, _jsonOptions));
+        Func<MeshNode, MeshNode> wrappedUpdate = node =>
+        {
+            // Re-stamp AsyncLocal so the lambda body sees the caller's
+            // identity, no matter what thread invoked it. No-op when no
+            // identity was set (background flows that genuinely have no
+            // user — these should ImpersonateAsSystem explicitly).
+            using (capturedForLambda is null || accessService is null
+                ? null
+                : accessService.SwitchAccessContext(capturedForLambda))
+            {
+                return update(EnsureTypedContent(node, _jsonOptions));
+            }
+        };
 
         return new RequireSubscribeObservable<MeshNode>(
             // 🚨 CarryAccessContext is the cross-cutting "AccessContext survives
@@ -513,35 +609,76 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                 });
                             if (delivery == null)
                             {
-                                observer.OnError(new InvalidOperationException(
-                                    $"Post of PatchDataRequest returned null for {_path}"));
+                                observer.OnError(new MeshNodeStreamException(new MeshNodeError(
+                                    MeshNodeErrorCode.OwnerUnreachable,
+                                    _path!,
+                                    "Post of PatchDataRequest returned null — owner address could not be resolved")));
                                 return;
                             }
 
-                            // 🚨 Return the LOCALLY-COMPUTED `updated` snapshot
-                            // optimistically — not "next non-null emission" from
-                            // the remote stream.
+                            // 🚨 Wait for the owner's PatchDataResponse so we can
+                            // surface structured failures (AccessDenied,
+                            // Deserialization, Conflict, …) instead of silently
+                            // claiming success. The previous "fire-and-emit-
+                            // optimistically" shape lost ALL owner-side failures:
+                            // RLS denials, validator rejections, JSON parse errors
+                            // never reached the caller — they appeared as
+                            // "stream.Update succeeded but the node didn't change"
+                            // hangs (the silent-failure class behind the current
+                            // CheckInbox/Delegation flakes).
                             //
-                            // Why not echo-from-stream:
-                            // - The first emission is always the full initial sync;
-                            //   subsequent emissions can be deltas/intermediate
-                            //   state with partial content.
-                            // - During streaming, the thread node emits many times
-                            //   per round ([JsonIgnore] StreamingText /
-                            //   StreamingToolCalls mutations etc.), so any "wait for
-                            //   N-th emission" heuristic races.
-                            // - The patch is posted with the caller's AccessContext;
-                            //   if RLS rejects it, observer.OnError fires below
-                            //   (and the post delivery error path triggers).
-                            //   Otherwise the patch IS what the owner commits — the
-                            //   lambda is pure and the merge is RFC 7396 deterministic.
+                            // On Success: emit the LOCALLY-COMPUTED `updated`
+                            // snapshot (the patch is pure RFC 7396 against the
+                            // owner's current state — deterministic merge result).
+                            // On NodeError: OnError with the typed exception so
+                            // the GUI layout-area boundary renders a typed card
+                            // and tests can assert on Error.Code.
                             //
-                            // Caller gets the snapshot they asked for. If they want
-                            // the owner's full reconciled state they should re-read
-                            // via GetMeshNodeStream(path).Take(1) — a fresh
-                            // subscription always starts with the full sync emission.
-                            observer.OnNext(updated);
-                            observer.OnCompleted();
+                            // Caller gets the snapshot they asked for. If they
+                            // want the owner's full reconciled state (after merge
+                            // against any concurrent writers) they should re-read
+                            // via GetMeshNodeStream(path).Take(1).
+                            var responseSub = _workspace.Hub.Observe(delivery)
+                                .Timeout(TimeSpan.FromSeconds(30))
+                                .Take(1)
+                                .Subscribe(
+                                    d =>
+                                    {
+                                        if (d.Message is not PatchDataResponse resp)
+                                        {
+                                            observer.OnError(new MeshNodeStreamException(new MeshNodeError(
+                                                MeshNodeErrorCode.Unknown,
+                                                _path!,
+                                                $"Unexpected response shape from owner: {d.Message?.GetType().Name ?? "<null>"}")));
+                                            return;
+                                        }
+                                        if (resp.NodeError is { } err)
+                                        {
+                                            observer.OnError(new MeshNodeStreamException(err));
+                                            return;
+                                        }
+                                        if (!resp.Success)
+                                        {
+                                            observer.OnError(new MeshNodeStreamException(new MeshNodeError(
+                                                MeshNodeErrorCode.Unknown,
+                                                _path!,
+                                                resp.Error ?? "Patch failed without diagnostic")));
+                                            return;
+                                        }
+                                        observer.OnNext(updated);
+                                        observer.OnCompleted();
+                                    },
+                                    ex =>
+                                    {
+                                        var code = ex is TimeoutException
+                                            ? MeshNodeErrorCode.OwnerUnreachable
+                                            : MeshNodeErrorCode.Unknown;
+                                        observer.OnError(new MeshNodeStreamException(new MeshNodeError(
+                                            code,
+                                            _path!,
+                                            $"Failed to receive PatchDataResponse: {ex.Message}"), ex));
+                                    });
+                            composite.Add(responseSub);
                         }
                         catch (Exception ex)
                         {
