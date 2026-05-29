@@ -305,6 +305,16 @@ public class MeshOperations
         {
             var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
             var emitted = 0;
+            // 🚨 Capture the inner hub.Observe subscription so disposal tears
+            // down the hub-level callback. Without this, a CTS timeout or
+            // outer-subscriber early dispose leaves the GetDataRequest's
+            // pending-callback entry in the hub's responseSubjects dict until
+            // the framework's RequestTimeout (~30s). The test base's
+            // Quiescing-budget watchdog flags it as a leak — the exact
+            // failure signature behind FullCrudWorkflow_CreateGetUpdateDelete's
+            // CI flake (`GetDataRequest@ACME/CrudTest_…(17001ms)` pending).
+            // Matches the GetMeshNode shape in MeshNodeStreamExtensions.cs.
+            IDisposable? innerSubscription = null;
 
             void EmitOnce(MeshNode? node)
             {
@@ -320,9 +330,13 @@ public class MeshOperations
                 var delivery = hub.Post(
                     new GetDataRequest(new MeshNodeReference()),
                     o => o.WithTarget(new Address(resolvedPath)));
-                if (delivery == null) { EmitOnce(null); return Disposable.Create(() => cts.Dispose()); }
+                if (delivery == null)
+                {
+                    EmitOnce(null);
+                    return Disposable.Create(() => cts.Dispose());
+                }
 
-                hub.Observe(delivery)
+                innerSubscription = hub.Observe(delivery)
                     .Subscribe(
                         d =>
                         {
@@ -372,7 +386,11 @@ public class MeshOperations
                 EmitOnce(null);
             }
 
-            return Disposable.Create(() => cts.Dispose());
+            return Disposable.Create(() =>
+            {
+                innerSubscription?.Dispose();
+                cts.Dispose();
+            });
         });
 
     /// <summary>
@@ -401,13 +419,19 @@ public class MeshOperations
                 observer.OnCompleted();
             }
 
+            // 🚨 Capture the inner Subscribe so disposal removes the
+            // hub-level pending callback. See FetchNode for the failure
+            // mode this avoids (test-base Quiescing leak detection trips
+            // on the orphaned callback entry).
+            IDisposable? innerSubscription = null;
+
             try
             {
                 var delivery = hub.Post(
                     DataChangeRequest.Update([node]),
                     o => o.WithTarget(new Address(node.Path)))!;
 
-                hub.Observe(delivery)
+                innerSubscription = hub.Observe(delivery)
                     .Subscribe(
                         d =>
                         {
@@ -437,7 +461,11 @@ public class MeshOperations
                 Fail(ex);
             }
 
-            return () => cts.Dispose();
+            return () =>
+            {
+                innerSubscription?.Dispose();
+                cts.Dispose();
+            };
         });
 
     /// <summary>
@@ -505,13 +533,17 @@ public class MeshOperations
         // "Error: …" string instead of hanging the whole Get pipeline.
         return Observable.Create<string?>(observer =>
         {
+            // 🚨 Capture inner Subscribe for proper teardown. Same leak class
+            // as FetchNode — outer Timeout cancellation tore down the
+            // observer's chain but left the hub-level callback registered.
+            IDisposable? innerSubscription = null;
             try
             {
                 var delivery = hub.Post(
                     new GetDataRequest(reference),
                     o => o.WithTarget(address))!;
 
-                hub.Observe(delivery)
+                innerSubscription = hub.Observe(delivery)
                     .Subscribe(
                         d =>
                         {
@@ -546,7 +578,7 @@ public class MeshOperations
                 observer.OnError(ex);
             }
 
-            return () => { };
+            return () => innerSubscription?.Dispose();
         })
         .Timeout(TimeSpan.FromSeconds(10))
         .Catch((TimeoutException _) =>
@@ -878,13 +910,16 @@ public class MeshOperations
                 observer.OnCompleted();
             }
 
+            // 🚨 Capture inner Subscribe for proper teardown.
+            IDisposable? innerSubscription = null;
+
             try
             {
                 var delivery = hub.Post(
                     new PatchDataRequest(new MeshNodeReference(), new RawJson(rawPatch)),
                     o => o.WithTarget(new Address(resolvedPath)))!;
 
-                hub.Observe(delivery)
+                innerSubscription = hub.Observe(delivery)
                     .Subscribe(
                         d =>
                         {
@@ -910,7 +945,11 @@ public class MeshOperations
                 Fail(ex);
             }
 
-            return () => cts.Dispose();
+            return () =>
+            {
+                innerSubscription?.Dispose();
+                cts.Dispose();
+            };
         });
 
     /// <summary>
@@ -1338,13 +1377,15 @@ public class MeshOperations
         return Observable.Create<string>(observer =>
         {
             var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            // 🚨 Capture inner Subscribe for proper teardown.
+            IDisposable? innerSubscription = null;
             try
             {
                 var delivery = hub.Post(
                     new MoveNodeRequest(resolvedSource, resolvedTarget),
                     o => o.WithTarget(new Address(resolvedSource)))!;
 
-                hub.Observe(delivery)
+                innerSubscription = hub.Observe(delivery)
                     .Subscribe(
                         d =>
                         {
@@ -1387,7 +1428,11 @@ public class MeshOperations
                 observer.OnCompleted();
             }
 
-            return () => cts.Dispose();
+            return () =>
+            {
+                innerSubscription?.Dispose();
+                cts.Dispose();
+            };
         });
     }
 
