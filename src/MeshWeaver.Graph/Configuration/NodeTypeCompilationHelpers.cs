@@ -320,8 +320,98 @@ internal static class NodeTypeCompilationHelpers
                         "First-build kickoff: Update failed for {HubPath}", hubPath));
             });
 
-        return new CompositeDisposable(watcherSub, resetSub, firstBuildKickoffSub);
+        // 🚨 Recovery kickoff (2026-05-29) — un-strand a NodeType that comes up
+        // persisted as CompilationStatus = Compiling.
+        //
+        // When the process dies (or the per-NodeType grain deactivates) AFTER the
+        // Pending→Compiling flip but BEFORE the terminal Ok/Error write-back, the
+        // on-disk JSON freezes at Compiling. On the next activation NOTHING
+        // re-drives the compile:
+        //   - firstBuildKickoffSub requires CompilationStatus is null,
+        //   - watcherSub requires CompilationStatus == Pending,
+        //   - InstallReleaseRequestWatcher only fires when status is SETTLED.
+        // So the NodeType sits in Compiling forever, every instance hub falls
+        // back to the default config (no MeshNodeReference reducer), and the
+        // instance page renders nothing — the rbuergi/CatBond/AtlanticBond
+        // "I get nothing" symptom.
+        //
+        // Fix: on the FIRST emission at hub init (Take(1) BEFORE the Where so a
+        // normal in-flight compile that legitimately flips Compiling later never
+        // trips this), if the init state is Compiling, look up the recorded
+        // compile activity. If that activity is no longer actually running
+        // (missing / terminal / stale start), the compile is orphaned → flip
+        // back to Pending so watcherSub dispatches a FRESH compile. If the
+        // activity is genuinely still running on its Activity hub (non-terminal +
+        // recent), leave it alone — that compile will finish and write back.
+        var recoveryKickoffSub = ownStream
+            .Take(1)
+            .Where(node => node?.Content is NodeTypeDefinition def
+                && def.CompilationStatus == CompilationStatus.Compiling
+                && !IsStaticOnlyNodeType(node, def))
+            .SelectMany(node =>
+            {
+                var n = node!;
+                var def = (NodeTypeDefinition)n.Content!;
+                var activityPath = def.LastCompilationActivityPath;
+                var startedAt = def.LastCompileStartedAt;
+                if (string.IsNullOrEmpty(activityPath))
+                    // No activity recorded at all → the Pending→Compiling flip
+                    // never got as far as starting an activity. Orphaned.
+                    return Observable.Return((node: n, running: false));
+                // Probe the activity's live state (one-shot, short timeout). A
+                // missing node, a fault, or a stale/terminal status → not running.
+                return workspace.GetMeshNodeStream(activityPath)
+                    .Take(1)
+                    .Timeout(TimeSpan.FromSeconds(5))
+                    .Select(a =>
+                    {
+                        var log = a?.Content as ActivityLog;
+                        var running = log is { Status: ActivityStatus.Running, End: null }
+                            && !IsStaleCompile(startedAt);
+                        return (node: n, running);
+                    })
+                    .Catch<(MeshNode node, bool running), Exception>(_ =>
+                        Observable.Return((node: n, running: false)));
+            })
+            .Where(t => !t.running)
+            .Subscribe(t =>
+            {
+                logger?.LogWarning(
+                    "Compile recovery: {HubPath} came up persisted as Compiling but its activity is not running — re-triggering compile (flip Compiling→Pending)",
+                    hubPath);
+                var recoveryAccess = hub.ServiceProvider.GetService<AccessService>();
+                using var systemScope = recoveryAccess?.ImpersonateAsSystem();
+                workspace.GetMeshNodeStream().Update(curr =>
+                {
+                    if (curr?.Content is not NodeTypeDefinition def) return curr!;
+                    // Only recover if STILL Compiling — the genuine compile may
+                    // have settled between the probe and this lambda.
+                    if (def.CompilationStatus != CompilationStatus.Compiling) return curr;
+                    return curr with
+                    {
+                        Content = def with { CompilationStatus = CompilationStatus.Pending }
+                    };
+                }).Subscribe(_ => { },
+                    ex => logger?.LogWarning(ex,
+                        "Compile recovery: re-trigger Update failed for {HubPath}", hubPath));
+            });
+
+        return new CompositeDisposable(
+            watcherSub, resetSub, firstBuildKickoffSub, recoveryKickoffSub);
     }
+
+    /// <summary>
+    /// True when a NodeType has been "Compiling" for longer than any healthy
+    /// compile could plausibly take — used by the recovery kickoff to treat a
+    /// non-terminal activity whose start is older than the compile budget as a
+    /// stranded ghost (e.g. a Running activity left behind by a hard restart).
+    /// The activity hub caps its own internal Roslyn wait at 60s; double that
+    /// for slack so a genuinely slow-but-live compile is never falsely reaped.
+    /// A null start (status flipped without a stamp) is treated as stale.
+    /// </summary>
+    private static bool IsStaleCompile(DateTimeOffset? startedAt) =>
+        startedAt is null
+        || DateTimeOffset.UtcNow - startedAt.Value > TimeSpan.FromSeconds(120);
 
     /// <summary>
     /// Subscribes (no <c>Take(1)</c>) to the shared <see cref="NodeSources.GetSources"/>
@@ -359,6 +449,9 @@ internal static class NodeTypeCompilationHelpers
             ?.CreateLogger("MeshWeaver.Graph.CompileWatcher");
         var hubPath = hub.Address.Path;
         var ownStream = workspace.GetMeshNodeStream();
+        // Source-set discovery is read as System (see the GetSources call in the
+        // Select below — break-the-cycle fix for the activation self-deadlock).
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
 
         // Outer subscription: discover the source path set via the shared
         // synced query (NodeSources.GetSources). When the path set changes
@@ -407,7 +500,25 @@ internal static class NodeTypeCompilationHelpers
                 // .Take(1) so we only consume the first list, then drop the
                 // synced query — we don't need its change-detection layer.
                 // The per-path streams (below) handle live updates.
-                return NodeSources.GetSources(workspace, def, hubPath)
+                //
+                // 🚨 Read the source set as System. Source-set discovery is
+                // framework infrastructure, NOT a user-scoped read. Without this
+                // scope, workspace.GetQuery routes through WrapWithPerUserRls,
+                // which — under a user-triggered activation — issues a
+                // CheckPermission round-trip per source node. For a source path
+                // UNDER this NodeType, resolving the ancestor's Read routes a
+                // GetPermissionRequest BACK to this very grain, forming a
+                // call-chain cycle that deadlocks the single-threaded,
+                // non-reentrant activation (Orleans request-scheduling: "a grain
+                // that calls back into itself deadlocks unless reentrant").
+                // Reading as System makes WrapWithPerUserRls short-circuit — no
+                // CheckPermission, no self-call, no cycle. Mirrors the first-
+                // build kickoff and the compile body, which already run under
+                // ImpersonateAsSystem. Repro: OrleansSourcesWatcherDeadlockTest.
+                IObservable<IReadOnlyList<MeshNode>> sourceSet;
+                using (accessService?.ImpersonateAsSystem())
+                    sourceSet = NodeSources.GetSources(workspace, def, hubPath);
+                return sourceSet
                     .Take(1)
                     .SelectMany(initial =>
                     {

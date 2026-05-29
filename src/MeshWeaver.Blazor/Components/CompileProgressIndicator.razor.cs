@@ -36,49 +36,126 @@ public partial class CompileProgressIndicator : IDisposable
     [Parameter] public string? NodeTypePath { get; set; }
 
     private string? CompilingPath;
+    private string? ProgressMessage;
+    private string? ErrorPath;
+    private string? CompileError;
+    private string? StreamError;
     private int Seconds;
     private IDisposable? _statusSub;
+    private IDisposable? _activitySub;
     private IDisposable? _tickSub;
+
+    /// <summary>
+    /// Snapshot of what the watched NodeType(s) are doing — drives the render
+    /// branches: an in-flight compile, a terminal failure, or nothing.
+    /// </summary>
+    private sealed record CompileState(
+        string? Path, CompilationStatus? Status, string? ActivityPath, string? Error);
 
     protected override void OnInitialized()
     {
-        IObservable<string?> compilingPathObs;
+        // Surface BOTH an in-flight compile (spinner + live activity message)
+        // AND a terminal failure (the CompilationError text). The activity path
+        // is written onto the NodeType at compile start
+        // (NodeTypeCompileActivityHandler → LastCompilationActivityPath), so it is
+        // live throughout the compile — we follow it to surface real progress.
+        // 🚨 Errors are surfaced, never swallowed: a stuck/blank layout area must
+        // tell the user WHY it isn't loading (compile failed) instead of showing
+        // an indefinite spinner with no message.
+        IObservable<CompileState> compileObs;
         if (!string.IsNullOrEmpty(NodeTypePath))
         {
             // Single-NodeType mode: subscribe to that node's live stream
             // through IMeshNodeStreamCache — process-wide shared handle,
             // joined by every GUI watching the same NodeType.
             var cache = Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-            compilingPathObs = cache.GetStream(NodeTypePath)
-                .Select(n => (n?.Content is NodeTypeDefinition def
-                              && def.CompilationStatus == CompilationStatus.Compiling)
-                    ? NodeTypePath
-                    : null);
+            compileObs = cache.GetStream(NodeTypePath)
+                .Select(n => n?.Content is NodeTypeDefinition def
+                             && def.CompilationStatus is CompilationStatus.Compiling or CompilationStatus.Error
+                    ? new CompileState(NodeTypePath, def.CompilationStatus,
+                        def.LastCompilationActivityPath, def.CompilationError)
+                    : new CompileState(null, null, null, null));
         }
         else
         {
             // Global mode: synced NodeType query — replaces the old 1-second
             // INodeTypeService.GetCompilingPaths poll. Query is the right
             // primitive here (set of nodes); single-node cache wouldn't apply.
+            // Prefer an in-flight compile; fall back to a failed one so a layout
+            // area that won't load surfaces the compile error rather than a blank.
             var workspace = Hub.GetWorkspace();
-            compilingPathObs = workspace.GetQuery("nodetypes-compiling", "nodeType:NodeType")
-                .Select(snapshot => snapshot
-                    .FirstOrDefault(n => n.Content is NodeTypeDefinition def
-                                         && def.CompilationStatus == CompilationStatus.Compiling)
-                    ?.Path);
+            compileObs = workspace.GetQuery("nodetypes-compiling", "nodeType:NodeType")
+                .Select(snapshot =>
+                {
+                    var node = snapshot.FirstOrDefault(n => n.Content is NodeTypeDefinition d
+                            && d.CompilationStatus == CompilationStatus.Compiling)
+                        ?? snapshot.FirstOrDefault(n => n.Content is NodeTypeDefinition d
+                            && d.CompilationStatus == CompilationStatus.Error);
+                    return node?.Content is NodeTypeDefinition def
+                        ? new CompileState(node.Path, def.CompilationStatus,
+                            def.LastCompilationActivityPath, def.CompilationError)
+                        : new CompileState(null, null, null, null);
+                });
         }
 
-        _statusSub = compilingPathObs
+        _statusSub = compileObs
             .DistinctUntilChanged()
             .Subscribe(
-                path =>
+                state =>
                 {
-                    CompilingPath = path;
+                    var compiling = state.Status == CompilationStatus.Compiling;
+                    CompilingPath = compiling ? state.Path : null;
+                    ErrorPath = state.Status == CompilationStatus.Error ? state.Path : null;
+                    CompileError = state.Status == CompilationStatus.Error ? state.Error : null;
+                    ProgressMessage = null;
+                    StreamError = null;
                     Seconds = 0;
-                    StartOrStopTicker(path is not null);
+                    StartOrStopTicker(compiling);
+                    SubscribeToActivity(state.ActivityPath, compiling);
                     InvokeAsync(StateHasChanged);
                 },
-                _ => { /* swallow — best-effort UI signal */ });
+                // 🚨 Surface, don't swallow. A faulted status stream means we can
+                // no longer report compile state — say so instead of going blank.
+                ex =>
+                {
+                    StreamError = ex.Message;
+                    CompilingPath = null;
+                    ErrorPath = null;
+                    InvokeAsync(StateHasChanged);
+                });
+    }
+
+    /// <summary>
+    /// Follow the compile <see cref="ActivityLog"/> and surface its live message
+    /// tail ("starting Roslyn", "Roslyn produced assembly", "Release created") so
+    /// the user sees real progress, not just a blind spinner. Best-effort: a
+    /// missing/slow activity simply leaves the generic "Compiling …" text.
+    /// </summary>
+    private void SubscribeToActivity(string? activityPath, bool active)
+    {
+        _activitySub?.Dispose();
+        _activitySub = null;
+        if (!active || string.IsNullOrEmpty(activityPath)) return;
+
+        var cache = Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        _activitySub = cache.GetStream(activityPath)
+            .Select(n => (n?.Content as ActivityLog)?.Messages is { Count: > 0 } msgs
+                ? msgs[^1].Message
+                : null)
+            .DistinctUntilChanged()
+            .Subscribe(
+                msg =>
+                {
+                    ProgressMessage = msg;
+                    InvokeAsync(StateHasChanged);
+                },
+                // Activity progress is best-effort, but still surface the fault as
+                // the progress tail rather than swallowing it silently.
+                ex =>
+                {
+                    ProgressMessage = $"(compile progress unavailable: {ex.Message})";
+                    InvokeAsync(StateHasChanged);
+                });
     }
 
     private void StartOrStopTicker(bool active)
@@ -97,6 +174,7 @@ public partial class CompileProgressIndicator : IDisposable
     public void Dispose()
     {
         _statusSub?.Dispose();
+        _activitySub?.Dispose();
         _tickSub?.Dispose();
     }
 }

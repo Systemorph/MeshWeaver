@@ -16,3 +16,18 @@
     color: var(--neutral-foreground-rest);
     font-weight: 600;
 }
+
+.compile-progress.compile-error {
+    background: var(--neutral-layer-2);
+    border-color: var(--error, #d13438);
+    color: var(--error, #d13438);
+}
+
+.compile-progress.compile-error strong {
+    color: var(--error, #d13438);
+}
+
+.compile-error-icon {
+    font-size: 1.1rem;
+    line-height: 1;
+}
