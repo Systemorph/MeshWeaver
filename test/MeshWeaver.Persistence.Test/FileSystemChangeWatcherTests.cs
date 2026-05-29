@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -49,7 +50,7 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
     /// path fast while still surfacing real failures.
     /// </summary>
     private static Task WaitForNotification(
-        List<DataChangeNotification> notifications,
+        IReadOnlyCollection<DataChangeNotification> notifications,
         Func<DataChangeNotification, bool> predicate,
         int timeoutMs = 5000) =>
         Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
@@ -73,7 +74,7 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
     /// notification ever fires from the probes themselves.</para>
     /// </summary>
     private Task PrimeWatcherAsync(
-        List<DataChangeNotification> notifications,
+        IReadOnlyCollection<DataChangeNotification> notifications,
         int timeoutMs = 10_000)
     {
         var marker = $"prime-{Guid.NewGuid():N}";
@@ -85,6 +86,42 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
             .Do(i => File.WriteAllText(
                 Path.Combine(probeDir, $"{marker}-{i}.json"),
                 "{}"))
+            .Where(_ => notifications.Any(n => n.Path.Contains(marker)))
+            .FirstAsync()
+            .Timeout(TimeSpan.FromMilliseconds(timeoutMs))
+            .ToTask();
+    }
+
+    /// <summary>
+    /// Creates <paramref name="subDir"/> and proves the watcher has an ACTIVE
+    /// inotify watch on it before the test writes the file(s) it asserts on.
+    ///
+    /// <para>🚨 This is the root-cause fix for the bulk inotify timeouts. On
+    /// Linux, <see cref="FileSystemWatcher"/> with <c>IncludeSubdirectories</c>
+    /// adds the per-subdirectory inotify watch <b>reactively</b> when it observes
+    /// the directory-created event — so a file written into a brand-new subdir
+    /// immediately after <c>Directory.CreateDirectory</c> is silently MISSED if
+    /// the watch hasn't landed yet. Windows <c>ReadDirectoryChangesW</c> is
+    /// natively recursive, so this never reproduces locally on Windows but bites
+    /// on Linux CI under load (the 5s/15s timeouts). We write a uniquely-marked
+    /// probe into the subdir and wait until the watcher delivers a notification
+    /// for it — proving the watch is live. The marker lives under a name that
+    /// never matches the tests' own assertions (<c>external/node*</c>,
+    /// <c>docs/readme</c>), and probes are spaced wider than the debounce window
+    /// so each one fires.</para>
+    /// </summary>
+    private async Task EnsureSubdirWatchedAsync(
+        string subDir,
+        IReadOnlyCollection<DataChangeNotification> notifications,
+        int timeoutMs = 10_000)
+    {
+        Directory.CreateDirectory(subDir);
+        var marker = $"watchprobe-{Guid.NewGuid():N}";
+        var stepMs = _watcher.DebounceIntervalMs * 2 + 50;
+        await Observable.Interval(TimeSpan.FromMilliseconds(stepMs))
+            .StartWith(0L)
+            .Do(i => File.WriteAllText(
+                Path.Combine(subDir, $"{marker}-{i}.json"), "{}"))
             .Where(_ => notifications.Any(n => n.Path.Contains(marker)))
             .FirstAsync()
             .Timeout(TimeSpan.FromMilliseconds(timeoutMs))
@@ -109,15 +146,17 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
     public async Task ExternalFileCreation_NotifiesObservers()
     {
         // Arrange
-        var receivedNotifications = new List<DataChangeNotification>();
-        _changeNotifier.Subscribe(n => receivedNotifications.Add(n));
+        var receivedNotifications = new ConcurrentQueue<DataChangeNotification>();
+        _changeNotifier.Subscribe(n => receivedNotifications.Enqueue(n));
 
         _watcher.Start();
         await PrimeWatcherAsync(receivedNotifications);
 
-        // Act - Create a file externally
+        // Act - Create a file externally (prove the subdir watch is live first —
+        // Linux inotify registers per-subdir watches reactively; a write into a
+        // brand-new subdir before the watch lands is missed under CI load).
         var dir = Path.Combine(_testDirectory, "external");
-        Directory.CreateDirectory(dir);
+        await EnsureSubdirWatchedAsync(dir, receivedNotifications);
         await File.WriteAllTextAsync(Path.Combine(dir, "node1.json"), """
             {
                 "id": "node1",
@@ -145,15 +184,17 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
     public async Task ExternalFileCreation_ObserveQueryReceivesUpdate()
     {
         // Arrange - subscribe to the change notifier (which watcher publishes to)
-        var receivedNotifications = new List<DataChangeNotification>();
-        _changeNotifier.Subscribe(n => receivedNotifications.Add(n));
+        var receivedNotifications = new ConcurrentQueue<DataChangeNotification>();
+        _changeNotifier.Subscribe(n => receivedNotifications.Enqueue(n));
 
         _watcher.Start();
         await PrimeWatcherAsync(receivedNotifications);
 
-        // Act - Create a file externally
+        // Act - Create a file externally (prove the subdir watch is live first —
+        // Linux inotify registers per-subdir watches reactively; a write into a
+        // brand-new subdir before the watch lands is missed under CI load).
         var dir = Path.Combine(_testDirectory, "external");
-        Directory.CreateDirectory(dir);
+        await EnsureSubdirWatchedAsync(dir, receivedNotifications);
         await File.WriteAllTextAsync(Path.Combine(dir, "node1.json"), """
             {
                 "id": "node1",
@@ -200,8 +241,8 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
             }
             """);
 
-        var receivedNotifications = new List<DataChangeNotification>();
-        _changeNotifier.Subscribe(n => receivedNotifications.Add(n));
+        var receivedNotifications = new ConcurrentQueue<DataChangeNotification>();
+        _changeNotifier.Subscribe(n => receivedNotifications.Enqueue(n));
 
         _watcher.Start();
         await PrimeWatcherAsync(receivedNotifications);
@@ -243,8 +284,8 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
             }
             """);
 
-        var receivedNotifications = new List<DataChangeNotification>();
-        _changeNotifier.Subscribe(n => receivedNotifications.Add(n));
+        var receivedNotifications = new ConcurrentQueue<DataChangeNotification>();
+        _changeNotifier.Subscribe(n => receivedNotifications.Enqueue(n));
 
         _watcher.Start();
         await PrimeWatcherAsync(receivedNotifications);
@@ -276,8 +317,8 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
             }
             """);
 
-        var receivedNotifications = new List<DataChangeNotification>();
-        _changeNotifier.Subscribe(n => receivedNotifications.Add(n));
+        var receivedNotifications = new ConcurrentQueue<DataChangeNotification>();
+        _changeNotifier.Subscribe(n => receivedNotifications.Enqueue(n));
 
         _watcher.Start();
         await PrimeWatcherAsync(receivedNotifications);
@@ -302,15 +343,16 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
     public async Task ExternalMarkdownCreation_NotifiesObservers()
     {
         // Arrange
-        var receivedNotifications = new List<DataChangeNotification>();
-        _changeNotifier.Subscribe(n => receivedNotifications.Add(n));
+        var receivedNotifications = new ConcurrentQueue<DataChangeNotification>();
+        _changeNotifier.Subscribe(n => receivedNotifications.Enqueue(n));
 
         _watcher.Start();
         await PrimeWatcherAsync(receivedNotifications);
 
-        // Act - Create a markdown file externally
+        // Act - Create a markdown file externally (prove the subdir watch is live
+        // first — Linux inotify subdir-registration race, see EnsureSubdirWatchedAsync).
         var dir = Path.Combine(_testDirectory, "docs");
-        Directory.CreateDirectory(dir);
+        await EnsureSubdirWatchedAsync(dir, receivedNotifications);
         await File.WriteAllTextAsync(Path.Combine(dir, "readme.md"), """
             ---
             Name: External Readme
@@ -345,8 +387,8 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
     public async Task Watcher_StoppedByDefault_DoesNotNotify()
     {
         // Arrange
-        var receivedNotifications = new List<DataChangeNotification>();
-        _changeNotifier.Subscribe(n => receivedNotifications.Add(n));
+        var receivedNotifications = new ConcurrentQueue<DataChangeNotification>();
+        _changeNotifier.Subscribe(n => receivedNotifications.Enqueue(n));
 
         // Note: Watcher is NOT started
 
@@ -365,32 +407,34 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
     public async Task Watcher_AfterStop_DoesNotNotify()
     {
         // Arrange
-        var receivedNotifications = new List<DataChangeNotification>();
-        _changeNotifier.Subscribe(n => receivedNotifications.Add(n));
+        var receivedNotifications = new ConcurrentQueue<DataChangeNotification>();
+        _changeNotifier.Subscribe(n => receivedNotifications.Enqueue(n));
 
         _watcher.Start();
         await PrimeWatcherAsync(receivedNotifications);
 
-        // Create a file to verify watcher is working
+        // Create a file to verify the watcher is working. Prove the subdir watch
+        // is live first (Linux inotify subdir-registration race) so node1 is
+        // reliably observed; reaching past these awaits proves the watcher works.
         var dir = Path.Combine(_testDirectory, "external");
-        Directory.CreateDirectory(dir);
+        await EnsureSubdirWatchedAsync(dir, receivedNotifications);
         await File.WriteAllTextAsync(Path.Combine(dir, "node1.json"), """{ "id": "node1" }""");
-        // Stream-wait for the watcher's notification before flipping to the
-        // "Stop" half of the test — replaces a fixed Task.Delay(500).
-        await WaitForNotification(receivedNotifications, n => n.Path.Contains("external/node1"));
+        await WaitForNotification(receivedNotifications,
+            n => n.Path.Contains("external/node1"), timeoutMs: 15_000);
 
-        var countBefore = receivedNotifications.Count;
-        countBefore.Should().BeGreaterThan(0);
-
-        // Stop the watcher
+        // Stop the watcher.
         _watcher.Stop();
 
-        // Act - Create another file
+        // Act - Create another file AFTER stop.
         await File.WriteAllTextAsync(Path.Combine(dir, "node2.json"), """{ "id": "node2" }""");
         await Task.Delay(500);
 
-        // Assert - No new notifications after stop
-        receivedNotifications.Count.Should().Be(countBefore);
+        // Assert - the post-stop file must NOT be observed. Asserting on node2
+        // specifically (rather than a total count) is robust against a trailing
+        // debounced event from the pre-stop writes landing after we sampled.
+        receivedNotifications.Should().NotContain(
+            n => n.Path.Contains("external/node2"),
+            "no file created after Stop() should be delivered");
     }
 
     #endregion
@@ -401,14 +445,14 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
     public async Task Watcher_RapidChanges_Debounced()
     {
         // Arrange
-        var receivedNotifications = new List<DataChangeNotification>();
-        _changeNotifier.Subscribe(n => receivedNotifications.Add(n));
+        var receivedNotifications = new ConcurrentQueue<DataChangeNotification>();
+        _changeNotifier.Subscribe(n => receivedNotifications.Enqueue(n));
 
         _watcher.Start();
         await PrimeWatcherAsync(receivedNotifications);
 
         var dir = Path.Combine(_testDirectory, "external");
-        Directory.CreateDirectory(dir);
+        await EnsureSubdirWatchedAsync(dir, receivedNotifications);
         var filePath = Path.Combine(dir, "node1.json");
 
         // Act - Make rapid changes to the same file. The 20 ms waits keep the
@@ -436,8 +480,8 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
     public async Task Watcher_UnsupportedFileTypes_Ignored()
     {
         // Arrange
-        var receivedNotifications = new List<DataChangeNotification>();
-        _changeNotifier.Subscribe(n => receivedNotifications.Add(n));
+        var receivedNotifications = new ConcurrentQueue<DataChangeNotification>();
+        _changeNotifier.Subscribe(n => receivedNotifications.Enqueue(n));
 
         _watcher.Start();
 
