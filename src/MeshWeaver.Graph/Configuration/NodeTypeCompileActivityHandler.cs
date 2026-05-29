@@ -149,7 +149,17 @@ internal static class NodeTypeCompileActivityHandler
                 .Take(1);
 
         snapshotObservable
-            .Timeout(TimeSpan.FromSeconds(30))
+            // Wait for the Compiling snapshot to land before invoking Roslyn.
+            // This is the activity's own internal wait, NOT the trigger (the
+            // caller already got RunCompileResponse(Dispatched: true) above), so
+            // a longer budget here never blocks the trigger — it only governs
+            // how patiently the activity waits for the cached stream to catch up
+            // to OWN's Compiling flip. 30s could strand the activity (it faults
+            // → no terminal WriteToParent → NodeType stuck Compiling forever →
+            // every instance renders the slow-path overlay). Capped at 60s to
+            // match the consumer-side SlowPathTimeout — a longer wait does not
+            // rescue a wedged grain, it only delays the fault, so 60s is the max.
+            .Timeout(TimeSpan.FromSeconds(60))
             .SelectMany(pendingNode =>
             {
                 logger?.LogInformation("[NTCA] starting Roslyn for {ParentPath} (activity={ActivityPath})",
@@ -218,6 +228,26 @@ internal static class NodeTypeCompileActivityHandler
                 IObservable<IReadOnlyList<MeshNode>?> sourcesObservable;
                 if (pendingDef?.CurrentSourceVersions is { Count: > 0 } versions)
                 {
+                    // 🚨 Each per-source stream MUST emit exactly ONE value
+                    // (real MeshNode OR a sentinel `null!`) — never
+                    // `Observable.Empty`. CombineLatest waits for EVERY
+                    // input to emit at least once before it fires; if any
+                    // input's 5s Timeout-then-Catch returned Empty, that
+                    // input completed WITHOUT emitting, CombineLatest never
+                    // emitted, `.Take(1)` completed silently, the outer
+                    // SelectMany never fired, and the compile activity
+                    // hung indefinitely. Observed: 28s gap between
+                    // "[NTCA] starting Roslyn" and "Compiling assembly"
+                    // in LinkedInTelemetryImportTest local trace; same
+                    // shape behind the prod `rbuergi/CatBond` cascade
+                    // (slow per-node hubs → source stream timeouts →
+                    // never-firing compile → stale 30s+ callbacks).
+                    //
+                    // Fix: emit `null!` sentinel on Timeout/Catch so the
+                    // input ALWAYS produces a value. Filter nulls AFTER
+                    // CombineLatest. Outer `Timeout(10s, …)` is a
+                    // hard backstop in case Subscribe itself never
+                    // returns (defence in depth).
                     var paths = versions.Keys.ToArray();
                     sourcesObservable = paths
                         .Select(p => activityHub.GetWorkspace().GetMeshNodeStream(p)
@@ -227,13 +257,16 @@ internal static class NodeTypeCompileActivityHandler
                             .Catch<MeshNode, Exception>(ex =>
                             {
                                 logger?.LogWarning(
-                                    "[NTCA] live stream read for {SourcePath} faulted ({ExType}) — skipping in compile set",
+                                    "[NTCA] live stream read for {SourcePath} faulted ({ExType}) — emitting null sentinel; CombineLatest needs a value per input",
                                     p, ex.GetType().Name);
-                                return Observable.Empty<MeshNode>();
+                                return Observable.Return<MeshNode>(null!);
                             }))
                         .CombineLatest()
                         .Take(1)
-                        .Select(nodes => (IReadOnlyList<MeshNode>?)nodes.Where(n => n != null).ToList())
+                        .Timeout(TimeSpan.FromSeconds(10),
+                            Observable.Return<IList<MeshNode>>(Array.Empty<MeshNode>()))
+                        .Select(nodes => (IReadOnlyList<MeshNode>?)nodes
+                            .Where(n => n is not null).ToList())
                         .Catch<IReadOnlyList<MeshNode>?, Exception>(ex =>
                         {
                             logger?.LogWarning(
