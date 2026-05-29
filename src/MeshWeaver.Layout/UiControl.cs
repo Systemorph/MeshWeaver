@@ -135,7 +135,7 @@ public abstract record UiControl : IUiControl
     protected abstract EntityStoreAndUpdates Render(LayoutAreaHost host, RenderingContext context, EntityStore store);
     protected static RenderingContext GetContextForArea(RenderingContext context, string area)
     {
-        return context with { Area = $"{context.Area}/{area}", Parent = context };
+        return context with { Area = $"{context.Area}/{area}", Parent = context, Depth = context.Depth + 1 };
     }
 
     public UiControl WithBuildup(Func<LayoutAreaHost, RenderingContext, EntityStore, EntityStoreAndUpdates> buildup)

@@ -223,10 +223,43 @@ public record LayoutAreaHost : IDisposable
         => uiControlService.Convert(instance);
 
 
+    /// <summary>
+    /// Maximum layout-area nesting depth. A control tree that references itself
+    /// (a container embedding itself, or a layout area whose content embeds its
+    /// own area) recurses through <see cref="RenderArea(RenderingContext, object, EntityStore)"/>
+    /// → <c>Render</c> → <c>RenderArea</c> synchronously until the stack
+    /// overflows — which in .NET is a fatal, UNCATCHABLE fail-fast (exit
+    /// 0xC0000409) that takes down the whole server. Real layouts nest a few
+    /// dozen levels at most; 100 is far above any legitimate tree and far below
+    /// the stack-overflow frame count, so it converts the crash into a visible
+    /// error without ever tripping on a valid layout.
+    /// </summary>
+    internal const int MaxRenderDepth = 100;
+
     internal EntityStoreAndUpdates RenderArea(RenderingContext context, object? view, EntityStore store)
     {
         if (view == null)
             return new(store, [], Stream.StreamId);
+
+        // 🚨 Recursion guard — bail BEFORE the stack overflows. One buggy /
+        // self-referential layout (e.g. a dynamic NodeType whose Overview embeds
+        // itself) must NEVER crash the whole server; surface it as a visible
+        // error instead. This was the rbuergi/CatBond crash: opening it recursed
+        // here until the process fail-fasted (0xC0000409).
+        if (context.Depth > MaxRenderDepth)
+        {
+            logger?.LogError(
+                "[LAH-RENDER] Render depth {Depth} exceeded limit {Max} at area={Area} on hub {Hub} — " +
+                "aborting to avoid a stack-overflow crash. The layout is almost certainly recursive " +
+                "(a control or area that embeds its own area).",
+                context.Depth, MaxRenderDepth, context.Area, Stream.Hub.Address);
+            var recursionError = new MarkdownControl(
+                $"**Layout recursion detected**\n\nRendering of `{context.Area}` was stopped at depth " +
+                $"{context.Depth} to protect the server from a stack-overflow crash. This layout appears " +
+                $"to embed itself (a control or area that references its own area). Fix the layout so it " +
+                $"no longer renders itself recursively.");
+            return store.UpdateControl(context.Area, recursionError);
+        }
 
         var control = ConvertToControl(view);
         if (control == null)
