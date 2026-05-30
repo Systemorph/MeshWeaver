@@ -60,10 +60,10 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
     }
 
     [Fact]
-    public async Task UpdateMeshNode_SingleUpdate_MessagesChange()
+    public void UpdateMeshNode_SingleUpdate_MessagesChange()
     {
         var threadNode = ThreadNodeType.BuildThreadNode("User/Roland", "update test", "Roland");
-        var created = await NodeFactory.CreateNode(threadNode);
+        var created = NodeFactory.CreateNode(threadNode).Should().Emit();
         var threadPath = created.Path;
 
         var client = GetClient();

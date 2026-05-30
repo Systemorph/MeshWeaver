@@ -38,10 +38,10 @@ public class JsonPatchThreadMessagesTest(ITestOutputHelper output) : MonolithMes
     }
 
     [Fact]
-    public async Task CreateThread_ThenUpdateMessages_ProducesValidMeshNode()
+    public void CreateThread_ThenUpdateMessages_ProducesValidMeshNode()
     {
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, "patch test", "Roland");
-        var created = await NodeFactory.CreateNode(threadNode);
+        var created = NodeFactory.CreateNode(threadNode).Should().Emit();
         var threadPath = created.Path;
         Output.WriteLine($"Thread created: {threadPath}");
 
