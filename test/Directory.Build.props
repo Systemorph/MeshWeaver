@@ -4,6 +4,10 @@
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
+    <!-- Required so the global <Using> items below (incl. MeshWeaver.Reactive.Assertions)
+         are actually emitted. With ImplicitUsings disabled, <Using> is silently ignored,
+         and Should()/Seconds() fail to resolve across every test file. -->
+    <ImplicitUsings>enable</ImplicitUsings>
     <!-- Always emit a TRX so every `dotnet test` invocation leaves a parseable
          result file in TestResults/ — required for hang diagnosis (the only
          place the per-test StdOut + outcome is recorded once the host crashes
