@@ -48,8 +48,6 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         "MeshWeaverNewCommentTests",
         ".mesh-cache");
 
-    private CancellationToken TestTimeout => new CancellationTokenSource(30.Seconds()).Token;
-
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         var graphPath = TestPaths.SamplesGraph;
@@ -226,13 +224,13 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// per-hub workspace ownership check.
     /// </remarks>
     [Fact(Skip = "Pending framework fix: cross-path DataChangeRequest currently mutates the child node instead of being rejected by the wrongly-targeted parent hub.")]
-    public async Task NewComment_DataChangeToWrongAddress_ShouldNotUpdateComment()
+    public void NewComment_DataChangeToWrongAddress_ShouldNotUpdateComment()
     {
         var client = GetClient();
         var docPath = "Doc/DataMesh/CollaborativeEditing";
         var docAddress = new Address(docPath);
 
-        await client.Observe(new PingRequest(), o => o.WithTarget(docAddress)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(docAddress)).Should().Emit();
 
         // Create comment
         var commentId = Guid.NewGuid().AsString();
@@ -251,7 +249,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             Content = comment
         };
 
-        var createdNode = await NodeFactory.CreateNode(commentNode);
+        var createdNode = NodeFactory.CreateNode(commentNode).Should().Emit();
         Output.WriteLine($"Created comment at: {createdNode.Path}");
 
         // Send DataChangeRequest to WRONG address (the markdown document, not the comment)
@@ -259,7 +257,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var updatedNode = createdNode with { Content = updatedComment };
 
         Output.WriteLine($"Sending DataChangeRequest to WRONG address: {docAddress}");
-        await client.Observe(new DataChangeRequest().WithUpdates(updatedNode), o => o.WithTarget(docAddress)).FirstAsync().ToTask(); // BUG: targeting parent instead of comment
+        client.Observe(new DataChangeRequest().WithUpdates(updatedNode), o => o.WithTarget(docAddress)).Should().Emit(); // BUG: targeting parent instead of comment
 
         // Verify comment text did NOT change (still empty) Ã¢â‚¬â€ via per-node stream
         // The wrong-target DataChange may race with the comment hub's MeshNodeReference
@@ -270,11 +268,11 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         // comment's live stream and Throttle until quiescence, so we observe the
         // settled state rather than racing the writer.
         var commentStream = Mesh.GetWorkspace().GetMeshNodeStream(createdNode.Path!);
-        var settled = await commentStream
+        var settled = commentStream
             .Where(n => n is not null)
             .Throttle(500.Milliseconds())
-            .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+            .Should()
+            .Emit();
 
         settled.Should().NotBeNull();
         var settledComment = settled!.Content.Should().BeOfType<Comment>().Subject;
@@ -283,7 +281,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"Confirmed: text settled empty (DataChangeRequest to wrong address was ignored)");
 
         // Cleanup
-        await NodeFactory.DeleteNode(createdNode.Path!);
+        NodeFactory.DeleteNode(createdNode.Path!).Should().Emit();
     }
 
     /// <summary>
@@ -292,23 +290,24 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// contain the comment's edit area (not just the read-only card).
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task ReadView_WithNewComment_ShouldShowCommentInSidebar()
+    public void ReadView_WithNewComment_ShouldShowCommentInSidebar()
     {
         var client = GetClient();
         var docPath = "Doc/DataMesh/CollaborativeEditing";
         var docAddress = new Address(docPath);
 
         // Initialize and wait for Read view
-        await client.Observe(new PingRequest(), o => o.WithTarget(docAddress)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(docAddress)).Should().Emit();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MarkdownLayoutAreas.OverviewArea);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(docAddress, reference);
 
-        var initialControl = await stream
+        var initialControl = stream
             .GetControlStream(MarkdownLayoutAreas.OverviewArea)
-            .Timeout(20.Seconds())
-            .FirstAsync(x => x is StackControl);
+            .Should()
+            .Within(20.Seconds())
+            .Match(x => x is StackControl);
         initialControl.Should().NotBeNull("Initial Read view should render");
         Output.WriteLine("Read view rendered initially");
 
@@ -331,24 +330,23 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         };
 
         Output.WriteLine("Creating comment...");
-        await NodeFactory.CreateNode(commentNode);
+        NodeFactory.CreateNode(commentNode).Should().Emit();
 
-        // Wait for the view to re-render with the new comment
+        // Wait for the view to re-render with the new comment. The reactive
+        // control-stream wait below blocks until the sidebar re-renders — the
+        // commentNodesStream in ReadView picks up the new node — so no fixed delay.
         Output.WriteLine("Waiting for view to update with new comment...");
-        // The commentNodesStream in ReadView should pick up the new node
-        // and re-render the sidebar with the comment card
-        await Task.Delay(2000); // Give time for reactive stream to deliver
-
-        var updatedControl = await stream
+        var updatedControl = stream
             .GetControlStream(MarkdownLayoutAreas.OverviewArea)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x is StackControl);
+            .Should()
+            .Within(10.Seconds())
+            .Match(x => x is StackControl);
 
         updatedControl.Should().NotBeNull("View should still render after comment creation");
         Output.WriteLine("View re-rendered after comment creation");
 
         // Cleanup
-        await NodeFactory.DeleteNode(commentNode.Path);
+        NodeFactory.DeleteNode(commentNode.Path).Should().Emit();
     }
 
     /// <summary>
@@ -356,7 +354,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// This simulates the complete user flow.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task FullFlow_CreateComment_EditText_Reload_ShouldPersist()
+    public void FullFlow_CreateComment_EditText_Reload_ShouldPersist()
     {
         var client = GetClient();
         var docPath = "Doc/DataMesh/CollaborativeEditing";
@@ -364,7 +362,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         // 1. Initialize hub
         Output.WriteLine("1. Initializing document hub...");
-        await client.Observe(new PingRequest(), o => o.WithTarget(docAddress)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(docAddress)).Should().Emit();
 
         // 2. Create empty comment (simulating "Comment" button)
         var commentId = Guid.NewGuid().AsString();
@@ -386,7 +384,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         };
 
         Output.WriteLine($"2. Creating empty comment: Path={commentNode.Path}");
-        var created = await NodeFactory.CreateNode(commentNode);
+        var created = NodeFactory.CreateNode(commentNode).Should().Emit();
         created.Should().NotBeNull();
         Output.WriteLine($"   Created at: {created.Path}");
 
@@ -400,13 +398,16 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var editedNode = created with { Content = editedComment };
 
         Output.WriteLine("3. Updating comment text via NodeFactory.UpdateNodeAsync...");
-        await NodeFactory.UpdateNode(editedNode);
+        NodeFactory.UpdateNode(editedNode).Should().Emit();
 
-        // 4. "Reload" Ã¢â‚¬â€ read content via the per-node MeshNodeReference stream.
+        // 4. "Reload"Ã¢â‚¬â€ read content via the per-node MeshNodeReference stream.
         // QueryAsync would race the eventually-consistent catalog and return stale.
-        var ct = TestContext.Current.CancellationToken;
-        Output.WriteLine("4. Simulating reload Ã¢â‚¬â€ reading content via per-node stream...");
-        var reloaded = await ReadNodeAsync(created.Path!, ct);
+        Output.WriteLine("4. Simulating reloadÃ¢â‚¬â€ reading content via per-node stream...");
+        var reloaded = Mesh.GetMeshNode(created.Path!, ReadNodeTimeout)
+            .Should()
+            .Within(ReadNodeTimeout)
+            .Match(n => n?.Content is Comment c &&
+                        c.Text == "This is my important feedback about the document.");
         reloaded.Should().NotBeNull("Comment must survive reload");
         var reloadedComment = reloaded!.Content.Should().BeOfType<Comment>().Subject;
         reloadedComment.Text.Should().Be("This is my important feedback about the document.",
@@ -419,17 +420,21 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         // for the catalog to surface the comment under the doc namespace.
         Output.WriteLine("5. Verifying via namespace: query...");
         var nsQuery = $"namespace:{docPath} nodeType:{CommentNodeType.NodeType}";
-        await WaitForQueryPathSetAsync(nsQuery, set => set.Contains(created.Path!), ct);
-        var children = await MeshQuery.QueryAsync<MeshNode>(nsQuery).ToListAsync(ct);
-
-        var found = children.FirstOrDefault(n => n.Path == created.Path);
+        var found = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(nsQuery))
+            .SelectMany(c => c.Items)
+            .Where(n => n.Path == created.Path &&
+                        n.Content is Comment cc &&
+                        cc.Text == "This is my important feedback about the document.")
+            .Should()
+            .Within(ReadNodeTimeout)
+            .Emit();
         found.Should().NotBeNull("Comment must appear in namespace: query after reload");
         var foundComment = found!.Content.Should().BeOfType<Comment>().Subject;
         foundComment.Text.Should().Be("This is my important feedback about the document.");
         Output.WriteLine($"   Found in children query: {found.Path}");
 
         // Cleanup
-        await NodeFactory.DeleteNode(created.Path!);
+        NodeFactory.DeleteNode(created.Path!).Should().Emit();
         Output.WriteLine("Cleanup done");
     }
 
@@ -441,28 +446,19 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     ///   4. Verify both the updated content and the Comment node
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task CreateCommentRequest_ShouldInsertMarkersAndCreateNode()
+    public void CreateCommentRequest_ShouldInsertMarkersAndCreateNode()
     {
         var client = GetClient();
         var docPath = "Doc/DataMesh/CollaborativeEditing";
         var docAddress = new Address(docPath);
 
         // Initialize the document hub
-        await client.Observe(new PingRequest(), o => o.WithTarget(docAddress)).FirstAsync().ToTask(TestTimeout);
+        client.Observe(new PingRequest(), o => o.WithTarget(docAddress)).Should().Within(30.Seconds()).Emit();
 
-        // 0) Subscribe to markdown stream BEFORE sending request Ã¢â‚¬â€ wait for markers
         var workspace = client.GetWorkspace();
-        string? capturedMarkerId = null;
-        var markersAppeared = workspace.GetRemoteStream<MeshNode>(docAddress)!
-            .Select(nodes => nodes?.FirstOrDefault(n => n.Path == docPath))
-            .Where(n => n?.Content is MarkdownContent)
-            .Select(n => ((MarkdownContent)n!.Content!).Content ?? "")
-            .Where(content => content.Contains("<!--comment:") && content.Contains("TestAuthor"))
-            .FirstAsync()
-            .ToTask(TestTimeout);
 
-        // 1) Send CreateCommentRequest â€” observable, no Task-await on hub thread.
-        var commentResponseDelivery = await client.Observe(
+        // 1) Send CreateCommentRequest — observable, no Task-await on hub thread.
+        var commentResponseDelivery = client.Observe(
             new CreateCommentRequest
             {
                 DocumentId = docPath,
@@ -470,24 +466,31 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
                 CommentText = "This is a test comment via CreateCommentRequest",
                 Author = "TestAuthor"
             },
-            o => o.WithTarget(docAddress)).FirstAsync().ToTask(TestTimeout);
+            o => o.WithTarget(docAddress)).Should().Within(30.Seconds()).Emit();
 
         // 2) Read response
         var commentResponse = commentResponseDelivery.Message;
         commentResponse.Success.Should().BeTrue("CreateCommentRequest should succeed");
         commentResponse.MarkerId.Should().NotBeNullOrEmpty();
-        capturedMarkerId = commentResponse.MarkerId;
+        var capturedMarkerId = commentResponse.MarkerId;
         Output.WriteLine($"Response: MarkerId={capturedMarkerId}");
 
-        // 3) Wait for markers to appear in markdown stream
-        var updatedContent = await markersAppeared;
+        // 3) Wait for markers to appear in markdown stream. The remote stream
+        // retains the latest doc state, so blocking after the request is race-free.
+        var updatedContent = workspace.GetRemoteStream<MeshNode>(docAddress)!
+            .Select(nodes => nodes?.FirstOrDefault(n => n.Path == docPath))
+            .Where(n => n?.Content is MarkdownContent)
+            .Select(n => ((MarkdownContent)n!.Content!).Content ?? "")
+            .Should()
+            .Within(30.Seconds())
+            .Match(content => content.Contains($"<!--comment:{capturedMarkerId}") && content.Contains("TestAuthor"));
         updatedContent.Should().Contain($"<!--comment:{capturedMarkerId}",
             "Comment markers should appear in the markdown stream");
         Output.WriteLine("Markers verified in markdown stream.");
 
         // 4) Verify comment node via GetDataRequest
         var commentPath = $"{docPath}/{CommentsExtensions.CommentPartition}/{capturedMarkerId}";
-        var commentNodeResponse = await client.Observe(new GetDataRequest(new EntityReference(nameof(MeshNode), capturedMarkerId!)), o => o.WithTarget(new Address(commentPath))).FirstAsync().ToTask(TestTimeout);
+        var commentNodeResponse = client.Observe(new GetDataRequest(new EntityReference(nameof(MeshNode), capturedMarkerId!)), o => o.WithTarget(new Address(commentPath))).Should().Within(30.Seconds()).Emit();
         var commentNode = commentNodeResponse.Message.Data as MeshNode;
         commentNode.Should().NotBeNull($"Comment MeshNode should exist at {commentPath}");
         var comment = commentNode!.Content.Should().BeOfType<Comment>().Subject;
@@ -498,7 +501,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"Comment node verified: {commentNode.Path}");
 
         // Cleanup
-        await NodeFactory.DeleteNode(commentPath);
+        NodeFactory.DeleteNode(commentPath).Should().Emit();
     }
 
     /// <summary>
@@ -506,17 +509,17 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// The handler should create a Comment MeshNode without inserting markers.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task CreateCommentRequest_PageLevel_ShouldCreateNodeWithoutMarkers()
+    public void CreateCommentRequest_PageLevel_ShouldCreateNodeWithoutMarkers()
     {
         var client = GetClient();
         var docPath = "Doc/DataMesh/CollaborativeEditing";
         var docAddress = new Address(docPath);
 
         // Initialize the document hub
-        await client.Observe(new PingRequest(), o => o.WithTarget(docAddress)).FirstAsync().ToTask(TestTimeout);
+        client.Observe(new PingRequest(), o => o.WithTarget(docAddress)).Should().Within(30.Seconds()).Emit();
 
         // Send via hub.Observe (observable, no Task-await on hub thread).
-        var commentResponseDelivery = await client.Observe(
+        var commentResponseDelivery = client.Observe(
             new CreateCommentRequest
             {
                 DocumentId = docPath,
@@ -524,7 +527,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
                 CommentText = "A page-level comment",
                 Author = "TestAuthor"
             },
-            o => o.WithTarget(docAddress)).FirstAsync().ToTask(TestTimeout);
+            o => o.WithTarget(docAddress)).Should().Within(30.Seconds()).Emit();
 
         var commentResponse = commentResponseDelivery.Message;
         commentResponse.Success.Should().BeTrue();
@@ -532,7 +535,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         // Verify comment node via GetDataRequest
         var commentPath = $"{docPath}/{CommentsExtensions.CommentPartition}/{commentResponse.MarkerId}";
-        var commentNodeResponse = await client.Observe(new GetDataRequest(new EntityReference(nameof(MeshNode), commentResponse.MarkerId!)), o => o.WithTarget(new Address(commentPath))).FirstAsync().ToTask(TestTimeout);
+        var commentNodeResponse = client.Observe(new GetDataRequest(new EntityReference(nameof(MeshNode), commentResponse.MarkerId!)), o => o.WithTarget(new Address(commentPath))).Should().Within(30.Seconds()).Emit();
         var commentNode = commentNodeResponse.Message.Data as MeshNode;
 
         commentNode.Should().NotBeNull();
@@ -541,7 +544,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         comment.MarkerId.Should().BeNull("Page-level comments have no MarkerId");
 
         // Cleanup
-        await NodeFactory.DeleteNode(commentPath);
+        NodeFactory.DeleteNode(commentPath).Should().Emit();
     }
 }
 

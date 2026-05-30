@@ -54,12 +54,12 @@ public class AcmePathResolutionDiagnosticTest(ITestOutputHelper output) : Monoli
     /// not registered when loaded from a file with no top-level state/version).
     /// </summary>
     [Fact]
-    public async Task RawJsonDeserialize_BothFiles_ProduceMeshNode()
+    public void RawJsonDeserialize_BothFiles_ProduceMeshNode()
     {
         var dataRoot = TestPaths.SamplesGraphData;
-        var defJson = await File.ReadAllTextAsync(
+        var defJson = File.ReadAllText(
             Path.Combine(dataRoot, "ACME", "ProductLaunch", "Todo", "DefinePersona.json"));
-        var launchJson = await File.ReadAllTextAsync(
+        var launchJson = File.ReadAllText(
             Path.Combine(dataRoot, "ACME", "ProductLaunch", "Todo", "LaunchEvent.json"));
 
         var options = Mesh.JsonSerializerOptions;
@@ -85,12 +85,17 @@ public class AcmePathResolutionDiagnosticTest(ITestOutputHelper output) : Monoli
     /// (routing / catalog / per-hub data source).
     /// </summary>
     [Fact]
-    public async Task ReadNodeAsync_BothPaths_ReturnNonNull()
+    public void ReadNodeAsync_BothPaths_ReturnNonNull()
     {
-        var defNode = await ReadNodeAsync("ACME/ProductLaunch/Todo/DefinePersona");
-        Output.WriteLine($"DefinePersona via ReadNodeAsync: {(defNode == null ? "<null>" : defNode.Path)}");
-        var launchNode = await ReadNodeAsync("ACME/ProductLaunch/Todo/LaunchEvent");
-        Output.WriteLine($"LaunchEvent via ReadNodeAsync: {(launchNode == null ? "<null>" : launchNode.Path)}");
+        var defNode = ReadNode("ACME/ProductLaunch/Todo/DefinePersona")
+            .Should().Within(60.Seconds()).Match(n => n is not null,
+                "DefinePersona must resolve via the per-node hub's MeshNodeReference reducer");
+        Output.WriteLine($"DefinePersona via ReadNode: {(defNode == null ? "<null>" : defNode.Path)}");
+        var launchNode = ReadNode("ACME/ProductLaunch/Todo/LaunchEvent")
+            .Should().Within(60.Seconds()).Match(n => n is not null,
+                "LaunchEvent must resolve too — both .json files live in the same partition directory " +
+                "and have the same MeshNode shape");
+        Output.WriteLine($"LaunchEvent via ReadNode: {(launchNode == null ? "<null>" : launchNode.Path)}");
 
         defNode.Should().NotBeNull("DefinePersona must resolve via the per-node hub's MeshNodeReference reducer");
         launchNode.Should().NotBeNull(
@@ -104,12 +109,16 @@ public class AcmePathResolutionDiagnosticTest(ITestOutputHelper output) : Monoli
     /// mutated by the first lookup making the second one match a stale prefix).
     /// </summary>
     [Fact]
-    public async Task ReadNodeAsync_ReverseOrder_BothPathsReturnNonNull()
+    public void ReadNodeAsync_ReverseOrder_BothPathsReturnNonNull()
     {
-        var launchNode = await ReadNodeAsync("ACME/ProductLaunch/Todo/LaunchEvent");
-        Output.WriteLine($"LaunchEvent via ReadNodeAsync: {(launchNode == null ? "<null>" : launchNode.Path)}");
-        var defNode = await ReadNodeAsync("ACME/ProductLaunch/Todo/DefinePersona");
-        Output.WriteLine($"DefinePersona via ReadNodeAsync: {(defNode == null ? "<null>" : defNode.Path)}");
+        var launchNode = ReadNode("ACME/ProductLaunch/Todo/LaunchEvent")
+            .Should().Within(60.Seconds()).Match(n => n is not null,
+                "LaunchEvent must resolve regardless of access order");
+        Output.WriteLine($"LaunchEvent via ReadNode: {(launchNode == null ? "<null>" : launchNode.Path)}");
+        var defNode = ReadNode("ACME/ProductLaunch/Todo/DefinePersona")
+            .Should().Within(60.Seconds()).Match(n => n is not null,
+                "DefinePersona must resolve regardless of access order");
+        Output.WriteLine($"DefinePersona via ReadNode: {(defNode == null ? "<null>" : defNode.Path)}");
 
         launchNode.Should().NotBeNull("LaunchEvent must resolve regardless of access order");
         defNode.Should().NotBeNull("DefinePersona must resolve regardless of access order");

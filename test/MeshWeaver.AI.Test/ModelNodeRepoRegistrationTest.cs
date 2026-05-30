@@ -68,15 +68,10 @@ public class ModelNodeRepoRegistrationTest : AITestBase
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
     [Fact]
-    public async Task StaticLanguageModel_AccessibleViaGetMeshNodeStream()
+    public void StaticLanguageModel_AccessibleViaGetMeshNodeStream()
     {
-        var ct = new CancellationTokenSource(15.Seconds()).Token;
-
-        var node = await Workspace.GetMeshNodeStream("_Provider/Anthropic/claude-opus-4-7")
-            .Where(n => n?.Content is ModelDefinition)
-            .Take(1)
-            .Timeout(10.Seconds())
-            .ToTask(ct);
+        var node = Workspace.GetMeshNodeStream("_Provider/Anthropic/claude-opus-4-7")
+            .Should().Within(10.Seconds()).Match(n => n?.Content is ModelDefinition);
 
         node.Should().NotBeNull("BuiltInLanguageModelProvider emits a LanguageModel child under _Provider/{name}/{modelId}");
         node.NodeType.Should().Be(LanguageModelNodeType.NodeType);
@@ -88,18 +83,13 @@ public class ModelNodeRepoRegistrationTest : AITestBase
     }
 
     [Fact]
-    public async Task StaticModelProvider_AccessibleViaGetMeshNodeStream()
+    public void StaticModelProvider_AccessibleViaGetMeshNodeStream()
     {
-        var ct = new CancellationTokenSource(15.Seconds()).Token;
-
         // This is the registration the test in this file primarily proves
         // is wired correctly: routing to the _Provider partition resolves
         // to the static node provider, NOT to a missing-partition error.
-        var node = await Workspace.GetMeshNodeStream("_Provider/Anthropic")
-            .Where(n => n?.Content is ModelProviderConfiguration)
-            .Take(1)
-            .Timeout(10.Seconds())
-            .ToTask(ct);
+        var node = Workspace.GetMeshNodeStream("_Provider/Anthropic")
+            .Should().Within(10.Seconds()).Match(n => n?.Content is ModelProviderConfiguration);
 
         node.Should().NotBeNull("ModelProvider partition storage provider must serve namespace:_Provider reads");
         node.NodeType.Should().Be(ModelProviderNodeType.NodeType);
@@ -109,17 +99,12 @@ public class ModelNodeRepoRegistrationTest : AITestBase
     }
 
     [Fact]
-    public async Task SyncedQuery_NamespaceProvider_ReturnsModelProviderNodes()
+    public void SyncedQuery_NamespaceProvider_ReturnsModelProviderNodes()
     {
-        var ct = new CancellationTokenSource(15.Seconds()).Token;
-
-        var snapshot = await Workspace.GetQuery(
+        var snapshot = Workspace.GetQuery(
                 "test-providers",
                 $"namespace:{ModelProviderNodeType.RootNamespace} nodeType:{ModelProviderNodeType.NodeType}")
-            .Where(s => s.Any())
-            .Take(1)
-            .Timeout(10.Seconds())
-            .ToTask(ct);
+            .Should().Within(10.Seconds()).Match(s => s.Any());
 
         snapshot.Should().Contain(n => n.Path == "_Provider/Anthropic"
             && n.NodeType == ModelProviderNodeType.NodeType,
@@ -143,18 +128,13 @@ public class ModelNodeRepoRegistrationTest : AITestBase
     }
 
     [Fact]
-    public async Task PickerQueries_ReturnBothLanguageModelAndModelProviderNodes()
+    public void PickerQueries_ReturnBothLanguageModelAndModelProviderNodes()
     {
-        var ct = new CancellationTokenSource(15.Seconds()).Token;
-
-        var snapshot = await Workspace.GetQuery(
+        var snapshot = Workspace.GetQuery(
                 "picker",
                 AgentPickerProjection.BuildModelQueries())
-            .Where(s => s.Any(n => n.NodeType == LanguageModelNodeType.NodeType)
-                     && s.Any(n => n.NodeType == ModelProviderNodeType.NodeType))
-            .Take(1)
-            .Timeout(10.Seconds())
-            .ToTask(ct);
+            .Should().Within(10.Seconds()).Match(s => s.Any(n => n.NodeType == LanguageModelNodeType.NodeType)
+                     && s.Any(n => n.NodeType == ModelProviderNodeType.NodeType));
 
         snapshot.Should().Contain(n => n.Path == "_Provider/Anthropic/claude-opus-4-7");
         snapshot.Should().Contain(n => n.Path == "_Provider/Anthropic");

@@ -169,9 +169,10 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     /// Test that task instances have correct NodeType.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task Task_Instances_HaveCorrectNodeType()
+    public void Task_Instances_HaveCorrectNodeType()
     {
-        var task = await ReadNodeAsync("ACME/ProductLaunch/Todo/DefinePersona");
+        var task = ReadNode("ACME/ProductLaunch/Todo/DefinePersona")
+            .Should().Within(60.Seconds()).Match(n => n is not null);
 
         task.Should().NotBeNull();
         task!.NodeType.Should().Be("ACME/Project/Todo");

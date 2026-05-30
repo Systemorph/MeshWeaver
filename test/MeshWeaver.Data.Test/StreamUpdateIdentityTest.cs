@@ -39,7 +39,7 @@ public class StreamUpdateIdentityTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [HubFact]
-    public async Task StreamUpdate_WithAsyncLocalIdentity_DelegateSeesCallerIdentity()
+    public void StreamUpdate_WithAsyncLocalIdentity_DelegateSeesCallerIdentity()
     {
         var host = GetHost();
         var workspace = host.GetWorkspace();
@@ -69,11 +69,9 @@ public class StreamUpdateIdentityTest(ITestOutputHelper output) : HubTestBase(ou
             return null;
         }, _ => { });
 
-        var aliceSeen = await seen
-            .Where(id => id == "alice")
-            .FirstAsync()
-            .Timeout(5.Seconds())
-            .ToTask(TestContext.Current.CancellationToken);
+        var aliceSeen = seen
+            .Should().Within(5.Seconds())
+            .Match(id => id == "alice");
 
         aliceSeen.Should().Be(
             "alice",

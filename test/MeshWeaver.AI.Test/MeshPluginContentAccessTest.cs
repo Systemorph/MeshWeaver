@@ -165,6 +165,10 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
             new MeshNode(nodePath) { Name = "Direct Test", NodeType = "Markdown" });
 
         var client = GetClient();
+        // Genuine-async round-trip against a live Monolith node hub: the awaits
+        // hand the thread back to the in-process message pump so the node hub can
+        // activate and deliver. A blocking reactive .Should() holds the thread and
+        // starves that delivery — so this stays async with the Task bridge.
         var response = await client.Observe(new GetDataRequest(new UnifiedReference("content:data.txt")), o => o.WithTarget(new Address(nodePath))).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
 
         Output.WriteLine($"Response error: {response.Message.Error}");
@@ -190,6 +194,8 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
             new MeshNode(nodePath) { Name = "Collection Test", NodeType = "Markdown" });
 
         var client = GetClient();
+        // Stays async (Task bridge) — see GetDataRequest_ContentReference_DirectToNodeHub:
+        // a blocking reactive .Should() round-trip starves the in-process pump.
         var response = await client.Observe(new GetDataRequest(new UnifiedReference("collection:")), o => o.WithTarget(new Address(nodePath))).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
 
         Output.WriteLine($"Response error: {response.Message.Error}");

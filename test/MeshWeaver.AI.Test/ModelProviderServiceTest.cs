@@ -53,17 +53,16 @@ public class ModelProviderServiceTest : AITestBase
     private IWorkspace Workspace => Mesh.GetWorkspace();
 
     [Fact]
-    public async Task CreateProvider_CreatesProviderNode_AndDefaultModelChildren()
+    public void CreateProvider_CreatesProviderNode_AndDefaultModelChildren()
     {
-        var ct = new CancellationTokenSource(20.Seconds()).Token;
         var owner = $"user-{Guid.NewGuid():N}";
 
-        var result = await Service.CreateProvider(
+        var result = Service.CreateProvider(
             ownerPath: owner,
             provider: "Anthropic",
             apiKey: "sk-ant-TEST-1234",
             label: "Roland's test key")
-            .FirstAsync().ToTask(ct);
+            .Should().Within(20.Seconds()).Emit();
 
         result.ProviderNode.Path.Should().Be($"{owner}/_Provider/Anthropic");
         result.ProviderNode.NodeType.Should().Be(ModelProviderNodeType.NodeType);
@@ -85,21 +84,19 @@ public class ModelProviderServiceTest : AITestBase
     }
 
     [Fact]
-    public async Task GetProvidersForOwner_ReturnsLiveCollection()
+    public void GetProvidersForOwner_ReturnsLiveCollection()
     {
-        var ct = new CancellationTokenSource(20.Seconds()).Token;
         var owner = $"user-{Guid.NewGuid():N}";
 
-        var before = await Service.GetProvidersForOwner(owner)
-            .Take(1).Timeout(5.Seconds()).ToTask(ct);
+        var before = Service.GetProvidersForOwner(owner)
+            .Should().Within(5.Seconds()).Emit();
         before.Should().BeEmpty();
 
-        await Service.CreateProvider(owner, "Anthropic", "sk-x")
-            .FirstAsync().ToTask(ct);
+        Service.CreateProvider(owner, "Anthropic", "sk-x")
+            .Should().Within(20.Seconds()).Emit();
 
-        var after = await Service.GetProvidersForOwner(owner)
-            .Where(list => list.Count > 0)
-            .Take(1).Timeout(10.Seconds()).ToTask(ct);
+        var after = Service.GetProvidersForOwner(owner)
+            .Should().Within(10.Seconds()).Match(list => list.Count > 0);
 
         after.Should().HaveCount(1);
         after[0].Provider.Should().Be("Anthropic");
@@ -109,25 +106,23 @@ public class ModelProviderServiceTest : AITestBase
     }
 
     [Fact]
-    public async Task RotateKey_UpdatesApiKeyOnly()
+    public void RotateKey_UpdatesApiKeyOnly()
     {
-        var ct = new CancellationTokenSource(20.Seconds()).Token;
         var owner = $"user-{Guid.NewGuid():N}";
 
-        var created = await Service.CreateProvider(owner, "Anthropic", "sk-old", label: "L")
-            .FirstAsync().ToTask(ct);
+        var created = Service.CreateProvider(owner, "Anthropic", "sk-old", label: "L")
+            .Should().Within(20.Seconds()).Emit();
         var path = created.ProviderNode.Path;
 
         // Pre-warm the synced query so the Update finds the path registered.
-        await Service.GetProvidersForOwner(owner)
-            .Where(p => p.Count > 0).Take(1).Timeout(10.Seconds()).ToTask(ct);
+        Service.GetProvidersForOwner(owner)
+            .Should().Within(10.Seconds()).Match(p => p.Count > 0);
 
-        var ok = await Service.RotateKey(path, "sk-new").FirstAsync().ToTask(ct);
+        var ok = Service.RotateKey(path, "sk-new").Should().Emit();
         ok.Should().BeTrue();
 
-        var updated = await Workspace.GetMeshNodeStream(path)
-            .Where(n => (n.Content as ModelProviderConfiguration)?.ApiKey == "sk-new")
-            .Take(1).Timeout(10.Seconds()).ToTask(ct);
+        var updated = Workspace.GetMeshNodeStream(path)
+            .Should().Within(10.Seconds()).Match(n => (n.Content as ModelProviderConfiguration)?.ApiKey == "sk-new");
         var cfg = updated.Content.Should().BeOfType<ModelProviderConfiguration>().Which;
         cfg.ApiKey.Should().Be("sk-new");
         cfg.Label.Should().Be("L", "RotateKey must not clobber other fields");
@@ -149,6 +144,12 @@ public class ModelProviderServiceTest : AITestBase
         var ok = await Service.DeleteProvider(path).FirstAsync().ToTask(ct);
         ok.Should().BeTrue();
 
+        // Stays on the live single-subscription wait (NOT a reactive .Should()):
+        // GetProvidersForOwner is a Replay(1).RefCount() cached stream. The
+        // cascade-delete empty snapshot arrives on the live upstream re-emission;
+        // a blocking reactive .Should() raced the Replay/RefCount reconnect and
+        // timed out, whereas this stays subscribed until the empty state lands.
+        // No reactive blocking assertion here, so the method correctly stays async.
         var afterDelete = await Service.GetProvidersForOwner(owner)
             .Where(list => list.Count == 0).Take(1).Timeout(10.Seconds()).ToTask(ct);
         afterDelete.Should().BeEmpty();

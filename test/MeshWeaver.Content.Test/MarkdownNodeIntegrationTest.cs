@@ -105,9 +105,9 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// Test that the CollaborativeEditing markdown node exists in the MeshWeaver namespace.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task CollaborativeEditing_NodeExists_InMeshWeaverNamespace()
+    public void CollaborativeEditing_NodeExists_InMeshWeaverNamespace()
     {
-        var node = await ReadNodeAsync("Doc/DataMesh/CollaborativeEditing");
+        var node = Mesh.GetMeshNode("Doc/DataMesh/CollaborativeEditing", ReadNodeTimeout).Should().Emit();
 
         node.Should().NotBeNull("CollaborativeEditing node should exist");
         node!.Path.Should().Be("Doc/DataMesh/CollaborativeEditing");
@@ -119,9 +119,9 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// Test that the markdown node has MarkdownDocument content.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task CollaborativeEditing_HasMarkdownDocumentContent()
+    public void CollaborativeEditing_HasMarkdownDocumentContent()
     {
-        var node = await ReadNodeAsync("Doc/DataMesh/CollaborativeEditing");
+        var node = Mesh.GetMeshNode("Doc/DataMesh/CollaborativeEditing", ReadNodeTimeout).Should().Emit();
 
         node.Should().NotBeNull();
         node!.Content.Should().NotBeNull("Node should have content");
@@ -139,9 +139,9 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// Test that the markdown content contains documentation about collaborative editing.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task CollaborativeEditing_ContentContainsDocumentation()
+    public void CollaborativeEditing_ContentContainsDocumentation()
     {
-        var node = await ReadNodeAsync("Doc/DataMesh/CollaborativeEditing");
+        var node = Mesh.GetMeshNode("Doc/DataMesh/CollaborativeEditing", ReadNodeTimeout).Should().Emit();
 
         node.Should().NotBeNull();
 
@@ -492,10 +492,10 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// Test that all markdown nodes in MeshWeaver have correct nodeType.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task MeshWeaver_MarkdownNodes_HaveCorrectNodeType()
+    public void MeshWeaver_MarkdownNodes_HaveCorrectNodeType()
     {
-        var collaborativeEditing = await ReadNodeAsync("Doc/DataMesh/CollaborativeEditing");
-        var nodeTypeConfig = await ReadNodeAsync("Doc/DataMesh/NodeTypeConfiguration");
+        var collaborativeEditing = Mesh.GetMeshNode("Doc/DataMesh/CollaborativeEditing", ReadNodeTimeout).Should().Emit();
+        var nodeTypeConfig = Mesh.GetMeshNode("Doc/DataMesh/NodeTypeConfiguration", ReadNodeTimeout).Should().Emit();
 
         collaborativeEditing.Should().NotBeNull();
         collaborativeEditing!.NodeType.Should().Be("Markdown");
@@ -513,7 +513,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// This verifies that the Markdown NodeType is properly configured with hub and layout.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task CollaborativeEditing_ReturnsDefaultLayoutView()
+    public void CollaborativeEditing_ReturnsDefaultLayoutView()
     {
         var nodeAddress = new Address("Doc/DataMesh/CollaborativeEditing");
 
@@ -524,7 +524,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
 
         // First verify we can ping the hub
         Output.WriteLine("Pinging CollaborativeEditing hub...");
-        var pingResponse = await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask();
+        var pingResponse = client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Emit();
 
         Output.WriteLine($"Ping response: {pingResponse.Message}");
         pingResponse.Message.Should().NotBeNull("Hub should respond to ping");
@@ -536,7 +536,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         Output.WriteLine("Getting default layout for CollaborativeEditing...");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, reference);
 
-        var changeItem = await stream.Timeout(30.Seconds()).FirstAsync();
+        var changeItem = stream.Should().Within(30.Seconds()).Emit();
         var value = changeItem.Value;
 
         Output.WriteLine($"Received layout ValueKind: {value.ValueKind}");
@@ -669,7 +669,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// Test that requesting the $Data layout area with self-reference returns the MeshNode.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task DataSelfReference_ReturnsLayoutView()
+    public void DataSelfReference_ReturnsLayoutView()
     {
         var nodeAddress = new Address("Doc/DataMesh/CollaborativeEditing");
 
@@ -685,7 +685,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         Output.WriteLine($"Getting {MeshNodeLayoutAreas.DataArea} layout for Doc/DataMesh/CollaborativeEditing...");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, reference);
 
-        var changeItem = await stream.Timeout(30.Seconds()).FirstAsync();
+        var changeItem = stream.Should().Within(30.Seconds()).Emit();
         var value = changeItem.Value;
 
         Output.WriteLine($"Received layout ValueKind: {value.ValueKind}");
@@ -703,7 +703,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// Test that requesting the $Schema layout area with self-reference returns schema info.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task SchemaSelfReference_ReturnsLayoutView()
+    public void SchemaSelfReference_ReturnsLayoutView()
     {
         var nodeAddress = new Address("Doc/DataMesh/CollaborativeEditing");
 
@@ -719,7 +719,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         Output.WriteLine($"Getting {MeshNodeLayoutAreas.SchemaArea} layout for Doc/DataMesh/CollaborativeEditing...");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, reference);
 
-        var changeItem = await stream.Timeout(30.Seconds()).FirstAsync();
+        var changeItem = stream.Should().Within(30.Seconds()).Emit();
         var value = changeItem.Value;
 
         Output.WriteLine($"Received layout ValueKind: {value.ValueKind}");
@@ -737,7 +737,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// Test that requesting the $Model layout area returns data model diagram.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task ModelSelfReference_ReturnsLayoutView()
+    public void ModelSelfReference_ReturnsLayoutView()
     {
         var nodeAddress = new Address("Doc/DataMesh/CollaborativeEditing");
 
@@ -753,7 +753,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         Output.WriteLine($"Getting {MeshNodeLayoutAreas.ModelArea} layout for Doc/DataMesh/CollaborativeEditing...");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, reference);
 
-        var changeItem = await stream.Timeout(30.Seconds()).FirstAsync();
+        var changeItem = stream.Should().Within(30.Seconds()).Emit();
         var value = changeItem.Value;
 
         Output.WriteLine($"Received layout ValueKind: {value.ValueKind}");
@@ -771,7 +771,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// Test that requesting the $Content layout area with self-reference returns the node's icon.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task ContentSelfReference_ReturnsNodeIcon()
+    public void ContentSelfReference_ReturnsNodeIcon()
     {
         var nodeAddress = new Address("Doc/DataMesh/CollaborativeEditing");
 
@@ -787,7 +787,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         Output.WriteLine($"Getting {MeshNodeLayoutAreas.ContentArea} layout for Doc/DataMesh/CollaborativeEditing...");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, reference);
 
-        var changeItem = await stream.Timeout(30.Seconds()).FirstAsync();
+        var changeItem = stream.Should().Within(30.Seconds()).Emit();
         var value = changeItem.Value;
 
         Output.WriteLine($"Received layout ValueKind: {value.ValueKind}");
@@ -885,9 +885,9 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// Test that InteractiveMarkdown node exists and has executable code blocks.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task InteractiveMarkdown_NodeExists_WithExecutableCodeBlocks()
+    public void InteractiveMarkdown_NodeExists_WithExecutableCodeBlocks()
     {
-        var node = await ReadNodeAsync("Doc/DataMesh/InteractiveMarkdown");
+        var node = Mesh.GetMeshNode("Doc/DataMesh/InteractiveMarkdown", ReadNodeTimeout).Should().Emit();
 
         node.Should().NotBeNull("InteractiveMarkdown node should exist at Doc/DataMesh/InteractiveMarkdown");
         node!.Path.Should().Be("Doc/DataMesh/InteractiveMarkdown");
@@ -898,9 +898,9 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// Test that InteractiveMarkdown content contains --render flags.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task InteractiveMarkdown_ContentContainsRenderFlags()
+    public void InteractiveMarkdown_ContentContainsRenderFlags()
     {
-        var node = await ReadNodeAsync("Doc/DataMesh/InteractiveMarkdown");
+        var node = Mesh.GetMeshNode("Doc/DataMesh/InteractiveMarkdown", ReadNodeTimeout).Should().Emit();
 
         node.Should().NotBeNull();
 
@@ -918,9 +918,9 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// This validates that the markdown parsing correctly identifies code blocks with --render.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task InteractiveMarkdown_ParsesExecutableCodeBlocks()
+    public void InteractiveMarkdown_ParsesExecutableCodeBlocks()
     {
-        var node = await ReadNodeAsync("Doc/DataMesh/InteractiveMarkdown");
+        var node = Mesh.GetMeshNode("Doc/DataMesh/InteractiveMarkdown", ReadNodeTimeout).Should().Emit();
         node.Should().NotBeNull();
 
         // Extract markdown content from node
@@ -980,9 +980,9 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// This is needed for the client to replace with actual kernel address.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task InteractiveMarkdown_PrerenderedHtml_ContainsKernelPlaceholder()
+    public void InteractiveMarkdown_PrerenderedHtml_ContainsKernelPlaceholder()
     {
-        var node = await ReadNodeAsync("Doc/DataMesh/InteractiveMarkdown");
+        var node = Mesh.GetMeshNode("Doc/DataMesh/InteractiveMarkdown", ReadNodeTimeout).Should().Emit();
         node.Should().NotBeNull();
 
         // Extract markdown content from node

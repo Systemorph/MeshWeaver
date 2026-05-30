@@ -35,9 +35,8 @@ public class ModelProviderIntegrationTest : AITestBase
     private IWorkspace Workspace => Mesh.GetWorkspace();
 
     [Fact]
-    public async Task UserOwnedModelProvider_ResolverFindsKeyViaProviderRef()
+    public void UserOwnedModelProvider_ResolverFindsKeyViaProviderRef()
     {
-        var ct = new CancellationTokenSource(20.Seconds()).Token;
         var userId = $"user-{Guid.NewGuid():N}";
         var providerPath = $"{userId}/_Provider/Anthropic";
         var modelId = "claude-opus-4-7";
@@ -61,7 +60,7 @@ public class ModelProviderIntegrationTest : AITestBase
                 Models = ImmutableArray.Create(modelId)
             }
         };
-        var providerCreated = await MeshService.CreateNode(providerNode).FirstAsync().ToTask(ct);
+        var providerCreated = MeshService.CreateNode(providerNode).Should().Within(20.Seconds()).Emit();
         providerCreated.Path.Should().Be(providerPath);
 
         // 2. Create the LanguageModel child that references the provider.
@@ -79,17 +78,14 @@ public class ModelProviderIntegrationTest : AITestBase
                 Order = 1
             }
         };
-        await MeshService.CreateNode(modelNode).FirstAsync().ToTask(ct);
+        MeshService.CreateNode(modelNode).Should().Within(20.Seconds()).Emit();
 
         // 3. Pre-warm the resolver's snapshot via the same workspace.GetQuery
         //    the resolver uses internally â€” see SyncedMeshNodeQueries.md.
-        await Workspace.GetQuery(
+        Workspace.GetQuery(
                 "warmup",
                 AgentPickerProjection.BuildModelQueries(currentPath: userId))
-            .Where(s => s.Any(n => n.Path == modelPath))
-            .Take(1)
-            .Timeout(15.Seconds())
-            .ToTask(ct);
+            .Should().Within(15.Seconds()).Match(s => s.Any(n => n.Path == modelPath));
 
         // 4. Resolve and verify. Poll via Observable.Interval â€” the
         //    resolver's internal IngestSnapshot is driven by the same
@@ -99,19 +95,17 @@ public class ModelProviderIntegrationTest : AITestBase
         var resolver = Mesh.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
         resolver.WatchPartition(userId);
 
-        var resolution = await Observable.Interval(TimeSpan.FromMilliseconds(50))
+        var resolution = Observable.Interval(TimeSpan.FromMilliseconds(50))
             .Select(_ => resolver.Resolve(modelId))
-            .Where(r => r.ApiKey != null)
-            .Take(1).Timeout(10.Seconds()).ToTask(ct);
+            .Should().Within(10.Seconds()).Match(r => r.ApiKey != null);
         resolution.ApiKey.Should().Be(rawKey, "resolver follows ProviderRef â†’ ModelProvider.ApiKey");
         resolution.Endpoint.Should().Be("https://api.anthropic.com/v1/messages");
         resolution.Source.Should().StartWith("providerRef:");
     }
 
     [Fact]
-    public async Task Resolver_MissingProvider_ReturnsMissing()
+    public void Resolver_MissingProvider_ReturnsMissing()
     {
-        var ct = new CancellationTokenSource(15.Seconds()).Token;
         // Model node without a ProviderRef and no parent provider â€”
         // resolver should report Missing so the factory falls back to IOptions.
         var orphanId = $"orphan-model-{Guid.NewGuid():N}";
@@ -127,13 +121,10 @@ public class ModelProviderIntegrationTest : AITestBase
                 Provider = "NoSuchProvider",
             }
         };
-        await MeshService.CreateNode(modelNode).FirstAsync().ToTask(ct);
+        MeshService.CreateNode(modelNode).Should().Within(15.Seconds()).Emit();
 
-        await Workspace.GetQuery("warm-orphan", AgentPickerProjection.BuildModelQueries())
-            .Where(s => s.Any(n => n.Path == modelPath))
-            .Take(1)
-            .Timeout(10.Seconds())
-            .ToTask(ct);
+        Workspace.GetQuery("warm-orphan", AgentPickerProjection.BuildModelQueries())
+            .Should().Within(10.Seconds()).Match(s => s.Any(n => n.Path == modelPath));
 
         var resolver = Mesh.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
         var resolution = resolver.Resolve(orphanId);
@@ -144,23 +135,21 @@ public class ModelProviderIntegrationTest : AITestBase
     }
 
     [Fact]
-    public async Task Resolver_UnknownModelId_ReturnsMissing()
+    public void Resolver_UnknownModelId_ReturnsMissing()
     {
-        var ct = new CancellationTokenSource(10.Seconds()).Token;
         var resolver = Mesh.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
         resolver.EnsureSubscription();
         // Wait via the same synced observable the resolver subscribes to â€”
         // once it emits any Initial snapshot, the resolver has been
         // notified too (same cache id, same upstream).
-        await Workspace.GetQuery(AgentPickerProjection.ModelsQueryId, AgentPickerProjection.BuildModelQueries())
-            .Take(1).Timeout(8.Seconds()).ToTask(ct);
+        Workspace.GetQuery(AgentPickerProjection.ModelsQueryId, AgentPickerProjection.BuildModelQueries())
+            .Should().Within(8.Seconds()).Emit();
         resolver.Resolve("definitely-not-a-real-model-id").Should().Be(CredentialResolution.Missing);
     }
 
     [Fact]
-    public async Task ResolverGetProviderForModel_ReturnsCachedProvider()
+    public void ResolverGetProviderForModel_ReturnsCachedProvider()
     {
-        var ct = new CancellationTokenSource(15.Seconds()).Token;
         var modelId = $"prov-{Guid.NewGuid():N}";
         var modelNs = $"{ModelProviderNodeType.RootNamespace}/Anthropic";
         var modelPath = $"{modelNs}/{modelId}";
@@ -174,7 +163,7 @@ public class ModelProviderIntegrationTest : AITestBase
                 Provider = "Anthropic",
             }
         };
-        await MeshService.CreateNode(modelNode).FirstAsync().ToTask(ct);
+        MeshService.CreateNode(modelNode).Should().Within(15.Seconds()).Emit();
 
         // Drive the resolver's own subscription so its internal
         // modelsById dict ingests the new node, then poll-via-interval
@@ -183,10 +172,9 @@ public class ModelProviderIntegrationTest : AITestBase
         // own OnNext on the same cached observable.
         var resolver = Mesh.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
         resolver.EnsureSubscription();
-        var provider = await Observable.Interval(TimeSpan.FromMilliseconds(50))
+        var provider = Observable.Interval(TimeSpan.FromMilliseconds(50))
             .Select(_ => resolver.GetProviderForModel(modelId))
-            .Where(p => p != null)
-            .Take(1).Timeout(10.Seconds()).ToTask(ct);
+            .Should().Within(10.Seconds()).Match(p => p != null);
         provider.Should().Be("Anthropic");
     }
 }

@@ -91,15 +91,15 @@ public class MeshOperationsUploadTest : MonolithMeshTestBase
     /// <c>IContentService</c> from â€” same one tests use to issue requests.</summary>
     private MeshOperations Ops() => new(GetClient());
 
-    private async Task<string> CreateTestNodeAsync(string suffix)
+    private string CreateTestNode(string suffix)
     {
         var nodePath = $"Upload_{_testId}_{suffix}";
         // FileSystemStreamProvider.InitializeAsync enumerates the base directory; create it
         // upfront so the first SaveFileAsync doesn't fail with DirectoryNotFoundException.
         // Matches the pattern in MeshPluginContentAccessTest.
         Directory.CreateDirectory(Path.Combine(ContentBasePath, nodePath));
-        await NodeFactory.CreateNode(
-            new MeshNode(nodePath) { Name = $"Upload test {suffix}", NodeType = "Markdown" });
+        NodeFactory.CreateNode(
+            new MeshNode(nodePath) { Name = $"Upload test {suffix}", NodeType = "Markdown" }).Should().Emit();
         return nodePath;
     }
 
@@ -150,13 +150,12 @@ public class MeshOperationsUploadTest : MonolithMeshTestBase
     // ---- Picture uploads ------------------------------------------------
 
     [Fact]
-    public async Task Upload_Png_LandsInContentCollection()
+    public void Upload_Png_LandsInContentCollection()
     {
-        var nodePath = await CreateTestNodeAsync("png");
+        var nodePath = CreateTestNode("png");
         var bytes = MakePng();
 
-        var result = await Ops().Upload($"{nodePath}/content/logo.png", bytes)
-            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var result = Ops().Upload($"{nodePath}/content/logo.png", bytes).Should().Emit();
 
         Output.WriteLine(result);
 
@@ -168,84 +167,76 @@ public class MeshOperationsUploadTest : MonolithMeshTestBase
         // Byte-for-byte verification on disk â€” the upload tool's reason for being.
         var disk = DiskPath(nodePath, "logo.png");
         File.Exists(disk).Should().BeTrue();
-        (await File.ReadAllBytesAsync(disk, TestContext.Current.CancellationToken))
-            .Should().Equal(bytes);
+        File.ReadAllBytes(disk).Should().Equal(bytes);
     }
 
     [Fact]
-    public async Task Upload_Svg_PreservesUtf8Markup()
+    public void Upload_Svg_PreservesUtf8Markup()
     {
-        var nodePath = await CreateTestNodeAsync("svg");
+        var nodePath = CreateTestNode("svg");
         var bytes = MakeSvg();
 
-        var result = await Ops().Upload($"{nodePath}/content/icon.svg", bytes)
-            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var result = Ops().Upload($"{nodePath}/content/icon.svg", bytes).Should().Emit();
 
         ParseStatus(result).GetProperty("status").GetString().Should().Be("Uploaded");
 
         var disk = DiskPath(nodePath, "icon.svg");
-        var roundTrip = await File.ReadAllTextAsync(disk, Encoding.UTF8, TestContext.Current.CancellationToken);
+        var roundTrip = File.ReadAllText(disk, Encoding.UTF8);
         roundTrip.Should().Contain("<circle");
         roundTrip.Should().Contain("viewBox");
     }
 
     [Fact]
-    public async Task Upload_Png_NestedSubfolderPath()
+    public void Upload_Png_NestedSubfolderPath()
     {
-        var nodePath = await CreateTestNodeAsync("nested");
+        var nodePath = CreateTestNode("nested");
         var bytes = MakePng();
 
-        var result = await Ops().Upload($"{nodePath}/content/branding/logos/dark.png", bytes)
-            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var result = Ops().Upload($"{nodePath}/content/branding/logos/dark.png", bytes).Should().Emit();
 
         ParseStatus(result).GetProperty("status").GetString().Should().Be("Uploaded");
 
         var disk = DiskPath(nodePath, "branding/logos/dark.png");
         File.Exists(disk).Should().BeTrue();
-        (await File.ReadAllBytesAsync(disk, TestContext.Current.CancellationToken))
-            .Should().Equal(bytes);
+        File.ReadAllBytes(disk).Should().Equal(bytes);
     }
 
     // ---- Document uploads ----------------------------------------------
 
     [Fact]
-    public async Task Upload_Docx_RoundTripsBytes()
+    public void Upload_Docx_RoundTripsBytes()
     {
         // Random bytes with a .docx extension â€” the upload tool is content-agnostic;
         // we want to prove a "real-sized" document blob survives the round-trip exactly.
-        var nodePath = await CreateTestNodeAsync("docx");
+        var nodePath = CreateTestNode("docx");
         var bytes = MakeRandomBytes(64 * 1024); // 64 KB
 
-        var result = await Ops().Upload($"{nodePath}/content/proposal.docx", bytes)
-            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var result = Ops().Upload($"{nodePath}/content/proposal.docx", bytes).Should().Emit();
 
         var json = ParseStatus(result);
         json.GetProperty("status").GetString().Should().Be("Uploaded");
         json.GetProperty("bytes").GetInt32().Should().Be(bytes.Length);
 
         var disk = DiskPath(nodePath, "proposal.docx");
-        (await File.ReadAllBytesAsync(disk, TestContext.Current.CancellationToken))
-            .Should().Equal(bytes);
+        File.ReadAllBytes(disk).Should().Equal(bytes);
     }
 
     [Fact]
-    public async Task Upload_Xlsx_RoundTripsBytes()
+    public void Upload_Xlsx_RoundTripsBytes()
     {
-        var nodePath = await CreateTestNodeAsync("xlsx");
+        var nodePath = CreateTestNode("xlsx");
         var bytes = MakeRandomBytes(32 * 1024);
 
-        var result = await Ops().Upload($"{nodePath}/content/model.xlsx", bytes)
-            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var result = Ops().Upload($"{nodePath}/content/model.xlsx", bytes).Should().Emit();
 
         ParseStatus(result).GetProperty("status").GetString().Should().Be("Uploaded");
-        (await File.ReadAllBytesAsync(DiskPath(nodePath, "model.xlsx"), TestContext.Current.CancellationToken))
-            .Should().Equal(bytes);
+        File.ReadAllBytes(DiskPath(nodePath, "model.xlsx")).Should().Equal(bytes);
     }
 
     [Fact]
-    public async Task Upload_Pdf_RoundTripsBytes()
+    public void Upload_Pdf_RoundTripsBytes()
     {
-        var nodePath = await CreateTestNodeAsync("pdf");
+        var nodePath = CreateTestNode("pdf");
         // Mix a real PDF magic header with random payload â€” exercises the binary path
         // and gives a sniffable signature.
         var pdf = new byte[8 * 1024];
@@ -253,12 +244,10 @@ public class MeshOperationsUploadTest : MonolithMeshTestBase
         var header = "%PDF-1.4\n"u8;
         header.CopyTo(pdf);
 
-        var result = await Ops().Upload($"{nodePath}/content/spec.pdf", pdf)
-            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var result = Ops().Upload($"{nodePath}/content/spec.pdf", pdf).Should().Emit();
 
         ParseStatus(result).GetProperty("status").GetString().Should().Be("Uploaded");
-        (await File.ReadAllBytesAsync(DiskPath(nodePath, "spec.pdf"), TestContext.Current.CancellationToken))
-            .Should().Equal(pdf);
+        File.ReadAllBytes(DiskPath(nodePath, "spec.pdf")).Should().Equal(pdf);
     }
 
     // ---- MCP-style base64 path (drift check) ---------------------------
@@ -270,63 +259,57 @@ public class MeshOperationsUploadTest : MonolithMeshTestBase
     /// and the same response shape.
     /// </summary>
     [Fact]
-    public async Task Upload_Base64Path_MatchesRawBytesPath()
+    public void Upload_Base64Path_MatchesRawBytesPath()
     {
-        var nodePath = await CreateTestNodeAsync("base64");
+        var nodePath = CreateTestNode("base64");
         var bytes = MakePng();
         var base64 = Convert.ToBase64String(bytes);
 
         // Decode at the boundary (this is exactly what McpMeshPlugin.Upload does)
         // and hand off to the shared core.
         var decoded = Convert.FromBase64String(base64);
-        var result = await Ops().Upload($"{nodePath}/content/logo-b64.png", decoded)
-            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var result = Ops().Upload($"{nodePath}/content/logo-b64.png", decoded).Should().Emit();
 
         var json = ParseStatus(result);
         json.GetProperty("status").GetString().Should().Be("Uploaded");
         json.GetProperty("bytes").GetInt32().Should().Be(bytes.Length);
 
-        (await File.ReadAllBytesAsync(DiskPath(nodePath, "logo-b64.png"), TestContext.Current.CancellationToken))
-            .Should().Equal(bytes);
+        File.ReadAllBytes(DiskPath(nodePath, "logo-b64.png")).Should().Equal(bytes);
     }
 
     // ---- Error paths ----------------------------------------------------
 
     [Fact]
-    public async Task Upload_EmptyPath_ReturnsError()
+    public void Upload_EmptyPath_ReturnsError()
     {
-        var result = await Ops().Upload("", MakePng())
-            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var result = Ops().Upload("", MakePng()).Should().Emit();
         result.Should().StartWith("Error:");
         result.Should().Contain("path is required");
     }
 
     [Fact]
-    public async Task Upload_EmptyBytes_ReturnsError()
+    public void Upload_EmptyBytes_ReturnsError()
     {
-        var nodePath = await CreateTestNodeAsync("nobytes");
-        var result = await Ops().Upload($"{nodePath}/content/empty.bin", Array.Empty<byte>())
-            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var nodePath = CreateTestNode("nobytes");
+        var result = Ops().Upload($"{nodePath}/content/empty.bin", Array.Empty<byte>()).Should().Emit();
         result.Should().StartWith("Error:");
         result.Should().Contain("content is required");
     }
 
     [Fact]
-    public async Task Upload_MissingFilename_ReturnsError()
+    public void Upload_MissingFilename_ReturnsError()
     {
-        var nodePath = await CreateTestNodeAsync("nofile");
+        var nodePath = CreateTestNode("nofile");
         // Path ends in collection only, no filename â€” Upload must reject early.
-        var result = await Ops().Upload($"{nodePath}/content/", MakePng())
-            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var result = Ops().Upload($"{nodePath}/content/", MakePng()).Should().Emit();
         result.Should().StartWith("Error:");
     }
 
     [Fact]
-    public async Task Upload_UnknownCollection_ReturnsError()
+    public void Upload_UnknownCollection_ReturnsError()
     {
-        var nodePath = await CreateTestNodeAsync("unknown");
-        var result = await Ops().Upload($"{nodePath}/nonexistent/file.png", MakePng())
-            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var nodePath = CreateTestNode("unknown");
+        var result = Ops().Upload($"{nodePath}/nonexistent/file.png", MakePng()).Should().Emit();
         result.Should().StartWith("Error:");
         result.Should().Contain("nonexistent");
     }
@@ -336,11 +319,10 @@ public class MeshOperationsUploadTest : MonolithMeshTestBase
     /// (the "frozen" fixture leaves IsEditable at its default false).
     /// </summary>
     [Fact]
-    public async Task Upload_ReadOnlyCollection_Refused()
+    public void Upload_ReadOnlyCollection_Refused()
     {
-        var nodePath = await CreateTestNodeAsync("frozen");
-        var result = await Ops().Upload($"{nodePath}/frozen/should-fail.png", MakePng())
-            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var nodePath = CreateTestNode("frozen");
+        var result = Ops().Upload($"{nodePath}/frozen/should-fail.png", MakePng()).Should().Emit();
         result.Should().StartWith("Error:");
         result.Should().Contain("read-only");
         File.Exists(DiskPath(nodePath, "should-fail.png")).Should().BeFalse();

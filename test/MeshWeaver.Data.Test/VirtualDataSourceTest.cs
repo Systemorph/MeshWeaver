@@ -116,14 +116,14 @@ public class VirtualDataSourceTest(ITestOutputHelper output) : HubTestBase(outpu
     /// Tests that virtual data source correctly initializes with combined data
     /// </summary>
     [Fact]
-    public async Task VirtualDataSource_Initializes_WithCombinedData()
+    public void VirtualDataSource_Initializes_WithCombinedData()
     {
         // Arrange
         var workspace = GetHost().GetWorkspace();
 
         // Act
         var stream = workspace.GetStream(typeof(ProductSummary));
-        var data = await stream.Take(1).Timeout(TimeSpan.FromSeconds(5));
+        var data = stream.Should().Within(TimeSpan.FromSeconds(5)).Emit();
 
         // Assert
         var summaries = data.Value!.GetData<ProductSummary>().ToArray();
@@ -137,14 +137,14 @@ public class VirtualDataSourceTest(ITestOutputHelper output) : HubTestBase(outpu
     /// Tests that virtual data source can be queried from workspace
     /// </summary>
     [Fact]
-    public async Task VirtualDataSource_CanBeQueried_FromWorkspace()
+    public void VirtualDataSource_CanBeQueried_FromWorkspace()
     {
         // Arrange
         var workspace = GetHost().GetWorkspace();
 
         // Act
         var stream = workspace.GetStream(typeof(ProductSummary));
-        var data = await stream.Take(1).Timeout(TimeSpan.FromSeconds(5));
+        var data = stream.Should().Within(TimeSpan.FromSeconds(5)).Emit();
 
         // Assert
         var summary = data.Value!.GetData<ProductSummary>().First(s => s.ProductId == 1);
@@ -157,14 +157,14 @@ public class VirtualDataSourceTest(ITestOutputHelper output) : HubTestBase(outpu
     /// Tests that virtual data combines data from multiple sources correctly
     /// </summary>
     [Fact]
-    public async Task VirtualDataSource_CombinesData_FromMultipleSources()
+    public void VirtualDataSource_CombinesData_FromMultipleSources()
     {
         // Arrange
         var workspace = GetHost().GetWorkspace();
 
         // Act
         var stream = workspace.GetStream(typeof(ProductSummary));
-        var data = await stream.Take(1).Timeout(TimeSpan.FromSeconds(5));
+        var data = stream.Should().Within(TimeSpan.FromSeconds(5)).Emit();
 
         // Assert
         var summaries = data.Value!.GetData<ProductSummary>().ToArray();
@@ -184,14 +184,14 @@ public class VirtualDataSourceTest(ITestOutputHelper output) : HubTestBase(outpu
     /// Tests that virtual data source respects keys from source data
     /// </summary>
     [Fact]
-    public async Task VirtualDataSource_RespectsKeys_FromSourceData()
+    public void VirtualDataSource_RespectsKeys_FromSourceData()
     {
         // Arrange
         var workspace = GetHost().GetWorkspace();
 
         // Act
         var stream = workspace.GetStream(typeof(ProductSummary));
-        var data = await stream.Take(1).Timeout(TimeSpan.FromSeconds(5));
+        var data = stream.Should().Within(TimeSpan.FromSeconds(5)).Emit();
 
         // Assert
         var summaries = data.Value!.GetData<ProductSummary>().ToArray();

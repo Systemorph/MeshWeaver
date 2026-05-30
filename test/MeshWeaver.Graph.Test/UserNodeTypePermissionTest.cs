@@ -1,6 +1,4 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
-using System.Threading.Tasks;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -66,7 +64,7 @@ public class UserNodeTypePermissionTest
     #region Node Access Rules (via NodeAccessRuleSet)
 
     [Fact]
-    public async Task AuthenticatedUser_CanReadDirectUserNode()
+    public void AuthenticatedUser_CanReadDirectUserNode()
     {
         var config = BuildUserHubConfig();
         var ruleSet = config.Get<NodeAccessRuleSet>();
@@ -76,12 +74,12 @@ public class UserNodeTypePermissionTest
         // Path = "User/Alice" (derived from ns/id)
         var context = ReadContext("Alice", "User");
 
-        var result = await accessRule.HasAccess(context, "bob").FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        result.Should().BeTrue("any authenticated user can read a direct User node");
+        accessRule.HasAccess(context, "bob")
+            .Should().Be(true, "any authenticated user can read a direct User node");
     }
 
     [Fact]
-    public async Task UnauthenticatedUser_CannotReadDirectUserNode()
+    public void UnauthenticatedUser_CannotReadDirectUserNode()
     {
         var config = BuildUserHubConfig();
         var ruleSet = config.Get<NodeAccessRuleSet>();
@@ -89,15 +87,15 @@ public class UserNodeTypePermissionTest
 
         var context = ReadContext("Alice", "User");
 
-        var resultNull = await accessRule.HasAccess(context, null).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        resultNull.Should().BeFalse("unauthenticated user (null) should be denied");
+        accessRule.HasAccess(context, null)
+            .Should().Be(false, "unauthenticated user (null) should be denied");
 
-        var resultEmpty = await accessRule.HasAccess(context, "").FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        resultEmpty.Should().BeFalse("unauthenticated user (empty) should be denied");
+        accessRule.HasAccess(context, "")
+            .Should().Be(false, "unauthenticated user (empty) should be denied");
     }
 
     [Fact]
-    public async Task AuthenticatedUser_CannotReadChildNode()
+    public void AuthenticatedUser_CannotReadChildNode()
     {
         var config = BuildUserHubConfig();
         var ruleSet = config.Get<NodeAccessRuleSet>();
@@ -106,12 +104,12 @@ public class UserNodeTypePermissionTest
         // Path = "User/Alice/thread1" (child node)
         var context = ReadContext("thread1", "User/Alice");
 
-        var result = await accessRule.HasAccess(context, "bob").FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        result.Should().BeFalse("child nodes (threads, activities) should not be publicly readable");
+        accessRule.HasAccess(context, "bob")
+            .Should().Be(false, "child nodes (threads, activities) should not be publicly readable");
     }
 
     [Fact]
-    public async Task UserCanEditOwnNode()
+    public void UserCanEditOwnNode()
     {
         var config = BuildUserHubConfig();
         var ruleSet = config.Get<NodeAccessRuleSet>();
@@ -119,12 +117,12 @@ public class UserNodeTypePermissionTest
 
         var context = UpdateContext("Alice", "User");
 
-        var result = await accessRule.HasAccess(context, "Alice").FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        result.Should().BeTrue("users should be able to edit their own node");
+        accessRule.HasAccess(context, "Alice")
+            .Should().Be(true, "users should be able to edit their own node");
     }
 
     [Fact]
-    public async Task UserCannotEditOtherUserNode()
+    public void UserCannotEditOtherUserNode()
     {
         var config = BuildUserHubConfig();
         var ruleSet = config.Get<NodeAccessRuleSet>();
@@ -132,8 +130,8 @@ public class UserNodeTypePermissionTest
 
         var context = UpdateContext("Alice", "User");
 
-        var result = await accessRule.HasAccess(context, "Bob").FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        result.Should().BeFalse("users should not be able to edit other users' nodes");
+        accessRule.HasAccess(context, "Bob")
+            .Should().Be(false, "users should not be able to edit other users' nodes");
     }
 
     #endregion

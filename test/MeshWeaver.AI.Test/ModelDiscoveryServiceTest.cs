@@ -39,10 +39,10 @@ public class ModelDiscoveryServiceTest : AITestBase
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
     private ModelDiscoveryService Discovery => Mesh.ServiceProvider.GetRequiredService<ModelDiscoveryService>();
 
-    private async Task CreateUserProvider(string ownerPath, string providerName, string modelId, CancellationToken ct)
+    private void CreateUserProvider(string ownerPath, string providerName, string modelId)
     {
         var providerPath = $"{ownerPath}/{ModelProviderNodeType.RootNamespace}/{providerName}";
-        await MeshService.CreateNode(new MeshNode(providerName, $"{ownerPath}/{ModelProviderNodeType.RootNamespace}")
+        MeshService.CreateNode(new MeshNode(providerName, $"{ownerPath}/{ModelProviderNodeType.RootNamespace}")
         {
             NodeType = ModelProviderNodeType.NodeType,
             Name = providerName,
@@ -55,8 +55,8 @@ public class ModelDiscoveryServiceTest : AITestBase
                 CreatedAt = DateTimeOffset.UtcNow,
                 Models = ImmutableArray.Create(modelId),
             }
-        }).FirstAsync().ToTask(ct);
-        await MeshService.CreateNode(new MeshNode(modelId, providerPath)
+        }).Should().Within(20.Seconds()).Emit();
+        MeshService.CreateNode(new MeshNode(modelId, providerPath)
         {
             NodeType = LanguageModelNodeType.NodeType,
             Name = modelId,
@@ -68,21 +68,17 @@ public class ModelDiscoveryServiceTest : AITestBase
                 Provider = providerName,
                 ProviderRef = providerPath,
             }
-        }).FirstAsync().ToTask(ct);
+        }).Should().Within(20.Seconds()).Emit();
     }
 
     [Fact]
-    public async Task GetModelsAtNode_ReturnsSatelliteSubtree()
+    public void GetModelsAtNode_ReturnsSatelliteSubtree()
     {
-        var ct = new CancellationTokenSource(20.Seconds()).Token;
         var owner = $"owner-{Guid.NewGuid():N}";
-        await CreateUserProvider(owner, "Anthropic", "claude-opus-4-7", ct);
+        CreateUserProvider(owner, "Anthropic", "claude-opus-4-7");
 
-        var snapshot = await Discovery.GetModelsAtNode(owner)
-            .Where(s => s.Count >= 2)
-            .Take(1)
-            .Timeout(15.Seconds())
-            .ToTask(ct);
+        var snapshot = Discovery.GetModelsAtNode(owner)
+            .Should().Within(15.Seconds()).Match(s => s.Count >= 2);
 
         snapshot.Should().Contain(n => n.NodeType == ModelProviderNodeType.NodeType
             && n.Path == $"{owner}/_Provider/Anthropic");
@@ -91,23 +87,19 @@ public class ModelDiscoveryServiceTest : AITestBase
     }
 
     [Fact]
-    public async Task GetModelsForNodeHierarchy_UnionsAncestorLevels()
+    public void GetModelsForNodeHierarchy_UnionsAncestorLevels()
     {
-        var ct = new CancellationTokenSource(30.Seconds()).Token;
         var owner = $"org-{Guid.NewGuid():N}";
         var child = $"{owner}/Project1";
 
         // Two providers â€” one at the org level, one at the child level.
-        await CreateUserProvider(owner, "Anthropic", "claude-sonnet-4-6", ct);
-        await CreateUserProvider(child, "OpenAI", "gpt-4o-mini", ct);
+        CreateUserProvider(owner, "Anthropic", "claude-sonnet-4-6");
+        CreateUserProvider(child, "OpenAI", "gpt-4o-mini");
 
         // Asking for the child's hierarchy should see BOTH (its own + org's).
-        var snapshot = await Discovery.GetModelsForNodeHierarchy(child)
-            .Where(s => s.Any(n => n.Provider() == "Anthropic")
-                     && s.Any(n => n.Provider() == "OpenAI"))
-            .Take(1)
-            .Timeout(20.Seconds())
-            .ToTask(ct);
+        var snapshot = Discovery.GetModelsForNodeHierarchy(child)
+            .Should().Within(20.Seconds()).Match(s => s.Any(n => n.Provider() == "Anthropic")
+                     && s.Any(n => n.Provider() == "OpenAI"));
 
         snapshot.Should().Contain(n => n.Path == $"{child}/_Provider/OpenAI",
             "child node's own ModelProvider surfaces");
@@ -116,29 +108,25 @@ public class ModelDiscoveryServiceTest : AITestBase
     }
 
     [Fact]
-    public async Task GetEffectiveModels_CombinesNodePathAndNodeTypePath()
+    public void GetEffectiveModels_CombinesNodePathAndNodeTypePath()
     {
-        var ct = new CancellationTokenSource(30.Seconds()).Token;
         var nodePath = $"nodeOwner-{Guid.NewGuid():N}";
         var nodeTypePath = $"ntOwner-{Guid.NewGuid():N}";
 
         // One provider on the node-path side, one on the NodeType side.
-        await CreateUserProvider(nodePath, "Anthropic", "claude-opus-4-7", ct);
-        await CreateUserProvider(nodeTypePath, "OpenAI", "gpt-4o", ct);
+        CreateUserProvider(nodePath, "Anthropic", "claude-opus-4-7");
+        CreateUserProvider(nodeTypePath, "OpenAI", "gpt-4o");
 
-        var snapshot = await Discovery.GetEffectiveModels(nodePath, nodeTypePath)
-            .Where(s => s.Any(n => n.Provider() == "Anthropic")
-                     && s.Any(n => n.Provider() == "OpenAI"))
-            .Take(1)
-            .Timeout(20.Seconds())
-            .ToTask(ct);
+        var snapshot = Discovery.GetEffectiveModels(nodePath, nodeTypePath)
+            .Should().Within(20.Seconds()).Match(s => s.Any(n => n.Provider() == "Anthropic")
+                     && s.Any(n => n.Provider() == "OpenAI"));
 
         snapshot.Should().Contain(n => n.Path == $"{nodePath}/_Provider/Anthropic");
         snapshot.Should().Contain(n => n.Path == $"{nodeTypePath}/_Provider/OpenAI");
     }
 
     [Fact]
-    public async Task Service_RegisteredOnTopLevelMeshHub_NotPerThreadHub()
+    public void Service_RegisteredOnTopLevelMeshHub_NotPerThreadHub()
     {
         // Resolving the service from the mesh hub's ServiceProvider must
         // succeed. The contract is that callers reach into the top-level
@@ -151,8 +139,6 @@ public class ModelDiscoveryServiceTest : AITestBase
         // returns the same instance.
         var again = Mesh.ServiceProvider.GetRequiredService<ModelDiscoveryService>();
         ReferenceEquals(fromMesh, again).Should().BeTrue();
-
-        await Task.CompletedTask;
     }
 }
 

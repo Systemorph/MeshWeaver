@@ -39,7 +39,7 @@ public class StreamUpdateBeforeSubscribeTest(ITestOutputHelper output) : HubTest
                 ds => ds.WithType<BusinessUnit>()));
 
     [HubFact]
-    public async Task UpdateImmediatelyAfterGetRemoteStream_AppliesAfterCurrentPopulated()
+    public void UpdateImmediatelyAfterGetRemoteStream_AppliesAfterCurrentPopulated()
     {
         // Activate the host hub.
         var host = GetHost();
@@ -60,12 +60,10 @@ public class StreamUpdateBeforeSubscribeTest(ITestOutputHelper output) : HubTest
         client.Post(new DataChangeRequest { Updates = [updatedBu] });
 
         // Wait for the new name to propagate via the cross-hub data sync.
-        var observed = await workspace
+        var observed = workspace
             .GetObservable<BusinessUnit>(firstBu.SystemName)
-            .Where(bu => bu?.DisplayName == newName)
-            .Take(1)
-            .Timeout(60.Seconds())
-            .ToTask(TestContext.Current.CancellationToken);
+            .Should().Within(60.Seconds())
+            .Match(bu => bu?.DisplayName == newName);
 
         observed!.DisplayName.Should().Be(newName,
             "DataChangeRequest fires UpdateStreamRequest under the SynchronizationGate; pre-fix " +

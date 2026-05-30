@@ -86,7 +86,7 @@ public class StartWithSynchronizationTest(ITestOutputHelper output) : HubTestBas
     /// loading to content through JSON synchronization.
     /// </summary>
     [HubFact]
-    public async Task StartWith_WithImmediateData_TransitionsToContent()
+    public void StartWith_WithImmediateData_TransitionsToContent()
     {
         var reference = new LayoutAreaReference(LoadingView);
 
@@ -102,11 +102,11 @@ public class StartWithSynchronizationTest(ITestOutputHelper output) : HubTestBas
         Output.WriteLine("Waiting for control stream...");
 
         // Collect all controls emitted
-        var controls = await stream
+        var controls = stream
             .GetControlStream(reference.Area!)
             .TakeUntil(c => c is HtmlControl)
-            .Timeout(5.Seconds())
-            .ToArray();
+            .ToArray()
+            .Should().Within(5.Seconds()).Emit();
 
         Output.WriteLine($"Received {controls.Length} control(s)");
         foreach (var ctrl in controls)
@@ -125,7 +125,7 @@ public class StartWithSynchronizationTest(ITestOutputHelper output) : HubTestBas
     /// the loading state is visible first, then transitions to content.
     /// </summary>
     [HubFact]
-    public async Task StartWith_WithDelayedData_ShowsLoadingThenContent()
+    public void StartWith_WithDelayedData_ShowsLoadingThenContent()
     {
         var reference = new LayoutAreaReference(DelayedLoadingView);
 
@@ -140,10 +140,9 @@ public class StartWithSynchronizationTest(ITestOutputHelper output) : HubTestBas
         Output.WriteLine("Waiting for initial control...");
 
         // First, we should get the loading control
-        var firstControl = await stream
+        var firstControl = stream
             .GetControlStream(reference.Area!)
-            .Timeout(2.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(2.Seconds()).Match(x => x != null);
 
         Output.WriteLine($"First control: {firstControl?.GetType().Name}: {GetControlContent(firstControl)}");
         firstControl.Should().BeOfType<MarkdownControl>()
@@ -152,11 +151,11 @@ public class StartWithSynchronizationTest(ITestOutputHelper output) : HubTestBas
         Output.WriteLine("Waiting for content transition...");
 
         // Then we should get the actual content
-        var finalControl = await stream
+        var finalControl = stream
             .GetControlStream(reference.Area!)
             .TakeUntil(c => c is HtmlControl)
-            .Timeout(3.Seconds())
-            .LastAsync();
+            .LastAsync()
+            .Should().Within(3.Seconds()).Emit();
 
         Output.WriteLine($"Final control: {finalControl?.GetType().Name}: {GetControlContent(finalControl)}");
         finalControl.Should().BeOfType<HtmlControl>()
@@ -169,7 +168,7 @@ public class StartWithSynchronizationTest(ITestOutputHelper output) : HubTestBas
     /// This test explicitly controls timing to expose race conditions.
     /// </summary>
     [HubFact]
-    public async Task StartWith_WithSubjectControl_TransitionsOnEmission()
+    public void StartWith_WithSubjectControl_TransitionsOnEmission()
     {
         // First emit the content to the subject BEFORE getting the stream
         // This simulates data being ready after initialization
@@ -188,11 +187,11 @@ public class StartWithSynchronizationTest(ITestOutputHelper output) : HubTestBas
         Output.WriteLine("Waiting for content...");
 
         // The subject already has content, so we should get the HTML control
-        var controls = await stream
+        var controls = stream
             .GetControlStream(reference.Area!)
             .TakeUntil(c => c is HtmlControl)
-            .Timeout(5.Seconds())
-            .ToArray();
+            .ToArray()
+            .Should().Within(5.Seconds()).Emit();
 
         Output.WriteLine($"Received {controls.Length} control(s)");
         foreach (var ctrl in controls)
@@ -211,7 +210,7 @@ public class StartWithSynchronizationTest(ITestOutputHelper output) : HubTestBas
     /// in the JSON synchronization pipeline.
     /// </summary>
     [HubFact]
-    public async Task StartWith_RapidEmissions_AllUpdatesReceived()
+    public void StartWith_RapidEmissions_AllUpdatesReceived()
     {
         var reference = new LayoutAreaReference(LoadingView);
 
@@ -223,31 +222,22 @@ public class StartWithSynchronizationTest(ITestOutputHelper output) : HubTestBas
             reference
         );
 
-        // Subscribe and collect all controls
-        var controlsReceived = new List<UiControl?>();
-        var subscription = stream
+        // Collect every control up to and including the content (HtmlControl), waiting on the
+        // actual transition rather than a wall-clock window.
+        var controlsReceived = stream
             .GetControlStream(reference.Area!)
-            .Subscribe(c =>
-            {
-                Output.WriteLine($"Received: {c?.GetType().Name}: {GetControlContent(c)}");
-                lock (controlsReceived)
-                {
-                    controlsReceived.Add(c);
-                }
-            });
+            .Do(c => Output.WriteLine($"Received: {c?.GetType().Name}: {GetControlContent(c)}"))
+            .TakeUntil(c => c is HtmlControl)
+            .ToArray()
+            .Should().Within(5.Seconds()).Emit();
 
-        // Wait for at least one control
-        await Task.Delay(1.Seconds());
-
-        subscription.Dispose();
-
-        Output.WriteLine($"Total controls received: {controlsReceived.Count}");
+        Output.WriteLine($"Total controls received: {controlsReceived.Length}");
 
         // Should have received at least one control (either loading or content)
         controlsReceived.Should().NotBeEmpty();
 
         // If we got multiple controls, the last one should be the content
-        if (controlsReceived.Count > 1)
+        if (controlsReceived.Length > 1)
         {
             controlsReceived.Last().Should().BeOfType<HtmlControl>();
         }

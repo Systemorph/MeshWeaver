@@ -4,7 +4,6 @@ using System.ComponentModel.DataAnnotations;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
-using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Fixture;
@@ -72,17 +71,16 @@ public class InlineEditingWorkflowTest(ITestOutputHelper output) : HubTestBase(o
     }
 
     [HubFact]
-    public async Task Overview_RendersWithClickableProperties()
+    public void Overview_RendersWithClickableProperties()
     {
         var reference = new LayoutAreaReference(OverviewView);
         var workspace = GetClient().GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             CreateHostAddress(), reference);
 
-        var control = await stream
+        var control = stream
             .GetControlStream(reference.Area!)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(5.Seconds()).Match(x => x != null);
 
         control.Should().BeOfType<StackControl>();
         var stack = (StackControl)control!;
@@ -90,32 +88,30 @@ public class InlineEditingWorkflowTest(ITestOutputHelper output) : HubTestBase(o
     }
 
     [HubFact]
-    public async Task Overview_ContainsLayoutGrid()
+    public void Overview_ContainsLayoutGrid()
     {
         var reference = new LayoutAreaReference(OverviewView);
         var workspace = GetClient().GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             CreateHostAddress(), reference);
 
-        var control = await stream
+        var control = stream
             .GetControlStream(reference.Area!)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(5.Seconds()).Match(x => x != null);
 
         var stack = control.Should().BeOfType<StackControl>().Subject;
         var firstArea = stack.Areas.First().Area?.ToString();
         firstArea.Should().NotBeNullOrEmpty();
 
-        var gridControl = await stream
+        var gridControl = stream
             .GetControlStream(firstArea!)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(5.Seconds()).Match(x => x != null);
 
         gridControl.Should().BeOfType<LayoutGridControl>();
     }
 
     [HubFact]
-    public async Task ClickedEvent_SwitchesToEditMode()
+    public void ClickedEvent_SwitchesToEditMode()
     {
         var reference = new LayoutAreaReference(EditableView);
         var hub = GetClient();
@@ -124,10 +120,9 @@ public class InlineEditingWorkflowTest(ITestOutputHelper output) : HubTestBase(o
             CreateHostAddress(), reference);
 
         // Get initial control - Stack with Label and clickable area
-        var control = await stream
+        var control = stream
             .GetControlStream(reference.Area!)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(5.Seconds()).Match(x => x != null);
 
         var stack = control.Should().BeOfType<StackControl>().Subject;
         var areas = stack.Areas.ToList();
@@ -141,17 +136,15 @@ public class InlineEditingWorkflowTest(ITestOutputHelper output) : HubTestBase(o
         hub.Post(new ClickedEvent(clickableArea!, stream.StreamId), o => o.WithTarget(CreateHostAddress()));
 
         // Wait for edit control
-        var editControl = await stream
+        var editControl = stream
             .GetControlStream(clickableArea!)
-            .Where(c => c is TextFieldControl or NumberFieldControl or SelectControl)
-            .Timeout(3.Seconds())
-            .FirstAsync();
+            .Should().Within(3.Seconds()).Match(c => c is TextFieldControl or NumberFieldControl or SelectControl);
 
         editControl.Should().NotBeNull("should switch to edit control after click");
     }
 
     [HubFact]
-    public async Task DataBinding_ReflectsInitialValues()
+    public void DataBinding_ReflectsInitialValues()
     {
         var reference = new LayoutAreaReference(OverviewView);
         var workspace = GetClient().GetWorkspace();
@@ -159,10 +152,9 @@ public class InlineEditingWorkflowTest(ITestOutputHelper output) : HubTestBase(o
             CreateHostAddress(), reference);
 
         // Verify data is bound correctly
-        var data = await stream
+        var data = stream
             .GetDataStream<EditableItem>(new JsonPointerReference($"/data/\"{TestDataId}\""))
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(5.Seconds()).Match(x => x != null);
 
         data.Should().NotBeNull();
         data!.Category.Should().Be("Work");
@@ -171,7 +163,7 @@ public class InlineEditingWorkflowTest(ITestOutputHelper output) : HubTestBase(o
     }
 
     [HubFact]
-    public async Task DataUpdate_PropagatesViaStream()
+    public void DataUpdate_PropagatesViaStream()
     {
         var reference = new LayoutAreaReference(EditableView);
         var hub = GetClient();
@@ -180,10 +172,9 @@ public class InlineEditingWorkflowTest(ITestOutputHelper output) : HubTestBase(o
             CreateHostAddress(), reference);
 
         // Wait for initial render
-        await stream
+        stream
             .GetControlStream(reference.Area!)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(5.Seconds()).Match(x => x != null);
 
         // Update data via stream
         var dataPointer = "/data/\"singleProp\"";
@@ -192,11 +183,9 @@ public class InlineEditingWorkflowTest(ITestOutputHelper output) : HubTestBase(o
         stream.UpdatePointer(newValue, dataPointer, new JsonPointerReference(""));
 
         // Verify the update propagated
-        var updated = await stream
+        var updated = stream
             .GetDataStream<EditableItem>(new JsonPointerReference(dataPointer))
-            .Where(x => x?.Category == "Updated Category")
-            .Timeout(3.Seconds())
-            .FirstAsync();
+            .Should().Within(3.Seconds()).Match(x => x?.Category == "Updated Category");
 
         updated.Should().NotBeNull();
         updated!.Category.Should().Be("Updated Category");
@@ -204,17 +193,16 @@ public class InlineEditingWorkflowTest(ITestOutputHelper output) : HubTestBase(o
     }
 
     [HubFact]
-    public async Task MarkdownView_RendersCorrectly()
+    public void MarkdownView_RendersCorrectly()
     {
         var reference = new LayoutAreaReference(MarkdownView);
         var workspace = GetClient().GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             CreateHostAddress(), reference);
 
-        var control = await stream
+        var control = stream
             .GetControlStream(reference.Area!)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(5.Seconds()).Match(x => x != null);
 
         control.Should().BeOfType<StackControl>();
     }

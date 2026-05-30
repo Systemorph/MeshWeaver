@@ -2,7 +2,6 @@ using System;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
-using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Persistence;
@@ -45,33 +44,31 @@ public class ImportLayoutAreaTest(ITestOutputHelper output) : HubTestBase(output
         => base.ConfigureClient(configuration).AddLayoutClient(d => d);
 
     [HubFact]
-    public async Task ImportForm_RendersStackControl()
+    public void ImportForm_RendersStackControl()
     {
         var reference = new LayoutAreaReference(ImportView);
         var workspace = GetClient().GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             CreateHostAddress(), reference);
 
-        var control = await stream
+        var control = stream
             .GetControlStream(reference.Area!)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(5.Seconds()).Match(x => x != null);
 
         control.Should().BeOfType<StackControl>();
     }
 
     [HubFact]
-    public async Task ImportForm_HasMultipleAreas()
+    public void ImportForm_HasMultipleAreas()
     {
         var reference = new LayoutAreaReference(ImportView);
         var workspace = GetClient().GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             CreateHostAddress(), reference);
 
-        var control = await stream
+        var control = stream
             .GetControlStream(reference.Area!)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(5.Seconds()).Match(x => x != null);
 
         var stack = control.Should().BeOfType<StackControl>().Subject;
         // Should have: H2 header, namespace picker, source radio group,
@@ -81,17 +78,16 @@ public class ImportLayoutAreaTest(ITestOutputHelper output) : HubTestBase(output
     }
 
     [HubFact]
-    public async Task ImportForm_HasNamespacePicker()
+    public void ImportForm_HasNamespacePicker()
     {
         var reference = new LayoutAreaReference(ImportView);
         var workspace = GetClient().GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             CreateHostAddress(), reference);
 
-        var control = await stream
+        var control = stream
             .GetControlStream(reference.Area!)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(5.Seconds()).Match(x => x != null);
 
         var stack = (StackControl)control!;
         var areas = stack.Areas.ToList();
@@ -103,10 +99,9 @@ public class ImportLayoutAreaTest(ITestOutputHelper output) : HubTestBase(output
             var areaName = area.Area?.ToString();
             if (string.IsNullOrEmpty(areaName)) continue;
 
-            var areaControl = await stream
+            var areaControl = stream
                 .GetControlStream(areaName)
-                .Timeout(3.Seconds())
-                .FirstAsync(x => x != null);
+                .Should().Within(3.Seconds()).Match(x => x != null);
 
             if (areaControl is MeshNodePickerControl picker && picker.Label?.ToString() == "Destination Namespace")
             {
@@ -119,17 +114,16 @@ public class ImportLayoutAreaTest(ITestOutputHelper output) : HubTestBase(output
     }
 
     [HubFact]
-    public async Task ImportForm_HasSourceTypeRadioGroup()
+    public void ImportForm_HasSourceTypeRadioGroup()
     {
         var reference = new LayoutAreaReference(ImportView);
         var workspace = GetClient().GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             CreateHostAddress(), reference);
 
-        var control = await stream
+        var control = stream
             .GetControlStream(reference.Area!)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(5.Seconds()).Match(x => x != null);
 
         var stack = (StackControl)control!;
         var areas = stack.Areas.ToList();
@@ -141,10 +135,9 @@ public class ImportLayoutAreaTest(ITestOutputHelper output) : HubTestBase(output
             var areaName = area.Area?.ToString();
             if (string.IsNullOrEmpty(areaName)) continue;
 
-            var areaControl = await stream
+            var areaControl = stream
                 .GetControlStream(areaName)
-                .Timeout(3.Seconds())
-                .FirstAsync(x => x != null);
+                .Should().Within(3.Seconds()).Match(x => x != null);
 
             if (areaControl is RadioGroupControl)
             {
@@ -160,10 +153,9 @@ public class ImportLayoutAreaTest(ITestOutputHelper output) : HubTestBase(output
                     var nestedName = nestedArea.Area?.ToString();
                     if (string.IsNullOrEmpty(nestedName)) continue;
 
-                    var nestedControl = await stream
+                    var nestedControl = stream
                         .GetControlStream(nestedName)
-                        .Timeout(3.Seconds())
-                        .FirstAsync(x => x != null);
+                        .Should().Within(3.Seconds()).Match(x => x != null);
 
                     if (nestedControl is RadioGroupControl)
                     {
@@ -179,17 +171,16 @@ public class ImportLayoutAreaTest(ITestOutputHelper output) : HubTestBase(output
     }
 
     [HubFact]
-    public async Task ImportForm_HasCancelButton()
+    public void ImportForm_HasCancelButton()
     {
         var reference = new LayoutAreaReference(ImportView);
         var workspace = GetClient().GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             CreateHostAddress(), reference);
 
-        var control = await stream
+        var control = stream
             .GetControlStream(reference.Area!)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(5.Seconds()).Match(x => x != null);
 
         var stack = (StackControl)control!;
         var areas = stack.Areas.ToList();
@@ -200,10 +191,9 @@ public class ImportLayoutAreaTest(ITestOutputHelper output) : HubTestBase(output
             var areaName = area.Area?.ToString();
             if (string.IsNullOrEmpty(areaName)) continue;
 
-            var areaControl = await stream
+            var areaControl = stream
                 .GetControlStream(areaName)
-                .Timeout(3.Seconds())
-                .FirstAsync(x => x != null);
+                .Should().Within(3.Seconds()).Match(x => x != null);
 
             if (areaControl is ButtonControl button && button.Data?.ToString() == "Cancel")
             {

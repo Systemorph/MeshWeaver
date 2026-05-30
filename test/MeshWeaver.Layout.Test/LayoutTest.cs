@@ -98,7 +98,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         .AddLayoutClient(d => d);
 
     [HubFact]
-    public async Task BasicArea()
+    public void BasicArea()
     {
         var reference = new LayoutAreaReference(StaticView);
 
@@ -108,9 +108,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             reference
         );
 
-        var control = await stream.GetControlStream(reference.Area!)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x != null);
+        var control = stream.GetControlStream(reference.Area!)
+            .Should().Within(10.Seconds()).Match(x => x != null);
         var areas = control
             .Should()
             .BeOfType<StackControl>()
@@ -118,12 +117,9 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .HaveCount(2)
             .And.Subject;
 
-        var areaControls = await Task.WhenAll(
-            areas!.Select(async a =>
-                await stream.GetControlStream(a.Area.ToString()!)
-                .Timeout(10.Seconds())
-                .FirstAsync(x => x != null)!)
-        );
+        var areaControls = areas!
+            .Select(a => stream.GetControlStream(a.Area.ToString()!).Should().Within(10.Seconds()).Match(x => x != null))
+            .ToArray();
 
         areaControls.Should().HaveCount(2).And.AllBeOfType<HtmlControl>();
     }
@@ -143,7 +139,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     /// deep leaf below it.</para>
     /// </summary>
     [HubFact]
-    public async Task DeeplyNestedLayout_DoesNotCrashServer_SurfacesRecursionError()
+    public void DeeplyNestedLayout_DoesNotCrashServer_SurfacesRecursionError()
     {
         var reference = new LayoutAreaReference(RecursiveView);
         var workspace = GetClient().GetWorkspace();
@@ -161,9 +157,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         // the DEEP_LEAF_MARKER beneath it must never render.
         for (var depth = 0; depth < 130; depth++)
         {
-            var control = await stream.GetControlStream(area)
-                .Timeout(10.Seconds())
-                .FirstAsync(x => x != null);
+            var control = stream.GetControlStream(area)
+                .Should().Within(10.Seconds()).Match(x => x != null);
 
             if (control is MarkdownControl md)
             {
@@ -206,7 +201,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [HubFact]
-    public async Task TestViewWithProgress()
+    public void TestViewWithProgress()
     {
         var reference = new LayoutAreaReference(nameof(ViewWithProgress));
 
@@ -216,11 +211,10 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             reference
         );
         // Wait for the async view to complete and emit the final HtmlControl
-        var finalControl = await stream
+        var finalControl = stream
             .GetControlStream(reference.Area!)
             .Where(o => o is HtmlControl)
-            .Timeout(30.Seconds())
-            .FirstAsync();
+            .Should().Within(30.Seconds()).Emit();
         finalControl.Should().BeOfType<HtmlControl>();
     }
 
@@ -239,7 +233,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [HubFact]
-    public async Task TestUpdatingView()
+    public void TestUpdatingView()
     {
         var reference = new LayoutAreaReference(nameof(UpdatingView));
 
@@ -250,27 +244,24 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             reference
         );
         var reportArea = $"{reference.Area}/Content";
-        var content = await stream.GetControlStream(reportArea)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null)!;
+        var content = stream.GetControlStream(reportArea)
+            .Should().Within(10.Seconds()).Match(x => x is not null);
         content.Should().BeOfType<HtmlControl>().Which.Data.ToString().Should().Contain("2024");
 
         // Get toolbar and change value.
         var toolbarArea = $"{reference.Area}/Toolbar";
-        var yearTextBox = (TextFieldControl)await stream
+        var yearTextBox = (TextFieldControl)stream
             .GetControlStream(toolbarArea)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null);
+            .Should().Within(10.Seconds()).Match(x => x is not null)!;
         yearTextBox.DataContext.Should().Be("/data/\"toolbar\"");
 
         var dataPointer = yearTextBox.Data.Should().BeOfType<JsonPointerReference>().Which;
         dataPointer.Pointer.Should().Be("year");
         var pointer = JsonPointer.Parse($"/{dataPointer.Pointer}");
-        var year = await stream
+        var year = stream
             .GetDataStream<JsonElement>(new JsonPointerReference(yearTextBox.DataContext!))
             .Select(s => pointer.Evaluate(s))
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x != null)!;
+            .Should().Within(10.Seconds()).Match(x => x != null);
         year!.Value.GetInt32().Should().Be(2024);
 
         stream.Update(ci =>
@@ -285,11 +276,11 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             return stream.ToChangeItem(ci, updated, patch, stream.StreamId);
         }, null!);
 
-        var updatedControls = await stream
+        var updatedControls = stream
             .GetControlStream(reportArea)
             .TakeUntil(o => o is HtmlControl html && !html.Data.ToString()!.Contains("2024"))
-            .Timeout(10.Seconds())
-            .ToArray();
+            .ToArray()
+            .Should().Within(10.Seconds()).Emit();
         updatedControls
             .Last()
             .Should()
@@ -304,7 +295,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         );
 
     [HubFact]
-    public async Task TestItemTemplate()
+    public void TestItemTemplate()
     {
         var reference = new LayoutAreaReference(nameof(ItemTemplate));
 
@@ -315,17 +306,15 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             reference
         );
         var controlArea = $"{reference.Area}";
-        var content = await stream.GetControlStream(controlArea)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x != null);
+        var content = stream.GetControlStream(controlArea)
+            .Should().Within(10.Seconds()).Match(x => x != null);
         var itemTemplate = content.Should().BeOfType<ItemTemplateControl>().Which;
         itemTemplate.DataContext.Should().Be($"/data/\"{nameof(ItemTemplate)}\"");
-        var data = await stream
+        var data = stream
             .GetDataStream<IEnumerable<JsonElement>>(
                 new JsonPointerReference(itemTemplate.DataContext!)
             )
-            .Where(x => x is not null)
-            .FirstAsync();
+            .Should().Match(x => x is not null);
 
 
         var view = itemTemplate.View;
@@ -358,7 +347,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [HubFact]
-    public async Task TestClick()
+    public void TestClick()
     {
         var reference = new LayoutAreaReference(nameof(Counter));
 
@@ -369,22 +358,20 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             reference
         );
         var buttonArea = $"{reference.Area}/Button";
-        var content = await stream.GetControlStream(buttonArea)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x != null);
+        var content = stream.GetControlStream(buttonArea)
+            .Should().Within(10.Seconds()).Match(x => x != null);
         content
             .Should()
             .BeOfType<HtmlControl>()
             .Which.Data.ToString()
             .Should()
             .Contain("Count");
-        hub.Post(new ClickedEvent(buttonArea, stream.StreamId), o => o.WithTarget(CreateHostAddress()));
         var counterArea = $"{reference.Area}/Counter";
-        content = await stream
+        var counterStream = stream
             .GetControlStream(counterArea)
-            .FirstAsync(x => x is HtmlControl { Data: not "0" })
-            .Timeout(TimeSpan.FromSeconds(3))
-            ;
+            .Where(x => x is HtmlControl { Data: not "0" });
+        hub.Post(new ClickedEvent(buttonArea, stream.StreamId), o => o.WithTarget(CreateHostAddress()));
+        content = counterStream.Should().Within(3.Seconds()).Emit();
         content.Should().BeOfType<HtmlControl>().Which.Data.Should().Be(1);
     }
 
@@ -398,7 +385,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [HubFact]
-    public async Task TestDataGrid()
+    public void TestDataGrid()
     {
         var reference = new LayoutAreaReference(nameof(DataGrid));
 
@@ -408,10 +395,9 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             CreateHostAddress(),
             reference
         );
-        var content = await stream
+        var content = stream
             .GetControlStream(reference.Area!)
-            //.Timeout(TimeSpan.FromSeconds(3))
-            .FirstAsync(x => x != null);
+            .Should().Match(x => x != null);
 
         var controls = content
             .Should()
@@ -454,7 +440,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     private const string Results = nameof(Results);
 
     [HubFact]
-    public async Task TestDataBoundCheckboxes()
+    public void TestDataBoundCheckboxes()
     {
         var reference = new LayoutAreaReference(nameof(DataBoundCheckboxes));
 
@@ -465,30 +451,27 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             reference
         );
         var controlArea = $"{reference.Area}/{Filter}";
-        var tmp = await stream.Select(
+        var tmp = stream.Select(
             s =>
             {
                 var pointer = JsonPointer.Parse(LayoutAreaReference.GetControlPointer(controlArea));
                 var result = pointer.Evaluate(s.Value);
                 return result?.Deserialize<object>(hub.JsonSerializerOptions);
             })
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x != null);
-        var content = await stream
+            .Should().Within(10.Seconds()).Match(x => x != null);
+        var content = stream
             .GetControlStream(controlArea)
-            .Timeout(TimeSpan.FromSeconds(3))
-            .FirstAsync(x => x != null);
+            .Should().Within(3.Seconds()).Match(x => x != null);
         var itemTemplate = content.Should().BeOfType<ItemTemplateControl>().Which;
         var enumReference = itemTemplate.Data.Should().BeOfType<JsonPointerReference>().Which.Pointer.Should().Be($"data").And.Subject;
         itemTemplate.DataContext.Should().Be($"/data/\"{nameof(DataBoundCheckboxes)}\"");
         var enumerableReference = new JsonPointerReference($"{itemTemplate.DataContext}/{enumReference}");
         // Wait for the populated collection — the data stream's first emission
-        // can be the empty Initial snapshot; FirstAsync() without a predicate
+        // can be the empty Initial snapshot; Emit() without a predicate
         // would grab that and the HaveCount(3) assertion would flake.
-        var filter = await stream.GetDataStream<IReadOnlyCollection<LabelAndBool>>(enumerableReference)
+        var filter = stream.GetDataStream<IReadOnlyCollection<LabelAndBool>>(enumerableReference)
             .Where(x => x is { Count: 3 })
-            .Timeout(3.Seconds())
-            .FirstAsync();
+            .Should().Within(3.Seconds()).Emit();
 
         filter.Should().HaveCount(3);
         var pointer = itemTemplate.Data.Should().BeOfType<JsonPointerReference>().Subject;
@@ -497,10 +480,9 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         first.Value.Should().BeTrue();
 
         var resultsArea = $"{reference.Area}/{Results}";
-        var resultsControl = await stream
+        var resultsControl = stream
             .GetControlStream(resultsArea)
-            .Timeout(TimeSpan.FromSeconds(3))
-            .FirstAsync(x => x != null);
+            .Should().Within(3.Seconds()).Match(x => x != null);
         var resultItemTemplate = resultsControl.Should().BeOfType<CheckBoxControl>().Which;
         resultItemTemplate.DataContext.Should().BeNull();
 
@@ -509,6 +491,10 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .Which.Should().BeTrue();
 
         var firstValuePointer = enumerableReference.Pointer + "/0/value";
+
+        var toggledResultsStream = stream
+            .GetControlStream(resultsArea)
+            .Where(x => x is CheckBoxControl cb && !((bool)cb.Data));
 
         stream.Update(ci =>
         {
@@ -519,11 +505,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             return stream.ToChangeItem(ci, updated, patch, stream.StreamId);
         }, null!);
 
-        resultsControl = await stream
-            .GetControlStream(resultsArea)
-            .Where(x => x is CheckBoxControl cb && !((bool)cb.Data))
-            //.Timeout(TimeSpan.FromSeconds(3))
-            .FirstAsync(x => true);
+        resultsControl = toggledResultsStream.Should().Within(3.Seconds()).Emit()!;
 
         ((bool)((CheckBoxControl)resultsControl).Data).Should().Be(false);
     }
@@ -554,7 +536,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
 
     [HubFact]
-    public async Task TestCatalogView()
+    public void TestCatalogView()
     {
         var reference = new LayoutAreaReference(nameof(CatalogView));
 
@@ -564,9 +546,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             CreateHostAddress(),
             reference
         );
-        var content = await stream.GetControlStream(reference.Area!)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x != null);
+        var content = stream.GetControlStream(reference.Area!)
+            .Should().Within(10.Seconds()).Match(x => x != null);
         var grid = content
             .Should()
             .BeOfType<DataGridControl>()
@@ -610,7 +591,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
 
     [HubFact]
-    public async Task TestAsyncView()
+    public void TestAsyncView()
     {
         var reference = new LayoutAreaReference(nameof(AsyncView));
 
@@ -623,12 +604,13 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var stopwatch = Stopwatch.StartNew();
 
-        var content = await stream.GetControlStream(reference.Area!)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x != null);
+        var content = stream.GetControlStream(reference.Area!)
+            .Should().Within(10.Seconds()).Match(x => x != null);
 
         var subAreaName = content.Should().BeOfType<StackControl>().Which.Areas.Should().HaveCount(1).And.Subject!.First();
-        var subArea = await stream.GetControlStream(subAreaName.Area.ToString()!).FirstAsync();
+        // The sub-area renders only after the async view's 3s delay; its first emission within
+        // the wait window is the null placeholder (the async content has not arrived yet).
+        var subArea = stream.GetControlStream(subAreaName.Area.ToString()!).Should().Emit();
 
         stopwatch.Stop();
 
@@ -720,7 +702,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     /// at the loading state and never transition to the actual content.
     /// </summary>
     [HubFact]
-    public async Task TestStartWithLoading()
+    public void TestStartWithLoading()
     {
         var reference = new LayoutAreaReference(nameof(StartWithLoadingView));
 
@@ -732,11 +714,11 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         );
 
         // Get the control - we should eventually see "DataGrid" content, not stay at "Loading"
-        var controls = await stream
+        var controls = stream
             .GetControlStream(reference.Area!)
             .TakeUntil(o => o is DataGridControl)
-            .Timeout(5.Seconds())
-            .ToArray();
+            .ToArray()
+            .Should().Within(5.Seconds()).Emit();
 
         // Should have received at least the loading control and the final data grid
         controls.Should().HaveCountGreaterThanOrEqualTo(1);
@@ -751,7 +733,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     /// the view to get stuck at the loading state if there's a hashing/timing issue.
     /// </summary>
     [HubFact]
-    public async Task TestStartWithDelayedData()
+    public void TestStartWithDelayedData()
     {
         var reference = new LayoutAreaReference(nameof(StartWithDelayedView));
 
@@ -763,20 +745,19 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         );
 
         // First, we should get the loading control
-        var firstControl = await stream
+        var firstControl = stream
             .GetControlStream(reference.Area!)
-            .Timeout(2.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(2.Seconds()).Match(x => x != null);
 
         firstControl.Should().BeOfType<MarkdownControl>()
             .Which.Markdown.ToString().Should().Contain("Loading");
 
         // Then, we should eventually get the actual content after the delay
-        var finalControl = await stream
+        var finalControl = stream
             .GetControlStream(reference.Area!)
             .TakeUntil(o => o is HtmlControl)
-            .Timeout(5.Seconds())
-            .LastAsync();
+            .LastAsync()
+            .Should().Within(5.Seconds()).Emit();
 
         finalControl.Should().BeOfType<HtmlControl>()
             .Which.Data.ToString().Should().Contain("Data Loaded");
@@ -817,7 +798,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     /// the view properly transitions from loading to content.
     /// </summary>
     [HubFact]
-    public async Task TestStartWithControlledSubject()
+    public void TestStartWithControlledSubject()
     {
         // Reset the subject for this test
         var subject = new System.Reactive.Subjects.ReplaySubject<UiControl>(1);
@@ -832,23 +813,24 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         );
 
         // First control should be the loading message from StartWith
-        var firstControl = await stream
+        var firstControl = stream
             .GetControlStream(reference.Area!)
-            .Timeout(2.Seconds())
-            .FirstAsync(x => x != null);
+            .Should().Within(2.Seconds()).Match(x => x != null);
 
         firstControl.Should().BeOfType<MarkdownControl>()
             .Which.Markdown.ToString().Should().Contain("Loading");
+
+        // Set up the transition watch BEFORE emitting to avoid a race
+        var finalControlStream = stream
+            .GetControlStream(reference.Area!)
+            .TakeUntil(o => o is HtmlControl)
+            .LastAsync();
 
         // Now emit the actual content via the subject
         TestSubject.OnNext(Controls.Html("Subject Data Loaded"));
 
         // Wait for the content to transition
-        var finalControl = await stream
-            .GetControlStream(reference.Area!)
-            .TakeUntil(o => o is HtmlControl)
-            .Timeout(3.Seconds())
-            .LastAsync();
+        var finalControl = finalControlStream.Should().Within(3.Seconds()).Emit();
 
         // The final control should be the HTML content, not still the loading message
         finalControl.Should().BeOfType<HtmlControl>()
@@ -1233,12 +1215,14 @@ public class CodeEditorDataBindingTest(ITestOutputHelper output) : HubTestBase(o
             .WithView(editor, "Editor")
             .WithView(
                 Controls.Button("Save")
-                    .WithClickAction(async actx =>
+                    .WithClickAction(actx =>
                     {
-                        // Read the current value from the stream (this is what Save button does)
-                        var currentValue = await host.Stream.GetDataStream<string>(CodeDataId).FirstAsync();
-                        // Store in a separate location so we can verify what was read
-                        host.UpdateData("savedValue", currentValue ?? "null");
+                        // Read the current value from the stream (this is what Save button does).
+                        // Reactive, non-blocking: take the current value and store it.
+                        host.Stream.GetDataStream<string>(CodeDataId)
+                            .Take(1)
+                            .Subscribe(currentValue => host.UpdateData("savedValue", currentValue ?? "null"));
+                        return Task.CompletedTask;
                     }),
                 "SaveButton"
             );
@@ -1257,7 +1241,7 @@ public class CodeEditorDataBindingTest(ITestOutputHelper output) : HubTestBase(o
     /// 4. Verify the updated value is saved, not the initial value
     /// </summary>
     [HubFact]
-    public async Task CodeEditor_UpdatePointer_SavesUpdatedValue()
+    public void CodeEditor_UpdatePointer_SavesUpdatedValue()
     {
         var reference = new LayoutAreaReference(CodeEditorView);
 
@@ -1270,9 +1254,8 @@ public class CodeEditorDataBindingTest(ITestOutputHelper output) : HubTestBase(o
 
         // Wait for the editor control to be rendered
         var editorArea = $"{reference.Area}/Editor";
-        var editorControl = await stream.GetControlStream(editorArea)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x != null);
+        var editorControl = stream.GetControlStream(editorArea)
+            .Should().Within(10.Seconds()).Match(x => x != null);
 
         var textField = editorControl.Should().BeOfType<TextFieldControl>().Which;
         textField.DataContext.Should().Be(LayoutAreaReference.GetDataPointer(CodeDataId));
@@ -1280,24 +1263,19 @@ public class CodeEditorDataBindingTest(ITestOutputHelper output) : HubTestBase(o
         valuePointer.Pointer.Should().Be("");
 
         // Verify initial value is loaded
-        var initialValue = await stream
+        var initialValue = stream
             .GetDataStream<string>(new JsonPointerReference(textField.DataContext!))
-            .Timeout(5.Seconds())
-            .FirstAsync();
+            .Should().Within(5.Seconds()).Emit();
         initialValue.Should().Be(InitialCode);
 
         // Now simulate what CodeEditorView.OnValueChanged does:
         // Update the data using UpdatePointer with the same pattern
         stream.UpdatePointer(UpdatedCode, textField.DataContext, valuePointer);
 
-        // Wait for the update to be applied
-        await Task.Delay(500);
-
-        // Verify the value was updated in the stream
-        var updatedValue = await stream
+        // Verify the value was updated in the stream (the predicate waits for the update to apply)
+        var updatedValue = stream
             .GetDataStream<string>(new JsonPointerReference(textField.DataContext!))
-            .Timeout(5.Seconds())
-            .FirstAsync();
+            .Should().Within(5.Seconds()).Match(x => x == UpdatedCode);
 
         // THIS IS THE KEY ASSERTION - the value should be updated, not still initial
         updatedValue.Should().Be(UpdatedCode,
@@ -1308,7 +1286,7 @@ public class CodeEditorDataBindingTest(ITestOutputHelper output) : HubTestBase(o
     /// Test the GetPointer helper to verify the path construction.
     /// </summary>
     [HubFact]
-    public async Task CodeEditor_EmptyPointer_ResolvesToCorrectPath()
+    public void CodeEditor_EmptyPointer_ResolvesToCorrectPath()
     {
         var reference = new LayoutAreaReference(CodeEditorView);
 
@@ -1321,9 +1299,8 @@ public class CodeEditorDataBindingTest(ITestOutputHelper output) : HubTestBase(o
 
         // Wait for the editor control
         var editorArea = $"{reference.Area}/Editor";
-        await stream.GetControlStream(editorArea)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x != null);
+        stream.GetControlStream(editorArea)
+            .Should().Within(10.Seconds()).Match(x => x != null);
 
         // Get the data context pointer
         var dataContext = LayoutAreaReference.GetDataPointer(CodeDataId);
@@ -1333,23 +1310,20 @@ public class CodeEditorDataBindingTest(ITestOutputHelper output) : HubTestBase(o
         var valuePointer = new JsonPointerReference("");
 
         // Read using DataBind (the observable way)
-        var valueFromBind = await stream
+        var valueFromBind = stream
             .DataBind<string>(valuePointer, dataContext)
-            .Timeout(5.Seconds())
-            .FirstAsync();
+            .Should().Within(5.Seconds()).Emit();
 
         valueFromBind.Should().Be(InitialCode,
             "DataBind with empty pointer should read the value at DataContext");
 
         // Now update using UpdatePointer with empty pointer
         stream.UpdatePointer("New Value", dataContext, valuePointer);
-        await Task.Delay(500);
 
-        // Read again
-        var valueAfterUpdate = await stream
+        // Read again (the predicate waits for the update to apply)
+        var valueAfterUpdate = stream
             .DataBind<string>(valuePointer, dataContext)
-            .Timeout(5.Seconds())
-            .FirstAsync();
+            .Should().Within(5.Seconds()).Match(x => x == "New Value");
 
         valueAfterUpdate.Should().Be("New Value",
             "UpdatePointer with empty pointer should update the value at DataContext");

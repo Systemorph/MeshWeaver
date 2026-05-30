@@ -93,13 +93,13 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
     /// where comment c1 has a reply â€” the scenario that caused OperationCanceledException.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task CollaborativeEditingDocument_Overview_ShouldRender()
+    public void CollaborativeEditingDocument_Overview_ShouldRender()
     {
         var client = GetClient();
         var docAddress = new Address(DocPath);
 
         Output.WriteLine("Initializing hub for CollaborativeEditing.md...");
-        await client.Observe(new PingRequest(), o => o.WithTarget(docAddress)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(docAddress)).Should().Emit();
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -110,7 +110,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
             reference);
 
         Output.WriteLine("Waiting for document Overview to render...");
-        var value = await stream.Timeout(TimeSpan.FromSeconds(20)).FirstAsync();
+        var value = stream.Should().Within(TimeSpan.FromSeconds(20)).Emit();
 
         Output.WriteLine($"Received value: {value.Value.ValueKind}");
         value.Should().NotBe(default(JsonElement),
@@ -122,13 +122,13 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
     /// Comments with replies are rendered with nested LayoutArea controls.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task DocumentComments_ShouldRenderAllComments()
+    public void DocumentComments_ShouldRenderAllComments()
     {
         var client = GetClient();
         var docAddress = new Address(DocPath);
 
         Output.WriteLine("Initializing hub for document...");
-        await client.Observe(new PingRequest(), o => o.WithTarget(docAddress)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(docAddress)).Should().Emit();
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -139,7 +139,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
             reference);
 
         Output.WriteLine("Waiting for Comments area to render...");
-        var value = await stream.Timeout(TimeSpan.FromSeconds(15)).FirstAsync();
+        var value = stream.Should().Within(TimeSpan.FromSeconds(15)).Emit();
 
         Output.WriteLine($"Received value: {value.Value.ValueKind}");
         value.Should().NotBe(default(JsonElement),
@@ -150,13 +150,13 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
     /// Renders the Overview area for comment c1 which has a reply.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task CommentWithReply_Overview_ShouldRender()
+    public void CommentWithReply_Overview_ShouldRender()
     {
         var client = GetClient();
         var commentAddress = new Address(CommentC1Path);
 
         Output.WriteLine("Initializing hub for comment c1 (has reply)...");
-        await client.Observe(new PingRequest(), o => o.WithTarget(commentAddress)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(commentAddress)).Should().Emit();
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -167,7 +167,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
             reference);
 
         Output.WriteLine("Waiting for Overview to render (comment with reply)...");
-        var value = await stream.Timeout(TimeSpan.FromSeconds(15)).FirstAsync();
+        var value = stream.Should().Within(TimeSpan.FromSeconds(15)).Emit();
 
         Output.WriteLine($"Received value: {value.Value.ValueKind}");
         value.Should().NotBe(default(JsonElement),
@@ -179,13 +179,13 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
     /// Tests whether the reply node's hub can be started independently.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task ReplyNode_Overview_ShouldRender()
+    public void ReplyNode_Overview_ShouldRender()
     {
         var client = GetClient();
         var replyAddress = new Address(ReplyPath);
 
         Output.WriteLine("Initializing hub for reply node directly...");
-        await client.Observe(new PingRequest(), o => o.WithTarget(replyAddress)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(replyAddress)).Should().Emit();
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -196,7 +196,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
             reference);
 
         Output.WriteLine("Waiting for Reply Overview to render...");
-        var value = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
+        var value = stream.Should().Within(TimeSpan.FromSeconds(10)).Emit();
 
         Output.WriteLine($"Received value: {value.Value.ValueKind}");
         value.Should().NotBe(default(JsonElement), "Reply node Overview should render");
@@ -209,13 +209,13 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
     /// genuinely childless comment.)
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task CommentWithoutReplies_Overview_ShouldRender()
+    public void CommentWithoutReplies_Overview_ShouldRender()
     {
         var client = GetClient();
         var commentAddress = new Address(DocPath + "/_Comment/c6");
 
         Output.WriteLine("Initializing hub for comment c6 (no replies)...");
-        await client.Observe(new PingRequest(), o => o.WithTarget(commentAddress)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(commentAddress)).Should().Emit();
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -226,7 +226,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
             reference);
 
         Output.WriteLine("Waiting for Overview to render...");
-        var value = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
+        var value = stream.Should().Within(TimeSpan.FromSeconds(10)).Emit();
 
         Output.WriteLine($"Received value: {value.Value.ValueKind}");
         value.Should().NotBe(default(JsonElement), "Comment Overview should render for comment without replies");

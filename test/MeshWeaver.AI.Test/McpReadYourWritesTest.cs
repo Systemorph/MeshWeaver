@@ -241,14 +241,14 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
     // ---- ExecuteScript --------------------------------------------------------
 
     [Fact]
-    public async Task ExecuteScript_ForIsExecutableCodeNode_CompletesWithoutError()
+    public void ExecuteScript_ForIsExecutableCodeNode_CompletesWithoutError()
     {
         // Seed the script directly via IMeshService (the "created through
         // IMeshService" path per our testing rule â€” script nodes skip the MCP
         // plugin Create so we're not tangling the test with Create semantics).
         var id = $"exec-{Guid.NewGuid():N}";
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        await meshService.CreateNode(
+        meshService.CreateNode(
             new MeshNode(id, "Scripts")
             {
                 Name = "Hello Script",
@@ -258,11 +258,11 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
                     Code = "Console.WriteLine(\"hello from test\"); 1+1",
                     IsExecutable = true
                 }
-            });
+            }).Should().Emit();
 
         var ops = new MeshOperations(Mesh);
-        var result = await ops.ExecuteScript($"@Scripts/{id}", timeoutSeconds: 30)
-            .FirstAsync().ToTask();
+        var result = ops.ExecuteScript($"@Scripts/{id}", timeoutSeconds: 30)
+            .Should().Within(35.Seconds()).Emit();
 
         // Budget is 30s on the kernel completion callback. The key assertion is
         // that ExecuteScript does NOT hang beyond the budget AND doesn't return
