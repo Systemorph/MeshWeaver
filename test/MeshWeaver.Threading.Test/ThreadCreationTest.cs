@@ -56,7 +56,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Hello, can you help me with this project?")), o => o.WithTarget(new Address(contextPath))).FirstAsync().ToTask();
 
         // Assert Ã¢â‚¬â€ response
-        response.Message.Success.Should().BeTrue(response.Message.Error);
+        response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         response.Message.Node?.Path.Should().NotBeNullOrEmpty();
         response.Message.Node?.Name.Should().NotBeNullOrEmpty();
 
@@ -102,7 +102,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         var client = GetClient();
         var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "A thread on TestProject")), o => o.WithTarget(new Address(contextPath))).FirstAsync().ToTask();
 
-        response.Message.Success.Should().BeTrue(response.Message.Error);
+        response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         var threadPath = response.Message.Node?.Path!;
         Output.WriteLine($"Created thread at: {threadPath}");
 
@@ -575,7 +575,7 @@ public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBa
         var client = GetClient();
         var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("SecureProject", "Admin creating a thread")), o => o.WithTarget(new Address("SecureProject"))).FirstAsync().ToTask();
 
-        response.Message.Success.Should().BeTrue(response.Message.Error);
+        response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         response.Message.Node?.Path.Should().Contain($"/{ThreadNodeType.ThreadPartition}/");
     }
 

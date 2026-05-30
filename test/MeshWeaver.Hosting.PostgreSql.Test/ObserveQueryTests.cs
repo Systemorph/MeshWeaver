@@ -63,9 +63,8 @@ public class ObserveQueryTests : IAsyncLifetime
         // row, so asserting "exactly one change" was a flake under load. The
         // contract this test pins is the SHAPE of the Initial emission, not
         // the absence of subsequent ones.
-        var initialChange = await _query.ObserveQuery<MeshNode>(request, _options)
-            .Where(c => c.ChangeType == QueryChangeType.Initial)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).ToTask();
+        var initialChange = _query.ObserveQuery<MeshNode>(request, _options)
+            .Should().Within(10.Seconds()).Match(c => c.ChangeType == QueryChangeType.Initial);
 
         initialChange.Items.Should().HaveCount(1);
         initialChange.Items[0].Id.Should().Be("Story1");
@@ -277,7 +276,7 @@ public class ObserveQueryTests : IAsyncLifetime
         var addedChanges = finalSnap.Where(c => c.ChangeType == QueryChangeType.Added).ToList();
         addedChanges.Should().NotBeEmpty();
         var allAddedItems = addedChanges.SelectMany(c => c.Items).ToList();
-        allAddedItems.Select(n => n.Id).Should().BeEquivalentTo(["Story1", "Story2", "Story3"]);
+        allAddedItems.Select(n => n.Id).Should().BeEquivalentTo(new[] { "Story1", "Story2", "Story3" }, JsonSerializerOptions.Default);
     }
 
     private async Task WriteNode(string id, string ns, string nodeType)

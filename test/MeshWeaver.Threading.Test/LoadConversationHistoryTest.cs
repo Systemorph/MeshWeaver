@@ -58,7 +58,7 @@ public class LoadConversationHistoryTest(ITestOutputHelper output) : MonolithMes
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, text, "TestUser");
         var resp = await client.Observe(new CreateNodeRequest(threadNode),
             o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
-        resp.Message.Success.Should().BeTrue(resp.Message.Error);
+        resp.Message.Success.Should().BeTrue(resp.Message.Error ?? "");
         return resp.Message.Node!.Path!;
     }
 

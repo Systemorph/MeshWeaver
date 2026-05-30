@@ -84,7 +84,7 @@ public class QueryTests
             results.Add(item);
 
         results.Should().HaveCount(2);
-        results.Cast<MeshNode>().Select(n => n.Id).Should().BeEquivalentTo("Story1", "Story2");
+        results.Cast<MeshNode>().Select(n => n.Id).Should().BeEquivalentTo(new[] { "Story1", "Story2" }, JsonSerializerOptions.Default);
     }
 
     [Fact]
@@ -167,7 +167,7 @@ public class QueryTests
         // Ancestors: ACME, ACME/Project (NOT Story1 itself)
         results.Should().HaveCount(2);
         results.Cast<MeshNode>().Select(n => n.Path).Should()
-            .BeEquivalentTo("ACME", "ACME/Project");
+            .BeEquivalentTo(new[] { "ACME", "ACME/Project" }, JsonSerializerOptions.Default);
     }
 
     [Fact]

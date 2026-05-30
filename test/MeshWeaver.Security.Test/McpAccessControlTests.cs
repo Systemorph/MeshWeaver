@@ -89,7 +89,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
     {
         var response = await UserContextMiddleware.ValidateTokenViaHub(rawToken, Mesh).FirstAsync().ToTask(TestContext.Current.CancellationToken);
         response.Should().NotBeNull("token validation should return a response");
-        response!.Success.Should().BeTrue("token should be valid, got error: {0}", response.Error);
+        response!.Success.Should().BeTrue("token should be valid, got error: {0}", response.Error ?? "");
 
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         accessService.SetCircuitContext(new AccessContext

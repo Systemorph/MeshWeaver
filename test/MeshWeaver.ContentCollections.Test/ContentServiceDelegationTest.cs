@@ -102,8 +102,8 @@ public class ContentServiceDelegationTest(ITestOutputHelper output) : HubTestBas
         childCollectionFromChild.Should().NotBeNull("child hub should have its own ChildCollection");
 
         // Debug: Check instance details
-        Output.WriteLine($"parentCollectionFromParent instance: {parentCollectionFromParent.GetHashCode()}");
-        Output.WriteLine($"parentCollectionFromChild instance: {parentCollectionFromChild.GetHashCode()}");
+        Output.WriteLine($"parentCollectionFromParent instance: {parentCollectionFromParent!.GetHashCode()}");
+        Output.WriteLine($"parentCollectionFromChild instance: {parentCollectionFromChild!.GetHashCode()}");
         Output.WriteLine($"Are they reference equal: {ReferenceEquals(parentCollectionFromParent, parentCollectionFromChild)}");
 
         // Act & Assert - The ParentCollection from child should have the same collection name

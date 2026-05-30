@@ -152,8 +152,10 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
         response.Message.Should().NotBeNull();
 
         var configs = response.Message.Data as IReadOnlyCollection<ContentCollectionConfig>;
-        // configs may be null or empty because the mapped config couldn't be resolved
-        configs.Should().BeNullOrEmpty("mapped config should not resolve when source collection doesn't exist");
+        // configs may be null or empty because the mapped config couldn't be resolved.
+        // The library has no collection-level BeNullOrEmpty, so check both conditions explicitly.
+        (configs is null || configs.Count == 0).Should()
+            .BeTrue("mapped config should not resolve when source collection doesn't exist");
     }
 
     /// <summary>

@@ -78,7 +78,7 @@ public class DelegationWriteCountTest(ITestOutputHelper output) : MonolithMeshTe
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, "trigger delegation", "TestUser");
         var create = await client.Observe(new CreateNodeRequest(threadNode),
             o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
-        create.Message.Success.Should().BeTrue(create.Message.Error);
+        create.Message.Success.Should().BeTrue(create.Message.Error ?? "");
         var parentThreadPath = create.Message.Node!.Path!;
 
         // Subscribe to parent thread BEFORE submitting so we don't miss

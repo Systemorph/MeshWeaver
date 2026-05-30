@@ -105,7 +105,7 @@ public class StorageAdapterTests
         await adapter.WriteAsync(new MeshNode("C", "other"), _options, TestContext.Current.CancellationToken);
 
         var (nodePaths, _) = await adapter.ListChildPathsAsync("parent", TestContext.Current.CancellationToken);
-        nodePaths.Should().BeEquivalentTo("parent/A", "parent/B");
+        nodePaths.Should().BeEquivalentTo(new[] { "parent/A", "parent/B" }, JsonSerializerOptions.Default);
     }
 
     [Fact]

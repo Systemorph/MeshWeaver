@@ -110,9 +110,8 @@ public class MicrosoftImportTests(ITestOutputHelper output) : InsuranceTestBase(
 
         // Verify data was imported by querying the workspace
         var workspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
-        var risks = await workspace.GetObservable<PropertyRisk>()
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x.Count > 0);
+        var risks = workspace.GetObservable<PropertyRisk>()
+            .Should().Within(10.Seconds()).Match(x => x.Count > 0);
 
         risks.Should().NotBeEmpty("import should return at least one risk");
         risks.All(r => r.PricingId == MicrosoftPricingId).Should().BeTrue("all risks should have PricingId set to Microsoft/2026");
@@ -156,9 +155,8 @@ public class MicrosoftImportTests(ITestOutputHelper output) : InsuranceTestBase(
 
         // Verify data was imported
         var workspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
-        var risks = await workspace.GetObservable<PropertyRisk>()
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x.Count > 0);
+        var risks = workspace.GetObservable<PropertyRisk>()
+            .Should().Within(10.Seconds()).Match(x => x.Count > 0);
         risks.Should().NotBeEmpty();
 
         // Verify allocation worked - sum of allocated TsiBi should equal proportional distribution
@@ -210,9 +208,8 @@ public class MicrosoftImportTests(ITestOutputHelper output) : InsuranceTestBase(
 
         // Verify data was imported
         var workspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
-        var risks = await workspace.GetObservable<PropertyRisk>()
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x.Count > 0);
+        var risks = workspace.GetObservable<PropertyRisk>()
+            .Should().Within(10.Seconds()).Match(x => x.Count > 0);
         risks.Should().NotBeEmpty();
         Output.WriteLine($"Imported {risks.Count} risks using direct mapping");
     }

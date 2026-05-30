@@ -104,7 +104,7 @@ public class OrleansReentrancyTest(ITestOutputHelper output) : TestBase(output)
         // Create thread
         var threadNode = ThreadNodeType.BuildThreadNode("User/TestUser", "Reentrancy test", "TestUser");
         var createResp = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("User/TestUser"))).FirstAsync().ToTask(ct);
-        createResp.Message.Success.Should().BeTrue(createResp.Message.Error);
+        createResp.Message.Success.Should().BeTrue(createResp.Message.Error ?? "");
         var threadPath = createResp.Message.Node!.Path!;
         Output.WriteLine($"Thread: {threadPath}");
 

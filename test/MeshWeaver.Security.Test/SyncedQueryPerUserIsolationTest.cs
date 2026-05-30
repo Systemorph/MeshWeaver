@@ -155,14 +155,14 @@ public class SyncedQueryPerUserIsolationTest(ITestOutputHelper output) : Monolit
         accessService.SetContext(new AccessContext { ObjectId = "dave", Name = "Dave" });
         var daveObs = workspace.GetQuery(queryId, query);
 
-        carolObs.Should().NotBeSameAs(daveObs,
+        ((object)carolObs).Should().NotBeSameAs(daveObs,
             "every GetQuery call yields a fresh Defer wrapper — distinct " +
             "callers get distinct per-subscriber filter chains, even when " +
             "they share the same upstream.");
 
         accessService.SetContext(new AccessContext { ObjectId = "carol", Name = "Carol" });
         var carolObs2 = workspace.GetQuery(queryId, query);
-        carolObs2.Should().NotBeSameAs(carolObs,
+        ((object)carolObs2).Should().NotBeSameAs(carolObs,
             "wrappers are NOT cached — each call returns a new Defer. The " +
             "underlying upstream IS cached (verified by " +
             "LanguageModelSyncedQueryTest.SyncedQuery_GetQueryById_ReusesSameUpstreamAcrossCalls).");
@@ -201,7 +201,7 @@ public class SyncedQueryPerUserIsolationTest(ITestOutputHelper output) : Monolit
             second = workspace.GetQuery(queryId, query);
         }
 
-        second.Should().BeSameAs(first,
+        ((object)second).Should().BeSameAs(first,
             "infrastructure callers wrapped in ImpersonateAsSystem share the " +
             "system-security cache key — this is the perf shortcut SecurityService " +
             "and NodeType compile-watchers rely on");

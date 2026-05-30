@@ -87,13 +87,10 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
         var workspace = host.GetWorkspace();
 
         // Wait for initial data load - content is inside MeshNode.Content
-        var nodeStream = workspace.GetStream<MeshNode>();
-        nodeStream.Should().NotBeNull();
+        var nodeStream = workspace.GetStream<MeshNode>()!;
 
-        var nodes = await nodeStream!
-            .Where(items => items?.Any() == true)
-            .Timeout(5.Seconds())
-            .FirstAsync();
+        var nodes = nodeStream
+            .Should().Within(5.Seconds()).Match(items => items?.Any() == true)!;
 
         nodes.Should().NotBeNull();
         var node = nodes.First();
@@ -115,13 +112,10 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
         var workspace = host.GetWorkspace();
 
         // Wait for initial data load
-        var nodeStream = workspace.GetStream<MeshNode>();
-        nodeStream.Should().NotBeNull();
+        var nodeStream = workspace.GetStream<MeshNode>()!;
 
-        var initialNodes = await nodeStream!
-            .Where(items => items?.Any() == true)
-            .Timeout(5.Seconds())
-            .FirstAsync();
+        var initialNodes = nodeStream
+            .Should().Within(5.Seconds()).Match(items => items?.Any() == true)!;
         initialNodes.Should().NotBeNull();
 
         // Act - Update MeshNode with new content
@@ -164,13 +158,10 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
         var workspace = host.GetWorkspace();
 
         // Wait for initial data load - content is inside MeshNode
-        var nodeStream = workspace.GetStream<MeshNode>();
-        nodeStream.Should().NotBeNull();
+        var nodeStream = workspace.GetStream<MeshNode>()!;
 
-        var nodes = await nodeStream!
-            .Where(items => items?.Any() == true)
-            .Timeout(5.Seconds())
-            .FirstAsync();
+        var nodes = nodeStream
+            .Should().Within(5.Seconds()).Match(items => items?.Any() == true)!;
         nodes.Should().NotBeNull();
 
         var node = nodes.First();

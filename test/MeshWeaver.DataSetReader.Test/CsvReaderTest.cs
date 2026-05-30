@@ -163,8 +163,9 @@ namespace MeshWeaver.DataSetReader.Test
         {
             var stream = await FileStorageService.GetStreamFromFilePath($"{CsvFilesWithComplexCases}BadData.csv");
             Func<Task> act = async () => await ReadFromStream(stream);
-            (await act.Should().ThrowAsync<BadDataException>()).Where(x => x.Message.Contains("\"Here opening quote is started but not finished") &&
-                                                                           x.Message.Contains("\"ThisQuote will be treated as closing for first line"));
+            (await act.Should().ThrowAsync<BadDataException>())
+                .WithMessage("*\"Here opening quote is started but not finished*")
+                .And.WithMessage("*\"ThisQuote will be treated as closing for first line*");
         }
     }
 }

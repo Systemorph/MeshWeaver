@@ -67,7 +67,7 @@ public class OrleansCacheUpdateMultiSiloTest : IClassFixture<TwoSiloCacheUpdateF
         var createResp = await siloHub
             .Observe(new CreateNodeRequest(providerNode), o => o.WithTarget(siloHub.Address))
             .FirstAsync().ToTask(ct);
-        createResp.Message.Success.Should().BeTrue(createResp.Message.Error);
+        createResp.Message.Success.Should().BeTrue(createResp.Message.Error ?? "");
         createResp.Message.Node!.Path.Should().Be(providerPath);
 
         // 2. Rotate the ApiKey via cache.Update on the silo's

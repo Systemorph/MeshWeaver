@@ -31,8 +31,12 @@ public class InboxToolUnitTest
 
         result.DrainedTexts.Should().BeEmpty();
         result.DrainedIds.Should().BeEmpty();
+        // Thread is a plain DTO record (primitives + strings + enums + immutable
+        // collections of primitives) with no polymorphic members, and this is a
+        // hub-less pure-logic test, so JsonSerializerOptions.Default is correct.
         result.UpdatedThread.Should().BeEquivalentTo(thread,
-            "drain on empty inbox is a no-op");
+            System.Text.Json.JsonSerializerOptions.Default,
+            because: "drain on empty inbox is a no-op");
     }
 
     [Fact]

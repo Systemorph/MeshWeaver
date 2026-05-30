@@ -72,7 +72,7 @@ public class OrleansHostedHubRoutingTest(ITestOutputHelper output) : OrleansShar
                 new CreateNodeRequest(threadNode),
                 o => o.WithTarget(new Address("TestUser")))
             .FirstAsync().ToTask(ct);
-        createResp.Message.Success.Should().BeTrue(createResp.Message.Error);
+        createResp.Message.Success.Should().BeTrue(createResp.Message.Error ?? "");
 
         // 2. Post GetDataRequest at the per-thread address â€” generic round-trip
         //    that exercises the same routing layer and returns a response from
@@ -125,7 +125,7 @@ public class OrleansHostedHubRoutingTest(ITestOutputHelper output) : OrleansShar
                 new CreateNodeRequest(threadNode),
                 o => o.WithTarget(new Address("TestUser")))
             .FirstAsync().ToTask(ct);
-        createResp.Message.Success.Should().BeTrue(createResp.Message.Error);
+        createResp.Message.Success.Should().BeTrue(createResp.Message.Error ?? "");
 
         // 2. Confirm the thread starts empty.
         var before = await ReadThreadAsync(client, threadPath, ct);

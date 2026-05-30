@@ -73,7 +73,7 @@ public class OrleansUserOwnedModelTest(ITestOutputHelper output) : OrleansShared
         };
         var providerResp = await client.Observe(new CreateNodeRequest(providerNode), o => o.WithTarget(meshAddress))
             .FirstAsync().ToTask(ct);
-        providerResp.Message.Success.Should().BeTrue(providerResp.Message.Error);
+        providerResp.Message.Success.Should().BeTrue(providerResp.Message.Error ?? "");
         providerResp.Message.Node!.Path.Should().Be(providerPath);
 
         // 2. Create the LanguageModel child referencing the provider.
@@ -93,7 +93,7 @@ public class OrleansUserOwnedModelTest(ITestOutputHelper output) : OrleansShared
         };
         var modelResp = await client.Observe(new CreateNodeRequest(modelNode), o => o.WithTarget(meshAddress))
             .FirstAsync().ToTask(ct);
-        modelResp.Message.Success.Should().BeTrue(modelResp.Message.Error);
+        modelResp.Message.Success.Should().BeTrue(modelResp.Message.Error ?? "");
         modelResp.Message.Node!.Path.Should().Be(modelPath);
 
         // 3. Verify the resolver can see both nodes â€” read through the

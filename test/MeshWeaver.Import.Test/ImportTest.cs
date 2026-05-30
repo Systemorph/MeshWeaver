@@ -93,7 +93,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
             computedItems1
                 .Select(x => x.Value)
                 .Should()
-                .BeEquivalentTo(expectedComputedItems1.Select(x => x.Value));
+                .BeEquivalentTo(expectedComputedItems1.Select(x => x.Value), client.JsonSerializerOptions);
         }
     }
 
@@ -134,7 +134,7 @@ Id,Year,LoB,BusinessUnit,Value
             new LineOfBusiness("2", "LoB_two"),
         };
 
-        items.Should().HaveSameCount(expectedLoBs).And.BeEquivalentTo(expectedLoBs);
+        items.Should().HaveSameCount(expectedLoBs).And.BeEquivalentTo(expectedLoBs, client.JsonSerializerOptions);
     }
 
     private const string VanillaCsv =
@@ -178,8 +178,8 @@ SystemName,DisplayName
 
         using (new AssertionScope())
         {
-            actualLoBs.Should().HaveSameCount(expectedLoBs).And.BeEquivalentTo(expectedLoBs);
-            actualBUs.Should().HaveSameCount(expectedBUs).And.BeEquivalentTo(expectedBUs);
+            actualLoBs.Should().HaveSameCount(expectedLoBs).And.BeEquivalentTo(expectedLoBs, client.JsonSerializerOptions);
+            actualBUs.Should().HaveSameCount(expectedBUs).And.BeEquivalentTo(expectedBUs, client.JsonSerializerOptions);
         }
     }
 

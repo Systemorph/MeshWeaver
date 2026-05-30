@@ -88,7 +88,7 @@ public class QuerySyntaxTests
         var results = await CollectResults(query, request);
 
         results.Should().HaveCount(2);
-        results.Select(n => n.Name).Should().BeEquivalentTo("Claims Processing", "Claims Dashboard");
+        results.Select(n => n.Name).Should().BeEquivalentTo(new[] { "Claims Processing", "Claims Dashboard" }, JsonSerializerOptions.Default);
     }
 
     [Fact]
@@ -135,7 +135,7 @@ public class QuerySyntaxTests
         var results = await CollectResults(query, request);
 
         results.Should().HaveCount(2);
-        results.Select(n => n.Name).Should().BeEquivalentTo("Claims Processing", "Claims Dashboard");
+        results.Select(n => n.Name).Should().BeEquivalentTo(new[] { "Claims Processing", "Claims Dashboard" }, JsonSerializerOptions.Default);
     }
 
     [Fact]
@@ -209,7 +209,7 @@ public class QuerySyntaxTests
 
         results.Should().HaveCount(4);
         results.Select(n => n.NodeType).Distinct()
-            .Should().BeEquivalentTo("Story", "Bug");
+            .Should().BeEquivalentTo(new[] { "Story", "Bug" }, JsonSerializerOptions.Default);
     }
 
     [Fact]
@@ -500,7 +500,7 @@ public class QuerySyntaxTests
 
         results.Should().HaveCount(4);
         results.Select(n => n.NodeType).Distinct()
-            .Should().BeEquivalentTo("Story", "Bug");
+            .Should().BeEquivalentTo(new[] { "Story", "Bug" }, JsonSerializerOptions.Default);
     }
 
     [Fact]
@@ -532,7 +532,7 @@ public class QuerySyntaxTests
         // Story1 and Bug1 exist; Missing doesn't â€” IN(...) returns the existing two.
         results.Should().HaveCount(2);
         results.Select(n => n.Path).Should().BeEquivalentTo(
-            "ACME/Project/Story1", "ACME/Project/Bug1");
+            new[] { "ACME/Project/Story1", "ACME/Project/Bug1" }, JsonSerializerOptions.Default);
     }
 
     #endregion

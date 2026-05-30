@@ -126,7 +126,7 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
             $"{Root}/c1",
             $"{Root}/c2",
             $"{Root}/c1/gc"
-        });
+        }, System.Text.Json.JsonSerializerOptions.Default);
 
         // Wait once for the catalog to drop ALL four â€” single subscription, not four.
         var paths = await WaitForQueryPathSetAsync(
@@ -299,7 +299,7 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
             $"{TestPartition}/mixed",
             $"{TestPartition}/mixed/ok",
             $"{TestPartition}/mixed/bad"
-        });
+        }, System.Text.Json.JsonSerializerOptions.Default);
     }
 
     // â”€â”€â”€ Phase 3: warnings + ConfirmWarnings round-trip â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

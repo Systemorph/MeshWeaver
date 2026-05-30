@@ -76,10 +76,12 @@ public class MultiQueryUnionTests
             results.Add((MeshNode)item);
 
         // Three Agent nodes total; non-Agent "Notes" node is filtered out by the second query's nodeType clause.
-        results.Select(n => n.Path).Should().BeEquivalentTo(
+        results.Select(n => n.Path).Should().BeEquivalentTo(new[]
+        {
             "Agent/Orchestrator",
             "Agent/Coder",
-            "User/Roland/CustomBot");
+            "User/Roland/CustomBot"
+        }, JsonSerializerOptions.Default);
     }
 
     [Fact]
@@ -103,9 +105,11 @@ public class MultiQueryUnionTests
         await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
             results.Add((MeshNode)item);
 
-        results.Select(n => n.Path).Should().BeEquivalentTo(
+        results.Select(n => n.Path).Should().BeEquivalentTo(new[]
+        {
             "Agent/Orchestrator",
-            "Agent/Coder");
+            "Agent/Coder"
+        }, JsonSerializerOptions.Default);
     }
 
     [Fact]
@@ -119,15 +123,15 @@ public class MultiQueryUnionTests
             "namespace:User/Roland nodeType:Agent",
         });
 
-        var initial = await query.ObserveQuery<MeshNode>(request, _options)
-            .Where(c => c.ChangeType == QueryChangeType.Initial)
-            .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+        var initial = query.ObserveQuery<MeshNode>(request, _options)
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial);
 
-        initial.Items.Select(n => n.Path).Should().BeEquivalentTo(
+        initial.Items.Select(n => n.Path).Should().BeEquivalentTo(new[]
+        {
             "Agent/Orchestrator",
             "Agent/Coder",
-            "User/Roland/CustomBot");
+            "User/Roland/CustomBot"
+        }, JsonSerializerOptions.Default);
     }
 
     [Fact]
@@ -198,6 +202,6 @@ public class MultiQueryUnionTests
             singleResults.Add((MeshNode)item);
 
         multiResults.Select(n => n.Path).Should().BeEquivalentTo(
-            singleResults.Select(n => n.Path));
+            singleResults.Select(n => n.Path), JsonSerializerOptions.Default);
     }
 }

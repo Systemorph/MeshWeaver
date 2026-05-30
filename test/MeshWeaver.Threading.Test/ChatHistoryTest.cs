@@ -49,7 +49,7 @@ public class ChatHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     {
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, text, "TestUser");
         var response = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
-        response.Message.Success.Should().BeTrue(response.Message.Error);
+        response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         return response.Message.Node!.Path!;
     }
 

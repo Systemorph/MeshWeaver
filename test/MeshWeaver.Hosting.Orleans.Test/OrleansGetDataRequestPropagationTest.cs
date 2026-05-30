@@ -48,7 +48,7 @@ public class OrleansGetDataRequestPropagationTest(ITestOutputHelper output) : Or
                 }),
                 o => o.WithTarget(new Address("TestUser")))
             .FirstAsync().ToTask(ct);
-        createResp.Message.Success.Should().BeTrue(createResp.Message.Error);
+        createResp.Message.Success.Should().BeTrue(createResp.Message.Error ?? "");
         Output.WriteLine($"[test] CreateNode succeeded: {pathA}");
 
         // 2. Read via polled GetDataRequest from a SEPARATE client. Retry the
@@ -72,7 +72,7 @@ public class OrleansGetDataRequestPropagationTest(ITestOutputHelper output) : Or
                 new UpdateNodeRequest(initial with { Name = "A1" }),
                 o => o.WithTarget(new Address(pathA)))
             .FirstAsync().ToTask(ct);
-        updResp.Message.Success.Should().BeTrue(updResp.Message.Error);
+        updResp.Message.Success.Should().BeTrue(updResp.Message.Error ?? "");
         Output.WriteLine("[update] UpdateNodeRequest succeeded");
 
         // 4. Poll fresh GetDataRequests until A1 appears.

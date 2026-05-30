@@ -21,7 +21,7 @@ public class InMemoryPublishQueueTest
         q.Enqueue(Snap("b", now.AddMinutes(10)));
 
         var due = q.DrainDue(now);
-        due.Select(s => s.PostPath).Should().BeEquivalentTo(new[] { "a" });
+        due.Select(s => s.PostPath).Should().BeEquivalentTo(new[] { "a" }, System.Text.Json.JsonSerializerOptions.Default);
 
         // After drain, "a" is gone; second drain would return empty — "b" still pending.
         q.DrainDue(now).Should().BeEmpty();

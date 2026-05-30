@@ -76,13 +76,10 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
         var host = GetHost();
         var workspace = host.GetWorkspace();
 
-        var nodeStream = workspace.GetStream<MeshNode>();
-        nodeStream.Should().NotBeNull();
+        var nodeStream = workspace.GetStream<MeshNode>()!;
 
-        var initialNodes = await nodeStream!
-            .Where(items => items?.Any() == true)
-            .Timeout(5.Seconds())
-            .FirstAsync();
+        var initialNodes = nodeStream
+            .Should().Within(5.Seconds()).Match(items => items?.Any() == true)!;
 
         var node = initialNodes.First();
         var initial = AccessControlLayoutArea.DeserializeAssignment(node)!;

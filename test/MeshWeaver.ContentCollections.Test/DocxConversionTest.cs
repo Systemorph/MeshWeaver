@@ -67,15 +67,15 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [Fact]
-    public async Task FileContentProvider_Auto_Converts_Docx()
+    public void FileContentProvider_Auto_Converts_Docx()
     {
         // Arrange
         var hub = GetClient();
         var fileContentProvider = hub.ServiceProvider.GetRequiredService<IFileContentProvider>();
 
         // Act — requesting a .docx file should auto-convert to markdown
-        var result = await fileContentProvider.GetFileContent("content", "sample.docx")
-            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var result = fileContentProvider.GetFileContent("content", "sample.docx")
+            .Should().Emit();
 
         // Assert
         Output.WriteLine($"Content result:\n{result.Content}");
@@ -86,15 +86,15 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [Fact]
-    public async Task FileContentProvider_Returns_PlainText_For_Md()
+    public void FileContentProvider_Returns_PlainText_For_Md()
     {
         // Arrange
         var hub = GetClient();
         var fileContentProvider = hub.ServiceProvider.GetRequiredService<IFileContentProvider>();
 
         // Act — requesting a .md file should return as-is
-        var result = await fileContentProvider.GetFileContent("content", "readme.md")
-            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var result = fileContentProvider.GetFileContent("content", "readme.md")
+            .Should().Emit();
 
         // Assert
         result.Success.Should().BeTrue();
@@ -192,16 +192,15 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [Fact]
-    public async Task GetDataRequest_Content_Prefix_Returns_Markdown_For_Docx()
+    public void GetDataRequest_Content_Prefix_Returns_Markdown_For_Docx()
     {
         // Arrange — the unified path content:content/sample.docx should auto-convert
         var hub = GetClient();
 
         // Act
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var response = await hub.Observe(
+        var response = hub.Observe(
             new GetDataRequest(new UnifiedReference("content:content/sample.docx")),
-            o => o.WithTarget(hub.Address)).FirstAsync().ToTask(cts.Token);
+            o => o.WithTarget(hub.Address)).Should().Within(10.Seconds()).Emit();
 
         // Assert
         var dataResponse = response.Message;

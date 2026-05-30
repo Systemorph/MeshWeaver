@@ -130,7 +130,7 @@ public class HttpMeshStorageAdapterTests
 
         var (nodes, dirs) = await adapter.ListChildPathsAsync("rbuergi/Story", TestContext.Current.CancellationToken);
 
-        nodes.Should().BeEquivalentTo(["rbuergi/Story/KernelTour", "rbuergi/Story/Other"]);
+        nodes.Should().BeEquivalentTo(new[] { "rbuergi/Story/KernelTour", "rbuergi/Story/Other" }, JsonSerializerOptions.Default);
         dirs.Should().BeEmpty(
             because: "remote-backed adapters have no notion of empty directories");
         stub.SearchCalls.Should().ContainSingle()
@@ -146,7 +146,7 @@ public class HttpMeshStorageAdapterTests
 
         var (nodes, _) = await adapter.ListChildPathsAsync(null, TestContext.Current.CancellationToken);
 
-        nodes.Should().BeEquivalentTo(["rbuergi", "Doc"]);
+        nodes.Should().BeEquivalentTo(new[] { "rbuergi", "Doc" }, JsonSerializerOptions.Default);
         stub.SearchCalls.Should().ContainSingle().Which.Should().Be("namespace:");
     }
 

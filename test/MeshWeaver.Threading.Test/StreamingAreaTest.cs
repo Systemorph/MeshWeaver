@@ -43,8 +43,6 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
     [Fact]
     public async Task StreamingArea_WhenIdle_ReturnsNull()
     {
-        var ct = new CancellationTokenSource(10.Seconds()).Token;
-
         // Create an idle thread (not executing)
         var threadPath = "User/Roland/_Thread/streaming-idle-test";
         await NodeFactory.CreateNode(new MeshNode("streaming-idle-test", "User/Roland/_Thread")
@@ -61,12 +59,9 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
             new Address(threadPath),
             new LayoutAreaReference(ThreadNodeType.StreamingArea));
 
-        streamingArea.Should().NotBeNull("StreamingArea should be served by the thread hub");
-
-        // First emission should be null or empty (thread is idle)
-        var first = await streamingArea!
-            .Timeout(5.Seconds())
-            .FirstAsync();
+        // First emission should be null or empty (thread is idle) — the area is
+        // served by the thread hub.
+        var first = streamingArea.Should().Within(5.Seconds()).Emit();
 
         Output.WriteLine($"StreamingArea emission: ChangeType={first.ChangeType}");
         // The area returns null when idle â€” the LayoutAreaView renders nothing
@@ -75,8 +70,6 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
     [Fact]
     public async Task StreamingArea_WhenExecuting_ReturnsStreamingCell()
     {
-        var ct = new CancellationTokenSource(15.Seconds()).Token;
-
         var threadPath = "User/Roland/_Thread/streaming-exec-test";
         var responseMsgId = "resp-abc";
 
@@ -114,13 +107,9 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
             new Address(threadPath),
             new LayoutAreaReference(ThreadNodeType.StreamingArea));
 
-        streamingArea.Should().NotBeNull();
-
         // Should get a non-null emission (the streaming cell control)
-        var emission = await streamingArea!
-            .Where(ci => ci.Value.ValueKind != JsonValueKind.Null)
-            .Timeout(10.Seconds())
-            .FirstAsync();
+        var emission = streamingArea.Should().Within(10.Seconds())
+            .Match(ci => ci.Value.ValueKind != JsonValueKind.Null);
 
         Output.WriteLine($"StreamingArea emission: {emission.Value}");
         // The emission should contain the LayoutAreaControl pointing to the response message

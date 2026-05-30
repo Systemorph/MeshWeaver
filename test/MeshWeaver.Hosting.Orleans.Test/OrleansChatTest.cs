@@ -45,7 +45,7 @@ public class OrleansChatTest(ITestOutputHelper output) : OrleansTestBase<ChatSil
     private async Task<string> CreateThreadAsync(IMessageHub client, string text, CancellationToken ct)
     {
         var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, text)), o => o.WithTarget(new Address(ContextPath))).FirstAsync().ToTask(ct);
-        response.Message.Success.Should().BeTrue(response.Message.Error);
+        response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         return response.Message.Node!.Path!;
     }
 

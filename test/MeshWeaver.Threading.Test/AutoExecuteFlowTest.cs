@@ -61,7 +61,7 @@ public class AutoExecuteFlowTest(ITestOutputHelper output) : MonolithMeshTestBas
 
         var createResponse = await client.Observe(new CreateNodeRequest(threadNode),
             o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
-        createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error);
+        createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error ?? "");
         Output.WriteLine("Thread created");
 
         var responseMsgId = await ThreadFlow.SubmitAndWait(client, threadPath,

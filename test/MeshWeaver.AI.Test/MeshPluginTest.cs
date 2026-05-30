@@ -570,7 +570,7 @@ public class MeshPluginTest : MonolithMeshTestBase
         var worker = agents.FirstOrDefault(a => a.Name == "Worker");
         worker.Should().NotBeNull("Worker agent should be loaded from test data");
         worker!.AgentConfiguration.Should().NotBeNull();
-        worker.AgentConfiguration!.Plugins.Should().NotBeNullOrEmpty(
+        worker.AgentConfiguration!.Plugins.Should().NotBeEmpty(
             "Worker should have explicit plugins configured for write tool access");
     }
 

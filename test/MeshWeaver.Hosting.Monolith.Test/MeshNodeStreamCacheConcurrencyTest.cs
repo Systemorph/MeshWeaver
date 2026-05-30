@@ -147,6 +147,7 @@ public class MeshNodeStreamCacheConcurrencyTest(ITestOutputHelper output) : Mono
 
         var results = await Task.WhenAll(tasks);
         results.Should().AllBeEquivalentTo(true,
-            "every distinct-id concurrent caller must see the seeded node");
+            System.Text.Json.JsonSerializerOptions.Default,
+            because: "every distinct-id concurrent caller must see the seeded node");
     }
 }

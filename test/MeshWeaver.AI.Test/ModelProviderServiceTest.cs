@@ -68,7 +68,7 @@ public class ModelProviderServiceTest : AITestBase
         result.ProviderNode.Path.Should().Be($"{owner}/_Provider/Anthropic");
         result.ProviderNode.NodeType.Should().Be(ModelProviderNodeType.NodeType);
 
-        var cfg = result.ProviderNode.Content.Should().BeAssignableTo<ModelProviderConfiguration>().Subject;
+        var cfg = result.ProviderNode.Content.Should().BeOfType<ModelProviderConfiguration>().Which;
         cfg.Provider.Should().Be("Anthropic");
         cfg.ApiKey.Should().Be("sk-ant-TEST-1234");
         cfg.Label.Should().Be("Roland's test key");
@@ -78,7 +78,7 @@ public class ModelProviderServiceTest : AITestBase
         {
             node.NodeType.Should().Be(LanguageModelNodeType.NodeType);
             node.Path.Should().StartWith($"{owner}/_Provider/Anthropic/");
-            var def = node.Content.Should().BeAssignableTo<ModelDefinition>().Subject;
+            var def = node.Content.Should().BeOfType<ModelDefinition>().Which;
             def.Provider.Should().Be("Anthropic");
             def.ProviderRef.Should().Be($"{owner}/_Provider/Anthropic");
         });
@@ -128,7 +128,7 @@ public class ModelProviderServiceTest : AITestBase
         var updated = await Workspace.GetMeshNodeStream(path)
             .Where(n => (n.Content as ModelProviderConfiguration)?.ApiKey == "sk-new")
             .Take(1).Timeout(10.Seconds()).ToTask(ct);
-        var cfg = updated.Content.Should().BeAssignableTo<ModelProviderConfiguration>().Subject;
+        var cfg = updated.Content.Should().BeOfType<ModelProviderConfiguration>().Which;
         cfg.ApiKey.Should().Be("sk-new");
         cfg.Label.Should().Be("L", "RotateKey must not clobber other fields");
     }

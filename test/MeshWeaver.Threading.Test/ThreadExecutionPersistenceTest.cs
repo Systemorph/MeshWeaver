@@ -57,7 +57,7 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
     {
         var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ns, text)),
             o => o.WithTarget(new Address(ns))).FirstAsync().ToTask(ct);
-        response.Message.Success.Should().BeTrue(response.Message.Error);
+        response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         return response.Message.Node!.Path!;
     }
 

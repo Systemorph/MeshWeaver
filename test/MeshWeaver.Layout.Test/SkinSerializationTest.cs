@@ -45,9 +45,7 @@ public class SkinSerializationTest(ITestOutputHelper output) : HubTestBase(outpu
         // Verify we can deserialize it back without errors
         var deserialized = JsonSerializer.Deserialize<UiControl>(serialized, client.JsonSerializerOptions);
         deserialized.Should().NotBeNull();
-        deserialized.Should().BeOfType<StackControl>();
-
-        var deserializedStack = (StackControl)deserialized;
+        var deserializedStack = deserialized.Should().BeOfType<StackControl>().Which;
         deserializedStack.Skins.Should().NotBeNull();
         // Should only contain the valid skin, null/empty ones should be filtered out
         deserializedStack.Skins.Should().HaveCount(1);
@@ -123,10 +121,9 @@ public class SkinSerializationTest(ITestOutputHelper output) : HubTestBase(outpu
 
         // Should successfully deserialize to the correct concrete type
         deserializedAsBase.Should().NotBeNull();
-        deserializedAsBase.Should().BeOfType<StackControl>();
 
-        // Cast to StackControl and verify properties
-        var deserializedStack = (StackControl)deserializedAsBase;
+        // Narrow to StackControl and verify properties
+        var deserializedStack = deserializedAsBase.Should().BeOfType<StackControl>().Which;
         deserializedStack.Skins.Should().NotBeNull();
         deserializedStack.Skins.Should().HaveCount(1);
         deserializedStack.Skins[0].Should().BeOfType<LayoutStackSkin>();

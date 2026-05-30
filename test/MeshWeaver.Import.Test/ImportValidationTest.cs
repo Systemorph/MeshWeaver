@@ -99,8 +99,12 @@ SystemName,FoundationYear,ContractType
             .Select(x => x.Message)
             .Should()
             .BeEquivalentTo(
-                "The field FoundationYear must be between 1999 and 2023.",
-                ImportManager.ImportFailed
+                new[]
+                {
+                    "The field FoundationYear must be between 1999 and 2023.",
+                    ImportManager.ImportFailed
+                },
+                client.JsonSerializerOptions
             );
 
         // Workspace check removed - the workspace observable doesn't emit for failed imports
@@ -155,9 +159,13 @@ DoubleValue,Country
             .Select(x => x.Message)
             .Should()
             .BeEquivalentTo(
-                "The IntValue field must have type from these: System.Double, System.Decimal, System.Single.",
-                "The DecimalValue field value should be in interval from 10 to 20.",
-                ImportManager.ImportFailed
+                new[]
+                {
+                    "The IntValue field must have type from these: System.Double, System.Decimal, System.Single.",
+                    "The DecimalValue field value should be in interval from 10 to 20.",
+                    ImportManager.ImportFailed
+                },
+                client.JsonSerializerOptions
             );
 
         // Workspace check removed - the workspace observable doesn't emit for failed imports

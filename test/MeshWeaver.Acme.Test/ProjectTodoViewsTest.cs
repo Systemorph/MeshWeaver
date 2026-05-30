@@ -162,7 +162,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// Note: "Summary" view doesn't exist, using TodaysFocus as the overview/summary view.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task Summary_ShouldRenderWithData()
+    public void Summary_ShouldRenderWithData()
     {
         var workspace = GetClient().GetWorkspace();
         // TodaysFocus is the overview/summary view showing urgent items
@@ -173,11 +173,9 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
             projectAddress,
             reference);
 
-        var control = await stream
+        var control = stream
             .GetControlStream(reference.Area!)
-            .Where(c => c != null)
-            .Timeout(10.Seconds())
-            .FirstAsync();
+            .Should().Within(10.Seconds()).Match(c => c != null);
 
         control.Should().NotBeNull("TodaysFocus view should render");
         Output.WriteLine($"Control type: {control?.GetType().Name}");
@@ -187,7 +185,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// Test that the AllTasks view renders with tasks grouped by status.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task AllTasks_ShouldRenderWithData()
+    public void AllTasks_ShouldRenderWithData()
     {
         var workspace = GetClient().GetWorkspace();
         var reference = new LayoutAreaReference("AllTasks");
@@ -197,11 +195,9 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
             projectAddress,
             reference);
 
-        var control = await stream
+        var control = stream
             .GetControlStream(reference.Area!)
-            .Where(c => c is CatalogControl { Groups.Count: > 0 })
-            .Timeout(10.Seconds())
-            .FirstAsync();
+            .Should().Within(10.Seconds()).Match(c => c is CatalogControl { Groups.Count: > 0 });
 
         var catalog = control.Should().BeOfType<CatalogControl>().Subject;
         catalog.Groups.Should().NotBeEmpty("should have groups with todo items");
@@ -212,7 +208,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// Test that the TodosByCategory view renders with actual task categories.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task TodosByCategory_ShouldRenderWithData()
+    public void TodosByCategory_ShouldRenderWithData()
     {
         var workspace = GetClient().GetWorkspace();
         var reference = new LayoutAreaReference("TodosByCategory");
@@ -223,11 +219,9 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
             reference);
 
         // Wait for CatalogControl with groups (the actual data view after loading completes)
-        var control = await stream
+        var control = stream
             .GetControlStream(reference.Area!)
-            .Where(c => c is CatalogControl { Groups.Count: > 0 })
-            .Timeout(10.Seconds())
-            .FirstAsync();
+            .Should().Within(10.Seconds()).Match(c => c is CatalogControl { Groups.Count: > 0 });
 
         var catalog = control.Should().BeOfType<CatalogControl>().Subject;
         catalog.Groups.Should().NotBeEmpty("should have groups with categories");
@@ -239,7 +233,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// Note: "Planning" is a group name, not a view. Backlog is the view in this group.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task Planning_ShouldRenderWithData()
+    public void Planning_ShouldRenderWithData()
     {
         var workspace = GetClient().GetWorkspace();
         // "Planning" group contains Backlog view
@@ -254,11 +248,9 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
         // (~12s on cold start) — wait for the actually-loaded shape, not just the
         // first non-null emission. Backlog may return CatalogControl with groups
         // or MarkdownControl if all tasks are assigned.
-        var control = await stream
+        var control = stream
             .GetControlStream(reference.Area!)
-            .Where(c => c is CatalogControl { Groups.Count: > 0 } || c is MarkdownControl)
-            .Timeout(30.Seconds())
-            .FirstAsync();
+            .Should().Within(30.Seconds()).Match(c => c is CatalogControl { Groups.Count: > 0 } || c is MarkdownControl);
 
         control.Should().NotBeNull("Backlog view should render");
         Output.WriteLine($"Control type: {control?.GetType().Name}");
@@ -271,7 +263,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// renders without checking task content.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task MyTasks_ShouldRenderWithData()
+    public void MyTasks_ShouldRenderWithData()
     {
         // Note: Setting AccessService context on the client doesn't propagate to the server hub
         // in the test infrastructure. The view will render with "Guest" user context.
@@ -283,11 +275,9 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
             projectAddress,
             reference);
 
-        var control = await stream
+        var control = stream
             .GetControlStream(reference.Area!)
-            .Where(c => c != null)
-            .Timeout(10.Seconds())
-            .FirstAsync();
+            .Should().Within(10.Seconds()).Match(c => c != null);
 
         // MyTasks returns CatalogControl with groups or MarkdownControl when no tasks
         control.Should().NotBeNull("MyTasks view should render");
@@ -298,7 +288,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// Test that the Backlog view renders with data.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task Backlog_ShouldRenderWithData()
+    public void Backlog_ShouldRenderWithData()
     {
         var workspace = GetClient().GetWorkspace();
         var reference = new LayoutAreaReference("Backlog");
@@ -311,11 +301,9 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
         // Same gating shape as Planning_ShouldRenderWithData — wait for the
         // loaded view rather than the first non-null emission, since the area
         // can emit `null` while the ACME/Project NodeType is still compiling.
-        var control = await stream
+        var control = stream
             .GetControlStream(reference.Area!)
-            .Where(c => c is CatalogControl { Groups.Count: > 0 } || c is MarkdownControl)
-            .Timeout(30.Seconds())
-            .FirstAsync();
+            .Should().Within(30.Seconds()).Match(c => c is CatalogControl { Groups.Count: > 0 } || c is MarkdownControl);
 
         control.Should().NotBeNull("Backlog view should render");
         Output.WriteLine($"Control type: {control?.GetType().Name}");
@@ -325,7 +313,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// Test that the TodaysFocus view renders with data.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task TodaysFocus_ShouldRenderWithData()
+    public void TodaysFocus_ShouldRenderWithData()
     {
         var workspace = GetClient().GetWorkspace();
         var reference = new LayoutAreaReference("TodaysFocus");
@@ -336,11 +324,9 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
             reference);
 
         // TodaysFocus returns CatalogControl with groups or Markdown if no urgent tasks
-        var control = await stream
+        var control = stream
             .GetControlStream(reference.Area!)
-            .Where(c => c != null)
-            .Timeout(10.Seconds())
-            .FirstAsync();
+            .Should().Within(10.Seconds()).Match(c => c != null);
 
         control.Should().NotBeNull("TodaysFocus view should render");
         Output.WriteLine($"Control type: {control?.GetType().Name}");
@@ -424,7 +410,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// proving the hardcoded value was removed.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task MyTasks_UsesAccessService_NotHardcodedAlice()
+    public void MyTasks_UsesAccessService_NotHardcodedAlice()
     {
         // Act: Request MyTasks view WITHOUT setting any user context
         // If the bug is still present, it would show Alice's tasks
@@ -438,11 +424,9 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
             reference);
 
         // Wait for the view to render
-        var control = await stream
+        var control = stream
             .GetControlStream(reference.Area!)
-            .Where(c => c != null)
-            .Timeout(10.Seconds())
-            .FirstAsync();
+            .Should().Within(10.Seconds()).Match(c => c != null);
 
         // Assert: Verify the view rendered
         control.Should().NotBeNull("MyTasks view should render");

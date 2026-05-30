@@ -50,7 +50,7 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var client = GetClient();
         var threadResponse = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Plan a project setup")), o => o.WithTarget(new Address(contextPath))).FirstAsync().ToTask();
 
-        threadResponse.Message.Success.Should().BeTrue(threadResponse.Message.Error);
+        threadResponse.Message.Success.Should().BeTrue(threadResponse.Message.Error ?? "");
         var threadPath = threadResponse.Message.Node!.Path;
         Output.WriteLine($"Thread created at: {threadPath}");
 
@@ -88,7 +88,7 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         // 5. Verify the content is the plan markdown
         var content = retrievedNode.Content;
         content.Should().NotBeNull();
-        content.ToString().Should().Contain("Set up project structure");
+        content!.ToString().Should().Contain("Set up project structure");
     }
 
     [Fact]
@@ -103,7 +103,7 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
         var client = GetClient();
         var threadResponse = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Test partition storage")), o => o.WithTarget(new Address(contextPath))).FirstAsync().ToTask();
-        threadResponse.Message.Success.Should().BeTrue(threadResponse.Message.Error);
+        threadResponse.Message.Success.Should().BeTrue(threadResponse.Message.Error ?? "");
         var threadPath = threadResponse.Message.Node!.Path;
 
         // Store plan
@@ -140,7 +140,7 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
         var client = GetClient();
         var threadResponse = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Update plan test")), o => o.WithTarget(new Address(contextPath))).FirstAsync().ToTask();
-        threadResponse.Message.Success.Should().BeTrue(threadResponse.Message.Error);
+        threadResponse.Message.Success.Should().BeTrue(threadResponse.Message.Error ?? "");
         var threadPath = threadResponse.Message.Node!.Path;
 
         // Create initial plan

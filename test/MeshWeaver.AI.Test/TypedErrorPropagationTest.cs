@@ -7,8 +7,6 @@ using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -199,7 +197,7 @@ public class TypedErrorPropagationTest : MonolithMeshTestBase
                     updateOnNextSeen.TrySetResult(true);
                 },
                 ex => updateOnNextSeen.TrySetException(ex));
-        await updateOnNextSeen.Task.WaitAsync(15.Seconds());
+        await updateOnNextSeen.Task.WaitAsync(15.Seconds(), TestContext.Current.CancellationToken);
         updateSub.Dispose();
 
         // Assert: every captured hop saw the canary identity.

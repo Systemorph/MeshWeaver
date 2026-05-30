@@ -123,12 +123,12 @@ public class AcmePathResolutionDiagnosticTest(ITestOutputHelper output) : Monoli
     /// returned null for some reason, even though the file exists.
     /// </summary>
     [Fact]
-    public async Task PathResolver_BothPaths_ResolveToExactNodeNoRemainder()
+    public void PathResolver_BothPaths_ResolveToExactNodeNoRemainder()
     {
-        var defResolution = await PathResolver.ResolvePath("ACME/ProductLaunch/Todo/DefinePersona").FirstAsync();
+        var defResolution = PathResolver.ResolvePath("ACME/ProductLaunch/Todo/DefinePersona").Should().Emit();
         Output.WriteLine($"DefinePersona resolution: prefix={defResolution?.Prefix} remainder={defResolution?.Remainder}");
 
-        var launchResolution = await PathResolver.ResolvePath("ACME/ProductLaunch/Todo/LaunchEvent").FirstAsync();
+        var launchResolution = PathResolver.ResolvePath("ACME/ProductLaunch/Todo/LaunchEvent").Should().Emit();
         Output.WriteLine($"LaunchEvent resolution: prefix={launchResolution?.Prefix} remainder={launchResolution?.Remainder}");
 
         defResolution!.Prefix.Should().Be("ACME/ProductLaunch/Todo/DefinePersona");

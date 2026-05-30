@@ -145,7 +145,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
 
         // Assert
         resolution.Should().NotBeNull($"persistence has {TestPartition}/org1");
-        resolution.Prefix.Should().Be($"{TestPartition}/org1");
+        resolution!.Prefix.Should().Be($"{TestPartition}/org1");
         resolution.Remainder.Should().BeNull();
     }
 
@@ -157,7 +157,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
 
         // Assert: should match TestData/org1/proj1 with remainder
         resolution.Should().NotBeNull();
-        resolution.Prefix.Should().Be($"{TestPartition}/org1/proj1");
+        resolution!.Prefix.Should().Be($"{TestPartition}/org1/proj1");
         resolution.Remainder.Should().Be("nonexistent/deep");
     }
 
@@ -169,7 +169,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
 
         // Assert
         resolution.Should().NotBeNull();
-        resolution.Prefix.Should().Be($"{TestPartition}/org1/proj1/item1");
+        resolution!.Prefix.Should().Be($"{TestPartition}/org1/proj1/item1");
         resolution.Remainder.Should().BeNull();
     }
 
@@ -181,7 +181,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
 
         // Assert
         resolution.Should().NotBeNull();
-        resolution.Prefix.Should().Be($"{TestPartition}/org1/proj1/item1");
+        resolution!.Prefix.Should().Be($"{TestPartition}/org1/proj1/item1");
         resolution.Remainder.Should().Be("Overview");
     }
 
@@ -203,7 +203,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
 
         // Assert: TestPartition is the address, "_Nodes" is the remainder (layout area)
         resolution.Should().NotBeNull();
-        resolution.Prefix.Should().Be(TestPartition);
+        resolution!.Prefix.Should().Be(TestPartition);
         resolution.Remainder.Should().Be("_Nodes");
     }
 
@@ -225,7 +225,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
 
         // Assert
         resolution.Should().NotBeNull("Space should be resolvable");
-        resolution.Prefix.Should().Be("Space");
+        resolution!.Prefix.Should().Be("Space");
         resolution.Remainder.Should().BeNull();
     }
 
@@ -262,7 +262,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
 
         // Assert
         resolution.Should().NotBeNull($"{typePath} should be resolvable");
-        resolution.Prefix.Should().Be(typePath);
+        resolution!.Prefix.Should().Be(typePath);
         resolution.Remainder.Should().BeNull();
     }
 

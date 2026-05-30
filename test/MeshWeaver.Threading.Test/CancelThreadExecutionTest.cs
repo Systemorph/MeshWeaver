@@ -58,7 +58,7 @@ public class CancelThreadExecutionTest(ITestOutputHelper output) : MonolithMeshT
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, "Cancel test", "Roland");
         var createResp = await client.Observe(new CreateNodeRequest(threadNode),
             o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
-        createResp.Message.Success.Should().BeTrue(createResp.Message.Error);
+        createResp.Message.Success.Should().BeTrue(createResp.Message.Error ?? "");
         var threadPath = createResp.Message.Node!.Path!;
 
         // Warm up the remote stream subscription BEFORE submit so the

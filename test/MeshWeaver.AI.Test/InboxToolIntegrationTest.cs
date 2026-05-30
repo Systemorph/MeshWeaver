@@ -65,7 +65,7 @@ public class InboxToolIntegrationTest : AITestBase
         var result = await tool.InvokeAsync(new AIFunctionArguments(), ct);
 
         result.Should().NotBeNull();
-        result.ToString().Should().Be("(no new messages)");
+        result!.ToString().Should().Be("(no new messages)");
     }
 
     [Fact]
@@ -476,14 +476,14 @@ public class InboxToolIntegrationTest : AITestBase
         MeshThread? last = null;
         try
         {
-            return await Mesh.GetWorkspace().GetMeshNodeStream(threadPath)
+            return (await Mesh.GetWorkspace().GetMeshNodeStream(threadPath)
                 .Select(n => n.Content as MeshThread)
                 .Where(t => t is not null)
                 .Do(t => last = t)
                 .Where(t => predicate(t!))
                 .Take(1)
                 .Timeout(TimeSpan.FromMilliseconds(timeoutMs))
-                .ToTask(ct)!;
+                .ToTask(ct))!;
         }
         catch (TimeoutException)
         {

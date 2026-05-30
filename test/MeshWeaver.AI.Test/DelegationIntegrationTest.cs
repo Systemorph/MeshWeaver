@@ -306,7 +306,7 @@ public class DelegationIntegrationTest : MonolithMeshTestBase
         var coordinator = agents.FirstOrDefault(a => a.Name == "Coordinator");
         coordinator.Should().NotBeNull("Coordinator agent should be loaded");
         coordinator!.AgentConfiguration.Should().NotBeNull();
-        coordinator.AgentConfiguration!.Delegations.Should().NotBeNullOrEmpty(
+        coordinator.AgentConfiguration!.Delegations.Should().NotBeEmpty(
             "Coordinator should have delegations configured from .md front matter");
         coordinator.AgentConfiguration.Delegations!
             .Should().Contain(d => d.AgentPath == "Worker",

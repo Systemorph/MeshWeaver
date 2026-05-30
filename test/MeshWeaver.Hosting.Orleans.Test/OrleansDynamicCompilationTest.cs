@@ -348,7 +348,7 @@ public class OrleansCrossSiloCompilationTest(ITestOutputHelper output)
                 o => o.WithTarget(new Address(typePath)))
             .FirstAsync().ToTask(ct);
 
-        compileResp.Message.Success.Should().BeTrue(compileResp.Message.Error);
+        compileResp.Message.Success.Should().BeTrue(compileResp.Message.Error ?? "");
         var assemblyLocation = compileResp.Message.AssemblyLocation;
         assemblyLocation.Should().NotBeNullOrEmpty("compile must produce an assembly path");
         File.Exists(assemblyLocation!).Should().BeTrue("DLL file must exist on disk");

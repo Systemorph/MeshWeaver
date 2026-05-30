@@ -98,6 +98,7 @@ public class ApiTokenAuthenticationHandlerTests
 
         claims.Where(c => c.Type == ClaimTypes.Role).Select(c => c.Value)
             .Should().BeEquivalentTo(new[] { "Admin", "Viewer" },
-                "blank role entries must be silently dropped, never stamped as empty Role claims");
+                System.Text.Json.JsonSerializerOptions.Default,
+                because: "blank role entries must be silently dropped, never stamped as empty Role claims");
     }
 }

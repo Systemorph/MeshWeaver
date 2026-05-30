@@ -124,7 +124,10 @@ public class PatchWorkspaceAckTest : MonolithMeshTestBase
         var nodeHub = Mesh.GetHostedHub(new Address(path));
         var workspace = nodeHub.GetWorkspace();
         var stream = workspace.GetStream<MeshNode>();
-        stream.Should().NotBeNull("the hub must expose a MeshNode stream");
+        // IObservable<T> routes to ObservableAssertions (no NotBeNull) — this is a
+        // plain reference-null guard, not a stream-emission assertion. The actual
+        // emission wait is asserted below via observedName.Should().Be(...).
+        Assert.NotNull(stream);
 
         var observedName = await stream!
             .Where(nodes => nodes != null && nodes.Any(n => n.Path == path))

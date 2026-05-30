@@ -85,7 +85,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
             .GetObservable<MyData>()
             .Timeout(10.Seconds())
             .FirstOrDefaultAsync();
-        response.Should().BeEquivalentTo(MyData.InitialData);
+        response.Should().BeEquivalentTo(MyData.InitialData, GetHost().JsonSerializerOptions);
     }
 
 
@@ -128,7 +128,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
             .OrderBy(a => a.Id)
             .ToArray();
 
-        data.ToArray().Should().BeEquivalentTo(expectedItems);
+        data.ToArray().Should().BeEquivalentTo(expectedItems, GetHost().JsonSerializerOptions);
         data = (
             await GetHost()
                 .GetWorkspace()
@@ -139,12 +139,12 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
             .OrderBy(a => a.Id)
             .ToArray();
 
-        data.ToArray().Should().BeEquivalentTo(expectedItems);
+        data.ToArray().Should().BeEquivalentTo(expectedItems, GetHost().JsonSerializerOptions);
         await Task.Delay(200, CancellationTokenSource.CreateLinkedTokenSource(
             TestContext.Current.CancellationToken,
             new CancellationTokenSource(5.Seconds()).Token
         ).Token);
-        storage.Values.Cast<MyData>().OrderBy(x => x.Id).Should().BeEquivalentTo(expectedItems);
+        storage.Values.Cast<MyData>().OrderBy(x => x.Id).Should().BeEquivalentTo(expectedItems, GetHost().JsonSerializerOptions);
     }
 
     /// <summary>
@@ -161,7 +161,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
             .GetObservable<MyData>()
             .Timeout(10.Seconds())
             .FirstOrDefaultAsync();
-        data.Should().BeEquivalentTo(MyData.InitialData);
+        data.Should().BeEquivalentTo(MyData.InitialData, GetHost().JsonSerializerOptions);
 
         var toBeDeleted = data.Take(1).ToArray();
         var expectedItems = data.Skip(1).ToArray();
@@ -178,9 +178,9 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
             .GetObservable<MyData>()
             .Timeout(10.Seconds())
             .FirstOrDefaultAsync(i => i.Count == 1);
-        data.Should().BeEquivalentTo(expectedItems);
+        data.Should().BeEquivalentTo(expectedItems, GetHost().JsonSerializerOptions);
         await Task.Delay(100, TestContext.Current.CancellationToken);
-        storage.Values.Should().BeEquivalentTo(expectedItems);
+        storage.Values.Should().BeEquivalentTo(expectedItems, GetHost().JsonSerializerOptions);
     }
 
     /// <summary>
@@ -299,7 +299,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
             .Select(c => c.Value!.Instances.Values)
             .FirstAsync();
 
-        collection.Should().BeEquivalentTo(MyData.InitialData);
+        collection.Should().BeEquivalentTo(MyData.InitialData, GetHost().JsonSerializerOptions);
     }
 
     [Fact]
@@ -362,7 +362,8 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
             .Timeout(10.Seconds())
             .FirstAsync();
 
-        var types = result.Should().BeAssignableTo<IEnumerable<TypeDescription>>().Which.ToArray();
+        result.Should().BeAssignableTo<IEnumerable<TypeDescription>>();
+        var types = ((IEnumerable<TypeDescription>)result!).ToArray();
         types.Should().NotBeEmpty();
         types.Should().Contain(t => t.Name.Contains("MyData"));
     }
@@ -373,7 +374,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var host = GetHost();
         var stream = host.GetWorkspace()
             .GetStream(new NodeTypeReference(), x => x.ReturnNullWhenNotPresent());
-        stream.Should().NotBeNull();
+        ((object?)stream).Should().NotBeNull();
     }
 
     /// <summary>
@@ -455,7 +456,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         // Should contain our test type
         var myDataType = typesResponse.Types.FirstOrDefault(t => t.Name.Contains("MyData"));
         myDataType.Should().NotBeNull();
-        myDataType.DisplayName.Should().NotBeNullOrEmpty();
+        myDataType!.DisplayName.Should().NotBeNullOrEmpty();
         myDataType.Description.Should().NotBeNullOrEmpty();
     }
 
@@ -479,7 +480,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
 
         // Verify types are sorted by display name
         var sortedTypes = types.OrderBy(t => t.DisplayName).ToArray();
-        types.Should().Equal(sortedTypes, (t1, t2) => (t1.DisplayName).Equals(t2.DisplayName));
+        types.Select(t => t.DisplayName).Should().Equal(sortedTypes.Select(t => t.DisplayName));
     }
 
     /// <summary>
@@ -643,7 +644,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
             .Timeout(10.Seconds())
             .FirstOrDefaultAsync();
 
-        initialClientData.Should().BeEquivalentTo(initialHostData);
+        initialClientData.Should().BeEquivalentTo(initialHostData, GetHost().JsonSerializerOptions);
 
         // act - update from client
         await client.Observe(DataChangeRequest.Update([updateItem]), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
@@ -664,7 +665,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
             .Timeout(10.Seconds())
             .FirstOrDefaultAsync(x => x.Any(item => item.Text == "Updated Text"));
 
-        updatedClientData.Should().BeEquivalentTo(updatedHostData);
+        updatedClientData.Should().BeEquivalentTo(updatedHostData, GetHost().JsonSerializerOptions);
         updatedClientData.Should().Contain(x => x.Id == "1" && x.Text == "Updated Text");
     }
 
@@ -686,7 +687,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
             .FirstAsync();
 
         // assert
-        collection.Should().BeEquivalentTo(MyData.InitialData);
+        collection.Should().BeEquivalentTo(MyData.InitialData, GetHost().JsonSerializerOptions);
         collection.Should().AllBeOfType<MyData>();
     }
 

@@ -61,10 +61,9 @@ public class OrleansSubscribeRequestNotFoundSurfaceTest(ITestOutputHelper output
         var reference = new LayoutAreaReference("Overview");
 
         var workspace = client.GetWorkspace();
+        // GetRemoteStream must always return a stream — even when the target is unreachable,
+        // the OnError path (asserted below) is the surface signal.
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(address, reference);
-        stream.Should().NotBeNull(
-            "GetRemoteStream must always return a stream â€” even when the target is unreachable, " +
-            "the OnError path is the surface signal.");
 
         Exception? captured = null;
         var done = new ManualResetEventSlim(false);
@@ -114,7 +113,6 @@ public class OrleansSubscribeRequestNotFoundSurfaceTest(ITestOutputHelper output
 
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(address, reference);
-        stream.Should().NotBeNull();
 
         var dataReceived = false;
         Exception? error = null;

@@ -1034,7 +1034,7 @@ DateTime.Now.ToString()
         // Parse to get MarkdownContent with CodeSubmissions and PrerenderedHtml
         var content = MarkdownContent.Parse(markdown);
 
-        content.CodeSubmissions.Should().NotBeNullOrEmpty(
+        content.CodeSubmissions.Should().NotBeEmpty(
             "Parsing markdown with --render code block should produce CodeSubmissions");
         content.PrerenderedHtml.Should().Contain(ExecutableCodeBlockRenderer.KernelAddressPlaceholder,
             "PrerenderedHtml should contain __KERNEL_ADDRESS__ placeholder");
@@ -1057,7 +1057,7 @@ DateTime.Now.ToString()
         var roundTripped = (MarkdownContent)deserialized!;
         roundTripped.Content.Should().Be(content.Content);
         roundTripped.PrerenderedHtml.Should().Contain(ExecutableCodeBlockRenderer.KernelAddressPlaceholder);
-        roundTripped.CodeSubmissions.Should().NotBeNullOrEmpty(
+        roundTripped.CodeSubmissions.Should().NotBeEmpty(
             "CodeSubmissions must survive the JSON round-trip so interactive markdown can replace __KERNEL_ADDRESS__");
         roundTripped.CodeSubmissions!.Count.Should().Be(content.CodeSubmissions!.Count);
         roundTripped.CodeSubmissions![0].Code.Should().Be(content.CodeSubmissions[0].Code);

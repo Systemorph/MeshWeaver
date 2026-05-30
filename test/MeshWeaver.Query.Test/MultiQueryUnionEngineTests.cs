@@ -38,7 +38,7 @@ public class MultiQueryUnionEngineTests(ITestOutputHelper output) : MonolithMesh
             $"path:{p}_other nodeType:Markdown scope:descendants",
         })).ToListAsync();
 
-        results.Cast<MeshNode>().Select(n => n.Name).Should().BeEquivalentTo("A1", "A2", "B1");
+        results.Cast<MeshNode>().Select(n => n.Name).Should().BeEquivalentTo(new[] { "A1", "A2", "B1" }, Mesh.JsonSerializerOptions);
     }
 
     [Fact]
@@ -66,17 +66,15 @@ public class MultiQueryUnionEngineTests(ITestOutputHelper output) : MonolithMesh
         await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/X") with { Name = "X", NodeType = "Markdown" });
         await NodeFactory.CreateNode(MeshNode.FromPath($"{p}_other/Y") with { Name = "Y", NodeType = "Markdown" });
 
-        var initial = await MeshQuery
+        var initial = MeshQuery
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQueries(new[]
             {
                 $"path:{p} nodeType:Markdown scope:descendants",
                 $"path:{p}_other nodeType:Markdown scope:descendants",
             }))
             .Where(c => c.ChangeType == QueryChangeType.Initial)
-            .FirstAsync()
-            .Timeout(System.TimeSpan.FromSeconds(10))
-            .ToTask(TestContext.Current.CancellationToken);
+            .Should().Within(10.Seconds()).Emit();
 
-        initial.Items.Select(n => n.Name).Should().BeEquivalentTo("X", "Y");
+        initial.Items.Select(n => n.Name).Should().BeEquivalentTo(new[] { "X", "Y" }, Mesh.JsonSerializerOptions);
     }
 }

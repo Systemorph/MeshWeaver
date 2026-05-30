@@ -113,9 +113,9 @@ public class MarkdownViewLogicTest
 
         result.Should().NotBeNull();
         result!.Should().HaveCount(2);
-        result[0].Id.Should().Be("cell-1");
-        result[0].Code.Should().Be("var x = 1;");
-        result[1].Id.Should().Be("cell-2");
+        result![0].Id.Should().Be("cell-1");
+        result![0].Code.Should().Be("var x = 1;");
+        result![1].Id.Should().Be("cell-2");
     }
 
     [Fact]
@@ -188,7 +188,7 @@ public class MarkdownViewLogicTest
 
         result.CodeSubmissions.Should().NotBeNull();
         result.CodeSubmissions!.Should().HaveCount(1);
-        result.CodeSubmissions[0].Code.Should().Contain("var x = 1 + 2");
+        result.CodeSubmissions![0].Code.Should().Contain("var x = 1 + 2");
     }
 
     [Fact]
@@ -204,7 +204,7 @@ public class MarkdownViewLogicTest
 
         result.CodeSubmissions.Should().NotBeNull();
         result.CodeSubmissions!.Should().HaveCount(1);
-        result.CodeSubmissions[0].Id.Should().Be("my-area");
+        result.CodeSubmissions![0].Id.Should().Be("my-area");
     }
 
     [Fact]
@@ -321,7 +321,8 @@ public class MarkdownViewLogicTest
 
         fromExtract.Should().NotBeNull();
         fromExtract!.Should().HaveCount(fromRender!.Count);
-        fromExtract.Select(s => s.Code).Should().BeEquivalentTo(fromRender.Select(s => s.Code));
+        fromExtract!.Select(s => s.Code).Should()
+            .BeEquivalentTo(fromRender!.Select(s => s.Code), JsonSerializerOptions.Default);
     }
 
     [Fact]
@@ -363,7 +364,7 @@ public class MarkdownViewLogicTest
 
         recovered.Should().NotBeNull();
         recovered!.Should().HaveCount(2);
-        recovered[0].Code.Should().Contain("var x = 1");
-        recovered[1].Id.Should().Be("my-area");
+        recovered![0].Code.Should().Contain("var x = 1");
+        recovered![1].Id.Should().Be("my-area");
     }
 }

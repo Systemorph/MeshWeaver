@@ -74,14 +74,13 @@ public class PostPipelineAccessContextTest(ITestOutputHelper output) : HubTestBa
     /// <c>ImpersonateAs...</c> tests below.</para>
     /// </summary>
     [Fact]
-    public async Task SubHub_with_no_user_context_leaves_context_null_and_fails_closed()
+    public void SubHub_with_no_user_context_leaves_context_null_and_fails_closed()
     {
         var client = GetClient();
 
-        var response = await client
+        var response = client
             .Observe(new CaptureContextRequest(), o => o.WithTarget(CreateHostAddress()))
-            .FirstAsync()
-            .ToTask(new CancellationTokenSource(10.Seconds()).Token);
+            .Should().Within(10.Seconds()).Emit();
 
         response.Message.HasAccessContext.Should().BeFalse(
             because: "after the 2026-05-21 cleanup the PostPipeline fails closed when no " +
@@ -105,14 +104,13 @@ public class PostPipelineAccessContextTest(ITestOutputHelper output) : HubTestBa
     /// fallback, it will fail.
     /// </summary>
     [Fact]
-    public async Task Mesh_hub_with_no_user_context_does_NOT_self_impersonate()
+    public void Mesh_hub_with_no_user_context_does_NOT_self_impersonate()
     {
         var meshHub = Mesh; // injected by HubTestBase — Address = mesh/1
 
-        var response = await meshHub
+        var response = meshHub
             .Observe(new CaptureContextRequest(), o => o.WithTarget(CreateHostAddress()))
-            .FirstAsync()
-            .ToTask(new CancellationTokenSource(10.Seconds()).Token);
+            .Should().Within(10.Seconds()).Emit();
 
         // The response can come back with no AccessContext — that's the
         // documented fail-closed behaviour for mesh-typed senders.
@@ -136,7 +134,7 @@ public class PostPipelineAccessContextTest(ITestOutputHelper output) : HubTestBa
     /// of stream caches).
     /// </summary>
     [Fact]
-    public async Task ImpersonateAsSystem_scope_propagates_through_Post()
+    public void ImpersonateAsSystem_scope_propagates_through_Post()
     {
         var client = GetClient();
         var access = client.ServiceProvider.GetRequiredService<AccessService>();
@@ -144,10 +142,9 @@ public class PostPipelineAccessContextTest(ITestOutputHelper output) : HubTestBa
         IMessageDelivery<CaptureContextResponse> response;
         using (access.ImpersonateAsSystem())
         {
-            response = await client
+            response = client
                 .Observe(new CaptureContextRequest(), o => o.WithTarget(CreateHostAddress()))
-                .FirstAsync()
-                .ToTask(new CancellationTokenSource(10.Seconds()).Token);
+                .Should().Within(10.Seconds()).Emit();
         }
 
         response.Message.HasAccessContext.Should().BeTrue(
@@ -164,7 +161,7 @@ public class PostPipelineAccessContextTest(ITestOutputHelper output) : HubTestBa
     /// heartbeat pattern (JsonSynchronizationStream.cs:218, 292, 327).
     /// </summary>
     [Fact]
-    public async Task ImpersonateAsHub_scope_propagates_through_Post()
+    public void ImpersonateAsHub_scope_propagates_through_Post()
     {
         var client = GetClient();
         var access = client.ServiceProvider.GetRequiredService<AccessService>();
@@ -172,10 +169,9 @@ public class PostPipelineAccessContextTest(ITestOutputHelper output) : HubTestBa
         IMessageDelivery<CaptureContextResponse> response;
         using (access.ImpersonateAsHub(client))
         {
-            response = await client
+            response = client
                 .Observe(new CaptureContextRequest(), o => o.WithTarget(CreateHostAddress()))
-                .FirstAsync()
-                .ToTask(new CancellationTokenSource(10.Seconds()).Token);
+                .Should().Within(10.Seconds()).Emit();
         }
 
         response.Message.HasAccessContext.Should().BeTrue(

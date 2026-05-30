@@ -53,7 +53,7 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
 
         var stream = consumerHub.GetWorkspace().GetStream<TestItem>();
 
-        stream.Should().NotBeNull("workspace stream should exist for registered type");
+        ((object?)stream).Should().NotBeNull("workspace stream should exist for registered type");
 
         var act = async () => await stream!.Timeout(5.Seconds()).FirstAsync();
         var ex = await Assert.ThrowsAnyAsync<Exception>(act);
@@ -81,7 +81,7 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
 
         var stream = consumerHub.GetWorkspace().GetStream<TestItem>();
 
-        stream.Should().NotBeNull("workspace stream should exist for registered type");
+        ((object?)stream).Should().NotBeNull("workspace stream should exist for registered type");
 
         var act = async () => await stream!.Timeout(5.Seconds()).FirstAsync();
         var ex = await Assert.ThrowsAnyAsync<Exception>(act);
@@ -110,7 +110,7 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
 
         // STEP 1: Wait for internal workspace stream to error (proves data source failed)
         var internalStream = groupHub.GetWorkspace().GetStream<TestItem>();
-        internalStream.Should().NotBeNull("workspace stream should exist for registered type");
+        ((object?)internalStream).Should().NotBeNull("workspace stream should exist for registered type");
 
         var internalAct = async () => await internalStream!.Timeout(5.Seconds()).FirstAsync();
         var internalEx = await Assert.ThrowsAnyAsync<Exception>(internalAct);
@@ -177,7 +177,7 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
 
         // Wait for the internal stream to error (proves initialization failed)
         var internalStream = groupHub.GetWorkspace().GetStream<TestItem>();
-        internalStream.Should().NotBeNull();
+        ((object?)internalStream).Should().NotBeNull();
         var internalAct = async () => await internalStream!.Timeout(5.Seconds()).FirstAsync();
         var internalEx = await Assert.ThrowsAnyAsync<Exception>(internalAct);
         Output.WriteLine($"Internal stream errored: {internalEx.GetType().Name}: {internalEx.Message}");
@@ -220,7 +220,7 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
 
         // Wait for internal stream error (proves init failed)
         var stream = groupHub.GetWorkspace().GetStream<TestItem>();
-        stream.Should().NotBeNull();
+        ((object?)stream).Should().NotBeNull();
         await Assert.ThrowsAnyAsync<Exception>(
             async () => await stream!.Timeout(5.Seconds()).FirstAsync());
 
@@ -251,7 +251,7 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
 
         // Wait for internal stream error
         var stream = groupHub.GetWorkspace().GetStream<TestItem>();
-        stream.Should().NotBeNull();
+        ((object?)stream).Should().NotBeNull();
         await Assert.ThrowsAnyAsync<Exception>(
             async () => await stream!.Timeout(5.Seconds()).FirstAsync());
 

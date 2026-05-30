@@ -186,7 +186,7 @@ public class ObservableTopNExtensionsTests
         items.ToObservable().ScanTopN(5, ScoreComparer).Subscribe(snapshots.Add);
 
         snapshots[^1].Should().HaveCount(3);
-        snapshots[^1].Select(s => s.Name).Should().BeEquivalentTo(new[] { "alpha", "beta", "gamma" });
+        snapshots[^1].Select(s => s.Name).Should().BeEquivalentTo(new[] { "alpha", "beta", "gamma" }, System.Text.Json.JsonSerializerOptions.Default);
     }
 
     // ──────────────────────── Performance / no-resort proxy ────────────────────────

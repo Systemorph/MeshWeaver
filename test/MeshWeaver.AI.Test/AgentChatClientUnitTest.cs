@@ -148,7 +148,7 @@ public class AgentChatClientUnitTest
         var result = AgentChatClient.FindCyclicDelegations(configs).ToList();
 
         result.Should().HaveCount(2);
-        result.Select(a => a.Id).Should().BeEquivalentTo("A", "B");
+        result.Select(a => a.Id).Should().BeEquivalentTo(new[] { "A", "B" }, System.Text.Json.JsonSerializerOptions.Default);
     }
 
     [Fact]
@@ -180,7 +180,7 @@ public class AgentChatClientUnitTest
         var result = AgentChatClient.FindCyclicDelegations(configs).ToList();
 
         result.Should().HaveCount(2);
-        result.Select(a => a.Id).Should().BeEquivalentTo("A", "B");
+        result.Select(a => a.Id).Should().BeEquivalentTo(new[] { "A", "B" }, System.Text.Json.JsonSerializerOptions.Default);
     }
 
     [Fact]

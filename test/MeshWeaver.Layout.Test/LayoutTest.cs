@@ -119,7 +119,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .And.Subject;
 
         var areaControls = await Task.WhenAll(
-            areas.Select(async a =>
+            areas!.Select(async a =>
                 await stream.GetControlStream(a.Area.ToString()!)
                 .Timeout(10.Seconds())
                 .FirstAsync(x => x != null)!)
@@ -322,7 +322,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         itemTemplate.DataContext.Should().Be($"/data/\"{nameof(ItemTemplate)}\"");
         var data = await stream
             .GetDataStream<IEnumerable<JsonElement>>(
-                new JsonPointerReference(itemTemplate.DataContext)
+                new JsonPointerReference(itemTemplate.DataContext!)
             )
             .Where(x => x is not null)
             .FirstAsync();
@@ -338,7 +338,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var parsedPointer = JsonPointer.Parse($"/{pointer.Pointer}");
         data.Select(d => parsedPointer.Evaluate(d)!.Value.ToString())
             .Should()
-            .BeEquivalentTo("Hello", "World");
+            .BeEquivalentTo(new[] { "Hello", "World" }, System.Text.Json.JsonSerializerOptions.Default);
     }
 
     private UiControl Counter()
@@ -418,25 +418,21 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .BeOfType<DataGridControl>()
             .Which.Columns.Should()
             .HaveCount(2)
-            .And.Subject.ToArray();
+            .And.Subject!.ToArray();
         ;
 
 
-        controls.Should().BeEquivalentTo(
-                [
-                    new PropertyColumnControl<string>
-                    {
-                        Property = nameof(DataRecord.SystemName).ToCamelCase(),
-                        Title = nameof(DataRecord.SystemName).Wordify(),
-                    },
-                    new PropertyColumnControl<string>
-                    {
-                        Property = nameof(DataRecord.DisplayName).ToCamelCase(),
-                        Title = nameof(DataRecord.DisplayName).Wordify(),
-                    }
-                ],
-                options => options.Including(c => c.Property).Including(c => c.Title)
-            );
+        // Compare only the Property/Title members of each column (the library's
+        // BeEquivalentTo equivalency config filters root-level members, not
+        // per-element members of a collection, so project both sides first).
+        controls.Cast<PropertyColumnControl>().Select(c => new { c.Property, Title = c.Title?.ToString() })
+            .Should().BeEquivalentTo(
+                new[]
+                {
+                    new { Property = (string?)nameof(DataRecord.SystemName).ToCamelCase(), Title = (string?)nameof(DataRecord.SystemName).Wordify() },
+                    new { Property = (string?)nameof(DataRecord.DisplayName).ToCamelCase(), Title = (string?)nameof(DataRecord.DisplayName).Wordify() }
+                },
+                System.Text.Json.JsonSerializerOptions.Default);
     }
 
     public static UiControl DataBoundCheckboxes(LayoutAreaHost area, RenderingContext context)
@@ -543,7 +539,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var serialized = JsonSerializer.Serialize(data, host.JsonSerializerOptions);
         var client = GetClient();
         var deserialized = JsonSerializer.Deserialize<FilterEntity>(serialized, client.JsonSerializerOptions);
-        deserialized.Should().BeEquivalentTo(data);
+        deserialized.Should().BeEquivalentTo(data, client.JsonSerializerOptions);
     }
 
     private IObservable<UiControl> CatalogView(LayoutAreaHost area, RenderingContext context)
@@ -593,7 +589,12 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         grid.Columns.Should()
             .HaveCount(benchmarks.Length);
 
-        grid.Columns.Should().BeEquivalentTo(benchmarks, options => options.Including(c => c.Property).Including(c => c.Title));
+        // Project to the compared members (Property/Title) — the equivalency config
+        // filters root members, not per-element members of a collection.
+        grid.Columns.Cast<PropertyColumnControl>().Select(c => new { c.Property, Title = c.Title?.ToString() })
+            .Should().BeEquivalentTo(
+                benchmarks.Select(c => new { c.Property, Title = (string?)c.Title?.ToString() }),
+                System.Text.Json.JsonSerializerOptions.Default);
     }
 
     // TODO V10: Need to rewrite realistic test for disposing views. (29.07.2024, Roland Bürgi)
@@ -626,7 +627,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
 
-        var subAreaName = content.Should().BeOfType<StackControl>().Which.Areas.Should().HaveCount(1).And.Subject.First();
+        var subAreaName = content.Should().BeOfType<StackControl>().Which.Areas.Should().HaveCount(1).And.Subject!.First();
         var subArea = await stream.GetControlStream(subAreaName.Area.ToString()!).FirstAsync();
 
         stopwatch.Stop();
@@ -915,7 +916,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         // Both should deserialize collections the same way
         collectionClientDeserialized.Should().NotBeNull();
         collectionHostedDeserialized.Should().NotBeNull();
-        collectionClientDeserialized.Count.Should().Be(collectionHostedDeserialized.Count);
+        collectionClientDeserialized!.Count.Should().Be(collectionHostedDeserialized!.Count);
 
         // Each item should be properly deserialized as PropertyColumnControl<string>
         collectionClientDeserialized.Should().AllBeOfType<PropertyColumnControl<string>>();
@@ -1019,15 +1020,17 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             }
         }
 
-        // The test should pass if PropertyColumnControl objects are properly deserialized
+        // The test should pass if PropertyColumnControl objects are properly deserialized.
+        // BeOfType<T> here matches any value assignable to T (PropertyColumnControl<string>
+        // derives from PropertyColumnControl), and exposes the narrowed value via .Which.
         deserialized.Columns.Should().HaveCount(2);
-        deserialized.Columns.Should().AllBeAssignableTo<PropertyColumnControl>();
+        deserialized.Columns.Should().AllBeOfType<PropertyColumnControl>();
 
-        var firstColumn = deserialized.Columns[0].Should().BeAssignableTo<PropertyColumnControl>().Which;
+        var firstColumn = deserialized.Columns[0].Should().BeOfType<PropertyColumnControl>().Which;
         firstColumn.Property.Should().Be(nameof(DataRecord.SystemName).ToCamelCase());
         firstColumn.Title.Should().Be(nameof(DataRecord.SystemName).Wordify());
 
-        var secondColumn = deserialized.Columns[1].Should().BeAssignableTo<PropertyColumnControl>().Which;
+        var secondColumn = deserialized.Columns[1].Should().BeOfType<PropertyColumnControl>().Which;
         secondColumn.Property.Should().Be(nameof(DataRecord.DisplayName).ToCamelCase());
         secondColumn.Title.Should().Be(nameof(DataRecord.DisplayName).Wordify());
     }
@@ -1086,7 +1089,7 @@ public class DefaultAreaTest(ITestOutputHelper output) : HubTestBase(output)
         .AddLayoutClient(d => d);
 
     [HubFact]
-    public async Task NullArea_ReturnsNamedAreaControlPointingToDefaultArea()
+    public void NullArea_ReturnsNamedAreaControlPointingToDefaultArea()
     {
         // Arrange - create a reference with null area
         var reference = new LayoutAreaReference(null);
@@ -1098,9 +1101,8 @@ public class DefaultAreaTest(ITestOutputHelper output) : HubTestBase(output)
         );
 
         // Act - get the control stream for empty area
-        var control = await stream.GetControlStream(string.Empty)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x != null);
+        var control = stream.GetControlStream(string.Empty)
+            .Should().Within(10.Seconds()).Match(x => x != null);
 
         // Assert - should get a NamedAreaControl pointing to the default area
         var namedArea = control.Should().BeOfType<NamedAreaControl>().Which;
@@ -1108,7 +1110,7 @@ public class DefaultAreaTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [HubFact]
-    public async Task EmptyArea_ReturnsNamedAreaControlPointingToDefaultArea()
+    public void EmptyArea_ReturnsNamedAreaControlPointingToDefaultArea()
     {
         // Arrange - create a reference with empty area
         var reference = new LayoutAreaReference(string.Empty);
@@ -1120,9 +1122,8 @@ public class DefaultAreaTest(ITestOutputHelper output) : HubTestBase(output)
         );
 
         // Act - get the control stream for empty area
-        var control = await stream.GetControlStream(string.Empty)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x != null);
+        var control = stream.GetControlStream(string.Empty)
+            .Should().Within(10.Seconds()).Match(x => x != null);
 
         // Assert - should get a NamedAreaControl pointing to the default area
         var namedArea = control.Should().BeOfType<NamedAreaControl>().Which;
@@ -1130,7 +1131,7 @@ public class DefaultAreaTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [HubFact]
-    public async Task ExplicitArea_UsesSpecifiedArea()
+    public void ExplicitArea_UsesSpecifiedArea()
     {
         // Arrange - create a reference with explicit area
         var reference = new LayoutAreaReference(OtherView);
@@ -1142,9 +1143,8 @@ public class DefaultAreaTest(ITestOutputHelper output) : HubTestBase(output)
         );
 
         // Act - get the control stream for the specified area
-        var control = await stream.GetControlStream(reference.Area!)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x != null);
+        var control = stream.GetControlStream(reference.Area!)
+            .Should().Within(10.Seconds()).Match(x => x != null);
 
         // Assert - should get the other view content, not the default
         control.Should().BeOfType<HtmlControl>()
@@ -1152,7 +1152,7 @@ public class DefaultAreaTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [HubFact]
-    public async Task DefaultAreaContent_IsRenderedCorrectly()
+    public void DefaultAreaContent_IsRenderedCorrectly()
     {
         // Arrange - create a reference with null area
         var reference = new LayoutAreaReference(null);
@@ -1164,9 +1164,8 @@ public class DefaultAreaTest(ITestOutputHelper output) : HubTestBase(output)
         );
 
         // Act - get the control stream for the actual default view (not empty string)
-        var control = await stream.GetControlStream(DefaultView)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x != null);
+        var control = stream.GetControlStream(DefaultView)
+            .Should().Within(10.Seconds()).Match(x => x != null);
 
         // Assert - should get the default view content
         control.Should().BeOfType<HtmlControl>()

@@ -79,7 +79,7 @@ public class AccessControlQueryTests
 
         results.Should().HaveCount(3);
         results.Cast<MeshNode>().Select(n => n.Path)
-            .Should().BeEquivalentTo("ACME/Project/Story1", "ACME/Project/Story2", "ACME/Team/Alice");
+            .Should().BeEquivalentTo(new[] { "ACME/Project/Story1", "ACME/Project/Story2", "ACME/Team/Alice" }, JsonSerializerOptions.Default);
     }
 
     [Fact]
@@ -97,7 +97,7 @@ public class AccessControlQueryTests
         // but NOT ACME/Team/Alice
         results.Should().HaveCount(2);
         results.Cast<MeshNode>().Select(n => n.Path)
-            .Should().BeEquivalentTo("ACME/Project/Story1", "ACME/Project/Story2");
+            .Should().BeEquivalentTo(new[] { "ACME/Project/Story1", "ACME/Project/Story2" }, JsonSerializerOptions.Default);
     }
 
     [Fact]
@@ -133,7 +133,7 @@ public class AccessControlQueryTests
         // Alice should see Story1 and Story2 but NOT Alice (ACME/Team denied)
         results.Should().HaveCount(2);
         results.Cast<MeshNode>().Select(n => n.Path)
-            .Should().BeEquivalentTo("ACME/Project/Story1", "ACME/Project/Story2");
+            .Should().BeEquivalentTo(new[] { "ACME/Project/Story1", "ACME/Project/Story2" }, JsonSerializerOptions.Default);
     }
 
     [Fact]
@@ -187,7 +187,7 @@ public class AccessControlQueryTests
 
         results.Should().HaveCount(4);
         results.Cast<MeshNode>().Select(n => n.Path)
-            .Should().BeEquivalentTo("ACME/Project/Story1", "ACME/Project/Story2", "ACME/Team/Alice", "Contoso/Project");
+            .Should().BeEquivalentTo(new[] { "ACME/Project/Story1", "ACME/Project/Story2", "ACME/Team/Alice", "Contoso/Project" }, JsonSerializerOptions.Default);
     }
 
     [Fact]
@@ -222,7 +222,7 @@ public class AccessControlQueryTests
 
         results.Should().HaveCount(2);
         results.Cast<MeshNode>().Select(n => n.Path)
-            .Should().BeEquivalentTo("ACME/Docs/Doc1", "ACME/Docs/Doc2");
+            .Should().BeEquivalentTo(new[] { "ACME/Docs/Doc1", "ACME/Docs/Doc2" }, JsonSerializerOptions.Default);
     }
 
     [Fact]
@@ -529,6 +529,6 @@ public class AccessControlQueryTests
         }
 
         results.Should().HaveCount(2, "Both User nodes should be publicly readable");
-        results.Select(n => n.Path).Should().BeEquivalentTo("User/Roland", "User/Alice");
+        results.Select(n => n.Path).Should().BeEquivalentTo(new[] { "User/Roland", "User/Alice" }, JsonSerializerOptions.Default);
     }
 }

@@ -385,7 +385,7 @@ public class ApprovalAndNotificationTest
         };
 
         ctx.IsVirtual.Should().BeFalse();
-        ctx.ObjectId.Should().NotBeEmpty();
+        ctx.ObjectId.Should().NotBeNullOrEmpty();
     }
 
     #endregion

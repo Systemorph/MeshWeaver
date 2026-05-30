@@ -211,7 +211,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         }
 
         var responseText = responseBuilder.ToString().Trim();
-        responseText.Should().NotBeEmpty("agent should produce a streaming response");
+        responseText.Should().NotBeNullOrEmpty("agent should produce a streaming response");
         responseText.Should().Contain("test response", "response should come from the fake agent");
 
         // 6. Create agent reply as child ThreadMessage
@@ -375,8 +375,8 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         }
 
         // Both threads should produce responses
-        response1.ToString().Trim().Should().NotBeEmpty();
-        response2.ToString().Trim().Should().NotBeEmpty();
+        response1.ToString().Trim().Should().NotBeNullOrEmpty();
+        response2.ToString().Trim().Should().NotBeNullOrEmpty();
 
         // Thread persistence is now via MeshNodes â€” no separate IChatPersistenceService
     }

@@ -46,40 +46,39 @@ public class ThreadResumeTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         return base.ConfigureClient(configuration).AddData();
     }
 
-    private async Task<string> CreateThreadAsync(IMessageHub client, string text, CancellationToken ct)
+    private string CreateThread(IMessageHub client, string text)
     {
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, text, "TestUser");
-        var response = await client.Observe(new CreateNodeRequest(threadNode),
-            o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
-        response.Message.Success.Should().BeTrue(response.Message.Error);
+        var response = client.Observe(new CreateNodeRequest(threadNode),
+            o => o.WithTarget(Mesh.Address)).Should().Emit();
+        response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         return response.Message.Node!.Path!;
     }
 
     [Fact]
-    public async Task Resume_ThreadWithMessages_LoadsAllMessages()
+    public void Resume_ThreadWithMessages_LoadsAllMessages()
     {
-        var ct = new CancellationTokenSource(30.Seconds()).Token;
         var client = GetClient();
 
-        var threadPath = await CreateThreadAsync(client, "Resume test thread", ct);
+        var threadPath = CreateThread(client, "Resume test thread");
         Output.WriteLine($"Thread: {threadPath}");
 
-        var responseMsgId = await ThreadFlow.SubmitAndWait(client, threadPath,
-            "First message for resume test", contextPath: ContextPath).FirstAsync().ToTask(ct);
+        var responseMsgId = ThreadFlow.SubmitAndWait(client, threadPath,
+            "First message for resume test", contextPath: ContextPath).Should().Within(30.Seconds()).Emit();
 
-        var thread = await ThreadFlow.ReadThread(client, threadPath,
-            t => t is { IsExecuting: false } && t.Messages.Count >= 2).FirstAsync().ToTask(ct);
+        var thread = ThreadFlow.ReadThread(client, threadPath,
+            t => t is { IsExecuting: false } && t.Messages.Count >= 2).Should().Within(30.Seconds()).Emit();
         thread.Messages.Should().HaveCount(2);
         Output.WriteLine($"Persisted messages: [{string.Join(", ", thread.Messages)}]");
 
         // Wait for response text to be present.
-        await ThreadFlow.ReadMessage(client, threadPath, responseMsgId,
-            m => !string.IsNullOrEmpty(m.Text)).FirstAsync().ToTask(ct);
+        ThreadFlow.ReadMessage(client, threadPath, responseMsgId,
+            m => !string.IsNullOrEmpty(m.Text)).Should().Emit();
 
         // Simulate resume: a fresh client subscribes to the same thread.
         var client2 = GetClient();
-        var resumed = await ThreadFlow.ReadThread(client2, threadPath,
-            t => t.Messages.Count >= 2).FirstAsync().ToTask(ct);
+        var resumed = ThreadFlow.ReadThread(client2, threadPath,
+            t => t.Messages.Count >= 2).Should().Within(30.Seconds()).Emit();
         resumed.Messages.Should().HaveCount(2, "resumed thread should have all messages");
         resumed.Messages[0].Should().Be(thread.Messages[0]);
         resumed.Messages[1].Should().Be(thread.Messages[1]);
@@ -87,8 +86,8 @@ public class ThreadResumeTest(ITestOutputHelper output) : MonolithMeshTestBase(o
 
         foreach (var msgId in resumed.Messages)
         {
-            var msg = await ThreadFlow.ReadMessage(client2, threadPath, msgId,
-                m => !string.IsNullOrEmpty(m.Text)).FirstAsync().ToTask(ct);
+            var msg = ThreadFlow.ReadMessage(client2, threadPath, msgId,
+                m => !string.IsNullOrEmpty(m.Text)).Should().Emit();
             Output.WriteLine($"  {msgId}: role={msg.Role}, text='{msg.Text[..Math.Min(50, msg.Text.Length)]}'");
         }
 
@@ -96,34 +95,33 @@ public class ThreadResumeTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     }
 
     [Fact]
-    public async Task Resume_ThreadWithMultipleExchanges_LoadsAll()
+    public void Resume_ThreadWithMultipleExchanges_LoadsAll()
     {
-        var ct = new CancellationTokenSource(30.Seconds()).Token;
         var client = GetClient();
 
-        var threadPath = await CreateThreadAsync(client, "Multi-exchange resume test", ct);
+        var threadPath = CreateThread(client, "Multi-exchange resume test");
 
-        await ThreadFlow.SubmitAndWait(client, threadPath, "First question",
-            contextPath: ContextPath).FirstAsync().ToTask(ct);
-        var threadAfterFirst = await ThreadFlow.ReadThread(client, threadPath,
-            t => t is { IsExecuting: false } && t.Messages.Count >= 2).FirstAsync().ToTask(ct);
+        ThreadFlow.SubmitAndWait(client, threadPath, "First question",
+            contextPath: ContextPath).Should().Within(30.Seconds()).Emit();
+        var threadAfterFirst = ThreadFlow.ReadThread(client, threadPath,
+            t => t is { IsExecuting: false } && t.Messages.Count >= 2).Should().Within(30.Seconds()).Emit();
         Output.WriteLine($"After first exchange: [{string.Join(", ", threadAfterFirst.Messages)}]");
 
-        await ThreadFlow.SubmitAndWait(client, threadPath, "Second question",
-            contextPath: ContextPath).FirstAsync().ToTask(ct);
-        var allThread = await ThreadFlow.ReadThread(client, threadPath,
-            t => t is { IsExecuting: false } && t.Messages.Count >= 4).FirstAsync().ToTask(ct);
+        ThreadFlow.SubmitAndWait(client, threadPath, "Second question",
+            contextPath: ContextPath).Should().Within(30.Seconds()).Emit();
+        var allThread = ThreadFlow.ReadThread(client, threadPath,
+            t => t is { IsExecuting: false } && t.Messages.Count >= 4).Should().Within(30.Seconds()).Emit();
         allThread.Messages.Should().HaveCount(4, "should have 2 exchanges = 4 messages");
 
         // Wait for the last response to have text.
-        await ThreadFlow.ReadMessage(client, threadPath, allThread.Messages[3],
-            m => !string.IsNullOrEmpty(m.Text)).FirstAsync().ToTask(ct);
+        ThreadFlow.ReadMessage(client, threadPath, allThread.Messages[3],
+            m => !string.IsNullOrEmpty(m.Text)).Should().Emit();
 
         var client2 = GetClient();
-        var resumed = await ThreadFlow.ReadThread(client2, threadPath,
-            t => t.Messages.Count >= 4).FirstAsync().ToTask(ct);
+        var resumed = ThreadFlow.ReadThread(client2, threadPath,
+            t => t.Messages.Count >= 4).Should().Within(30.Seconds()).Emit();
         resumed.Messages.Should().HaveCount(4);
-        resumed.Messages.Should().BeEquivalentTo(allThread.Messages, o => o.WithStrictOrdering());
+        resumed.Messages.Should().BeEquivalentTo(allThread.Messages, client.JsonSerializerOptions, o => o.WithStrictOrdering());
 
         Output.WriteLine($"Resumed {resumed.Messages.Count} messages across 2 exchanges");
     }

@@ -2,7 +2,6 @@ using System;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
-using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Layout;
@@ -37,7 +36,7 @@ public class NorthwindApplicationTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     [Fact]
-    public async Task GetLayoutAreas_ShouldWork()
+    public void GetLayoutAreas_ShouldWork()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -48,15 +47,13 @@ public class NorthwindApplicationTest(ITestOutputHelper output) : MonolithMeshTe
             reference
         );
 
-        var result = await stream
-            .Timeout(TimeSpan.FromSeconds(10))
-            .FirstAsync();
+        var result = stream.Should().Within(TimeSpan.FromSeconds(10)).Emit();
 
         result.Should().NotBeNull();
     }
 
     [Fact]
-    public async Task GetNorthwindDataCube_ShouldWork()
+    public void GetNorthwindDataCube_ShouldWork()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -66,11 +63,10 @@ public class NorthwindApplicationTest(ITestOutputHelper output) : MonolithMeshTe
             new CollectionReference(nameof(NorthwindDataCube))
         );
 
-        var result = await stream
+        var result = stream
             .Where(x => x.Value != null && x.Value.Instances.Count > 0)
             .Select(x => x.Value!.Get<NorthwindDataCube>())
-            .Timeout(TimeSpan.FromSeconds(30))
-            .FirstAsync(x => x.Any());
+            .Should().Within(TimeSpan.FromSeconds(30)).Match(x => x.Any());
 
         result.Should().HaveCountGreaterThan(0);
     }

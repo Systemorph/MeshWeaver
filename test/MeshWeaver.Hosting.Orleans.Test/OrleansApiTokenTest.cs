@@ -65,7 +65,7 @@ public class OrleansApiTokenTest(ITestOutputHelper output) : OrleansSharedTestBa
         // Act Ã¢â‚¬â€ standard CreateNodeRequest (same as Thread creation)
         var response = await client.Observe(new CreateNodeRequest(tokenNode), o => o.WithTarget(meshAddress)).FirstAsync().ToTask(ct);
 
-        response.Message.Success.Should().BeTrue(response.Message.Error);
+        response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         response.Message.Node.Should().NotBeNull();
         response.Message.Node!.Path.Should().Be($"User/{userId}/_Api/{hashPrefix}");
         response.Message.Node.NodeType.Should().Be(ApiTokenNodeType.NodeType);

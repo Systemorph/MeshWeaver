@@ -97,7 +97,7 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
 
         // 1. Create thread
         var createResponse = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(UserPath, "Streaming test")), o => o.WithTarget(new Address(UserPath))).FirstAsync().ToTask(ct);
-        createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error);
+        createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error ?? "");
         var threadPath = createResponse.Message.Node!.Path!;
         Output.WriteLine($"Thread: {threadPath}");
 
@@ -145,7 +145,7 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
 
         // Create thread
         var createResponse = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(UserPath, "Incremental test")), o => o.WithTarget(new Address(UserPath))).FirstAsync().ToTask(ct);
-        createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error);
+        createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error ?? "");
         var threadPath = createResponse.Message.Node!.Path!;
 
         // Submit message via stream.Update.
@@ -204,7 +204,7 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
         var createResponse = await client.Observe(
             new CreateNodeRequest(ThreadNodeType.BuildThreadNode(UserPath, "Growing emissions test")),
             o => o.WithTarget(new Address(UserPath))).FirstAsync().ToTask(ct);
-        createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error);
+        createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error ?? "");
         var threadPath = createResponse.Message.Node!.Path!;
 
         client.SubmitMessage(

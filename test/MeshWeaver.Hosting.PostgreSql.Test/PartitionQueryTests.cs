@@ -142,7 +142,7 @@ public class PartitionQueryTests
         var node = await adapter.ReadAsync("Admin/Partition/Documentation", _options, TestContext.Current.CancellationToken);
 
         node.Should().NotBeNull();
-        var def = DeserializeContent<PartitionDefinition>(node.Content);
+        var def = DeserializeContent<PartitionDefinition>(node!.Content);
         def.Should().NotBeNull();
         def!.Namespace.Should().Be("Doc");
         def.DataSource.Should().Be("static");
@@ -158,7 +158,7 @@ public class PartitionQueryTests
         var node = await adapter.ReadAsync("Admin/Partition/ACME", _options, TestContext.Current.CancellationToken);
 
         node.Should().NotBeNull();
-        var def = DeserializeContent<PartitionDefinition>(node.Content);
+        var def = DeserializeContent<PartitionDefinition>(node!.Content);
         def.Should().NotBeNull();
         def!.TableMappings.Should().NotBeNull();
         def.TableMappings.Should().ContainKey("_Activity");

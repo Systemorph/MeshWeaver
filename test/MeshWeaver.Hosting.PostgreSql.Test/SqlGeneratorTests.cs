@@ -396,7 +396,7 @@ public class SqlGeneratorTests
     public void GetAncestorPaths_ReturnsCorrectPaths()
     {
         PostgreSqlSqlGenerator.GetAncestorPaths("ACME/Project/Story1")
-            .Should().BeEquivalentTo("ACME", "ACME/Project");
+            .Should().BeEquivalentTo(new[] { "ACME", "ACME/Project" }, System.Text.Json.JsonSerializerOptions.Default);
 
         PostgreSqlSqlGenerator.GetAncestorPaths("ACME")
             .Should().BeEmpty();

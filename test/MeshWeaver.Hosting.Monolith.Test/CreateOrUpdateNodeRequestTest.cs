@@ -51,7 +51,7 @@ public class CreateOrUpdateNodeRequestTest(ITestOutputHelper output)
             .FirstAsync()
             .ToTask(ct);
 
-        resp.Success.Should().BeTrue(resp.Error);
+        resp.Success.Should().BeTrue(resp.Error ?? "");
         resp.WasCreated.Should().BeTrue(
             "the target was missing — the handler must forward as CreateNodeRequest internally");
         resp.Node.Should().NotBeNull();
@@ -106,7 +106,7 @@ public class CreateOrUpdateNodeRequestTest(ITestOutputHelper output)
             .FirstAsync()
             .ToTask(ct);
 
-        resp.Success.Should().BeTrue(resp.Error);
+        resp.Success.Should().BeTrue(resp.Error ?? "");
         resp.WasCreated.Should().BeFalse(
             "the target existed — the handler must apply via stream.Update, not CreateNodeRequest");
         resp.Node.Should().NotBeNull();
@@ -165,7 +165,7 @@ public class CreateOrUpdateNodeRequestTest(ITestOutputHelper output)
             .Select(d => d.Message)
             .FirstAsync()
             .ToTask(ct);
-        resp.Success.Should().BeTrue(resp.Error);
+        resp.Success.Should().BeTrue(resp.Error ?? "");
 
         // Wait for the stream to converge on the renamed state.
         var workspace = GetClient(c => c.AddData()).GetWorkspace();

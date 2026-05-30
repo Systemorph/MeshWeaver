@@ -200,6 +200,6 @@ public class VirtualDataSourceTest(ITestOutputHelper output) : HubTestBase(outpu
         summaries.Select(s => s.ProductId).Should().OnlyHaveUniqueItems();
 
         // Product IDs should match the original products
-        summaries.Select(s => s.ProductId).Should().BeEquivalentTo([1, 2, 3]);
+        summaries.Select(s => s.ProductId).Should().BeEquivalentTo(new[] { 1, 2, 3 }, System.Text.Json.JsonSerializerOptions.Default);
     }
 }

@@ -649,7 +649,7 @@ public class CosmosSqlGeneratorTests
 
         sql.Should().Contain("SELECT TOP 10 *");
         sql.Should().Contain("ORDER BY VectorDistance(c.embedding, @queryVector)");
-        parameters["@queryVector"].Should().BeEquivalentTo(queryVector);
+        parameters["@queryVector"].Should().BeEquivalentTo(queryVector, System.Text.Json.JsonSerializerOptions.Default);
     }
 
     [Fact]
@@ -666,7 +666,7 @@ public class CosmosSqlGeneratorTests
         sql.Should().Contain("WHERE c.status = @p0");
         sql.Should().Contain("ORDER BY VectorDistance(c.embedding, @queryVector)");
         parameters["@p0"].Should().Be("active");
-        parameters["@queryVector"].Should().BeEquivalentTo(queryVector);
+        parameters["@queryVector"].Should().BeEquivalentTo(queryVector, System.Text.Json.JsonSerializerOptions.Default);
     }
 
     [Fact]
@@ -771,7 +771,7 @@ public class CosmosSqlGeneratorTests
     {
         var ancestors = HierarchyPatterns.GetAncestorPaths("a/b/c/d");
 
-        ancestors.Should().BeEquivalentTo(["a", "a/b", "a/b/c"]);
+        ancestors.Should().BeEquivalentTo(new[] { "a", "a/b", "a/b/c" }, System.Text.Json.JsonSerializerOptions.Default);
     }
 
     [Fact]
@@ -787,7 +787,7 @@ public class CosmosSqlGeneratorTests
     {
         var ancestors = HierarchyPatterns.GetAncestorPaths("a/b");
 
-        ancestors.Should().BeEquivalentTo(["a"]);
+        ancestors.Should().BeEquivalentTo(new[] { "a" }, System.Text.Json.JsonSerializerOptions.Default);
     }
 
     [Fact]

@@ -92,7 +92,7 @@ public class PricingCatalogTests(ITestOutputHelper output) : InsuranceTestBase(o
 
             pricing.UnderwritingYear.Should().NotBeNull(
                 $"pricing {pricing.Id} should have an underwriting year");
-            pricing.UnderwritingYear.Should().BeGreaterThan(2000,
+            pricing.UnderwritingYear!.Value.Should().BeGreaterThan(2000,
                 $"pricing {pricing.Id} should have a valid underwriting year");
         }
 
@@ -121,7 +121,7 @@ public class PricingCatalogTests(ITestOutputHelper output) : InsuranceTestBase(o
     }
 
     [Fact(Timeout = 30000)]
-    public async Task GetPricingCatalog_UsingLayoutAreaReference_ShouldReturnPricingsControl()
+    public void GetPricingCatalog_UsingLayoutAreaReference_ShouldReturnPricingsControl()
     {
         // Arrange
         var reference = new LayoutAreaReference("Pricings");
@@ -135,9 +135,8 @@ public class PricingCatalogTests(ITestOutputHelper output) : InsuranceTestBase(o
         );
 
         // Get the control from the stream
-        var control = await stream.GetControlStream(reference.Area!)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x != null);
+        var control = stream.GetControlStream(reference.Area!)
+            .Should().Within(10.Seconds()).Match(x => x != null)!;
 
         // Assert
         control.Should().NotBeNull("layout area should return a control");

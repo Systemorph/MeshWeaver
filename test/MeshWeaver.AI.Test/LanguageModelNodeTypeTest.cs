@@ -61,7 +61,8 @@ public class LanguageModelNodeTypeTest
             n.Content.Should().BeOfType<ModelDefinition>();
         });
         modelNodes.Select(n => n.Id).Should().BeEquivalentTo(
-            new[] { "claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5" });
+            new[] { "claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5" },
+            System.Text.Json.JsonSerializerOptions.Default);
     }
 
     [Fact]
@@ -161,7 +162,7 @@ public class LanguageModelNodeTypeTest
             .Select(n => n.Id)
             .ToList();
 
-        ids.Should().BeEquivalentTo(new[] { "claude-sonnet-4-6", "claude-haiku-4-5" });
+        ids.Should().BeEquivalentTo(new[] { "claude-sonnet-4-6", "claude-haiku-4-5" }, System.Text.Json.JsonSerializerOptions.Default);
     }
 
     [Fact]

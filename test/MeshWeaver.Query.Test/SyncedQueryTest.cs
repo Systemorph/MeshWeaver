@@ -90,7 +90,7 @@ public class SyncedQueryTest(ITestOutputHelper output)
     {
         _ = CreateQuery("$dyn-cache");
         var observableB = Mesh.GetWorkspace().GetQuery("$dyn-cache");
-        observableB.Should().NotBeNull(
+        ((object?)observableB).Should().NotBeNull(
             "the dynamically-created synced query is registered under its name");
 
         // Per-subscriber RLS (commit c1e0afbdf) wraps the registry's cached
@@ -102,7 +102,7 @@ public class SyncedQueryTest(ITestOutputHelper output)
         var cache = Mesh.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
         var innerA = cache.GetQuery("$dyn-cache");
         var innerB = cache.GetQuery("$dyn-cache");
-        innerA.Should().NotBeNull("the registry caches the inner observable on first GetQuery(name, query) call");
+        ((object?)innerA).Should().NotBeNull("the registry caches the inner observable on first GetQuery(name, query) call");
         ReferenceEquals(innerA, innerB).Should().BeTrue(
             "two registry lookups for the same id return the same cached inner observable");
     }
@@ -115,7 +115,7 @@ public class SyncedQueryTest(ITestOutputHelper output)
     public void GetQuery_UnknownName_ReturnsNull()
     {
         var observable = Mesh.GetWorkspace().GetQuery("$does-not-exist");
-        observable.Should().BeNull();
+        ((object?)observable).Should().BeNull();
     }
 
     /// <summary>

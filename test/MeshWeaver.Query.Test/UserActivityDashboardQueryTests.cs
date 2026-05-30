@@ -153,7 +153,7 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
 
         var client = GetClient();
         var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Help me with my project")), o => o.WithTarget(new Address(contextPath))).FirstAsync().ToTask(ct);
-        response.Message.Success.Should().BeTrue(response.Message.Error);
+        response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         var threadPath = response.Message.Node!.Path!;
         Output.WriteLine($"Thread created at: {threadPath}");
 
@@ -221,7 +221,7 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
         // Thread satellite via CreateNodeRequest
         var client = GetClient();
         var threadResponse = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ns, "Thread in my items")), o => o.WithTarget(new Address(ns))).FirstAsync().ToTask(ct);
-        threadResponse.Message.Success.Should().BeTrue(threadResponse.Message.Error);
+        threadResponse.Message.Success.Should().BeTrue(threadResponse.Message.Error ?? "");
 
         // Act: exact dashboard query
         var results = await MeshQuery

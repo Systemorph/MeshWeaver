@@ -48,7 +48,7 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
 
         var client = GetClient();
         var threadResponse = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Test delegation")), o => o.WithTarget(new Address(contextPath))).FirstAsync().ToTask();
-        threadResponse.Message.Success.Should().BeTrue(threadResponse.Message.Error);
+        threadResponse.Message.Success.Should().BeTrue(threadResponse.Message.Error ?? "");
         var threadPath = threadResponse.Message.Node!.Path;
 
         // Create a response message (simulating what ThreadExecution does)

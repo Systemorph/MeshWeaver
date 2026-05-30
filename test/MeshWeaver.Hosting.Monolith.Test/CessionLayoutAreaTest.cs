@@ -117,7 +117,7 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
         var workspace = hostedHub!.GetWorkspace();
         Output.WriteLine($"Workspace exists: {workspace != null}");
 
-        var uiControlService = hostedHub.ServiceProvider.GetService<IUiControlService>();
+        var uiControlService = hostedHub!.ServiceProvider.GetService<IUiControlService>();
         Output.WriteLine($"IUiControlService exists: {uiControlService != null}");
         Output.WriteLine($"LayoutDefinition renderer count: {uiControlService?.LayoutDefinition.Count ?? 0}");
 
@@ -182,9 +182,10 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
 
         var ex = await Assert.ThrowsAnyAsync<Exception>(act);
         Output.WriteLine($"Got exception: {ex.GetType().Name}: {ex.Message}");
-        ex.Message.Should().ContainAny(
-            new[] { "No node found", "NotFound", "does not exist" },
-            $"Expected a NotFound-style failure naming '{missingPath}'");
+        new[] { "No node found", "NotFound", "does not exist" }
+            .Any(s => ex.Message.Contains(s, StringComparison.Ordinal))
+            .Should().BeTrue(
+                $"Expected a NotFound-style failure naming '{missingPath}', but got: {ex.Message}");
     }
 
     [Fact(Timeout = 60000)]

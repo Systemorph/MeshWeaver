@@ -148,16 +148,15 @@ public class MapToToggleableControlTest(ITestOutputHelper output) : HubTestBase(
     /// Test that the initial render shows readonly views with LabelControl.
     /// </summary>
     [Fact]
-    public async Task InitialRender_ShowsReadonlyView()
+    public void InitialRender_ShowsReadonlyView()
     {
         var host = GetHost();
         var workspace = host.GetWorkspace();
         var area = workspace.GetStream(new LayoutAreaReference(ToggleableControlView));
 
-        var control = await area
+        var control = area
             .GetControlStream(ToggleableControlView)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null);
+            .Should().Within(10.Seconds()).Match(x => x is not null);
 
         // Should render as a LayoutGridControl
         var grid = control.Should().BeOfType<LayoutGridControl>().Subject;
@@ -166,10 +165,9 @@ public class MapToToggleableControlTest(ITestOutputHelper output) : HubTestBase(
         // Get the first non-markdown property area (Title)
         var titleAreaId = grid.Areas.Skip(1).First().Area.ToString()!; // Skip Id, get Title
 
-        var titleControl = await area
+        var titleControl = area
             .GetControlStream(titleAreaId)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x is not null);
+            .Should().Within(5.Seconds()).Match(x => x is not null);
 
         // The control should be a Stack containing Label and the reactive view
         titleControl.Should().BeOfType<StackControl>();
@@ -634,16 +632,15 @@ public class MarkdownToggleTest(ITestOutputHelper output) : HubTestBase(output)
     /// Test that markdown properties use Done button instead of blur.
     /// </summary>
     [Fact]
-    public async Task Markdown_UsesDoneButton()
+    public void Markdown_UsesDoneButton()
     {
         var host = GetHost();
         var workspace = host.GetWorkspace();
         var area = workspace.GetStream(new LayoutAreaReference(MarkdownToggleView));
 
-        var control = await area
+        var control = area
             .GetControlStream(MarkdownToggleView)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null);
+            .Should().Within(10.Seconds()).Match(x => x is not null);
 
         // Should render as a Stack with full width
         var stack = control.Should().BeOfType<StackControl>().Subject;

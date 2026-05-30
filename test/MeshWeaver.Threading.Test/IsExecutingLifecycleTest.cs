@@ -59,7 +59,7 @@ public class IsExecutingLifecycleTest(ITestOutputHelper output) : MonolithMeshTe
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, "hello", "TestUser");
         var createDelivery = await client.Observe(new CreateNodeRequest(threadNode),
             o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
-        createDelivery.Message.Success.Should().BeTrue(createDelivery.Message.Error);
+        createDelivery.Message.Success.Should().BeTrue(createDelivery.Message.Error ?? "");
         var threadPath = createDelivery.Message.Node!.Path!;
 
         // Warm up the remote stream subscription BEFORE submit so the

@@ -87,12 +87,11 @@ public class SyncedQueryPgTest : IAsyncLifetime
 
     /// <summary>Initial empty result set emits an empty dictionary.</summary>
     [Fact(Timeout = 30000)]
-    public async Task EmptyQuery_EmitsEmptyDictionary()
+    public void EmptyQuery_EmitsEmptyDictionary()
     {
-        var ct = TestContext.Current.CancellationToken;
         var collection = BuildSyncedCollection("namespace:ACME/Project").Replay(1).RefCount();
         using var keepAlive = collection.Subscribe();
-        var initial = await collection.Timeout(15.Seconds()).FirstAsync().ToTask(ct);
+        var initial = collection.Should().Within(15.Seconds()).Emit();
         initial.Should().BeEmpty();
     }
 
@@ -100,37 +99,31 @@ public class SyncedQueryPgTest : IAsyncLifetime
     [Fact(Timeout = 30000)]
     public async Task Add_NewMatchingNode_GrowsDictionary()
     {
-        var ct = TestContext.Current.CancellationToken;
         var collection = BuildSyncedCollection("namespace:ACME/Project").Replay(1).RefCount();
         using var keepAlive = collection.Subscribe();
-        await collection.Take(1).Timeout(15.Seconds()).ToTask(ct);
+        collection.Should().Within(15.Seconds()).Emit();
 
         await WriteNode("Story1", "ACME/Project", "Story");
 
-        await collection
-            .Where(d => d.ContainsKey("ACME/Project/Story1"))
-            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
+        collection.Should().Within(15.Seconds()).Match(d => d.ContainsKey("ACME/Project/Story1"));
     }
 
     /// <summary>Updating a node's content re-emits the dictionary with new value.</summary>
     [Fact(Timeout = 30000)]
     public async Task Update_ExistingNode_ReEmitsWithNewValue()
     {
-        var ct = TestContext.Current.CancellationToken;
         await WriteNode("Story1", "ACME/Project", "Story", "Original");
 
         var collection = BuildSyncedCollection("namespace:ACME/Project").Replay(1).RefCount();
         using var keepAlive = collection.Subscribe();
 
-        await collection
-            .Where(d => d.TryGetValue("ACME/Project/Story1", out var n) && n.Name == "Original")
-            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
+        collection.Should().Within(15.Seconds())
+            .Match(d => d.TryGetValue("ACME/Project/Story1", out var n) && n.Name == "Original");
 
         await WriteNode("Story1", "ACME/Project", "Story", "Updated");
 
-        await collection
-            .Where(d => d.TryGetValue("ACME/Project/Story1", out var n) && n.Name == "Updated")
-            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
+        collection.Should().Within(15.Seconds())
+            .Match(d => d.TryGetValue("ACME/Project/Story1", out var n) && n.Name == "Updated");
     }
 
     /// <summary>
@@ -161,15 +154,14 @@ public class SyncedQueryPgTest : IAsyncLifetime
         // Wait for the Initial emission deterministically — first subscriber
         // triggers the upstream pull; Replay(1) ensures we won't miss it even
         // if another concurrent subscriber attaches first.
-        var initial = await stream
-            .Where(c => c.ChangeType == QueryChangeType.Initial)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(15)).ToTask(ct);
-        initial.ChangeType.Should().Be(QueryChangeType.Initial);
+        stream.Should().Within(15.Seconds()).Match(c => c.ChangeType == QueryChangeType.Initial);
 
         // Pre-subscribe to Removed BEFORE issuing the delete. The hot Task
         // completes when the next Removed emission arrives — Replay(1)'s
         // buffer holds Initial (not Removed), so this filter only matches
-        // the post-delete event.
+        // the post-delete event. This pre-subscription ordering is load-bearing
+        // (it must attach before the delete races in), so it stays an explicit
+        // Task rather than a post-delete .Should().Match(...).
         var removedTask = stream
             .Where(c => c.ChangeType == QueryChangeType.Removed)
             .FirstAsync().Timeout(TimeSpan.FromSeconds(15)).ToTask(ct);
@@ -195,16 +187,14 @@ public class SyncedQueryPgTest : IAsyncLifetime
         var collection = BuildSyncedCollection("namespace:ACME/Project").Replay(1).RefCount();
         using var keepAlive = collection.Subscribe();
 
-        await collection
-            .Where(d => d.ContainsKey("ACME/Project/Story1") && d.ContainsKey("ACME/Project/Story2"))
-            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
+        collection.Should().Within(15.Seconds())
+            .Match(d => d.ContainsKey("ACME/Project/Story1") && d.ContainsKey("ACME/Project/Story2"));
 
         await _fixture.StorageAdapter.DeleteAsync("ACME/Project/Story1", ct);
 
-        var afterDelete = await collection
-            .Where(d => !d.ContainsKey("ACME/Project/Story1"))
-            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
-        afterDelete.Should().ContainKey("ACME/Project/Story2");
+        var afterDelete = collection.Should().Within(15.Seconds())
+            .Match(d => !d.ContainsKey("ACME/Project/Story1"));
+        afterDelete.ContainsKey("ACME/Project/Story2").Should().BeTrue();
     }
 
     /// <summary>
@@ -215,8 +205,6 @@ public class SyncedQueryPgTest : IAsyncLifetime
     [Fact(Timeout = 30000)]
     public async Task UnionOfTwoQueries_HoldsBoth()
     {
-        var ct = TestContext.Current.CancellationToken;
-
         // Two queries that match disjoint partitions but contribute to the same union.
         await WriteNode("S1", "ACME/Project", "Story");
         await WriteNode("E1", "ACME/Epic", "Epic");
@@ -240,8 +228,7 @@ public class SyncedQueryPgTest : IAsyncLifetime
 
         using var keepAlive = unioned.Subscribe();
 
-        await unioned
-            .Where(d => d.ContainsKey("ACME/Project/S1") && d.ContainsKey("ACME/Epic/E1"))
-            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
+        unioned.Should().Within(15.Seconds())
+            .Match(d => d.ContainsKey("ACME/Project/S1") && d.ContainsKey("ACME/Epic/E1"));
     }
 }

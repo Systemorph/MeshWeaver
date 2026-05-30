@@ -229,9 +229,8 @@ public class NodeTypeProgressAreaTest(ITestOutputHelper output) : MonolithMeshTe
     /// IAssemblyStore on disk.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task ColdCycle_TriggersCompile_StreamsTransitions_LandsAssemblyOnDisk()
+    public void ColdCycle_TriggersCompile_StreamsTransitions_LandsAssemblyOnDisk()
     {
-        var ct = TestContext.Current.CancellationToken;
         var assemblyStore = Mesh.ServiceProvider.GetRequiredService<IAssemblyStore>();
         var nodeTypeAddress = new Address(NodeTypePath);
         // We open subscriptions via the CLIENT workspace — the mesh hub itself
@@ -247,8 +246,8 @@ public class NodeTypeProgressAreaTest(ITestOutputHelper output) : MonolithMeshTe
         // this NodeType can be present. Probe versions 1..10 to catch any leftover.
         for (long v = 1; v <= 10; v++)
         {
-            var leftover = await assemblyStore.TryGetAssemblyPath(NodeTypePath, v)
-                .FirstAsync().ToTask(ct);
+            var leftover = assemblyStore.TryGetAssemblyPath(NodeTypePath, v)
+                .Should().Emit();
             leftover.Should().BeNull(
                 $"per-test IAssemblyStore must not contain a v{v} for {NodeTypePath} at test start");
         }
@@ -287,15 +286,11 @@ public class NodeTypeProgressAreaTest(ITestOutputHelper output) : MonolithMeshTe
         // emission tracks the same state (it subscribes to the same stream
         // internally), so by the time this completes the area has emitted at
         // least the terminal control.
-        var terminal = await clientWorkspace.GetMeshNodeStream(NodeTypePath)
-            .Where(n => n?.Content is NodeTypeDefinition d
+        var terminal = clientWorkspace.GetMeshNodeStream(NodeTypePath)
+            .Should().Within(30.Seconds()).Match(n => n?.Content is NodeTypeDefinition d
                         && d.CompilationStatus == CompilationStatus.Ok
                         && !string.IsNullOrEmpty(d.LatestAssemblyCollection)
-                        && !string.IsNullOrEmpty(d.LatestAssemblyPath))
-            .Take(1)
-            .Timeout(30.Seconds())
-            .FirstAsync()
-            .ToTask(ct);
+                        && !string.IsNullOrEmpty(d.LatestAssemblyPath));
 
         var terminalDef = (NodeTypeDefinition)terminal!.Content!;
         Output.WriteLine($"Cold cycle settled: Status={terminalDef.CompilationStatus} " +
@@ -341,8 +336,8 @@ public class NodeTypeProgressAreaTest(ITestOutputHelper output) : MonolithMeshTe
         // exact same path FileSystemAssemblyStore.Put wrote to.
         var version = terminalDef.LastCompiledVersion ?? 0;
         version.Should().BeGreaterThan(0, "compile must stamp LastCompiledVersion");
-        var dllPath = await assemblyStore.TryGetAssemblyPath(NodeTypePath, version)
-            .FirstAsync().ToTask(ct);
+        var dllPath = assemblyStore.TryGetAssemblyPath(NodeTypePath, version)
+            .Should().Emit();
         dllPath.Should().NotBeNullOrEmpty(
             $"v{version}.dll must exist in the IAssemblyStore after a successful compile");
         File.Exists(dllPath).Should().BeTrue(
@@ -372,19 +367,15 @@ public class NodeTypeProgressAreaTest(ITestOutputHelper output) : MonolithMeshTe
         // already covers that. Just wait for the terminal Ok and capture
         // the compiled version + dll path for the no-recompile assertion.
         Output.WriteLine("Warm cycle: triggering initial compile…");
-        var firstCompile = await driverClient.GetWorkspace().GetMeshNodeStream(NodeTypePath)
-            .Where(n => n?.Content is NodeTypeDefinition d
+        var firstCompile = driverClient.GetWorkspace().GetMeshNodeStream(NodeTypePath)
+            .Should().Within(30.Seconds()).Match(n => n?.Content is NodeTypeDefinition d
                         && d.CompilationStatus == CompilationStatus.Ok
-                        && !string.IsNullOrEmpty(d.LatestAssemblyPath))
-            .Take(1)
-            .Timeout(30.Seconds())
-            .FirstAsync()
-            .ToTask(ct);
+                        && !string.IsNullOrEmpty(d.LatestAssemblyPath));
 
         var firstDef = (NodeTypeDefinition)firstCompile!.Content!;
         var firstVersion = firstDef.LastCompiledVersion ?? 0;
-        var firstDllPath = await assemblyStore.TryGetAssemblyPath(NodeTypePath, firstVersion)
-            .FirstAsync().ToTask(ct);
+        var firstDllPath = assemblyStore.TryGetAssemblyPath(NodeTypePath, firstVersion)
+            .Should().Emit();
         var firstDllMtime = File.GetLastWriteTimeUtc(firstDllPath!);
         Output.WriteLine($"Initial compile: version={firstVersion} path={firstDllPath} mtime={firstDllMtime:O}");
 
@@ -411,18 +402,14 @@ public class NodeTypeProgressAreaTest(ITestOutputHelper output) : MonolithMeshTe
 
         // Open the Progress area on the same fresh client — same as a user
         // navigating to a page whose layout area lives behind a NodeType that's
-        // already compiled in this process.
+        // already compiled in this process. Block (≤ 5 s) for its first non-null
+        // control so the warm-cache assertion runs against a rendered area.
         var progressRef = new LayoutAreaReference(NodeTypeLayoutAreas.ProgressArea);
-        using var warmProgressSub = warmWorkspace
+        warmWorkspace
             .GetRemoteStream<JsonElement, LayoutAreaReference>(nodeTypeAddress, progressRef)
             .GetControlStream(progressRef.Area!)
-            .Where(c => c != null)
-            .Take(1)
-            .Timeout(5.Seconds())
-            .FirstAsync()
-            .ToTask(ct);
+            .Should().Within(5.Seconds()).Match(c => c != null);
 
-        await warmProgressSub;
         var warmFirstStatus = await warmFirstEmissionTcs.Task;
 
         Output.WriteLine($"Warm cycle: first observed status = {warmFirstStatus}");
@@ -453,16 +440,16 @@ public class NodeTypeProgressAreaTest(ITestOutputHelper output) : MonolithMeshTe
         // would either rewrite this path (FileSystemAssemblyStore.Put
         // short-circuits but the mtime would still update through any
         // attempted write) or bump the version (mint a v{N+1}.dll).
-        var stillFirstDllPath = await assemblyStore.TryGetAssemblyPath(NodeTypePath, firstVersion)
-            .FirstAsync().ToTask(ct);
+        var stillFirstDllPath = assemblyStore.TryGetAssemblyPath(NodeTypePath, firstVersion)
+            .Should().Emit();
         stillFirstDllPath.Should().Be(firstDllPath,
             "the warm cycle must not have moved the cached assembly path");
         File.GetLastWriteTimeUtc(stillFirstDllPath!).Should().Be(firstDllMtime,
             "the warm cycle must not have rewritten v{Version}.dll".Replace("{Version}", firstVersion.ToString()));
 
         // And no v{N+1}.dll should have appeared.
-        var nextVersionPath = await assemblyStore.TryGetAssemblyPath(NodeTypePath, firstVersion + 1)
-            .FirstAsync().ToTask(ct);
+        var nextVersionPath = assemblyStore.TryGetAssemblyPath(NodeTypePath, firstVersion + 1)
+            .Should().Emit();
         nextVersionPath.Should().BeNull(
             $"no v{firstVersion + 1}.dll should exist — the warm cycle must not have minted a new release");
     }

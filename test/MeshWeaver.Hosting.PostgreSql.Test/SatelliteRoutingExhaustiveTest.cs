@@ -338,16 +338,14 @@ public class SatelliteRoutingExhaustiveTest
         //      `access`, etc.), not to `mesh_nodes`.
         //   4. NOT create or query a schema named after the NodeType.
         var query = new PostgreSqlMeshQuery(adapter);
-        Func<Task<QueryResultChange<MeshNode>>> run = async () => await query
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:{nodeTypeName}"), _options)
-            .FirstAsync()
-            .ToTask(ct);
 
-        var act = await run.Should().NotThrowAsync(
-            $"nodeType:{nodeTypeName} query MUST resolve cleanly. It must NEVER produce " +
-            $"a SQL referencing `{nodeTypeName.ToLowerInvariant()}.{expectedTable}` or " +
-            $"`{nodeTypeName.ToLowerInvariant()}.mesh_nodes` — the schema name must come " +
-            "from the partition, not the NodeType.");
+        // Emit() blocks for the first ObserveQuery snapshot and rethrows any
+        // upstream error — so a clean emission IS the must-not-throw invariant:
+        // nodeType:X query MUST resolve cleanly. It must NEVER produce a SQL
+        // referencing `{nodeType}.{expectedTable}` or `{nodeType}.mesh_nodes` —
+        // the schema name must come from the partition, not the NodeType.
+        query.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:{nodeTypeName}"), _options)
+            .Should().Emit();
         // (Result row presence is fan-out-dependent and not always testable
         // against a single per-schema adapter; the must-not-throw assertion
         // is the load-bearing invariant.)

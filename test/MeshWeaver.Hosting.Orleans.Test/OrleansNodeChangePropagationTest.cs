@@ -62,7 +62,7 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
         Output.WriteLine($"CreateNodeRequest: id={node.Id}, path={node.Path}, target={targetAddress}");
         var response = await client.Observe(new CreateNodeRequest(node), o => o.WithTarget(new Address(targetAddress))).FirstAsync().ToTask(ct);
         Output.WriteLine($"CreateNodeResponse: success={response.Message.Success}, error={response.Message.Error ?? "(none)"}, path={response.Message.Node?.Path ?? "(null)"}, nodeType={response.Message.Node?.NodeType ?? "(null)"}");
-        response.Message.Success.Should().BeTrue(response.Message.Error);
+        response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         return response.Message.Node!.Path!;
     }
 
@@ -157,7 +157,7 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
 
         // 6. Verify response message has tool calls
         responseMsg.Should().NotBeNull("response message should exist after execution");
-        responseMsg!.ToolCalls.Should().NotBeNullOrEmpty("agent should have made tool calls");
+        responseMsg!.ToolCalls.Should().NotBeEmpty("agent should have made tool calls");
 
         var createCall = responseMsg.ToolCalls.FirstOrDefault(t => t.Name == "Create");
         createCall.Should().NotBeNull("agent should have called Create tool");
@@ -211,7 +211,7 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
         Output.WriteLine($"Sub-thread Patch: success={patchCall!.IsSuccess}, args={patchCall.Arguments?[..Math.Min(60, patchCall.Arguments?.Length ?? 0)]}");
 
         // 10. Verify NodeChangeEntry propagated to parent response
-        responseMsg.UpdatedNodes.Should().NotBeNullOrEmpty(
+        responseMsg.UpdatedNodes.Should().NotBeEmpty(
             "parent response should have aggregated UpdatedNodes from both Create and sub-thread Patch");
         Output.WriteLine($"UpdatedNodes on parent response: {responseMsg.UpdatedNodes.Count} entries");
         foreach (var entry in responseMsg.UpdatedNodes)
@@ -223,7 +223,7 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
         docChanges.Should().ContainSingle(
             "changes to same node should be aggregated into one entry");
         var docChange = docChanges[0];
-        docChange.VersionAfter.Should().BeGreaterThan(docChange.VersionBefore ?? 0,
+        (docChange.VersionAfter ?? 0).Should().BeGreaterThan(docChange.VersionBefore ?? 0,
             "aggregated version should show progression from create to patch");
         Output.WriteLine($"Aggregated: {docChange.Path} {docChange.Operation} v{docChange.VersionBefore}Ã¢â€ â€™v{docChange.VersionAfter}");
         }

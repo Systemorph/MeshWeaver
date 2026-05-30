@@ -28,15 +28,15 @@ public class HostedHubTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [Fact]
-    public async Task HostedPingPong()
+    public void HostedPingPong()
     {
         var client = GetClient();
         var subHub =
             client.ServiceProvider.CreateMessageHub(new Address("new", "1"),
                 conf => conf.WithTypes(typeof(Ping), typeof(Pong))
                 );
-        var response = await subHub
-            .Observe(new Ping(), o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask(new CancellationTokenSource(5.Seconds()).Token);
+        var response = subHub
+            .Observe(new Ping(), o => o.WithTarget(CreateHostAddress())).Should().Within(5.Seconds()).Emit();
         response.Message.Should().BeOfType<Pong>();
     }
 

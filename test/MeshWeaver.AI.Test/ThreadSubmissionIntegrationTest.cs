@@ -139,11 +139,12 @@ public class ThreadSubmissionIntegrationTest : AITestBase
 
         var final = await ReadThreadAsync(threadPath, ct);
         final.IngestedMessageIds.Should().HaveCount(3, "all three user messages should be ingested");
+        // ImmutableList<string> on both sides — plain strings, no polymorphism, so JsonSerializerOptions.Default.
         // Set-equal to UserMessageIds â€” dispatch is one user message per round
         // (Claude-Code-style turn structure), so the response cells interleave
         // with user cells in Messages, but UserMessageIds is the authoritative
         // list of user-input ids and must match IngestedMessageIds as a set.
-        final.IngestedMessageIds.Should().BeEquivalentTo(final.UserMessageIds);
+        final.IngestedMessageIds.Should().BeEquivalentTo(final.UserMessageIds, System.Text.Json.JsonSerializerOptions.Default);
         final.UserMessageIds.Should().HaveCount(3);
     }
 
@@ -282,7 +283,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         // if round 1 already finished). The key invariant: no user message is ingested
         // before it exists in UserMessageIds.
         pendingState.UserMessageIds.Should().HaveCount(4, "all four user messages should be registered on the thread");
-        pendingState.UserMessageIds.Should().StartWith(u1);
+        pendingState.UserMessageIds[0].Should().Be(u1, "u1 is the first registered user message");
         pendingState.IngestedMessageIds.Count.Should().BeGreaterThanOrEqualTo(1);
         pendingState.IngestedMessageIds.Should().BeSubsetOf(pendingState.UserMessageIds);
 
@@ -293,7 +294,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
             timeoutMs: 20_000, ct);
 
         final.IngestedMessageIds.Should().HaveCount(4);
-        final.IngestedMessageIds.Should().BeEquivalentTo(final.UserMessageIds);
+        final.IngestedMessageIds.Should().BeEquivalentTo(final.UserMessageIds, System.Text.Json.JsonSerializerOptions.Default);
 
         // Inbox-pattern dispatch: every entry in PendingUserMessages is drained
         // into a single round (one response cell per inbox drain). u1 lands while
@@ -306,7 +307,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         final.Messages.Should().HaveCount(6, "4 user cells + 2 response cells");
         final.Messages[0].Should().Be(u1, "u1 first");
         final.UserMessageIds.Should().HaveCount(4);
-        final.UserMessageIds.Should().StartWith(u1);
+        final.UserMessageIds[0].Should().Be(u1, "u1 is the first registered user message");
         final.Messages.Should().Contain(final.UserMessageIds);
         var responseIds = final.Messages.Except(final.UserMessageIds).ToList();
         responseIds.Should().HaveCount(2,
@@ -460,14 +461,14 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         MeshThread? last = null;
         try
         {
-            return await Mesh.GetWorkspace().GetMeshNodeStream(threadPath)
+            return (await Mesh.GetWorkspace().GetMeshNodeStream(threadPath)
                 .Select(n => n.Content as MeshThread)
                 .Where(t => t is not null)
                 .Do(t => last = t)
                 .Where(t => predicate(t!))
                 .Take(1)
                 .Timeout(TimeSpan.FromMilliseconds(timeoutMs))
-                .ToTask(ct)!;
+                .ToTask(ct))!;
         }
         catch (TimeoutException)
         {

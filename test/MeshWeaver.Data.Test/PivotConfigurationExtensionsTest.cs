@@ -222,7 +222,7 @@ public class PivotConfigurationExtensionsTest
         var data = pivotGrid.Data as SalesData[];
         data.Should().NotBeNull();
         data.Should().HaveCount(4);
-        data.Should().BeEquivalentTo(TestData);
+        data.Should().BeEquivalentTo(TestData, System.Text.Json.JsonSerializerOptions.Default);
     }
 
     [Fact]

@@ -33,8 +33,8 @@ public class NuGetDirectiveParserTest
             """);
 
         refs.Should().HaveCount(2);
-        refs.Should().ContainEquivalentOf(new NuGetPackageReference("Humanizer", "2.14.1"));
-        refs.Should().ContainEquivalentOf(new NuGetPackageReference("Markdig", "0.37.0"));
+        refs.Should().ContainEquivalentOf(new NuGetPackageReference("Humanizer", "2.14.1"), System.Text.Json.JsonSerializerOptions.Default);
+        refs.Should().ContainEquivalentOf(new NuGetPackageReference("Markdig", "0.37.0"), System.Text.Json.JsonSerializerOptions.Default);
         cleaned.Should().NotContain("nuget:");
     }
 

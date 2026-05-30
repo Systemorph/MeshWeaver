@@ -40,8 +40,6 @@ public class JsonPatchThreadMessagesTest(ITestOutputHelper output) : MonolithMes
     [Fact]
     public async Task CreateThread_ThenUpdateMessages_ProducesValidMeshNode()
     {
-        var ct = new CancellationTokenSource(10.Seconds()).Token;
-
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, "patch test", "Roland");
         var created = await NodeFactory.CreateNode(threadNode);
         var threadPath = created.Path;
@@ -51,7 +49,7 @@ public class JsonPatchThreadMessagesTest(ITestOutputHelper output) : MonolithMes
         var workspace = client.GetWorkspace();
         var threadStream = workspace.GetMeshNodeStream(threadPath);
 
-        var initial = await threadStream.Take(1).Timeout(5.Seconds()).ToTask(ct);
+        var initial = threadStream.Should().Within(5.Seconds()).Emit();
         var initialContent = initial.Content as MeshThread;
         initialContent.Should().NotBeNull();
         initialContent!.Messages.Should().BeEmpty();
@@ -64,18 +62,15 @@ public class JsonPatchThreadMessagesTest(ITestOutputHelper output) : MonolithMes
         client.Post(new DataChangeRequest { Updates = [updatedNode] },
             o => o.WithTarget(new Address(threadPath)));
 
-        var resultNode = await threadStream
-            .Where(n => (n.Content as MeshThread)?.Messages.Count >= 2)
-            .Take(1)
-            .Timeout(5.Seconds())
-            .ToTask(ct);
+        var resultNode = threadStream.Should().Within(5.Seconds())
+            .Match(n => (n.Content as MeshThread)?.Messages.Count >= 2);
 
         resultNode.Id.Should().Be(initial.Id, "Id should be preserved after patch");
         resultNode.NodeType.Should().Be("Thread", "NodeType should be preserved");
 
         var resultContent = resultNode.Content as MeshThread;
         resultContent.Should().NotBeNull();
-        resultContent!.Messages.Should().BeEquivalentTo(new[] { "msg1", "msg2" });
+        resultContent!.Messages.Should().BeEquivalentTo(new[] { "msg1", "msg2" }, client.JsonSerializerOptions);
         Output.WriteLine($"Patched node OK: {resultNode.Id}, Messages=[{string.Join(", ", resultContent.Messages)}]");
     }
 }

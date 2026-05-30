@@ -57,7 +57,7 @@ public class DelegationFailureTest(ITestOutputHelper output) : MonolithMeshTestB
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, "Cancellation test", "Roland");
         var createResp = await client.Observe(new CreateNodeRequest(threadNode),
             o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
-        createResp.Message.Success.Should().BeTrue(createResp.Message.Error);
+        createResp.Message.Success.Should().BeTrue(createResp.Message.Error ?? "");
         var threadPath = createResp.Message.Node!.Path!;
 
         client.SubmitMessage(

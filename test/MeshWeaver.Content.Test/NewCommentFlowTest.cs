@@ -487,7 +487,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         // 4) Verify comment node via GetDataRequest
         var commentPath = $"{docPath}/{CommentsExtensions.CommentPartition}/{capturedMarkerId}";
-        var commentNodeResponse = await client.Observe(new GetDataRequest(new EntityReference(nameof(MeshNode), capturedMarkerId)), o => o.WithTarget(new Address(commentPath))).FirstAsync().ToTask(TestTimeout);
+        var commentNodeResponse = await client.Observe(new GetDataRequest(new EntityReference(nameof(MeshNode), capturedMarkerId!)), o => o.WithTarget(new Address(commentPath))).FirstAsync().ToTask(TestTimeout);
         var commentNode = commentNodeResponse.Message.Data as MeshNode;
         commentNode.Should().NotBeNull($"Comment MeshNode should exist at {commentPath}");
         var comment = commentNode!.Content.Should().BeOfType<Comment>().Subject;

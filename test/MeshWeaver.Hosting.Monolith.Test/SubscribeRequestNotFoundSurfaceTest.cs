@@ -83,7 +83,9 @@ public class SubscribeRequestNotFoundSurfaceTest(ITestOutputHelper output) : Mon
 
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(address, reference);
-        stream.Should().NotBeNull("GetRemoteStream must always return a stream — even when the target is unreachable, the OnError path is the surface signal.");
+        // GetRemoteStream must always return a stream — even when the target is
+        // unreachable, the OnError path (asserted below) is the surface signal.
+        Assert.NotNull(stream);
 
         // Race two observables:
         //   • the stream's first Initial / data emission (success path — must not fire)

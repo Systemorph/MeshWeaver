@@ -118,7 +118,7 @@ public class OrleansInteractiveMarkdownTest(ITestOutputHelper output) : TestBase
             asJsonElement, portal.JsonSerializerOptions);
         recovered.Should().NotBeNull();
         recovered!.Should().HaveCount(2);
-        recovered[0].Id.Should().Be("orleans-wire");
+        recovered![0].Id.Should().Be("orleans-wire");
         recovered[0].Code.Should().Contain("Survived the grain boundary");
         recovered[1].Code.Should().Contain("var x = 123");
     }

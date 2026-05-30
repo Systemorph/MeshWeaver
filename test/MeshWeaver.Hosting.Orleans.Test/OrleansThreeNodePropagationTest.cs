@@ -82,7 +82,7 @@ public class OrleansThreeNodePropagationTest(ITestOutputHelper output) : Orleans
                 }),
                 o => o.WithTarget(new Address("TestUser")))
             .FirstAsync().ToTask(ct);
-        createResp.Message.Success.Should().BeTrue(createResp.Message.Error);
+        createResp.Message.Success.Should().BeTrue(createResp.Message.Error ?? "");
         Output.WriteLine($"[test] CreateNode succeeded: {pathA}");
 
         // 3. Two distinct test clients (b, c). Each gets its own routing-

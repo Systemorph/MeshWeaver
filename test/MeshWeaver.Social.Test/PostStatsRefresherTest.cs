@@ -56,7 +56,7 @@ public class PostStatsRefresherTest
         await WaitUntilAsync(() => bridge.StatsApplied.Count >= 2, TimeSpan.FromSeconds(2));
         await svc.StopAsync(CancellationToken.None);
 
-        bridge.StatsApplied.Select(s => s.PostPath).Should().BeEquivalentTo(new[] { "p1", "p2" });
+        bridge.StatsApplied.Select(s => s.PostPath).Should().BeEquivalentTo(new[] { "p1", "p2" }, System.Text.Json.JsonSerializerOptions.Default);
         bridge.StatsApplied.All(s => s.Stats.Impressions == 100).Should().BeTrue();
     }
 

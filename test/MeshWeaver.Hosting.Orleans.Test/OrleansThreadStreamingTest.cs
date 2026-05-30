@@ -77,7 +77,7 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
 
         // Create thread
         var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Streaming text test")), o => o.WithTarget(new Address(ContextPath))).FirstAsync().ToTask(ct);
-        response.Message.Success.Should().BeTrue(response.Message.Error);
+        response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         var threadPath = response.Message.Node!.Path!;
         Output.WriteLine($"Thread: {threadPath}");
 
@@ -130,7 +130,7 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
 
         // Create thread
         var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Delegation flow test")), o => o.WithTarget(new Address(ContextPath))).FirstAsync().ToTask(ct);
-        response.Message.Success.Should().BeTrue(response.Message.Error);
+        response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         var threadPath = response.Message.Node!.Path!;
         Output.WriteLine($"1. Thread created: {threadPath}");
 
@@ -251,7 +251,7 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
 
         // 1. Create thread
         var createResp = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Delegation live test")), o => o.WithTarget(new Address(ContextPath))).FirstAsync().ToTask(ct);
-        createResp.Message.Success.Should().BeTrue(createResp.Message.Error);
+        createResp.Message.Success.Should().BeTrue(createResp.Message.Error ?? "");
         var threadPath = createResp.Message.Node!.Path!;
         Output.WriteLine($"1. Thread: {threadPath}");
 
@@ -369,7 +369,7 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
             "per-message MeshNodeReference reducer must surface the streamed text — " +
             "this is what the Blazor view subscribes to via the path-bound bubble.");
         Output.WriteLine($"5. PASS — per-message MeshNodeReference reducer carries text " +
-            $"'{completed.Text}' (length={completed.Text.Length}).");
+            $"'{completed.Text}' (length={completed.Text!.Length}).");
     }
 }
 

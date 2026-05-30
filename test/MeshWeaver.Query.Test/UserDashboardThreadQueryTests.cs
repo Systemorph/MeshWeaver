@@ -62,11 +62,11 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
         var client = GetClient();
 
         var resp1 = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("PartnerRe", "Discussion about Partner Re portfolio", AdminUserId)), o => o.WithTarget(new Address("PartnerRe"))).FirstAsync().ToTask(TestTimeout);
-        resp1.Message.Success.Should().BeTrue(resp1.Message.Error);
+        resp1.Message.Success.Should().BeTrue(resp1.Message.Error ?? "");
         Output.WriteLine($"Thread 1 at: {resp1.Message.Node?.Path}");
 
         var resp2 = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("ACME", "ACME project review", AdminUserId)), o => o.WithTarget(new Address("ACME"))).FirstAsync().ToTask(TestTimeout);
-        resp2.Message.Success.Should().BeTrue(resp2.Message.Error);
+        resp2.Message.Success.Should().BeTrue(resp2.Message.Error ?? "");
         Output.WriteLine($"Thread 2 at: {resp2.Message.Node?.Path}");
 
         // Act: query threads by creator across all partitions (the fixed dashboard query)
@@ -99,7 +99,7 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
 
         var client = GetClient();
         var resp = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("External", "Thread in external namespace", AdminUserId)), o => o.WithTarget(new Address("External"))).FirstAsync().ToTask(TestTimeout);
-        resp.Message.Success.Should().BeTrue(resp.Message.Error);
+        resp.Message.Success.Should().BeTrue(resp.Message.Error ?? "");
 
         // Act: old query (namespace:User/userId scope:descendants) â€” misses external threads
         var userNs = $"User/{AdminUserId}";
@@ -248,7 +248,7 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
         var client = GetClient();
         var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("TestCtx", "Verify created-by storage", AdminUserId)), o => o.WithTarget(new Address("TestCtx"))).FirstAsync().ToTask(TestTimeout);
 
-        response.Message.Success.Should().BeTrue(response.Message.Error);
+        response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         var threadPath = response.Message.Node!.Path!;
 
         // Assert: retrieve and verify CreatedBy is set

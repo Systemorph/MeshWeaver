@@ -198,7 +198,7 @@ Record3SystemName,Record3DisplayName";
 
         ret.Should().HaveCount(2);
 
-        var resRecord = ret.First(x => x.DisplayName == "test");
+        var resRecord = ret!.First(x => x.DisplayName == "test");
 
         resRecord.Should().NotBeNull();
         resRecord.DisplayName.Should().Contain("test");

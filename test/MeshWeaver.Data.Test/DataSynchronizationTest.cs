@@ -112,6 +112,6 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
         loadedInstance.Should().Be(businessUnit);
 
         var linesOfBusiness = await workspace.GetStream<LineOfBusiness>()!.Timeout(3.Seconds()).FirstAsync();
-        linesOfBusiness.Should().NotBeNullOrEmpty();
+        linesOfBusiness.Should().NotBeEmpty();
     }
 }

@@ -313,7 +313,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
             $"error: {settledDef.CompilationError ?? "(none)"}");
 
         settledDef.CompilationStatus.Should().BeOneOf(
-            new[] { CompilationStatus.Ok, CompilationStatus.Error },
+            new Enum[] { CompilationStatus.Ok, CompilationStatus.Error },
             "the trigger MUST drive the NodeType to a terminal status — Compiling " +
             "or null indicates the chain stranded the operation. User-visible " +
             "notification depends on a non-intermediate state.");
