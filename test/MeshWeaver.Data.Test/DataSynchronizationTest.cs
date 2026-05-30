@@ -1,8 +1,6 @@
 ﻿using System.Linq;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Data.TestDomain;
 using MeshWeaver.Fixture;

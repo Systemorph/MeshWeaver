@@ -2,7 +2,6 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Linq;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Security;

@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
-using FluentAssertions;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout.Pivot;
 using Xunit;

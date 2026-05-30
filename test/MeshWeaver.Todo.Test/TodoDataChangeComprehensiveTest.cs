@@ -1,7 +1,5 @@
 ﻿using System.Threading;
 using System.Reactive.Linq;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Messaging;
 using MeshWeaver.Todo.Domain;

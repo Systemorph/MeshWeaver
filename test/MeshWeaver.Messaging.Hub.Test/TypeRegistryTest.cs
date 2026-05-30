@@ -1,6 +1,5 @@
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Domain;
 using MeshWeaver.Fixture;
 using Microsoft.Extensions.DependencyInjection;

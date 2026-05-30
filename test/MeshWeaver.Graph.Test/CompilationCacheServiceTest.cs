@@ -1,7 +1,6 @@
 using System;
 using System.IO;
 using System.Linq;
-using FluentAssertions;
 using MeshWeaver.Graph.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;

@@ -2,7 +2,6 @@ using System;
 using System.IO;
 using System.Reactive.Linq;
 using System.Text;
-using FluentAssertions;
 using MeshWeaver.Graph.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;

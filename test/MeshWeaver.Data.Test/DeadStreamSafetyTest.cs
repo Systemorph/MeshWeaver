@@ -1,7 +1,5 @@
 using System;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;

@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.AI;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.ContentCollections.Completion;

@@ -1,6 +1,5 @@
 using System.Collections.Immutable;
 using System.Text.Json;
-using FluentAssertions;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;

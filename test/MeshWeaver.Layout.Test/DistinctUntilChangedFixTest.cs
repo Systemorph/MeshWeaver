@@ -1,4 +1,3 @@
-using FluentAssertions;
 using MeshWeaver.Layout;
 using System;
 using System.Collections.Generic;

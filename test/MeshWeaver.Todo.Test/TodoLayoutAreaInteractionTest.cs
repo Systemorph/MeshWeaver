@@ -1,7 +1,5 @@
 ﻿using System.Reactive.Linq;
 using System.Text.Json;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Todo.LayoutAreas;

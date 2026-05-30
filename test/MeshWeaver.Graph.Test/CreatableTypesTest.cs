@@ -1,6 +1,5 @@
 using System;
 using System.Linq;
-using FluentAssertions;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using Xunit;

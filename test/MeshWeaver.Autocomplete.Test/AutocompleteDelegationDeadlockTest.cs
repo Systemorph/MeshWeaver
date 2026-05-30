@@ -3,7 +3,6 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using MeshWeaver.Reactive;
-using FluentAssertions;
 using Memex.Portal.Shared;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Graph;

@@ -1,5 +1,4 @@
 using System.Runtime.CompilerServices;
-using FluentAssertions;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 

@@ -10,7 +10,6 @@ using MeshWeaver.Reactive;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
-using FluentAssertions;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Fixture;

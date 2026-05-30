@@ -1,7 +1,5 @@
 ﻿using System.Collections.Generic;
 using System.Text.Json;
-using FluentAssertions;
-using FluentAssertions.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;

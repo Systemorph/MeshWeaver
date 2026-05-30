@@ -5,7 +5,6 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Xml.Linq;
-using FluentAssertions;
 using Xunit;
 
 namespace MeshWeaver.MemexTemplate.Test;

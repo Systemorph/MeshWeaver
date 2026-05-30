@@ -1,7 +1,6 @@
 using System;
 using System.IO;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.NuGet;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;

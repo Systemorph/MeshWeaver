@@ -6,7 +6,6 @@ using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using System.Reactive.Threading.Tasks;
 using System.Reactive.Linq;
-using FluentAssertions;
 using MeshWeaver.Reactive.Assertions;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;

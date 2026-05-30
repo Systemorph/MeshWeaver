@@ -5,8 +5,6 @@ using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using System.IO;
 using Markdig.Syntax;
 using MeshWeaver.Data;

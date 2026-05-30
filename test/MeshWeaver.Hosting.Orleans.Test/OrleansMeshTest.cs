@@ -4,8 +4,6 @@ using System.Threading.Tasks;
 using MeshWeaver.Mesh;
 using Xunit;
 using System.Threading;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using MeshWeaver.Connection.Orleans;

@@ -4,7 +4,6 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-using FluentAssertions;
 using Markdig;
 using Markdig.Syntax;
 using Markdig.Syntax.Inlines;

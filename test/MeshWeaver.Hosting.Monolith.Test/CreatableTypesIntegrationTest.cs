@@ -8,8 +8,6 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Reactive.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;

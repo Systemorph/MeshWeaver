@@ -3,7 +3,6 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
-using FluentAssertions;
 using Memex.Portal.Shared.Authentication;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh.Services;

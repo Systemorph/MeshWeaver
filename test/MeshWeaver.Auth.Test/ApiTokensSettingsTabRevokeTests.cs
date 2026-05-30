@@ -3,7 +3,6 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
 using Memex.Portal.Shared.Authentication;
 using Memex.Portal.Shared.Settings;
 using MeshWeaver.Hosting.Monolith.TestBase;

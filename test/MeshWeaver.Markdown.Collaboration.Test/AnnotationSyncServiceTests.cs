@@ -1,4 +1,3 @@
-using FluentAssertions;
 using MeshWeaver.Markdown;
 using MeshWeaver.Markdown.Collaboration;
 using Xunit;

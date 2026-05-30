@@ -3,7 +3,6 @@ using System.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;

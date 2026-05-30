@@ -1,5 +1,4 @@
 using System;
-using FluentAssertions;
 using MeshWeaver.Fixture;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Messaging;

@@ -6,7 +6,6 @@ using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Reactive;
-using FluentAssertions;
 using Memex.Portal.Shared;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
