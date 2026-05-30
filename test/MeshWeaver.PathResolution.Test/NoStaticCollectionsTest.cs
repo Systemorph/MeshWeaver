@@ -92,8 +92,9 @@ public class NoStaticCollectionsTest
         //      is the eventual idiomatic form — tracked, larger refactor. ----
         ["MeshWeaver.Hosting.Monolith.TestBase.MonolithMeshTestBase._sharedProviders"] = "TESTPERF: per-class SP cache (Type-keyed) -> IClassFixture (future)",
 
-        // ---- CACHE: mutable mesh/runtime state — MUST migrate to mesh-scoped instance. BURN DOWN TO ZERO. ----
-        ["MeshWeaver.Graph.Configuration.ApiTokenNodeType.ValidationCache"] = "CACHE: -> per-ApiToken-hub IMemoryCache (10-min TTL) + node-watch invalidation (cross-hub; deferred)",
+        // ---- CACHE (mutable mesh/runtime state): ZERO remaining. ApiTokenNodeType.ValidationCache
+        //      was the last one — removed; token validation now reads the live node via the auth
+        //      synced query (nodeType:ApiToken content.tokenHash). No static mesh-state caches exist.
     };
 
     [Fact]
