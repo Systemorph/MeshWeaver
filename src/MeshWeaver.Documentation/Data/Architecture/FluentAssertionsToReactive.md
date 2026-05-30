@@ -107,6 +107,26 @@ every `await` removed** (stream-waits → `.Should()`, observable-returning call
 Genuinely-async leaves like `await act.Should().ThrowAsync<T>()` keep their own method `async` — but then
 that method must NOT also use a blocking reactive assertion.
 
+### 2b. Test-base reactive reads (the `*Async` helpers are going away)
+
+The `MonolithMeshTestBase` async helpers are being removed in favour of the observables they wrapped:
+
+| ❌ before | ✅ after |
+|---|---|
+| `await ReadNodeAsync(p)` | `ReadNode(p).Should().Emit()` — authoritative owner-hub read; emits the node or `null` on NotFound |
+| `await CreateNodeAsync(n)` / `await NodeFactory.CreateNode(n)` | `NodeFactory.CreateNode(n).Should().Emit()` |
+| `await MeshQuery.QueryAsync<MeshNode>(q).ToListAsync()` | `MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(q)).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items` |
+| `await MeshQuery.QueryAsync(req).ToListAsync()` (non-generic) | same `ObserveQuery<MeshNode>(req).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items` |
+| `await QueryAsync<MeshNode>(q, skip, limit).ToListAsync()` | `ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(q) with { Skip = skip, Limit = limit }).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items` |
+
+`ObserveQuery<T>`'s **first emission is `ChangeType == Initial` carrying the full result set** — that's the
+snapshot the old `QueryAsync().ToListAsync()` returned. If a test races eventual-consistency lag (the
+Initial set is short and items trickle in as `Added`), accumulate instead: `.Scan(...)` the items and
+`.Should().Match(acc => acc.Count == N)`.
+
+A helper that only `await`-ed these (e.g. `SetupMarketingHierarchy()`, `EnsureNodesCreated()`) becomes
+`void`; its callers drop the `await`.
+
 **After removing every `await`**, the method is synchronous: change `public async Task Foo()` →
 `public void Foo()` and drop `async`. Remove the now-unused `using System.Threading.Tasks;` only if it
 becomes redundant (don't churn unrelated usings).
