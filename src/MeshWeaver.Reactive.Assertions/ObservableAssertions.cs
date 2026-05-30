@@ -166,4 +166,4 @@ public class ObservableAssertions<T>
 }
 
 /// <summary>Thrown when an <see cref="ObservableAssertions{T}"/> stream expectation is not met.</summary>
-public sealed class ObservableAssertionException(string message) : Exception(message);
+public sealed class ObservableAssertionException(string message) : AssertionException(message);
