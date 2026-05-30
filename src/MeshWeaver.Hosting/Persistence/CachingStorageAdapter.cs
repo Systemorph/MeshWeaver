@@ -22,9 +22,9 @@ public class CachingStorageAdapter : IStorageAdapter
     private readonly Func<JsonSerializerOptions, JsonSerializerOptions>? _writeOptionsModifier;
     private readonly FileFormatParserRegistry _parserRegistry = new();
 
-    // Static shared cache: keyed by base directory, shared across all instances with the same path
-    private static readonly ConcurrentDictionary<string, DirectorySnapshot> SharedSnapshots = new(StringComparer.OrdinalIgnoreCase);
-
+    // Per-adapter snapshot — NOT static. The adapter is registered AddSingleton<IStorageAdapter>
+    // per hub (PersistenceExtensions), so this instance field lives and dies with the mesh.
+    // (No cross-mesh static cache: that bled stale file state across test classes — see NoStaticState.md.)
     private readonly DirectorySnapshot _snapshot;
 
     private static readonly string[] SupportedExtensions = [".md", ".cs", ".json"];
@@ -38,12 +38,14 @@ public class CachingStorageAdapter : IStorageAdapter
         _baseDirectory = Path.GetFullPath(baseDirectory);
         _writeOptionsModifier = writeOptionsModifier;
         Directory.CreateDirectory(_baseDirectory);
-        _snapshot = SharedSnapshots.GetOrAdd(_baseDirectory, static dir => new DirectorySnapshot(dir));
+        _snapshot = new DirectorySnapshot(_baseDirectory);
     }
 
     /// <summary>
-    /// Holds a pre-loaded snapshot of a directory tree. Shared across all CachingStorageAdapter
-    /// instances that point to the same base directory (e.g., across test classes in a test run).
+    /// Holds a pre-loaded snapshot of a directory tree, owned by a single CachingStorageAdapter
+    /// instance (which is itself a per-mesh singleton). The directory scan is cheap (path walk;
+    /// file bytes are read lazily on first access), so re-scanning per mesh is negligible — and
+    /// it keeps each mesh's view isolated instead of bleeding through a process-wide static cache.
     /// </summary>
     private class DirectorySnapshot
     {
