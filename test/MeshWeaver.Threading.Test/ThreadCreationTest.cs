@@ -236,50 +236,40 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 15000)]
-    public async Task GetDataRequest_ToNonExistentNode_ReturnsErrorNotEndlessMessages()
+    public void GetDataRequest_ToNonExistentNode_ReturnsErrorNotEndlessMessages()
     {
         // A malformed path that mimics the bug. Posted through the CLIENT hub
-        // (same path the GUI takes) â€” the routing layer must reject within the
-        // timeout, not spin forever.
+        // (same path the GUI takes) â€” the routing layer must resolve within the
+        // timeout (response OR DeliveryFailure), not spin forever. Folding the
+        // error into an emission via Catch lets the reactive assertion accept
+        // both terminal outcomes while still failing if routing hangs.
         var nonExistentPath = "User/Roland/User/Roland/IOvAlUVOUUubAUdRoDaPwQ";
         var client = GetClient();
-        var cts = new CancellationTokenSource(3.Seconds());
 
-        try
-        {
-            var response = await client.Observe(
-                    new Data.GetDataRequest(new Data.EntityReference(nameof(MeshNode), nonExistentPath)),
-                    o => o.WithTarget(new Address(nonExistentPath)))
-                .FirstAsync().ToTask(cts.Token);
-            Output.WriteLine($"Response completed: {response.Message?.GetType().Name}");
-        }
-        catch (Messaging.DeliveryFailureException ex)
-        {
-            Output.WriteLine($"DeliveryFailure (expected): {ex.Message}");
-        }
+        var outcome = client.Observe(
+                new Data.GetDataRequest(new Data.EntityReference(nameof(MeshNode), nonExistentPath)),
+                o => o.WithTarget(new Address(nonExistentPath)))
+            .Select(r => (object?)r.Message?.GetType().Name)
+            .Catch((Exception ex) => Observable.Return((object?)ex))
+            .Should().Within(3.Seconds()).Emit();
+        Output.WriteLine($"Routing resolved: {outcome}");
     }
 
     [Fact(Timeout = 15000)]
-    public async Task GetDataRequest_ToNonExistentThread_ReturnsErrorNotEndlessMessages()
+    public void GetDataRequest_ToNonExistentThread_ReturnsErrorNotEndlessMessages()
     {
         // Thread path that looks valid but doesn't exist. Posted through the CLIENT
-        // â€” routing must complete (response or DeliveryFailure) within the timeout.
+        // â€” routing must resolve (response or DeliveryFailure) within the timeout.
         var nonExistentPath = "User/TestUser/nonexistent123";
         var client = GetClient();
-        var cts = new CancellationTokenSource(3.Seconds());
 
-        try
-        {
-            var response = await client.Observe(
-                    new Data.GetDataRequest(new Data.EntityReference(nameof(MeshNode), nonExistentPath)),
-                    o => o.WithTarget(new Address(nonExistentPath)))
-                .FirstAsync().ToTask(cts.Token);
-            Output.WriteLine($"Response completed: {response.Message?.GetType().Name}");
-        }
-        catch (Messaging.DeliveryFailureException ex)
-        {
-            Output.WriteLine($"DeliveryFailure (expected): {ex.Message}");
-        }
+        var outcome = client.Observe(
+                new Data.GetDataRequest(new Data.EntityReference(nameof(MeshNode), nonExistentPath)),
+                o => o.WithTarget(new Address(nonExistentPath)))
+            .Select(r => (object?)r.Message?.GetType().Name)
+            .Catch((Exception ex) => Observable.Return((object?)ex))
+            .Should().Within(3.Seconds()).Emit();
+        Output.WriteLine($"Routing resolved: {outcome}");
     }
 
     [Fact]
@@ -528,15 +518,18 @@ public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBa
         return base.ConfigureClient(configuration);
     }
 
+    // Framework setup hook: must keep the base's `Task` signature (the base
+    // awaits it during fixture init). Not a test body â€” no deadlock risk â€” so
+    // awaiting the CreateNode observables directly is the right shape here.
     protected override async Task SetupAccessRightsAsync()
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         // Admin user gets full access globally
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(AdminUserId, "Admin", null)).FirstAsync().ToTask();
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(AdminUserId, "Admin", null));
 
         // Viewer gets only Read+Execute (no Update) at the test context
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(ViewerUserId, "Viewer", "SecureProject")).FirstAsync().ToTask();
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(ViewerUserId, "Viewer", "SecureProject"));
     }
 
     [Fact]

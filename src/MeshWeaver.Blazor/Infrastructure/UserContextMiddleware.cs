@@ -135,7 +135,10 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
     /// window skip the Post entirely; the activity grain stays cold unless
     /// another flow needs it.
     /// </summary>
-    private static readonly ConcurrentDictionary<string, DateTimeOffset> _loginDedup = new();
+    // Instance field (NOT static): UserContextMiddleware is a single app-lifetime instance, so the
+    // dedup is correctly app-scoped and dies with the app — no process-wide static cache. See
+    // NoStaticState.md. (Not exercised by tests; the HTTP pipeline doesn't run under MonolithMeshTestBase.)
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _loginDedup = new();
     private static readonly TimeSpan LoginDedupWindow = TimeSpan.FromMinutes(5);
 
     /// <summary>
@@ -145,7 +148,7 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
     /// a single user doesn't spam the activity grain. Exits silently on any
     /// failure — auth must never depend on activity tracking.
     /// </summary>
-    private static void TrackLogin(AccessContext userContext, IMessageHub hub)
+    private void TrackLogin(AccessContext userContext, IMessageHub hub)
     {
         try
         {

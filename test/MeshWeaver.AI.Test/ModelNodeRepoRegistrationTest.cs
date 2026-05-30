@@ -112,17 +112,11 @@ public class ModelNodeRepoRegistrationTest : AITestBase
     }
 
     [Fact]
-    public async Task QueryAsync_NamespaceProvider_ReturnsCatalog()
+    public void QueryAsync_NamespaceProvider_ReturnsCatalog()
     {
-        var ct = new CancellationTokenSource(15.Seconds()).Token;
-
-        var results = new System.Collections.Generic.List<MeshNode>();
-        await foreach (var item in MeshService.QueryAsync(
-            new MeshQueryRequest { Query = $"namespace:{ModelProviderNodeType.RootNamespace} nodeType:{ModelProviderNodeType.NodeType} scope:descendants" },
-            ct))
-        {
-            if (item is MeshNode n) results.Add(n);
-        }
+        var results = MeshService.ObserveQuery<MeshNode>(
+                new MeshQueryRequest { Query = $"namespace:{ModelProviderNodeType.RootNamespace} nodeType:{ModelProviderNodeType.NodeType} scope:descendants" })
+            .Should().Within(15.Seconds()).Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         results.Should().Contain(n => n.Path == "_Provider/Anthropic");
     }

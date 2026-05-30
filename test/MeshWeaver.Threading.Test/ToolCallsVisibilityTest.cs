@@ -1,11 +1,9 @@
 ﻿using System;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
-using System.Threading;
-using System.Threading.Tasks;
 using MeshWeaver.AI;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
@@ -261,15 +259,13 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
     /// version increments (host.UpdateData re-triggering the stream).
     /// </summary>
     [Fact]
-    public async Task ToolCallsUpdate_WithLayoutArea_NoFeedbackLoop()
+    public void ToolCallsUpdate_WithLayoutArea_NoFeedbackLoop()
     {
-        var ct = new CancellationTokenSource(15.Seconds()).Token;
-
         var threadPath = "User/Roland/_Thread/feedback-loop-test";
         var responseMsgId = "resp-loop";
         var responsePath = $"{threadPath}/{responseMsgId}";
 
-        await NodeFactory.CreateNode(new MeshNode(responseMsgId, threadPath)
+        NodeFactory.CreateNode(new MeshNode(responseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
             MainNode = "User/Roland",
@@ -280,9 +276,9 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
                 Type = ThreadMessageType.AgentResponse,
                 AgentName = "TestAgent"
             }
-        });
+        }).Should().Emit();
 
-        await NodeFactory.CreateNode(new MeshNode("feedback-loop-test", "User/Roland/_Thread")
+        NodeFactory.CreateNode(new MeshNode("feedback-loop-test", "User/Roland/_Thread")
         {
             NodeType = ThreadNodeType.NodeType,
             MainNode = "User/Roland",
@@ -292,7 +288,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
                 ActiveMessageId = responseMsgId,
                 Messages = [responseMsgId]
             }
-        });
+        }).Should().Emit();
 
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -303,11 +299,9 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
             new Address(responsePath),
             new LayoutAreaReference(ThreadMessageNodeType.OverviewArea));
 
-        await layoutStream!
+        layoutStream!
             .Where(ci => ci.Value.ValueKind != JsonValueKind.Null)
-            .Timeout(10.Seconds())
-            .FirstAsync()
-            .ToTask(ct);
+            .Should().Within(10.Seconds()).Emit();
         Output.WriteLine("Layout area rendered");
 
         var responseStream = workspace.GetMeshNodeStream(responsePath);
@@ -319,7 +313,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
         var versionBefore = streamForVersion.Hub.Version;
         Output.WriteLine($"Version before update: {versionBefore}");
 
-        await responseStream.Update(current =>
+        responseStream.Update(current =>
         {
             var msg = current.Content as ThreadMessage ?? new ThreadMessage { Role = "assistant", Text = "" };
             return current with
@@ -335,9 +329,12 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
                     })
                 }
             };
-        }).FirstAsync().ToTask(ct);
+        }).Should().Emit();
 
-        await Task.Delay(500, ct);
+        // Settle window: let any feedback-loop emissions accumulate, then
+        // measure the version delta. A guaranteed-empty stream waited on for a
+        // fixed span is the void-safe equivalent of the old Task.Delay(500).
+        Observable.Empty<Unit>().Should().NotEmit(500.Milliseconds());
 
         var versionAfter = streamForVersion.Hub.Version;
         Output.WriteLine($"Version after update + 500ms: {versionAfter}");
@@ -348,7 +345,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
             $"Delta was {versionDelta} â€” indicates a feedback loop in layout area subscriptions");
         Output.WriteLine($"Version delta: {versionDelta} (no feedback loop)");
 
-        await responseStream.Update(current =>
+        responseStream.Update(current =>
         {
             var msg = current.Content as ThreadMessage ?? new ThreadMessage { Role = "assistant", Text = "" };
             return current with
@@ -367,9 +364,9 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
                     })
                 }
             };
-        }).FirstAsync().ToTask(ct);
+        }).Should().Emit();
 
-        await Task.Delay(500, ct);
+        Observable.Empty<Unit>().Should().NotEmit(500.Milliseconds());
 
         var versionFinal = streamForVersion.Hub.Version;
         var totalDelta = versionFinal - versionBefore;

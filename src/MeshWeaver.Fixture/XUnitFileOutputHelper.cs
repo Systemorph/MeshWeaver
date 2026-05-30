@@ -8,31 +8,27 @@ using Xunit;
 namespace MeshWeaver.Fixture;
 
 /// <summary>
-/// Static registry to track active test output helpers for cross-class access
+/// Tracks the active test output helper for the current test's async execution context.
+/// Backed by <see cref="AsyncLocal{T}"/> — NOT a static collection — so concurrent tests
+/// never see each other's helper (the parallel-safe replacement for the former
+/// process-wide <c>ConcurrentDictionary&lt;object, …&gt;</c>; see NoStaticState.md). The
+/// value set in a test's ctor flows to its method and any awaited continuations.
 /// </summary>
 public static class XUnitFileOutputRegistry
 {
-    private static readonly ConcurrentDictionary<object, XUnitFileOutputHelper> _activeOutputHelpers = new();
-    
+    private static readonly AsyncLocal<XUnitFileOutputHelper?> _current = new();
+
     public static void Register(object testInstance, XUnitFileOutputHelper outputHelper)
-    {
-        _activeOutputHelpers[testInstance] = outputHelper;
-    }
-    
+        => _current.Value = outputHelper;
+
     public static void Unregister(object testInstance)
-    {
-        _activeOutputHelpers.TryRemove(testInstance, out _);
-    }
-    
+        => _current.Value = null;
+
     public static XUnitFileOutputHelper? GetOutputHelper(object testInstance)
-    {
-        return _activeOutputHelpers.TryGetValue(testInstance, out var helper) ? helper : null;
-    }
-    
+        => _current.Value;
+
     public static XUnitFileOutputHelper? GetAnyActiveOutputHelper()
-    {
-        return _activeOutputHelpers.Values.FirstOrDefault();
-    }
+        => _current.Value;
 }
 
 /// <summary>

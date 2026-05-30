@@ -25,10 +25,12 @@ internal sealed class SearchHub
     private readonly IMessageHub _hub;
 
     /// <summary>
-    /// Side-table mapping correlation id -> channel + cancellation.
+    /// Side-table mapping correlation id -> channel + cancellation. Instance field (NOT static):
+    /// each SearchHub owns its own hosted hub, so its searches live and die with the hub — no
+    /// cross-instance/process-wide sharing. See NoStaticState.md.
     /// Kept out of the message to avoid serialization of non-serializable types.
     /// </summary>
-    private static readonly ConcurrentDictionary<string, PendingSearch> Pending = new();
+    private readonly ConcurrentDictionary<string, PendingSearch> _pending = new();
 
     public SearchHub(IMessageHub parentHub)
     {
@@ -47,14 +49,14 @@ internal sealed class SearchHub
     {
         var id = Guid.NewGuid().ToString("N");
         var channel = Channel.CreateUnbounded<QuerySuggestion>();
-        Pending[id] = new PendingSearch(channel.Writer, ct);
+        _pending[id] = new PendingSearch(channel.Writer, ct);
 
         _hub.Post(new SearchRequest(id, input?.Trim(), contextPath, maxResults));
 
         return ReadAndCleanup(id, channel.Reader, ct);
     }
 
-    private static async IAsyncEnumerable<QuerySuggestion> ReadAndCleanup(
+    private async IAsyncEnumerable<QuerySuggestion> ReadAndCleanup(
         string id,
         ChannelReader<QuerySuggestion> reader,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
@@ -66,7 +68,7 @@ internal sealed class SearchHub
         }
         finally
         {
-            Pending.TryRemove(id, out _);
+            _pending.TryRemove(id, out _);
         }
     }
 
@@ -74,12 +76,12 @@ internal sealed class SearchHub
     /// Runs on the hosted hub's scheduler — not the Blazor UI thread.
     /// Looks up the Channel and CancellationToken from the side-table.
     /// </summary>
-    private static async Task<IMessageDelivery> ExecuteSearchAsync(
+    private async Task<IMessageDelivery> ExecuteSearchAsync(
         IMessageHub hub, IMessageDelivery<SearchRequest> delivery, CancellationToken hubCt)
     {
         var req = delivery.Message;
 
-        if (!Pending.TryGetValue(req.Id, out var pending))
+        if (!_pending.TryGetValue(req.Id, out var pending))
             return delivery.Processed();
 
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(pending.Ct, hubCt);
