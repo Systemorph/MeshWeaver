@@ -14,7 +14,11 @@ public class EquivalencyOptions<T>
     internal readonly HashSet<string> Excluded = new(StringComparer.OrdinalIgnoreCase);
     internal HashSet<string>? Included;
     internal bool StrictOrdering;
-    internal bool StripTypeDiscriminator;
+    // FA's BeEquivalentTo is member-wise and type-agnostic, so by default we strip the polymorphic
+    // "$type" discriminator before comparing (it's a serialization artifact, not a member). This makes
+    // round-trip comparisons across different runtime types — e.g. MessageDelivery<Foo> vs the
+    // deserialized MessageDelivery<RawJson> — behave like FA. Opt back in with IncludingTypeDiscriminator().
+    internal bool StripTypeDiscriminator = true;
     internal readonly Dictionary<string, List<string>> ExcludedByDiscriminator = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Exclude a member from the comparison.</summary>
@@ -38,10 +42,17 @@ public class EquivalencyOptions<T>
         return this;
     }
 
-    /// <summary>Strip the <c>$type</c> polymorphism discriminator everywhere before comparing.</summary>
+    /// <summary>Strip the <c>$type</c> polymorphism discriminator before comparing. On by default (FA-style); call with <c>false</c> to keep it.</summary>
     public EquivalencyOptions<T> ExcludeTypeDiscriminator(bool flag = true)
     {
         StripTypeDiscriminator = flag;
+        return this;
+    }
+
+    /// <summary>Opt INTO comparing the <c>$type</c> polymorphism discriminator (stripped by default).</summary>
+    public EquivalencyOptions<T> IncludingTypeDiscriminator()
+    {
+        StripTypeDiscriminator = false;
         return this;
     }
 
