@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reactive.Linq;
 using MeshWeaver.Domain;
 using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -25,6 +26,18 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
     private IReadOnlyList<MeshNode> QueryNodes(string query) => QueryNodes(MeshQueryRequest.FromQuery(query));
+
+    /// <summary>
+    /// Reactive autocomplete is a one-shot snapshot: each provider emits its matches then completes.
+    /// Immediately after <c>CreateNode</c> the provider's index can still be catching up, so a single
+    /// snapshot may complete empty. Re-issue the snapshot on an interval until it surfaces a match — the
+    /// sanctioned re-query pattern for snapshot sources that race eventual-consistency lag.
+    /// </summary>
+    private IReadOnlyList<QueryResult> AutocompleteUntil(
+        string basePath, string prefix, Func<IReadOnlyList<QueryResult>, bool> predicate)
+        => Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
+            .SelectMany(_ => MeshQuery.Autocomplete(basePath, prefix, limit: 10))
+            .Should().Match(predicate);
 
     private void SetupMarketingHierarchy()
     {
@@ -179,10 +192,7 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     {
         SetupMarketingHierarchy();
 
-        // Autocomplete wraps each provider with .StartWith(empty); the first emission is empty,
-        // so wait for the emission that carries results.
-        var suggestions = MeshQuery.Autocomplete("Systemorph/Marketing", "Email", limit: 10)
-            .Should().Match(r => r.Count >= 1);
+        var suggestions = AutocompleteUntil("Systemorph/Marketing", "Email", r => r.Count >= 1);
 
         suggestions.Should().HaveCount(1);
         suggestions[0].Name.Should().Be("Email Triage");
@@ -194,9 +204,7 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     {
         SetupMarketingHierarchy();
 
-        // Test autocomplete with partial match (first emission is empty from .StartWith — wait for results)
-        var suggestions = MeshQuery.Autocomplete("Systemorph/Marketing", "claim", limit: 10)
-            .Should().Match(r => r.Any(s => s.Name == "Claims Processing"));
+        var suggestions = AutocompleteUntil("Systemorph/Marketing", "claim", r => r.Any(s => s.Name == "Claims Processing"));
 
         // Should find Claims Processing and its sub-stories
         suggestions.Should().Contain(s => s.Name == "Claims Processing");

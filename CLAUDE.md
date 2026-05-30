@@ -277,11 +277,39 @@ Full treatment: [CqrsAndContentAccess.md](src/MeshWeaver.Documentation/Data/Arch
 
 `@/path` is a Unified Content Reference for markdown links (`[text](@/Path)`), autocomplete, and agent tool args — **never in `href=""` attributes or HTTP URLs**. Markdig strips `@` in native markdown syntax but NOT inside `<a href>`.
 
+## 🚨🚨🚨 ABSOLUTE: No static collections — ever
+
+**A `static` field that is a collection or cache is FORBIDDEN** anywhere in `src/` or `test/`: no `static ConcurrentDictionary`, `static Dictionary`, `static HashSet`, `static List`, `static ConcurrentBag`/`Queue`, `static MemoryCache`/`IMemoryCache`, `[ThreadStatic]`, or `static Lazy<…>` of mutable data. Process-wide static state survives mesh disposal, so it **bleeds across tests** — the moment you add a `Clear()` method "for test isolation", that method *is* the proof of the bug — and across users/partitions in prod.
+
+**Every cache and every repository is an instance owned by the mesh.** Register it in `MeshBuilder` (`ConfigureServices` / `WithServices`) as a **singleton** so its lifetime IS the mesh's: when the mesh hub is disposed (end of test / shutdown), the cache dies with it. Hold the backing store (`IMemoryCache`, an instance `ConcurrentDictionary`, …) as an **instance field** on that singleton; resolve via `hub.ServiceProvider.GetRequiredService<T>()`.
+
+```csharp
+// ❌ FORBIDDEN — process-wide, survives mesh disposal, bleeds across tests
+public static class NodeTypeRegistry
+{
+    private static readonly ConcurrentDictionary<string, MeshNode> Nodes = new();
+    public static void Clear() => Nodes.Clear();   // ← "for test isolation" = the tell
+}
+
+// ✅ REQUIRED — instance repo, registered in MeshBuilder, lifetime = mesh
+public sealed class NodeTypeRepository
+{
+    private readonly ConcurrentDictionary<string, MeshNode> nodes = new();   // instance, not static
+    public void Register(MeshNode node) => nodes[node.Path] = node;
+    public bool TryGet(string path, out MeshNode? node) => nodes.TryGetValue(path, out node);
+}
+builder.ConfigureServices(s => s.AddSingleton<NodeTypeRepository>());          // dies with the mesh — no Clear() needed
+```
+
+**Allowed `static readonly`:** immutable, read-only constant lookups initialized once and never written at runtime (media-type maps, reserved-word sets, role tables). If it never takes a write after construction it's a *constant*, not a cache — fine. The instant something writes to it at runtime, it must become a mesh-scoped instance singleton.
+
+Full reference: [NoStaticState.md](src/MeshWeaver.Documentation/Data/Architecture/NoStaticState.md).
+
 ## Collections Policy
 
 **NEVER use mutable collections.** Always `System.Collections.Immutable`:  
 `List<T>` → `ImmutableList<T>`, `Dictionary<K,V>` → `ImmutableDictionary<K,V>`, `HashSet<T>` → `ImmutableHashSet<T>`, `Queue<T>` → `ImmutableQueue<T>`.  
-Exception: `ConcurrentDictionary` for concurrent mutation.
+Exception: `ConcurrentDictionary` for concurrent mutation — **as an instance field on a mesh-scoped singleton, never `static`** (see "No static collections" above).
 
 ## Architecture Overview
 
