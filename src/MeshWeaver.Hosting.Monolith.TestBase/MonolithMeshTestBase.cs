@@ -323,10 +323,6 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// </summary>
     private static readonly (string Label, Func<int?> Reader)[] KnownStaticCaches =
     {
-        ("agentCache", () => GetStaticDictCount("MeshWeaver.AI.ThreadExecution, MeshWeaver.AI", "AgentCache")),
-        ("execCancels", () => GetStaticDictCount("MeshWeaver.AI.ThreadExecution, MeshWeaver.AI", "ExecutionCancellations")),
-        ("complCallbk", () => GetStaticDictCount("MeshWeaver.AI.ThreadExecution, MeshWeaver.AI", "CompletionCallbacks")),
-        ("nodeTypeReg", () => GetStaticDictCount("MeshWeaver.Graph.Configuration.NodeTypeRegistry, MeshWeaver.Graph", "Nodes")),
         ("dynTypeCache", () => GetStaticDictCount("MeshWeaver.Blazor.DynamicTypeGenerator, MeshWeaver.Blazor", "TypeCache")),
         ("nonVirtThunks", () => GetStaticDictCount("MeshWeaver.BusinessRules.DefaultImplementationOfInterfacesExtensions, MeshWeaver.BusinessRules", "NonVirtualInvocationThunks")),
         ("storageSnaps", () => GetStaticDictCount("MeshWeaver.Hosting.Persistence.CachingStorageAdapter, MeshWeaver.Hosting", "SharedSnapshots")),
