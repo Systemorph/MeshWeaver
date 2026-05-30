@@ -271,17 +271,23 @@ late-read race was the root of the `check_inbox` phantom-drain flake).
 - `Idle` / `Cancelled` (+ pending) → no write (the submission watcher claims);
 - `Done` → terminal, untouched.
 
-**Activities** — `hub.InitializeActivityLifecycle(...)` in
-`ActivityControlPlaneExtensions`. On the own first emission, a stranded
-`Running` activity (the previous run was interrupted) is driven terminal:
-pending `RequestedStatus == Cancelled` → `Cancelled`, otherwise →
-`interruptedStatus` (default `Failed`, with an "interrupted by restart" log
-line). Wire it from the owning hub's `WithInitialization` (e.g. the kernel/script
-hub). **Idempotent/re-runnable operations re-request instead of terminating**:
-NodeType compile flips its own `CompilationStatus = Compiling → Pending` on wake
-so the compile watcher dispatches a fresh build — reading the owner's OWN state,
-never probing the activity hub cross-hub (that read lags and a false "still
-running" leaves the operation stranded).
+**Activities** recover from the **owner's own state**, where the owner hub is
+DISTINCT from the executor. NodeType compile is the canonical case: the compile
+runs on a separate activity hub, so the NodeType hub coming up with
+`CompilationStatus == Compiling` on its first own-stream emission means the
+compile was interrupted. It re-requests by flipping its own
+`CompilationStatus = Compiling → Pending` so the compile watcher dispatches a
+fresh build — reading the owner's OWN state, never probing the activity hub
+cross-hub (that read lags, and a false "still running" leaves the operation
+stranded — the rbuergi/CatBond "renders nothing" symptom).
+
+> 🚨 **Do NOT add a "first emission: Running ⇒ Failed/interrupted" recovery to a
+> hub that IS the executor.** Such a hub activates in order to run the work, so
+> its own activity is legitimately `Running` the instant it comes up — a
+> first-emission recovery would kill every freshly-started run. The kernel/script
+> hub is exactly this case and deliberately has no such recovery. Restart-recovery
+> for a hub-that-runs-its-own-work needs a separate supervisor, or the
+> owner-state re-request pattern above.
 
 Claim-handler pattern (clears the intent in the same atomic transition):
 
