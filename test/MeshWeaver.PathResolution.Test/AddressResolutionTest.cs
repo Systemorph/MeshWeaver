@@ -26,37 +26,37 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
             .AddAI()
             .AddSampleUsers();
 
-    private async Task EnsureNodesCreated()
+    private void EnsureNodesCreated()
     {
-        var existingPricing = await ReadNodeAsync("pricing");
+        var existingPricing = ReadNode("pricing").Should().Emit();
         if (existingPricing == null)
         {
-            await NodeFactory.CreateNode(MeshNode.FromPath(PricingPath) with
+            NodeFactory.CreateNode(MeshNode.FromPath(PricingPath) with
             {
                 Name = "Pricing",
                 Icon = "Calculator",
                 NodeType = "Markdown",
-            });
+            }).Should().Emit();
         }
 
-        var existingApp = await ReadNodeAsync("app");
+        var existingApp = ReadNode("app").Should().Emit();
         if (existingApp == null)
         {
-            await NodeFactory.CreateNode(MeshNode.FromPath(AppPath) with
+            NodeFactory.CreateNode(MeshNode.FromPath(AppPath) with
             {
                 Name = "Applications",
                 Icon = "App",
                 NodeType = "Markdown",
-            });
+            }).Should().Emit();
         }
     }
 
     #region ResolvePath Score-Based Tests
 
     [Fact(Timeout = 10000)]
-    public async Task ResolvePath_SingleSegmentNode_MatchesAndReturnsRemainder()
+    public void ResolvePath_SingleSegmentNode_MatchesAndReturnsRemainder()
     {
-        await EnsureNodesCreated();
+        EnsureNodesCreated();
         var resolution = PathResolver.ResolvePath("pricing/Microsoft/2026/Overview/details").Should().Emit();
 
         resolution.Should().NotBeNull();
@@ -65,9 +65,9 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     [Fact(Timeout = 10000)]
-    public async Task ResolvePath_AppPath_ReturnsPrefixAndRemainder()
+    public void ResolvePath_AppPath_ReturnsPrefixAndRemainder()
     {
-        await EnsureNodesCreated();
+        EnsureNodesCreated();
         var resolution = PathResolver.ResolvePath("app/Todo/Dashboard/123").Should().Emit();
 
         resolution.Should().NotBeNull();
@@ -76,9 +76,9 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     [Fact(Timeout = 10000)]
-    public async Task ResolvePath_ExactMatch_ReturnsNullRemainder()
+    public void ResolvePath_ExactMatch_ReturnsNullRemainder()
     {
-        await EnsureNodesCreated();
+        EnsureNodesCreated();
         var resolution = PathResolver.ResolvePath("pricing").Should().Emit();
 
         resolution.Should().NotBeNull();
@@ -87,9 +87,9 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     [Fact(Timeout = 10000)]
-    public async Task ResolvePath_WithLeadingSlash_ParsesCorrectly()
+    public void ResolvePath_WithLeadingSlash_ParsesCorrectly()
     {
-        await EnsureNodesCreated();
+        EnsureNodesCreated();
         var resolution = PathResolver.ResolvePath("/pricing/Microsoft/2026").Should().Emit();
 
         resolution.Should().NotBeNull();
@@ -98,9 +98,9 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     [Fact(Timeout = 10000)]
-    public async Task ResolvePath_UnknownPath_ReturnsNull()
+    public void ResolvePath_UnknownPath_ReturnsNull()
     {
-        await EnsureNodesCreated();
+        EnsureNodesCreated();
         var resolution = PathResolver.ResolvePath("unknown/test/path").Should().Emit();
 
         resolution.Should().BeNull();
@@ -114,10 +114,10 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     [InlineData("app", "app", null)]
     [InlineData("app/Insurance", "app", "Insurance")]
     [InlineData("app/Insurance/Dashboard", "app", "Insurance/Dashboard")]
-    public async Task ResolvePath_VariousPaths_ReturnsCorrectPrefixAndRemainder(
+    public void ResolvePath_VariousPaths_ReturnsCorrectPrefixAndRemainder(
         string path, string expectedPrefix, string? expectedRemainder)
     {
-        await EnsureNodesCreated();
+        EnsureNodesCreated();
         var resolution = PathResolver.ResolvePath(path).Should().Emit();
 
         resolution.Should().NotBeNull();
@@ -146,9 +146,9 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     #region Score-Based Matching Priority Tests
 
     [Fact(Timeout = 10000)]
-    public async Task ResolvePath_MultipleNodes_HighestScoreWins()
+    public void ResolvePath_MultipleNodes_HighestScoreWins()
     {
-        await EnsureNodesCreated();
+        EnsureNodesCreated();
         var resolution = PathResolver.ResolvePath("pricing/Microsoft/2026").Should().Emit();
 
         resolution.Should().NotBeNull();
@@ -157,9 +157,9 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     [Fact(Timeout = 10000)]
-    public async Task ResolvePath_CaseInsensitive_MatchesCorrectly()
+    public void ResolvePath_CaseInsensitive_MatchesCorrectly()
     {
-        await EnsureNodesCreated();
+        EnsureNodesCreated();
         // Persistence paths may be case-sensitive
         var resolution = PathResolver.ResolvePath("PRICING/Microsoft/2026").Should().Emit();
 
@@ -179,7 +179,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     /// resolves the full ThreadMessage path (not the Thread path with remainder).
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task ResolvePath_ThreadMessageNode_ResolvesToFullMessagePath()
+    public void ResolvePath_ThreadMessageNode_ResolvesToFullMessagePath()
     {
         // Create Thread node
         var threadPath = "User/Roland/_Thread/test-resolution-1234";
@@ -192,7 +192,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
                 Messages = ["msg1"]
             }
         };
-        await NodeFactory.CreateNode(threadNode);
+        NodeFactory.CreateNode(threadNode).Should().Emit();
 
         // Create ThreadMessage child node
         var msgNode = new MeshNode("msg1", threadPath)
@@ -207,7 +207,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
                 Type = ThreadMessageType.ExecutedInput
             }
         };
-        await NodeFactory.CreateNode(msgNode);
+        NodeFactory.CreateNode(msgNode).Should().Emit();
 
         // Resolve the ThreadMessage path â€” should return the full message path, no remainder
         var resolution = PathResolver.ResolvePath($"{threadPath}/msg1").Should().Emit();
@@ -223,7 +223,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     /// when ThreadMessage children exist.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task ResolvePath_ThreadNode_ResolvesCorrectlyWithChildren()
+    public void ResolvePath_ThreadNode_ResolvesCorrectlyWithChildren()
     {
         var threadPath = "User/Roland/_Thread/test-parent-5678";
         var threadNode = new MeshNode("test-parent-5678", "User/Roland/_Thread")
@@ -235,7 +235,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
                 Messages = ["m1"]
             }
         };
-        await NodeFactory.CreateNode(threadNode);
+        NodeFactory.CreateNode(threadNode).Should().Emit();
 
         var msgNode = new MeshNode("m1", threadPath)
         {
@@ -249,7 +249,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
                 Type = ThreadMessageType.AgentResponse
             }
         };
-        await NodeFactory.CreateNode(msgNode);
+        NodeFactory.CreateNode(msgNode).Should().Emit();
 
         // Resolve the Thread path â€” should match the Thread node exactly
         var resolution = PathResolver.ResolvePath(threadPath).Should().Emit();
