@@ -193,13 +193,41 @@ internal class ApiTokenService(IMeshService nodeFactory, IMessageHub hub, ILogge
             return Observable.Return<ApiToken?>(null);
 
         var hash = HashToken(rawToken);
+        var hashPrefix = hash[..12];
+        var indexPath = $"{ApiTokenNamespace}/{hashPrefix}";
 
-        // Live lookup by hash via the canonical synced query (ApiTokenQueries.GetApiTokenByHash) — no
-        // index hop, no System impersonation (the synced auth query bypasses RLS), no cache. Same shape
-        // as ApiTokenNodeType.HandleValidateToken; a revoked token is rejected at once (FinalizeToken).
-        return hub.GetWorkspace().GetApiTokenByHash(hash)
-            .Select(node => FinalizeToken(
-                node, (node?.Content as ApiToken) ?? ExtractApiToken(node), hash, hash[..12]));
+        return ReadAsSystem(indexPath)
+            .SelectMany(indexNode =>
+            {
+                if (indexNode == null)
+                    return Observable.Return<(MeshNode? node, ApiToken? token)>((null, null));
+
+                var index = indexNode.Content as ApiTokenIndex ?? ExtractApiTokenIndex(indexNode);
+                if (index != null)
+                {
+                    if (!string.Equals(index.TokenHash, hash, StringComparison.OrdinalIgnoreCase))
+                        return Observable.Return<(MeshNode? node, ApiToken? token)>((null, null));
+                    return ReadAsSystem(index.TokenPath)
+                        .Select(tn => (
+                            node: tn,
+                            token: (tn?.Content as ApiToken) ?? ExtractApiToken(tn)));
+                }
+                // Legacy format: full ApiToken at index path.
+                return Observable.Return((
+                    node: (MeshNode?)indexNode,
+                    token: (indexNode.Content as ApiToken) ?? ExtractApiToken(indexNode)));
+            })
+            .Select(t => FinalizeToken(t.node, t.token, hash, hashPrefix));
+    }
+
+    private IObservable<MeshNode?> ReadAsSystem(string path)
+    {
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        return accessService != null
+            ? Observable.Using(
+                () => accessService.ImpersonateAsSystem(),
+                _ => hub.GetMeshNode(path, TimeSpan.FromSeconds(5)))
+            : hub.GetMeshNode(path, TimeSpan.FromSeconds(5));
     }
 
     private ApiToken? FinalizeToken(MeshNode? tokenNode, ApiToken? apiToken, string hash, string hashPrefix)
@@ -261,8 +289,8 @@ internal class ApiTokenService(IMeshService nodeFactory, IMessageHub hub, ILogge
             {
                 var token = current.Content as ApiToken ?? ExtractApiToken(current);
                 if (token == null) return current;
-                // Flip IsRevoked on the live node. Validation reads the node live (synced
-                // auth query), so the revoke takes effect immediately — no cache to invalidate.
+                // Flip IsRevoked on the live node — validation reads the node fresh (no cache),
+                // so the revoke takes effect immediately.
                 return current with { Content = token with { IsRevoked = true } };
             })
             .Do(updatedNode =>
@@ -440,6 +468,24 @@ internal class ApiTokenService(IMeshService nodeFactory, IMessageHub hub, ILogge
         return null;
     }
 
+    private static ApiTokenIndex? ExtractApiTokenIndex(MeshNode? node)
+    {
+        if (node?.Content is System.Text.Json.JsonElement jsonElement)
+        {
+            try
+            {
+                var index = System.Text.Json.JsonSerializer.Deserialize<ApiTokenIndex>(jsonElement.GetRawText(),
+                    new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                // Distinguish from legacy ApiToken: index has TokenPath, ApiToken does not
+                return !string.IsNullOrEmpty(index?.TokenPath) ? index : null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+        return null;
+    }
 
     private AccessAssignment? ExtractAccessAssignment(MeshNode? node)
     {
