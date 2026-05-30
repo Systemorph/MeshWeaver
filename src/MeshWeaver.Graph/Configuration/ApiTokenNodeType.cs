@@ -1,5 +1,4 @@
-﻿using System.Collections.Concurrent;
-using System.Reactive;
+﻿using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
@@ -22,22 +21,6 @@ namespace MeshWeaver.Graph.Configuration;
 public static class ApiTokenNodeType
 {
     public const string NodeType = "ApiToken";
-    private static readonly ConcurrentDictionary<string, (ValidateTokenResponse Response, DateTimeOffset ExpiresAt)> ValidationCache = new();
-    private static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(5);
-
-    /// <summary>
-    /// Drops a token's cached validation entry so the next ValidateToken call
-    /// re-resolves from the per-node hub. Called by ApiTokenService.RevokeToken
-    /// to ensure the 5-minute cache doesn't outlive a revoke â€” without this
-    /// `RevokeToken_AfterImmediateValidate_BlocksFutureValidation` would fail
-    /// because the cache returns the pre-revoke response.
-    /// </summary>
-    public static void InvalidateValidationCache(string tokenHash)
-    {
-        if (string.IsNullOrEmpty(tokenHash))
-            return;
-        ValidationCache.TryRemove(tokenHash, out _);
-    }
 
     public static TBuilder AddApiTokenType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
@@ -77,9 +60,12 @@ public static class ApiTokenNodeType
     };
 
     /// <summary>
-    /// Validates an API token. Routes to ApiToken/{hashPrefix}, follows index to User/{userId}/_Api/{hash}.
-    /// Results are cached for 5 minutes.
-    /// Sync handler â€” composes via <c>IObservable</c> + <c>Subscribe</c>; no <c>await</c>.
+    /// Validates an API token by reading the live token node from the mesh: a single synced
+    /// query against the <c>auth</c> mirror schema (<c>nodeType:ApiToken content.tokenHash:{hash}</c>),
+    /// the same shape as <c>OnboardingMiddleware.FindUserByEmail</c>. The synced query bypasses RLS
+    /// and stays live, so a revoked token (<c>IsRevoked</c> on the node) is rejected immediately —
+    /// no cache, no per-hash index, no cross-hub invalidation. Sync handler: composes via
+    /// <c>IObservable</c> + <c>Subscribe</c>; no <c>await</c>.
     /// </summary>
     private static IMessageDelivery HandleValidateToken(
         IMessageHub hub,
@@ -95,107 +81,40 @@ public static class ApiTokenNodeType
 
         var hash = ValidateTokenRequest.HashToken(rawToken);
 
-        // Check cache first
-        if (ValidationCache.TryGetValue(hash, out var cached) && cached.ExpiresAt > DateTimeOffset.UtcNow)
-        {
-            hub.Post(cached.Response, o => o.ResponseFor(request));
-            return request.Processed();
-        }
-
-        // Read own MeshNode via one-shot GetDataRequest â€” true request/response, no
-        // lingering subscription. Posts to self (hub.Address); the handler's Subscribe
-        // runs on the event loop after this returns, so no deadlock.
-        //
-        // Impersonate-as-System for the lookup: token validation is the entry
-        // point that turns a raw token into a user identity, so by definition
-        // the caller is unauthenticated. Without an explicit System scope, the
-        // SecurePersistence ACL would deny the read (anonymous can't read an
-        // ApiToken node) and the validator would return "Token not found" for
-        // every request. The hash-compare further down is the actual
-        // authentication step; the System scope only covers this one read.
-        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
-        var hubAddress = hub.Address.ToString();
-        Observable.Using(
-            () => accessService.ImpersonateAsSystem(),
-            _ => hub.GetMeshNode(hubAddress, TimeSpan.FromSeconds(10)))
-            .SelectMany(node =>
-            {
-                if (node == null)
+        hub.GetWorkspace()
+            .GetQuery($"auth:tokenByHash:{hash}", $"nodeType:{NodeType} content.tokenHash:{hash} limit:1")
+            .Take(1)
+            .Select(items => items.FirstOrDefault())
+            .Timeout(TimeSpan.FromSeconds(10), Observable.Return<MeshNode?>(null))
+            .Subscribe(
+                node =>
                 {
-                    hub.Post(ValidateTokenResponse.Fail("Token not found"), o => o.ResponseFor(request));
-                    return Observable.Empty<Unit>();
-                }
+                    var apiToken = node?.Content as ApiToken ?? ExtractApiToken(node, hub.JsonSerializerOptions);
 
-                var index = node.Content as ApiTokenIndex ?? ExtractApiTokenIndex(node, hub.JsonSerializerOptions);
-
-                IObservable<MeshNode?> tokenNodeObs;
-                if (index != null)
-                {
-                    if (!string.Equals(index.TokenHash, hash, StringComparison.OrdinalIgnoreCase))
-                    {
-                        hub.Post(ValidateTokenResponse.Fail("Invalid token"), o => o.ResponseFor(request));
-                        return Observable.Empty<Unit>();
-                    }
-
-                    // Cross-hub one-shot read for the actual token node â€” GetDataRequest
-                    // routes to the owning per-node hub via the mesh. Re-impersonate
-                    // as System for this read too: the AsyncLocal context that the
-                    // outer Observable.Using set may not be alive when the SelectMany
-                    // continuation re-subscribes downstream, and the actual token
-                    // node sits at "{userId}/ApiToken/{hashPrefix}" which RLS gates
-                    // on the owning user's identity.
-                    tokenNodeObs = Observable.Using(
-                        () => accessService.ImpersonateAsSystem(),
-                        _ => hub.GetMeshNode(index.TokenPath, TimeSpan.FromSeconds(10)));
-                }
-                else
-                {
-                    tokenNodeObs = Observable.Return<MeshNode?>(node);
-                }
-
-                return tokenNodeObs.Select(tokenNode =>
-                {
-                    var apiToken = tokenNode?.Content as ApiToken ?? ExtractApiToken(tokenNode, hub.JsonSerializerOptions);
-
-                    if (apiToken == null)
+                    if (apiToken == null || !string.Equals(apiToken.TokenHash, hash, StringComparison.OrdinalIgnoreCase))
                     {
                         hub.Post(ValidateTokenResponse.Fail("Token not found"), o => o.ResponseFor(request));
-                        return Unit.Default;
+                        return;
                     }
-
-                    if (!string.Equals(apiToken.TokenHash, hash, StringComparison.OrdinalIgnoreCase))
-                    {
-                        hub.Post(ValidateTokenResponse.Fail("Invalid token"), o => o.ResponseFor(request));
-                        return Unit.Default;
-                    }
-
                     if (apiToken.IsRevoked)
                     {
                         hub.Post(ValidateTokenResponse.Fail("Token revoked"), o => o.ResponseFor(request));
-                        return Unit.Default;
+                        return;
                     }
-
                     if (apiToken.ExpiresAt.HasValue && apiToken.ExpiresAt.Value < DateTimeOffset.UtcNow)
                     {
                         hub.Post(ValidateTokenResponse.Fail("Token expired"), o => o.ResponseFor(request));
-                        return Unit.Default;
+                        return;
                     }
 
-                    // Include the roles captured on the ApiToken at creation time.
-                    // UserContextMiddleware stamps these onto AccessContext.Roles so
-                    // SecurityService.GetEffectivePermissions can resolve them via
-                    // the claim-based role path on per-node hubs â€” where the
-                    // synced AccessAssignment query is intentionally not registered
-                    // (SecurityServiceExtensions:44-50, recursion avoidance).
-                    var response = ValidateTokenResponse.Ok(
-                        apiToken.UserId, apiToken.UserName, apiToken.UserEmail, apiToken.Roles);
-                    ValidationCache[hash] = (response, DateTimeOffset.UtcNow + CacheDuration);
-                    hub.Post(response, o => o.ResponseFor(request));
-                    return Unit.Default;
-                });
-            })
-            .Subscribe(
-                _ => { },
+                    // Roles captured on the token at creation time — UserContextMiddleware stamps
+                    // these onto AccessContext.Roles so per-node hubs resolve them via the
+                    // claim-based path (the synced AccessAssignment query isn't registered there;
+                    // recursion avoidance, SecurityServiceExtensions).
+                    hub.Post(
+                        ValidateTokenResponse.Ok(apiToken.UserId, apiToken.UserName, apiToken.UserEmail, apiToken.Roles),
+                        o => o.ResponseFor(request));
+                },
                 ex => hub.Post(
                     ValidateTokenResponse.Fail($"Validation error: {ex.Message}"),
                     o => o.ResponseFor(request)));
@@ -207,17 +126,6 @@ public static class ApiTokenNodeType
     {
         if (node?.Content is not JsonElement jsonElement) return null;
         try { return JsonSerializer.Deserialize<ApiToken>(jsonElement.GetRawText(), options); }
-        catch { return null; }
-    }
-
-    private static ApiTokenIndex? ExtractApiTokenIndex(MeshNode? node, JsonSerializerOptions options)
-    {
-        if (node?.Content is not JsonElement jsonElement) return null;
-        try
-        {
-            var index = JsonSerializer.Deserialize<ApiTokenIndex>(jsonElement.GetRawText(), options);
-            return !string.IsNullOrEmpty(index?.TokenPath) ? index : null;
-        }
         catch { return null; }
     }
 }

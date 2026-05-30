@@ -289,11 +289,8 @@ internal class ApiTokenService(IMeshService nodeFactory, IMessageHub hub, ILogge
             {
                 var token = current.Content as ApiToken ?? ExtractApiToken(current);
                 if (token == null) return current;
-                // Drop the in-memory ValidationCache entry so the next
-                // ValidateToken call re-reads from this hub and observes
-                // IsRevoked=true. Without this, the 5-min cache outlives
-                // the revoke and validation keeps succeeding.
-                ApiTokenNodeType.InvalidateValidationCache(token.TokenHash);
+                // Flip IsRevoked on the live node. Validation reads the node live (synced
+                // auth query), so the revoke takes effect immediately — no cache to invalidate.
                 return current with { Content = token with { IsRevoked = true } };
             })
             .Do(updatedNode =>
