@@ -84,6 +84,29 @@ var p = await hub.GetEffectivePermissions(path)           var p = hub.GetEffecti
     .FirstAsync().ToTask();                                   .Should().Match(_ => true);   // or .Be(Permission.Read)
 ```
 
+### 2a. `await <observable>` is also an await to remove — and the method MUST become `void`
+
+Many mesh APIs **return `IObservable<T>`, not `Task<T>`** — notably `IMeshService.CreateNode` /
+`UpdateNode` / `DeleteNode` and `hub.Observe<T>(...)`. C# lets you `await` an observable (Rx's awaiter
+returns the last value), so test code is full of `await NodeFactory.CreateNode(node)` that looks like a
+Task await but isn't. **Convert these too:**
+
+```csharp
+// ❌ before — awaiting an IObservable keeps the method `async`
+var created = await NodeFactory.CreateNode(node);
+// ✅ after — reactive; the value is the first (and only) emission
+var created = NodeFactory.CreateNode(node).Should().Emit();
+```
+
+**🚨 This matters for correctness, not just style.** A reactive `.Should()` assertion **blocks** (waits
+synchronously for the emission). If even one `await` remains, the test method stays `async Task`, and
+xUnit runs it under an async SynchronizationContext. Blocking inside that context can **deadlock** — the
+framework's own continuations (the hub delivering your stream's emission) are starved by the block, and
+the assertion times out. So: **a test that uses any reactive `.Should()` assertion must be `void`, with
+every `await` removed** (stream-waits → `.Should()`, observable-returning calls → `.Should().Emit()`).
+Genuinely-async leaves like `await act.Should().ThrowAsync<T>()` keep their own method `async` — but then
+that method must NOT also use a blocking reactive assertion.
+
 **After removing every `await`**, the method is synchronous: change `public async Task Foo()` →
 `public void Foo()` and drop `async`. Remove the now-unused `using System.Threading.Tasks;` only if it
 becomes redundant (don't churn unrelated usings).
