@@ -19,7 +19,7 @@ Tags:
 | Intent | Primitive |
 |---|---|
 | **Bind a UI control to a node's content** | Declare a path-bound control (e.g. `new MeshNodeThumbnailControl { NodePath = path }`) or `JsonPointerReference`. The Blazor view subscribes via `GetRemoteStream<MeshNode, MeshNodeReference>` — **layout-area code never loads the node**. See [Data Binding](xref:GUI/DataBinding). |
-| **Find a set of nodes** (existence, listing, search) | `mesh.ObserveQuery<T>(request)` — or `QueryAsync` for `IAsyncEnumerable` |
+| **Find a set of nodes** (existence, listing, search) | `mesh.ObserveQuery<T>(request)` — reactive, live, composes with `Select`/`Where`/`Subscribe`. (The one-shot `IAsyncEnumerable` `QueryAsync` form is discouraged in hub-reachable code — it's a frozen snapshot that never re-emits; see [AsynchronousCalls](AsynchronousCalls) → "prefer `ObserveQuery`".) |
 | **Read a known node's content (one-shot)** | `hub.Post(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(addr))` + `hub.Observe` |
 | **Subscribe to a node's live updates** | `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReference())` |
 | **Write to a node** | `hub.Post(new PatchDataChangeRequest(...), o => o.WithTarget(addr))` (or `DataChangeRequest` for full updates) |

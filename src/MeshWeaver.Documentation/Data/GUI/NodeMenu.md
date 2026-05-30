@@ -5,7 +5,9 @@ Description: How node types register custom menu items in the portal's context m
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="7" y1="8" x2="17" y2="8"/><line x1="7" y1="12" x2="17" y2="12"/><line x1="7" y1="16" x2="13" y2="16"/></svg>
 ---
 
-The portal's node context menu (cube icon) is fully data-driven. Menu items are registered in the node's `HubConfiguration` via `IAsyncEnumerable` providers and rendered during the layout pipeline. A predicate-based renderer evaluates all providers and stores results at `$Menu` in the entity store (same pattern as `$Dialog`). The portal reads `$Menu` from the layout stream -- no separate RPC needed.
+The portal's node context menu (cube icon) is fully data-driven. Menu items are registered in the node's `HubConfiguration` via **reactive** providers (`IObservable<IReadOnlyCollection<NodeMenuItemDefinition>>`) and rendered during the layout pipeline. A predicate-based renderer subscribes to every provider, merges + sorts their items per context, and pushes the result to `$Menu` in the entity store via `host.UpdateArea` on every emission (same storage slot as `$Dialog`). The portal reads `$Menu` from the layout stream -- no separate RPC needed.
+
+🚨 **The menu is reactive, not snapshot-once.** Each provider emits its *complete* item set and re-emits whenever its inputs change — most importantly the viewer's effective permissions. A runtime `AccessAssignment` (e.g. granting Editor) reaches the menu on the `enriched` permission stream *after* the synced query catches up; a reactive provider re-emits the moment it does, and the menu self-corrects. The old `IAsyncEnumerable` + `await foreach … yield break` contract took the **first** permission snapshot and locked it in — baking in whatever had propagated by first render (the access race behind the old `Menu_Editor_ShowsCreateItems` flake). See [Aggregating Providers](../../Architecture/AggregatingProviders).
 
 # Default Menu Items
 
@@ -39,22 +41,25 @@ Items with a required permission are checked inline within the provider. Only vi
 Menu items can contain child items via the `Children` property. The portal renders parent items with a sub-menu that expands on hover.
 
 ```csharp
-// Group multiple items under a parent
-var children = new List<NodeMenuItemDefinition>();
-children.Add(new("Action 1", "Action1Area", Order: 1));
-children.Add(new("Action 2", "Action2Area", Order: 2));
-
-yield return new NodeMenuItemDefinition(
-    "More Actions", "MoreActions",
-    Order: 50,
-    Children: children);
+// Group multiple items under a parent — a provider emits its complete set per emission.
+private static IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> MoreActionsProvider(
+    LayoutAreaHost host, RenderingContext ctx)
+    => Observable.Return<IReadOnlyCollection<NodeMenuItemDefinition>>(
+    [
+        new NodeMenuItemDefinition("More Actions", "MoreActions", Order: 50,
+            Children:
+            [
+                new("Action 1", "Action1Area", Order: 1),
+                new("Action 2", "Action2Area", Order: 2),
+            ]),
+    ]);
 ```
 
 The `DefaultMenuProvider` groups Create, Copy, Move, Import, Export, and Delete under an "Actions" parent item using this pattern.
 
 # Server-Side Permission Filtering
 
-Permission checks happen inside `NodeMenuItemProvider` delegates evaluated during layout rendering on the node hub. The portal receives only items the user is allowed to see -- no client-side filtering needed.
+Permission checks happen inside reactive `NodeMenuItemProvider` streams subscribed during layout rendering on the node hub. The portal receives only items the user is allowed to see -- no client-side filtering needed. Because the providers are live, the `$Menu` stream re-emits whenever permissions change, so the menu updates without a reload.
 
 ```
 Portal (LayoutAreaView)
@@ -62,14 +67,15 @@ Portal (LayoutAreaView)
    |  Subscribes to layout stream
    |  ──────────────────────────────────►  Node Hub
    |                                        |
-   |                                        |  WithRenderer(_ => true, ...)
-   |                                        |    → EvaluateMenuItemsAsync(host, ctx)
-   |                                        |    → runs each provider (IAsyncEnumerable)
-   |                                        |    → permission checks inline
-   |                                        |    → sorted by Order
-   |                                        |    → stored as MenuControl at $Menu
+   |                                        |  WithRenderer(_ => true, RenderMenus)
+   |                                        |    → CollectMenuItemStreamsByContext(host, ctx)
+   |                                        |    → CombineLatest each provider's IObservable
+   |                                        |    → permission checks inside each .Select
+   |                                        |    → merged into ImmutableSortedSet by Order
+   |                                        |    → host.UpdateArea($Menu:{ctx}, MenuControl)
+   |                                        |      on EVERY emission (re-emits on perm change)
    |                                        |
-   |  $Menu stream update                   |
+   |  $Menu stream update(s)                |
    |  ◄──────────────────────────────────   |
    |
    |  LayoutAreaView → IMenuItemsProvider
@@ -78,25 +84,19 @@ Portal (LayoutAreaView)
 
 # Adding Custom Menu Items
 
-Use `AddNodeMenuItems()` in your node type's `HubConfiguration` to add items beyond the defaults:
+Use `AddNodeMenuItems()` in your node type's `HubConfiguration` to add items beyond the defaults. A provider is a reactive stream — compose the live permission observable with `.Select` and return the **complete** item set per emission (emit `[]` when you contribute nothing; never `Observable.Empty`):
 
 ```csharp
 config => config
-    .AddNodeMenuItems(async (host, ctx) =>
-    {
-        // PermissionHelper.GetEffectivePermissions is IObservable<Permission> — never
-        // awaited directly. Bridge to IAsyncEnumerable via ToAsyncEnumerableSequence
-        // and let the menu pipeline consume via await foreach + early yield break.
-        await foreach (var perms in PermissionHelper
-            .GetEffectivePermissions(host.Hub, host.Hub.Address.ToString())
-            .ToAsyncEnumerableSequence())
-        {
-            if (perms.HasFlag(Permission.Update))
-                yield return new NodeMenuItemDefinition("Suggest", "Suggest",
-                    RequiredPermission: Permission.Update, Order: 11);
-            yield break;
-        }
-    })
+    .AddNodeMenuItems((host, ctx) =>
+        // GetEffectivePermissions is IObservable<Permission> — re-emits when the viewer's
+        // permissions change. .Select off it so the menu re-renders when a role is granted.
+        host.Hub.GetEffectivePermissions(host.Hub.Address.ToString())
+            .Select(perms => perms.HasFlag(Permission.Update)
+                ? (IReadOnlyCollection<NodeMenuItemDefinition>)
+                    [new NodeMenuItemDefinition("Suggest", "Suggest",
+                        RequiredPermission: Permission.Update, Order: 11)]
+                : []))
     .AddLayout(layout => layout
         .WithView("Suggest", MyEditArea.Suggest))
 ```
@@ -117,16 +117,16 @@ Items from `AddNodeMenuItems()` are merged with the defaults and sorted by `Orde
 
 ## NodeMenuItemProvider
 
-For advanced scenarios, register a provider delegate that yields items conditionally:
+For advanced scenarios, register a provider delegate that emits items conditionally. Compose the live source streams — never `await`; the provider is `IObservable<IReadOnlyCollection<NodeMenuItemDefinition>>`:
 
 ```csharp
 config.AddNodeMenuItems(
-    new NodeMenuItemProvider(async (host, ctx) =>
-    {
-        var canDoSpecialThing = await CheckSomethingAsync(host.Hub);
-        if (canDoSpecialThing)
-            yield return new NodeMenuItemDefinition("Special", "SpecialArea", Order: 20);
-    }))
+    new NodeMenuItemProvider((host, ctx) =>
+        CheckSomething(host.Hub)   // IObservable<bool>, re-emits as the condition changes
+            .Select(canDoSpecialThing => canDoSpecialThing
+                ? (IReadOnlyCollection<NodeMenuItemDefinition>)
+                    [new NodeMenuItemDefinition("Special", "SpecialArea", Order: 20)]
+                : [])))
 ```
 
 ## Named Menu Contexts

@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using System.Reactive.Threading.Tasks;
 using System.Reactive.Linq;
 using FluentAssertions;
+using MeshWeaver.Reactive.Assertions;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -39,20 +40,19 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
             .Scan(ImmutableList<QueryResultChange<MeshNode>>.Empty, (acc, c) => acc.Add(c));
 
     [Fact]
-    public async Task ObserveQuery_EmitsInitialResults()
+    public void ObserveQuery_EmitsInitialResults()
     {
+        // 🟢 Role-model reactive test: NO `await`, no `Task`. The creates are driven by the
+        // assertion's subscribe, and we wait for the stream's matching emission via
+        // `.Should().Match(...)` — see Doc/Architecture/ReactiveTestAssertions.md.
         var p = P();
-        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project1") with { Name = "Project 1", NodeType = "Markdown" });
-        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project2") with { Name = "Project 2", NodeType = "Markdown" });
-
-        var ct = TestContext.Current.CancellationToken;
+        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project1") with { Name = "Project 1", NodeType = "Markdown" }).Should().Emit();
+        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project2") with { Name = "Project 2", NodeType = "Markdown" }).Should().Emit();
 
         // Act — wait for the initial emission to carry both items.
-        var changes = await ObserveAccumulated($"path:{p} nodeType:Markdown scope:descendants")
-            .Where(acc => acc.Count >= 1 && acc[0].Items.Count >= 2)
-            .FirstAsync()
-            .Timeout(WaitTimeout)
-            .ToTask(ct);
+        var changes = ObserveAccumulated($"path:{p} nodeType:Markdown scope:descendants")
+            .Should(WaitTimeout)
+            .Match(acc => acc.Count >= 1 && acc[0].Items.Count >= 2);
 
         // Assert
         changes.Should().HaveCount(1);
@@ -273,26 +273,32 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
         await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project1") with { Name = "Project 1", NodeType = "Markdown" });
 
         var ct = TestContext.Current.CancellationToken;
-        var receivedChanges = new List<QueryResultChange<MeshNode>>();
+        // Thread-safe: the OnNext callback fires on the change-feed thread while the test thread
+        // reads the count. A plain List races here (the original flake).
+        var receivedChanges = new System.Collections.Concurrent.ConcurrentQueue<QueryResultChange<MeshNode>>();
 
         var subscription = Query
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{p} nodeType:Markdown scope:descendants"))
-            .Subscribe(change => receivedChanges.Add(change));
+            .Subscribe(receivedChanges.Enqueue);
 
-        // Wait for initial emission via a separate observation rather than a sleep.
-        await ObserveAccumulated($"path:{p} nodeType:Markdown scope:descendants")
-            .Where(acc => acc.Count >= 1)
+        // Wait until THIS subscription (not a separate one) has recorded its initial emission, so
+        // the pre-dispose baseline is deterministic. The original waited on a *different*
+        // subscription's initial, so the test subscription's own initial could still be in flight
+        // when Dispose ran — and land afterwards, growing the count and failing the assert.
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Select(_ => receivedChanges.Count)
+            .Where(c => c >= 1)
             .FirstAsync()
             .Timeout(WaitTimeout)
             .ToTask(ct);
 
-        // Act - Dispose subscription.
+        // Act - Dispose subscription, then snapshot the deterministic baseline.
         subscription.Dispose();
+        var countAtDisposal = receivedChanges.Count;
 
-        var snapshot = receivedChanges.ToImmutableList();
-
-        // Add more nodes after disposal and wait via a fresh subscription that DOES emit;
-        // if the disposed subscription got the Added change, the snapshot would have grown.
+        // Add a node after disposal and wait — via a FRESH subscription that DOES emit — until the
+        // system has processed the Added (its Initial snapshot shows both nodes). If the disposed
+        // subscription were still live, the change feed would have grown its queue by now.
         await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project2") with { Name = "Project 2", NodeType = "Markdown" });
         await ObserveAccumulated($"path:{p} nodeType:Markdown scope:descendants")
             .Where(acc => acc.Count >= 1 && acc[0].Items.Count >= 2)
@@ -301,7 +307,7 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
             .ToTask(ct);
 
         // Assert - the disposed subscription should not have received the Added change.
-        receivedChanges.Should().HaveCount(snapshot.Count, "disposed subscription must not emit further");
+        receivedChanges.Count.Should().Be(countAtDisposal, "disposed subscription must not emit further");
     }
 
     [Fact]

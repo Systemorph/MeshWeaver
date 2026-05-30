@@ -25,12 +25,16 @@ public record NodeMenuItemDefinition(
     IReadOnlyList<NodeMenuItemDefinition>? Children = null);
 
 /// <summary>
-/// Provider delegate that yields menu items via IAsyncEnumerable.
-/// Providers are evaluated during layout rendering; they can check permissions inline.
-/// TODO: convert to <c>IObservable&lt;NodeMenuItemDefinition&gt;</c> once the renderer
-/// pipeline supports it end-to-end.
+/// Provider delegate that emits the current set of menu items as a reactive stream.
+/// Each emission is the provider's <b>complete</b> set of items for the current state — the
+/// renderer replaces (not appends) the provider's slice on every emission. Providers compose
+/// the live MeshNode + permission streams, so the menu re-renders automatically when a runtime
+/// <c>AccessAssignment</c> propagates (the access-race fix — see
+/// <c>Doc/GUI/NodeMenu.md</c>). Emit an empty collection (never <c>Observable.Empty</c>) when
+/// the provider contributes nothing for the current node, so the aggregator's
+/// <c>CombineLatest</c> never stalls waiting on a silent provider.
 /// </summary>
-public delegate IAsyncEnumerable<NodeMenuItemDefinition> NodeMenuItemProvider(
+public delegate IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> NodeMenuItemProvider(
     LayoutAreaHost host, RenderingContext context);
 
 /// <summary>
@@ -48,13 +52,14 @@ public interface INodeMenuProvider
     string Context => "Node";
 
     /// <summary>
-    /// Yields menu items. Providers may check node type / permissions before yielding — the
-    /// renderer passes them no filter, so any early-exit (e.g. for the wrong node type) must
-    /// happen inside the implementation.
-    /// TODO: convert to <c>IObservable&lt;NodeMenuItemDefinition&gt; GetItems(...)</c>
-    /// once the renderer pipeline supports it end-to-end.
+    /// Emits this provider's complete set of menu items as a reactive stream. Providers may check
+    /// node type / permissions inside the stream — the renderer passes no filter, so any
+    /// "contributes nothing" case must emit an <b>empty</b> collection (never
+    /// <c>Observable.Empty</c>, which would stall the aggregator's <c>CombineLatest</c>).
+    /// Compose live streams (<c>GetMeshNodeStream</c>, <c>GetEffectivePermissions</c>) so the menu
+    /// re-renders when permissions or node content change.
     /// </summary>
-    IAsyncEnumerable<NodeMenuItemDefinition> GetItemsAsync(LayoutAreaHost host, RenderingContext context);
+    IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> GetItems(LayoutAreaHost host, RenderingContext context);
 }
 
 /// <summary>

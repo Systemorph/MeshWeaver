@@ -195,6 +195,49 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
         AutocompleteMode mode, int limit = 10, string? contextPath = null,
         string? context = null, [EnumeratorCancellation] CancellationToken ct = default)
     {
+        // Legacy async-enumerable surface — delegates to the fully synchronous computation.
+        foreach (var suggestion in ComputeSuggestions(basePath, prefix, mode, limit, contextPath, context))
+            yield return suggestion;
+        await Task.CompletedTask; // async-iterator shape only; the work is fully synchronous
+    }
+
+    /// <summary>
+    /// Reactive autocomplete — <b>fully synchronous</b>. The static catalog is purely in-memory and
+    /// never performs I/O, so it builds the snapshot and <c>Observable.Return</c>s it (no
+    /// <c>Task.Run</c>, no <c>await</c>) instead of inheriting the default async-bridge. This is the
+    /// "in-memory never async" rule in action — see
+    /// <c>Doc/Architecture/AggregatingProviders.md</c> → "The async boundary lives at the I/O edge".
+    /// </summary>
+    public IObservable<IReadOnlyList<QueryResult>> Autocomplete(
+        string basePath, string prefix, JsonSerializerOptions options,
+        AutocompleteMode mode = AutocompleteMode.RelevanceFirst, int limit = 10,
+        string? contextPath = null, string? context = null)
+    {
+        var providerName = ((IMeshQueryProvider)this).Name;
+        var rows = (IReadOnlyList<QueryResult>)ComputeSuggestions(basePath, prefix, mode, limit, contextPath, context)
+            .Select(s => new QueryResult
+            {
+                Path = s.Path,
+                Name = s.Name,
+                NodeType = s.NodeType,
+                Icon = s.Icon,
+                Score = s.Score,
+                ProviderName = providerName,
+            })
+            .ToList();
+        return Observable.Return(rows);
+    }
+
+    /// <summary>
+    /// Synchronous suggestion computation shared by the legacy async-enumerable
+    /// <see cref="AutocompleteAsync(string,string,JsonSerializerOptions,AutocompleteMode,int,string?,string?,CancellationToken)"/>
+    /// and the reactive <see cref="Autocomplete"/> override. Pure in-memory scan + score + order —
+    /// no I/O, so no async.
+    /// </summary>
+    private IReadOnlyList<QuerySuggestion> ComputeSuggestions(
+        string basePath, string prefix, AutocompleteMode mode, int limit,
+        string? contextPath, string? context)
+    {
         var normalizedPrefix = (prefix ?? "").ToLowerInvariant();
         var suggestions = new List<QuerySuggestion>();
 
@@ -254,10 +297,7 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
                 .ThenBy(s => s.Name)
         };
 
-        foreach (var suggestion in ordered.Take(limit))
-            yield return suggestion;
-
-        await Task.CompletedTask; // Satisfy async requirement
+        return ordered.Take(limit).ToList();
     }
 
     public IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request, JsonSerializerOptions options)

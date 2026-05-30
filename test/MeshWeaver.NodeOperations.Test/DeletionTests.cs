@@ -115,17 +115,23 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
         // Act — delete root
         await NodeFactory.DeleteNode($"{TestPartition}/del3root");
 
-        // Assert — entire subtree should be gone. Poll because the recursive
-        // delete fan-out (root → mid → deep) writes per-leaf in order; a
-        // one-shot subtree query can race the bottom-most delete in CI.
-        // 30 s deadline absorbs the slower CI path that was timing out the
-        // previous 15 s ceiling on Linux runners.
+        // Assert — entire subtree should be gone. Poll the AUTHORITATIVE per-node read
+        // (owner-hub round-trip via ReadNodeAsync, which returns null on NotFound) for every
+        // node in the hierarchy, not the lagged `QueryAsync scope:subtree` catalog index. The
+        // recursive delete writes bottom-to-top (deep → mid → root); a query against the
+        // eventually-consistent catalog can lag the actual per-node-hub disposal under CI load
+        // and trip the deadline even though the nodes are gone. This is the same authoritative
+        // poll the sibling Delete_ParentWithChildren_DeletesAll uses.
         await Observable.Interval(TimeSpan.FromMilliseconds(50))
             .StartWith(0L)
-            .SelectMany(_ => Observable.FromAsync(() => MeshQuery
-                .QueryAsync<MeshNode>($"path:{TestPartition}/del3root scope:subtree")
-                .ToListAsync(TestTimeout).AsTask()))
-            .Where(items => items.Count == 0)
+            .SelectMany(_ => Observable.FromAsync(async () =>
+            {
+                var root = await ReadNodeAsync($"{TestPartition}/del3root", TestTimeout);
+                var mid = await ReadNodeAsync($"{TestPartition}/del3root/mid", TestTimeout);
+                var deep = await ReadNodeAsync($"{TestPartition}/del3root/mid/deep", TestTimeout);
+                return root is null && mid is null && deep is null;
+            }))
+            .Where(allGone => allGone)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(30))
             .ToTask(TestContext.Current.CancellationToken);

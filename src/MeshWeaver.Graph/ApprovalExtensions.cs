@@ -53,24 +53,20 @@ public static class ApprovalExtensions
         => configuration.Get<ApprovalsEnabled>() != null;
 
     /// <summary>
-    /// Menu provider that yields "Request Approval" for users with update permission.
-    /// Bridges the permission observable into the IAsyncEnumerable contract via
-    /// <c>await foreach</c> + early <c>yield break</c> — first snapshot wins; the
-    /// pipeline is one-shot per render. (TODO: when the menu pipeline becomes
-    /// fully reactive, drop this bridge and emit live menu updates.)
+    /// Reactive menu provider that emits "Request Approval" for users with Update permission.
+    /// Re-emits when the viewer's effective permissions change (e.g. a role is granted at runtime),
+    /// so the item appears/disappears without a reload. Emits an empty slice when Update is absent.
     /// </summary>
-    private static async IAsyncEnumerable<NodeMenuItemDefinition> ApprovalMenuProvider(
+    private static IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> ApprovalMenuProvider(
         LayoutAreaHost host, RenderingContext ctx)
     {
         var hubPath = host.Hub.Address.ToString();
-        await foreach (var perms in host.Hub.GetEffectivePermissions(hubPath)
-            .ToAsyncEnumerableSequence())
-        {
-            if (perms.HasFlag(Permission.Update))
-                yield return new NodeMenuItemDefinition(
-                    "Request Approval", "RequestApproval",
-                    Order: 30, Href: MeshNodeLayoutAreas.BuildUrl(hubPath, "RequestApproval"));
-            yield break;
-        }
+        return host.Hub.GetEffectivePermissions(hubPath).Select(perms =>
+            perms.HasFlag(Permission.Update)
+                ? (IReadOnlyCollection<NodeMenuItemDefinition>)
+                    [new NodeMenuItemDefinition(
+                        "Request Approval", "RequestApproval",
+                        Order: 30, Href: MeshNodeLayoutAreas.BuildUrl(hubPath, "RequestApproval"))]
+                : []);
     }
 }
