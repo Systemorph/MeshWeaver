@@ -525,9 +525,6 @@ public static class EditorExtensions
 
     #region MapToToggleableControl
 
-    // Track which edit states have been initialized to avoid re-initializing on re-render
-    private static readonly HashSet<string> InitializedEditStates = new();
-
     /// <summary>
     /// Creates a control that toggles between read-only and edit modes.
     /// Read-only displays a LabelControl; click switches to edit mode.
@@ -552,18 +549,11 @@ public static class EditorExtensions
         var propName = property.Name.ToCamelCase()!;
         var editStateId = $"editState_{dataId}_{propName}";
 
-        // Initialize edit state only once per session to prevent reset on re-render
-        // Use a unique key combining stream ID and edit state ID
-        // When not toggleable, start in edit mode
-        var initKey = $"{host.Stream.StreamId}_{editStateId}";
-        lock (InitializedEditStates)
-        {
-            if (!InitializedEditStates.Contains(initKey))
-            {
-                host.UpdateData(editStateId, !isToggleable); // Start in edit mode when not toggleable
-                InitializedEditStates.Add(initKey);
-            }
-        }
+        // Initialize the edit-state value only once per layout-area session so a re-render
+        // doesn't reset edit mode. The "already seeded" set lives on the host (per-session
+        // instance state), not a process-wide static set — see NoStaticState.md.
+        if (host.TryMarkEditStateInitialized(editStateId))
+            host.UpdateData(editStateId, !isToggleable); // Start in edit mode when not toggleable
 
         // Get the edit state stream - now it will emit the stored value
         var editStateStream = host.Stream.GetDataStream<bool>(editStateId)

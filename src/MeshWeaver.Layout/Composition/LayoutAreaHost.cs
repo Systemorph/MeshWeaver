@@ -364,6 +364,22 @@ public record LayoutAreaHost : IDisposable
             Update(LayoutAreaReference.Data, store => store.SetItem(id, data));
     }
 
+    // Per-session "already seeded" set for toggleable edit-state ids (EditorExtensions.
+    // MapToToggleableControl). Instance field — NOT a static set — so it dies with this
+    // layout-area host and never bleeds across sessions/tests. See NoStaticState.md.
+    private readonly HashSet<string> initializedEditStates = new();
+
+    /// <summary>
+    /// Marks <paramref name="editStateId"/> as initialized for this layout-area session.
+    /// Returns <c>true</c> the first time (caller should seed the initial value), <c>false</c>
+    /// on every subsequent render (so a re-render doesn't reset the edit/read toggle).
+    /// </summary>
+    public bool TryMarkEditStateInitialized(string editStateId)
+    {
+        lock (initializedEditStates)
+            return initializedEditStates.Add(editStateId);
+    }
+
 
     private readonly ConcurrentDictionary<string, List<IDisposable>> disposablesByArea = new();
 

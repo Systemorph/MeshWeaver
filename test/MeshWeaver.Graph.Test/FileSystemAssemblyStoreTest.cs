@@ -1,6 +1,5 @@
 using System;
 using System.IO;
-using System.Reactive.Linq;
 using System.Text;
 using MeshWeaver.Graph.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -33,7 +32,7 @@ public class FileSystemAssemblyStoreTest : IDisposable
     [Fact]
     public void TryGet_returns_null_on_cold_miss()
     {
-        var path = store.TryGetAssemblyPath("Systemorph/FutuRe/Pricing", version: 3).Wait();
+        var path = store.TryGetAssemblyPath("Systemorph/FutuRe/Pricing", version: 3).Should().Emit();
         path.Should().BeNull();
     }
 
@@ -41,12 +40,12 @@ public class FileSystemAssemblyStoreTest : IDisposable
     public void Put_writes_bytes_and_TryGet_returns_that_path()
     {
         var bytes = Encoding.UTF8.GetBytes("fake-dll-bytes");
-        var putPath = store.Put("Systemorph/FutuRe/Pricing", version: 7, bytes, pdbBytes: null).Wait();
+        var putPath = store.Put("Systemorph/FutuRe/Pricing", version: 7, bytes, pdbBytes: null).Should().Emit();
 
         File.Exists(putPath).Should().BeTrue();
         File.ReadAllBytes(putPath!).Should().BeEquivalentTo(bytes, System.Text.Json.JsonSerializerOptions.Default);
 
-        var getPath = store.TryGetAssemblyPath("Systemorph/FutuRe/Pricing", version: 7).Wait();
+        var getPath = store.TryGetAssemblyPath("Systemorph/FutuRe/Pricing", version: 7).Should().Emit();
         getPath.Should().Be(putPath);
     }
 
@@ -55,7 +54,7 @@ public class FileSystemAssemblyStoreTest : IDisposable
     {
         var dll = new byte[] { 1, 2, 3, 4 };
         var pdb = new byte[] { 9, 9, 9 };
-        var dllPath = store.Put("A/B", version: 1, dll, pdb).Wait()!;
+        var dllPath = store.Put("A/B", version: 1, dll, pdb).Should().Emit()!;
 
         File.Exists(dllPath).Should().BeTrue();
         var pdbPath = Path.ChangeExtension(dllPath, ".pdb");
@@ -76,8 +75,8 @@ public class FileSystemAssemblyStoreTest : IDisposable
         // with it and we land on a fresh dllPath.
         var v1 = Encoding.UTF8.GetBytes("first-compile");
         var v2 = Encoding.UTF8.GetBytes("second-compile-of-same-version");
-        var p1 = store.Put("X/Y", version: 4, v1, null).Wait()!;
-        var p2 = store.Put("X/Y", version: 4, v2, null).Wait()!;
+        var p1 = store.Put("X/Y", version: 4, v1, null).Should().Emit()!;
+        var p2 = store.Put("X/Y", version: 4, v2, null).Should().Emit()!;
         p2.Should().Be(p1, "same version must resolve to the same filesystem path");
         File.ReadAllBytes(p2).Should().BeEquivalentTo(v1, System.Text.Json.JsonSerializerOptions.Default, because: "second put is a no-op — first-write-wins for ALC safety");
     }
@@ -87,8 +86,8 @@ public class FileSystemAssemblyStoreTest : IDisposable
     {
         var bytesV1 = Encoding.UTF8.GetBytes("v1-source");
         var bytesV2 = Encoding.UTF8.GetBytes("v2-source");
-        var p1 = store.Put("X/Y", version: 1, bytesV1, null).Wait()!;
-        var p2 = store.Put("X/Y", version: 2, bytesV2, null).Wait()!;
+        var p1 = store.Put("X/Y", version: 1, bytesV1, null).Should().Emit()!;
+        var p2 = store.Put("X/Y", version: 2, bytesV2, null).Should().Emit()!;
         p1.Should().NotBe(p2, "different versions land in different files — history is preserved");
         File.Exists(p1).Should().BeTrue();
         File.Exists(p2).Should().BeTrue();
@@ -99,8 +98,8 @@ public class FileSystemAssemblyStoreTest : IDisposable
     {
         // Two-step escape: '_' → '__', then '/' → '_'. Guarantees that mesh paths
         // with or without literal underscores encode to distinct directories.
-        var p1 = store.Put("A/B/C", version: 1, new byte[] { 1 }, null).Wait()!;
-        var p2 = store.Put("A_B/C", version: 1, new byte[] { 2 }, null).Wait()!;
+        var p1 = store.Put("A/B/C", version: 1, new byte[] { 1 }, null).Should().Emit()!;
+        var p2 = store.Put("A_B/C", version: 1, new byte[] { 2 }, null).Should().Emit()!;
         p1.Should().NotBe(p2);
     }
 
@@ -115,9 +114,9 @@ public class FileSystemAssemblyStoreTest : IDisposable
         var siloB = new FileSystemAssemblyStore(root, NullLogger<FileSystemAssemblyStore>.Instance);
 
         var bytes = Encoding.UTF8.GetBytes("compiled-on-silo-A");
-        var putPath = siloA.Put("Shared/Type", version: 42, bytes, null).Wait()!;
+        var putPath = siloA.Put("Shared/Type", version: 42, bytes, null).Should().Emit()!;
 
-        var getPath = siloB.TryGetAssemblyPath("Shared/Type", version: 42).Wait();
+        var getPath = siloB.TryGetAssemblyPath("Shared/Type", version: 42).Should().Emit();
         getPath.Should().Be(putPath, "silo B must see silo A's write via the shared root");
 
         File.ReadAllBytes(getPath!).Should().BeEquivalentTo(bytes, System.Text.Json.JsonSerializerOptions.Default);
@@ -132,11 +131,11 @@ public class FileSystemAssemblyStoreTest : IDisposable
         var siloA = new FileSystemAssemblyStore(root, NullLogger<FileSystemAssemblyStore>.Instance);
         var siloB = new FileSystemAssemblyStore(root, NullLogger<FileSystemAssemblyStore>.Instance);
 
-        siloA.Put("Shared/Type", version: 1, new byte[] { 1 }, null).Wait();
-        siloB.Put("Shared/Type", version: 2, new byte[] { 2 }, null).Wait();
+        siloA.Put("Shared/Type", version: 1, new byte[] { 1 }, null).Should().Emit();
+        siloB.Put("Shared/Type", version: 2, new byte[] { 2 }, null).Should().Emit();
 
-        var aSeesB = siloA.TryGetAssemblyPath("Shared/Type", version: 2).Wait();
-        var bSeesA = siloB.TryGetAssemblyPath("Shared/Type", version: 1).Wait();
+        var aSeesB = siloA.TryGetAssemblyPath("Shared/Type", version: 2).Should().Emit();
+        var bSeesA = siloB.TryGetAssemblyPath("Shared/Type", version: 1).Should().Emit();
         aSeesB.Should().NotBeNull();
         bSeesA.Should().NotBeNull();
         aSeesB.Should().NotBe(bSeesA, "v1 and v2 live at distinct paths");

@@ -87,12 +87,13 @@ public class NoStaticCollectionsTest
         // ---- PROC: tied to a process-global resource; per-mesh is meaningless, no test bleed ----
         ["MeshWeaver.Kernel.Hub.KernelExecutor._probingDirs"] = "PROC: AssemblyLoadContext.Default.Resolving probe registry (one resolver per process)",
 
+        // ---- TESTPERF: keyed by test-class Type -> isolated across classes (no cross-class bleed);
+        //      shares only within a class's own methods (xUnit already serializes those). IClassFixture
+        //      is the eventual idiomatic form — tracked, larger refactor. ----
+        ["MeshWeaver.Hosting.Monolith.TestBase.MonolithMeshTestBase._sharedProviders"] = "TESTPERF: per-class SP cache (Type-keyed) -> IClassFixture (future)",
+
         // ---- CACHE: mutable mesh/runtime state — MUST migrate to mesh-scoped instance. BURN DOWN TO ZERO. ----
-        ["MeshWeaver.Graph.Configuration.NodeTypeRegistry.Nodes"] = "CACHE: deleted in source — drops on Graph rebuild",
-        ["MeshWeaver.Graph.Configuration.ApiTokenNodeType.ValidationCache"] = "CACHE: -> mesh-scoped IMemoryCache (10-min TTL)",
-        ["MeshWeaver.Hosting.Monolith.TestBase.MonolithMeshTestBase._sharedProviders"] = "CACHE: shared DI providers across tests (opt-in only; -> IClassFixture)",
-        ["MeshWeaver.Layout.EditorExtensions.InitializedEditStates"] = "CACHE: -> per-layout-area state",
-        ["MeshWeaver.Fixture.XUnitFileOutputRegistry._activeOutputHelpers"] = "CACHE: test-infra review",
+        ["MeshWeaver.Graph.Configuration.ApiTokenNodeType.ValidationCache"] = "CACHE: -> per-ApiToken-hub IMemoryCache (10-min TTL) + node-watch invalidation (cross-hub; deferred)",
     };
 
     [Fact]
