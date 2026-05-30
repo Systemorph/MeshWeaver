@@ -65,7 +65,7 @@ public class DeadStreamSafetyTest(ITestOutputHelper output) : HubTestBase(output
     {
         // Pre-fix: ObjectDisposedException at the user's call site (Reduce
         // chain). Post-fix: ctor returns a "dead" stream, no exception.
-        var act = () => CreateAgainstDisposingHost();
+        Action act = () => CreateAgainstDisposingHost();
         act.Should().NotThrow(
             "the dead-stream branch must replace the throw with a benign no-op stream");
     }

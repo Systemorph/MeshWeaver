@@ -51,7 +51,7 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTe
         Output.WriteLine($"CreateNodeRequest: id={node.Id}, path={node.Path}, target={targetAddress}");
         var response = await client.Observe(new CreateNodeRequest(node), o => o.WithTarget(new Address(targetAddress))).FirstAsync().ToTask(ct);
         Output.WriteLine($"CreateNodeResponse: success={response.Message.Success}, error={response.Message.Error ?? "(none)"}, path={response.Message.Node?.Path ?? "(null)"}");
-        response.Message.Success.Should().BeTrue(response.Message.Error);
+        response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         return response.Message.Node!.Path!;
     }
 
@@ -394,7 +394,7 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTe
             var fullPath = $"{threadPath}/{msgId}";
             var msg = await GetHubContent<ThreadMessage>(client, fullPath).Where(c => c is not null).Take(1).Timeout(30.Seconds()).FirstAsync().ToTask(ct);
             msg.Should().NotBeNull($"ThreadMessage at {fullPath} should exist");
-            Output.WriteLine($"Child node verified: {fullPath} => role={msg.Role}, type={msg.Type}");
+            Output.WriteLine($"Child node verified: {fullPath} => role={msg!.Role}, type={msg.Type}");
         }
     }
 }

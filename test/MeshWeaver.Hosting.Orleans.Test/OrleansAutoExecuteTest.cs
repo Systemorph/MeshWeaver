@@ -89,7 +89,7 @@ public class OrleansAutoExecuteTest(ITestOutputHelper output) : OrleansSharedTes
 
             // Create the thread Ã¢â‚¬â€ AutoExecutePendingMessage should fire on grain activation
             var createResponse = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("TestUser"))).FirstAsync().ToTask(ct);
-            createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error);
+            createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error ?? "");
             Output.WriteLine("Thread created, waiting for execution...");
 
             // Poll for execution to complete

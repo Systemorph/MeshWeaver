@@ -194,7 +194,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         }
         else
         {
-            Output.WriteLine($"Content type: {todoNode.Content.GetType().Name}");
+            Output.WriteLine($"Content type: {todoNode.Content!.GetType().Name}");
             Output.WriteLine($"Content: {todoNode.Content}");
         }
     }
@@ -221,13 +221,13 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// Test that the Project hub can receive requests.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task ProjectHub_CanReceiveRequests()
+    public void ProjectHub_CanReceiveRequests()
     {
         var client = GetClient();
         var projectAddress = new Address("ACME/ProductLaunch");
 
         // Verify the hub is accessible
-        var response = await client.Observe(new PingRequest(), o => o.WithTarget(projectAddress)).FirstAsync().ToTask();
+        var response = client.Observe(new PingRequest(), o => o.WithTarget(projectAddress)).Should().Emit();
 
         response.Should().NotBeNull("Project hub should respond to ping");
         Output.WriteLine($"Project hub is accessible at {projectAddress}");
@@ -237,13 +237,13 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// Test that the Todo hub can receive requests.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task TodoHub_CanReceiveRequests()
+    public void TodoHub_CanReceiveRequests()
     {
         var client = GetClient();
         var todoAddress = new Address("ACME/ProductLaunch/Todo/DefinePersona");
 
         // Verify the hub is accessible
-        var response = await client.Observe(new PingRequest(), o => o.WithTarget(todoAddress)).FirstAsync().ToTask();
+        var response = client.Observe(new PingRequest(), o => o.WithTarget(todoAddress)).Should().Emit();
 
         response.Should().NotBeNull("Todo hub should respond to ping");
         Output.WriteLine($"Todo hub is accessible at {todoAddress}");
@@ -253,7 +253,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// Test that multiple Todo hubs can be accessed independently.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task MultipleTodoHubs_CanBeAccessedIndependently()
+    public void MultipleTodoHubs_CanBeAccessedIndependently()
     {
         var client = GetClient();
 
@@ -268,7 +268,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         {
             var todoAddress = new Address(addressPath);
 
-            var response = await client.Observe(new PingRequest(), o => o.WithTarget(todoAddress)).FirstAsync().ToTask();
+            var response = client.Observe(new PingRequest(), o => o.WithTarget(todoAddress)).Should().Emit();
 
             response.Should().NotBeNull($"Todo hub at {addressPath} should respond");
             Output.WriteLine($"Successfully accessed: {addressPath}");
@@ -280,7 +280,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// Note: "Summary" view doesn't exist, using TodaysFocus as the overview view.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task SummaryView_RespondsToDataAccess()
+    public void SummaryView_RespondsToDataAccess()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -294,11 +294,9 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
             reference);
 
         Output.WriteLine("Getting initial TodaysFocus view...");
-        var control = await stream
+        var control = stream
             .GetControlStream(reference.Area!)
-            .Where(c => c != null)
-            .Timeout(TimeSpan.FromSeconds(30))
-            .FirstAsync();
+            .Should().Within(30.Seconds()).Match(c => c != null);
 
         control.Should().NotBeNull("TodaysFocus view should render initially");
         Output.WriteLine($"Initial view rendered: {control?.GetType().Name}");
@@ -383,7 +381,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// Test that the AllTasks view renders with groups.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task AllTasksView_ShouldIncludeNewTaskButton()
+    public void AllTasksView_ShouldIncludeNewTaskButton()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -395,11 +393,9 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
             reference);
 
         Output.WriteLine("Getting AllTasks view...");
-        var control = await stream
+        var control = stream
             .GetControlStream(reference.Area!)
-            .Where(c => c != null)
-            .Timeout(TimeSpan.FromSeconds(30))
-            .FirstAsync();
+            .Should().Within(30.Seconds()).Match(c => c != null);
 
         control.Should().NotBeNull("AllTasks view should render");
         Output.WriteLine($"AllTasks view rendered: {control?.GetType().Name}");
@@ -410,7 +406,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// Note: "Details" view is named "Overview" in Todo.json.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task DetailsView_ShouldIncludeCrudButtons()
+    public void DetailsView_ShouldIncludeCrudButtons()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -423,11 +419,9 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
             reference);
 
         Output.WriteLine("Getting Overview view...");
-        var control = await stream
+        var control = stream
             .GetControlStream(reference.Area!)
-            .Where(c => c != null)
-            .Timeout(TimeSpan.FromSeconds(30))
-            .FirstAsync();
+            .Should().Within(30.Seconds()).Match(c => c != null);
 
         control.Should().NotBeNull("Overview view should render");
         Output.WriteLine($"Overview view rendered: {control?.GetType().Name}");
@@ -461,11 +455,9 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
             reference);
 
         Output.WriteLine("Getting AllTasks view (triggers ProjectViews compilation)...");
-        var control = await stream
+        var control = stream
             .GetControlStream(reference.Area!)
-            .Where(c => c != null)
-            .Timeout(TimeSpan.FromSeconds(30))
-            .FirstAsync();
+            .Should().Within(30.Seconds()).Match(c => c != null);
 
         control.Should().NotBeNull("AllTasks view should compile and render");
         Output.WriteLine($"AllTasks view compiled and rendered: {control?.GetType().Name}");
@@ -510,12 +502,11 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
 
         // Capture the initial active set + the original todo from the same
         // ObserveQuery subscription â€” initial emission is the full snapshot.
-        var initialItems = await MeshQuery
+        var initialItems = MeshQuery
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(activeQuery))
             .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
             .Select(c => c.Items)
-            .FirstAsync()
-            .ToTask(ct);
+            .Should().Emit();
 
         var originalNode = initialItems.FirstOrDefault(n => n.Path == todoPath);
         originalNode.Should().NotBeNull("DefinePersona should be in the initial active set");
@@ -549,12 +540,11 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         var deletedQuery = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo state:Deleted scope:subtree";
 
         // Capture original from the live active set (set query â€” ObserveQuery is correct).
-        var initialActive = await MeshQuery
+        var initialActive = MeshQuery
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(activeQuery))
             .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
             .Select(c => c.Items)
-            .FirstAsync()
-            .ToTask(ct);
+            .Should().Emit();
 
         var originalNode = initialActive.FirstOrDefault(n => n.Path == todoPath);
         originalNode.Should().NotBeNull("DefinePersona should be in the initial active set");

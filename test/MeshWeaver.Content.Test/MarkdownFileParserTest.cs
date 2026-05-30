@@ -56,8 +56,8 @@ public class MarkdownFileParserTest
         node.State.Should().Be(MeshNodeState.Transient);
 
         var mdContent = node.Content.Should().BeOfType<MarkdownContent>().Subject;
-        mdContent.Authors.Should().BeEquivalentTo(["John Doe", "Jane Smith"]);
-        mdContent.Tags.Should().BeEquivalentTo(["tutorial", "beginner"]);
+        mdContent.Authors.Should().BeEquivalentTo(new[] { "John Doe", "Jane Smith" }, System.Text.Json.JsonSerializerOptions.Default);
+        mdContent.Tags.Should().BeEquivalentTo(new[] { "tutorial", "beginner" }, System.Text.Json.JsonSerializerOptions.Default);
         mdContent.Thumbnail.Should().Be("/images/thumb.png");
         mdContent.Abstract.Should().Be("A detailed article"); // Mapped from Description
         mdContent.Content.Should().Contain("# My Article");
@@ -409,8 +409,8 @@ public class MarkdownFileParserTest
         reparsed.Icon.Should().Be("School");
 
         var mdContent = reparsed.Content.Should().BeOfType<MarkdownContent>().Subject;
-        mdContent.Authors.Should().BeEquivalentTo(["Teacher One"]);
-        mdContent.Tags.Should().BeEquivalentTo(["advanced"]);
+        mdContent.Authors.Should().BeEquivalentTo(new[] { "Teacher One" }, System.Text.Json.JsonSerializerOptions.Default);
+        mdContent.Tags.Should().BeEquivalentTo(new[] { "advanced" }, System.Text.Json.JsonSerializerOptions.Default);
         mdContent.Abstract.Should().Be("A comprehensive tutorial");
         mdContent.Content.Should().Contain("# Tutorial Title");
         mdContent.Content.Should().Contain("Step 1: Do this.");

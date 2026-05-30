@@ -88,9 +88,7 @@ public class LayoutSerializationTest(ITestOutputHelper output) : HubTestBase(out
 
             // Verify the deserialized object is of the correct type
             deserialized.Should().NotBeNull();
-            deserialized.Should().BeOfType<StackControl>();
-
-            var stackControl = (StackControl)deserialized;
+            var stackControl = deserialized.Should().BeOfType<StackControl>().Which;
             stackControl.Skin.Should().BeOfType<LayoutStackSkin>();
             stackControl.Areas.Should().HaveCount(6);
             stackControl.Areas.Should().AllBeOfType<NamedAreaControl>();

@@ -736,9 +736,9 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
                 .Select(i => i.GetProperty("title").GetString())
                 .ToArray();
 
-            inheritorTitles.Should().Contain(title => title.Contains("Circle"));
-            inheritorTitles.Should().Contain(title => title.Contains("Rectangle"));
-            inheritorTitles.Should().Contain(title => title.Contains("Triangle"));
+            inheritorTitles.Should().Contain(title => title!.Contains("Circle"));
+            inheritorTitles.Should().Contain(title => title!.Contains("Rectangle"));
+            inheritorTitles.Should().Contain(title => title!.Contains("Triangle"));
         }
     }
 
@@ -909,7 +909,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
 
             // assert - verify deserialization worked correctly
             deserializedReference.Should().NotBeNull();
-            deserializedReference.Should().BeOfType(reference.GetType());
+            deserializedReference!.GetType().Should().Be(reference.GetType());
             deserializedReference.Should().Be(reference);
         }
     }
@@ -963,7 +963,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
 
         // assert - verify deserialization worked correctly
         deserializedRequest.Should().NotBeNull();
-        deserializedRequest.StreamId.Should().Be("test-stream-id");
+        deserializedRequest!.StreamId.Should().Be("test-stream-id");
         deserializedRequest.Reference.Should().NotBeNull();
         deserializedRequest.Reference.Should().BeOfType<EntityReference>();
 
@@ -1008,9 +1008,9 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
 
             // assert - verify deserialization integrity
             deserializedRequest.Should().NotBeNull();
-            deserializedRequest.StreamId.Should().Be($"stream-{testCase.Name.ToLower()}");
+            deserializedRequest!.StreamId.Should().Be($"stream-{testCase.Name.ToLower()}");
             deserializedRequest.Reference.Should().NotBeNull();
-            deserializedRequest.Reference.Should().BeOfType(testCase.Reference.GetType());
+            deserializedRequest.Reference!.GetType().Should().Be(testCase.Reference.GetType());
             deserializedRequest.Reference.Should().Be(testCase.Reference);
         }
     }
@@ -1073,11 +1073,11 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
 
         // assert - verify deserialization integrity
         deserializedRequest.Should().NotBeNull();
-        deserializedRequest.StreamId.Should().Be("layout-stream-id");
+        deserializedRequest!.StreamId.Should().Be("layout-stream-id");
         deserializedRequest.Reference.Should().NotBeNull();
         deserializedRequest.Reference.Should().BeOfType<LayoutAreaReference>();
 
-        var deserializedLayoutRef = (LayoutAreaReference)deserializedRequest.Reference;
+        var deserializedLayoutRef = (LayoutAreaReference)deserializedRequest.Reference!;
         deserializedLayoutRef.Area.Should().Be("main-area");
         deserializedLayoutRef.Id.Should().Be("layout-123");
         deserializedLayoutRef.Layout.Should().Be("dashboard-layout");

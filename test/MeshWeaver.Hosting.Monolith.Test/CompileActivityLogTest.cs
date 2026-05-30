@@ -160,7 +160,7 @@ public class CompileActivityLogTest(ITestOutputHelper output) : MonolithMeshTest
             "CompiledSources must be set whenever the compile produces an assembly");
         result.CompiledSources!.Should().ContainKey($"{nodeTypePath}/Source/code",
             "the snapshot must include every source Code node the compile consumed");
-        result.CompiledSources[$"{nodeTypePath}/Source/code"].Should().BeGreaterThanOrEqualTo(0,
+        result.CompiledSources![$"{nodeTypePath}/Source/code"].Should().BeGreaterThanOrEqualTo(0,
             "snapshot value is the source MeshNode.Version (always non-negative)");
     }
 }

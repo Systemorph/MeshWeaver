@@ -69,8 +69,8 @@ public class VirtualUserMiddlewareAuthContextTest
         // Asserting the throw proves we DID enter the block (vs. the guard above
         // short-circuiting). The integration test in MeshWeaver.Hosting.Blazor.Test
         // covers the happy path with a real DI scope.
-        await FluentActions.Invoking(() => middleware.InvokeAsync(context))
-            .Should().ThrowAsync<System.Exception>(
-                "unauthenticated requests must enter the VUser provisioning block");
+        Func<Task> act = () => middleware.InvokeAsync(context);
+        await act.Should().ThrowAsync<System.Exception>(
+            "unauthenticated requests must enter the VUser provisioning block");
     }
 }

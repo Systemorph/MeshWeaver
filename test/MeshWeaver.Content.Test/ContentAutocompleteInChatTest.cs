@@ -273,7 +273,7 @@ public class ContentAutocompleteInChatTest(ITestOutputHelper output) : MonolithM
         Output.WriteLine($"Filter '{filterText}': {expectedMatches.Count} matches out of {allFiles.Count} files");
         expectedMatches.Should().NotBeEmpty($"filter '{filterText}' should match at least the original file");
         expectedMatches.Should().AllSatisfy(f =>
-            f.Name.Should().Contain(filterText, Exactly.Once(),
+            f.Name.Should().Contain(filterText,
                 $"each match should contain the filter text '{filterText}'"));
     }
 

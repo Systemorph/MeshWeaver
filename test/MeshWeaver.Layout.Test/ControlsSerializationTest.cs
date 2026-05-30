@@ -57,7 +57,7 @@ public class ControlsSerializationTest(ITestOutputHelper output) : HubTestBase(o
         deserialized.Should().NotBeNull();
         deserialized.Should().HaveCount(3);
 
-        var deserializedList = deserialized.ToList();
+        var deserializedList = deserialized!.ToList();
         deserializedList[0].Should().BeOfType<Option<int>>();
         deserializedList[0].Text.Should().Be("One");
         ((Option<int>)deserializedList[0]).Item.Should().Be(1);
@@ -97,7 +97,7 @@ public class ControlsSerializationTest(ITestOutputHelper output) : HubTestBase(o
         deserialized.Should().NotBeNull();
         deserialized.Should().HaveCount(3);
 
-        deserialized[0].Should().BeOfType<Option<string>>();
+        deserialized![0].Should().BeOfType<Option<string>>();
         deserialized[0].Text.Should().Be("Hello");
         ((Option<string>)deserialized[0]).Item.Should().Be("hello");
 
@@ -132,7 +132,7 @@ public class ControlsSerializationTest(ITestOutputHelper output) : HubTestBase(o
         var deserialized = JsonSerializer.Deserialize<IEnumerable<Option>>(serialized, host.JsonSerializerOptions);
         // Verify the results
         deserialized.Should().NotBeNull();
-        var deserializedArray = deserialized.ToArray();
+        var deserializedArray = deserialized!.ToArray();
         deserializedArray.Should().HaveCount(2);
 
         deserializedArray[0].Should().BeOfType<Option<int>>();
@@ -162,7 +162,7 @@ public class ControlsSerializationTest(ITestOutputHelper output) : HubTestBase(o
         // Verify the results
         deserialized.Should().NotBeNull();
         deserialized.Should().BeOfType<Option<int>>();
-        deserialized.Text.Should().Be("Forty-Two");
+        deserialized!.Text.Should().Be("Forty-Two");
         ((Option<int>)deserialized).Item.Should().Be(42);
     }
 }

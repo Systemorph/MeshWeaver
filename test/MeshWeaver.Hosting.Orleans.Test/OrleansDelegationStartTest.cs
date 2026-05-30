@@ -66,7 +66,7 @@ public class OrleansDelegationStartTest(ITestOutputHelper output) : OrleansShare
             // Create a parent thread first (delegations live under a response message)
             var parentNode = ThreadNodeType.BuildThreadNode("TestUser", "Parent for delegation test", "TestUser");
             var parentResp = await client.Observe(new CreateNodeRequest(parentNode), o => o.WithTarget(new Address("TestUser"))).FirstAsync().ToTask(ct);
-            parentResp.Message.Success.Should().BeTrue(parentResp.Message.Error);
+            parentResp.Message.Success.Should().BeTrue(parentResp.Message.Error ?? "");
             var parentPath = parentResp.Message.Node!.Path!;
             Output.WriteLine($"Parent thread: {parentPath}");
 
@@ -94,7 +94,7 @@ public class OrleansDelegationStartTest(ITestOutputHelper output) : OrleansShare
             // also creates all three nodes via meshService.CreateNode but does so
             // concurrently / fire-and-forget so the routing race is hidden.
             var threadResp = await client.Observe(new CreateNodeRequest(subThreadNode), o => o.WithTarget(new Address(parentMsgPath))).FirstAsync().ToTask(ct);
-            threadResp.Message.Success.Should().BeTrue(threadResp.Message.Error);
+            threadResp.Message.Success.Should().BeTrue(threadResp.Message.Error ?? "");
             Output.WriteLine("Sub-thread created Ã¢â‚¬â€ WatchForExecution should trigger");
 
             // Step 2: Create user cell (now that sub-thread exists routing succeeds)

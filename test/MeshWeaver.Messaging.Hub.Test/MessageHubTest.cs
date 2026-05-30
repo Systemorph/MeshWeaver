@@ -25,30 +25,27 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
         );
 
     [Fact]
-    public async Task HelloWorld()
+    public void HelloWorld()
     {
         var host = GetHost();
-        var response = await host.Observe(new SayHelloRequest(), o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask(new CancellationTokenSource(10.Seconds()).Token);
+        var response = host.Observe(new SayHelloRequest(), o => o.WithTarget(CreateHostAddress())).Should().Within(10.Seconds()).Emit();
         response.Should().BeAssignableTo<IMessageDelivery<HelloEvent>>();
     }
 
     [Fact]
-    public async Task HelloWorldFromClient()
+    public void HelloWorldFromClient()
     {
         var client = GetClient();
-        var response = await client.Observe(new SayHelloRequest(), o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(5.Seconds()).Token
-            ).Token);
+        var response = client.Observe(new SayHelloRequest(), o => o.WithTarget(CreateHostAddress())).Should().Within(5.Seconds()).Emit();
         response.Should().BeAssignableTo<IMessageDelivery<HelloEvent>>();
     }
 
     [Fact]
-    public async Task ClientToServerWithMessageTraffic()
+    public void ClientToServerWithMessageTraffic()
     {
         var client = GetClient();
 
-        var response = await client.Observe(new SayHelloRequest(), o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var response = client.Observe(new SayHelloRequest(), o => o.WithTarget(CreateHostAddress())).Should().Emit();
         response.Should().BeAssignableTo<IMessageDelivery<HelloEvent>>();
     }
 

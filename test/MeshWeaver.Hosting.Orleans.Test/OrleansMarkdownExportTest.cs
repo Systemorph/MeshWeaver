@@ -100,7 +100,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
             Content = new MarkdownContent { Content = markdown }
         };
         var response = await client.Observe(new CreateNodeRequest(node), o => o.WithTarget(new Address(TestUserId))).FirstAsync().ToTask(ct);
-        response.Message.Success.Should().BeTrue(response.Message.Error);
+        response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         return response.Message.Node!.Path!;
     }
 
@@ -127,7 +127,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
             "discriminator didn't match any registered type on the client hub");
 
         var dispatch = delivery.Message;
-        dispatch.Error.Should().BeNull(dispatch.Error);
+        dispatch.Error.Should().BeNull(dispatch.Error ?? "");
         dispatch.Format.Should().Be(ExportFormat.Pdf);
         dispatch.ActivityPath.Should().NotBeNullOrEmpty(
             "the just-start dispatch returns the activity path — bytes flow via ActivityLog.ReturnValue");
@@ -148,7 +148,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
         terminal.ReturnValue.Should().NotBeNull("the script writes RenderedDocument here");
         var rendered = terminal.ReturnValue!.Value.Deserialize<RenderedDocument>(client.JsonSerializerOptions);
         rendered!.Format.Should().Be(ExportFormat.Pdf);
-        rendered.Content.Should().NotBeNullOrEmpty("PDF render should produce bytes");
+        rendered.Content.Should().NotBeEmpty("PDF render should produce bytes");
         rendered.MimeType.Should().Be("application/pdf");
     }
 
@@ -311,7 +311,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
             "discriminator didn't match any registered type on the client hub");
 
         var dispatch = delivery.Message;
-        dispatch.Error.Should().BeNull(dispatch.Error);
+        dispatch.Error.Should().BeNull(dispatch.Error ?? "");
         dispatch.Format.Should().Be(ExportFormat.Docx);
         dispatch.ActivityPath.Should().NotBeNullOrEmpty();
 
@@ -327,7 +327,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
                      + string.Join(" | ", terminal.Messages.Select(m => $"[{m.LogLevel}] {m.Message}")));
         var rendered = terminal.ReturnValue!.Value.Deserialize<RenderedDocument>(client.JsonSerializerOptions);
         rendered!.Format.Should().Be(ExportFormat.Docx);
-        rendered.Content.Should().NotBeNullOrEmpty("DOCX render should produce bytes");
+        rendered.Content.Should().NotBeEmpty("DOCX render should produce bytes");
         rendered.MimeType.Should().Be("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
     }
 }

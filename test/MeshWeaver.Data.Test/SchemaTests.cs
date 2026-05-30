@@ -283,7 +283,7 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         // Should contain our test type
         var testType = typesResponse.Types.FirstOrDefault(t => t.Name.Contains("TestSchemaData"));
         testType.Should().NotBeNull();
-        testType.DisplayName.Should().NotBeNullOrEmpty();
+        testType!.DisplayName.Should().NotBeNullOrEmpty();
         testType.Description.Should().NotBeNullOrEmpty();
         testType.Description.Should().Contain("TestSchemaData");
     }

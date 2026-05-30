@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Reactive.Linq;
 using System.Text.Json;
-using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -19,7 +18,6 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
-using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.MathDemo.Test;
 
 /// <summary>
@@ -75,7 +73,7 @@ public class MatrixViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         => base.ConfigureClient(configuration).AddLayoutClient();
 
     [Fact(Timeout = 120_000)]
-    public async Task Inverse_ShouldRenderForMatrixExample()
+    public void Inverse_ShouldRenderForMatrixExample()
     {
         if (ShouldSkip) return;
 
@@ -83,7 +81,8 @@ public class MatrixViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var address = new Address("MathDemo/Matrix/Example");
 
         // Initialize the hub first â€” required for routing to hit the per-node hub.
-        await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(address))
+            .Should().Within(TimeSpan.FromSeconds(90)).Emit();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Inverse");
@@ -91,11 +90,11 @@ public class MatrixViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(address, reference);
 
         Output.WriteLine("Waiting for Inverse view to render (cold run resolves MathNet.Numerics from NuGet)â€¦");
-        var value = await stream.Timeout(TimeSpan.FromSeconds(90)).FirstAsync();
+        stream.Should().Within(TimeSpan.FromSeconds(90))
+            .Match(value => !value.Equals(default(JsonElement)),
+                "Inverse layout area should render â€” proves #r \"nuget:MathNet.Numerics, ...\" is resolved " +
+                "and MatrixLayoutAreas.Inverse executed against the sample instance.");
 
         Output.WriteLine("Inverse view rendered.");
-        value.Should().NotBe(default(JsonElement),
-            "Inverse layout area should render â€” proves #r \"nuget:MathNet.Numerics, ...\" is resolved " +
-            "and MatrixLayoutAreas.Inverse executed against the sample instance.");
     }
 }

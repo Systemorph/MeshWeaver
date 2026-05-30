@@ -67,8 +67,8 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
         var workspace = GetHost().GetWorkspace();
         var collectionName = workspace.DataContext.GetTypeSource(typeof(MyData))!.CollectionName;
         var stream = workspace.GetStream(new CollectionsReference(collectionName));
-        stream.Should().NotBeNull();
-        stream.Reduce(new EntityReference(collectionName, Instance))!
+        ((object?)stream).Should().NotBeNull();
+        stream!.Reduce(new EntityReference(collectionName, Instance))!
             .Select(i => i.Value!)
             .OfType<MyData>()
             .Subscribe(tracker.Add);
@@ -97,8 +97,8 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
         ).Token);
         await DisposeAsync();
 
-        tracker.Should().HaveCount(10)
-            .And.Subject.Select(t => t.Text).Should().Equal(Enumerable.Range(0, 10).Select(exp => (exp + 1).ToString()));
+        tracker.Should().HaveCount(10);
+        tracker.Select(t => t.Text).Should().Equal(Enumerable.Range(0, 10).Select(exp => (exp + 1).ToString()));
     }
 
     /// <summary>
@@ -111,10 +111,10 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
         var workspace = GetHost().GetWorkspace();
         var collectionName = workspace.DataContext.GetTypeSource(typeof(DerivedData))!.CollectionName;
         var stream = workspace.GetStream(new CollectionsReference(collectionName));
-        stream.Should().NotBeNull();
+        ((object?)stream).Should().NotBeNull();
 
         // Reduce to get a stream of DerivedData entities
-        var derivedStream = stream.Reduce(new EntityReference(collectionName, "1"))!
+        var derivedStream = stream!.Reduce(new EntityReference(collectionName, "1"))!
             .Select(i => i.Value)
             .Where(v => v is DerivedData)
             .Select(v => (DerivedData)v!)
@@ -161,10 +161,10 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
         var workspace = GetHost().GetWorkspace();
         var collectionName = workspace.DataContext.GetTypeSource(typeof(MyData))!.CollectionName;
         var stream = workspace.GetStream(new CollectionsReference(collectionName));
-        stream.Should().NotBeNull();
+        ((object?)stream).Should().NotBeNull();
 
         // Act: use Select to extract just the Text property as a string
-        var textStream = stream.Reduce(new EntityReference(collectionName, "test"))!
+        var textStream = stream!.Reduce(new EntityReference(collectionName, "test"))!
             .Select(obj => obj is MyData data ? data.Text : null!);
 
         List<string> receivedTexts = new();
@@ -218,7 +218,7 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
         // Get the data source stream (the parent stream that all reduced streams subscribe to)
         var dataSource = hostWorkspace.DataContext.GetDataSourceForType(typeof(MyData))!;
         var dataSourceStream = dataSource.GetStreamForPartition(null);
-        dataSourceStream.Should().NotBeNull();
+        ((object?)dataSourceStream).Should().NotBeNull();
 
         // Get client-side stream (subscribes remotely to host)
         var clientWorkspace = client.GetWorkspace();

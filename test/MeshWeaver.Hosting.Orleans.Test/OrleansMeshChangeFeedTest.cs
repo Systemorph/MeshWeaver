@@ -44,7 +44,7 @@ public class OrleansMeshChangeFeedTest(ITestOutputHelper output) : OrleansShared
         Output.WriteLine($"CreateNodeRequest: id={node.Id}, target={targetAddress}");
         var response = await client.Observe(new CreateNodeRequest(node), o => o.WithTarget(new Address(targetAddress))).FirstAsync().ToTask(ct);
         Output.WriteLine($"CreateNodeResponse: success={response.Message.Success}, path={response.Message.Node?.Path ?? "(null)"}");
-        response.Message.Success.Should().BeTrue(response.Message.Error);
+        response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         return response.Message.Node!.Path!;
     }
 

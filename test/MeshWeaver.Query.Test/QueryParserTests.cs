@@ -106,7 +106,7 @@ public class QueryParserTests
         var comparison = (QueryComparison)result.Filter!;
         comparison.Condition.Selector.Should().Be("category");
         comparison.Condition.Operator.Should().Be(QueryOperator.In);
-        comparison.Condition.Values.Should().BeEquivalentTo(["Electronics", "Computers", "Gadgets"]);
+        comparison.Condition.Values.Should().BeEquivalentTo(new[] { "Electronics", "Computers", "Gadgets" }, System.Text.Json.JsonSerializerOptions.Default);
     }
 
     // ─── Grep-style `|` alternation (`grep -E`'s alternation operator) ───
@@ -121,7 +121,7 @@ public class QueryParserTests
         var comparison = (QueryComparison)result.Filter!;
         comparison.Condition.Selector.Should().Be("nodeType");
         comparison.Condition.Operator.Should().Be(QueryOperator.In);
-        comparison.Condition.Values.Should().BeEquivalentTo(["Story", "Task", "Bug"]);
+        comparison.Condition.Values.Should().BeEquivalentTo(new[] { "Story", "Task", "Bug" }, System.Text.Json.JsonSerializerOptions.Default);
     }
 
     [Fact]
@@ -133,7 +133,7 @@ public class QueryParserTests
         var comparison = (QueryComparison)result.Filter!;
         comparison.Condition.Selector.Should().Be("nodeType");
         comparison.Condition.Operator.Should().Be(QueryOperator.NotIn);
-        comparison.Condition.Values.Should().BeEquivalentTo(["Spam", "Trash"]);
+        comparison.Condition.Values.Should().BeEquivalentTo(new[] { "Spam", "Trash" }, System.Text.Json.JsonSerializerOptions.Default);
     }
 
     [Fact]
@@ -171,7 +171,7 @@ public class QueryParserTests
         // consumers that don't yet read Paths.
         var result = _parser.Parse("path:foo/bar/baz|foo/bar|foo");
 
-        result.Paths.Should().BeEquivalentTo(["foo/bar/baz", "foo/bar", "foo"]);
+        result.Paths.Should().BeEquivalentTo(new[] { "foo/bar/baz", "foo/bar", "foo" }, System.Text.Json.JsonSerializerOptions.Default);
         result.Path.Should().Be("foo/bar/baz");
     }
 
@@ -215,7 +215,7 @@ public class QueryParserTests
         // Routing-layer canonical form: path filter with alternation + sort + limit.
         var result = _parser.Parse("path:a/b/c|a/b|a sort:length(path)-desc limit:1");
 
-        result.Paths.Should().BeEquivalentTo(["a/b/c", "a/b", "a"]);
+        result.Paths.Should().BeEquivalentTo(new[] { "a/b/c", "a/b", "a" }, System.Text.Json.JsonSerializerOptions.Default);
         result.OrderBy.Should().NotBeNull();
         result.OrderBy!.Property.Should().Be("length(path)");
         result.OrderBy.Descending.Should().BeTrue();
@@ -231,7 +231,7 @@ public class QueryParserTests
         var comparison = (QueryComparison)result.Filter!;
         comparison.Condition.Selector.Should().Be("status");
         comparison.Condition.Operator.Should().Be(QueryOperator.NotIn);
-        comparison.Condition.Values.Should().BeEquivalentTo(["deleted", "archived"]);
+        comparison.Condition.Values.Should().BeEquivalentTo(new[] { "deleted", "archived" }, System.Text.Json.JsonSerializerOptions.Default);
     }
 
     #endregion
@@ -795,7 +795,7 @@ public class QueryParserTests
         var result = _parser.Parse("select:name");
 
         result.Select.Should().NotBeNull();
-        result.Select.Should().BeEquivalentTo(["name"]);
+        result.Select.Should().BeEquivalentTo(new[] { "name" }, System.Text.Json.JsonSerializerOptions.Default);
         result.Filter.Should().BeNull();
     }
 
@@ -805,7 +805,7 @@ public class QueryParserTests
         var result = _parser.Parse("select:name,nodeType,icon");
 
         result.Select.Should().NotBeNull();
-        result.Select.Should().BeEquivalentTo(["name", "nodeType", "icon"]);
+        result.Select.Should().BeEquivalentTo(new[] { "name", "nodeType", "icon" }, System.Text.Json.JsonSerializerOptions.Default);
     }
 
     [Fact]
@@ -814,7 +814,7 @@ public class QueryParserTests
         var result = _parser.Parse("nodeType:Story select:path,name");
 
         result.Select.Should().NotBeNull();
-        result.Select.Should().BeEquivalentTo(["path", "name"]);
+        result.Select.Should().BeEquivalentTo(new[] { "path", "name" }, System.Text.Json.JsonSerializerOptions.Default);
         result.Filter.Should().BeOfType<QueryComparison>();
         var comparison = (QueryComparison)result.Filter!;
         comparison.Condition.Selector.Should().Be("nodeType");
@@ -827,7 +827,7 @@ public class QueryParserTests
         var result = _parser.Parse("namespace:Systemorph select:name,nodeType sort:name limit:10");
 
         result.Select.Should().NotBeNull();
-        result.Select.Should().BeEquivalentTo(["name", "nodeType"]);
+        result.Select.Should().BeEquivalentTo(new[] { "name", "nodeType" }, System.Text.Json.JsonSerializerOptions.Default);
         result.Path.Should().Be("Systemorph");
         result.OrderBy.Should().NotBeNull();
         result.OrderBy!.Property.Should().Be("name");

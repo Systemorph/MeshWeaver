@@ -49,14 +49,12 @@ public class ApiTokensSettingsTabRevokeTests(ITestOutputHelper output) : Monolit
             Mesh.ServiceProvider.GetRequiredService<ILogger<ApiTokenService>>()
         );
 
-    private CancellationToken CT => TestContext.Current.CancellationToken;
-
     [Fact]
-    public async Task Revoke_ExistingToken_CompletesUnderDeadlineWithSuccess()
+    public void Revoke_ExistingToken_CompletesUnderDeadlineWithSuccess()
     {
         var service = GetService();
-        var created = await service.CreateToken(
-            "user1", "Test User", "test@example.com", "Click Test").FirstAsync().ToTask(CT);
+        var created = service.CreateToken(
+            "user1", "Test User", "test@example.com", "Click Test").Should().Emit();
 
         // Mirror production lifecycle: the settings tab subscribes to
         // GetTokensForUser (a workspace.GetQuery synced collection)
@@ -67,17 +65,13 @@ public class ApiTokensSettingsTabRevokeTests(ITestOutputHelper output) : Monolit
         // Without this pre-subscribe, the test bypasses the warm-up step
         // the UI takes for granted and the Update lambda gets a null
         // current value.
-        await WaitForTokenInSyncedListAsync(service, created.Node.Path);
+        WaitForTokenInSyncedList(service, created.Node.Path);
 
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(CT);
-        cts.CancelAfter(RevokeDeadline);
-
-        // If the revoke composition deadlocks anywhere, ToTask(cts.Token)
-        // throws OperationCanceledException after RevokeDeadline — the
-        // assertion failure points squarely at the broken layer.
-        var outcome = await ApiTokensSettingsTab.Revoke(service, created.Node.Path, "Click Test")
-            .FirstAsync()
-            .ToTask(cts.Token);
+        // The .Within(RevokeDeadline) deadline is the regression guard: if
+        // the revoke composition deadlocks anywhere, the assertion fails
+        // after RevokeDeadline pointing squarely at the broken layer.
+        var outcome = ApiTokensSettingsTab.Revoke(service, created.Node.Path, "Click Test")
+            .Should().Within(RevokeDeadline).Emit();
 
         outcome.Success.Should().BeTrue(
             "the production click handler is subscribed to this exact observable; " +
@@ -87,54 +81,43 @@ public class ApiTokensSettingsTabRevokeTests(ITestOutputHelper output) : Monolit
     }
 
     [Fact]
-    public async Task Revoke_NonExistentToken_CompletesUnderDeadlineWithFailure()
+    public void Revoke_NonExistentToken_CompletesUnderDeadlineWithFailure()
     {
         var service = GetService();
-
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(CT);
-        cts.CancelAfter(RevokeDeadline);
 
         // The previous shape (FromAsync(QueryAsync).SelectMany(UpdateNode))
         // returned false on missing node — the stream-based rewrite must
         // preserve that contract (no exception, no hang). A regression here
-        // would surface as either timeout cancellation OR an unhandled
-        // exception bubbling out of the OnNext.
-        var outcome = await ApiTokensSettingsTab.Revoke(service, "user1/ApiToken/does-not-exist", "Missing")
-            .FirstAsync()
-            .ToTask(cts.Token);
+        // would surface as either a .Within(RevokeDeadline) timeout OR an
+        // unhandled exception bubbling out of the OnNext.
+        var outcome = ApiTokensSettingsTab.Revoke(service, "user1/ApiToken/does-not-exist", "Missing")
+            .Should().Within(RevokeDeadline).Emit();
 
         outcome.Success.Should().BeFalse();
         outcome.Label.Should().Be("Missing");
     }
 
     [Fact]
-    public async Task Revoke_AlreadyRevokedToken_CompletesUnderDeadline()
+    public void Revoke_AlreadyRevokedToken_CompletesUnderDeadline()
     {
         var service = GetService();
-        var created = await service.CreateToken(
-            "user1", "Test User", "test@example.com", "Double Revoke").FirstAsync().ToTask(CT);
+        var created = service.CreateToken(
+            "user1", "Test User", "test@example.com", "Double Revoke").Should().Emit();
 
-        await WaitForTokenInSyncedListAsync(service, created.Node.Path);
+        WaitForTokenInSyncedList(service, created.Node.Path);
 
         // First revoke through the click pipeline. Tight deadline here too —
         // a deadlock on a freshly-revoked token would still be a regression.
-        using (var firstCts = CancellationTokenSource.CreateLinkedTokenSource(CT))
-        {
-            firstCts.CancelAfter(RevokeDeadline);
-            var firstOutcome = await ApiTokensSettingsTab.Revoke(service, created.Node.Path, "Double Revoke")
-                .FirstAsync().ToTask(firstCts.Token);
-            firstOutcome.Success.Should().BeTrue();
-        }
+        var firstOutcome = ApiTokensSettingsTab.Revoke(service, created.Node.Path, "Double Revoke")
+            .Should().Within(RevokeDeadline).Emit();
+        firstOutcome.Success.Should().BeTrue();
 
         // Second revoke on the same path: the node still exists (revoke =
         // flag flip, not delete). Re-applying IsRevoked=true is a no-op
         // update — must still complete within the deadline and not hang
         // waiting for "node not found".
-        using var secondCts = CancellationTokenSource.CreateLinkedTokenSource(CT);
-        secondCts.CancelAfter(RevokeDeadline);
-
-        var secondOutcome = await ApiTokensSettingsTab.Revoke(service, created.Node.Path, "Double Revoke")
-            .FirstAsync().ToTask(secondCts.Token);
+        var secondOutcome = ApiTokensSettingsTab.Revoke(service, created.Node.Path, "Double Revoke")
+            .Should().Within(RevokeDeadline).Emit();
 
         secondOutcome.Success.Should().BeTrue(
             "re-revoking a revoked token is idempotent; the second call must " +
@@ -142,7 +125,7 @@ public class ApiTokensSettingsTabRevokeTests(ITestOutputHelper output) : Monolit
     }
 
     [Fact]
-    public async Task Revoke_ManyTokens_CompletesEachUnderDeadline()
+    public void Revoke_ManyTokens_CompletesEachUnderDeadline()
     {
         // Sanity: nothing about the composition retains a per-call subscription
         // or other state that would slow successive revokes. A regression to
@@ -152,21 +135,19 @@ public class ApiTokensSettingsTabRevokeTests(ITestOutputHelper output) : Monolit
         var tokens = new System.Collections.Generic.List<MeshNode>();
         for (var i = 0; i < 5; i++)
         {
-            var c = await service.CreateToken(
-                "user1", "Test User", "test@example.com", $"Token {i}").FirstAsync().ToTask(CT);
+            var c = service.CreateToken(
+                "user1", "Test User", "test@example.com", $"Token {i}").Should().Emit();
             tokens.Add(c.Node);
         }
 
         // Single synced-query warm-up after all creates — the path set is
         // namespace-scoped so a single subscribe covers every token at once.
-        await WaitForTokenInSyncedListAsync(service, tokens[^1].Path);
+        WaitForTokenInSyncedList(service, tokens[^1].Path);
 
         foreach (var token in tokens)
         {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(CT);
-            cts.CancelAfter(RevokeDeadline);
-            var outcome = await ApiTokensSettingsTab.Revoke(service, token.Path, token.Name ?? "")
-                .FirstAsync().ToTask(cts.Token);
+            var outcome = ApiTokensSettingsTab.Revoke(service, token.Path, token.Name ?? "")
+                .Should().Within(RevokeDeadline).Emit();
             outcome.Success.Should().BeTrue(
                 $"revoke for {token.Path} must complete within {RevokeDeadline.TotalSeconds}s");
         }
@@ -190,11 +171,11 @@ public class ApiTokensSettingsTabRevokeTests(ITestOutputHelper output) : Monolit
     /// persistence empty" regressions.</para>
     /// </summary>
     [Fact]
-    public async Task CreateToken_PersistsNodeOrThrows_NeverSilentReject()
+    public void CreateToken_PersistsNodeOrThrows_NeverSilentReject()
     {
         var service = GetService();
-        var created = await service.CreateToken(
-            "user1", "Test User", "test@example.com", "Persistence Probe").FirstAsync().ToTask(CT);
+        var created = service.CreateToken(
+            "user1", "Test User", "test@example.com", "Persistence Probe").Should().Emit();
 
         created.Node.Path.Should().NotBeNullOrEmpty(
             "CreateToken must populate Node.Path — empty path is the silent-success symptom");
@@ -202,13 +183,9 @@ public class ApiTokensSettingsTabRevokeTests(ITestOutputHelper output) : Monolit
         // Read back through the synced-query path. If the token isn't in
         // the synced collection within 10s, persistence is the issue —
         // CreateNode returned Success but the node isn't actually queryable.
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(CT);
-        cts.CancelAfter(TimeSpan.FromSeconds(10));
-
-        var tokens = await service.GetTokensForUser("user1")
-            .Where(list => System.Linq.Enumerable.Any(list, t => t.NodePath == created.Node.Path))
-            .Take(1)
-            .ToTask(cts.Token);
+        var tokens = service.GetTokensForUser("user1")
+            .Should().Within(TimeSpan.FromSeconds(10))
+            .Match(list => System.Linq.Enumerable.Any(list, t => t.NodePath == created.Node.Path));
 
         tokens.Should().ContainSingle(t => t.NodePath == created.Node.Path,
             "CreateToken returned Success → persistence MUST contain the node. " +
@@ -237,22 +214,19 @@ public class ApiTokensSettingsTabRevokeTests(ITestOutputHelper output) : Monolit
     /// failure mode is debuggable from the log line alone.</para>
     /// </summary>
     [Fact]
-    public async Task Revoke_WithoutSyncedQueryWarmup_FailsWithDiagnosticMessage()
+    public void Revoke_WithoutSyncedQueryWarmup_FailsWithDiagnosticMessage()
     {
         var service = GetService();
-        var created = await service.CreateToken(
-            "user1", "Test User", "test@example.com", "No-Warmup").FirstAsync().ToTask(CT);
+        var created = service.CreateToken(
+            "user1", "Test User", "test@example.com", "No-Warmup").Should().Emit();
 
-        // Deliberately skip WaitForTokenInSyncedListAsync — this is the
+        // Deliberately skip WaitForTokenInSyncedList — this is the
         // "no synced query" scenario. With the current ApiTokenService
         // catch shape, the InvalidOperationException is swallowed and
         // outcome.Success=false. The Message should carry the diagnostic
         // hints from MeshNodeStreamHandle's improved error.
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(CT);
-        cts.CancelAfter(RevokeDeadline);
-
-        var outcome = await ApiTokensSettingsTab.Revoke(service, created.Node.Path, "No-Warmup")
-            .FirstAsync().ToTask(cts.Token);
+        var outcome = ApiTokensSettingsTab.Revoke(service, created.Node.Path, "No-Warmup")
+            .Should().Within(RevokeDeadline).Emit();
 
         // Document the current behavior: the catch in RevokeToken converts
         // the InvalidOperationException to outcome.Success=false. The user
@@ -277,20 +251,15 @@ public class ApiTokensSettingsTabRevokeTests(ITestOutputHelper output) : Monolit
     /// <summary>
     /// Subscribes to <see cref="ApiTokenService.GetTokensForUser"/> (a
     /// <c>workspace.GetQuery</c> synced collection) and blocks until the
-    /// node at <paramref name="path"/> appears in the snapshot. The
+    /// node at <paramref name="expectedPath"/> appears in the snapshot. The
     /// subscription registers the path in the workspace's live
     /// synced-query set — the prerequisite for
     /// <c>GetMeshNodeStream(path).Update(...)</c> to resolve via the
     /// workspace-level reducer instead of opening a fresh GetRemoteStream
     /// that may not see the node yet.
     /// </summary>
-    private async Task WaitForTokenInSyncedListAsync(ApiTokenService service, string expectedPath)
-    {
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(CT);
-        cts.CancelAfter(TimeSpan.FromSeconds(10));
-        await service.GetTokensForUser("user1")
-            .Where(list => System.Linq.Enumerable.Any(list, t => t.NodePath == expectedPath))
-            .Take(1)
-            .ToTask(cts.Token);
-    }
+    private void WaitForTokenInSyncedList(ApiTokenService service, string expectedPath)
+        => service.GetTokensForUser("user1")
+            .Should().Within(TimeSpan.FromSeconds(10))
+            .Match(list => System.Linq.Enumerable.Any(list, t => t.NodePath == expectedPath));
 }

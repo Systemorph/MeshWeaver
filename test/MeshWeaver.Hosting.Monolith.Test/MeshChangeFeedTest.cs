@@ -38,7 +38,7 @@ public class MeshChangeFeedTest(ITestOutputHelper output) : MonolithMeshTestBase
     {
         var node = new MeshNode(id, ns) { Name = $"Test {id}", NodeType = "Markdown" };
         var response = await Mesh.Observe(new CreateNodeRequest(node), o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(Ct);
-        response.Message.Success.Should().BeTrue(response.Message.Error);
+        response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         return response.Message.Node!;
     }
 

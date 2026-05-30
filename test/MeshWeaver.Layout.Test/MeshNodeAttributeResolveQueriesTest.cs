@@ -100,7 +100,7 @@ public class MeshNodeAttributeResolveQueriesTest
 
         var resolved = MeshNodeAttribute.ResolveQueries(queries, "ACME", "ACME/Alice_Access");
 
-        resolved.Should().BeEquivalentTo(queries);
+        resolved.Should().BeEquivalentTo(queries, System.Text.Json.JsonSerializerOptions.Default);
     }
 
     [Fact]

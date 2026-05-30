@@ -683,7 +683,7 @@ public class CommentMeshNodeTests
         // Comment c1 should have exactly 2 replies
         repliesByParent.Should().ContainKey("docs/page/c1");
         repliesByParent["docs/page/c1"].Should().HaveCount(2);
-        repliesByParent["docs/page/c1"].Select(n => ((Comment)n.Content!).Id).Should().BeEquivalentTo(["r1", "r2"]);
+        repliesByParent["docs/page/c1"].Select(n => ((Comment)n.Content!).Id).Should().BeEquivalentTo(new[] { "r1", "r2" }, System.Text.Json.JsonSerializerOptions.Default);
 
         // Comment c2 should have exactly 1 reply
         repliesByParent.Should().ContainKey("docs/page/c2");
@@ -1027,7 +1027,7 @@ public class CommentMeshNodeTests
         // CommentsView query: namespace:{docPath}/_Comment
         var topLevelComments = allNodes.Where(n => n.Namespace == commentNs).ToList();
         topLevelComments.Should().HaveCount(2);
-        topLevelComments.Select(n => n.Id).Should().BeEquivalentTo(["c1", "c2"]);
+        topLevelComments.Select(n => n.Id).Should().BeEquivalentTo(new[] { "c1", "c2" }, System.Text.Json.JsonSerializerOptions.Default);
 
         // reply1 should NOT appear in top-level query
         topLevelComments.Should().NotContain(n => n.Id == "reply1");
@@ -1153,7 +1153,7 @@ public class CommentMeshNodeTests
         var comments = annotations.Where(a => a.Type == MarkdownAnnotationType.Comment).ToList();
 
         comments.Should().HaveCount(6);
-        comments.Select(c => c.Id).Should().BeEquivalentTo(["c1", "c2", "c3", "c4", "c5", "c6"]);
+        comments.Select(c => c.Id).Should().BeEquivalentTo(new[] { "c1", "c2", "c3", "c4", "c5", "c6" }, System.Text.Json.JsonSerializerOptions.Default);
     }
 
     #endregion

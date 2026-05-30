@@ -1,5 +1,4 @@
-﻿using FluentAssertions;
-using MeshWeaver.Fixture;
+﻿using MeshWeaver.Fixture;
 using Xunit;
 
 namespace MeshWeaver.Layout.Test;

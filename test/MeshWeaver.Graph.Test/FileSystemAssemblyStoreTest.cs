@@ -44,7 +44,7 @@ public class FileSystemAssemblyStoreTest : IDisposable
         var putPath = store.Put("Systemorph/FutuRe/Pricing", version: 7, bytes, pdbBytes: null).Wait();
 
         File.Exists(putPath).Should().BeTrue();
-        File.ReadAllBytes(putPath!).Should().BeEquivalentTo(bytes);
+        File.ReadAllBytes(putPath!).Should().BeEquivalentTo(bytes, System.Text.Json.JsonSerializerOptions.Default);
 
         var getPath = store.TryGetAssemblyPath("Systemorph/FutuRe/Pricing", version: 7).Wait();
         getPath.Should().Be(putPath);
@@ -60,7 +60,7 @@ public class FileSystemAssemblyStoreTest : IDisposable
         File.Exists(dllPath).Should().BeTrue();
         var pdbPath = Path.ChangeExtension(dllPath, ".pdb");
         File.Exists(pdbPath).Should().BeTrue();
-        File.ReadAllBytes(pdbPath).Should().BeEquivalentTo(pdb);
+        File.ReadAllBytes(pdbPath).Should().BeEquivalentTo(pdb, System.Text.Json.JsonSerializerOptions.Default);
     }
 
     [Fact]
@@ -79,7 +79,7 @@ public class FileSystemAssemblyStoreTest : IDisposable
         var p1 = store.Put("X/Y", version: 4, v1, null).Wait()!;
         var p2 = store.Put("X/Y", version: 4, v2, null).Wait()!;
         p2.Should().Be(p1, "same version must resolve to the same filesystem path");
-        File.ReadAllBytes(p2).Should().BeEquivalentTo(v1, "second put is a no-op — first-write-wins for ALC safety");
+        File.ReadAllBytes(p2).Should().BeEquivalentTo(v1, System.Text.Json.JsonSerializerOptions.Default, because: "second put is a no-op — first-write-wins for ALC safety");
     }
 
     [Fact]
@@ -120,7 +120,7 @@ public class FileSystemAssemblyStoreTest : IDisposable
         var getPath = siloB.TryGetAssemblyPath("Shared/Type", version: 42).Wait();
         getPath.Should().Be(putPath, "silo B must see silo A's write via the shared root");
 
-        File.ReadAllBytes(getPath!).Should().BeEquivalentTo(bytes);
+        File.ReadAllBytes(getPath!).Should().BeEquivalentTo(bytes, System.Text.Json.JsonSerializerOptions.Default);
     }
 
     [Fact]

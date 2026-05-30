@@ -120,7 +120,7 @@ public static class LayoutTestExtensions
     {
         var control = root.FindControlForProperty(propertyName);
         control.Should().NotBeNull($"Control for property '{propertyName}' should exist");
-        control.Should().BeOfType(expectedControlType, $"Property '{propertyName}' should use {expectedControlType.Name}");
+        control!.GetType().Should().Be(expectedControlType, $"Property '{propertyName}' should use {expectedControlType.Name}");
     }
 
     /// <summary>

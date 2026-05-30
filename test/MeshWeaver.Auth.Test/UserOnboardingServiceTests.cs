@@ -85,9 +85,7 @@ public class UserOnboardingServiceTests(ITestOutputHelper output) : MonolithMesh
         MeshNode emitted;
         using (accessService.ImpersonateAsSystem())
         {
-            emitted = await service.CreateUser(request)
-                .FirstAsync()
-                .ToTask(Ct);
+            emitted = service.CreateUser(request).Should().Emit();
         }
 
         // The observable emits the partition-root node — that's the canonical
@@ -125,7 +123,7 @@ public class UserOnboardingServiceTests(ITestOutputHelper output) : MonolithMesh
     /// catalog-mirror row (b) exists for.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task CreateUser_LoginQueryFindsUserByEmail()
+    public void CreateUser_LoginQueryFindsUserByEmail()
     {
         var username = $"obtest-{Guid.NewGuid():N}".ToLowerInvariant()[..16];
         var email = $"{username}@example.com";
@@ -134,23 +132,20 @@ public class UserOnboardingServiceTests(ITestOutputHelper output) : MonolithMesh
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         using (accessService.ImpersonateAsSystem())
         {
-            await service.CreateUser(new UserOnboardingRequest(username, email, FullName: "Login Test"))
-                .FirstAsync().ToTask(Ct);
+            service.CreateUser(new UserOnboardingRequest(username, email, FullName: "Login Test"))
+                .Should().Emit();
         }
 
         // Same shape as OnboardingMiddleware.FindUserByEmail — search for the user
         // by email. We use IMeshService (public surface; the middleware uses the
         // internal IMeshQueryCore but the query string + result shape are identical).
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        var found = await meshService
+        var found = meshService
             .ObserveQuery<MeshNode>(
                 MeshQueryRequest.FromQuery(
                     $"nodeType:User content.email:{email} limit:1"))
-            .Where(c => c.Items.Count > 0)
-            .Take(1)
-            .Timeout(10.Seconds())
-            .FirstAsync()
-            .ToTask(Ct);
+            .Should().Within(10.Seconds())
+            .Match(c => c.Items.Count > 0);
 
         found.Items.Should().ContainSingle(
             "the login query MUST find the user by email — that's why we keep the " +

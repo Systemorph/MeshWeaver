@@ -49,7 +49,7 @@ public class OrleansPortalFlowTest(ITestOutputHelper output) : OrleansSharedTest
             // Step 1: Create thread
             var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Portal flow Orleans test", "TestUser");
             var createResp = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("TestUser"))).FirstAsync().ToTask(ct);
-            createResp.Message.Success.Should().BeTrue(createResp.Message.Error);
+            createResp.Message.Success.Should().BeTrue(createResp.Message.Error ?? "");
             var threadPath = createResp.Message.Node!.Path!;
             Output.WriteLine($"Thread: {threadPath}");
 
@@ -155,7 +155,7 @@ public class OrleansPortalFlowTest(ITestOutputHelper output) : OrleansSharedTest
                 .ToTask(ct);
 
             userCells.Should().HaveCount(userTexts.Length);
-            userCells.Select(c => c.Text).Should().BeEquivalentTo(userTexts);
+            userCells.Select(c => c.Text).Should().BeEquivalentTo(userTexts, client.JsonSerializerOptions);
             Output.WriteLine($"All {userTexts.Length} user submissions ingested with text");
         }
         finally

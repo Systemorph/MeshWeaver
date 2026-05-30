@@ -28,7 +28,7 @@ public class TaskSchedulerInvariantTest(ITestOutputHelper output) : HubTestBase(
     /// hosted hubs created from any context end up independent.
     /// </summary>
     [Fact]
-    public async Task DefaultHub_DispatchesOnTaskSchedulerDefault()
+    public void DefaultHub_DispatchesOnTaskSchedulerDefault()
     {
         var hub = Mesh.GetHostedHub(
             CreateHostAddress(),
@@ -40,7 +40,7 @@ public class TaskSchedulerInvariantTest(ITestOutputHelper output) : HubTestBase(
                 return request.Processed();
             }));
 
-        var response = await hub.Observe(new WhereAmIRequest(), o => o.WithTarget(hub.Address)).FirstAsync().ToTask(new CancellationTokenSource(10.Seconds()).Token);
+        var response = hub.Observe(new WhereAmIRequest(), o => o.WithTarget(hub.Address)).Should().Within(10.Seconds()).Emit();
 
         response.Message.TaskSchedulerId.Should().Be(TaskScheduler.Default.Id,
             because: "hosted hubs must default to TaskScheduler.Default â€” they are independent actors");
@@ -53,7 +53,7 @@ public class TaskSchedulerInvariantTest(ITestOutputHelper output) : HubTestBase(
     /// can attribute work.
     /// </summary>
     [Fact]
-    public async Task ConfiguredHub_DispatchesOnTheConfiguredScheduler()
+    public void ConfiguredHub_DispatchesOnTheConfiguredScheduler()
     {
         // ConcurrentExclusiveSchedulerPair.ExclusiveScheduler is a known scheduler
         // distinct from TaskScheduler.Default â€” easy to identify by Id.
@@ -71,7 +71,7 @@ public class TaskSchedulerInvariantTest(ITestOutputHelper output) : HubTestBase(
                     return request.Processed();
                 }));
 
-        var response = await hub.Observe(new WhereAmIRequest(), o => o.WithTarget(hub.Address)).FirstAsync().ToTask(new CancellationTokenSource(10.Seconds()).Token);
+        var response = hub.Observe(new WhereAmIRequest(), o => o.WithTarget(hub.Address)).Should().Within(10.Seconds()).Emit();
 
         response.Message.TaskSchedulerId.Should().Be(customScheduler.Id,
             because: "WithTaskScheduler must couple the hub's ActionBlock to the supplied scheduler");
@@ -119,7 +119,7 @@ public class TaskSchedulerInvariantTest(ITestOutputHelper output) : HubTestBase(
                 }));
 
         // Trigger parent â†’ which creates sub-hub + posts to it.
-        await parent.Observe(new WhereAmIRequest(), o => o.WithTarget(parent.Address)).FirstAsync().ToTask(new CancellationTokenSource(10.Seconds()).Token);
+        parent.Observe(new WhereAmIRequest(), o => o.WithTarget(parent.Address)).Should().Within(10.Seconds()).Emit();
 
         var observed = await subDone.Task.WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
 

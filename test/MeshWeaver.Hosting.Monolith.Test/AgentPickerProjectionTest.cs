@@ -104,7 +104,8 @@ public class AgentPickerProjectionTest : MonolithMeshTestBase
             "ObserveModels is the EXACT pipe ThreadChatView binds to via "
             + "modelSubscription. Empty here = empty model combobox in chat.");
         models.Select(m => m.Name).Should().BeEquivalentTo(
-            new[] { "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5" });
+            new[] { "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5" },
+            System.Text.Json.JsonSerializerOptions.Default);
         models.Should().AllSatisfy(m =>
         {
             m.Name.Should().NotBeNullOrWhiteSpace();

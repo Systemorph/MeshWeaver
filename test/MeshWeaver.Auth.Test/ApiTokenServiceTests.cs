@@ -2,9 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
-using System.Threading;
-using System.Threading.Tasks;
 using Memex.Portal.Shared.Authentication;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -30,23 +27,21 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
             Mesh.ServiceProvider.GetRequiredService<ILogger<ApiTokenService>>()
         );
 
-    private CancellationToken CT => TestContext.Current.CancellationToken;
-
     [Fact]
-    public async Task CreateToken_ReturnsTokenWithCorrectPrefix()
+    public void CreateToken_ReturnsTokenWithCorrectPrefix()
     {
-        var result = await GetService().CreateToken(
-            "user1", "Test User", "test@example.com", "Test Label").FirstAsync().ToTask(CT);
+        var result = GetService().CreateToken(
+            "user1", "Test User", "test@example.com", "Test Label").Should().Emit();
 
         result.RawToken.Should().StartWith("mw_");
         result.RawToken.Length.Should().BeGreaterThan(10);
     }
 
     [Fact]
-    public async Task CreateToken_StoresNodeWithHashedContent()
+    public void CreateToken_StoresNodeWithHashedContent()
     {
-        var result = await GetService().CreateToken(
-            "user1", "Test User", "test@example.com", "My Token").FirstAsync().ToTask(CT);
+        var result = GetService().CreateToken(
+            "user1", "Test User", "test@example.com", "My Token").Should().Emit();
 
         result.Node.Should().NotBeNull();
         result.Node.NodeType.Should().Be("ApiToken");
@@ -64,29 +59,29 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     [Fact]
-    public async Task CreateToken_PersistsNodeToStorage()
+    public void CreateToken_PersistsNodeToStorage()
     {
         var service = GetService();
-        var result = await service.CreateToken(
-            "user1", "Test User", "test@example.com", "Test").FirstAsync().ToTask(CT);
+        var result = service.CreateToken(
+            "user1", "Test User", "test@example.com", "Test").Should().Emit();
 
         // ApiToken nodes don't activate per-node hubs (IsSatelliteType), so
         // ReadNodeAsync would hang waiting for a route — read via the same
-        // mesh-level index ApiTokenService uses internally. Poll briefly to
-        // absorb read-side index lag (the create just landed).
-        var stored = await PollQueryAsync(result.Node.Path!, n => n is not null, CT);
+        // mesh-level index ApiTokenService uses internally. Wait on the live
+        // query stream until the create lands (absorbs read-side index lag).
+        var stored = ObserveNode(result.Node.Path!).Should().Match(n => n is not null);
         stored.Should().NotBeNull();
         stored!.NodeType.Should().Be("ApiToken");
     }
 
     [Fact]
-    public async Task ValidateToken_ValidToken_ReturnsApiToken()
+    public void ValidateToken_ValidToken_ReturnsApiToken()
     {
         var service = GetService();
-        var result = await service.CreateToken(
-            "user1", "Test User", "test@example.com", "Valid Token").FirstAsync().ToTask(CT);
+        var result = service.CreateToken(
+            "user1", "Test User", "test@example.com", "Valid Token").Should().Emit();
 
-        var validated = await service.ValidateToken(result.RawToken).FirstAsync().ToTask(CT);
+        var validated = service.ValidateToken(result.RawToken).Should().Emit();
 
         validated.Should().NotBeNull();
         validated!.UserId.Should().Be("user1");
@@ -95,55 +90,55 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     [Fact]
-    public async Task ValidateToken_InvalidToken_ReturnsNull()
+    public void ValidateToken_InvalidToken_ReturnsNull()
     {
-        var result = await GetService().ValidateToken("mw_invalidtokenvalue123").FirstAsync().ToTask(CT);
+        var result = GetService().ValidateToken("mw_invalidtokenvalue123").Should().Emit();
 
         result.Should().BeNull();
     }
 
     [Fact]
-    public async Task ValidateToken_EmptyToken_ReturnsNull()
+    public void ValidateToken_EmptyToken_ReturnsNull()
     {
-        var result = await GetService().ValidateToken("").FirstAsync().ToTask(CT);
+        var result = GetService().ValidateToken("").Should().Emit();
         result.Should().BeNull();
     }
 
     [Fact]
-    public async Task ValidateToken_NullToken_ReturnsNull()
+    public void ValidateToken_NullToken_ReturnsNull()
     {
-        var result = await GetService().ValidateToken(null!).FirstAsync().ToTask(CT);
+        var result = GetService().ValidateToken(null!).Should().Emit();
         result.Should().BeNull();
     }
 
     [Fact]
-    public async Task ValidateToken_TokenWithoutPrefix_ReturnsNull()
+    public void ValidateToken_TokenWithoutPrefix_ReturnsNull()
     {
-        var result = await GetService().ValidateToken("notaprefixedtoken").FirstAsync().ToTask(CT);
+        var result = GetService().ValidateToken("notaprefixedtoken").Should().Emit();
         result.Should().BeNull();
     }
 
     [Fact]
-    public async Task ValidateToken_ExpiredToken_ReturnsNull()
+    public void ValidateToken_ExpiredToken_ReturnsNull()
     {
         var service = GetService();
-        var result = await service.CreateToken(
+        var result = service.CreateToken(
             "user1", "Test User", "test@example.com", "Expired",
-            expiresAt: DateTimeOffset.UtcNow.AddDays(-1)).FirstAsync().ToTask(CT);
+            expiresAt: DateTimeOffset.UtcNow.AddDays(-1)).Should().Emit();
 
-        var validated = await service.ValidateToken(result.RawToken).FirstAsync().ToTask(CT);
+        var validated = service.ValidateToken(result.RawToken).Should().Emit();
 
         validated.Should().BeNull();
     }
 
     [Fact]
-    public async Task ValidateToken_RevokedToken_ReturnsNull()
+    public void ValidateToken_RevokedToken_ReturnsNull()
     {
         var service = GetService();
-        var result = await service.CreateToken(
-            "user1", "Test User", "test@example.com", "To Revoke").FirstAsync().ToTask(CT);
+        var result = service.CreateToken(
+            "user1", "Test User", "test@example.com", "To Revoke").Should().Emit();
 
-        await service.RevokeToken(result.Node.Path).FirstAsync().ToTask(CT);
+        service.RevokeToken(result.Node.Path).Should().Emit();
 
         // ApiToken nodes don't activate per-node hubs (see 1e22b3cc3), so
         // ReadNode(path).MeshNodeReference would hang. Verify revoke through
@@ -152,46 +147,43 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         // request/response on a 50 ms interval until the token reads as null,
         // absorbing read-side index lag — replaces a hand-rolled do/while +
         // Task.Delay(50).
-        var validated = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
-            .SelectMany(_ => service.ValidateToken(result.RawToken).FirstAsync())
-            .Where(v => v is null)
-            .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(10))
-            .ToTask(CT);
+        var validated = Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => service.ValidateToken(result.RawToken).Take(1))
+            .Should().Match(v => v is null);
 
         validated.Should().BeNull();
     }
 
     [Fact]
-    public async Task RevokeToken_ExistingToken_ReturnsTrue()
+    public void RevokeToken_ExistingToken_ReturnsTrue()
     {
         var service = GetService();
-        var result = await service.CreateToken(
-            "user1", "Test User", "test@example.com", "To Revoke").FirstAsync().ToTask(CT);
+        var result = service.CreateToken(
+            "user1", "Test User", "test@example.com", "To Revoke").Should().Emit();
 
-        var revoked = await service.RevokeToken(result.Node.Path).FirstAsync().ToTask(CT);
+        var revoked = service.RevokeToken(result.Node.Path).Should().Emit();
 
         revoked.Should().BeTrue();
     }
 
     [Fact]
-    public async Task RevokeToken_NonexistentPath_ReturnsFalse()
+    public void RevokeToken_NonexistentPath_ReturnsFalse()
     {
-        var revoked = await GetService().RevokeToken("ApiToken/nonexistent").FirstAsync().ToTask(CT);
+        var revoked = GetService().RevokeToken("ApiToken/nonexistent").Should().Emit();
 
         revoked.Should().BeFalse();
     }
 
     [Fact]
-    public async Task GetTokensForUser_ReturnsOnlyUserTokens()
+    public void GetTokensForUser_ReturnsOnlyUserTokens()
     {
         var service = GetService();
-        await service.CreateToken("user1", "User One", "u1@test.com", "Token A").FirstAsync().ToTask(CT);
-        await service.CreateToken("user1", "User One", "u1@test.com", "Token B").FirstAsync().ToTask(CT);
-        await service.CreateToken("user2", "User Two", "u2@test.com", "Token C").FirstAsync().ToTask(CT);
+        service.CreateToken("user1", "User One", "u1@test.com", "Token A").Should().Emit();
+        service.CreateToken("user1", "User One", "u1@test.com", "Token B").Should().Emit();
+        service.CreateToken("user2", "User Two", "u2@test.com", "Token C").Should().Emit();
 
-        var user1Tokens = await service.GetTokensForUser("user1").FirstAsync().ToTask(CT);
-        var user2Tokens = await service.GetTokensForUser("user2").FirstAsync().ToTask(CT);
+        var user1Tokens = service.GetTokensForUser("user1").Should().Match(t => t.Count == 2);
+        var user2Tokens = service.GetTokensForUser("user2").Should().Match(t => t.Count == 1);
 
         user1Tokens.Should().HaveCount(2);
         user1Tokens.Select(t => t.Label).Should().Contain("Token A").And.Contain("Token B");
@@ -201,13 +193,13 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     [Fact]
-    public async Task GetTokensForUser_NeverExposesFullHash()
+    public void GetTokensForUser_NeverExposesFullHash()
     {
         var service = GetService();
-        var result = await service.CreateToken(
-            "user1", "Test User", "test@example.com", "Test").FirstAsync().ToTask(CT);
+        var result = service.CreateToken(
+            "user1", "Test User", "test@example.com", "Test").Should().Emit();
 
-        var tokens = await service.GetTokensForUser("user1").FirstAsync().ToTask(CT);
+        var tokens = service.GetTokensForUser("user1").Should().Match(t => t.Count == 1);
 
         tokens.Should().HaveCount(1);
         var tokenInfo = tokens[0];
@@ -220,117 +212,110 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     // ── DeleteToken (previously zero coverage; the old hub.Post pattern would deadlock) ──
 
     [Fact]
-    public async Task DeleteToken_RemovesNodeFromStorage()
+    public void DeleteToken_RemovesNodeFromStorage()
     {
         var service = GetService();
-        var result = await service.CreateToken(
-            "user1", "Test User", "test@example.com", "To Delete").FirstAsync().ToTask(CT);
+        var result = service.CreateToken(
+            "user1", "Test User", "test@example.com", "To Delete").Should().Emit();
 
-        await service.DeleteToken(result.Node.Path).FirstAsync().ToTask(CT);
+        service.DeleteToken(result.Node.Path).Should().Emit();
 
         // ApiToken nodes don't activate per-node hubs — read via the same
-        // mesh-level path:X query the production service uses, polling to
-        // absorb read-side index lag.
-        var stored = await PollQueryAsync(result.Node.Path, n => n is null, CT);
+        // mesh-level path:X query the production service uses, waiting on the
+        // live stream to absorb read-side index lag.
+        var stored = ObserveNode(result.Node.Path).Should().Match(n => n is null);
         stored.Should().BeNull();
     }
 
     [Fact]
-    public async Task DeleteToken_AfterDelete_ValidateReturnsNull()
+    public void DeleteToken_AfterDelete_ValidateReturnsNull()
     {
         var service = GetService();
-        var result = await service.CreateToken(
-            "user1", "Test User", "test@example.com", "To Delete").FirstAsync().ToTask(CT);
+        var result = service.CreateToken(
+            "user1", "Test User", "test@example.com", "To Delete").Should().Emit();
 
-        await service.DeleteToken(result.Node.Path).FirstAsync().ToTask(CT);
+        service.DeleteToken(result.Node.Path).Should().Emit();
 
         // Stream-poll the request/response until null — replaces a hand-rolled
         // do/while + Task.Delay(50) loop.
-        var validated = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
-            .SelectMany(_ => service.ValidateToken(result.RawToken).FirstAsync())
-            .Where(v => v is null)
-            .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(10))
-            .ToTask(CT);
+        var validated = Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => service.ValidateToken(result.RawToken).Take(1))
+            .Should().Match(v => v is null);
 
         validated.Should().BeNull();
     }
 
     [Fact]
-    public async Task DeleteToken_AlsoRemovesIndexEntry()
+    public void DeleteToken_AlsoRemovesIndexEntry()
     {
         var service = GetService();
-        var result = await service.CreateToken(
-            "user1", "Test User", "test@example.com", "Index Delete").FirstAsync().ToTask(CT);
+        var result = service.CreateToken(
+            "user1", "Test User", "test@example.com", "Index Delete").Should().Emit();
 
         var apiToken = result.Node.Content as ApiToken;
         var hashPrefix = apiToken!.TokenHash[..12];
         var indexPath = $"ApiToken/{hashPrefix}";
 
-        await service.DeleteToken(result.Node.Path).FirstAsync().ToTask(CT);
+        service.DeleteToken(result.Node.Path).Should().Emit();
 
         // Same primitive as DeleteToken_RemovesNodeFromStorage — query, not
         // ReadNodeAsync (no per-node hub at ApiToken/{hash} either).
-        var index = await PollQueryAsync(indexPath, n => n is null, CT);
+        var index = ObserveNode(indexPath).Should().Match(n => n is null);
         index.Should().BeNull();
     }
 
     [Fact]
-    public async Task DeleteToken_NonexistentPath_Completes()
+    public void DeleteToken_NonexistentPath_Completes()
     {
-        var result = await GetService().DeleteToken("user1/ApiToken/nonexistent").FirstAsync().ToTask(CT);
+        var result = GetService().DeleteToken("user1/ApiToken/nonexistent").Should().Emit();
         result.Should().BeFalse();
     }
 
     // ── GetTokensForUser edge cases ──
 
     [Fact]
-    public async Task GetTokensForUser_EmptyUser_ReturnsEmpty()
+    public void GetTokensForUser_EmptyUser_ReturnsEmpty()
     {
-        var tokens = await GetService().GetTokensForUser("nobody").FirstAsync().ToTask(CT);
+        var tokens = GetService().GetTokensForUser("nobody").Should().Emit();
 
         tokens.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task GetTokensForUser_RevokedToken_StillAppearsAsRevoked()
+    public void GetTokensForUser_RevokedToken_StillAppearsAsRevoked()
     {
         var service = GetService();
-        var result = await service.CreateToken(
-            "user1", "Test User", "test@example.com", "Revoke Me").FirstAsync().ToTask(CT);
-        await service.RevokeToken(result.Node.Path).FirstAsync().ToTask(CT);
+        var result = service.CreateToken(
+            "user1", "Test User", "test@example.com", "Revoke Me").Should().Emit();
+        service.RevokeToken(result.Node.Path).Should().Emit();
 
         // 🚨 Subscribe ONCE to the live synced-query stream and wait for the
-        // condition via stream.Where(...).FirstAsync().Timeout(...). Replaces the
-        // prior Observable.Interval(50ms) polling — re-subscribing to GetTokensForUser
+        // condition via Should().Match(...). Replaces the prior
+        // Observable.Interval(50ms) polling — re-subscribing to GetTokensForUser
         // every tick raced the synced-query Replay(1) cache (project_synced_query_race.md):
         // each poll hit the cache's buffered Initial snapshot rather than waiting
         // for the live Updated emission from the revoke's NotifyChange.
-        var tokens = await service.GetTokensForUser("user1")
-            .Where(t => t.Any(x => x.Label == "Revoke Me" && x.IsRevoked))
-            .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(15))
-            .ToTask(CT);
+        var tokens = service.GetTokensForUser("user1")
+            .Should().Within(TimeSpan.FromSeconds(15))
+            .Match(t => t.Any(x => x.Label == "Revoke Me" && x.IsRevoked));
 
         tokens.Should().ContainSingle(t => t.Label == "Revoke Me" && t.IsRevoked);
     }
 
     [Fact]
-    public async Task GetTokensForUser_DeletedToken_DoesNotAppear()
+    public void GetTokensForUser_DeletedToken_DoesNotAppear()
     {
         var service = GetService();
-        var result = await service.CreateToken(
-            "user1", "Test User", "test@example.com", "Delete Me").FirstAsync().ToTask(CT);
-        await service.DeleteToken(result.Node.Path).FirstAsync().ToTask(CT);
+        var result = service.CreateToken(
+            "user1", "Test User", "test@example.com", "Delete Me").Should().Emit();
+        service.DeleteToken(result.Node.Path).Should().Emit();
 
         // Single live subscription to the synced-query stream — see comment on
         // GetTokensForUser_RevokedToken_StillAppearsAsRevoked for why polling
         // re-subscriptions race the Replay(1) cache.
-        var tokens = await service.GetTokensForUser("user1")
-            .Where(t => !t.Any(x => x.Label == "Delete Me"))
-            .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(15))
-            .ToTask(CT);
+        var tokens = service.GetTokensForUser("user1")
+            .Should().Within(TimeSpan.FromSeconds(15))
+            .Match(t => !t.Any(x => x.Label == "Delete Me"));
 
         tokens.Should().NotContain(t => t.Label == "Delete Me");
     }
@@ -363,59 +348,59 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     [Fact]
-    public async Task CreateToken_WithExpiry_SetsExpiresAt()
+    public void CreateToken_WithExpiry_SetsExpiresAt()
     {
         var expiry = DateTimeOffset.UtcNow.AddDays(30);
-        var result = await GetService().CreateToken(
+        var result = GetService().CreateToken(
             "user1", "Test User", "test@example.com", "Expiring",
-            expiresAt: expiry).FirstAsync().ToTask(CT);
+            expiresAt: expiry).Should().Emit();
 
         var apiToken = result.Node.Content as ApiToken;
-        apiToken!.ExpiresAt.Should().BeCloseTo(expiry, TimeSpan.FromSeconds(1));
+        apiToken!.ExpiresAt!.Value.Should().BeCloseTo(expiry, TimeSpan.FromSeconds(1));
     }
 
     [Fact]
-    public async Task CreateToken_WithoutExpiry_ExpiresAtIsNull()
+    public void CreateToken_WithoutExpiry_ExpiresAtIsNull()
     {
-        var result = await GetService().CreateToken(
-            "user1", "Test User", "test@example.com", "No Expiry").FirstAsync().ToTask(CT);
+        var result = GetService().CreateToken(
+            "user1", "Test User", "test@example.com", "No Expiry").Should().Emit();
 
         var apiToken = result.Node.Content as ApiToken;
         apiToken!.ExpiresAt.Should().BeNull();
     }
 
     [Fact]
-    public async Task CreateToken_EachTokenIsUnique()
+    public void CreateToken_EachTokenIsUnique()
     {
         var service = GetService();
-        var result1 = await service.CreateToken(
-            "user1", "Test User", "test@example.com", "Token 1").FirstAsync().ToTask(CT);
-        var result2 = await service.CreateToken(
-            "user1", "Test User", "test@example.com", "Token 2").FirstAsync().ToTask(CT);
+        var result1 = service.CreateToken(
+            "user1", "Test User", "test@example.com", "Token 1").Should().Emit();
+        var result2 = service.CreateToken(
+            "user1", "Test User", "test@example.com", "Token 2").Should().Emit();
 
         result1.RawToken.Should().NotBe(result2.RawToken);
     }
 
     [Fact]
-    public async Task ValidateToken_FutureExpiry_ReturnsApiToken()
+    public void ValidateToken_FutureExpiry_ReturnsApiToken()
     {
         var service = GetService();
-        var result = await service.CreateToken(
+        var result = service.CreateToken(
             "user1", "Test User", "test@example.com", "Future",
-            expiresAt: DateTimeOffset.UtcNow.AddDays(30)).FirstAsync().ToTask(CT);
+            expiresAt: DateTimeOffset.UtcNow.AddDays(30)).Should().Emit();
 
-        var validated = await service.ValidateToken(result.RawToken).FirstAsync().ToTask(CT);
+        var validated = service.ValidateToken(result.RawToken).Should().Emit();
 
         validated.Should().NotBeNull();
         validated!.UserId.Should().Be("user1");
     }
 
     /// <summary>
-    /// Waits for the MeshNode at <paramref name="path"/> to satisfy <paramref name="condition"/>
-    /// using the live <see cref="IMeshService.ObserveQuery"/> stream — Initial / Added / Updated /
-    /// Removed events fold into a single <c>MeshNode?</c> that we filter with <c>.Where</c>. No
-    /// polling, no <c>Task.Delay</c>: the timeout fires only if the condition genuinely never
-    /// becomes true.
+    /// Folds the live <see cref="IMeshService.ObserveQuery"/> stream for the MeshNode at
+    /// <paramref name="path"/> into a single <c>MeshNode?</c> — Initial / Added / Updated /
+    /// Removed events collapse via <c>.Scan</c>. Callers assert on the result with
+    /// <c>.Should().Match(...)</c>, which blocks (≤ the assertion timeout) for the first
+    /// snapshot satisfying the predicate. No polling, no <c>Task.Delay</c>.
     /// <para>
     /// Required for ApiToken paths because those nodes are <c>IsSatelliteType</c> and have no
     /// per-node hub — the test base's <c>ReadNodeAsync</c> (and <c>GetMeshNodeStream(path)</c>)
@@ -424,7 +409,7 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     /// uses for its own reads, with live change-notifier deltas instead of a polling loop.
     /// </para>
     /// </summary>
-    private Task<MeshNode?> PollQueryAsync(string path, Func<MeshNode?, bool> condition, CancellationToken ct)
+    private IObservable<MeshNode?> ObserveNode(string path)
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         return meshService
@@ -437,11 +422,6 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
                     change.Items.FirstOrDefault() ?? current,
                 QueryChangeType.Removed => null,
                 _ => current,
-            })
-            .Where(node => condition(node))
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .FirstAsync()
-            .ToTask(ct);
+            });
     }
 }

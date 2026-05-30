@@ -49,7 +49,7 @@ public class Playground
         var altered = instance with { Value = 2 };
         var patch = instance.CreatePatch(altered);
         var applied = patch.Apply(instance);
-        applied.Should().BeEquivalentTo(altered);
+        applied.Should().BeEquivalentTo(altered, System.Text.Json.JsonSerializerOptions.Default);
     }
 
     /// <summary>

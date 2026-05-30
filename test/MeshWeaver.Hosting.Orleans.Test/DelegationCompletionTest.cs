@@ -55,7 +55,7 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
             .Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("TestUser", "Completion test", "TestUser")),
                 o => o.WithTarget(new Address("TestUser")))
             .FirstAsync().ToTask(ct);
-        response.Message.Success.Should().BeTrue(response.Message.Error);
+        response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         var threadPath = response.Message.Node!.Path!;
         Output.WriteLine($"Thread: {threadPath}");
 
@@ -123,7 +123,7 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
         finalMsg.Summary.Should().NotBeNull(
             "response cell must carry a dedicated Summary populated at terminal status — " +
             "the delegation tool returns this (not the verbose Text) to the parent agent");
-        finalMsg.Summary.Should().NotBeEmpty("summary must contain text");
+        finalMsg.Summary.Should().NotBeNullOrEmpty("summary must contain text");
         Output.WriteLine($"Verified: response cell Summary length = {finalMsg.Summary!.Length}");
 
         var threadAtIdle = await workspace.GetMeshNodeStream(threadPath)
@@ -164,7 +164,7 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
                 ThreadNodeType.BuildThreadNode("TestUser", "Grandparent thread", "TestUser")),
                 o => o.WithTarget(new Address("TestUser")))
             .FirstAsync().ToTask(ct);
-        gpResponse.Message.Success.Should().BeTrue(gpResponse.Message.Error);
+        gpResponse.Message.Success.Should().BeTrue(gpResponse.Message.Error ?? "");
         var gpPath = gpResponse.Message.Node!.Path!;
         Output.WriteLine($"Grandparent: {gpPath}");
         client.SubmitMessage(
@@ -178,7 +178,7 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
         gpFinal!.Summary.Should().NotBeNullOrEmpty(
             "Level-1 thread must write Summary atomically with Status=Idle so an observer " +
             "(e.g. a delegating parent) can read it in the same emission as the Idle flip");
-        Output.WriteLine($"Level-1 Summary: {gpFinal.Summary![..Math.Min(80, gpFinal.Summary.Length)]}");
+        Output.WriteLine($"Level-1 Summary: {gpFinal.Summary![..Math.Min(80, gpFinal.Summary!.Length)]}");
 
         // 2. Spawn a child thread submission and observe its terminal Summary
         //    the same way — proving the propagation chain works at any depth.
@@ -189,7 +189,7 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
                 ThreadNodeType.BuildThreadNode("TestUser", "Child thread", "TestUser")),
                 o => o.WithTarget(new Address("TestUser")))
             .FirstAsync().ToTask(ct);
-        childResponse.Message.Success.Should().BeTrue(childResponse.Message.Error);
+        childResponse.Message.Success.Should().BeTrue(childResponse.Message.Error ?? "");
         var childPath = childResponse.Message.Node!.Path!;
         Output.WriteLine($"Child: {childPath}");
         client.SubmitMessage(
@@ -214,7 +214,7 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
         childRunningToIdle.terminal!.Summary.Should().NotBeNullOrEmpty(
             "Level-2 (child) thread reactive Running→Idle subscription must surface the " +
             "child's Summary — same shape the DelegationTool uses for sub-thread tool-call results");
-        Output.WriteLine($"Level-2 Summary: {childRunningToIdle.terminal.Summary![..Math.Min(80, childRunningToIdle.terminal.Summary.Length)]}");
+        Output.WriteLine($"Level-2 Summary: {childRunningToIdle.terminal.Summary![..Math.Min(80, childRunningToIdle.terminal.Summary!.Length)]}");
     }
 
     /// <summary>
@@ -247,7 +247,7 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
                     ThreadNodeType.BuildThreadNode("TestUser", "Summary block test", "TestUser")),
                     o => o.WithTarget(new Address("TestUser")))
                 .FirstAsync().ToTask(ct);
-            createResp.Message.Success.Should().BeTrue(createResp.Message.Error);
+            createResp.Message.Success.Should().BeTrue(createResp.Message.Error ?? "");
             var threadPath = createResp.Message.Node!.Path!;
 
             client.SubmitMessage(

@@ -138,10 +138,10 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 60000)]
-    public async Task Profitability_Overview_ShouldRender()
+    public void Profitability_Overview_ShouldRender()
     {
-        await InitializeChildAnalysisHubs();
-        var control = await GetControlAsync("FutuRe/Analysis", "Overview");
+        InitializeChildAnalysisHubs();
+        var control = GetControl("FutuRe/Analysis", "Overview");
         control.Should().NotBeNull("Overview should render for group Analysis hub");
     }
 
@@ -150,13 +150,13 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// with actual content (not just an error control).
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task EuropeRe_Overview_ShouldRender()
+    public void EuropeRe_Overview_ShouldRender()
     {
         var client = GetClient();
         var address = new Address("FutuRe/EuropeRe");
 
         Output.WriteLine("Initializing hub for FutuRe/EuropeRe...");
-        await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -172,10 +172,10 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         // CI and fast-fails (~400ms) while the full render arrives a beat later.
         // 50 s: accounts for first-activation compile time on slow CI agents
         // when LocalAnalysis DLL isn't in the session cache yet.
-        var control = await stream
+        var control = stream
             .GetControlStream(reference.Area!)
-            .Timeout(TimeSpan.FromSeconds(50))
-            .FirstAsync(x => x is StackControl s && s.Areas.Count >= 2);
+            .Should().Within(50.Seconds())
+            .Match(x => x is StackControl s && s.Areas.Count >= 2);
 
         Output.WriteLine($"Received control: {control?.GetType().Name}");
         control.Should().NotBeNull("Overview area should render for EuropeRe business unit");
@@ -190,13 +190,13 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// with actual content (not just an error control).
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task AmericasIns_Overview_ShouldRender()
+    public void AmericasIns_Overview_ShouldRender()
     {
         var client = GetClient();
         var address = new Address("FutuRe/AmericasIns");
 
         Output.WriteLine("Initializing hub for FutuRe/AmericasIns...");
-        await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -213,10 +213,10 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         // fast-fails while the full render arrives a beat later. Same shape
         // as EuropeRe_Overview_ShouldRender above. 50 s budget covers the
         // first-activation compile on slow CI agents.
-        var control = await stream
+        var control = stream
             .GetControlStream(reference.Area!)
-            .Timeout(TimeSpan.FromSeconds(50))
-            .FirstAsync(x => x is StackControl s && s.Areas.Count >= 2);
+            .Should().Within(50.Seconds())
+            .Match(x => x is StackControl s && s.Areas.Count >= 2);
 
         Output.WriteLine($"Received control: {control?.GetType().Name}");
         control.Should().NotBeNull("Overview area should render for AmericasIns business unit");
@@ -231,13 +231,13 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// with actual content (not just an error control).
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task AsiaRe_Overview_ShouldRender()
+    public void AsiaRe_Overview_ShouldRender()
     {
         var client = GetClient();
         var address = new Address("FutuRe/AsiaRe");
 
         Output.WriteLine("Initializing hub for FutuRe/AsiaRe...");
-        await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -255,10 +255,10 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         // tests alphabetically so AmericasIns warms the cache, but the
         // single-filter local repro and isolated CI shards both hit the
         // cold compile here and time out at 60 s).
-        var control = await stream
+        var control = stream
             .GetControlStream(reference.Area!)
-            .Timeout(TimeSpan.FromSeconds(100))
-            .FirstAsync(x => x is StackControl s && s.Areas.Count >= 2);
+            .Should().Within(100.Seconds())
+            .Match(x => x is StackControl s && s.Areas.Count >= 2);
 
         Output.WriteLine($"Received control: {control?.GetType().Name}");
         control.Should().NotBeNull("Overview area should render for AsiaRe business unit");
@@ -403,13 +403,13 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// This tests runtime compilation of the LineOfBusiness data type.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task EuropeRe_LineOfBusiness_Overview_ShouldRender()
+    public void EuropeRe_LineOfBusiness_Overview_ShouldRender()
     {
         var client = GetClient();
         var address = new Address("FutuRe/EuropeRe/LineOfBusiness/HOUSEHOLD");
 
         Output.WriteLine("Initializing hub for FutuRe/EuropeRe/LineOfBusiness/HOUSEHOLD...");
-        await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -419,10 +419,10 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             address, reference);
 
         Output.WriteLine("Waiting for Overview control...");
-        var control = await stream
+        var control = stream
             .GetControlStream(reference.Area!)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .FirstAsync(x => x is not null);
+            .Should().Within(10.Seconds())
+            .Match(x => x is not null);
 
         Output.WriteLine($"Received control: {control?.GetType().Name}");
         control.Should().NotBeNull("Overview area should render a control for EuropeRe LineOfBusiness HOUSEHOLD");
@@ -442,7 +442,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var client = GetClient();
         var address = new Address("FutuRe/LineOfBusiness");
 
-        await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Search");
@@ -450,10 +450,10 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             address, reference);
 
-        var control = await stream
+        var control = stream
             .GetControlStream(reference.Area!)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .FirstAsync(x => x is not null);
+            .Should().Within(10.Seconds())
+            .Match(x => x is not null);
 
         var searchControl = control.Should().BeOfType<MeshSearchControl>().Subject;
         searchControl.HiddenQuery.Should().NotBeNull("Search should have a hidden query");
@@ -481,7 +481,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var client = GetClient();
         var address = new Address("FutuRe/EuropeRe/LineOfBusiness");
 
-        await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Search");
@@ -489,10 +489,10 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             address, reference);
 
-        var control = await stream
+        var control = stream
             .GetControlStream(reference.Area!)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .FirstAsync(x => x is not null);
+            .Should().Within(10.Seconds())
+            .Match(x => x is not null);
 
         var searchControl = control.Should().BeOfType<MeshSearchControl>().Subject;
         searchControl.HiddenQuery.Should().NotBeNull("Search should have a hidden query");
@@ -522,17 +522,17 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     // Ã¢â€â‚¬Ã¢â€â‚¬ Layout Area Catalog Ã¢â€â‚¬Ã¢â€â‚¬
 
     [Fact(Timeout = 60000)]
-    public async Task GroupAnalysis_LayoutAreas_ShouldRenderCatalog()
+    public void GroupAnalysis_LayoutAreas_ShouldRenderCatalog()
     {
-        await InitializeChildAnalysisHubs();
-        var control = await GetControlAsync("FutuRe/Analysis", "LayoutAreas");
+        InitializeChildAnalysisHubs();
+        var control = GetControl("FutuRe/Analysis", "LayoutAreas");
         control.Should().NotBeNull("LayoutAreas catalog should render for group Analysis hub");
     }
 
     [Fact(Timeout = 60000)]
-    public async Task LocalAnalysis_LayoutAreas_ShouldRenderCatalog()
+    public void LocalAnalysis_LayoutAreas_ShouldRenderCatalog()
     {
-        var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "LayoutAreas");
+        var control = GetControl("FutuRe/EuropeRe/Analysis", "LayoutAreas");
         control.Should().NotBeNull("LayoutAreas catalog should render for local EuropeRe Analysis hub");
 
         // The LayoutAreaCatalog returns a StackControl with category headers (H2) and LayoutGridControls
@@ -555,13 +555,13 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// resolves to LayoutAreas, not Overview. This is what users see when navigating to the page.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task EuropeRe_Analysis_DefaultArea_ShouldResolveToLayoutAreas()
+    public void EuropeRe_Analysis_DefaultArea_ShouldResolveToLayoutAreas()
     {
         var client = GetClient();
         var address = new Address("FutuRe/EuropeRe/Analysis");
 
         Output.WriteLine("Initializing hub for FutuRe/EuropeRe/Analysis...");
-        await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
 
         var workspace = client.GetWorkspace();
         // null area = mimics browser navigation to /FutuRe/EuropeRe/Analysis
@@ -572,10 +572,10 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         Output.WriteLine("Waiting for default area control...");
         // The default area stores a NamedAreaControl at the "" key
-        var control = await stream
+        var control = stream
             .GetControlStream("")
-            .Timeout(TimeSpan.FromSeconds(15))
-            .FirstAsync(x => x is not null);
+            .Should().Within(15.Seconds())
+            .Match(x => x is not null);
 
         Output.WriteLine($"Default area control type: {control?.GetType().Name}");
 
@@ -590,64 +590,64 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     // Ã¢â€â‚¬Ã¢â€â‚¬ Local Analysis Hub (EuropeRe) Ã¢â€â‚¬Ã¢â€â‚¬
 
     [Fact(Timeout = 60000)]
-    public async Task EuropeRe_KeyMetrics_ShouldHaveNonZeroData()
+    public void EuropeRe_KeyMetrics_ShouldHaveNonZeroData()
     {
-        var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "KeyMetrics", unwrap: true);
+        var control = GetControl("FutuRe/EuropeRe/Analysis", "KeyMetrics", unwrap: true);
         var md = AssertMarkdownWithNonZeroNumbers(control, "EuropeRe KeyMetrics");
         md.Should().Contain("Total Premium", "KeyMetrics should show premium");
         md.Should().Contain("Loss Ratio", "KeyMetrics should show loss ratio");
     }
 
     [Fact(Timeout = 60000)]
-    public async Task EuropeRe_KeyMetrics_ShouldShowCorrectCurrency()
+    public void EuropeRe_KeyMetrics_ShouldShowCorrectCurrency()
     {
-        var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "KeyMetrics", unwrap: true);
+        var control = GetControl("FutuRe/EuropeRe/Analysis", "KeyMetrics", unwrap: true);
         var md = AssertMarkdownWithNonZeroNumbers(control, "EuropeRe KeyMetrics currency");
         md.Should().Contain(" EUR", "EuropeRe amounts should be labeled with EUR, not CHF");
         md.Should().NotContain(" CHF", "EuropeRe should not show CHF Ã¢â‚¬â€ its currency is EUR");
     }
 
     [Fact(Timeout = 60000)]
-    public async Task EuropeRe_ProfitabilityTable_ShouldHaveNonZeroData()
+    public void EuropeRe_ProfitabilityTable_ShouldHaveNonZeroData()
     {
-        var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "ProfitabilityTable", unwrap: true);
+        var control = GetControl("FutuRe/EuropeRe/Analysis", "ProfitabilityTable", unwrap: true);
         var md = AssertMarkdownWithNonZeroNumbers(control, "EuropeRe ProfitabilityTable");
         md.Should().Contain("Line of Business", "table should have headers");
         md.Should().Contain("Total", "table should have totals row");
     }
 
     [Fact(Timeout = 60000)]
-    public async Task EuropeRe_ProfitabilityOverview_ShouldRenderChart()
+    public void EuropeRe_ProfitabilityOverview_ShouldRenderChart()
     {
-        var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "ProfitabilityOverview", unwrap: true);
+        var control = GetControl("FutuRe/EuropeRe/Analysis", "ProfitabilityOverview", unwrap: true);
         control.Should().BeOfType<ChartControl>("ProfitabilityOverview should be a chart");
     }
 
     [Fact(Timeout = 60000)]
-    public async Task EuropeRe_EstimateVsActual_ShouldHaveData()
+    public void EuropeRe_EstimateVsActual_ShouldHaveData()
     {
-        var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "EstimateVsActual");
+        var control = GetControl("FutuRe/EuropeRe/Analysis", "EstimateVsActual");
         control.Should().NotBeNull("EstimateVsActual should render for EuropeRe");
     }
 
     [Fact(Timeout = 60000)]
-    public async Task EuropeRe_ProfitByLoB_ShouldRenderChart()
+    public void EuropeRe_ProfitByLoB_ShouldRenderChart()
     {
-        var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "ProfitByLoB", unwrap: true);
+        var control = GetControl("FutuRe/EuropeRe/Analysis", "ProfitByLoB", unwrap: true);
         control.Should().BeOfType<ChartControl>("ProfitByLoB should be a chart");
     }
 
     [Fact(Timeout = 60000)]
-    public async Task EuropeRe_LossRatio_ShouldRenderChart()
+    public void EuropeRe_LossRatio_ShouldRenderChart()
     {
-        var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "LossRatio", unwrap: true);
+        var control = GetControl("FutuRe/EuropeRe/Analysis", "LossRatio", unwrap: true);
         control.Should().BeOfType<ChartControl>("LossRatio should be a chart");
     }
 
     [Fact(Timeout = 60000)]
-    public async Task EuropeRe_QuarterlyTrend_ShouldRenderChart()
+    public void EuropeRe_QuarterlyTrend_ShouldRenderChart()
     {
-        var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "QuarterlyTrend", unwrap: true);
+        var control = GetControl("FutuRe/EuropeRe/Analysis", "QuarterlyTrend", unwrap: true);
         control.Should().BeOfType<ChartControl>("QuarterlyTrend should be a chart");
     }
 
@@ -657,15 +657,15 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Diagnostic: check whether PartitionedHubDataSource actually receives data from child hubs.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task Group_Diagnostic_DataFlow()
+    public void Group_Diagnostic_DataFlow()
     {
-        await InitializeChildAnalysisHubs();
+        InitializeChildAnalysisHubs();
 
         var client = GetClient();
         var groupAddress = new Address("FutuRe/Analysis");
 
         // Ping to ensure group hub is created
-        await client.Observe(new PingRequest(), o => o.WithTarget(groupAddress)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(groupAddress)).Should().Emit();
 
         // Get the group hub directly
         var groupHub = Mesh.GetHostedHub(groupAddress, HostedHubCreation.Never);
@@ -690,14 +690,14 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             Output.WriteLine("Waiting for stream data...");
             try
             {
-                var data = await stream
-                    .Timeout(TimeSpan.FromSeconds(8))
-                    .FirstAsync(x => x.Value != null);
+                var data = stream
+                    .Should().Within(8.Seconds())
+                    .Match(x => x.Value != null);
                 Output.WriteLine($"Got data! Collections: {string.Join(", ", data.Value!.Collections.Keys)}");
                 foreach (var c in data.Value!.Collections)
                     Output.WriteLine($"  Collection '{c.Key}': {c.Value.Instances.Count} instances");
             }
-            catch (TimeoutException)
+            catch (ObservableAssertionException)
             {
                 Output.WriteLine("TIMEOUT: Stream never emitted data within 8 seconds");
 
@@ -718,15 +718,15 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 60000)]
-    public async Task Group_KeyMetrics_ShouldHaveNonZeroData()
+    public void Group_KeyMetrics_ShouldHaveNonZeroData()
     {
-        await InitializeChildAnalysisHubs();
+        InitializeChildAnalysisHubs();
 
         // First, get ANY control (not waiting for data) to see what renders.
         // Group-hub initialisation involves PartitionedHubDataSource fan-out across
         // child BU hubs; under the full suite (after many other tests) that occasionally
         // takes > 8 s, so we give it the same 15 s budget the other group tests use.
-        var control = await GetControlAsync("FutuRe/Analysis", "KeyMetrics",
+        var control = GetControl("FutuRe/Analysis", "KeyMetrics",
             waitForData: false, timeoutSeconds: 15);
 
         Output.WriteLine($"Control type: {control?.GetType().Name}");
@@ -741,12 +741,12 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 60000)]
-    public async Task Group_ProfitabilityTable_ShouldHaveNonZeroData()
+    public void Group_ProfitabilityTable_ShouldHaveNonZeroData()
     {
         // Pre-initialize child BU hubs so their data is loaded before group hub aggregates
-        await InitializeChildAnalysisHubs();
+        InitializeChildAnalysisHubs();
 
-        var control = await GetControlAsync("FutuRe/Analysis", "ProfitabilityTable", unwrap: true);
+        var control = GetControl("FutuRe/Analysis", "ProfitabilityTable", unwrap: true);
         // Group profitability table renders Ã¢â‚¬â€ data may arrive asynchronously from child BU hubs.
         // Verify the markdown structure (headers and totals) rather than requiring non-zero data,
         // since PartitionedHubDataSource data flow depends on test execution order.
@@ -759,57 +759,57 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 60000)]
-    public async Task Group_ProfitabilityOverview_ShouldRenderChart()
+    public void Group_ProfitabilityOverview_ShouldRenderChart()
     {
-        await InitializeChildAnalysisHubs();
-        var control = await GetControlAsync("FutuRe/Analysis", "ProfitabilityOverview", unwrap: true);
+        InitializeChildAnalysisHubs();
+        var control = GetControl("FutuRe/Analysis", "ProfitabilityOverview", unwrap: true);
         control.Should().BeOfType<ChartControl>("ProfitabilityOverview should be a chart");
     }
 
     [Fact(Timeout = 60000)]
-    public async Task Group_EstimateVsActual_ShouldHaveData()
+    public void Group_EstimateVsActual_ShouldHaveData()
     {
-        await InitializeChildAnalysisHubs();
-        var control = await GetControlAsync("FutuRe/Analysis", "EstimateVsActual");
+        InitializeChildAnalysisHubs();
+        var control = GetControl("FutuRe/Analysis", "EstimateVsActual");
         control.Should().NotBeNull("EstimateVsActual should render for group hub");
     }
 
     [Fact(Timeout = 60000)]
-    public async Task Group_ProfitByLoB_ShouldRenderChart()
+    public void Group_ProfitByLoB_ShouldRenderChart()
     {
-        await InitializeChildAnalysisHubs();
-        var control = await GetControlAsync("FutuRe/Analysis", "ProfitByLoB", unwrap: true);
+        InitializeChildAnalysisHubs();
+        var control = GetControl("FutuRe/Analysis", "ProfitByLoB", unwrap: true);
         control.Should().BeOfType<ChartControl>("ProfitByLoB should be a chart");
     }
 
     [Fact(Timeout = 60000)]
-    public async Task Group_LossRatio_ShouldRenderChart()
+    public void Group_LossRatio_ShouldRenderChart()
     {
-        await InitializeChildAnalysisHubs();
-        var control = await GetControlAsync("FutuRe/Analysis", "LossRatio", unwrap: true);
+        InitializeChildAnalysisHubs();
+        var control = GetControl("FutuRe/Analysis", "LossRatio", unwrap: true);
         control.Should().BeOfType<ChartControl>("LossRatio should be a chart");
     }
 
     [Fact(Timeout = 60000)]
-    public async Task Group_QuarterlyTrend_ShouldRenderChart()
+    public void Group_QuarterlyTrend_ShouldRenderChart()
     {
-        await InitializeChildAnalysisHubs();
-        var control = await GetControlAsync("FutuRe/Analysis", "QuarterlyTrend", unwrap: true);
+        InitializeChildAnalysisHubs();
+        var control = GetControl("FutuRe/Analysis", "QuarterlyTrend", unwrap: true);
         control.Should().BeOfType<ChartControl>("QuarterlyTrend should be a chart");
     }
 
     [Fact(Timeout = 60000)]
-    public async Task EuropeRe_AnnualProfitabilityWaterfall_ShouldRender()
+    public void EuropeRe_AnnualProfitabilityWaterfall_ShouldRender()
     {
-        var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "AnnualProfitabilityWaterfall", unwrap: true);
+        var control = GetControl("FutuRe/EuropeRe/Analysis", "AnnualProfitabilityWaterfall", unwrap: true);
         control.Should().BeOfType<HtmlControl>("AnnualProfitabilityWaterfall should return an HtmlControl with SVG");
     }
 
     [Fact(Timeout = 60000)]
-    public async Task Group_AnnualProfitabilityWaterfall_ShouldRender()
+    public void Group_AnnualProfitabilityWaterfall_ShouldRender()
     {
-        await InitializeChildAnalysisHubs();
-        var control = await GetControlAsync("FutuRe/Analysis", "AnnualProfitabilityWaterfall", unwrap: true);
+        InitializeChildAnalysisHubs();
+        var control = GetControl("FutuRe/Analysis", "AnnualProfitabilityWaterfall", unwrap: true);
         control.Should().BeOfType<HtmlControl>("AnnualProfitabilityWaterfall should return an HtmlControl with SVG");
     }
 
@@ -824,7 +824,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var client = GetClient();
         var address = new Address("FutuRe/EuropeRe");
 
-        await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Search");
@@ -832,10 +832,10 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             address, reference);
 
-        var control = await stream
+        var control = stream
             .GetControlStream(reference.Area!)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .FirstAsync(x => x is not null);
+            .Should().Within(10.Seconds())
+            .Match(x => x is not null);
 
         var searchControl = control.Should().BeOfType<MeshSearchControl>().Subject;
         var hiddenQuery = searchControl.HiddenQuery!.ToString()!;
@@ -902,13 +902,13 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Verifies that the AnnualReport node exists and its Overview area renders.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task AnnualReport_Overview_ShouldRender()
+    public void AnnualReport_Overview_ShouldRender()
     {
         var client = GetClient();
         var address = new Address("FutuRe/Analysis/AnnualReport");
 
         Output.WriteLine("Initializing hub for FutuRe/Analysis/AnnualReport...");
-        await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -918,7 +918,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             address, reference);
 
         Output.WriteLine("Waiting for Overview area...");
-        var value = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
+        var value = stream.Should().Within(10.Seconds()).Emit();
 
         Output.WriteLine($"Received value: {value.Value.ValueKind}");
         value.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined,
@@ -932,21 +932,21 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// in its markdown content, and that the Markdig pipeline converts them to layout-area divs.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task AnnualReport_Overview_ShouldContainLayoutAreaReferences()
+    public void AnnualReport_Overview_ShouldContainLayoutAreaReferences()
     {
         var client = GetClient();
         var address = new Address("FutuRe/Analysis/AnnualReport");
 
-        await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Overview");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(address, reference);
 
         // Get the Overview control (StackControl with title + MarkdownControl + children)
-        var control = await stream.GetControlStream(reference.Area!)
-            .Timeout(TimeSpan.FromSeconds(15))
-            .FirstAsync(x => x is not null);
+        var control = stream.GetControlStream(reference.Area!)
+            .Should().Within(15.Seconds())
+            .Match(x => x is not null);
 
         var stack = control.Should().BeOfType<StackControl>().Subject;
         Output.WriteLine($"Stack has {stack.Areas?.Count} areas");
@@ -958,9 +958,9 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             var childKey = area.Area?.ToString();
             if (string.IsNullOrEmpty(childKey)) continue;
 
-            var childControl = await stream.GetControlStream(childKey)
-                .Timeout(TimeSpan.FromSeconds(10))
-                .FirstAsync(x => x is not null);
+            var childControl = stream.GetControlStream(childKey)
+                .Should().Within(10.Seconds())
+                .Match(x => x is not null);
 
             Output.WriteLine($"  Area '{childKey}': {childControl?.GetType().Name}");
 
@@ -1001,7 +1001,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// splitting into Prefix="FutuRe/Analysis" and Remainder="X".
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task PathResolver_ShouldResolve_AnalysisLayoutAreaPaths()
+    public void PathResolver_ShouldResolve_AnalysisLayoutAreaPaths()
     {
         var pathResolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
 
@@ -1010,7 +1010,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         foreach (var path in paths)
         {
-            var resolution = await pathResolver.ResolvePath(path).FirstAsync().ToTask();
+            var resolution = pathResolver.ResolvePath(path).Should().Emit();
             Output.WriteLine($"  {path} Ã¢â€ â€™ Prefix='{resolution?.Prefix}', Remainder='{resolution?.Remainder}'");
 
             resolution.Should().NotBeNull($"Path '{path}' should resolve");
@@ -1023,19 +1023,19 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// chart control at the resolved address/area.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task AnnualReport_EmbeddedCharts_ShouldRenderViaPathResolution()
+    public void AnnualReport_EmbeddedCharts_ShouldRenderViaPathResolution()
     {
-        await InitializeChildAnalysisHubs();
+        InitializeChildAnalysisHubs();
 
         // Simulate what PathBasedLayoutArea does
         var pathResolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
-        var resolution = await pathResolver.ResolvePath("FutuRe/Analysis/KeyMetrics").FirstAsync().ToTask();
+        var resolution = pathResolver.ResolvePath("FutuRe/Analysis/KeyMetrics").Should().Emit();
 
         resolution.Should().NotBeNull();
         Output.WriteLine($"Resolved: Prefix='{resolution!.Prefix}', Remainder='{resolution.Remainder}'");
 
         // Now get the control at the resolved address/area
-        var control = await GetControlAsync(resolution.Prefix, resolution.Remainder!,
+        var control = GetControl(resolution.Prefix, resolution.Remainder!,
             waitForData: false, timeoutSeconds: 15);
 
         Output.WriteLine($"Control type: {control?.GetType().Name}");
@@ -1050,20 +1050,20 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Since EuropeRe charts render individually, this report should work end-to-end.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task EuropeRe_AnnualReport_Overview_ShouldContainLayoutAreaReferences()
+    public void EuropeRe_AnnualReport_Overview_ShouldContainLayoutAreaReferences()
     {
         var client = GetClient();
         var address = new Address("FutuRe/EuropeRe/Analysis/AnnualReport");
 
-        await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Overview");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(address, reference);
 
-        var control = await stream.GetControlStream(reference.Area!)
-            .Timeout(TimeSpan.FromSeconds(15))
-            .FirstAsync(x => x is not null);
+        var control = stream.GetControlStream(reference.Area!)
+            .Should().Within(15.Seconds())
+            .Match(x => x is not null);
 
         var stack = control.Should().BeOfType<StackControl>().Subject;
         Output.WriteLine($"Stack has {stack.Areas?.Count} areas");
@@ -1074,9 +1074,9 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             var childKey = area.Area?.ToString();
             if (string.IsNullOrEmpty(childKey)) continue;
 
-            var childControl = await stream.GetControlStream(childKey)
-                .Timeout(TimeSpan.FromSeconds(10))
-                .FirstAsync(x => x is not null);
+            var childControl = stream.GetControlStream(childKey)
+                .Should().Within(10.Seconds())
+                .Match(x => x is not null);
 
             Output.WriteLine($"  Area '{childKey}': {childControl?.GetType().Name}");
 
@@ -1118,7 +1118,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Prefix="FutuRe/EuropeRe/Analysis" and Remainder="KeyMetrics".
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task PathResolver_ShouldResolve_EuropeReAnalysisLayoutAreaPaths()
+    public void PathResolver_ShouldResolve_EuropeReAnalysisLayoutAreaPaths()
     {
         var pathResolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
 
@@ -1127,7 +1127,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         foreach (var path in paths)
         {
-            var resolution = await pathResolver.ResolvePath(path).FirstAsync().ToTask();
+            var resolution = pathResolver.ResolvePath(path).Should().Emit();
             Output.WriteLine($"  {path} Ã¢â€ â€™ Prefix='{resolution?.Prefix}', Remainder='{resolution?.Remainder}'");
 
             resolution.Should().NotBeNull($"Path '{path}' should resolve");
@@ -1142,10 +1142,10 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// this should succeed and proves the @@() embedding pipeline works end-to-end.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task EuropeRe_AnnualReport_EmbeddedCharts_ShouldRenderViaPathResolution()
+    public void EuropeRe_AnnualReport_EmbeddedCharts_ShouldRenderViaPathResolution()
     {
         var pathResolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
-        var resolution = await pathResolver.ResolvePath("FutuRe/EuropeRe/Analysis/KeyMetrics").FirstAsync().ToTask();
+        var resolution = pathResolver.ResolvePath("FutuRe/EuropeRe/Analysis/KeyMetrics").Should().Emit();
 
         resolution.Should().NotBeNull();
         Output.WriteLine($"Resolved: Prefix='{resolution!.Prefix}', Remainder='{resolution.Remainder}'");
@@ -1154,7 +1154,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         resolution.Remainder.Should().Be("KeyMetrics");
 
         // Get the control at the resolved address/area Ã¢â‚¬â€ this is what PathBasedLayoutArea does
-        var control = await GetControlAsync(resolution.Prefix, resolution.Remainder!,
+        var control = GetControl(resolution.Prefix, resolution.Remainder!,
             waitForData: false, timeoutSeconds: 15);
 
         Output.WriteLine($"Control type: {control?.GetType().Name}");
@@ -1198,10 +1198,10 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// in the browser (timeout, missing service, access denied, etc.).
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task Group_HubInitialization_ShouldSucceedWithoutPreInit()
+    public void Group_HubInitialization_ShouldSucceedWithoutPreInit()
     {
         // Do NOT call InitializeChildAnalysisHubs() Ã¢â‚¬â€ reproduce browser behavior
-        var control = await GetControlAsync("FutuRe/Analysis", "KeyMetrics",
+        var control = GetControl("FutuRe/Analysis", "KeyMetrics",
             waitForData: false, timeoutSeconds: 15);
         control.Should().NotBeNull("FutuRe/Analysis hub should initialize without pre-starting child hubs");
     }
@@ -1214,19 +1214,18 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Without this, the remote streams may receive empty data if child hubs haven't
     /// finished loading their CSV data when the group hub subscribes.
     /// </summary>
-    private async Task InitializeChildAnalysisHubs()
+    private void InitializeChildAnalysisHubs()
     {
         var client = GetClient();
-        var ct = TestContext.Current.CancellationToken;
 
         foreach (var bu in new[] { "EuropeRe", "AmericasIns" })
         {
             var buAddress = new Address($"FutuRe/{bu}/Analysis");
-            await client.Observe(new PingRequest(), o => o.WithTarget(buAddress)).FirstAsync().ToTask();
+            client.Observe(new PingRequest(), o => o.WithTarget(buAddress)).Should().Emit();
         }
     }
 
-    private async Task<UiControl?> GetControlAsync(
+    private UiControl? GetControl(
         string addressPath, string areaName,
         bool waitForData = false, int timeoutSeconds = 15,
         bool unwrap = false)
@@ -1234,7 +1233,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var client = GetClient();
         var address = new Address(addressPath);
 
-        await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(areaName);
@@ -1242,12 +1241,10 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             address, reference);
 
-        var control = await stream
+        var control = stream
             .GetControlStream(reference.Area!)
-            .Timeout(TimeSpan.FromSeconds(timeoutSeconds))
-            .FirstAsync(x => x is not null);
-
-        control.Should().NotBeNull($"{areaName} should render at {addressPath}");
+            .Should().Within(timeoutSeconds.Seconds())
+            .Match(x => x is not null, $"{areaName} should render at {addressPath}");
 
         if (unwrap)
         {
@@ -1263,19 +1260,19 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
                 if (string.IsNullOrEmpty(childKey)) break;
 
                 Output.WriteLine($"  Unwrap [{depth}]: '{childKey}'...");
-                control = await stream
+                control = stream
                     .GetControlStream(childKey)
-                    .Timeout(TimeSpan.FromSeconds(timeoutSeconds))
-                    .FirstAsync(x => x is not null && (!waitForData || HasNonTrivialData(x)));
+                    .Should().Within(timeoutSeconds.Seconds())
+                    .Match(x => x is not null && (!waitForData || HasNonTrivialData(x)));
                 Output.WriteLine($"  Ã¢â€ â€™ {control?.GetType().Name}");
             }
         }
         else if (waitForData && !HasNonTrivialData(control))
         {
-            control = await stream
+            control = stream
                 .GetControlStream(reference.Area!)
-                .Timeout(TimeSpan.FromSeconds(timeoutSeconds))
-                .FirstAsync(x => x is not null && HasNonTrivialData(x));
+                .Should().Within(timeoutSeconds.Seconds())
+                .Match(x => x is not null && HasNonTrivialData(x));
         }
 
         return control;

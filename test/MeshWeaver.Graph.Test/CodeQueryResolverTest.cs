@@ -80,7 +80,7 @@ public class CodeQueryResolverTest
         var fromNull = CodeQueryResolver.ExpandAll(null, CodeQueryResolver.DefaultSources, SelfPath).ToList();
         var fromEmpty = CodeQueryResolver.ExpandAll(new List<string>(), CodeQueryResolver.DefaultSources, SelfPath).ToList();
 
-        fromNull.Should().BeEquivalentTo(fromEmpty);
+        fromNull.Should().BeEquivalentTo(fromEmpty, System.Text.Json.JsonSerializerOptions.Default);
         fromNull.Should().ContainSingle()
             .Which.Should().Be($"namespace:{SelfPath}/Source scope:subtree nodeType:Code");
     }

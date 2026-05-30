@@ -54,12 +54,12 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
         var client = GetClient();
 
         var resp1 = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("PartitionA", "Thread in A", AdminUserId)), o => o.WithTarget(new Address("PartitionA"))).FirstAsync().ToTask(TestTimeout);
-        resp1.Message.Success.Should().BeTrue(resp1.Message.Error);
+        resp1.Message.Success.Should().BeTrue(resp1.Message.Error ?? "");
         var threadA = resp1.Message.Node!.Path!;
         Output.WriteLine($"Thread A: {threadA}");
 
         var resp2 = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("PartitionB", "Thread in B", AdminUserId)), o => o.WithTarget(new Address("PartitionB"))).FirstAsync().ToTask(TestTimeout);
-        resp2.Message.Success.Should().BeTrue(resp2.Message.Error);
+        resp2.Message.Success.Should().BeTrue(resp2.Message.Error ?? "");
         var threadB = resp2.Message.Node!.Path!;
         Output.WriteLine($"Thread B: {threadB}");
 
@@ -88,10 +88,10 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
         var client = GetClient();
 
         var resp1 = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("NsX", "X thread", AdminUserId)), o => o.WithTarget(new Address("NsX"))).FirstAsync().ToTask(TestTimeout);
-        resp1.Message.Success.Should().BeTrue(resp1.Message.Error);
+        resp1.Message.Success.Should().BeTrue(resp1.Message.Error ?? "");
 
         var resp2 = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("NsY", "Y thread", AdminUserId)), o => o.WithTarget(new Address("NsY"))).FirstAsync().ToTask(TestTimeout);
-        resp2.Message.Success.Should().BeTrue(resp2.Message.Error);
+        resp2.Message.Success.Should().BeTrue(resp2.Message.Error ?? "");
 
         // Act: query with explicit namespace â€” should only return threads from NsX
         var results = await MeshQuery

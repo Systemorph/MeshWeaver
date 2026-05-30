@@ -163,16 +163,15 @@ public class InlineEditingTest(ITestOutputHelper output) : HubTestBase(output)
     /// Test that the inline edit view renders with readonly values initially.
     /// </summary>
     [Fact]
-    public async Task InlineEdit_InitialRender_ShowsReadonlyValues()
+    public void InlineEdit_InitialRender_ShowsReadonlyValues()
     {
         var host = GetHost();
         var workspace = host.GetWorkspace();
         var area = workspace.GetStream(new LayoutAreaReference(InlineEditView));
 
-        var control = await area
+        var control = area
             .GetControlStream(InlineEditView)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null);
+            .Should().Within(10.Seconds()).Match(x => x is not null);
 
         // Should render as a LayoutGridControl
         var grid = control.Should().BeOfType<LayoutGridControl>().Subject;

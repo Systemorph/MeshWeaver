@@ -115,7 +115,7 @@ public class ExportDocumentScriptRelayTest(ITestOutputHelper output) : MonolithM
         rendered!.Format.Should().Be(ExportFormat.Pdf);
         rendered.MimeType.Should().Be("application/pdf");
         rendered.FileName.Should().EndWith(".pdf");
-        rendered.Content.Should().NotBeNullOrEmpty();
+        rendered.Content.Should().NotBeNull().And.NotBeEmpty();
         rendered.Content.Length.Should().BeGreaterThan(100,
             "a real PDF is at least a few hundred bytes");
     }

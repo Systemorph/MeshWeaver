@@ -127,8 +127,8 @@ public class OrleansCommentTest(ITestOutputHelper output) : TestBase(output)
 
         // 2) Verify response (no deadlock â€” handler is non-blocking)
         var commentResponse = response.Message as CreateCommentResponse;
-        commentResponse.Should().NotBeNull("Expected CreateCommentResponse, got {0}", response.Message?.GetType().Name);
-        commentResponse!.Success.Should().BeTrue("Error: {0}", commentResponse.Error);
+        commentResponse.Should().NotBeNull("Expected CreateCommentResponse, got {0}", response.Message?.GetType().Name ?? "(null)");
+        commentResponse!.Success.Should().BeTrue("Error: {0}", commentResponse.Error ?? "");
         commentResponse.MarkerId.Should().NotBeNullOrEmpty();
         Output.WriteLine($"Comment created: MarkerId={commentResponse.MarkerId}");
 
@@ -175,7 +175,7 @@ public class OrleansCommentTest(ITestOutputHelper output) : TestBase(output)
 
         var commentResponse = response.Message as CreateCommentResponse;
         commentResponse.Should().NotBeNull();
-        commentResponse!.Success.Should().BeTrue("Error: {0}", commentResponse.Error);
+        commentResponse!.Success.Should().BeTrue("Error: {0}", commentResponse.Error ?? "");
         Output.WriteLine($"Page-level comment created: MarkerId={commentResponse.MarkerId}");
 
         // Verify comment node via GetDataRequest

@@ -7,6 +7,7 @@ using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Mesh;
@@ -118,8 +119,8 @@ public class HierarchicalPathDeletionTests
 
         deleted.Should().HaveCount(3);
         deleted.Last().Should().Be("a", "root must be last");
-        deleted.Take(2).Should().BeEquivalentTo(new[] { "a/b", "a/c" },
-            "siblings complete before the parent, in either order");
+        deleted.Take(2).Should().BeEquivalentTo(new[] { "a/b", "a/c" }, JsonSerializerOptions.Default,
+            because: "siblings complete before the parent, in either order");
     }
 
     [Fact]

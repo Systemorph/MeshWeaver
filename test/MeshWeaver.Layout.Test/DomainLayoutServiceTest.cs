@@ -108,7 +108,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
         value.Should().NotBeNull();
         value.Should().Be("Hello");
 
-        var objectStream = stream.DataBind<JsonElement>(new(dataContext));
+        var objectStream = stream.DataBind<JsonElement>(new(dataContext!));
         var obj = await objectStream.Timeout(10.Seconds()).FirstAsync()!;
         const string Universe = nameof(Universe);
 
@@ -150,7 +150,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
 
 
     [HubFact]
-    public async Task TestCatalog()
+    public void TestCatalog()
     {
         var host = GetHost();
         var reference = DomainLayoutAreas.GetCatalogReference(nameof(DataRecord));
@@ -160,25 +160,22 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             CreateHostAddress(),
             reference
         );
-        var content = await stream.GetControlStream(reference.Area!)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x != null);
+        var content = stream.GetControlStream(reference.Area!)
+            .Should().Within(10.Seconds()).Match(x => x != null);
         var stack = content
             .Should()
             .BeOfType<StackControl>()
             .Which;
 
-        var control = await stream
+        var control = stream
             .GetControlStream(stack.Areas.Last().Area.ToString()!)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null)!;
+            .Should().Within(10.Seconds()).Match(x => x is not null);
         var dataGrid = control.Should().BeOfType<DataGridControl>().Which;
-        var pointer = dataGrid.Data.Should().BeAssignableTo<JsonPointerReference>().Which;
-        var dataStream = await stream
+        var pointer = dataGrid.Data.Should().BeOfType<JsonPointerReference>().Which;
+        var dataStream = stream
             .GetDataStream<IEnumerable<object>>(pointer)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null)!;
-        dataStream.Should().BeAssignableTo<IEnumerable<object>>().Which.Should().HaveCount(2);
+            .Should().Within(10.Seconds()).Match(x => x is not null);
+        dataStream.Should().BeOfType<IEnumerable<object>>().Which.Should().HaveCount(2);
 
     }
 }

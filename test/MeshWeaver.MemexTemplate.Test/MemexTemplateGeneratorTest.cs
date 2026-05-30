@@ -127,7 +127,7 @@ public class MemexTemplateGeneratorTest : IDisposable
 
         // Third-party packages should have real versions from root Directory.Packages.props
         packageVersions.Should().ContainKey("Aspire.Hosting.AppHost");
-        packageVersions["Aspire.Hosting.AppHost"].Should().NotBeEmpty()
+        packageVersions["Aspire.Hosting.AppHost"].Should().NotBeNullOrEmpty()
             .And.NotBe(version, "third-party versions come from root Directory.Packages.props, not the generator version arg");
     }
 

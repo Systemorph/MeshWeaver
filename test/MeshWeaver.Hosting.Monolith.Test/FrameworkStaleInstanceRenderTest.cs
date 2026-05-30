@@ -4,8 +4,6 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -175,10 +173,10 @@ public class FrameworkStaleInstanceRenderTest(ITestOutputHelper output) : Monoli
             .FirstAsync()
             .ToTask(ct);
 
-        control.Should().BeOfType<HtmlControl>(
+        var html = control.Should().BeOfType<HtmlControl>(
             "the instance must bind the compiled Overview after the framework-stale "
-            + "self-heal, not the framework-stale overlay");
-        ((HtmlControl)control).Data.ToString().Should().Contain(marker,
+            + "self-heal, not the framework-stale overlay").Which;
+        html.Data.ToString().Should().Contain(marker,
             "the rendered Overview must be the compiled marker area, proving the instance "
             + "picked up the healed assembly rather than the overlay/default config");
     }

@@ -85,7 +85,7 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         // assert
         data.Should().NotBeNull();
         data.Should().HaveCount(3);
-        data.Should().BeEquivalentTo(WorkspaceTestData.TestData);
+        data.Should().BeEquivalentTo(WorkspaceTestData.TestData, GetHost().JsonSerializerOptions);
     }
 
     /// <summary>
@@ -105,7 +105,7 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
             .FirstAsync();
 
         // assert
-        item.Should().BeEquivalentTo(expectedItem);
+        item.Should().BeEquivalentTo(expectedItem, GetHost().JsonSerializerOptions);
     }
 
     /// <summary>
@@ -260,7 +260,7 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
 
         // act
         var stream = workspace.GetStream(collectionRef);
-        stream.Should().NotBeNull();
+        ((object?)stream).Should().NotBeNull();
         var collection = await stream!
             .Where(c => c.Value != null)
             .Select(c => c.Value!.Instances.Values.Cast<WorkspaceTestData>().ToArray())
@@ -269,7 +269,7 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
 
         // assert
         collection.Should().HaveCount(3);
-        collection.Should().BeEquivalentTo(WorkspaceTestData.TestData);
+        collection.Should().BeEquivalentTo(WorkspaceTestData.TestData, GetHost().JsonSerializerOptions);
     }
 
     /// <summary>
@@ -284,7 +284,7 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
 
         // act
         var stream = workspace.GetStream(entityRef);
-        stream.Should().NotBeNull();
+        ((object?)stream).Should().NotBeNull();
         var item = await stream!
             .Where(c => c.Value != null)
             .Select(c => c.Value as WorkspaceTestData)
@@ -293,7 +293,7 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
 
         // assert
         item.Should().NotBeNull();
-        item.Id.Should().Be("2");
+        item!.Id.Should().Be("2");
         item.Name.Should().Be("Second Item");
     }    /// <summary>
          /// Tests that multiple clients can synchronize data changes across the workspace

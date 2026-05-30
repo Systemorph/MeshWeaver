@@ -497,7 +497,7 @@ public class CompilationCacheServiceLoadContextTest : IDisposable
         _service.Dispose();
 
         // Act
-        var act = () => _service.GetOrCreateLoadContext("test");
+        var act = () => { _service.GetOrCreateLoadContext("test"); };
 
         // Assert
         act.Should().Throw<ObjectDisposedException>();
@@ -510,7 +510,7 @@ public class CompilationCacheServiceLoadContextTest : IDisposable
         _service.Dispose();
 
         // Act
-        var act = () => _service.LoadAssembly("test");
+        var act = () => { _service.LoadAssembly("test"); };
 
         // Assert
         act.Should().Throw<ObjectDisposedException>();

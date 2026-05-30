@@ -223,10 +223,26 @@ public class MeshNodeCacheIdentityTest(ITestOutputHelper output) : MonolithMeshT
             // Query path: the cache uses similar paths during hydration.
             // No exception should be raised; a result is fine even if empty
             // (the security gate is what's under test, not query semantics).
-            var act = async () => await meshService
-                .ObserveQuery<MeshNode>(new MeshQueryRequest { Query = $"path:{nodePath}", Limit = 1 })
-                .Take(1).Timeout(5.Seconds()).ToTask(TestTimeout);
-            await act.Should().NotThrowAsync<UnauthorizedAccessException>(
+            // The library's NotThrowAsync is non-generic (asserts NO exception of any
+            // kind). Here only UnauthorizedAccessException must not be raised — a timeout
+            // or empty completion is tolerated — so the type-specific assertion is done
+            // manually: run the act, swallow everything except UnauthorizedAccessException.
+            UnauthorizedAccessException? denied = null;
+            try
+            {
+                await meshService
+                    .ObserveQuery<MeshNode>(new MeshQueryRequest { Query = $"path:{nodePath}", Limit = 1 })
+                    .Take(1).Timeout(5.Seconds()).ToTask(TestTimeout);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                denied = ex;
+            }
+            catch
+            {
+                // Other exceptions (e.g. timeout on an empty query) are not under test.
+            }
+            denied.Should().BeNull(
                 "cache identity must be allowed to read — hydration depends on it");
         }
     }

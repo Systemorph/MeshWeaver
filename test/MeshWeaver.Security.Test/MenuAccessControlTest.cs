@@ -187,8 +187,9 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
             Output.WriteLine($"  {item.Label} (Area={item.Area})");
 
         items.Select(i => i.Label).Should().BeEquivalentTo(
-            ["Files", "Threads", "Versions", "Pin"],
-            "Viewer has only Read — no Create, Update, Delete, or Export items (Pin requires no permission; Settings is a dedicated header button)");
+            new[] { "Files", "Threads", "Versions", "Pin" },
+            JsonSerializerOptions.Default,
+            because: "Viewer has only Read — no Create, Update, Delete, or Export items (Pin requires no permission; Settings is a dedicated header button)");
     }
 
     [Fact(Timeout = 30000)]
@@ -219,7 +220,8 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
             Output.WriteLine($"  {item.Label} (Area={item.Area})");
 
         items.Select(i => i.Label).Should().BeEquivalentTo(expected,
-            "Editor has Read|Create|Update|Comment|Export — Edit/Create/Copy/Import/Export/Recycle plus always-visible items and Pin (Settings is a dedicated header button)");
+            JsonSerializerOptions.Default,
+            because: "Editor has Read|Create|Update|Comment|Export — Edit/Create/Copy/Import/Export/Recycle plus always-visible items and Pin (Settings is a dedicated header button)");
     }
 
     [Fact(Timeout = 30000)]
@@ -247,7 +249,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
             Output.WriteLine($"  {item.Label} (Area={item.Area})");
 
         items.Should().HaveCount(12, "Admin should see all default menu items across Node and Mesh contexts (Settings is a dedicated header button)");
-        items.Select(i => i.Label).Should().BeEquivalentTo(expected);
+        items.Select(i => i.Label).Should().BeEquivalentTo(expected, JsonSerializerOptions.Default);
     }
 
     [Fact(Timeout = 30000)]

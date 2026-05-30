@@ -78,13 +78,13 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     /// Test that ACME organization hub can be initialized.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task ACME_Organization_CanBeInitialized()
+    public void ACME_Organization_CanBeInitialized()
     {
         var acmeAddress = new Address("ACME");
 
         var client = GetClient(c => c.AddData(data => data));
 
-        var response = await client.Observe(new PingRequest(), o => o.WithTarget(acmeAddress)).FirstAsync().ToTask();
+        var response = client.Observe(new PingRequest(), o => o.WithTarget(acmeAddress)).Should().Emit();
 
         response.Should().NotBeNull();
     }
@@ -93,13 +93,13 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     /// Test that Project NodeType under ACME can be initialized.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task ACME_Project_NodeType_CanBeInitialized()
+    public void ACME_Project_NodeType_CanBeInitialized()
     {
         var projectTypeAddress = new Address("ACME/Project");
 
         var client = GetClient(c => c.AddData(data => data));
 
-        var response = await client.Observe(new PingRequest(), o => o.WithTarget(projectTypeAddress)).FirstAsync().ToTask();
+        var response = client.Observe(new PingRequest(), o => o.WithTarget(projectTypeAddress)).Should().Emit();
 
         response.Should().NotBeNull();
     }
@@ -108,13 +108,13 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     /// Test that Todo NodeType under Project can be initialized.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task ACME_Todo_NodeType_CanBeInitialized()
+    public void ACME_Todo_NodeType_CanBeInitialized()
     {
         var todoTypeAddress = new Address("ACME/Project/Todo");
 
         var client = GetClient(c => c.AddData(data => data));
 
-        var response = await client.Observe(new PingRequest(), o => o.WithTarget(todoTypeAddress)).FirstAsync().ToTask();
+        var response = client.Observe(new PingRequest(), o => o.WithTarget(todoTypeAddress)).Should().Emit();
 
         response.Should().NotBeNull();
     }
@@ -123,13 +123,13 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     /// Test that ProductLaunch project instance can be initialized.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task ProductLaunch_Instance_CanBeInitialized()
+    public void ProductLaunch_Instance_CanBeInitialized()
     {
         var productLaunchAddress = new Address("ACME/ProductLaunch");
 
         var client = GetClient(c => c.AddData(data => data));
 
-        var response = await client.Observe(new PingRequest(), o => o.WithTarget(productLaunchAddress)).FirstAsync().ToTask();
+        var response = client.Observe(new PingRequest(), o => o.WithTarget(productLaunchAddress)).Should().Emit();
 
         response.Should().NotBeNull();
     }
@@ -138,13 +138,13 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     /// Test that a task instance can be initialized.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task Task_Instance_CanBeInitialized()
+    public void Task_Instance_CanBeInitialized()
     {
         var taskAddress = new Address("ACME/ProductLaunch/Todo/DefinePersona");
 
         var client = GetClient(c => c.AddData(data => data));
 
-        var response = await client.Observe(new PingRequest(), o => o.WithTarget(taskAddress)).FirstAsync().ToTask();
+        var response = client.Observe(new PingRequest(), o => o.WithTarget(taskAddress)).Should().Emit();
 
         response.Should().NotBeNull();
     }

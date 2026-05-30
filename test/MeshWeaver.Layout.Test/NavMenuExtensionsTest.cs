@@ -38,7 +38,7 @@ public class NavMenuExtensionsTest(ITestOutputHelper output) : HubTestBase(outpu
         ) => base.ConfigureClient(configuration).AddLayoutClient(d => d);
 
         [HubFact]
-        public async Task BasicArea()
+        public void BasicArea()
         {
             var reference = new LayoutAreaReference(NavMenuExtensions.NavMenu);
 
@@ -48,10 +48,9 @@ public class NavMenuExtensionsTest(ITestOutputHelper output) : HubTestBase(outpu
                 reference
             );
 
-            var control = await stream.GetControlStream(reference.Area!)
-                .Timeout(10.Seconds())
-                .FirstAsync(x => x != null);
-            
+            var control = stream.GetControlStream(reference.Area!)
+                .Should().Within(10.Seconds()).Match(x => x != null);
+
             control
                 .Should()
                 .BeOfType<NavMenuControl>()

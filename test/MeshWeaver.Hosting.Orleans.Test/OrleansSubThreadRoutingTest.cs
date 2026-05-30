@@ -44,7 +44,7 @@ public class OrleansSubThreadRoutingTest(ITestOutputHelper output) : OrleansShar
         Output.WriteLine($"CreateNodeRequest: id={node.Id}, ns={node.Namespace}, path={node.Path}, target={targetAddress}");
         var response = await client.Observe(new CreateNodeRequest(node), o => o.WithTarget(new Address(targetAddress))).FirstAsync().ToTask(ct);
         Output.WriteLine($"CreateNodeResponse: success={response.Message.Success}, error={response.Message.Error ?? "(none)"}, path={response.Message.Node?.Path ?? "(null)"}");
-        response.Message.Success.Should().BeTrue(response.Message.Error);
+        response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         return response.Message.Node!.Path!;
     }
 

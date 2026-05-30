@@ -41,7 +41,7 @@ public class CodeTreeTest
 
         var tree = NodeTypeLayoutAreas.BuildCodeTree(RootPath, CodeNodeType.SourceSubNamespace, nodes);
 
-        tree.Folders.Keys.Should().BeEquivalentTo(["Models"]);
+        tree.Folders.Keys.Should().BeEquivalentTo(new[] { "Models" }, System.Text.Json.JsonSerializerOptions.Default);
         tree.Leaves.Should().ContainSingle(l => l.Name == "Program.cs");
     }
 
@@ -58,7 +58,7 @@ public class CodeTreeTest
         var tree = NodeTypeLayoutAreas.BuildCodeTree(RootPath, CodeNodeType.TestSubNamespace, nodes);
 
         tree.Leaves.Should().ContainSingle(l => l.Name == "ProgramTest.cs");
-        tree.Folders.Should().ContainKey("Integration");
+        tree.Folders.Keys.Should().Contain("Integration");
         tree.Folders["Integration"].Leaves.Should().ContainSingle(l => l.Name == "EndToEndTest.cs");
     }
 
@@ -102,8 +102,8 @@ public class CodeTreeTest
 
         var tree = NodeTypeLayoutAreas.BuildCodeTree(RootPath, CodeNodeType.SourceSubNamespace, nodes);
 
-        tree.Folders.Keys.Should().BeEquivalentTo(["Models", "Services"]);
-        tree.Folders["Models"].Folders.Keys.Should().BeEquivalentTo(["Nested"]);
+        tree.Folders.Keys.Should().BeEquivalentTo(new[] { "Models", "Services" }, System.Text.Json.JsonSerializerOptions.Default);
+        tree.Folders["Models"].Folders.Keys.Should().BeEquivalentTo(new[] { "Nested" }, System.Text.Json.JsonSerializerOptions.Default);
         tree.Folders["Models"].Folders["Nested"].Leaves.Should().ContainSingle(l => l.Name == "C.cs");
         tree.Folders["Models"].Leaves.Should().ContainSingle(l => l.Name == "B.cs");
         tree.Folders["Services"].Leaves.Should().ContainSingle(l => l.Name == "D.cs");
@@ -151,7 +151,7 @@ public class CodeTreeTest
         var current = tree;
         foreach (var seg in new[] { "a", "b", "c", "d" })
         {
-            current.Folders.Should().ContainKey(seg, $"tree should descend through '{seg}'");
+            current.Folders.Keys.Should().Contain(seg, $"tree should descend through '{seg}'");
             current = current.Folders[seg];
         }
         current.Leaves.Should().ContainSingle(l => l.Name == "Leaf.cs");
@@ -173,10 +173,10 @@ public class CodeTreeTest
 
         var tree = NodeTypeLayoutAreas.BuildCodeTreeForNavigation(RootPath, nodes);
 
-        tree.Folders.Should().ContainKey("Source");
+        tree.Folders.Keys.Should().Contain("Source");
         tree.Folders["Source"].Leaves.Should().ContainSingle(l => l.Name == "Program.cs");
         tree.Folders["Source"].Folders["Models"].Leaves.Should().ContainSingle(l => l.Name == "Person.cs");
-        tree.Folders.Should().NotContainKey("(shared)");
+        tree.Folders.Keys.Should().NotContain("(shared)");
     }
 
     [Fact]
@@ -194,14 +194,14 @@ public class CodeTreeTest
 
         var tree = NodeTypeLayoutAreas.BuildCodeTreeForNavigation(RootPath, nodes);
 
-        tree.Folders.Should().ContainKey("Source", "local file is relativised");
-        tree.Folders.Should().ContainKey("(shared)", "foreign files collect under a shared folder");
+        tree.Folders.Keys.Should().Contain("Source", "local file is relativised");
+        tree.Folders.Keys.Should().Contain("(shared)", "foreign files collect under a shared folder");
 
         var shared = tree.Folders["(shared)"];
         // Foreign files keep their full path so operators see where they came from.
-        shared.Folders.Should().ContainKey("Shared");
+        shared.Folders.Keys.Should().Contain("Shared");
         shared.Folders["Shared"].Folders["Utils"].Leaves.Should().ContainSingle(l => l.Name == "Helper.cs");
-        shared.Folders.Should().ContainKey("Other");
+        shared.Folders.Keys.Should().Contain("Other");
         shared.Folders["Other"].Folders["Lib"].Leaves.Should().ContainSingle(l => l.Name == "CommonTypes.cs");
     }
 
@@ -224,7 +224,7 @@ public class CodeTreeTest
 
         var tree = NodeTypeLayoutAreas.BuildCodeTreeForNavigation(RootPath, nodes);
 
-        tree.Folders.Should().ContainKey("(shared)");
-        tree.Folders.Should().NotContainKey("Source", "no local files means no local root folder");
+        tree.Folders.Keys.Should().Contain("(shared)");
+        tree.Folders.Keys.Should().NotContain("Source", "no local files means no local root folder");
     }
 }

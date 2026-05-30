@@ -408,9 +408,9 @@ public class NodeTypeReleaseTest
         // Act
         var sanitized = release.GetSanitizedPath();
 
-        // Assert - Should be a valid file name
+        // Assert - Should be a valid file name (none of its characters are invalid).
         var invalidChars = Path.GetInvalidFileNameChars();
-        sanitized.Should().NotContainAny(invalidChars.Select(c => c.ToString()).ToArray());
+        sanitized.AsEnumerable().Should().NotContainAny(invalidChars);
     }
 }
 

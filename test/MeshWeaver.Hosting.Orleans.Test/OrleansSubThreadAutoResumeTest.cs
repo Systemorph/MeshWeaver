@@ -116,7 +116,7 @@ public class OrleansSubThreadAutoResumeTest(ITestOutputHelper output) : TestBase
         var threadNode = ThreadNodeType.BuildThreadNode("User/TestUser", "auto-resume test", "TestUser");
         var createResp = await client.Observe(new CreateNodeRequest(threadNode),
                 o => o.WithTarget(new Address("User/TestUser"))).FirstAsync().ToTask(ct);
-        createResp.Message.Success.Should().BeTrue(createResp.Message.Error);
+        createResp.Message.Success.Should().BeTrue(createResp.Message.Error ?? "");
         var parentThreadPath = createResp.Message.Node!.Path!;
         Output.WriteLine($"Parent thread: {parentThreadPath}");
 
