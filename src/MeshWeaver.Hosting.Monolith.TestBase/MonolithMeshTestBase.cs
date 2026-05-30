@@ -329,7 +329,6 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         ("aclAttrCache", () => GetStaticDictCount("MeshWeaver.Hosting.Security.AccessControlPipeline, MeshWeaver.Hosting", "AttributeCache")),
         ("apiTokenVal", () => GetStaticDictCount("MeshWeaver.Graph.Configuration.ApiTokenNodeType, MeshWeaver.Graph", "ValidationCache")),
         ("xunitOutHelpers", () => GetStaticDictCount("MeshWeaver.Fixture.XUnitFileOutputRegistry, MeshWeaver.Fixture", "_activeOutputHelpers")),
-        ("testAccessNodes", () => GetStaticDictCount("MeshWeaver.Hosting.Monolith.TestBase.TestAccessNodeProvider, MeshWeaver.Hosting.Monolith.TestBase", "Nodes")),
     };
 
     /// <summary>

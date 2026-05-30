@@ -84,13 +84,13 @@ public class NoStaticCollectionsTest
         ["MeshWeaver.Reflection.GenericCaches.MethodCaches"] = "MEMO: MethodInfo",
         ["MeshWeaver.Reflection.GenericCaches.TypeCaches"] = "MEMO: Type",
 
+        // ---- PROC: tied to a process-global resource; per-mesh is meaningless, no test bleed ----
+        ["MeshWeaver.Kernel.Hub.KernelExecutor._probingDirs"] = "PROC: AssemblyLoadContext.Default.Resolving probe registry (one resolver per process)",
+
         // ---- CACHE: mutable mesh/runtime state — MUST migrate to mesh-scoped instance. BURN DOWN TO ZERO. ----
         ["MeshWeaver.Graph.Configuration.NodeTypeRegistry.Nodes"] = "CACHE: deleted in source — drops on Graph rebuild",
         ["MeshWeaver.Graph.Configuration.ApiTokenNodeType.ValidationCache"] = "CACHE: -> mesh-scoped IMemoryCache (10-min TTL)",
-        ["MeshWeaver.Hosting.Persistence.CachingStorageAdapter.SharedSnapshots"] = "CACHE: -> instance on adapter owner",
-        ["MeshWeaver.Hosting.Monolith.TestBase.MonolithMeshTestBase._sharedProviders"] = "CACHE: shared DI providers across tests",
-        ["MeshWeaver.Hosting.Monolith.TestBase.TestAccessNodeProvider.Nodes"] = "CACHE: -> per-mesh seed repo",
-        ["MeshWeaver.Kernel.Hub.KernelExecutor._probingDirs"] = "CACHE: -> instance / one-time install",
+        ["MeshWeaver.Hosting.Monolith.TestBase.MonolithMeshTestBase._sharedProviders"] = "CACHE: shared DI providers across tests (opt-in only; -> IClassFixture)",
         ["MeshWeaver.Layout.EditorExtensions.InitializedEditStates"] = "CACHE: -> per-layout-area state",
         ["MeshWeaver.Fixture.XUnitFileOutputRegistry._activeOutputHelpers"] = "CACHE: test-infra review",
     };
