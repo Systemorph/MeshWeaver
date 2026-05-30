@@ -96,24 +96,42 @@ Process-global *memoization* keyed by a process-global identity (`Type` → refl
 
 Surfaced by the repo audit + the `KnownStaticCaches` watchdog. **C = mutable mesh/runtime state (must fix), B = process-safe memoization (migrate when touched).**
 
+The authoritative gate is the **`NoStaticCollectionsTest`** build guard (in `MeshWeaver.PathResolution.Test`):
+it reflects over every `MeshWeaver.*` assembly and fails on any static mutable-collection field that
+isn't in its classified allow-list. The allow-list IS the live status; this table mirrors it.
+
 | Field | Project | Bucket | Status |
 |---|---|---|---|
 | `NodeTypeRegistry.Nodes` | Graph | C | ✅ deleted (dead code) |
-| `ThreadExecution.AgentCache` | AI | C | ⬜ → mesh-scoped `IMemoryCache` |
-| `ThreadExecution.ExecutionCancellations` | AI | C | ⬜ → mesh-scoped instance |
-| `ThreadExecution.CompletionCallbacks` | AI | C | ⬜ → mesh-scoped instance |
-| `ApiTokenNodeType.ValidationCache` | Graph | C | ⬜ → mesh-scoped `IMemoryCache` (TTL) |
-| `CachingStorageAdapter.SharedSnapshots` | Hosting | C | ⬜ → instance on the adapter's owner |
-| `EditorExtensions.InitializedEditStates` | Layout | C | ⬜ → per-layout-area state |
-| `SearchHub.Pending` | Blazor.Portal | C | ⬜ → mesh-scoped instance |
-| `UserContextMiddleware._loginDedup` | Blazor | C | ⬜ → mesh-scoped instance |
-| `DynamicTypeGenerator.TypeCache` | Blazor | C | ⬜ → mesh-scoped instance |
-| `KernelExecutor._probingDirs` | Kernel.Hub | C | ⬜ → instance / one-time install |
-| `TestAccessNodeProvider.Nodes` | Test base | C | ⬜ → per-mesh seed repo |
-| `XUnitFileOutputRegistry._activeOutputHelpers` | Fixture | C | ⬜ → test-infra review |
-| `GenericCaches.TypeCaches` / `MethodCaches` | Reflection | B | ⬜ pure-by-`Type`/`MethodInfo` |
-| `AccessControlPipeline.AttributeCache` | Hosting | B | ⬜ pure-by-`Type` |
-| `MarkdownExtensions.PipelineCache` | Markdown | B | ⬜ pure-by-content |
-| `DefaultImplementationOfInterfacesExtensions.NonVirtualInvocationThunks` | BusinessRules | B | ⬜ pure-by-`MethodInfo` |
+| `TestAccessNodeProvider.Nodes` | Test base | C | ✅ deleted (dead code) |
+| `ThreadExecution.AgentCache` / `ExecutionCancellations` / `CompletionCallbacks` | AI | C | ✅ already gone (were stale watchdog strings) |
+| `CachingStorageAdapter.SharedSnapshots` | Hosting | C | ✅ per-adapter instance (adapter is `AddSingleton` per hub) |
+| `EditorExtensions.InitializedEditStates` | Layout | C | ✅ `LayoutAreaHost.TryMarkEditStateInitialized` (per-session instance) |
+| `SearchHub.Pending` | Blazor.Portal | C | ✅ instance field + instance handler |
+| `UserContextMiddleware._loginDedup` | Blazor | C | ✅ instance (app-singleton middleware) |
+| `XUnitFileOutputRegistry._activeOutputHelpers` | Fixture | C | ✅ `AsyncLocal<…>` (parallel-safe, not a collection) |
+| `ApiTokenNodeType.ValidationCache` | Graph | C | 🔁 **auth redesign** — see below |
+| `KernelExecutor._probingDirs` | Kernel.Hub | PROC | ✅ justified — backs the one process-wide `AssemblyLoadContext.Default.Resolving` hook |
+| `DynamicTypeGenerator.TypeCache` | Blazor | MEMO | ✅ justified — generated type = `f(schema)`, pure-by-key |
+| `MonolithMeshTestBase._sharedProviders` | Test base | TESTPERF | ◻ Type-keyed (no cross-class bleed); `IClassFixture` is the eventual form |
+| `GenericCaches.TypeCaches` / `MethodCaches` | Reflection | B | ◻ pure-by-`Type`/`MethodInfo` |
+| `AccessControlPipeline.AttributeCache` | Hosting | B | ◻ pure-by-`Type` |
+| `MarkdownExtensions.PipelineCache` | Markdown | B | ◻ pure-by-content |
+| `…NonVirtualInvocationThunks` / `MessageHubConfiguration._systemMessageCache` | BusinessRules / Messaging | B | ◻ pure-by-`MethodInfo` / `Type` |
 
 Immutable constant lookups (media-type maps, reserved-word sets, role tables, SQL config) are **not** caches and are out of scope.
+
+### `ApiTokenNodeType.ValidationCache` — the one remaining C-bucket cache
+
+This was a static `ConcurrentDictionary<tokenHash, (response, expiry)>` on the token-validation hot path,
+invalidated cross-hub by `RevokeToken`. The redesign removes it entirely by reading the **live** token node
+from the mesh — exactly how a `User` is resolved by email:
+
+- **Storage:** the token is a node at **`{userId}/Token/{tokenHash}`** (id = the token hash), under the user
+  partition, **mirrored into the `auth` schema** by the per-partition trigger (`mirror_access_object_to_auth_schema`,
+  V27 — `ApiToken` is in the mirror set, same as `User`/`Group`/`Role`/`VUser`).
+- **Validate:** `workspace.GetQuery("auth:tokenByHash:{hash}", "nodeType:ApiToken content.tokenHash:{hash} limit:1")`
+  — a single-schema `auth` query (the `content.X:` field filter is supported; cf. `OnboardingMiddleware.FindUserByEmail`
+  using `nodeType:User content.email:{email}`). The synced query is live, so revocation is immediate.
+- **Result:** no static cache, no `InvalidateValidationCache`, no global `ApiToken/{hashPrefix}` index. A `Vnext`
+  Repair migration relocates existing `{userId}/ApiToken/{hashPrefix}` tokens → `{userId}/Token/{tokenHash}`.
