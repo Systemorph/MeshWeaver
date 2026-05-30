@@ -76,15 +76,9 @@ public class InboxToolIntegrationTest : AITestBase
         var threadPath = await SeedEmptyThreadAsync(ct);
         var threadHub = await GetThreadHubAsync(threadPath, ct);
 
-        // Lock IsExecuting=true BEFORE appending so the server-side watcher
-        // doesn't drain the queue first. Simulates mid-stream agent state.
-        await SetIsExecutingAsync(threadHub, true, ct);
-
-        var msgId = ThreadInput.AppendUserInput(
-            threadHub.GetWorkspace(), threadPath,
-            ThreadInput.CreateUserMessage("hello mid-stream", createdBy: "rbuergi@systemorph.com"));
-        await WaitForThreadAsync(threadPath,
-            t => t.PendingUserMessages.ContainsKey(msgId) && t.IsExecuting, 5_000, ct);
+        // Atomically enter a genuine mid-execution state WITH the message queued,
+        // gated on the tool's own stream (see SeedPendingMidExecutionAsync).
+        var msgId = (await SeedPendingMidExecutionAsync(threadHub, ct, "hello mid-stream"))[0];
 
         var tool = InboxTool.CreateCheckInboxTool(threadHub);
         var result = (await tool.InvokeAsync(new AIFunctionArguments(), ct))?.ToString();
@@ -93,10 +87,10 @@ public class InboxToolIntegrationTest : AITestBase
         result.Should().Contain("follow-up");
 
         // Verify state: PendingUserMessages drained, msgId added to IngestedMessageIds.
-        var afterDrain = await WaitForThreadAsync(threadPath,
+        var afterDrain = await WaitForOwnAsync(threadHub,
             t => t.IngestedMessageIds.Contains(msgId)
                  && !t.PendingUserMessages.ContainsKey(msgId),
-            5_000, ct);
+            15_000, ct);
 
         afterDrain.PendingUserMessages.Should().NotContainKey(msgId);
         afterDrain.IngestedMessageIds.Should().Contain(msgId);
@@ -116,19 +110,8 @@ public class InboxToolIntegrationTest : AITestBase
         // mid-stream" â€” the real flow has the agent already executing when
         // follow-ups arrive, and check_inbox is the only path that promotes
         // them out of PendingUserMessages.
-        await SetIsExecutingAsync(threadHub, true, ct);
-
-        var workspace = threadHub.GetWorkspace();
-        var ids = new List<string>();
-        foreach (var text in new[] { "first", "second", "third" })
-        {
-            var id = ThreadInput.AppendUserInput(
-                workspace, threadPath,
-                ThreadInput.CreateUserMessage(text, createdBy: "rbuergi@systemorph.com"));
-            ids.Add(id);
-        }
-        await WaitForThreadAsync(threadPath,
-            t => t.PendingUserMessages.Count == 3 && t.IsExecuting, 5_000, ct);
+        // Atomically enter mid-execution WITH all three queued (one own-stream write).
+        var ids = await SeedPendingMidExecutionAsync(threadHub, ct, "first", "second", "third");
 
         var tool = InboxTool.CreateCheckInboxTool(threadHub);
         var result = (await tool.InvokeAsync(new AIFunctionArguments(), ct))?.ToString();
@@ -141,9 +124,9 @@ public class InboxToolIntegrationTest : AITestBase
         secondIdx.Should().BeGreaterThan(firstIdx, "second should follow first in order");
         thirdIdx.Should().BeGreaterThan(secondIdx, "third should follow second in order");
 
-        var after = await WaitForThreadAsync(threadPath,
+        var after = await WaitForOwnAsync(threadHub,
             t => t.IngestedMessageIds.Count >= 3 && t.PendingUserMessages.IsEmpty,
-            5_000, ct);
+            15_000, ct);
 
         foreach (var id in ids)
             after.IngestedMessageIds.Should().Contain(id);
@@ -157,23 +140,17 @@ public class InboxToolIntegrationTest : AITestBase
         var threadPath = await SeedEmptyThreadAsync(ct);
         var threadHub = await GetThreadHubAsync(threadPath, ct);
 
-        // Lock IsExecuting=true first so the watcher doesn't drain the queue.
-        await SetIsExecutingAsync(threadHub, true, ct);
-
-        var msgId = ThreadInput.AppendUserInput(
-            threadHub.GetWorkspace(), threadPath,
-            ThreadInput.CreateUserMessage("only one", createdBy: "rbuergi@systemorph.com"));
-        await WaitForThreadAsync(threadPath,
-            t => t.PendingUserMessages.ContainsKey(msgId) && t.IsExecuting, 5_000, ct);
+        // Atomically enter mid-execution WITH the message queued (one own-stream write).
+        var msgId = (await SeedPendingMidExecutionAsync(threadHub, ct, "only one"))[0];
 
         var tool = InboxTool.CreateCheckInboxTool(threadHub);
         var first = (await tool.InvokeAsync(new AIFunctionArguments(), ct))?.ToString();
         first.Should().Contain("only one");
 
-        // Wait briefly for the drain UpdateMeshNode to commit before the second
-        // poll (the workspace round-trip is fire-and-forget inside the tool).
-        await WaitForThreadAsync(threadPath,
-            t => t.IngestedMessageIds.Contains(msgId), 5_000, ct);
+        // Wait on the OWN stream (the tool's drain commit lands there) before the
+        // second poll — the workspace round-trip is fire-and-forget inside the tool.
+        await WaitForOwnAsync(threadHub,
+            t => t.IngestedMessageIds.Contains(msgId), 15_000, ct);
 
         var second = (await tool.InvokeAsync(new AIFunctionArguments(), ct))?.ToString();
         second.Should().Be("(no new messages)",
@@ -441,29 +418,96 @@ public class InboxToolIntegrationTest : AITestBase
     }
 
     /// <summary>
-    /// Sets <see cref="MeshThread.Status"/> on the thread node directly.
-    /// Used by check_inbox tests to keep the watcher from racing the tool call.
+    /// Stream-based wait on the thread hub's OWN node stream — the EXACT stream
+    /// <see cref="InboxTool.CheckInbox"/> reads (<c>threadHub.GetWorkspace().GetMeshNodeStream()</c>).
+    /// The mesh-side <see cref="WaitForThreadAsync"/> uses a separate remote stream
+    /// with its own replay buffer, so a condition satisfied there isn't guaranteed
+    /// visible on the tool's own stream yet. Gating the tool call on the OWN stream
+    /// means the tool reads the same snapshot the wait just observed — closing the
+    /// window where the submission watcher could drain between a mesh-side wait and
+    /// the tool's own-stream read.
     /// </summary>
-    private async Task SetIsExecutingAsync(IMessageHub threadHub, bool isExecuting, CancellationToken ct)
+    private static async Task<MeshThread> WaitForOwnAsync(
+        IMessageHub threadHub, Func<MeshThread, bool> predicate, int timeoutMs, CancellationToken ct)
     {
-        var workspace = threadHub.GetWorkspace();
-        var targetStatus = isExecuting
-            ? ThreadExecutionStatus.Executing
-            : ThreadExecutionStatus.Idle;
-        await workspace.GetMeshNodeStream().Update(node =>
+        MeshThread? last = null;
+        try
+        {
+            return (await threadHub.GetWorkspace().GetMeshNodeStream()
+                .Select(n => n.Content as MeshThread)
+                .Where(t => t is not null)
+                .Do(t => last = t)
+                .Where(t => predicate(t!))
+                .Take(1)
+                .Timeout(TimeSpan.FromMilliseconds(timeoutMs))
+                .ToTask(ct))!;
+        }
+        catch (TimeoutException)
+        {
+            predicate(last!).Should().BeTrue(
+                $"own-stream condition not reached within {timeoutMs}ms for {threadHub.Address.Path}. " +
+                $"Last: PendingUserMessages.Count={last?.PendingUserMessages.Count}, " +
+                $"IngestedMessageIds=[{(last is null ? "" : string.Join(",", last.IngestedMessageIds))}], " +
+                $"IsExecuting={last?.IsExecuting}");
+            return last!;
+        }
+    }
+
+    /// <summary>
+    /// Seeds a GENUINE mid-execution state in ONE atomic own-stream write and
+    /// returns the queued ids. The write sets Status=Executing AND an
+    /// <see cref="MeshThread.ActiveMessageId"/> + <see cref="MeshThread.PendingUserMessage"/>
+    /// (the shape a real in-flight turn has) AND the queued
+    /// <see cref="MeshThread.PendingUserMessages"/>.
+    ///
+    /// <para>Why all in one write, with the active-round fields:
+    /// <list type="bullet">
+    ///   <item>ONE write → the submission watcher never observes a transient
+    ///     <c>Idle+pending</c> (the two-write set-Executing-then-append shape let
+    ///     the append's stale snapshot clobber Status back to Idle).</item>
+    ///   <item>ActiveMessageId + PendingUserMessage → <see cref="ThreadExecution"/>'s
+    ///     <c>RecoverStaleExecutingThread</c> SKIPS this thread (its guard treats it
+    ///     as a live round). Otherwise its async init-read can race the write, see a
+    ///     "stale" Executing thread with no active round, RESET Status→Idle, and the
+    ///     watcher then drains the queue out from under check_inbox — the flake. No
+    ///     test-side <c>stream.Where</c> can prevent that server-side drain, so we
+    ///     stop it at the source by not looking stale. (WatchForExecution is deleted,
+    ///     so these fields trigger no auto-execute.)</item>
+    /// </list></para>
+    /// </summary>
+    private async Task<IReadOnlyList<string>> SeedPendingMidExecutionAsync(
+        IMessageHub threadHub, CancellationToken ct, params string[] texts)
+    {
+        var ids = texts.Select(_ => Guid.NewGuid().AsString()).ToArray();
+        var activeMsgId = $"active-{Guid.NewGuid():N}";
+        await threadHub.GetWorkspace().GetMeshNodeStream().Update(node =>
         {
             var t = node.Content as MeshThread ?? new MeshThread();
-            return node with { Content = t with { Status = targetStatus } };
-        }).Take(1).ToTask(ct);
-        // Wait until the post-update value is observable via the same read path
-        // AppendUserInput uses. Update().Take(1) completes when the write commits
-        // to its own observable, but the workspace's stream-handle replay buffer
-        // can still hand out the pre-update snapshot to the next subscriber under
-        // contention (full-suite run), so AppendUserInput's lambda would see
-        // IsExecuting=false and the watcher dispatches immediately.
-        await workspace.GetMeshNodeStream()
-            .Where(n => (n.Content as MeshThread)?.IsExecuting == isExecuting)
-            .Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask(ct);
+            var userIds = t.UserMessageIds;
+            var pending = t.PendingUserMessages;
+            for (var i = 0; i < texts.Length; i++)
+            {
+                userIds = userIds.Add(ids[i]);
+                pending = pending.SetItem(ids[i],
+                    ThreadInput.CreateUserMessage(texts[i], createdBy: "rbuergi@systemorph.com"));
+            }
+            return node with
+            {
+                Content = t with
+                {
+                    Status = ThreadExecutionStatus.Executing,
+                    ActiveMessageId = activeMsgId,
+                    PendingUserMessage = texts[0],
+                    UserMessageIds = userIds,
+                    PendingUserMessages = pending
+                }
+            };
+        }).Take(1).Timeout(TimeSpan.FromSeconds(15)).ToTask(ct);
+
+        // Gate on the SAME own stream check_inbox reads (load-tolerant budget).
+        await WaitForOwnAsync(threadHub,
+            t => t.IsExecuting && ids.All(t.PendingUserMessages.ContainsKey), 15_000, ct);
+        return ids;
     }
 
     // â”€â”€â”€ Fake chat client + factory â”€â”€â”€
