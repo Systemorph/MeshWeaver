@@ -202,9 +202,18 @@ Existing pairs in the codebase:
 | Owning node            | Intent field                     | Current-state field           | Cleared by                       |
 |------------------------|----------------------------------|-------------------------------|----------------------------------|
 | `MeshThread`           | (none — Status transition gates) | `Status` (Starting/Executing) | `InstallServerWatcher` claim     |
-| `MeshThread`           | `RequestedCancellationAt`        | Sub-thread's cancel watcher   | Sub-thread's CTS unwind          |
+| `MeshThread`           | `RequestedStatus` (= `Cancelled`)| `Status` (→ `Cancelled`)      | Streaming-loop terminal write    |
 | `NodeTypeDefinition`   | `RequestedReleasePath`           | `LatestReleasePath`           | `NodeTypeCompileActivityHandler` |
 | `ActivityLog`          | `RequestedStatus`                | `Status`                      | Activity hub on transition       |
+
+`MeshThread.RequestedStatus` is a `ThreadExecutionStatus?` — the request half of
+the same Status/RequestedStatus pair (today only `Cancelled` is ever requested).
+The GUI Stop button and a parent cancelling a sub-thread set it; the cancel
+watcher cancels the CTS, and the streaming loop's terminal write flips
+`Status → Cancelled` and clears `RequestedStatus`. `Cancelled` is a distinct,
+visible terminal status that re-dispatches like `Idle` when `PendingUserMessages`
+still holds input. (There is **no** transient `Completing` status — terminal
+writes are atomic.)
 
 Submission-watcher implementation pattern (the SOLE entry point for
 dispatching a new round on the thread hub):
@@ -212,17 +221,19 @@ dispatching a new round on the thread hub):
 ```csharp
 threadHub.GetWorkspace().GetMeshNodeStream()
     .Where(n => n.Content is MeshThread t
-        && t.Status == ThreadExecutionStatus.Idle
+        // Idle OR Cancelled (a stopped round re-dispatches like Idle)
+        && t.Status is ThreadExecutionStatus.Idle or ThreadExecutionStatus.Cancelled
         && t.PendingUserMessages.Count > 0)
     .Subscribe(_ =>
     {
         workspace.GetMeshNodeStream().Update(node =>
         {
             // 🚨 Re-check inside the lambda. The hub's action block serialises
-            // concurrent emissions — the SECOND lambda sees Status != Idle and bails.
+            // concurrent emissions — the SECOND lambda sees a non-claimable
+            // status and bails.
             var t = node.Content as MeshThread;
             if (t is null
-                || t.Status != Idle
+                || t.Status is not (Idle or Cancelled)
                 || t.PendingUserMessages.IsEmpty) return node;
             return node with { Content = t with {
                 Status = StartingExecution,
@@ -237,6 +248,40 @@ The `_Exec` hosted hub subscribes to the parent thread's stream via
 `DispatchAfterClaim` on each `Idle → StartingExecution` transition
 (`DistinctUntilChanged` on `ExecutionStartedAt`). No internal trigger
 event; the state transition IS the dispatch signal.
+
+## Wake-up recovery — drive any non-terminal state to valid, once
+
+**Core invariant: a freshly-activated hub has no in-process work.** So on
+activation a hub must reconcile any persisted *non-terminal* state left by an
+interrupted previous activation. The rule is the same for threads and
+activities: **read the OWN node stream's FIRST emission** (the loaded persisted
+state, correctly ordered on the hub's action block vs subsequent writes) and
+drive the state to a valid one **exactly once** — never a late `GetMeshNode`
+round-trip whose response can land *after* later writes and clobber them (that
+late-read race was the root of the `check_inbox` phantom-drain flake).
+
+**Threads** — `InitializeThreadLifecycle` (`ThreadExecution.cs`):
+
+- pending `RequestedStatus == Cancelled` → honor it: stamp the response cell
+  `Cancelled`, write terminal `Status = Cancelled`, clear the request;
+- `Executing` (with a response cell) → **resume** the same cell by re-entering
+  `StartingExecution`; `DispatchAfterClaim` reuses `ActiveMessageId` (resume mode);
+- `StartingExecution` → no write (the `_Exec` round watcher fires on its own
+  first emission);
+- `Idle` / `Cancelled` (+ pending) → no write (the submission watcher claims);
+- `Done` → terminal, untouched.
+
+**Activities** — `hub.InitializeActivityLifecycle(...)` in
+`ActivityControlPlaneExtensions`. On the own first emission, a stranded
+`Running` activity (the previous run was interrupted) is driven terminal:
+pending `RequestedStatus == Cancelled` → `Cancelled`, otherwise →
+`interruptedStatus` (default `Failed`, with an "interrupted by restart" log
+line). Wire it from the owning hub's `WithInitialization` (e.g. the kernel/script
+hub). **Idempotent/re-runnable operations re-request instead of terminating**:
+NodeType compile flips its own `CompilationStatus = Compiling → Pending` on wake
+so the compile watcher dispatches a fresh build — reading the owner's OWN state,
+never probing the activity hub cross-hub (that read lags and a false "still
+running" leaves the operation stranded).
 
 Claim-handler pattern (clears the intent in the same atomic transition):
 

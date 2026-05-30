@@ -92,12 +92,22 @@ These callbacks exist for *signalling* (a one-shot transition), not for *observa
 
 ## What the watcher does
 
-When the thread node's `Content.PendingUserMessages` becomes non-empty AND `IsExecuting` is false, the submission watcher (installed via `ThreadSubmission.InstallServerWatcher` during thread hub initialization):
+When the thread node's `Content.PendingUserMessages` becomes non-empty AND `Status` is `Idle` **or** `Cancelled` (a stopped round re-dispatches like Idle), the submission watcher (installed via `ThreadSubmission.InstallServerWatcher` during thread hub initialization):
 
 1. Drains `PendingUserMessages` into `Messages` (one round per dispatch — Claude-Code-style turn structure).
 2. Allocates the response cell node.
-3. Flips `IsExecuting = true`, `Status = Executing`.
+3. Flips `Status = Executing` (so `IsExecuting` becomes true).
 4. Invokes `ThreadExecution.ExecuteMessageAsync(execHub, RoundParams, AccessContext?)` **directly as a method** — no message dispatch.
+
+### Status state machine
+
+`ThreadExecutionStatus`: `Idle → StartingExecution → Executing → Idle`, with a `Executing → Cancelled` branch when execution is stopped. There is **no** transient `Completing` status — terminal writes are atomic. `Cancelled` is a distinct, visible terminal status that re-dispatches like `Idle` when input is queued. Cancellation is requested by setting `RequestedStatus = Cancelled` (GUI Stop button, or a parent cancelling a sub-thread); the cancel watcher cancels the CTS and the streaming loop's terminal write flips `Status → Cancelled` and clears `RequestedStatus`.
+
+**Wake-up** (`InitializeThreadLifecycle`): on hub activation the thread reads its own node's first stream emission and drives any non-terminal state to valid once — a pending `RequestedStatus = Cancelled` is honored, an interrupted `Executing` round **resumes its existing response cell** (re-entering `StartingExecution`; `DispatchAfterClaim` reuses `ActiveMessageId`), and `Idle`/`Cancelled` with pending input is left for the submission watcher. See `ActivityControlPlane.md` → "Wake-up recovery".
+
+### Mid-execution inbox drain (A7)
+
+While `Executing`, the `check_inbox` tool drains queued user messages. If a drain happens mid-stream it performs a **clean output-cell transition**: it freezes the current response cell (`Completed`), places the new user cells after it, and switches streaming to a fresh response cell — `[R1 completed] → [U…] → [R2 streaming]`. The streaming writer targets a per-round `ActiveResponseSegment` whose `ResponseMsgId`/`TextBaseline` the tool re-points, so the continuation streams into R2 (a stale buffered push slices off the baseline to empty — harmless). An empty drain leaves the cell unchanged.
 
 Resubmit / DeleteFromMessage / RecordSubmissionFailure each do the full thread-state mutation **inline** inside their hub extension method's `GetMeshNodeStream(threadPath).Update(...)` lambda. No intent fields, no per-operation watcher — only the submission watcher remains. `MarkThreadDone` likewise writes `Status` directly. Earlier intent-payload records (`ResubmitIntent`, `FailureRecord`) and matching thread-node fields (`RequestedResubmit`, `RequestedDeleteFromMessageId`, `PendingFailures`) were deleted (2026-05-27).
 

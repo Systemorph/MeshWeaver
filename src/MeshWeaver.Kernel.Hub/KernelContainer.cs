@@ -89,6 +89,16 @@ public class KernelContainer(IServiceProvider serviceProvider)
             {
                 DisposeOnTimeout(hub);
                 StartActivityControlPlane(hub);
+                // Wake-up recovery: a script activity left Running by a restart is
+                // not a resumable job — on the own node's first emission, mark it
+                // Failed("interrupted") (or honor a pending Cancelled request) so
+                // it never sits Running forever. Mirrors the thread-side
+                // InitializeThreadLifecycle. Retry stays an explicit user action
+                // (new RequestedStatus=Running on a fresh activity).
+                hub.RegisterForDisposal(hub.InitializeActivityLifecycle(
+                    interruptedStatus: ActivityStatus.Failed,
+                    interruptedMessage: "Script interrupted by a restart.",
+                    logger: logger));
             })
             .WithHandler<SubmitCodeRequest>(ForwardSubmitCodeRequest)
             .WithHandler<CancelScriptRequest>(ForwardCancelRequest);

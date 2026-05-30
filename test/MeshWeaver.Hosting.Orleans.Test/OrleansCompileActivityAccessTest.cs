@@ -652,6 +652,80 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
     }
 
     /// <summary>
+    /// Wake-up of a "still Running" activity: a NodeType comes up persisted as
+    /// Compiling WITH a recorded activity path and a RECENT compile-start stamp —
+    /// the exact shape the OLD recovery treated as "genuinely running, leave it
+    /// alone" by probing the activity hub cross-hub. That probe lagged the
+    /// owner's writes; a false "still running" read left the NodeType stranded
+    /// forever (the rbuergi/CatBond "renders nothing" symptom). The simplified
+    /// recovery reads ONLY the owner's own state — Compiling on the first init
+    /// emission ALWAYS means interrupted — so it re-triggers regardless of any
+    /// recorded/recent activity. This pins that no-probe behavior: it MUST settle
+    /// Ok even though the recorded activity looks recent.
+    /// </summary>
+    [Fact(Timeout = 90000)]
+    public async Task NodeTypeHub_StrandedInCompiling_RecentActivityRecorded_StillRecompilesOnInit()
+    {
+        var ct = new CancellationTokenSource(80.Seconds()).Token;
+
+        var typeId = $"StrandedRecent{Guid.NewGuid():N}";
+        var typePath = $"TestUser/{typeId}";
+
+        await SeedAsSystem(new MeshNode("code", $"{typePath}/Source")
+        {
+            Name = "code",
+            NodeType = "Code",
+            Content = new CodeConfiguration
+            {
+                Code = $$"""
+                    public record {{typeId}}
+                    {
+                        public string Title { get; init; } = string.Empty;
+                    }
+                    """,
+                Language = "csharp"
+            }
+        }, ct);
+
+        // Stranded WITH a recorded activity path and a RECENT start — the old
+        // probe-based recovery would read this as "still running" and skip.
+        var recordedActivityPath = $"{typePath}/_Activity/compile-{Guid.NewGuid():N}";
+        await SeedAsSystem(MeshNode.FromPath(typePath) with
+        {
+            Name = typeId,
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition
+            {
+                Description = "Stranded-in-Compiling with recent activity recovery guard",
+                Configuration = $"config => config.WithContentType<{typeId}>()",
+                CompilationStatus = CompilationStatus.Compiling,
+                LastCompilationActivityPath = recordedActivityPath,
+                LastCompileStartedAt = DateTimeOffset.UtcNow // RECENT — old code would skip
+            }
+        }, ct);
+        Output.WriteLine($"Seeded STRANDED NodeType (Compiling, RECENT activity {recordedActivityPath}) at {typePath}");
+
+        var client = await GetClientAsync($"stranded-recent-{Guid.NewGuid():N}", userId: "TestUser");
+        await client.Observe(new GetDataRequest(new MeshNodeReference()),
+                o => o.WithTarget(new Address(typePath)))
+            .FirstAsync().Timeout(20.Seconds()).ToTask(ct);
+
+        var siloHub = ((InProcessSiloHandle)Cluster.Silos[0]).SiloHost.Services
+            .GetRequiredService<IMessageHub>();
+        var settled = await siloHub.GetWorkspace().GetMeshNodeStream(typePath)
+            .Where(n => n.Content is NodeTypeDefinition d
+                && d.CompilationStatus is CompilationStatus.Ok or CompilationStatus.Error)
+            .Take(1).Timeout(60.Seconds()).ToTask(ct);
+        var settledDef = (NodeTypeDefinition)settled.Content!;
+        Output.WriteLine($"Settled status: {settledDef.CompilationStatus}");
+
+        settledDef.CompilationStatus.Should().Be(CompilationStatus.Ok,
+            "recovery reads the owner's OWN Compiling state, not a cross-hub activity " +
+            "probe — so it re-triggers even when a recent activity path is recorded. " +
+            "The old probe could false-positive on lag and strand the NodeType forever.");
+    }
+
+    /// <summary>
     /// Repro for the 2026-05-29 activation self-deadlock — the case we hadn't
     /// covered before: activating a per-NodeType grain under a NON-System user
     /// AccessContext (the GUI-render shape, not the System kickoff path).

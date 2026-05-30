@@ -77,6 +77,91 @@ public static class ActivityControlPlaneExtensions
     }
 
     /// <summary>
+    /// Wake-up recovery for an activity hub (content = <see cref="ActivityLog"/>),
+    /// the activity-side mirror of the thread <c>InitializeThreadLifecycle</c>.
+    /// On the OWN node's FIRST stream emission, drive a stranded activity to a
+    /// valid terminal state exactly once. A freshly-activated hub has no
+    /// in-process run, so <see cref="ActivityStatus.Running"/> on wake means the
+    /// previous activation was interrupted:
+    /// <list type="bullet">
+    ///   <item><see cref="ActivityLog.RequestedStatus"/> == <see cref="ActivityStatus.Cancelled"/>
+    ///     (a cancel requested before the hub died) → terminal <see cref="ActivityStatus.Cancelled"/>.</item>
+    ///   <item>otherwise <see cref="ActivityStatus.Running"/> → terminal
+    ///     <paramref name="interruptedStatus"/> (default <see cref="ActivityStatus.Failed"/>),
+    ///     with an "interrupted by restart" log line appended.</item>
+    /// </list>
+    /// Already-terminal activities are left untouched. Read on the own stream's
+    /// first emission (correctly ordered vs later writes), NOT a late
+    /// <c>GetMeshNode</c> round-trip. Idempotent: the write re-checks
+    /// <c>Status == Running</c>.
+    ///
+    /// <para>Use this for non-resumable operations (kernel scripts, export,
+    /// import). Idempotent/re-runnable operations (NodeType compile) instead
+    /// re-request from the OWNER's own state field rather than terminating the
+    /// activity — see <c>NodeTypeCompilationHelpers</c>.</para>
+    /// </summary>
+    public static IDisposable InitializeActivityLifecycle(
+        this IMessageHub hub,
+        ActivityStatus interruptedStatus = ActivityStatus.Failed,
+        string interruptedMessage = "Activity interrupted by a restart.",
+        ILogger? logger = null)
+    {
+        if (hub is null) throw new ArgumentNullException(nameof(hub));
+
+        logger ??= hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.ActivityControlPlane");
+
+        var workspace = hub.GetWorkspace();
+        return workspace.GetMeshNodeStream()
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(15))
+            .Subscribe(
+                node =>
+                {
+                    if (node?.Content is not ActivityLog log) return;
+                    if (log.Status != ActivityStatus.Running) return; // already terminal — nothing to recover
+
+                    var honorCancel = log.RequestedStatus == ActivityStatus.Cancelled;
+                    var terminal = honorCancel ? ActivityStatus.Cancelled : interruptedStatus;
+                    logger?.LogInformation(
+                        "[ActivityControlPlane] Init: recovering stranded Running activity {Address} → {Terminal}",
+                        hub.Address, terminal);
+
+                    workspace.GetMeshNodeStream().Update(n =>
+                    {
+                        if (n.Content is not ActivityLog l || l.Status != ActivityStatus.Running)
+                            return n;
+                        var msg = honorCancel
+                            ? "Activity cancelled (requested before restart)."
+                            : interruptedMessage;
+                        return n with
+                        {
+                            Content = l with
+                            {
+                                Status = terminal,
+                                RequestedStatus = null,
+                                End = DateTime.UtcNow,
+                                Messages = l.Messages.Add(new LogMessage(msg,
+                                    terminal == ActivityStatus.Failed ? LogLevel.Error : LogLevel.Warning))
+                            }
+                        };
+                    }).Subscribe(
+                        _ => { },
+                        ex => logger?.LogWarning(ex,
+                            "[ActivityControlPlane] Init recovery write failed for {Address}", hub.Address));
+                },
+                ex =>
+                {
+                    if (ex is TimeoutException)
+                        logger?.LogDebug(
+                            "[ActivityControlPlane] Init: no activity node within 15s for {Address}", hub.Address);
+                    else
+                        logger?.LogWarning(ex,
+                            "[ActivityControlPlane] InitializeActivityLifecycle faulted for {Address}", hub.Address);
+                });
+    }
+
+    /// <summary>
     /// Sibling of <see cref="WatchControlPlane"/> for job-orchestration cases where the
     /// trigger isn't a single status field but a more general "this state needs work
     /// done now" condition (e.g., thread has unprocessed user messages and isn't already

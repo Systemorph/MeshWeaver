@@ -320,64 +320,39 @@ internal static class NodeTypeCompilationHelpers
                         "First-build kickoff: Update failed for {HubPath}", hubPath));
             });
 
-        // 🚨 Recovery kickoff (2026-05-29) — un-strand a NodeType that comes up
-        // persisted as CompilationStatus = Compiling.
+        // 🚨 Recovery kickoff — un-strand a NodeType that comes up persisted as
+        // CompilationStatus = Compiling. This is the activity-side wake-up state
+        // machine: a freshly-activated NodeType hub has NO in-process compile (the
+        // compile runs on a separate Activity hub and is not a resumable job), so
+        // Compiling on the FIRST init emission ALWAYS means the previous compile
+        // was interrupted before its terminal Ok/Error write-back.
         //
         // When the process dies (or the per-NodeType grain deactivates) AFTER the
-        // Pending→Compiling flip but BEFORE the terminal Ok/Error write-back, the
-        // on-disk JSON freezes at Compiling. On the next activation NOTHING
-        // re-drives the compile:
-        //   - firstBuildKickoffSub requires CompilationStatus is null,
-        //   - watcherSub requires CompilationStatus == Pending,
-        //   - InstallReleaseRequestWatcher only fires when status is SETTLED.
-        // So the NodeType sits in Compiling forever, every instance hub falls
-        // back to the default config (no MeshNodeReference reducer), and the
-        // instance page renders nothing — the rbuergi/CatBond/AtlanticBond
-        // "I get nothing" symptom.
+        // Pending→Compiling flip but BEFORE the write-back, the on-disk JSON
+        // freezes at Compiling. On the next activation NOTHING re-drives the
+        // compile (firstBuildKickoffSub needs null, watcherSub needs Pending,
+        // InstallReleaseRequestWatcher needs a SETTLED status). So the NodeType
+        // sits in Compiling forever, every instance hub falls back to the default
+        // config (no MeshNodeReference reducer), and the instance page renders
+        // nothing — the rbuergi/CatBond/AtlanticBond "I get nothing" symptom.
         //
-        // Fix: on the FIRST emission at hub init (Take(1) BEFORE the Where so a
-        // normal in-flight compile that legitimately flips Compiling later never
-        // trips this), if the init state is Compiling, look up the recorded
-        // compile activity. If that activity is no longer actually running
-        // (missing / terminal / stale start), the compile is orphaned → flip
-        // back to Pending so watcherSub dispatches a FRESH compile. If the
-        // activity is genuinely still running on its Activity hub (non-terminal +
-        // recent), leave it alone — that compile will finish and write back.
+        // Fix: re-request a fresh compile from the OWNER's OWN state — flip
+        // Compiling→Pending so watcherSub dispatches. We deliberately do NOT probe
+        // the Activity hub cross-hub: that read lags the owner's writes, and a
+        // false "still running" leaves the NodeType stranded (the very bug). A
+        // rare duplicate compile is harmless — it settles to the same Ok release.
+        // Take(1) BEFORE the Where so a normal in-flight compile that legitimately
+        // flips Compiling LATER never trips this; the idempotent re-check inside
+        // the Update lambda drops the write if the genuine compile settled first.
         var recoveryKickoffSub = ownStream
             .Take(1)
             .Where(node => node?.Content is NodeTypeDefinition def
                 && def.CompilationStatus == CompilationStatus.Compiling
                 && !IsStaticOnlyNodeType(node, def))
-            .SelectMany(node =>
-            {
-                var n = node!;
-                var def = (NodeTypeDefinition)n.Content!;
-                var activityPath = def.LastCompilationActivityPath;
-                var startedAt = def.LastCompileStartedAt;
-                if (string.IsNullOrEmpty(activityPath))
-                    // No activity recorded at all → the Pending→Compiling flip
-                    // never got as far as starting an activity. Orphaned.
-                    return Observable.Return((node: n, running: false));
-                // Probe the activity's live state (one-shot, short timeout). A
-                // missing node, a fault, or a stale/terminal status → not running.
-                return workspace.GetMeshNodeStream(activityPath)
-                    .Take(1)
-                    .Timeout(TimeSpan.FromSeconds(5))
-                    .Select(a =>
-                    {
-                        var log = a?.Content as ActivityLog;
-                        var running = log is { Status: ActivityStatus.Running, End: null }
-                            && !IsStaleCompile(startedAt);
-                        return (node: n, running);
-                    })
-                    .Catch<(MeshNode node, bool running), Exception>(_ =>
-                        Observable.Return((node: n, running: false)));
-            })
-            .Where(t => !t.running)
-            .Subscribe(t =>
+            .Subscribe(node =>
             {
                 logger?.LogWarning(
-                    "Compile recovery: {HubPath} came up persisted as Compiling but its activity is not running — re-triggering compile (flip Compiling→Pending)",
+                    "Compile recovery: {HubPath} came up persisted as Compiling — re-triggering compile (flip Compiling→Pending)",
                     hubPath);
                 var recoveryAccess = hub.ServiceProvider.GetService<AccessService>();
                 using var systemScope = recoveryAccess?.ImpersonateAsSystem();
@@ -385,7 +360,7 @@ internal static class NodeTypeCompilationHelpers
                 {
                     if (curr?.Content is not NodeTypeDefinition def) return curr!;
                     // Only recover if STILL Compiling — the genuine compile may
-                    // have settled between the probe and this lambda.
+                    // have settled between the init emission and this lambda.
                     if (def.CompilationStatus != CompilationStatus.Compiling) return curr;
                     return curr with
                     {
@@ -399,19 +374,6 @@ internal static class NodeTypeCompilationHelpers
         return new CompositeDisposable(
             watcherSub, resetSub, firstBuildKickoffSub, recoveryKickoffSub);
     }
-
-    /// <summary>
-    /// True when a NodeType has been "Compiling" for longer than any healthy
-    /// compile could plausibly take — used by the recovery kickoff to treat a
-    /// non-terminal activity whose start is older than the compile budget as a
-    /// stranded ghost (e.g. a Running activity left behind by a hard restart).
-    /// The activity hub caps its own internal Roslyn wait at 60s; double that
-    /// for slack so a genuinely slow-but-live compile is never falsely reaped.
-    /// A null start (status flipped without a stamp) is treated as stale.
-    /// </summary>
-    private static bool IsStaleCompile(DateTimeOffset? startedAt) =>
-        startedAt is null
-        || DateTimeOffset.UtcNow - startedAt.Value > TimeSpan.FromSeconds(120);
 
     /// <summary>
     /// Subscribes (no <c>Take(1)</c>) to the shared <see cref="NodeSources.GetSources"/>

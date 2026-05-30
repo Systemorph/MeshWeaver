@@ -103,7 +103,7 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
         for (var i = 0; i < 30 && !notificationAppeared; i++)
         {
             var notifications = await meshService
-                .QueryAsync<MeshNode>($"path:{threadPath}/_Notification scope:children nodeType:Notification")
+                .QueryAsync<MeshNode>($"path:{threadPath}/_Notification scope:children nodeType:Notification", ct)
                 .ToListAsync(ct);
             notificationAppeared = notifications.Any(n =>
                 n.Content is MeshWeaver.Mesh.Notification notif
@@ -204,8 +204,7 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
             .Scan((sawRunning: false, terminal: (MeshThread?)null), (state, t) =>
             {
                 if (t!.Status is ThreadExecutionStatus.Executing
-                              or ThreadExecutionStatus.StartingExecution
-                              or ThreadExecutionStatus.Completing)
+                              or ThreadExecutionStatus.StartingExecution)
                     return (true, null);
                 if (state.sawRunning && t.Status == ThreadExecutionStatus.Idle
                                      && !string.IsNullOrEmpty(t.Summary))
