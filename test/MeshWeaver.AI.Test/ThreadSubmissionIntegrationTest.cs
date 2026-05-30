@@ -380,8 +380,20 @@ public class ThreadSubmissionIntegrationTest : AITestBase
             t => !t.IsExecuting && t.IngestedMessageIds.Count == 1,
             timeoutMs: 30_000, ct);
 
-        // Give any racing second-dispatch a chance to land.
-        await Task.Delay(500, ct);
+        // No second round must dispatch. Watch the stream for Messages growing
+        // past the single [user, response] pair; a 500ms quiet window with no
+        // growth confirms exactly-once. stream.Where + Timeout instead of a bare
+        // Task.Delay + re-read — we actively watch for the BAD event.
+        var secondRound = await Mesh.GetWorkspace().GetMeshNodeStream(threadPath)
+            .Select(n => n.Content as MeshThread)
+            .Where(t => t is not null && t!.Messages.Count > 2)
+            .Take(1)
+            .Timeout(TimeSpan.FromMilliseconds(500))
+            .Materialize()
+            .FirstAsync()
+            .ToTask(ct);
+        secondRound.Kind.Should().Be(System.Reactive.NotificationKind.OnError,
+            "no second round should dispatch for a single submit (Timeout = no growth = good)");
 
         var final = await ReadThreadAsync(threadPath, ct);
 
@@ -430,29 +442,45 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         return content!;
     }
 
-    /// <summary>Polls the thread node until <paramref name="predicate"/> is true or timeout elapses.</summary>
+    /// <summary>
+    /// Stream-based wait: subscribes to the thread's MeshNode stream and returns
+    /// the first emission whose content matches <paramref name="predicate"/>.
+    /// Replaces the previous <c>Task.Delay(100)</c> poll loop — that read a
+    /// potentially stale cached snapshot each cycle and raced the workspace's
+    /// write propagation, so under cumulative test load a transition that landed
+    /// between two polls (or whose re-query lagged) blew the budget. The stream
+    /// emits on every commit, so the predicate sees every state transition
+    /// exactly once. See CLAUDE.md → "Never Task.Delay to wait for propagation".
+    /// </summary>
     private async Task<MeshThread> WaitForThreadAsync(
         string threadPath,
         Func<MeshThread, bool> predicate,
         int timeoutMs,
         CancellationToken ct)
     {
-        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
         MeshThread? last = null;
-        while (DateTime.UtcNow < deadline && !ct.IsCancellationRequested)
+        try
         {
-            last = await ReadThreadAsync(threadPath, ct);
-            if (predicate(last)) return last;
-            await Task.Delay(100, ct);
+            return await Mesh.GetWorkspace().GetMeshNodeStream(threadPath)
+                .Select(n => n.Content as MeshThread)
+                .Where(t => t is not null)
+                .Do(t => last = t)
+                .Where(t => predicate(t!))
+                .Take(1)
+                .Timeout(TimeSpan.FromMilliseconds(timeoutMs))
+                .ToTask(ct)!;
         }
-        // Predicate not satisfied in time â€” return whatever we saw last so the assertion error shows state.
-        last.Should().NotBeNull();
-        predicate(last!).Should().BeTrue(
-            $"condition not reached within {timeoutMs}ms for thread {threadPath}. " +
-            $"Last state: Messages=[{string.Join(",", last!.Messages)}], " +
-            $"IngestedMessageIds=[{string.Join(",", last.IngestedMessageIds)}], " +
-            $"IsExecuting={last.IsExecuting}, ActiveMessageId={last.ActiveMessageId}");
-        return last!;
+        catch (TimeoutException)
+        {
+            last.Should().NotBeNull(
+                $"thread {threadPath} never emitted a MeshThread snapshot within {timeoutMs}ms");
+            predicate(last!).Should().BeTrue(
+                $"condition not reached within {timeoutMs}ms for thread {threadPath}. " +
+                $"Last state: Messages=[{string.Join(",", last!.Messages)}], " +
+                $"IngestedMessageIds=[{string.Join(",", last.IngestedMessageIds)}], " +
+                $"IsExecuting={last.IsExecuting}, ActiveMessageId={last.ActiveMessageId}");
+            return last!;
+        }
     }
 
     // â”€â”€â”€ Fake chat client (minimal) â”€â”€â”€
