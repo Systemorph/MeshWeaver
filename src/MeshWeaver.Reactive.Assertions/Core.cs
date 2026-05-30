@@ -22,6 +22,8 @@ public class AndWhichConstraint<TAssertions, TMatched>(TAssertions parent, TMatc
     public TMatched Which { get; } = matched;
     /// <summary>Alias for <see cref="Which"/>.</summary>
     public TMatched Subject { get; } = matched;
+    /// <summary>Alias for <see cref="Which"/> — reads naturally after <c>ContainKey</c> (<c>.WhoseValue</c>).</summary>
+    public TMatched WhoseValue => Which;
 }
 
 /// <summary>

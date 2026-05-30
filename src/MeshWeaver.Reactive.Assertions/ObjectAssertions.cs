@@ -74,6 +74,26 @@ public class ObjectAssertions<TSubject, TAssertions>
             () => $"Expected value to be assignable to {typeof(T).Name}{Az.Reason(because, becauseArgs)}, but found {Subject?.GetType().Name ?? "<null>"}.");
         return Ok;
     }
+
+    /// <summary>Asserts the value is NOT of (and does not derive from) <typeparamref name="T"/>.</summary>
+    public AndConstraint<TAssertions> NotBeOfType<T>(string because = "", params object[] becauseArgs)
+    {
+        Az.Ensure(Subject is not T,
+            () => $"Did not expect value to be of type {typeof(T).Name}{Az.Reason(because, becauseArgs)}, but it was.");
+        return Ok;
+    }
+
+    /// <summary>Asserts the value equals one of <paramref name="validValues"/>.</summary>
+    public AndConstraint<TAssertions> BeOneOf(params TSubject[] validValues)
+        => BeOneOf(validValues, "");
+
+    /// <summary>Asserts the value equals one of <paramref name="validValues"/>.</summary>
+    public AndConstraint<TAssertions> BeOneOf(IEnumerable<TSubject> validValues, string because = "", params object[] becauseArgs)
+    {
+        Az.Ensure(validValues.Contains(Subject),
+            () => $"Expected value to be one of {Az.Fmt(validValues)}{Az.Reason(because, becauseArgs)}, but found {Az.Fmt(Subject)}.");
+        return Ok;
+    }
 }
 
 /// <summary>Assertions for an arbitrary object / reference value (the generic <c>Should()</c> fallback).</summary>
@@ -119,10 +139,24 @@ public class StringAssertions(string? subject) : ObjectAssertions<string?, Strin
         return new(this);
     }
 
+    public AndConstraint<StringAssertions> NotStartWith(string unexpected, string because = "", params object[] becauseArgs)
+    {
+        Az.Ensure(Subject == null || !Subject.StartsWith(unexpected, StringComparison.Ordinal),
+            () => $"Did not expect {Az.Fmt(Subject)} to start with {Az.Fmt(unexpected)}{Az.Reason(because, becauseArgs)}.");
+        return new(this);
+    }
+
     public AndConstraint<StringAssertions> EndWith(string expected, string because = "", params object[] becauseArgs)
     {
         Az.Ensure(Subject != null && Subject.EndsWith(expected, StringComparison.Ordinal),
             () => $"Expected {Az.Fmt(Subject)} to end with {Az.Fmt(expected)}{Az.Reason(because, becauseArgs)}.");
+        return new(this);
+    }
+
+    public AndConstraint<StringAssertions> NotEndWith(string unexpected, string because = "", params object[] becauseArgs)
+    {
+        Az.Ensure(Subject == null || !Subject.EndsWith(unexpected, StringComparison.Ordinal),
+            () => $"Did not expect {Az.Fmt(Subject)} to end with {Az.Fmt(unexpected)}{Az.Reason(because, becauseArgs)}.");
         return new(this);
     }
 
@@ -204,6 +238,25 @@ public class ComparableAssertions<T>(T subject) : ObjectAssertions<T, Comparable
 
     public AndConstraint<ComparableAssertions<T>> BePositive(string because = "", params object[] becauseArgs)
         => BeGreaterThan(default!, because, becauseArgs);
+
+    public AndConstraint<ComparableAssertions<T>> BeNegative(string because = "", params object[] becauseArgs)
+        => BeLessThan(default!, because, becauseArgs);
+
+    /// <summary>Alias for <see cref="BeGreaterThan"/> — reads naturally for <see cref="DateTime"/>/<see cref="DateTimeOffset"/>.</summary>
+    public AndConstraint<ComparableAssertions<T>> BeAfter(T expected, string because = "", params object[] becauseArgs)
+        => BeGreaterThan(expected, because, becauseArgs);
+
+    /// <summary>Alias for <see cref="BeGreaterThanOrEqualTo"/> (date/time friendly).</summary>
+    public AndConstraint<ComparableAssertions<T>> BeOnOrAfter(T expected, string because = "", params object[] becauseArgs)
+        => BeGreaterThanOrEqualTo(expected, because, becauseArgs);
+
+    /// <summary>Alias for <see cref="BeLessThan"/> (date/time friendly).</summary>
+    public AndConstraint<ComparableAssertions<T>> BeBefore(T expected, string because = "", params object[] becauseArgs)
+        => BeLessThan(expected, because, becauseArgs);
+
+    /// <summary>Alias for <see cref="BeLessThanOrEqualTo"/> (date/time friendly).</summary>
+    public AndConstraint<ComparableAssertions<T>> BeOnOrBefore(T expected, string because = "", params object[] becauseArgs)
+        => BeLessThanOrEqualTo(expected, because, becauseArgs);
 
     public AndConstraint<ComparableAssertions<T>> BeInRange(T minimum, T maximum, string because = "", params object[] becauseArgs)
     {

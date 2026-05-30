@@ -141,6 +141,17 @@ public class GenericCollectionAssertions<T> : ObjectAssertions<IEnumerable<T>?, 
 
     public AndConstraint<GenericCollectionAssertions<T>> BeInAscendingOrder(string because = "", params object[] becauseArgs)
         => BeInAscendingOrder(x => x!, because, becauseArgs);
+
+    /// <summary>Asserts every item is of (or derives from) <typeparamref name="TExpected"/>.</summary>
+    public AndConstraint<GenericCollectionAssertions<T>> AllBeOfType<TExpected>(string because = "", params object[] becauseArgs)
+    {
+        Az.Ensure(_items.All(x => x is TExpected),
+            () => $"Expected all items to be of type {typeof(TExpected).Name}{Az.Reason(because, becauseArgs)}.");
+        return new(AndSelf);
+    }
+
+    /// <summary>Exposes the materialized items to in-assembly extension assertions.</summary>
+    internal IReadOnlyList<T> Items => _items;
 }
 
 /// <summary>Assertions for <see cref="IDictionary{TKey,TValue}"/>.</summary>
