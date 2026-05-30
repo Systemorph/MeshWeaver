@@ -139,9 +139,9 @@ The wire `$type` discriminator must match the receiver's registered
 **sender's** `ITypeRegistry`:
 
 - If the sender registered `WithType(typeof(T), nameof(T))` → wire `$type`
-  is the short name (`"MeshThread.RequestedCancellationAt flip"`).
+  is the short name (`"CreateNodeRequest"`).
 - If the sender's registry lacks the type → falls back to `FullName`
-  (`"MeshWeaver.AI.MeshThread.RequestedCancellationAt flip"`) at serialize time.
+  (`"MeshWeaver.Mesh.CreateNodeRequest"`) at serialize time.
 
 A receiver that registered `WithType(typeof(T), nameof(T))` only matches
 short names, so an FQN on the wire fails the lookup and produces a
@@ -150,8 +150,8 @@ short names, so an FQN on the wire fails the lookup and produces a
 **Triage with the file trace** (`MESHWEAVER_MSG_TRACE=1`,
 `%TEMP%/meshweaver-msg-trace.log`): the `NotifyAsync ENTER` line stamps
 `msg=...` with the JSON `$type` discriminator from `RawJson.Content`.
-If the field reads `msg=MeshWeaver.AI.MeshThread.RequestedCancellationAt flip` (FQN)
-instead of `msg=MeshThread.RequestedCancellationAt flip` (short), a sender along the
+If the field reads `msg=MeshWeaver.Mesh.CreateNodeRequest` (FQN)
+instead of `msg=CreateNodeRequest` (short), a sender along the
 hop didn't register `T` in its TypeRegistry — register on every hub the
 message transits, not just the originator and the final target.
 

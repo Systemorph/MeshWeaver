@@ -842,7 +842,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         isCancelling = true;
         StateHasChanged();
 
-        // Stream-update cancellation: flip RequestedCancellationAt on the
+        // Stream-update cancellation: set RequestedStatus = Cancelled on the
         // thread node through the process-wide cache. The thread hub's cancel
         // watcher cancels the CTS and propagates to every active delegation
         // sub-thread. The button clears once IsExecuting flips false via the
@@ -850,15 +850,15 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         // the same shared cache handle).
         cache
             .Update(threadPath, curr => curr?.Content is MeshWeaver.AI.Thread t
-                ? curr with { Content = t with { RequestedCancellationAt = DateTime.UtcNow } }
+                ? curr with { Content = t with { RequestedStatus = MeshWeaver.AI.ThreadExecutionStatus.Cancelled } }
                 : curr!)
             .Subscribe(
                 updated =>
                 {
-                    if ((updated?.Content as MeshWeaver.AI.Thread)?.RequestedCancellationAt is null)
+                    if ((updated?.Content as MeshWeaver.AI.Thread)?.RequestedStatus is null)
                     {
                         Logger.LogWarning(
-                            "[ThreadChat:{InstanceId}] Cancel stream.Update returned a node WITHOUT RequestedCancellationAt set for {Thread}",
+                            "[ThreadChat:{InstanceId}] Cancel stream.Update returned a node WITHOUT RequestedStatus set for {Thread}",
                             _instanceId, threadPath);
                     }
                     isCancelling = false;
@@ -1618,8 +1618,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         {
             var je = ToJsonElement(node.Content, Hub.JsonSerializerOptions);
             // MeshThread.IsExecuting is a computed `[JsonIgnore]` property — read
-            // Status directly and recompute (StartingExecution / Executing /
-            // Completing → executing). Order matches Thread.cs Status enum.
+            // Status directly and recompute (StartingExecution / Executing →
+            // executing). Order matches Thread.cs Status enum: Idle=0,
+            // StartingExecution=1, Executing=2, Cancelled=3, Done=4 — so 3
+            // (Cancelled) is NOT executing.
             if (je.TryGetProperty("status", out var statusProp))
             {
                 var s = statusProp.ValueKind == JsonValueKind.String
@@ -1627,7 +1629,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     : statusProp.ValueKind == JsonValueKind.Number
                         ? statusProp.GetInt32().ToString()
                         : null;
-                isExecuting = s is "StartingExecution" or "Executing" or "Completing" or "1" or "2" or "3";
+                isExecuting = s is "StartingExecution" or "Executing" or "1" or "2";
             }
             if (je.TryGetProperty("executionStatus", out var esProp) && esProp.ValueKind == JsonValueKind.String)
                 executionStatus = esProp.GetString();

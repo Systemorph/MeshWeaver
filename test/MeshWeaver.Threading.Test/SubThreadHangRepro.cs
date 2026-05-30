@@ -251,17 +251,17 @@ public class SubThreadHangRepro(ITestOutputHelper output) : MonolithMeshTestBase
             .ToTask(ct);
         Output.WriteLine("Sub-thread reached IsExecuting=true.");
 
-        // Stamp RequestedCancellationAt on the PARENT â€” same write the GUI
+        // Set RequestedStatus = Cancelled on the PARENT â€” same write the GUI
         // Stop button performs (see RequestViaStreamUpdate.md). The parent
         // hub's cancel watcher unions StreamingToolCalls with the live
-        // AgentChatClient.DelegationPaths registry and propagates the flip
+        // AgentChatClient.DelegationPaths registry and propagates the request
         // to every active sub-thread.
         await workspace.GetMeshNodeStream(parentPath)
             .Update(curr => curr?.Content is MeshThread t
-                ? curr with { Content = t with { RequestedCancellationAt = DateTime.UtcNow } }
+                ? curr with { Content = t with { RequestedStatus = ThreadExecutionStatus.Cancelled } }
                 : curr!)
             .FirstAsync().ToTask(ct);
-        Output.WriteLine("Flipped RequestedCancellationAt on parent.");
+        Output.WriteLine("Set RequestedStatus = Cancelled on parent.");
 
         // Sub-thread should settle within ~20s of the cancel write reaching
         // the propagation watcher.

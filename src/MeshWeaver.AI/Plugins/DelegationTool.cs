@@ -40,7 +40,7 @@ public record DelegationInfo(string AgentPath, string Description);
 /// </summary>
 /// <param name="ThreadPath">Full mesh path of the sub-thread node.</param>
 /// <param name="AgentName">The agent assigned to handle the delegation.</param>
-/// <param name="Status">Idle / Executing / Completing — same enum as <c>Thread.Status</c>.</param>
+/// <param name="Status">Idle / Executing / Cancelled — same enum as <c>Thread.Status</c>.</param>
 /// <param name="PreviewText">First ~200 chars of the sub-thread's current response cell text (may be empty before the agent emits any text).</param>
 /// <param name="LastActivity">Heartbeat / last token timestamp; lets the agent gauge progress.</param>
 public record SubThreadInfo(
@@ -210,11 +210,12 @@ public static class DelegationTool
                             subThreadPath, dispatched.CallId);
 
                         // Subscribe to the sub-thread node's stream and capture
-                        // the Running → Idle transition. We use Scan to remember
-                        // whether we've seen a non-Idle (Executing / Completing)
-                        // status; the first Idle emission after that is the
-                        // genuine post-execution terminal, NOT the initial-Idle
-                        // emission the synced query replays on subscribe.
+                        // the Running → terminal transition. We use Scan to
+                        // remember whether we've seen a non-terminal (Executing /
+                        // StartingExecution) status; the first terminal emission
+                        // after that (Idle / Cancelled / Done) is the genuine
+                        // post-execution terminal, NOT the initial-Idle emission
+                        // the synced query replays on subscribe.
                         workspace.GetMeshNodeStream(subThreadPath)
                             .Select(node => node?.Content as MeshThread)
                             .Where(t => t is not null)
@@ -223,10 +224,11 @@ public static class DelegationTool
                                 (state, t) =>
                                 {
                                     if (t!.Status is ThreadExecutionStatus.Executing
-                                                  or ThreadExecutionStatus.StartingExecution
-                                                  or ThreadExecutionStatus.Completing)
+                                                  or ThreadExecutionStatus.StartingExecution)
                                         return (true, null);
-                                    if (state.sawRunning && t.Status == ThreadExecutionStatus.Idle)
+                                    if (state.sawRunning && t.Status is ThreadExecutionStatus.Idle
+                                                  or ThreadExecutionStatus.Cancelled
+                                                  or ThreadExecutionStatus.Done)
                                         return (state.sawRunning, t);
                                     return state;
                                 })
@@ -297,7 +299,7 @@ public static class DelegationTool
 
                 You can launch MULTIPLE delegations in parallel and coordinate them as they run:
                   - Call `list_sub_threads` at any time during your turn to see what delegations
-                    you have in flight, their status (Executing / Completing / Idle), a preview
+                    you have in flight, their status (Executing / Idle / Cancelled), a preview
                     of the partial response, and last-activity timestamp. Use this to decide
                     whether to wait, to nudge a stuck agent, or to abandon a path.
                   - Call `send_to_sub_thread(threadPath, message)` to inject a mid-stream

@@ -116,17 +116,19 @@ public class CancelThreadExecutionTest(ITestOutputHelper output) : MonolithMeshT
         Output.WriteLine("Streaming confirmed armed (response cell shows 'Generating response...')");
 
         // Cancel via stream.Update â€” same path the Stop button uses (see
-        // RequestViaStreamUpdate.md). Awaiting the post-update emission asserts
-        // the write actually landed on the per-thread hub.
+        // RequestViaStreamUpdate.md). Set RequestedStatus = Cancelled; the
+        // owning hub's cancel watcher reacts. Awaiting the post-update emission
+        // asserts the write actually landed on the per-thread hub.
         var cancelled = await workspace.GetMeshNodeStream(threadPath)
             .Update(curr => curr?.Content is MeshThread t
-                ? curr with { Content = t with { RequestedCancellationAt = DateTime.UtcNow } }
+                ? curr with { Content = t with { RequestedStatus = ThreadExecutionStatus.Cancelled } }
                 : curr!)
             .FirstAsync().ToTask(ct);
-        (cancelled.Content as MeshThread)?.RequestedCancellationAt.Should().NotBeNull(
-            "stream.Update should have stamped RequestedCancellationAt on the thread node");
+        (cancelled.Content as MeshThread)?.RequestedStatus.Should().Be(ThreadExecutionStatus.Cancelled,
+            "stream.Update should have stamped RequestedStatus = Cancelled on the thread node");
 
-        // Wait for execution to settle.
+        // Wait for execution to settle. Cancel drives the thread to the terminal
+        // Cancelled status (IsExecuting=false).
         var settled = await workspace.GetMeshNodeStream(threadPath)
             .Select(n => n.Content as MeshThread)
             .Where(t => t is { IsExecuting: false })
@@ -134,7 +136,9 @@ public class CancelThreadExecutionTest(ITestOutputHelper output) : MonolithMeshT
             .Timeout(15.Seconds())
             .ToTask(ct);
         settled.Should().NotBeNull();
-        Output.WriteLine($"Settled: Thread.IsExecuting={settled!.IsExecuting}");
+        settled!.Status.Should().Be(ThreadExecutionStatus.Cancelled,
+            "a stopped round lands on the terminal Cancelled status");
+        Output.WriteLine($"Settled: Thread.Status={settled.Status}, IsExecuting={settled.IsExecuting}");
 
         // Best-effort check: response cell SHOULD have partial streaming text
         // by now. The monotonic-text guard in PushToResponseMessage can keep

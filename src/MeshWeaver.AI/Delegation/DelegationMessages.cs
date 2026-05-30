@@ -17,7 +17,7 @@ public sealed record HeartbeatTick;
 /// <summary>
 /// Posted to the parent thread hub by the heartbeat handler when a sub-thread
 /// has gone unresponsive. The handler issues a single
-/// <c>nodeCache.Update(SubThreadPath, ... RequestedCancellationAt = now)</c> —
+/// <c>nodeCache.Update(SubThreadPath, ... RequestedStatus = Cancelled)</c> —
 /// the SAME primitive the GUI Stop button uses — which propagates through the
 /// sub-thread's own cancel watcher and tears down its CTS.
 /// </summary>

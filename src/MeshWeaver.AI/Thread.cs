@@ -46,12 +46,22 @@ public record ThreadExecutionContext
 /// pin the transition graph.
 ///
 /// <para>State graph (one execution round):
-/// <c>Idle → StartingExecution → Executing → Completing → Idle</c>. The
-/// thread can only re-enter <see cref="StartingExecution"/> from
-/// <see cref="Idle"/>; cancellation/error doesn't fork the graph — the
-/// terminal status lands on the response cell (<see cref="ThreadMessageStatus"/>),
-/// while the thread always flows through <see cref="Completing"/> back to
-/// <see cref="Idle"/>.</para>
+/// <c>Idle → StartingExecution → Executing → Idle</c>, with a
+/// <c>Executing → Cancelled</c> branch when execution is stopped. The thread
+/// re-enters <see cref="StartingExecution"/> from either <see cref="Idle"/>
+/// or <see cref="Cancelled"/> (a cancelled thread re-dispatches like Idle when
+/// pending input remains). Error doesn't fork the graph — the error status
+/// lands on the response cell (<see cref="ThreadMessageStatus"/>) and the
+/// thread returns to <see cref="Idle"/>. There is no transient "completing"
+/// state: terminal writes are atomic.</para>
+///
+/// <para><b>Wake-up.</b> On hub activation <c>InitializeThreadLifecycle</c>
+/// reads the own-node stream's first emission and drives any non-terminal
+/// state to a valid one once: a pending <see cref="Cancelled"/> request is
+/// honored, an interrupted <see cref="Executing"/> round resumes its existing
+/// response cell (re-entering <see cref="StartingExecution"/>), and
+/// <see cref="Idle"/>/<see cref="Cancelled"/> with pending input is left for
+/// the submission watcher to claim.</para>
 /// </summary>
 public enum ThreadExecutionStatus
 {
@@ -66,24 +76,24 @@ public enum ThreadExecutionStatus
     StartingExecution,
 
     /// <summary>Agent is streaming into the active response cell. The
-    /// <c>check_inbox</c> tool may drain newly-arrived pending entries into
-    /// <see cref="Thread.Messages"/> mid-stream; the same response cell keeps
-    /// streaming.</summary>
+    /// <c>check_inbox</c> tool may drain newly-arrived pending entries: it
+    /// freezes the current response cell, inserts the new user cells after it,
+    /// and switches streaming to a fresh response cell.</summary>
     Executing,
 
-    /// <summary>Stream loop has exited (normal / cancel / error). End-of-round
-    /// drain runs (any unread pending entries flush into Messages, marked
-    /// ingested so the watcher doesn't immediately re-dispatch), then the
-    /// response cell's terminal status is committed and the thread transitions
-    /// back to <see cref="Idle"/>.</summary>
-    Completing,
+    /// <summary>Execution was stopped (user pressed Stop, or a parent cancelled a
+    /// sub-thread). Distinct, visible terminal-ish state: the response cell is
+    /// marked <see cref="ThreadMessageStatus.Cancelled"/>, but the thread behaves
+    /// like <see cref="Idle"/> for re-dispatch — if <c>PendingUserMessages</c>
+    /// still holds input, the submission watcher starts a fresh round. Occupies
+    /// the int slot the removed transient "completing" state used to hold.</summary>
+    Cancelled = 3,
 
     /// <summary>User-marked terminal state — the thread is finished and
     /// hidden from default catalogs (queries default to
-    /// <c>-content.status:Done</c>). A new <c>SubmitMessageRequest</c>
-    /// implicitly transitions back to <see cref="Idle"/> so the user can
-    /// reopen a conversation by typing.</summary>
-    Done
+    /// <c>-content.status:Done</c>). A new submission implicitly transitions
+    /// back to <see cref="Idle"/> so the user can reopen a conversation by typing.</summary>
+    Done = 4
 }
 
 /// <summary>
@@ -221,18 +231,17 @@ public record Thread
 
     /// <summary>
     /// Backwards-compatible boolean shorthand for "round in flight". True for
-    /// <see cref="ThreadExecutionStatus.StartingExecution"/>,
-    /// <see cref="ThreadExecutionStatus.Executing"/>, and
-    /// <see cref="ThreadExecutionStatus.Completing"/>. Idle + Done are not
-    /// executing — Done is the user-marked terminal state.
+    /// <see cref="ThreadExecutionStatus.StartingExecution"/> and
+    /// <see cref="ThreadExecutionStatus.Executing"/>. Idle, Cancelled, and Done
+    /// are not executing — Cancelled is a stopped round (re-dispatchable like
+    /// Idle), Done is the user-marked terminal state.
     /// New callsites should read <see cref="Status"/> directly to pick a
     /// specific transition.
     /// </summary>
     [JsonIgnore]
     public bool IsExecuting
         => Status is ThreadExecutionStatus.StartingExecution
-                  or ThreadExecutionStatus.Executing
-                  or ThreadExecutionStatus.Completing;
+                  or ThreadExecutionStatus.Executing;
 
     /// <summary>
     /// Current execution activity description (e.g., "Calling search_nodes...", "Delegating to Navigator...").
@@ -268,7 +277,7 @@ public record Thread
     /// hub's heartbeat watcher: if <c>IsExecuting=true</c> AND
     /// <c>(now - LastActivityAt) &gt; HeartbeatTimeout</c> (with a 60 s
     /// cold-start grace measured from <see cref="ExecutionStartedAt"/>),
-    /// the watcher flips <see cref="RequestedCancellationAt"/> on this
+    /// the watcher sets <see cref="RequestedStatus"/> = <c>Cancelled</c> on this
     /// sub-thread — the same primitive the GUI Stop button uses. Replaces
     /// the hard 5-minute watchdog in <c>ExecuteDelegationAsync</c>.
     /// </summary>
@@ -285,18 +294,22 @@ public record Thread
     public TimeSpan? HeartbeatTimeout { get; init; }
 
     /// <summary>
-    /// User requested cancellation of the in-flight round. The thread hub's
-    /// cancel watcher observes its own thread node and, when
-    /// <c>RequestedCancellationAt &gt; ExecutionStartedAt</c>, cancels the
-    /// stored CTS and propagates the same flip onto every active delegation
-    /// sub-thread.
+    /// Control-plane request for a status transition the owning thread hub
+    /// should achieve — the request half of the Activity-Control-Plane
+    /// (<c>RequestedStatus</c> requests, <see cref="Status"/> achieves) pattern.
+    /// Today the only requested transition is <see cref="ThreadExecutionStatus.Cancelled"/>:
+    /// the GUI Stop button and a parent cancelling a sub-thread write
+    /// <c>RequestedStatus = Cancelled</c>; the cancel watcher observes its own
+    /// thread node, cancels the stored CTS, and propagates the same request onto
+    /// every active delegation sub-thread. The owning hub clears it back to
+    /// <c>null</c> once the achieved <see cref="Status"/> reaches the requested
+    /// value (or on wake-up while honoring a pending request).
     ///
-    /// <para><b>Stream-update only — never a MeshThread.RequestedCancellationAt flip.</b> The
-    /// owning thread hub serialises writes on its action block, so racing
-    /// flips collapse into one observed transition. See
-    /// [RequestViaStreamUpdate.md] for the rule.</para>
+    /// <para><b>Stream-update only.</b> The owning thread hub serialises writes on
+    /// its action block, so racing requests collapse into one observed
+    /// transition. See [RequestViaStreamUpdate.md] for the rule.</para>
     /// </summary>
-    public DateTime? RequestedCancellationAt { get; init; }
+    public ThreadExecutionStatus? RequestedStatus { get; init; }
 
     /// <summary>
     /// Pending user message text — set at thread creation to auto-start execution.

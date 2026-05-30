@@ -108,7 +108,7 @@ internal static class ThreadExecution
             .WithHandler<MeshWeaver.AI.Delegation.CancelDelegationSubThread>(
                 MeshWeaver.AI.Delegation.DelegationHandlers.HandleCancelDelegationSubThread)
             .WithInitialization(SetThreadHubIdentity)
-            .WithInitialization(RecoverStaleExecutingThread)
+            .WithInitialization(InitializeThreadLifecycle)
             .WithInitialization(InstallCancellationWatcher)
             .WithInitialization(InstallExecutionHub)
             .WithInitialization(InstallSubmissionWatcher)
@@ -288,108 +288,188 @@ internal static class ThreadExecution
     }
 
     /// <summary>
-    /// On hub startup, check if this Thread was left in IsExecuting=true state (crashed/restarted).
-    /// If stale: mark the active response message as "*Cancelled*", clear execution state,
-    /// and mark all ActiveProgress entries as completed. Fully non-blocking — no await.
-    /// Each child thread's own hub recovery handles its own cancellation recursively.
+    /// Clean wake-up state machine. On hub activation, read the OWN node's FIRST
+    /// stream emission (the loaded persisted state, correctly ordered on this
+    /// hub's action block vs any subsequent writes) and drive any non-terminal
+    /// state to a valid one exactly once. This replaces the old late
+    /// <c>GetMeshNode</c> round-trip whose response could land AFTER later writes
+    /// and clobber <c>Status → Idle</c> (the <c>check_inbox</c> phantom-drain
+    /// flake).
+    ///
+    /// <para>Branches (after honoring any pending cancel first):
+    /// <list type="bullet">
+    /// <item><b>Executing</b> (with a response cell) → <b>resume</b> the same
+    ///   cell: re-enter <c>StartingExecution</c> so the <c>_Exec</c> round
+    ///   watcher re-dispatches into the existing <c>ActiveMessageId</c>.</item>
+    /// <item><b>Executing</b> without a response cell → nothing to resume; reset
+    ///   to <c>Idle</c> so the submission watcher can claim pending input.</item>
+    /// <item><b>StartingExecution</b> → no write; the <c>_Exec</c> round watcher
+    ///   fires on its own first emission.</item>
+    /// <item><b>Idle</b> / <b>Cancelled</b> (+ pending) → no write; the
+    ///   submission watcher claims.</item>
+    /// <item><b>Done</b> → terminal; leave it.</item>
+    /// </list>
+    /// Each child thread's own hub runs the same recovery recursively.</para>
     /// </summary>
-    private static void RecoverStaleExecutingThread(IMessageHub hub)
+    private static void InitializeThreadLifecycle(IMessageHub hub)
     {
         var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
         var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
         var workspace = hub.GetWorkspace();
         var threadPath = hub.Address.Path;
 
-        // Read the thread node via one-shot GetDataRequest (posted to self) — true
-        // request/response, no workspace-collection subscription that immediately unsubscribes.
-        hub.GetMeshNode(threadPath).Subscribe(threadNode =>
-        {
-            if (threadNode?.Content is not Thread { IsExecuting: true } thread)
-                return;
-
-            // Don't recover threads that are still actively eligible for
-            // auto-execute by WatchForExecution. The two init handlers race
-            // on hub startup; recovery's job is to clean up state left over
-            // from an interrupted Task.Run on a previous activation, NOT to
-            // clobber a thread that's about to (re)start. WatchForExecution's
-            // entry condition is {IsExecuting=true, ActiveMessageId set,
-            // PendingUserMessage set}, so we use the same shape as the
-            // "owned by auto-execute" guard. Recovery still runs for the
-            // stale case (Task.Run died → no PendingUserMessage was ever set
-            // for this round, or the round already consumed it).
-            //
-            // The previous heuristic (started < 2 minutes ago → skip) is
-            // dropped because the "no time limits" rework
-            // (commit 6dc436bf5) explicitly said an in-flight execution can
-            // legitimately exceed any time window, and a long-running agent
-            // that crashed at minute 5 would otherwise stay IsExecuting=true
-            // forever.
-            if (thread.PendingUserMessage is { Length: > 0 }
-                && !string.IsNullOrEmpty(thread.ActiveMessageId))
-            {
-                logger?.LogInformation(
-                    "[ThreadExec] Recovery: skipping {ThreadPath} — auto-execute candidate (pending msg set)",
-                    threadPath);
-                return;
-            }
-
-            logger?.LogInformation("[ThreadExec] Recovery: stale execution on {ThreadPath}, activeMsg={ActiveMsg}",
-                threadPath, thread.ActiveMessageId);
-
-            // Cancel pending tool calls on the active response message.
-            // For delegation tool calls, check if the sub-thread actually completed.
-            if (!string.IsNullOrEmpty(thread.ActiveMessageId))
-            {
-                var responsePath = $"{threadPath}/{thread.ActiveMessageId}";
-                var responseMsgId = thread.ActiveMessageId!;
-                var mainEntity = threadNode.MainNode ?? threadPath;
-
-                // Mark all pending tool calls as cancelled — no query needed.
-                // Sub-thread recovery happens independently on their own hub init.
-                var updatedToolCalls = thread.StreamingToolCalls?
-                    .Select(tc => tc.Result != null
-                        ? tc
-                        : tc with { Result = "Cancelled (server restarted)", IsSuccess = false })
-                    .ToImmutableList() ?? ImmutableList<ToolCallEntry>.Empty;
-
-                UpdateResponseCell(cache, responsePath, threadPath, responseMsgId, mainEntity,
-                    msg => msg with
-                    {
-                        Text = msg.Text ?? "",
-                        ToolCalls = updatedToolCalls,
-                        Status = ThreadMessageStatus.Cancelled,
-                        CompletedAt = DateTime.UtcNow
-                    },
-                    logger);
-            }
-
-            // Clear thread execution state — recovery runs on the thread hub
-            // itself, so this is an OWN write via its workspace.
-            workspace.GetMeshNodeStream().Update(node =>
-            {
-                var t = node.Content as Thread ?? new Thread();
-                var cancelledAt = DateTime.UtcNow;
-                return node with
+        var sub = workspace.GetMeshNodeStream()
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(15))
+            .Subscribe(
+                node =>
                 {
-                    LastModified = cancelledAt,
+                    if (node?.Content is not MeshThread thread)
+                        return;
+
+                    // (1) Honor a cancel that was requested before the hub died,
+                    //     before looking at Status.
+                    if (thread.RequestedStatus == ThreadExecutionStatus.Cancelled
+                        && thread.Status != ThreadExecutionStatus.Cancelled)
+                    {
+                        logger?.LogInformation(
+                            "[ThreadExec] Init: honoring pending cancel on {ThreadPath}", threadPath);
+                        HonorPendingCancelOnWake(workspace, cache, node, thread, threadPath, logger);
+                        return;
+                    }
+
+                    switch (thread.Status)
+                    {
+                        case ThreadExecutionStatus.Executing
+                            when !string.IsNullOrEmpty(thread.ActiveMessageId):
+                            // Interrupted mid-round — the in-flight Task.Run is
+                            // gone. RESUME the same response cell by re-entering
+                            // StartingExecution; DispatchAfterClaim reuses
+                            // ActiveMessageId (resume mode). Clear the throttled
+                            // streaming snapshot so the cell re-streams cleanly.
+                            logger?.LogInformation(
+                                "[ThreadExec] Init: resuming interrupted round on {ThreadPath}, activeMsg={ActiveMsg}",
+                                threadPath, thread.ActiveMessageId);
+                            workspace.GetMeshNodeStream().Update(n =>
+                                n.Content is MeshThread t && t.Status == ThreadExecutionStatus.Executing
+                                    ? n with
+                                    {
+                                        LastModified = DateTime.UtcNow,
+                                        Content = t with
+                                        {
+                                            Status = ThreadExecutionStatus.StartingExecution,
+                                            StreamingText = null,
+                                            StreamingToolCalls = null,
+                                        }
+                                    }
+                                    : n)
+                                .Subscribe(_ => { }, ex => logger?.LogWarning(ex,
+                                    "[ThreadExec] Init resume: stream.Update failed for {ThreadPath}", threadPath));
+                            break;
+
+                        case ThreadExecutionStatus.Executing:
+                            // Executing but no response cell to resume — fall back
+                            // to Idle so the submission watcher can claim pending.
+                            logger?.LogInformation(
+                                "[ThreadExec] Init: Executing with no ActiveMessageId on {ThreadPath} — resetting to Idle",
+                                threadPath);
+                            workspace.GetMeshNodeStream().Update(n =>
+                                n.Content is MeshThread t && t.Status == ThreadExecutionStatus.Executing
+                                    ? n with
+                                    {
+                                        LastModified = DateTime.UtcNow,
+                                        Content = t with
+                                        {
+                                            Status = ThreadExecutionStatus.Idle,
+                                            ExecutionStatus = null,
+                                            ActiveMessageId = null,
+                                            ExecutionStartedAt = null,
+                                            StreamingText = null,
+                                            StreamingToolCalls = null,
+                                        }
+                                    }
+                                    : n)
+                                .Subscribe(_ => { }, ex => logger?.LogWarning(ex,
+                                    "[ThreadExec] Init reset: stream.Update failed for {ThreadPath}", threadPath));
+                            break;
+
+                        default:
+                            // StartingExecution / Idle / Cancelled / Done — no
+                            // write; the relevant watcher (or terminal state)
+                            // already covers it.
+                            break;
+                    }
+                },
+                ex =>
+                {
+                    if (ex is TimeoutException)
+                        logger?.LogDebug(
+                            "[ThreadExec] Init: no thread node within 15s for {ThreadPath} (new/empty thread)",
+                            threadPath);
+                    else
+                        logger?.LogWarning(ex,
+                            "[ThreadExec] InitializeThreadLifecycle faulted for {ThreadPath}", threadPath);
+                });
+
+        hub.RegisterForDisposal(sub);
+    }
+
+    /// <summary>
+    /// Wake-up branch for a thread that has a pending <c>RequestedStatus =
+    /// Cancelled</c> the previous activation never got to honor. Stamps the
+    /// active response cell <see cref="ThreadMessageStatus.Cancelled"/> (marking
+    /// any unfinished tool calls) and writes the terminal thread state
+    /// (<c>Status = Cancelled, RequestedStatus = null, ActiveMessageId = null</c>),
+    /// leaving <c>PendingUserMessages</c> intact so the submission watcher
+    /// re-dispatches a fresh round.
+    /// </summary>
+    private static void HonorPendingCancelOnWake(
+        IWorkspace workspace, IMeshNodeStreamCache cache, MeshNode node, MeshThread thread,
+        string threadPath, ILogger? logger)
+    {
+        if (!string.IsNullOrEmpty(thread.ActiveMessageId))
+        {
+            var responsePath = $"{threadPath}/{thread.ActiveMessageId}";
+            var responseMsgId = thread.ActiveMessageId!;
+            var mainEntity = node.MainNode ?? threadPath;
+            var cancelledToolCalls = thread.StreamingToolCalls?
+                .Select(tc => tc.Result != null
+                    ? tc
+                    : tc with { Result = "Cancelled (server restarted)", IsSuccess = false })
+                .ToImmutableList() ?? ImmutableList<ToolCallEntry>.Empty;
+
+            UpdateResponseCell(cache, responsePath, threadPath, responseMsgId, mainEntity,
+                msg => msg with
+                {
+                    Text = msg.Text ?? "",
+                    ToolCalls = cancelledToolCalls,
+                    Status = ThreadMessageStatus.Cancelled,
+                    CompletedAt = DateTime.UtcNow
+                },
+                logger);
+        }
+
+        workspace.GetMeshNodeStream().Update(n =>
+            n.Content is MeshThread t && t.Status != ThreadExecutionStatus.Cancelled
+                ? n with
+                {
+                    LastModified = DateTime.UtcNow,
                     Content = t with
                     {
-                        Status = ThreadExecutionStatus.Idle,
+                        Status = ThreadExecutionStatus.Cancelled,
+                        RequestedStatus = null,
                         ExecutionStatus = null,
                         ActiveMessageId = null,
                         TokensUsed = 0,
                         ExecutionStartedAt = null,
                         StreamingText = null,
-                        StreamingToolCalls = null
+                        StreamingToolCalls = null,
+                        Summary = "Cancelled (server restarted)."
                     }
-                };
-            }).Subscribe(
-                _ => { },
-                ex => logger?.LogWarning(ex,
-                    "RecoverStaleExecutingThread: UpdateMeshNode failed for {ThreadPath}", threadPath));
-
-            logger?.LogInformation("[ThreadExec] Recovery: cleared stale execution on {ThreadPath}", threadPath);
-        });
+                }
+                : n)
+            .Subscribe(_ => { }, ex => logger?.LogWarning(ex,
+                "[ThreadExec] HonorPendingCancelOnWake: stream.Update failed for {ThreadPath}", threadPath));
     }
 
     // WatchForExecution deleted as part of the "one trigger via GetMeshNodeStream"
@@ -424,6 +504,28 @@ internal static class ThreadExecution
     /// that's intentionally NOT done here.
     /// </summary>
     /// <summary>
+    /// Per-round mutable handle to the response cell currently being streamed
+    /// into. Stored on the parent thread hub via <c>hub.Set</c> for the duration
+    /// of a round. The streaming writer reads <see cref="ResponseMsgId"/> and
+    /// <see cref="TextBaseline"/> on every push so <see cref="InboxTool.CheckInbox"/>
+    /// can switch the target mid-round (the clean output-cell transition): it
+    /// freezes the current cell, inserts the drained user cells, allocates a new
+    /// cell, points <see cref="ResponseMsgId"/> at it, and bumps
+    /// <see cref="TextBaseline"/> to the accumulated length so far. The writer
+    /// then streams only <c>fullText[TextBaseline..]</c> into the new cell — a
+    /// stale buffered push carrying the pre-split text slices to empty, so the
+    /// timer-thread <c>Sample</c> push can't pollute the new cell.
+    /// <see cref="ResponseText"/> is the live accumulator the splitter reads the
+    /// current length from (null outside the streaming window).
+    /// </summary>
+    internal sealed class ActiveResponseSegment(string responseMsgId)
+    {
+        public string ResponseMsgId { get; set; } = responseMsgId;
+        public int TextBaseline { get; set; }
+        public System.Text.StringBuilder? ResponseText { get; set; }
+    }
+
+    /// <summary>
     /// Parameters for a single agent round. Direct-call replacement for the
     /// old <c>SubmitMessageRequest</c> wire message — the inputs the agent loop
     /// needs to run one round. Not a wire message: ExecuteMessageAsync is
@@ -453,6 +555,17 @@ internal static class ThreadExecution
                 $"ExecuteMessageAsync: RoundParams for thread {threadPath} has no ResponseMessageId");
         var responsePath = $"{threadPath}/{responseMsgId}";
 
+        // Active response-cell segment for THIS round. The streaming writer
+        // (PushToResponseMessage) targets segment.ResponseMsgId, NOT the captured
+        // responseMsgId, so the check_inbox tool can split the output mid-round:
+        // it freezes the current cell, inserts the interrupting user cells, and
+        // switches segment.ResponseMsgId to a fresh cell (clearing the shared
+        // StringBuilder) so subsequent tokens stream into the new cell. Stored on
+        // the parent hub so InboxTool.CheckInbox can reach it. See A7 in
+        // ThreadOperations.md.
+        var segment = new ActiveResponseSegment(responseMsgId);
+        parentHub.Set(segment);
+
         // Helper: push content to the response message via IMeshNodeStreamCache.
         // 🚨 Same shared handle that the GUI's ThreadMessageBubbleView reads from —
         // single upstream subscription process-wide. Replaces the per-_Exec
@@ -480,10 +593,19 @@ internal static class ThreadExecution
             ThreadMessageStatus? status = null,
             string? summary = null)
         {
+            // Re-read the segment's CURRENT target + text baseline on every push so
+            // writes follow a mid-round check_inbox split to the new cell. The cell
+            // receives only the accumulated text PAST the baseline (the prior cells'
+            // text was committed when they were frozen). A stale buffered push whose
+            // text is shorter than the baseline slices to empty — harmless.
+            var curResponseMsgId = segment.ResponseMsgId;
+            var baseline = segment.TextBaseline;
+            var curResponsePath = $"{threadPath}/{curResponseMsgId}";
+            text = text.Length > baseline ? text[baseline..] : string.Empty;
             logger.LogDebug("[ThreadExec] PUSH_TO_MSG: responsePath={ResponsePath}, textLen={TextLen}, toolCalls={ToolCalls}, updatedNodes={UpdatedNodes}, status={Status}",
-                responsePath, text.Length, toolCalls.Count, updatedNodes.Count, status?.ToString() ?? "(preserve)");
+                curResponsePath, text.Length, toolCalls.Count, updatedNodes.Count, status?.ToString() ?? "(preserve)");
 
-            var updateObs = cache.Update(responsePath, node =>
+            var updateObs = cache.Update(curResponsePath, node =>
             {
                 var current = node?.Content as ThreadMessage ?? new ThreadMessage
                 {
@@ -547,7 +669,7 @@ internal static class ThreadExecution
                 };
                 return node != null
                     ? node with { Content = updatedContent }
-                    : new MeshNode(responseMsgId, threadPath)
+                    : new MeshNode(curResponseMsgId, threadPath)
                     {
                         NodeType = ThreadMessageNodeType.NodeType,
                         MainNode = mainEntity,
@@ -560,7 +682,7 @@ internal static class ThreadExecution
             updateObs.Subscribe(
                 _ => { },
                 ex => logger.LogWarning(ex,
-                    "[ThreadExec] cache.Update failed for {Path}", responsePath));
+                    "[ThreadExec] cache.Update failed for {Path}", curResponsePath));
 
             // Heartbeat stamp on the OWN thread. Throttled to one write per
             // heartbeatStampInterval so the streaming hot path (Sample(100ms))
@@ -914,8 +1036,15 @@ internal static class ThreadExecution
                 // current submission's user/response cells) + current user message.
                 // The system prompt is added by AgentChatClient.GetStreamingResponseAsync
                 // before forwarding to the inner IChatClient.
-                var allMessages = chatHistory.Add(
-                    new ChatMessage(ChatRole.User, request.UserMessageText));
+                //
+                // RESUME path: UserMessageText is empty and UserMessageId is null —
+                // the interrupted round's user message is still in history (nothing
+                // was excluded), so we append NO trailing user message (an empty one
+                // would be a malformed final turn). The agent simply re-generates a
+                // response to the existing last user turn.
+                var allMessages = string.IsNullOrEmpty(request.UserMessageText)
+                    ? chatHistory
+                    : chatHistory.Add(new ChatMessage(ChatRole.User, request.UserMessageText));
                 logger.LogInformation("[ThreadExec] Sending {Count} messages to agent ({HistoryCount} history + 1 new): threadPath={ThreadPath}, agent={Agent}",
                     allMessages.Count, chatHistory.Count, threadPath, request.AgentName ?? "(default)");
 
@@ -942,6 +1071,17 @@ internal static class ThreadExecution
                 // Without this, OnDeactivateAsync waits up to 120s for the Task.Run
                 // that's stuck on an AI API call with no cancellation signal.
                 hub.RegisterForDisposal(_ => executionCts.Cancel());
+
+                // The live response-text accumulator. Wired into the round's
+                // ActiveResponseSegment + capturedResponseText BEFORE the first
+                // push so InboxTool.CheckInbox can split the output cell the moment
+                // streaming is observable (a check_inbox that races the first
+                // "Generating response..." emission still sees a non-null
+                // ResponseText and splits correctly).
+                var responseText = new StringBuilder();
+                capturedResponseText = responseText;
+                segment.ResponseText = responseText;
+
                 // Push progress: generating
                 PushToResponseMessage("Generating response...", ImmutableList<ToolCallEntry>.Empty,
                     ImmutableList<NodeChangeEntry>.Empty, request.AgentName, request.ModelName,
@@ -969,8 +1109,9 @@ internal static class ThreadExecution
                         parentHub.ServiceProvider.GetService<AccessService>()?.SetContext(userAccessContext);
 
                     var ct = executionCts.Token;
-                    var responseText = new StringBuilder();
-                    capturedResponseText = responseText;
+                    // responseText / capturedResponseText / segment.ResponseText were
+                    // wired just before the first push (above) so a check_inbox
+                    // racing the round start still sees the live accumulator.
                     int? inputTokens = null;
                     int? outputTokens = null;
                     int? totalTokens = null;
@@ -981,9 +1122,9 @@ internal static class ThreadExecution
                     // from a "stuck" pipeline from the parent's perspective — and an
                     // arbitrary deadline that fires `executionCts.Cancel()` would
                     // tear those down even when something is happening down the tree.
-                    // Manual cancellation via the Stop button (RequestedCancellationAt
-                    // flip on the thread node, see RequestViaStreamUpdate.md) is the
-                    // only legitimate cancel.
+                    // Manual cancellation via the Stop button (RequestedStatus =
+                    // Cancelled on the thread node, see RequestViaStreamUpdate.md) is
+                    // the only legitimate cancel.
 
                     try
                     {
@@ -1322,9 +1463,14 @@ internal static class ThreadExecution
                         var cancelSummary = string.IsNullOrEmpty(cancelText)
                             ? "Cancelled before completion."
                             : cancelText;
+                        // Terminal Cancelled (not Idle): a distinct, visible status.
+                        // Clear the cancel request now that it's achieved; leave
+                        // PendingUserMessages intact so the submission watcher
+                        // re-dispatches a fresh round from Cancelled+pending.
                         UpdateThreadExecution(t => t with
                         {
-                            Status = ThreadExecutionStatus.Idle, ExecutionStatus = null, ActiveMessageId = null,
+                            Status = ThreadExecutionStatus.Cancelled, RequestedStatus = null,
+                            ExecutionStatus = null, ActiveMessageId = null,
                             ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null,
                             Summary = cancelSummary
                         }).Subscribe(
@@ -1390,6 +1536,10 @@ internal static class ThreadExecution
                     finally
                     {
                         delegationStampSub?.Dispose();
+                        // Detach the accumulator so a check_inbox call between
+                        // rounds can't split on a dead StringBuilder (the guard
+                        // also requires IsExecuting + matching ActiveMessageId).
+                        segment.ResponseText = null;
                         parentHub.Set<CancellationTokenSource>(null!);
                         executionCts.Dispose();
                         // No per-_Exec stream handle to dispose — writes went through
@@ -1729,38 +1879,40 @@ internal static class ThreadExecution
     }
 
     /// <summary>
-    /// Stream-update cancellation: clients flip <see cref="MeshThread.RequestedCancellationAt"/>
-    /// on the thread node via <c>workspace.GetMeshNodeStream(threadPath).Update(...)</c>.
-    /// The watcher below observes the OWN thread node, treats every transition
-    /// to "<c>RequestedCancellationAt &gt; ExecutionStartedAt</c>" as a cancel
-    /// signal, cancels the stored CTS, and propagates the same flip onto every
-    /// active delegation sub-thread.
+    /// Stream-update cancellation: clients set <see cref="MeshThread.RequestedStatus"/>
+    /// = <c>Cancelled</c> on the thread node via
+    /// <c>workspace.GetMeshNodeStream(threadPath).Update(...)</c>. The watcher
+    /// below observes the OWN thread node, treats every transition to
+    /// "<c>RequestedStatus == Cancelled</c> while executing" as a cancel signal,
+    /// cancels the stored CTS, and propagates the same request onto every active
+    /// delegation sub-thread.
     ///
-    /// <para>The bare <c>RequestedCancellationAt</c> compare is the only single-
-    /// flight needed: the action block serialises Updates, and once we've
-    /// cancelled we record <c>handledAt</c> in process memory so the same
-    /// timestamp isn't acted on twice. A subsequent round starts when
-    /// <c>ExecutionStartedAt</c> moves past <c>RequestedCancellationAt</c>;
-    /// future flips beat that threshold and trigger again.</para>
+    /// <para>Dedup is by <see cref="MeshThread.ExecutionStartedAt"/>: each round
+    /// has a distinct start timestamp, so <c>DistinctUntilChanged</c> on it acts
+    /// at most once per round. After the CTS is cancelled the streaming loop's
+    /// <c>catch</c> writes the terminal <c>Status = Cancelled, RequestedStatus = null</c>,
+    /// at which point the <c>IsExecuting</c> filter stops matching. A subsequent
+    /// round (new <c>ExecutionStartedAt</c>) re-arms the watcher.</para>
+    ///
+    /// <para><b>No-CTS fallback.</b> If the request lands during the claim window
+    /// (<c>StartingExecution</c>, before the streaming loop stored its CTS) there
+    /// is no loop to write the terminal status — the watcher writes it directly,
+    /// guarded so it only fires while still <c>StartingExecution</c>.</para>
     /// </summary>
     private static void InstallCancellationWatcher(IMessageHub hub)
     {
         var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
         var threadPath = hub.Address.Path;
-        DateTime? lastHandledAt = null;
 
         var sub = hub.GetWorkspace().GetMeshNodeStream()
             .Where(n => n?.Content is MeshThread t
-                && t.RequestedCancellationAt is { } req
-                && (lastHandledAt is null || req > lastHandledAt.Value)
-                // Only act when the request is fresher than the current round —
-                // a stale flag from before this round's start is not a cancel.
-                && (t.ExecutionStartedAt is null || req >= t.ExecutionStartedAt.Value))
+                && t.RequestedStatus == ThreadExecutionStatus.Cancelled
+                && t.IsExecuting)
+            .DistinctUntilChanged(n => ((MeshThread)n!.Content!).ExecutionStartedAt)
             .Subscribe(
                 node =>
                 {
                     var thread = (MeshThread)node!.Content!;
-                    lastHandledAt = thread.RequestedCancellationAt;
 
                     // Propagate to every active delegation sub-thread via the
                     // canonical IMeshNodeStreamCache. The sub-thread is a
@@ -1803,7 +1955,7 @@ internal static class ThreadExecution
                             "[ThreadExec] Propagating cancel to sub-thread {SubThread}", subPath);
                         hub.GetWorkspace().GetMeshNodeStream(subPath).Update(
                             curr => curr?.Content is MeshThread sub
-                                ? curr with { Content = sub with { RequestedCancellationAt = thread.RequestedCancellationAt } }
+                                ? curr with { Content = sub with { RequestedStatus = ThreadExecutionStatus.Cancelled } }
                                 : curr!)
                             .Subscribe(_ => { }, ex => logger?.LogWarning(ex,
                                 "[ThreadExec] Cancel propagation failed for {SubThread}", subPath));
@@ -1838,6 +1990,37 @@ internal static class ThreadExecution
                                 "[ThreadExec] Cancel: CTS already disposed for {ThreadPath} — round already torn down",
                                 threadPath);
                         }
+                    }
+                    else
+                    {
+                        // No-CTS fallback: the stop landed in the claim window
+                        // (StartingExecution, before the streaming loop stored its
+                        // CTS) so no catch will write the terminal status. Write it
+                        // here — guarded to fire only while still StartingExecution
+                        // with the cancel still requested, so we never clobber a
+                        // round that has since reached Executing (its loop owns the
+                        // terminal write).
+                        logger?.LogDebug(
+                            "[ThreadExec] Cancel: no CTS for {ThreadPath} (claim window) — writing terminal Cancelled directly",
+                            threadPath);
+                        hub.GetWorkspace().GetMeshNodeStream().Update(
+                            curr => curr?.Content is MeshThread t
+                                    && t.Status == ThreadExecutionStatus.StartingExecution
+                                    && t.RequestedStatus == ThreadExecutionStatus.Cancelled
+                                ? curr with
+                                {
+                                    Content = t with
+                                    {
+                                        Status = ThreadExecutionStatus.Cancelled,
+                                        RequestedStatus = null,
+                                        ActiveMessageId = null,
+                                        ExecutionStartedAt = null,
+                                        ExecutionStatus = null,
+                                    }
+                                }
+                                : curr!)
+                            .Subscribe(_ => { }, ex => logger?.LogWarning(ex,
+                                "[ThreadExec] No-CTS cancel fallback failed for {ThreadPath}", threadPath));
                     }
                 },
                 ex => logger?.LogWarning(ex,

@@ -87,8 +87,8 @@ internal static class DelegationHandlers
     }
 
     /// <summary>
-    /// On the PARENT thread hub. Writes <see cref="MeshThread.RequestedCancellationAt"/>
-    /// to the named sub-thread via the process-wide
+    /// On the PARENT thread hub. Sets <see cref="MeshThread.RequestedStatus"/>
+    /// = <c>Cancelled</c> on the named sub-thread via the process-wide
     /// <see cref="IMeshNodeStreamCache"/> — same write the GUI Stop button
     /// performs, same propagation path. The sub-thread's own cancel watcher
     /// reacts and tears down its CTS.
@@ -107,7 +107,7 @@ internal static class DelegationHandlers
 
         nodeCache.Update(req.SubThreadPath, curr =>
                 curr?.Content is MeshThread t
-                    ? curr with { Content = t with { RequestedCancellationAt = DateTime.UtcNow } }
+                    ? curr with { Content = t with { RequestedStatus = ThreadExecutionStatus.Cancelled } }
                     : curr!)
             .Subscribe(
                 _ => { },

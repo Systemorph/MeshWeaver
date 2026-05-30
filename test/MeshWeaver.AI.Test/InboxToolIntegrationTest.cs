@@ -157,6 +157,88 @@ public class InboxToolIntegrationTest : AITestBase
             "once a message has been delivered to the agent it must NOT be redelivered on the next call");
     }
 
+    // â”€â”€â”€ A7: clean mid-execution output-cell transition â”€â”€â”€
+
+    /// <summary>
+    /// A7 — while a round is streaming into response cell R1, a follow-up message
+    /// arrives and the agent calls <c>check_inbox</c>. The clean output-cell
+    /// transition must freeze R1 (Completed), place the interrupting user cell
+    /// after it, and switch streaming to a FRESH cell R2 — final ordering
+    /// <c>[R1 completed] → [U] → [R2 streaming]</c>. The agent's continuation
+    /// streams into R2, NOT the frozen R1.
+    /// </summary>
+    [Fact]
+    public async Task CheckInbox_DrainMidExecution_FreezesR1_InputsInMiddle_SwitchesToNewOutputCell()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var threadPath = await SeedEmptyThreadAsync(ct);
+        var threadHub = await GetThreadHubAsync(threadPath, ct);
+        var client = GetClient();
+        var ws = Mesh.GetWorkspace();
+
+        // Round 1 — the fake client streams after a 5 s delay, so the round stays
+        // Executing long enough to drive a mid-stream check_inbox.
+        client.SubmitMessage(threadPath, "First question",
+            modelName: "inbox-fake-slow", createdBy: "rbuergi@systemorph.com");
+
+        var executing = await WaitForThreadAsync(threadPath,
+            t => t.IsExecuting && !string.IsNullOrEmpty(t.ActiveMessageId), 10_000, ct);
+        var r1 = executing.ActiveMessageId!;
+
+        // Wait until R1 is actually streaming — by then the round's
+        // ActiveResponseSegment.ResponseText is wired, so check_inbox will split.
+        await ws.GetMeshNodeStream($"{threadPath}/{r1}")
+            .Select(n => (n?.Content as ThreadMessage)?.Text)
+            .Where(txt => !string.IsNullOrEmpty(txt) && txt!.Contains("Generating response"))
+            .Take(1).Timeout(TimeSpan.FromSeconds(10)).ToTask(ct);
+
+        // Queue a follow-up while round 1 streams.
+        client.SubmitMessage(threadPath, "Follow-up while you work",
+            modelName: "inbox-fake-slow", createdBy: "rbuergi@systemorph.com");
+        var queued = await WaitForThreadAsync(threadPath,
+            t => t.PendingUserMessages.Count > 0, 5_000, ct);
+        var u2 = queued.PendingUserMessages.Keys.Single();
+
+        // Mid-execution check_inbox → A7 clean output-cell transition.
+        var tool = InboxTool.CreateCheckInboxTool(threadHub);
+        var toolResult = (await tool.InvokeAsync(new AIFunctionArguments(), ct))?.ToString();
+        toolResult.Should().Contain("Follow-up");
+
+        // ActiveMessageId switched to a NEW response cell; the follow-up drained.
+        var afterSplit = await WaitForThreadAsync(threadPath,
+            t => !string.IsNullOrEmpty(t.ActiveMessageId)
+                 && t.ActiveMessageId != r1
+                 && t.IngestedMessageIds.Contains(u2),
+            10_000, ct);
+        var r2 = afterSplit.ActiveMessageId!;
+        r2.Should().NotBe(r1, "check_inbox mid-execution must switch streaming to a fresh response cell");
+
+        // Ordering: [r1 … u2 … r2] — the interrupting user cell in the middle.
+        var idxR1 = afterSplit.Messages.IndexOf(r1);
+        var idxU2 = afterSplit.Messages.IndexOf(u2);
+        var idxR2 = afterSplit.Messages.IndexOf(r2);
+        idxR1.Should().BeGreaterThanOrEqualTo(0);
+        idxU2.Should().BeGreaterThan(idxR1, "the interrupting user message lands AFTER the frozen response cell");
+        idxR2.Should().BeGreaterThan(idxU2, "the new response cell lands AFTER the user message");
+
+        // R1 is frozen to a terminal Completed status (never regresses).
+        var r1Status = await ws.GetMeshNodeStream($"{threadPath}/{r1}")
+            .Select(n => (n?.Content as ThreadMessage)?.Status)
+            .Where(s => s == ThreadMessageStatus.Completed)
+            .Take(1).Timeout(TimeSpan.FromSeconds(10)).ToTask(ct);
+        r1Status.Should().Be(ThreadMessageStatus.Completed,
+            "the in-flight cell is frozen Completed when check_inbox splits");
+
+        // The agent's continuation streams into R2 (NOT the frozen R1) and the
+        // round completes there.
+        var r2Final = await ws.GetMeshNodeStream($"{threadPath}/{r2}")
+            .Select(n => n?.Content as ThreadMessage)
+            .Where(m => m is { Status: ThreadMessageStatus.Completed })
+            .Take(1).Timeout(TimeSpan.FromSeconds(15)).ToTask(ct);
+        r2Final!.Text.Should().Contain("slow ack",
+            "the continuation streams into the NEW cell, not the frozen one");
+    }
+
     // â”€â”€â”€ Cancel-then-restart: ESC with pending messages â”€â”€â”€
 
     [Fact]
@@ -196,10 +278,10 @@ public class InboxToolIntegrationTest : AITestBase
         // the post-update emission asserts the write actually landed.
         var cancelled = await client.GetWorkspace().GetMeshNodeStream(threadPath)
             .Update(curr => curr?.Content is MeshThread t
-                ? curr with { Content = t with { RequestedCancellationAt = DateTime.UtcNow } }
+                ? curr with { Content = t with { RequestedStatus = ThreadExecutionStatus.Cancelled } }
                 : curr!)
             .FirstAsync().ToTask(ct);
-        (cancelled.Content as MeshThread)?.RequestedCancellationAt.Should().NotBeNull();
+        (cancelled.Content as MeshThread)?.RequestedStatus.Should().Be(ThreadExecutionStatus.Cancelled);
 
         // After cancel, the watcher should pick up u2 and dispatch round 2.
         // Round 2 ingests u2 and produces a NEW response cell distinct from r1.
@@ -237,10 +319,10 @@ public class InboxToolIntegrationTest : AITestBase
         // the post-update emission asserts the write actually landed.
         var cancelled = await client.GetWorkspace().GetMeshNodeStream(threadPath)
             .Update(curr => curr?.Content is MeshThread t
-                ? curr with { Content = t with { RequestedCancellationAt = DateTime.UtcNow } }
+                ? curr with { Content = t with { RequestedStatus = ThreadExecutionStatus.Cancelled } }
                 : curr!)
             .FirstAsync().ToTask(ct);
-        (cancelled.Content as MeshThread)?.RequestedCancellationAt.Should().NotBeNull();
+        (cancelled.Content as MeshThread)?.RequestedStatus.Should().Be(ThreadExecutionStatus.Cancelled);
 
         // Wait for the cancel cleanup to settle (IsExecuting flips false).
         var afterCancel = await WaitForThreadAsync(threadPath,
@@ -287,10 +369,10 @@ public class InboxToolIntegrationTest : AITestBase
         // the post-update emission asserts the write actually landed.
         var cancelled = await client.GetWorkspace().GetMeshNodeStream(threadPath)
             .Update(curr => curr?.Content is MeshThread t
-                ? curr with { Content = t with { RequestedCancellationAt = DateTime.UtcNow } }
+                ? curr with { Content = t with { RequestedStatus = ThreadExecutionStatus.Cancelled } }
                 : curr!)
             .FirstAsync().ToTask(ct);
-        (cancelled.Content as MeshThread)?.RequestedCancellationAt.Should().NotBeNull();
+        (cancelled.Content as MeshThread)?.RequestedStatus.Should().Be(ThreadExecutionStatus.Cancelled);
 
         // All four should eventually end up ingested as the watcher dispatches
         // round 2/3/4 (one user message per round per PlanNextRound design).

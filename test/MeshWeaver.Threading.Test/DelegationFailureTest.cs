@@ -71,10 +71,10 @@ public class DelegationFailureTest(ITestOutputHelper output) : MonolithMeshTestB
 
         var cancelled = await workspace.GetMeshNodeStream(threadPath)
             .Update(curr => curr?.Content is MeshThread t
-                ? curr with { Content = t with { RequestedCancellationAt = DateTime.UtcNow } }
+                ? curr with { Content = t with { RequestedStatus = ThreadExecutionStatus.Cancelled } }
                 : curr!)
             .FirstAsync().ToTask(ct);
-        (cancelled.Content as MeshThread)?.RequestedCancellationAt.Should().NotBeNull();
+        (cancelled.Content as MeshThread)?.RequestedStatus.Should().Be(ThreadExecutionStatus.Cancelled);
 
         var thread = await ThreadFlow.ReadThread(client, threadPath,
             t => t.Messages.Count >= 2,

@@ -348,7 +348,7 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
     /// because the live progress has already landed on the parent's tool call.</para>
     ///
     /// <para><b>Watchdog stays.</b> 5-minute timeout → propagate
-    /// <c>RequestedCancellationAt</c> to the sub-thread + flip our tool call
+    /// <c>RequestedStatus = Cancelled</c> to the sub-thread + flip our tool call
     /// to <see cref="ToolCallStatus.Cancelled"/>, then yield the partial text
     /// so FCC can carry on.</para>
     /// </summary>
@@ -512,12 +512,13 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                                 {
                                     if (node?.Content is not MeshThread t) return;
                                     if (t.Status is ThreadExecutionStatus.Executing
-                                                 or ThreadExecutionStatus.StartingExecution
-                                                 or ThreadExecutionStatus.Completing)
+                                                 or ThreadExecutionStatus.StartingExecution)
                                     {
                                         sawRunning = true;
                                     }
-                                    else if (sawRunning && t.Status == ThreadExecutionStatus.Idle)
+                                    else if (sawRunning && t.Status is ThreadExecutionStatus.Idle
+                                                 or ThreadExecutionStatus.Cancelled
+                                                 or ThreadExecutionStatus.Done)
                                     {
                                         Logger.LogInformation(
                                             "[Delegation:{CallId}] TERMINAL sub={Path} (Running→Idle)",

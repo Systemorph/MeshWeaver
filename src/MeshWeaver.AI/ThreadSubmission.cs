@@ -64,11 +64,13 @@ internal static class ThreadSubmission
     /// </summary>
     public static RoundDispatch? PlanNextRound(MeshThread thread)
     {
-        // Allow planning when the thread is fully idle OR has just been claimed
+        // Allow planning when the thread is idle / cancelled (a stopped round
+        // re-dispatches like Idle if input is queued) OR has just been claimed
         // by InstallServerWatcher (Status==StartingExecution). Reject the active
-        // phases (Executing, Completing) — they own the in-flight round.
-        if (thread.Status != ThreadExecutionStatus.Idle
-            && thread.Status != ThreadExecutionStatus.StartingExecution)
+        // phase (Executing) — it owns the in-flight round.
+        if (thread.Status is not (ThreadExecutionStatus.Idle
+            or ThreadExecutionStatus.Cancelled
+            or ThreadExecutionStatus.StartingExecution))
             return null;
         if (thread.PendingUserMessages.IsEmpty) return null;
 
@@ -209,7 +211,7 @@ internal static class ThreadSubmissionServer
                     {
                         var t = node.Content as MeshThread;
                         if (t is null
-                            || t.Status != ThreadExecutionStatus.Idle
+                            || t.Status is not (ThreadExecutionStatus.Idle or ThreadExecutionStatus.Cancelled)
                             || t.PendingUserMessages.IsEmpty)
                         {
                             logger?.LogDebug(
@@ -254,7 +256,9 @@ internal static class ThreadSubmissionServer
     private static bool NeedsDispatch(MeshNode? node)
     {
         if (node?.Content is not MeshThread t) return false;
-        return t.Status == ThreadExecutionStatus.Idle
+        // Idle OR Cancelled (a stopped round re-dispatches like Idle) with
+        // queued input → claim a fresh round.
+        return t.Status is ThreadExecutionStatus.Idle or ThreadExecutionStatus.Cancelled
                && t.PendingUserMessages.Count > 0;
     }
 
@@ -285,6 +289,28 @@ internal static class ThreadSubmissionServer
         var dispatch = ThreadSubmission.PlanNextRound(thread);
         if (dispatch is null)
         {
+            // RESUME: an interrupted Executing round (InitializeThreadLifecycle
+            // re-entered StartingExecution) has no NEW pending input but still
+            // owns a response cell. Re-dispatch into that SAME cell rather than
+            // rolling back — the user's question already streamed a partial
+            // answer; we resume generating it.
+            if (thread.Status == ThreadExecutionStatus.StartingExecution
+                && !string.IsNullOrEmpty(thread.ActiveMessageId))
+            {
+                logger?.LogInformation(
+                    "[DispatchAfterClaim] resuming interrupted round {ResponseId} for {Path}",
+                    thread.ActiveMessageId, hub.Address.Path);
+                var resumeDispatch = new RoundDispatch(
+                    ImmutableList<string>.Empty,
+                    thread.ActiveMessageId!,
+                    thread.PendingAgentName,
+                    thread.PendingModelName,
+                    thread.PendingContextPath,
+                    thread.PendingAttachments);
+                DispatchRound(hub, threadNode, resumeDispatch, logger, onFailure, isResume: true);
+                return;
+            }
+
             logger?.LogDebug(
                 "[DispatchAfterClaim] nothing to dispatch (post-claim race?) for {Path} — rolling status back to Idle",
                 hub.Address.Path);
@@ -318,7 +344,8 @@ internal static class ThreadSubmissionServer
         MeshNode threadNode,
         RoundDispatch dispatch,
         ILogger<AgentChatClient>? logger,
-        Action? onFailure = null)
+        Action? onFailure = null,
+        bool isResume = false)
     {
         var threadPath = hub.Address.Path;
         var responseMsgId = dispatch.ResponseMessageId;
@@ -390,8 +417,136 @@ internal static class ThreadSubmissionServer
             ? pendingForRound[^1].Msg.Text
             : (thread.PendingUserMessage ?? "");
 
+        // Step 2 + 3: commit the round to the thread state (one atomic
+        // UpdateMeshNode) and start agent streaming. Shared by the fresh-dispatch
+        // path (after the response cell is created) and the resume path (cell
+        // already exists). On a fresh round dispatch.UserMessageIds drains the
+        // pending queue into Messages; on resume it is empty (the round's user
+        // cells were ingested before the interruption) so the Add/AddRange/Remove
+        // steps are all no-ops and only the StartingExecution → Executing flip +
+        // ActiveMessageId re-stamp take effect.
+        void CommitRoundAndExecute()
+        {
+            // The IsExecuting check is the idempotency guard — every other watcher
+            // emission in this round skips, so this body runs exactly once per round.
+            //
+            // Subscribe is mandatory: cache.Update returns a cold
+            // IObservable<MeshNode>; the side effect only runs on
+            // Subscribe. The downstream UpdateResponseCell +
+            // ExecuteMessageAsync chain off the Subscribe(onNext)
+            // so they only fire after the round commit is persisted.
+            // DispatchRound runs in parentHub context (hub = thread
+            // hub). Write through THIS hub's own node stream so
+            // sender = thread hub, AccessContext flows from the
+            // caller's identity.
+            hub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
+            {
+                var t = node.Content as MeshThread ?? new MeshThread();
+                // We expect Status==StartingExecution (post-claim from InstallServerWatcher
+                // or InitializeThreadLifecycle's resume re-entry).
+                // Anything else is an out-of-band state change — drop the commit.
+                if (t.Status != ThreadExecutionStatus.StartingExecution) return node;
+
+                // User ids in dispatch order, then the response id last.
+                // Contains check covers the resubmit case where u1 was already in
+                // Messages from a prior round — ApplyResubmit removed u1 from
+                // IngestedMessageIds (so the watcher re-dispatches it) but kept it
+                // in Messages, so a blind AddRange would duplicate it. Symmetric
+                // Contains check on responseMsgId catches resume (the cell is
+                // already in Messages) and DispatchRound retries.
+                var msgs = t.Messages;
+                foreach (var uid in dispatch.UserMessageIds)
+                    if (!msgs.Contains(uid)) msgs = msgs.Add(uid);
+                if (!msgs.Contains(responseMsgId)) msgs = msgs.Add(responseMsgId);
+
+                var ingested = t.IngestedMessageIds.AddRange(
+                    dispatch.UserMessageIds.Where(uid => !t.IngestedMessageIds.Contains(uid)));
+
+                // Drop consumed PendingUserMessages entries — their satellites now exist
+                // and their ids are now in Messages.
+                var pending = t.PendingUserMessages;
+                foreach (var (uid, _) in pendingForRound)
+                    pending = pending.Remove(uid);
+
+                return node with
+                {
+                    Content = t with
+                    {
+                        Messages = msgs,
+                        IngestedMessageIds = ingested,
+                        Status = ThreadExecutionStatus.Executing,
+                        // ActiveMessageId is the canonical handle —
+                        // full response path derives as {threadPath}/{ActiveMessageId}.
+                        ActiveMessageId = responseMsgId,
+                        ExecutionStartedAt = DateTime.UtcNow,
+                        TokensUsed = 0,
+                        ExecutionStatus = null,
+                        PendingUserMessage = null,
+                        PendingUserMessages = pending,
+                        PendingContextPath = dispatch.ContextPath,
+                        PendingAttachments = dispatch.Attachments?.ToImmutableList()
+                    }
+                };
+            }).Subscribe(
+                _ =>
+                {
+                    var allocCache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+                    ThreadExecution.UpdateResponseCell(
+                        allocCache, responsePath, threadPath, responseMsgId, mainEntity,
+                        msg => msg with { Text = "Allocating agent...", Status = ThreadMessageStatus.Streaming },
+                        logger);
+
+                    // Step 3: direct method call on _Exec hosted hub.
+                    // No SubmitMessageRequest post — the agent loop runs as
+                    // composed observables; only the LLM streaming is async.
+                    var executionHub = hub.GetHostedHub(
+                        new Address($"{hub.Address}/_Exec"),
+                        config => config,
+                        HostedHubCreation.Always);
+
+                    ThreadExecution.ExecuteMessageAsync(executionHub!,
+                        new ThreadExecution.RoundParams(
+                            ThreadPath: threadPath,
+                            ResponseMessageId: responseMsgId,
+                            UserMessageId: dispatch.UserMessageIds.LastOrDefault(),
+                            UserMessageText: roundUserText,
+                            AgentName: dispatch.AgentName,
+                            ModelName: dispatch.ModelName,
+                            ContextPath: dispatch.ContextPath,
+                            Attachments: dispatch.Attachments),
+                        userCtx);
+                },
+                ex =>
+                {
+                    logger?.LogWarning(ex,
+                        "[ThreadSubmission] Round commit UpdateMeshNode failed for {ResponseMsgId} on {ThreadPath}",
+                        responseMsgId, threadPath);
+                    onFailure?.Invoke();
+                });
+        }
+
         void AfterUserCellsReady()
         {
+            if (isResume)
+            {
+                // Resume into the EXISTING response cell — no CreateNodeRequest.
+                // Reset its streaming state (clear the partial text + tool calls
+                // left by the interrupted round) and commit directly.
+                var resumeCache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+                ThreadExecution.UpdateResponseCell(
+                    resumeCache, responsePath, threadPath, responseMsgId, mainEntity,
+                    msg => msg with
+                    {
+                        Text = "",
+                        ToolCalls = ImmutableList<ToolCallEntry>.Empty,
+                        Status = ThreadMessageStatus.Streaming,
+                        CompletedAt = null
+                    },
+                    logger);
+                CommitRoundAndExecute();
+                return;
+            }
+
             // Step 1: create the assistant output cell (CreateNodeRequest → RegisterCallback).
             // Status=Streaming until the streaming loop transitions it to Completed/Cancelled/Error.
             var responseCell = new MeshNode(responseMsgId, threadPath)
@@ -444,109 +599,12 @@ internal static class ThreadSubmissionServer
                             return;
                         }
 
-                        // Step 2: commit the round to the thread state (one atomic UpdateMeshNode).
-                        // Both the user satellite cells (created above in the materialization step)
-                        // and the response satellite cell (just confirmed in the CreateNodeRequest
-                        // callback above) exist on the hub now. Only NOW do we add their ids into
-                        // Messages — the GUI iterates Messages to render LayoutAreaControls, so
-                        // every id it sees has a backing satellite.
-                        //
-                        // The IsExecuting check is the idempotency guard — every other watcher
-                        // emission in this round skips, so this body runs exactly once per round.
-                        //
-                        // Subscribe is mandatory: cache.Update returns a cold
-                        // IObservable<MeshNode>; the side effect only runs on
-                        // Subscribe. The downstream UpdateResponseCell +
-                        // SubmitMessageRequest chain off the Subscribe(onNext)
-                        // so they only fire after the round commit is persisted.
-                        // DispatchRound runs in parentHub context (hub = thread
-                        // hub). Write through THIS hub's own node stream so
-                        // sender = thread hub, AccessContext flows from the
-                        // caller's identity.
-                        hub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
-                        {
-                            var t = node.Content as MeshThread ?? new MeshThread();
-                            // We expect Status==StartingExecution (post-claim from InstallServerWatcher).
-                            // Anything else is an out-of-band state change — drop the commit.
-                            if (t.Status != ThreadExecutionStatus.StartingExecution) return node;
-
-                            // User ids in dispatch order, then the response id last.
-                            // Contains check covers the resubmit case where u1 was already in
-                            // Messages from a prior round — ApplyResubmit removed u1 from
-                            // IngestedMessageIds (so the watcher re-dispatches it) but kept it
-                            // in Messages, so a blind AddRange would duplicate it. Symmetric
-                            // Contains check on responseMsgId catches the edge case where
-                            // DispatchRound retries (rollback + watcher re-dispatch with the
-                            // SAME response cell already wired up — same dispatch instance).
-                            var msgs = t.Messages;
-                            foreach (var uid in dispatch.UserMessageIds)
-                                if (!msgs.Contains(uid)) msgs = msgs.Add(uid);
-                            if (!msgs.Contains(responseMsgId)) msgs = msgs.Add(responseMsgId);
-
-                            var ingested = t.IngestedMessageIds.AddRange(
-                                dispatch.UserMessageIds.Where(uid => !t.IngestedMessageIds.Contains(uid)));
-
-                            // Drop consumed PendingUserMessages entries — their satellites now exist
-                            // and their ids are now in Messages.
-                            var pending = t.PendingUserMessages;
-                            foreach (var (uid, _) in pendingForRound)
-                                pending = pending.Remove(uid);
-
-                            return node with
-                            {
-                                Content = t with
-                                {
-                                    Messages = msgs,
-                                    IngestedMessageIds = ingested,
-                                    Status = ThreadExecutionStatus.Executing,
-                                    // ActiveMessageId is the canonical handle —
-                                    // full response path derives as {threadPath}/{ActiveMessageId}.
-                                    ActiveMessageId = responseMsgId,
-                                    ExecutionStartedAt = DateTime.UtcNow,
-                                    TokensUsed = 0,
-                                    ExecutionStatus = null,
-                                    PendingUserMessage = null,
-                                    PendingUserMessages = pending,
-                                    PendingContextPath = dispatch.ContextPath,
-                                    PendingAttachments = dispatch.Attachments?.ToImmutableList()
-                                }
-                            };
-                        }).Subscribe(
-                            _ =>
-                            {
-                                var allocCache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-                                ThreadExecution.UpdateResponseCell(
-                                    allocCache, responsePath, threadPath, responseMsgId, mainEntity,
-                                    msg => msg with { Text = "Allocating agent...", Status = ThreadMessageStatus.Streaming },
-                                    logger);
-
-                                // Step 3: direct method call on _Exec hosted hub.
-                                // No SubmitMessageRequest post — the agent loop runs as
-                                // composed observables; only the LLM streaming is async.
-                                var executionHub = hub.GetHostedHub(
-                                    new Address($"{hub.Address}/_Exec"),
-                                    config => config,
-                                    HostedHubCreation.Always);
-
-                                ThreadExecution.ExecuteMessageAsync(executionHub!,
-                                    new ThreadExecution.RoundParams(
-                                        ThreadPath: threadPath,
-                                        ResponseMessageId: responseMsgId,
-                                        UserMessageId: dispatch.UserMessageIds.LastOrDefault(),
-                                        UserMessageText: roundUserText,
-                                        AgentName: dispatch.AgentName,
-                                        ModelName: dispatch.ModelName,
-                                        ContextPath: dispatch.ContextPath,
-                                        Attachments: dispatch.Attachments),
-                                    userCtx);
-                            },
-                            ex =>
-                            {
-                                logger?.LogWarning(ex,
-                                    "[ThreadSubmission] Round commit UpdateMeshNode failed for {ResponseMsgId} on {ThreadPath}",
-                                    responseMsgId, threadPath);
-                                onFailure?.Invoke();
-                            });
+                        // Both the user satellite cells (created above in the materialization
+                        // step) and the response satellite cell (just confirmed) exist on the
+                        // hub now. Only NOW do we add their ids into Messages — the GUI iterates
+                        // Messages to render LayoutAreaControls, so every id it sees has a
+                        // backing satellite.
+                        CommitRoundAndExecute();
                     },
                     ex =>
                     {
