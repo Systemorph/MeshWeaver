@@ -119,6 +119,12 @@ The `MonolithMeshTestBase` async helpers are being removed in favour of the obse
 | `await MeshQuery.QueryAsync(req).ToListAsync()` (non-generic) | same `ObserveQuery<MeshNode>(req).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items` |
 | `await QueryAsync<MeshNode>(q, skip, limit).ToListAsync()` | `ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(q) with { Skip = skip, Limit = limit }).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items` |
 
+**Autocomplete is the exception that needs `.Match`, not `.Emit`:**
+`await MeshQuery.AutocompleteAsync(base, prefix, limit).ToListAsync()` →
+`MeshQuery.Autocomplete(base, prefix, limit: limit).Should().Match(r => r.Count >= 1)` (or
+`.Match(r => r.Any(s => s.Name == "…"))`). `Autocomplete` wraps each provider with `.StartWith(empty)` so
+its **first emission is empty** — `.Emit()` would grab that. Items are `QueryResult` (`.Path` / `.Name`).
+
 `ObserveQuery<T>`'s **first emission is `ChangeType == Initial` carrying the full result set** — that's the
 snapshot the old `QueryAsync().ToListAsync()` returned. If a test races eventual-consistency lag (the
 Initial set is short and items trickle in as `Added`), accumulate instead: `.Scan(...)` the items and
