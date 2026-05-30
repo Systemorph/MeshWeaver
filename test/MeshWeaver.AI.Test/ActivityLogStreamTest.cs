@@ -51,13 +51,13 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
         => base.ConfigureClient(configuration).AddLayoutClient();
 
     [Fact]
-    public async Task Script_Log_Messages_Land_On_ActivityLog_Node()
+    public void Script_Log_Messages_Land_On_ActivityLog_Node()
     {
         // Seed a Code node with a script that logs two lines.
         var id = $"logrun-{Guid.NewGuid():N}";
         var path = $"{ScriptsPartition}/{id}";
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        await mesh.CreateNode(new MeshNode(id, ScriptsPartition)
+        mesh.CreateNode(new MeshNode(id, ScriptsPartition)
         {
             Name = "Log test",
             NodeType = "Code",
@@ -69,14 +69,14 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
                        """,
                 IsExecutable = true
             }
-        });
+        }).Should().Within(30.Seconds()).Emit();
 
         // Dispatch via ExecuteScriptRequest; capture the ActivityLog path from the
         // response. That path points at the activity node the Code hub just created.
-        var execResponse = await AwaitResponseAsync(
+        var exec = Mesh.Observe(
             new ExecuteScriptRequest(),
-            o => o.WithTarget(new Address(path)));
-        var exec = execResponse.Message;
+            o => o.WithTarget(new Address(path)))
+            .Should().Within(60.Seconds()).Emit().Message;
         exec.Success.Should().BeTrue(exec.Error ?? "exec failed");
         exec.ActivityLog.Should().NotBeNullOrEmpty(
             "ExecuteScript must return the ActivityLog path for subscribers");
@@ -84,14 +84,12 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
         // Subscribe to the activity log's MeshNodeReference and wait until both
         // messages are present. Give the kernel up to 30 s to compile + run.
         var workspace = GetClient().GetWorkspace();
-        var observed = await workspace
+        var observed = workspace
             .GetRemoteStream<MeshNode, MeshNodeReference>(
                 new Address(exec.ActivityLog!), new MeshNodeReference())
             .Select(change => change.Value?.Content as ActivityLog)
-            .Where(log => log is not null && log.Messages.Count >= 2)
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(30))
-            .FirstAsync();
+            .Should().Within(30.Seconds())
+            .Match(log => log is not null && log.Messages.Count >= 2)!;
 
         observed.Messages.Select(m => m.Message)
             .Should().Contain(m => m.Contains("step-one"))
@@ -106,12 +104,12 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
     /// instead of buffering everything until the script returns.
     /// </summary>
     [Fact]
-    public async Task Progress_Messages_Stream_Gradually_Not_Just_At_The_End()
+    public void Progress_Messages_Stream_Gradually_Not_Just_At_The_End()
     {
         var id = $"progress-{Guid.NewGuid():N}";
         var path = $"{ScriptsPartition}/{id}";
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        await mesh.CreateNode(new MeshNode(id, ScriptsPartition)
+        mesh.CreateNode(new MeshNode(id, ScriptsPartition)
         {
             Name = "Progress test",
             NodeType = "Code",
@@ -128,12 +126,12 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
                        """,
                 IsExecutable = true
             }
-        });
+        }).Should().Within(30.Seconds()).Emit();
 
-        var execResponse = await AwaitResponseAsync(
+        var exec = Mesh.Observe(
             new ExecuteScriptRequest(),
-            o => o.WithTarget(new Address(path)));
-        var exec = execResponse.Message;
+            o => o.WithTarget(new Address(path)))
+            .Should().Within(60.Seconds()).Emit().Message;
         exec.Success.Should().BeTrue(exec.Error ?? "exec failed");
         exec.ActivityLog.Should().NotBeNullOrEmpty();
 
@@ -152,12 +150,11 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
             .Select(log => log!.Messages.Count)
             .DistinctUntilChanged();
 
-        var snapshots = await counts
+        var snapshots = counts
             .Where(c => c <= 4)
             .TakeUntil(c => c >= 4)
-            .Timeout(TimeSpan.FromSeconds(30))
             .ToList()
-            .ToTask();
+            .Should().Within(30.Seconds()).Emit();
 
         // Gradual streaming â†’ at least 3 distinct snapshots before we hit 4.
         // (We allow batching of two adjacent log calls but not all-at-once.)
@@ -169,12 +166,12 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
     }
 
     [Fact]
-    public async Task Script_Failure_Flips_ActivityLog_Status_To_Failed()
+    public void Script_Failure_Flips_ActivityLog_Status_To_Failed()
     {
         var id = $"logfail-{Guid.NewGuid():N}";
         var path = $"{ScriptsPartition}/{id}";
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        await mesh.CreateNode(new MeshNode(id, ScriptsPartition)
+        mesh.CreateNode(new MeshNode(id, ScriptsPartition)
         {
             Name = "Failing script",
             NodeType = "Code",
@@ -186,25 +183,23 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
                        """,
                 IsExecutable = true
             }
-        });
+        }).Should().Within(30.Seconds()).Emit();
 
-        var execResponse = await AwaitResponseAsync(
+        var exec = Mesh.Observe(
             new ExecuteScriptRequest(),
-            o => o.WithTarget(new Address(path)));
-        var exec = execResponse.Message;
+            o => o.WithTarget(new Address(path)))
+            .Should().Within(60.Seconds()).Emit().Message;
         exec.ActivityLog.Should().NotBeNullOrEmpty();
 
         // Stream the log until Status flips out of Running. Before-throw must be
         // present even though the script raised â€” Log is best-effort and survives.
         var workspace = GetClient().GetWorkspace();
-        var observed = await workspace
+        var observed = workspace
             .GetRemoteStream<MeshNode, MeshNodeReference>(
                 new Address(exec.ActivityLog!), new MeshNodeReference())
             .Select(change => change.Value?.Content as ActivityLog)
-            .Where(log => log is not null && log.Status != ActivityStatus.Running)
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(30))
-            .FirstAsync();
+            .Should().Within(30.Seconds())
+            .Match(log => log is not null && log.Status != ActivityStatus.Running)!;
 
         observed.Status.Should().Be(ActivityStatus.Failed);
         observed.Messages.Select(m => m.Message)

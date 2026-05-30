@@ -52,12 +52,11 @@ public class HubSubscriptionSecurityTest(ITestOutputHelper output) : MonolithMes
     /// A user with no roles should have no read permission on the hub.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task UnauthorizedUser_HasNoReadPermission()
+    public void UnauthorizedUser_HasNoReadPermission()
     {
-        var permissions = await Mesh.GetPermissionAsync("SecuredHub", "NobodyUser", TestTimeout);
-
-        permissions.Should().Be(Permission.None,
-            "user with no role assignments should have zero permissions");
+        Mesh.GetEffectivePermissions("SecuredHub", "NobodyUser")
+            .Should().Be(Permission.None,
+                "user with no role assignments should have zero permissions");
     }
 
     /// <summary>

@@ -100,9 +100,8 @@ public class AgentMarkdownParsingTest(ITestOutputHelper output) : MonolithMeshTe
     /// that actually exist (either as static nodes or in persistence).
     /// </summary>
     [Fact]
-    public async Task AgentInstructions_InlineReferences_PointToExistingNodes()
+    public void AgentInstructions_InlineReferences_PointToExistingNodes()
     {
-        var ct = new CancellationTokenSource(15.Seconds()).Token;
         var provider = new BuiltInAgentProvider();
         var allStaticNodes = provider.GetStaticNodes().ToList();
 
@@ -141,7 +140,7 @@ public class AgentMarkdownParsingTest(ITestOutputHelper output) : MonolithMeshTe
                     if (!refPath.Contains(':'))
                     {
                         // Try reading via per-node stream
-                        var found = await ReadNodeAsync(refPath, ct);
+                        var found = ReadNode(refPath).Should().Emit();
                         if (found == null)
                             missingRefs.Add($"{node.Path}: @@{refPath} â€” node not found");
                     }

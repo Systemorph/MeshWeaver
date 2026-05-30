@@ -34,14 +34,12 @@ public class ContentUploadTest(ITestOutputHelper output) : MonolithMeshTestBase(
     }
 
     [Fact]
-    public async Task SaveContentRequest_UploadsSvgToContentCollection()
+    public void SaveContentRequest_UploadsSvgToContentCollection()
     {
-        var ct = new CancellationTokenSource(15.Seconds()).Token;
-
         // Create a context node with content collections
         var contextPath = "UploadTestOrg";
-        await NodeFactory.CreateNode(
-            new MeshNode(contextPath) { Name = "Upload Test", NodeType = "Markdown" });
+        NodeFactory.CreateNode(
+            new MeshNode(contextPath) { Name = "Upload Test", NodeType = "Markdown" }).Should().Emit();
 
         var svgContent = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\"><circle cx=\"50\" cy=\"50\" r=\"40\" fill=\"blue\"/></svg>";
 
@@ -49,12 +47,12 @@ public class ContentUploadTest(ITestOutputHelper output) : MonolithMeshTestBase(
         var client = GetClient();
         try
         {
-            var response = await client.Observe(new SaveContentRequest
+            var response = client.Observe(new SaveContentRequest
                 {
                     CollectionName = "content",
                     FilePath = "test-diagram.svg",
                     TextContent = svgContent
-                }, o => o.WithTarget(new Address(contextPath))).FirstAsync().ToTask();
+                }, o => o.WithTarget(new Address(contextPath))).Should().Within(15.Seconds()).Emit();
 
             // Note: may fail if node doesn't have content collections configured
             // That's expected in monolith test without file system collections

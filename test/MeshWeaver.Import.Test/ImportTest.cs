@@ -39,7 +39,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [Fact]
-    public async Task DistributedImportTest()
+    public void DistributedImportTest()
     {
         // arrange
         var client = GetClient();
@@ -55,10 +55,8 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
 
         // act
         Logger.LogInformation("DistributedImportTest {TestId}: Sending import request with {Timeout}s timeout", testId, importRequest.Timeout?.TotalSeconds);
-        var importResponse = await client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024))).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
-            ).Token);
+        var importResponse = client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024)))
+            .Should().Within(10.Seconds()).Emit();
         Logger.LogInformation("DistributedImportTest {TestId}: Import response received with status {Status}", testId, importResponse.Message.Log.Status);
 
         // assert
@@ -68,19 +66,17 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
         var workspace = GetWorkspace(
             Mesh.GetHostedHub(TransactionalDataAddress.Create(2024, "1"))
         );
-        var transactionalItems1 = await workspace
+        var transactionalItems1 = workspace
             .GetObservable<TransactionalData>()
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x.Count > 1);
+            .Should().Within(5.Seconds()).Match(x => x.Count > 1);
         Logger.LogInformation("DistributedImportTest {TestId}: Got {Count} transactional items", testId, transactionalItems1.Count);
 
         Logger.LogInformation("DistributedImportTest {TestId}: Getting computed workspace", testId);
-        var computedItems1 = await (GetWorkspace(
+        var computedItems1 = GetWorkspace(
                 Mesh.GetHostedHub(ComputedDataAddress.Create(2024, "1"))
-            ))
+            )
             .GetObservable<ComputedData>()
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x is { Count: > 0 });
+            .Should().Within(5.Seconds()).Match(x => x is { Count: > 0 });
         Logger.LogInformation("DistributedImportTest {TestId}: Got {Count} computed items", testId, computedItems1.Count);
 
         using (new AssertionScope())
@@ -112,22 +108,19 @@ Id,Year,LoB,BusinessUnit,Value
 ";
 
     [Fact]
-    public async Task TestVanilla()
+    public void TestVanilla()
     {
         var client = GetClient();
         var importRequest = new ImportRequest(VanillaCsv); // Add timeout for bulk test scenarios
-        var importResponse = await client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024))).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken
-                , new CancellationTokenSource(10.Seconds()).Token
-            ).Token);
+        var importResponse = client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024)))
+            .Should().Within(10.Seconds()).Emit();
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         var workspace = GetWorkspace(
             Mesh.GetHostedHub(ReferenceDataAddress.Create(), null!)
         );
-        var items = await workspace
+        var items = workspace
             .GetObservable<LineOfBusiness>()
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x.FirstOrDefault()?.DisplayName.StartsWith("LoB") ?? false);
+            .Should().Within(10.Seconds()).Match(x => x.FirstOrDefault()?.DisplayName.StartsWith("LoB") ?? false);
         var expectedLoBs = new[]
         {
             new LineOfBusiness("1", "LoB_one"),

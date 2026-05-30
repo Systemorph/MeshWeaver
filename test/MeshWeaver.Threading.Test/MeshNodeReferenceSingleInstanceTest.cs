@@ -37,11 +37,11 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
     }
 
     [Fact]
-    public async Task GetRemoteStream_CollectionReference_ReturnsMeshNode()
+    public void GetRemoteStream_CollectionReference_ReturnsMeshNode()
     {
         // Create a thread node
         var threadNode = ThreadNodeType.BuildThreadNode("User/Roland", "single instance test", "Roland");
-        var created = await NodeFactory.CreateNode(threadNode);
+        var created = NodeFactory.CreateNode(threadNode).Should().Emit();
         var threadPath = created.Path;
 
         // Get via CollectionReference for MeshNode collection
@@ -126,10 +126,10 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
     }
 
     [Fact]
-    public async Task UpdateMeshNode_MultipleUpdates_AccumulateMessages()
+    public void UpdateMeshNode_MultipleUpdates_AccumulateMessages()
     {
         var threadNode = ThreadNodeType.BuildThreadNode("User/Roland", "multi update test", "Roland");
-        var created = await NodeFactory.CreateNode(threadNode);
+        var created = NodeFactory.CreateNode(threadNode).Should().Emit();
         var threadPath = created.Path;
 
         var client = GetClient();
@@ -203,14 +203,12 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
     /// Verifies that from a thread's Threads area we can create a new sub-thread (delegation).
     /// </summary>
     [Fact]
-    public async Task ThreadsCatalog_CreateNewThread_Succeeds()
+    public void ThreadsCatalog_CreateNewThread_Succeeds()
     {
-        var ct = new CancellationTokenSource(15.Seconds()).Token;
-
         // 1. Create a context node and a thread under it
         var contextPath = "TestContext";
-        await NodeFactory.CreateNode(
-            new MeshNode(contextPath) { Name = "Test Context", NodeType = "Markdown" });
+        NodeFactory.CreateNode(
+            new MeshNode(contextPath) { Name = "Test Context", NodeType = "Markdown" }).Should().Emit();
 
         var client = GetClient();
         var response = client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Parent thread for catalog test")), o => o.WithTarget(new Address(contextPath))).Should().Emit();
@@ -242,8 +240,9 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
 
         // 4. Verify the sub-thread is queryable — lives directly under the parent thread namespace
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        var threads = await meshQuery.QueryAsync<MeshNode>(
-            $"namespace:{threadPath} nodeType:{ThreadNodeType.NodeType}").ToListAsync(ct);
+        var threads = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            $"namespace:{threadPath} nodeType:{ThreadNodeType.NodeType}"))
+            .Should().Match(c => c.Items.Count >= 1).Items;
 
         threads.Should().ContainSingle("should find the created sub-thread");
         threads[0].Path.Should().Be(subThreadPath);

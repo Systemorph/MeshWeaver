@@ -744,13 +744,12 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// This verifies that the Todo ContentType is properly configured.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task ExistingTodo_HasExpectedContentStructure()
+    public void ExistingTodo_HasExpectedContentStructure()
     {
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-
         var query = "path:ACME/ProductLaunch/Todo/DefinePersona";
-        var results = await meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query), null, TestContext.Current.CancellationToken)
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var results = MeshQuery
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         results.Should().HaveCount(1, "DefinePersona should exist");
         var node = results[0];

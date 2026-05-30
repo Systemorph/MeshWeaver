@@ -48,15 +48,14 @@ public class DelegationFailureTest(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     [Fact]
-    public async Task SubmitMessage_WithCancellation_DoesNotHangForever()
+    public void SubmitMessage_WithCancellation_DoesNotHangForever()
     {
-        var ct = new CancellationTokenSource(15.Seconds()).Token;
         var client = GetClient();
         var workspace = client.GetWorkspace();
 
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, "Cancellation test", "Roland");
-        var createResp = await client.Observe(new CreateNodeRequest(threadNode),
-            o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
+        var createResp = client.Observe(new CreateNodeRequest(threadNode),
+            o => o.WithTarget(Mesh.Address)).Should().Within(15.Seconds()).Emit();
         createResp.Message.Success.Should().BeTrue(createResp.Message.Error ?? "");
         var threadPath = createResp.Message.Node!.Path!;
 
@@ -65,18 +64,23 @@ public class DelegationFailureTest(ITestOutputHelper output) : MonolithMeshTestB
             "Do something that delegates",
             contextPath: ContextPath);
 
-        await Task.Delay(1000, ct);
+        // Wait until the thread actually starts executing before cancelling â€”
+        // replaces a fixed Task.Delay(1000); cancelling before the CTS is armed
+        // would be a no-op.
+        workspace.GetMeshNodeStream(threadPath)
+            .Select(n => n.Content as MeshThread)
+            .Should().Within(15.Seconds()).Match(t => t is { IsExecuting: true });
 
-        var cancelled = await workspace.GetMeshNodeStream(threadPath)
+        var cancelled = workspace.GetMeshNodeStream(threadPath)
             .Update(curr => curr?.Content is MeshThread t
                 ? curr with { Content = t with { RequestedStatus = ThreadExecutionStatus.Cancelled } }
                 : curr!)
-            .FirstAsync().ToTask(ct);
+            .Should().Emit();
         (cancelled.Content as MeshThread)?.RequestedStatus.Should().Be(ThreadExecutionStatus.Cancelled);
 
-        var thread = await ThreadFlow.ReadThread(client, threadPath,
+        var thread = ThreadFlow.ReadThread(client, threadPath,
             t => t.Messages.Count >= 2,
-            timeout: 10.Seconds()).FirstAsync().ToTask(ct);
+            timeout: 10.Seconds()).Should().Within(10.Seconds()).Emit();
 
         thread.Should().NotBeNull();
         Output.WriteLine($"Thread has {thread.Messages.Count} messages");

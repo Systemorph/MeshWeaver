@@ -37,7 +37,7 @@ public class EffectivePermissionTest(ITestOutputHelper output) : MonolithMeshTes
     }
 
     [Fact(Timeout = 60000)]
-    public async Task CreateSpace_HasPermission_ReturnsAdmin()
+    public void CreateSpace_HasPermission_ReturnsAdmin()
     {
         var spaceNode = MeshNode.FromPath("Systemorph") with
         {
@@ -45,12 +45,10 @@ public class EffectivePermissionTest(ITestOutputHelper output) : MonolithMeshTes
             NodeType = SpaceNodeType.NodeType,
             Content = new Space { Name = "Systemorph" }
         };
-        await NodeFactory.CreateNode(spaceNode);
+        NodeFactory.CreateNode(spaceNode).Should().Emit();
 
-        var permissions = await Mesh.GetPermissionAsync(
-            "Systemorph", TestUsers.Admin.ObjectId,
-            until: p => p != Permission.None,
-            ct: TestTimeout);
+        var permissions = Mesh.GetEffectivePermissions("Systemorph", TestUsers.Admin.ObjectId)
+            .Should().Within(90.Seconds()).Match(p => p != Permission.None);
 
         permissions.Should().NotBe(Permission.None,
             "Creator should have permissions from persisted AccessAssignment on the Space");

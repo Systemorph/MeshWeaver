@@ -30,10 +30,8 @@ public class ApiTokenAccessTest(ITestOutputHelper output) : MonolithMeshTestBase
             .AddSampleUsers();
 
     [Fact]
-    public async Task CreateApiToken_ViaCreateNodeRequest_Succeeds()
+    public void CreateApiToken_ViaCreateNodeRequest_Succeeds()
     {
-        var ct = new CancellationTokenSource(10.Seconds()).Token;
-
         // Generate token hash
         var rawToken = $"mw_{Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant()}";
         var hash = ValidateTokenRequest.HashToken(rawToken);
@@ -58,7 +56,7 @@ public class ApiTokenAccessTest(ITestOutputHelper output) : MonolithMeshTestBase
         };
 
         // Act — standard CreateNodeRequest
-        var created = await NodeFactory.CreateNode(tokenNode);
+        var created = NodeFactory.CreateNode(tokenNode).Should().Emit();
 
         // Assert
         created.Should().NotBeNull();
@@ -69,10 +67,8 @@ public class ApiTokenAccessTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact]
-    public async Task CreateApiToken_StoredUnderUserPath()
+    public void CreateApiToken_StoredUnderUserPath()
     {
-        var ct = new CancellationTokenSource(10.Seconds()).Token;
-
         var hash = ValidateTokenRequest.HashToken("mw_test_token_12345");
         var hashPrefix = hash[..12];
         var userId = "rbuergi";
@@ -93,10 +89,10 @@ public class ApiTokenAccessTest(ITestOutputHelper output) : MonolithMeshTestBase
             }
         };
 
-        await NodeFactory.CreateNode(tokenNode);
+        NodeFactory.CreateNode(tokenNode).Should().Emit();
 
         // Verify via per-node stream (CQRS-correct — no catalog/index lag)
-        var result = await ReadNodeAsync($"User/{userId}/_Api/{hashPrefix}", ct);
+        var result = ReadNode($"User/{userId}/_Api/{hashPrefix}").Should().Emit();
         result.Should().NotBeNull("token should be retrievable by path");
         result!.MainNode.Should().Be($"User/{userId}");
     }

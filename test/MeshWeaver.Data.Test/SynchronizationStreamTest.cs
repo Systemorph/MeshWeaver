@@ -61,17 +61,21 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
     /// Tests parallel updates to the synchronization stream with concurrent modifications
     /// </summary>
     [Fact]
-    public async Task ParallelUpdate()
+    public void ParallelUpdate()
     {
-        List<MyData> tracker = new();
         var workspace = GetHost().GetWorkspace();
         var collectionName = workspace.DataContext.GetTypeSource(typeof(MyData))!.CollectionName;
         var stream = workspace.GetStream(new CollectionsReference(collectionName));
         ((object?)stream).Should().NotBeNull();
-        stream!.Reduce(new EntityReference(collectionName, Instance))!
+
+        // Accumulate every MyData emission reactively so we can block on the
+        // actual condition (10 items) instead of a fixed Task.Delay.
+        var tracked = stream!.Reduce(new EntityReference(collectionName, Instance))!
             .Select(i => i.Value!)
             .OfType<MyData>()
-            .Subscribe(tracker.Add);
+            .Scan(ImmutableList<MyData>.Empty, (acc, d) => acc.Add(d))
+            .Replay(1);
+        tracked.Connect();
 
         var count = 0;
         Enumerable.Range(0, 10).AsParallel().Select(_ =>
@@ -91,11 +95,8 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
             }, _ => { });
             return true;
         }).ToArray();
-        await Task.Delay(100, CancellationTokenSource.CreateLinkedTokenSource(
-            TestContext.Current.CancellationToken,
-            new CancellationTokenSource(5.Seconds()).Token
-        ).Token);
-        await DisposeAsync();
+
+        var tracker = tracked.Should().Within(5.Seconds()).Match(acc => acc.Count == 10);
 
         tracker.Should().HaveCount(10);
         tracker.Select(t => t.Text).Should().Equal(Enumerable.Range(0, 10).Select(exp => (exp + 1).ToString()));
@@ -105,7 +106,7 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
     /// Tests that Select projects ISynchronizationStream&lt;DerivedData&gt; to ISynchronizationStream&lt;IBaseData&gt;
     /// </summary>
     [Fact]
-    public async Task SelectProjectsDerivedToBaseType()
+    public void SelectProjectsDerivedToBaseType()
     {
         // Arrange: configure workspace with DerivedData
         var workspace = GetHost().GetWorkspace();
@@ -121,16 +122,15 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
             .Replay(1);
         derivedStream.Connect();
 
-        // Act: use Select to project DerivedData to IBaseData
+        // Act: use Select to project DerivedData to IBaseData. Accumulate the
+        // projected values reactively so we block on the condition (1 item),
+        // not a fixed Task.Delay.
         var baseDataStream = stream.Reduce(new EntityReference(collectionName, "1"))!
-            .Select(d => (IBaseData)d!);
-
-        List<IBaseData> receivedBaseData = new();
-        baseDataStream.Subscribe(change =>
-        {
-            if (change.Value is not null)
-                receivedBaseData.Add(change.Value);
-        });
+            .Select(d => (IBaseData)d!)
+            .Where(change => change.Value is not null)
+            .Scan(ImmutableList<IBaseData>.Empty, (acc, change) => acc.Add(change.Value!))
+            .Replay(1);
+        baseDataStream.Connect();
 
         // Add a DerivedData instance
         var instance = new DerivedData("1", "Extra information");
@@ -143,9 +143,8 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
                 stream.StreamId));
         });
 
-        await Task.Delay(100, TestContext.Current.CancellationToken);
-
         // Assert: the Select stream should have received the projected IBaseData
+        var receivedBaseData = baseDataStream.Should().Match(acc => acc.Count == 1);
         receivedBaseData.Should().HaveCount(1);
         receivedBaseData[0].Should().BeOfType<DerivedData>();
         receivedBaseData[0].Id.Should().Be("1");
@@ -155,7 +154,7 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
     /// Tests that Select can transform stream values using a lambda expression
     /// </summary>
     [Fact]
-    public async Task SelectTransformsValues()
+    public void SelectTransformsValues()
     {
         // Arrange
         var workspace = GetHost().GetWorkspace();
@@ -163,16 +162,17 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
         var stream = workspace.GetStream(new CollectionsReference(collectionName));
         ((object?)stream).Should().NotBeNull();
 
-        // Act: use Select to extract just the Text property as a string
+        // Act: use Select to extract just the Text property as a string, and
+        // accumulate distinct text values reactively so we block on the actual
+        // condition (both values present) instead of a fixed Task.Delay.
         var textStream = stream!.Reduce(new EntityReference(collectionName, "test"))!
-            .Select(obj => obj is MyData data ? data.Text : null!);
-
-        List<string> receivedTexts = new();
-        textStream.Subscribe(change =>
-        {
-            if (change.Value is not null)
-                receivedTexts.Add(change.Value);
-        });
+            .Select(obj => obj is MyData data ? data.Text : null!)
+            .Where(change => change.Value is not null)
+            .Select(change => change.Value!)
+            .DistinctUntilChanged()
+            .Scan(ImmutableList<string>.Empty, (acc, text) => acc.Add(text))
+            .Replay(1);
+        textStream.Connect();
 
         // Add MyData instances with different Text values
         stream.Update(state =>
@@ -185,8 +185,6 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
                 stream.StreamId));
         });
 
-        await Task.Delay(100, TestContext.Current.CancellationToken);
-
         stream.Update(state =>
         {
             var instance = new MyData("test", "Updated Text");
@@ -197,9 +195,8 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
                 stream.StreamId));
         });
 
-        await Task.Delay(100, TestContext.Current.CancellationToken);
-
-        // Assert: should have received both text values
+        // Assert: should have received both text values, in order
+        var receivedTexts = textStream.Should().Match(acc => acc.Count == 2);
         receivedTexts.Should().HaveCount(2);
         receivedTexts.Should().ContainInOrder("Hello World", "Updated Text");
     }

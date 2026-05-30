@@ -82,9 +82,8 @@ public class SyncedQueryCrossSiloTest(ITestOutputHelper output)
         IObservable<IEnumerable<MeshNode>> Synced);
 
     [Fact(Timeout = 30000)]
-    public async Task TwoSilos_BothSee_Initial_Added_Node()
+    public void TwoSilos_BothSee_Initial_Added_Node()
     {
-        var ct = TestContext.Current.CancellationToken;
         var siloA = CreateSilo("a-init");
         var siloB = CreateSilo("b-init");
 
@@ -93,19 +92,18 @@ public class SyncedQueryCrossSiloTest(ITestOutputHelper output)
         using var keepA = collA.Subscribe();
         using var keepB = collB.Subscribe();
 
-        await NodeFactory.CreateNode(MakeNode("seed", "Seed")).FirstAsync().ToTask(ct);
+        NodeFactory.CreateNode(MakeNode("seed", "Seed")).Should().Emit();
 
         var seedPath = $"{Namespace}/seed";
-        await collA.Where(arr => arr.Any(n => n.Path == seedPath))
-            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
-        await collB.Where(arr => arr.Any(n => n.Path == seedPath))
-            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
+        collA.Where(arr => arr.Any(n => n.Path == seedPath))
+            .Should().Within(15.Seconds()).Emit();
+        collB.Where(arr => arr.Any(n => n.Path == seedPath))
+            .Should().Within(15.Seconds()).Emit();
     }
 
     [Fact(Timeout = 30000)]
-    public async Task UpdateNode_PropagatesToBothSilos_ViaUpstreamObserveQuery()
+    public void UpdateNode_PropagatesToBothSilos_ViaUpstreamObserveQuery()
     {
-        var ct = TestContext.Current.CancellationToken;
         var siloA = CreateSilo("a-update");
         var siloB = CreateSilo("b-update");
 
@@ -115,33 +113,32 @@ public class SyncedQueryCrossSiloTest(ITestOutputHelper output)
         using var keepB = collB.Subscribe();
 
         var seed = MakeNode("payload", "Original");
-        await NodeFactory.CreateNode(seed).FirstAsync().ToTask(ct);
+        NodeFactory.CreateNode(seed).Should().Emit();
         var path = seed.Path;
 
         // Both silos observe initial state.
-        await collA.Where(arr => arr.Any(n => n.Path == path && n.Name == "Original"))
-            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
-        await collB.Where(arr => arr.Any(n => n.Path == path && n.Name == "Original"))
-            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
+        collA.Where(arr => arr.Any(n => n.Path == path && n.Name == "Original"))
+            .Should().Within(15.Seconds()).Emit();
+        collB.Where(arr => arr.Any(n => n.Path == path && n.Name == "Original"))
+            .Should().Within(15.Seconds()).Emit();
 
         // Update via the standard write path — IMeshService.UpdateNode persists
         // through the same backing store both silos read from, and the upstream
         // ObserveQuery emits Updated to every silo's synced pipeline.
         var current = seed with { Name = "Updated" };
-        await NodeFactory.UpdateNode(current).FirstAsync().ToTask(ct);
+        NodeFactory.UpdateNode(current).Should().Emit();
 
         // Both silos must observe the new value via their own ObserveQuery
         // subscription — this is the cross-silo invariant.
-        await collA.Where(arr => arr.Any(n => n.Path == path && n.Name == "Updated"))
-            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
-        await collB.Where(arr => arr.Any(n => n.Path == path && n.Name == "Updated"))
-            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
+        collA.Where(arr => arr.Any(n => n.Path == path && n.Name == "Updated"))
+            .Should().Within(15.Seconds()).Emit();
+        collB.Where(arr => arr.Any(n => n.Path == path && n.Name == "Updated"))
+            .Should().Within(15.Seconds()).Emit();
     }
 
     [Fact(Timeout = 30000)]
-    public async Task DeleteOnAnyHub_PropagatesToBothSilos_ViaChangeFeedBroadcast()
+    public void DeleteOnAnyHub_PropagatesToBothSilos_ViaChangeFeedBroadcast()
     {
-        var ct = TestContext.Current.CancellationToken;
         var siloA = CreateSilo("a-delete");
         var siloB = CreateSilo("b-delete");
 
@@ -150,35 +147,34 @@ public class SyncedQueryCrossSiloTest(ITestOutputHelper output)
         using var keepA = collA.Subscribe();
         using var keepB = collB.Subscribe();
 
-        await NodeFactory.CreateNode(MakeNode("keep", "Keep")).FirstAsync().ToTask(ct);
-        await NodeFactory.CreateNode(MakeNode("drop", "Drop")).FirstAsync().ToTask(ct);
+        NodeFactory.CreateNode(MakeNode("keep", "Keep")).Should().Emit();
+        NodeFactory.CreateNode(MakeNode("drop", "Drop")).Should().Emit();
 
         var keepPath = $"{Namespace}/keep";
         var dropPath = $"{Namespace}/drop";
 
-        await collA.Where(arr => arr.Any(n => n.Path == keepPath) && arr.Any(n => n.Path == dropPath))
-            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
-        await collB.Where(arr => arr.Any(n => n.Path == keepPath) && arr.Any(n => n.Path == dropPath))
-            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
+        collA.Where(arr => arr.Any(n => n.Path == keepPath) && arr.Any(n => n.Path == dropPath))
+            .Should().Within(15.Seconds()).Emit();
+        collB.Where(arr => arr.Any(n => n.Path == keepPath) && arr.Any(n => n.Path == dropPath))
+            .Should().Within(15.Seconds()).Emit();
 
         // Delete is the only event broadcast through IMeshChangeFeed in the
         // SyncedQueryMeshNodes pipeline — updates ride the sync stream, deletes ride
         // the broadcast feed (see SyncedQueryMeshNodes.BuildReadStreamCore).
-        await NodeFactory.DeleteNode(dropPath).FirstAsync().ToTask(ct);
+        NodeFactory.DeleteNode(dropPath).Should().Emit();
 
-        await collA.Where(arr => arr.All(n => n.Path != dropPath))
-            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
-        await collB.Where(arr => arr.All(n => n.Path != dropPath))
-            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
+        collA.Where(arr => arr.All(n => n.Path != dropPath))
+            .Should().Within(15.Seconds()).Emit();
+        collB.Where(arr => arr.All(n => n.Path != dropPath))
+            .Should().Within(15.Seconds()).Emit();
     }
 
     [Fact(Timeout = 30000)]
-    public async Task ConcurrentSubscriptions_ToSamePath_ShareSinglePerNodeStream()
+    public void ConcurrentSubscriptions_ToSamePath_ShareSinglePerNodeStream()
     {
-        var ct = TestContext.Current.CancellationToken;
         var siloA = CreateSilo("a-share");
 
-        await NodeFactory.CreateNode(MakeNode("shared", "Shared")).FirstAsync().ToTask(ct);
+        NodeFactory.CreateNode(MakeNode("shared", "Shared")).Should().Emit();
         var path = $"{Namespace}/shared";
 
         // Two callers on the SAME workspace asking for the same per-path remote stream
@@ -192,16 +188,15 @@ public class SyncedQueryCrossSiloTest(ITestOutputHelper output)
         ReferenceEquals(s1, s2).Should().BeTrue(
             "workspace caches per-(address,reference) remote streams — both callers must get the same instance");
 
-        await s1.Where(c => c?.Value?.Path == path).Take(1)
-            .Timeout(15.Seconds()).ToTask(ct);
-        await s2.Where(c => c?.Value?.Path == path).Take(1)
-            .Timeout(15.Seconds()).ToTask(ct);
+        s1.Where(c => c?.Value?.Path == path)
+            .Should().Within(15.Seconds()).Emit();
+        s2.Where(c => c?.Value?.Path == path)
+            .Should().Within(15.Seconds()).Emit();
     }
 
     [Fact(Timeout = 30000)]
-    public async Task MultiQueryUnion_AcrossSilos_PropagatesAdditiveFromBothQueries()
+    public void MultiQueryUnion_AcrossSilos_PropagatesAdditiveFromBothQueries()
     {
-        var ct = TestContext.Current.CancellationToken;
         var siloA = CreateSilo("a-multi");
 
         var nsX = $"{Namespace}/X";
@@ -222,23 +217,23 @@ public class SyncedQueryCrossSiloTest(ITestOutputHelper output)
         var collUnion = unioned.Replay(1).RefCount();
         using var keep = collUnion.Subscribe();
 
-        await NodeFactory.CreateNode(new MeshNode("xa", nsX)
+        NodeFactory.CreateNode(new MeshNode("xa", nsX)
             { Name = "Xa", NodeType = "Markdown", State = MeshNodeState.Active })
-            .FirstAsync().ToTask(ct);
-        await NodeFactory.CreateNode(new MeshNode("yb", nsY)
+            .Should().Emit();
+        NodeFactory.CreateNode(new MeshNode("yb", nsY)
             { Name = "Yb", NodeType = "Markdown", State = MeshNodeState.Active })
-            .FirstAsync().ToTask(ct);
+            .Should().Emit();
 
         var pathX = $"{nsX}/xa";
         var pathY = $"{nsY}/yb";
 
-        await collUnion
+        collUnion
             .Where(arr => arr.Any(n => n.Path == pathX) && arr.Any(n => n.Path == pathY))
-            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
+            .Should().Within(15.Seconds()).Emit();
     }
 
     [Fact(Timeout = 30000)]
-    public async Task GetQuery_GetOrCreate_IsIdempotentOnSameWorkspace()
+    public void GetQuery_GetOrCreate_IsIdempotentOnSameWorkspace()
     {
         var siloA = CreateSilo("a-cache");
         _ = siloA.Synced;
@@ -254,7 +249,6 @@ public class SyncedQueryCrossSiloTest(ITestOutputHelper output)
         var innerB = cache.GetQuery("$xsilo-a-cache");
         ReferenceEquals(innerA, innerB).Should().BeTrue(
             "registry hands back the same inner observable for the same name");
-        await Task.CompletedTask;
     }
 
     /// <summary>
@@ -277,9 +271,8 @@ public class SyncedQueryCrossSiloTest(ITestOutputHelper output)
     /// cache populate without per-silo recompilation.</para>
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task DynamicCompile_OnSiloA_ResultIsObservableOnSiloB_ViaSync()
+    public void DynamicCompile_OnSiloA_ResultIsObservableOnSiloB_ViaSync()
     {
-        var ct = TestContext.Current.CancellationToken;
 
         var typeId = $"XSiloCompile{Guid.NewGuid():N}";
         var typeNs = "type";
@@ -318,7 +311,7 @@ public class SyncedQueryCrossSiloTest(ITestOutputHelper output)
         using var keepB = collB.Subscribe();
 
         // Seed the NodeType + Code source via the standard create path.
-        await NodeFactory.CreateNode(MeshNode.FromPath(typePath) with
+        NodeFactory.CreateNode(MeshNode.FromPath(typePath) with
         {
             Name = typeId,
             NodeType = MeshNode.NodeTypePath,
@@ -328,9 +321,9 @@ public class SyncedQueryCrossSiloTest(ITestOutputHelper output)
                 Description = "in-process two-silo compile emulation",
                 Configuration = $"config => config.WithContentType<{typeId}>()"
             }
-        }).FirstAsync().ToTask(ct);
+        }).Should().Emit();
 
-        await NodeFactory.CreateNode(new MeshNode("code", $"{typePath}/Source")
+        NodeFactory.CreateNode(new MeshNode("code", $"{typePath}/Source")
         {
             Name = "code",
             NodeType = "Code",
@@ -345,13 +338,13 @@ public class SyncedQueryCrossSiloTest(ITestOutputHelper output)
                     """,
                 Language = "csharp"
             }
-        }).FirstAsync().ToTask(ct);
+        }).Should().Emit();
 
         // Both silos see the type node in their synced collection.
-        await collA.Where(arr => arr.Any(n => n.Path == typePath))
-            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
-        await collB.Where(arr => arr.Any(n => n.Path == typePath))
-            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
+        collA.Where(arr => arr.Any(n => n.Path == typePath))
+            .Should().Within(15.Seconds()).Emit();
+        collB.Where(arr => arr.Any(n => n.Path == typePath))
+            .Should().Within(15.Seconds()).Emit();
 
         // Drive the explicit-compile path: post CreateReleaseRequest to the
         // NodeType hub. HandleCreateRelease runs the same compile machinery and
@@ -359,9 +352,9 @@ public class SyncedQueryCrossSiloTest(ITestOutputHelper output)
         // (Replaces the previous CompilationStatus=Pending flip — that relied
         // on InstallCompileWatcher, which was removed in commit 86b34707d when
         // compile became explicit-only.)
-        await Mesh.Observe(new CreateReleaseRequest(),
+        Mesh.Observe(new CreateReleaseRequest(),
                 o => o.WithTarget(new Address(typePath)))
-            .FirstAsync().ToTask(ct);
+            .Should().Emit();
 
         // Silo B observes the terminal state. 🚨 Read live Content via
         // GetMeshNodeStream — synced query rows carry STALE Content by design
@@ -373,13 +366,11 @@ public class SyncedQueryCrossSiloTest(ITestOutputHelper output)
         // pre-compile snapshot, so the predicate never matches and the Rx
         // Timeout fires. GetMeshNodeStream routes through the per-node hub's
         // live MeshNodeReference reducer, which DOES refresh Content.
-        var settled = await hubB.GetWorkspace().GetMeshNodeStream(typePath)
+        var settled = hubB.GetWorkspace().GetMeshNodeStream(typePath)
             .Where(n => n.Content is NodeTypeDefinition d
                 && (d.CompilationStatus == CompilationStatus.Ok
                     || d.CompilationStatus == CompilationStatus.Error))
-            .Take(1)
-            .Timeout(60.Seconds())
-            .ToTask(ct);
+            .Should().Within(60.Seconds()).Emit();
 
         var settledDef = settled.Content as NodeTypeDefinition;
         settledDef!.CompilationStatus.Should().Be(CompilationStatus.Ok,

@@ -50,29 +50,27 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
     // â”€â”€ Latest Threads â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 30000)]
-    public async Task LatestThreads_FindsThreadsAcrossNamespaces_ByCreator()
+    public void LatestThreads_FindsThreadsAcrossNamespaces_ByCreator()
     {
         // Arrange: create context nodes in different namespaces
-        await NodeFactory.CreateNode(
-            new MeshNode("PartnerRe") { Name = "Partner Re", NodeType = "Markdown" });
-        await NodeFactory.CreateNode(
-            new MeshNode("ACME") { Name = "ACME Corp", NodeType = "Markdown" });
+        NodeFactory.CreateNode(
+            new MeshNode("PartnerRe") { Name = "Partner Re", NodeType = "Markdown" }).Should().Emit();
+        NodeFactory.CreateNode(
+            new MeshNode("ACME") { Name = "ACME Corp", NodeType = "Markdown" }).Should().Emit();
 
         // Create threads in two different namespaces via CreateNodeRequest
         var client = GetClient();
 
-        var resp1 = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("PartnerRe", "Discussion about Partner Re portfolio", AdminUserId)), o => o.WithTarget(new Address("PartnerRe"))).FirstAsync().ToTask(TestTimeout);
+        var resp1 = client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("PartnerRe", "Discussion about Partner Re portfolio", AdminUserId)), o => o.WithTarget(new Address("PartnerRe"))).Should().Within(TimeSpan.FromSeconds(25)).Emit();
         resp1.Message.Success.Should().BeTrue(resp1.Message.Error ?? "");
         Output.WriteLine($"Thread 1 at: {resp1.Message.Node?.Path}");
 
-        var resp2 = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("ACME", "ACME project review", AdminUserId)), o => o.WithTarget(new Address("ACME"))).FirstAsync().ToTask(TestTimeout);
+        var resp2 = client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("ACME", "ACME project review", AdminUserId)), o => o.WithTarget(new Address("ACME"))).Should().Within(TimeSpan.FromSeconds(25)).Emit();
         resp2.Message.Success.Should().BeTrue(resp2.Message.Error ?? "");
         Output.WriteLine($"Thread 2 at: {resp2.Message.Node?.Path}");
 
         // Act: query threads by creator across all partitions (the fixed dashboard query)
-        var myThreads = await MeshQuery
-            .QueryAsync<MeshNode>($"nodeType:Thread content.CreatedBy:{AdminUserId} scope:descendants sort:LastModified-desc")
-            .ToListAsync();
+        var myThreads = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:Thread content.CreatedBy:{AdminUserId} scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
         Output.WriteLine($"content.CreatedBy:{AdminUserId} scope:descendants => {myThreads.Count} threads");
 
         // Assert: both threads should be found across namespaces
@@ -88,29 +86,25 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
     }
 
     [Fact(Timeout = 30000)]
-    public async Task LatestThreads_OldQuery_MissesThreadsInOtherNamespaces()
+    public void LatestThreads_OldQuery_MissesThreadsInOtherNamespaces()
     {
         // This test documents the bug: the old namespace-scoped query
         // only finds threads under the user's own namespace.
 
         // Arrange: create context node in a different namespace
-        await NodeFactory.CreateNode(
-            new MeshNode("External") { Name = "External Org", NodeType = "Markdown" });
+        NodeFactory.CreateNode(
+            new MeshNode("External") { Name = "External Org", NodeType = "Markdown" }).Should().Emit();
 
         var client = GetClient();
-        var resp = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("External", "Thread in external namespace", AdminUserId)), o => o.WithTarget(new Address("External"))).FirstAsync().ToTask(TestTimeout);
+        var resp = client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("External", "Thread in external namespace", AdminUserId)), o => o.WithTarget(new Address("External"))).Should().Within(TimeSpan.FromSeconds(25)).Emit();
         resp.Message.Success.Should().BeTrue(resp.Message.Error ?? "");
 
         // Act: old query (namespace:User/userId scope:descendants) â€” misses external threads
         var userNs = $"User/{AdminUserId}";
-        var oldQueryResults = await MeshQuery
-            .QueryAsync<MeshNode>($"nodeType:Thread namespace:{userNs} scope:descendants sort:LastModified-desc")
-            .ToListAsync();
+        var oldQueryResults = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:Thread namespace:{userNs} scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Act: new query (content.CreatedBy filter, scope:descendants for global search)
-        var newQueryResults = await MeshQuery
-            .QueryAsync<MeshNode>($"nodeType:Thread content.CreatedBy:{AdminUserId} scope:descendants sort:LastModified-desc")
-            .ToListAsync();
+        var newQueryResults = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:Thread content.CreatedBy:{AdminUserId} scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         Output.WriteLine($"Old query (namespace:{userNs}): {oldQueryResults.Count} threads");
         Output.WriteLine($"New query (content.CreatedBy): {newQueryResults.Count} threads");
@@ -121,12 +115,12 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
     }
 
     [Fact(Timeout = 30000)]
-    public async Task LatestThreads_DoesNotShowOtherUsersThreads()
+    public void LatestThreads_DoesNotShowOtherUsersThreads()
     {
         // Arrange: create a thread with a different creator
         var otherUserId = "other-user";
         var threadPath = $"Shared/_Thread/other-thread-{Guid.NewGuid():N}";
-        await NodeFactory.CreateNode(MeshNode.FromPath(threadPath) with
+        NodeFactory.CreateNode(MeshNode.FromPath(threadPath) with
         {
             Name = "Other user's thread",
             NodeType = "Thread",
@@ -135,12 +129,10 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
             {
                 CreatedBy = otherUserId
             }
-        });
+        }).Should().Emit();
 
         // Act: query for current user's threads
-        var myThreads = await MeshQuery
-            .QueryAsync<MeshNode>($"nodeType:Thread content.CreatedBy:{AdminUserId} scope:descendants sort:LastModified-desc")
-            .ToListAsync();
+        var myThreads = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:Thread content.CreatedBy:{AdminUserId} scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Assert: other user's thread should NOT appear
         myThreads.Should().NotContain(n => n.Path == threadPath,
@@ -150,41 +142,39 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
     // â”€â”€ Activity Feed â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 30000)]
-    public async Task ActivityFeed_FindsNodesWithActivityAcrossNamespaces()
+    public void ActivityFeed_FindsNodesWithActivityAcrossNamespaces()
     {
         // Arrange: create nodes with activity in different namespaces
-        await NodeFactory.CreateNode(MeshNode.FromPath("OrgA/doc1") with
+        NodeFactory.CreateNode(MeshNode.FromPath("OrgA/doc1") with
         {
             Name = "Org A Document", NodeType = "Markdown"
-        });
-        await NodeFactory.CreateNode(MeshNode.FromPath("OrgA/doc1/_activity/log1") with
+        }).Should().Emit();
+        NodeFactory.CreateNode(MeshNode.FromPath("OrgA/doc1/_activity/log1") with
         {
             Name = "Edit activity", NodeType = "Activity",
             MainNode = "OrgA/doc1",
             Content = new ActivityLog("DataUpdate") { HubPath = "OrgA/doc1" }
-        });
+        }).Should().Emit();
 
-        await NodeFactory.CreateNode(MeshNode.FromPath("OrgB/doc2") with
+        NodeFactory.CreateNode(MeshNode.FromPath("OrgB/doc2") with
         {
             Name = "Org B Document", NodeType = "Markdown"
-        });
-        await NodeFactory.CreateNode(MeshNode.FromPath("OrgB/doc2/_activity/log2") with
+        }).Should().Emit();
+        NodeFactory.CreateNode(MeshNode.FromPath("OrgB/doc2/_activity/log2") with
         {
             Name = "Edit activity", NodeType = "Activity",
             MainNode = "OrgB/doc2",
             Content = new ActivityLog("Approval") { HubPath = "OrgB/doc2" }
-        });
+        }).Should().Emit();
 
         // Node without activity (should NOT appear)
-        await NodeFactory.CreateNode(MeshNode.FromPath("OrgC/doc3") with
+        NodeFactory.CreateNode(MeshNode.FromPath("OrgC/doc3") with
         {
             Name = "No Activity Doc", NodeType = "Markdown"
-        });
+        }).Should().Emit();
 
         // Act: the dashboard activity feed query
-        var results = await MeshQuery
-            .QueryAsync<MeshNode>("source:activity scope:subtree is:main sort:LastModified-desc")
-            .ToListAsync();
+        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("source:activity scope:subtree is:main sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Assert: only nodes WITH activity should appear
         results.Should().HaveCountGreaterThanOrEqualTo(2,
@@ -200,35 +190,33 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
     }
 
     [Fact(Timeout = 30000)]
-    public async Task ActivityFeed_ScopedToNamespace_FindsOnlyThatNamespace()
+    public void ActivityFeed_ScopedToNamespace_FindsOnlyThatNamespace()
     {
         // Arrange: activity in two namespaces
-        await NodeFactory.CreateNode(MeshNode.FromPath("nsA/item1") with
+        NodeFactory.CreateNode(MeshNode.FromPath("nsA/item1") with
         {
             Name = "Item A", NodeType = "Markdown"
-        });
-        await NodeFactory.CreateNode(MeshNode.FromPath("nsA/item1/_activity/log1") with
+        }).Should().Emit();
+        NodeFactory.CreateNode(MeshNode.FromPath("nsA/item1/_activity/log1") with
         {
             Name = "Log", NodeType = "Activity",
             MainNode = "nsA/item1",
             Content = new ActivityLog("DataUpdate") { HubPath = "nsA/item1" }
-        });
+        }).Should().Emit();
 
-        await NodeFactory.CreateNode(MeshNode.FromPath("nsB/item2") with
+        NodeFactory.CreateNode(MeshNode.FromPath("nsB/item2") with
         {
             Name = "Item B", NodeType = "Markdown"
-        });
-        await NodeFactory.CreateNode(MeshNode.FromPath("nsB/item2/_activity/log2") with
+        }).Should().Emit();
+        NodeFactory.CreateNode(MeshNode.FromPath("nsB/item2/_activity/log2") with
         {
             Name = "Log", NodeType = "Activity",
             MainNode = "nsB/item2",
             Content = new ActivityLog("Approval") { HubPath = "nsB/item2" }
-        });
+        }).Should().Emit();
 
         // Act: scoped to nsA only
-        var results = await MeshQuery
-            .QueryAsync<MeshNode>("source:activity namespace:nsA scope:descendants sort:LastModified-desc")
-            .ToListAsync();
+        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("source:activity namespace:nsA scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Assert: only nsA items
         results.Should().ContainSingle();
@@ -238,21 +226,21 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
     // â”€â”€ Thread CreatedBy storage â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 30000)]
-    public async Task CreateNodeRequest_Thread_StoresCreatedByInContent()
+    public void CreateNodeRequest_Thread_StoresCreatedByInContent()
     {
         // Arrange
-        await NodeFactory.CreateNode(
-            new MeshNode("TestCtx") { Name = "Test Context", NodeType = "Markdown" });
+        NodeFactory.CreateNode(
+            new MeshNode("TestCtx") { Name = "Test Context", NodeType = "Markdown" }).Should().Emit();
 
         // Act: create thread via the production CreateNodeRequest path
         var client = GetClient();
-        var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("TestCtx", "Verify created-by storage", AdminUserId)), o => o.WithTarget(new Address("TestCtx"))).FirstAsync().ToTask(TestTimeout);
+        var response = client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("TestCtx", "Verify created-by storage", AdminUserId)), o => o.WithTarget(new Address("TestCtx"))).Should().Within(TimeSpan.FromSeconds(25)).Emit();
 
         response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         var threadPath = response.Message.Node!.Path!;
 
         // Assert: retrieve and verify CreatedBy is set
-        var node = await ReadNodeAsync(threadPath, TestTimeout);
+        var node = ReadNode(threadPath).Should().Within(TimeSpan.FromSeconds(25)).Emit();
         node.Should().NotBeNull();
         var content = node!.Content.Should().BeOfType<MeshThread>().Subject;
         content.CreatedBy.Should().NotBeNullOrEmpty("CreatedBy should be set by HandleCreateThread");

@@ -24,13 +24,11 @@ namespace MeshWeaver.Auth.Test;
 ///
 /// <para>Real mesh, in-memory partitioned persistence, no mocks — this is the
 /// shape prod hits when a new user signs up. The chain stays 100% reactive
-/// inside the service; the test's single <c>.FirstAsync().ToTask()</c> bridge
-/// is the sanctioned test-edge boundary.</para>
+/// inside the service; the test asserts directly on the observables via
+/// <c>.Should().Emit()</c> / <c>.Match(...)</c> — no async bridge.</para>
 /// </summary>
 public class UserOnboardingServiceTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private CancellationToken Ct => TestContext.Current.CancellationToken;
-
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
             .ConfigureServices(services =>
@@ -65,7 +63,7 @@ public class UserOnboardingServiceTests(ITestOutputHelper output) : MonolithMesh
     /// rows (a/b) such that subsequent reads find them at the expected paths.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task CreateUser_WritesBothRows()
+    public void CreateUser_WritesBothRows()
     {
         var username = $"obtest-{Guid.NewGuid():N}".ToLowerInvariant()[..16];
 
@@ -98,13 +96,13 @@ public class UserOnboardingServiceTests(ITestOutputHelper output) : MonolithMesh
         emitted.NodeType.Should().Be("User");
 
         // (a) Per-user partition root — path = "{username}", ns = ""
-        var partitionRoot = await ReadNodeAsync(username, Ct);
+        var partitionRoot = ReadNode(username).Should().Emit();
         partitionRoot.Should().NotBeNull("partition-root entry must be readable at the bare path");
         partitionRoot!.NodeType.Should().Be("User");
         partitionRoot.Namespace.Should().BeNullOrEmpty();
 
         // (b) User-catalog mirror — path = "User/{username}", ns = "User"
-        var catalogMirror = await ReadNodeAsync($"User/{username}", Ct);
+        var catalogMirror = ReadNode($"User/{username}").Should().Emit();
         catalogMirror.Should().NotBeNull(
             "user-catalog mirror at user.mesh_nodes (ns=User) is what the login " +
             "query `nodeType:User content.email:X` scans — without it, every signed-in user " +

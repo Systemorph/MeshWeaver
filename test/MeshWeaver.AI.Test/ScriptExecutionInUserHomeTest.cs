@@ -64,30 +64,29 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
         """;
 
     [Fact]
-    public async Task Run_FireworksScript_StreamsProgressAndReturnsHtml()
+    public void Run_FireworksScript_StreamsProgressAndReturnsHtml()
     {
-        var (codePath, mesh) = await SeedExecutableCodeAsync(FireworksScript);
+        var (codePath, mesh) = SeedExecutableCode(FireworksScript);
 
         // Fire ExecuteScriptRequest. Response carries the activity path.
-        var execResponse = await AwaitResponseAsync(
+        var execMessage = Mesh.Observe(
             new ExecuteScriptRequest(),
-            o => o.WithTarget(new Address(codePath)));
-        execResponse.Message.Success.Should().BeTrue(execResponse.Message.Error ?? "exec failed");
-        execResponse.Message.ActivityLog.Should().NotBeNullOrEmpty();
-        execResponse.Message.ActivityLog!.Should().StartWith($"{UserHome}/_Activity/",
+            o => o.WithTarget(new Address(codePath)))
+            .Should().Within(60.Seconds()).Emit().Message;
+        execMessage.Success.Should().BeTrue(execMessage.Error ?? "exec failed");
+        execMessage.ActivityLog.Should().NotBeNullOrEmpty();
+        execMessage.ActivityLog!.Should().StartWith($"{UserHome}/_Activity/",
             "the activity lives in the user's home (partition root), not nested under the code node");
 
         // Subscribe to the activity log via the canonical GetRemoteStream pattern.
         // Wait for all four progress lines + the fireworks return value (5 messages total).
         var workspace = GetClient().GetWorkspace();
-        var final = await workspace
+        var final = workspace
             .GetRemoteStream<MeshNode, MeshNodeReference>(
-                new Address(execResponse.Message.ActivityLog!), new MeshNodeReference())
+                new Address(execMessage.ActivityLog!), new MeshNodeReference())
             .Select(change => change.Value?.Content as ActivityLog)
-            .Where(log => log is not null && log!.Status != ActivityStatus.Running)
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(30))
-            .FirstAsync();
+            .Should().Within(30.Seconds())
+            .Match(log => log is not null && log!.Status != ActivityStatus.Running)!;
 
         final.Status.Should().Be(ActivityStatus.Succeeded);
         final.Messages.Select(m => m.Message).Should()
@@ -104,28 +103,28 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
     /// the end. That proves the executor isn't blocking the activity hub.
     /// </summary>
     [Fact]
-    public async Task Run_StreamsProgressTimely_NotBuffered()
+    public void Run_StreamsProgressTimely_NotBuffered()
     {
-        var (codePath, _) = await SeedExecutableCodeAsync(FireworksScript);
+        var (codePath, _) = SeedExecutableCode(FireworksScript);
 
-        var execResponse = await AwaitResponseAsync(
+        var execMessage = Mesh.Observe(
             new ExecuteScriptRequest(),
-            o => o.WithTarget(new Address(codePath)));
-        execResponse.Message.Success.Should().BeTrue();
-        var activityPath = execResponse.Message.ActivityLog!;
+            o => o.WithTarget(new Address(codePath)))
+            .Should().Within(60.Seconds()).Emit().Message;
+        execMessage.Success.Should().BeTrue();
+        var activityPath = execMessage.ActivityLog!;
 
         var sw = Stopwatch.StartNew();
         var workspace = GetClient().GetWorkspace();
-        var observations = await workspace
+        var observations = workspace
             .GetRemoteStream<MeshNode, MeshNodeReference>(
                 new Address(activityPath), new MeshNodeReference())
             .Select(change => (Count: (change.Value?.Content as ActivityLog)?.Messages.Count ?? 0,
                                ElapsedMs: sw.ElapsedMilliseconds))
             .DistinctUntilChanged(o => o.Count)
             .TakeUntil(o => o.Count >= 5) // 4 progress + 1 fireworks return-value
-            .Timeout(TimeSpan.FromSeconds(30))
             .ToList()
-            .ToTask();
+            .Should().Within(30.Seconds()).Emit();
 
         observations.Should().HaveCountGreaterThanOrEqualTo(3,
             "subscribers should observe at least 3 distinct snapshots before the terminal one â€” "
@@ -145,7 +144,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
     /// observes the patch.
     /// </summary>
     [Fact]
-    public async Task Cancel_Via_RequestedStatus_Patch_Cancels_Running_Script()
+    public void Cancel_Via_RequestedStatus_Patch_Cancels_Running_Script()
     {
         // Script uses Task.Delay(ms, Ct) so the Ct global (rebound per
         // submission) actually interrupts the wait mid-flight when the user
@@ -158,18 +157,19 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
         // 800 ms raced that chain, especially behind a cold Roslyn compile.
         // When the cancel mechanism is genuinely broken the test still fails â€”
         // via the Status assertion below, just after the delay elapses.
-        var (codePath, _) = await SeedExecutableCodeAsync("""
+        var (codePath, _) = SeedExecutableCode("""
             Log.LogInformation("starting");
             await System.Threading.Tasks.Task.Delay(15000, Ct);
             Log.LogInformation("if you see this, cancel did not work");
             "should not get here"
         """);
 
-        var execResponse = await AwaitResponseAsync(
+        var execMessage = Mesh.Observe(
             new ExecuteScriptRequest(),
-            o => o.WithTarget(new Address(codePath)));
-        execResponse.Message.Success.Should().BeTrue();
-        var activityPath = new Address(execResponse.Message.ActivityLog!);
+            o => o.WithTarget(new Address(codePath)))
+            .Should().Within(60.Seconds()).Emit().Message;
+        execMessage.Success.Should().BeTrue();
+        var activityPath = new Address(execMessage.ActivityLog!);
 
         var workspace = GetClient().GetWorkspace();
         var activityStream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
@@ -179,12 +179,10 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
         // 30 s timeout: the first message is only published once the script
         // body runs, which is gated behind a cold Roslyn compile that can take
         // several seconds on a fresh kernel.
-        await activityStream
+        activityStream
             .Select(c => c.Value?.Content as ActivityLog)
-            .Where(l => l is not null && l.Messages.Count >= 1)
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(30))
-            .FirstAsync();
+            .Should().Within(30.Seconds())
+            .Match(l => l is not null && l.Messages.Count >= 1);
 
         // The canonical cancel: patch RequestedStatus on the activity content.
         // No CancelScriptRequest, no message types — the IMessageHub extension
@@ -198,12 +196,10 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
         // the script runs its full 15 s delay then completes â€” the terminal
         // emission still arrives and the Status assertion below reports the
         // real failure ("found Succeeded") instead of an opaque timeout.
-        var terminal = await activityStream
+        var terminal = activityStream
             .Select(c => c.Value?.Content as ActivityLog)
-            .Where(l => l is not null && l.Status != ActivityStatus.Running)
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(30))
-            .FirstAsync();
+            .Should().Within(30.Seconds())
+            .Match(l => l is not null && l.Status != ActivityStatus.Running)!;
 
         terminal!.Status.Should().Be(ActivityStatus.Cancelled,
             "post-ActivityControlPlane: cancellation surfaces as Cancelled (KernelExecutor " +
@@ -220,13 +216,14 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
     /// without any per-Code-node config.
     /// </summary>
     [Fact]
-    public async Task DefaultActivityParent_IsPartitionRoot()
+    public void DefaultActivityParent_IsPartitionRoot()
     {
-        var (codePath, _) = await SeedExecutableCodeAsync("\"hi\"");
-        var resp = await AwaitResponseAsync(
+        var (codePath, _) = SeedExecutableCode("\"hi\"");
+        var respMessage = Mesh.Observe(
             new ExecuteScriptRequest(),
-            o => o.WithTarget(new Address(codePath)));
-        resp.Message.ActivityLog.Should().StartWith($"{UserHome}/_Activity/",
+            o => o.WithTarget(new Address(codePath)))
+            .Should().Within(60.Seconds()).Emit().Message;
+        respMessage.ActivityLog.Should().StartWith($"{UserHome}/_Activity/",
             "with no ActivityParentPath, activities default to the partition root");
     }
 
@@ -238,7 +235,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
     /// runs in their own activity feed.
     /// </summary>
     [Fact]
-    public async Task ViewerToken_RoutesActivitiesToCallersHome()
+    public void ViewerToken_RoutesActivitiesToCallersHome()
     {
         // Code node in `rbuergi` (the test partition), but configured to
         // route activities to the {viewer}'s home. The DevLogin admin user
@@ -247,7 +244,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
         var id = $"viewerdemo-{Guid.NewGuid():N}";
         var path = $"{UserHome}/{id}";
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        await mesh.CreateNode(new MeshNode(id, UserHome)
+        mesh.CreateNode(new MeshNode(id, UserHome)
         {
             Name = "Viewer-routed",
             NodeType = "Code",
@@ -257,14 +254,15 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
                 IsExecutable = true,
                 ActivityParentPath = "{viewer}",
             }
-        });
+        }).Should().Within(30.Seconds()).Emit();
 
-        var resp = await AwaitResponseAsync(
+        var respMessage = Mesh.Observe(
             new ExecuteScriptRequest(),
-            o => o.WithTarget(new Address(path)));
-        resp.Message.Success.Should().BeTrue(resp.Message.Error ?? "exec failed");
+            o => o.WithTarget(new Address(path)))
+            .Should().Within(60.Seconds()).Emit().Message;
+        respMessage.Success.Should().BeTrue(respMessage.Error ?? "exec failed");
         var expectedViewerHome = MeshWeaver.Hosting.Monolith.TestBase.TestUsers.Admin.ObjectId;
-        resp.Message.ActivityLog.Should().StartWith($"{expectedViewerHome}/_Activity/",
+        respMessage.ActivityLog.Should().StartWith($"{expectedViewerHome}/_Activity/",
             "{viewer} should resolve to the calling user's AccessContext.ObjectId, " +
             "regardless of which partition the Code node lives in");
     }
@@ -275,25 +273,24 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
     /// + the last activity's Progress area without scanning historical activities.
     /// </summary>
     [Fact]
-    public async Task CodeNode_StampsLastExecutionFields()
+    public void CodeNode_StampsLastExecutionFields()
     {
-        var (codePath, _) = await SeedExecutableCodeAsync("\"x\"");
-        var resp = await AwaitResponseAsync(
+        var (codePath, _) = SeedExecutableCode("\"x\"");
+        var respMessage = Mesh.Observe(
             new ExecuteScriptRequest(),
-            o => o.WithTarget(new Address(codePath)));
-        var activityPath = resp.Message.ActivityLog!;
+            o => o.WithTarget(new Address(codePath)))
+            .Should().Within(60.Seconds()).Emit().Message;
+        var activityPath = respMessage.ActivityLog!;
 
         // Wait for the LastActivityPath stamp to land â€” the workspace.UpdateMeshNode
         // call inside HandleExecuteScript happens after CreateNode acks but
         // doesn't block ExecuteScriptResponse, so subscribe and wait for it.
         var workspace = GetClient().GetWorkspace();
-        var stamped = await workspace
+        var stamped = workspace
             .GetRemoteStream<MeshNode, MeshNodeReference>(new Address(codePath), new MeshNodeReference())
             .Select(c => c.Value?.Content as CodeConfiguration)
-            .Where(c => c is not null && c.LastActivityPath == activityPath)
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(15))
-            .FirstAsync();
+            .Should().Within(15.Seconds())
+            .Match(c => c is not null && c.LastActivityPath == activityPath)!;
 
         stamped!.LastExecutedAt.Should().NotBeNull("the run should set LastExecutedAt");
         stamped.LastExecutedBy.Should().NotBeNullOrEmpty("the user identity should be captured");
@@ -313,29 +310,28 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
     /// NuGet cache; subsequent runs hit the cache and complete in seconds.</para>
     /// </summary>
     [Fact(Timeout = 180_000)]
-    public async Task NuGetDirective_DownloadsPackage_AndScriptUsesIt()
+    public void NuGetDirective_DownloadsPackage_AndScriptUsesIt()
     {
-        var (codePath, _) = await SeedExecutableCodeAsync("""
+        var (codePath, _) = SeedExecutableCode("""
             #r "nuget:MathNet.Numerics, 5.0.0"
             using MathNet.Numerics;
             Log.LogInformation("MathNet pi/4 via series: {Result}", SpecialFunctions.Erf(1.0));
             $"erf(1) = {SpecialFunctions.Erf(1.0):F6}"
         """);
 
-        var execResponse = await AwaitResponseAsync(
+        var execMessage = Mesh.Observe(
             new ExecuteScriptRequest(),
-            o => o.WithTarget(new Address(codePath)));
-        execResponse.Message.Success.Should().BeTrue(execResponse.Message.Error ?? "exec failed");
+            o => o.WithTarget(new Address(codePath)))
+            .Should().Within(60.Seconds()).Emit().Message;
+        execMessage.Success.Should().BeTrue(execMessage.Error ?? "exec failed");
 
         var workspace = GetClient().GetWorkspace();
-        var final = await workspace
+        var final = workspace
             .GetRemoteStream<MeshNode, MeshNodeReference>(
-                new Address(execResponse.Message.ActivityLog!), new MeshNodeReference())
+                new Address(execMessage.ActivityLog!), new MeshNodeReference())
             .Select(c => c.Value?.Content as ActivityLog)
-            .Where(l => l is not null && l!.Status != ActivityStatus.Running)
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(120))
-            .FirstAsync();
+            .Should().Within(120.Seconds())
+            .Match(l => l is not null && l!.Status != ActivityStatus.Running)!;
 
         final!.Status.Should().Be(ActivityStatus.Succeeded,
             "MathNet.Numerics should resolve from nuget.org and the script should compile + run");
@@ -361,7 +357,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
     /// output; we don't want a missing artefact to mask real <c>#r</c> regressions.</para>
     /// </summary>
     [Fact]
-    public async Task NuGetDirective_ResolvesAgainstLocalMeshFeed_AndScriptUsesIt()
+    public void NuGetDirective_ResolvesAgainstLocalMeshFeed_AndScriptUsesIt()
     {
         // dist/packages/ is gitignored â€” populated locally by `dotnet pack` and on
         // CI by the publish workflow's pack step. When absent, surface the reason
@@ -378,7 +374,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
             return;
         }
 
-        var (codePath, _) = await SeedExecutableCodeAsync("""
+        var (codePath, _) = SeedExecutableCode("""
             #r "nuget:MeshWeaver.Application.Styles, 3.0.0-preview1"
             using MeshWeaver.Application.Styles;
             // FluentIcons is a static surface from MeshWeaver.Application.Styles â€”
@@ -388,20 +384,19 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
             $"icon-id:{icon.Id}"
         """);
 
-        var execResponse = await AwaitResponseAsync(
+        var execMessage = Mesh.Observe(
             new ExecuteScriptRequest(),
-            o => o.WithTarget(new Address(codePath)));
-        execResponse.Message.Success.Should().BeTrue(execResponse.Message.Error ?? "exec failed");
+            o => o.WithTarget(new Address(codePath)))
+            .Should().Within(60.Seconds()).Emit().Message;
+        execMessage.Success.Should().BeTrue(execMessage.Error ?? "exec failed");
 
         var workspace = GetClient().GetWorkspace();
-        var final = await workspace
+        var final = workspace
             .GetRemoteStream<MeshNode, MeshNodeReference>(
-                new Address(execResponse.Message.ActivityLog!), new MeshNodeReference())
+                new Address(execMessage.ActivityLog!), new MeshNodeReference())
             .Select(c => c.Value?.Content as ActivityLog)
-            .Where(l => l is not null && l!.Status != ActivityStatus.Running)
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(45))
-            .FirstAsync();
+            .Should().Within(45.Seconds())
+            .Match(l => l is not null && l!.Status != ActivityStatus.Running)!;
 
         // Diagnostic: dump activity messages so a Failed status shows WHY
         // (NuGet resolver errors, compile errors, runtime errors) instead of
@@ -424,25 +419,27 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
     /// historical runs accumulate as siblings under <c>{codePath}/_Activity/*</c>.
     /// </summary>
     [Fact]
-    public async Task ReRun_CreatesNewActivity_LeavingPreviousIntact()
+    public void ReRun_CreatesNewActivity_LeavingPreviousIntact()
     {
-        var (codePath, _) = await SeedExecutableCodeAsync(
+        var (codePath, _) = SeedExecutableCode(
             "Log.LogInformation(\"first run\");\n1");
 
-        var first = await AwaitResponseAsync(
+        var firstMessage = Mesh.Observe(
             new ExecuteScriptRequest(),
-            o => o.WithTarget(new Address(codePath)));
-        first.Message.Success.Should().BeTrue();
-        var firstActivity = first.Message.ActivityLog!;
+            o => o.WithTarget(new Address(codePath)))
+            .Should().Within(60.Seconds()).Emit().Message;
+        firstMessage.Success.Should().BeTrue();
+        var firstActivity = firstMessage.ActivityLog!;
 
         // Wait for first run to complete so the test isn't racing the second submit.
-        await WaitForCompletionAsync(firstActivity);
+        WaitForCompletion(firstActivity);
 
-        var second = await AwaitResponseAsync(
+        var secondMessage = Mesh.Observe(
             new ExecuteScriptRequest(),
-            o => o.WithTarget(new Address(codePath)));
-        second.Message.Success.Should().BeTrue();
-        var secondActivity = second.Message.ActivityLog!;
+            o => o.WithTarget(new Address(codePath)))
+            .Should().Within(60.Seconds()).Emit().Message;
+        secondMessage.Success.Should().BeTrue();
+        var secondActivity = secondMessage.ActivityLog!;
 
         secondActivity.Should().NotBe(firstActivity,
             "re-running must produce a fresh activity, not overwrite the previous one");
@@ -450,12 +447,12 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
         secondActivity.Should().StartWith($"{UserHome}/_Activity/");
     }
 
-    private async Task<(string Path, IMeshService Mesh)> SeedExecutableCodeAsync(string code)
+    private (string Path, IMeshService Mesh) SeedExecutableCode(string code)
     {
         var id = $"demo-{Guid.NewGuid():N}";
         var path = $"{UserHome}/{id}";
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        await mesh.CreateNode(new MeshNode(id, UserHome)
+        mesh.CreateNode(new MeshNode(id, UserHome)
         {
             Name = "Script demo",
             NodeType = "Code",
@@ -464,19 +461,15 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
                 Code = code,
                 IsExecutable = true,
             }
-        });
+        }).Should().Within(30.Seconds()).Emit();
         return (path, mesh);
     }
 
-    private Task<ActivityLog> WaitForCompletionAsync(string activityPath) =>
+    private ActivityLog WaitForCompletion(string activityPath) =>
         GetClient().GetWorkspace()
             .GetRemoteStream<MeshNode, MeshNodeReference>(
                 new Address(activityPath), new MeshNodeReference())
             .Select(change => change.Value?.Content as ActivityLog)
-            .Where(log => log is not null && log!.Status != ActivityStatus.Running)
-            .Select(log => log!)
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(30))
-            .FirstAsync()
-            .ToTask();
+            .Should().Within(30.Seconds())
+            .Match(log => log is not null && log!.Status != ActivityStatus.Running)!;
 }

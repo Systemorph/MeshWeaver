@@ -12,6 +12,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -49,72 +50,71 @@ public class DelegationExecutionTest(ITestOutputHelper output) : MonolithMeshTes
         return base.ConfigureClient(configuration).AddLayoutClient();
     }
 
-    private async Task<string> CreateThreadAsync(IMessageHub client, string text, CancellationToken ct)
+    private string CreateThread(IMessageHub client, string text)
     {
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, text, "TestUser");
-        var response = await client.Observe(new CreateNodeRequest(threadNode),
-            o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
+        var response = client.Observe(new CreateNodeRequest(threadNode),
+            o => o.WithTarget(Mesh.Address)).Should().Within(30.Seconds()).Emit();
         response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         return response.Message.Node!.Path!;
     }
 
     [Fact]
-    public async Task DelegationSubThread_SubmitMessage_ProducesNavigableHierarchy()
+    public void DelegationSubThread_SubmitMessage_ProducesNavigableHierarchy()
     {
-        var ct = new CancellationTokenSource(30.Seconds()).Token;
         var client = GetClient();
 
-        var threadPath = await CreateThreadAsync(client, "Delegation execution test", ct);
+        var threadPath = CreateThread(client, "Delegation execution test");
         Output.WriteLine($"Parent thread: {threadPath}");
 
-        var parentResponseMsgId = await ThreadFlow.SubmitAndWait(client, threadPath,
-            "Research reinsurance pricing", contextPath: ContextPath).FirstAsync().ToTask(ct);
+        var parentResponseMsgId = ThreadFlow.SubmitAndWait(client, threadPath,
+            "Research reinsurance pricing", contextPath: ContextPath).Should().Within(30.Seconds()).Emit();
         Output.WriteLine($"Parent response: {parentResponseMsgId}");
 
         // Wait for parent response to have its final text before creating
         // the sub-thread underneath.
-        await ThreadFlow.ReadMessage(client, threadPath, parentResponseMsgId,
-            m => !string.IsNullOrEmpty(m.Text) && m.Status != ThreadMessageStatus.Streaming).FirstAsync().ToTask(ct);
+        ThreadFlow.ReadMessage(client, threadPath, parentResponseMsgId,
+            m => !string.IsNullOrEmpty(m.Text) && m.Status != ThreadMessageStatus.Streaming).Should().Within(30.Seconds()).Emit();
 
         // Create the delegation sub-thread under the parent's response cell.
         var subThreadId = ThreadNodeType.GenerateSpeakingId("research reinsurance pricing");
         var parentMsgPath = $"{threadPath}/{parentResponseMsgId}";
         var subThreadPath = $"{parentMsgPath}/{subThreadId}";
 
-        await NodeFactory.CreateNode(new MeshNode(subThreadId, parentMsgPath)
+        NodeFactory.CreateNode(new MeshNode(subThreadId, parentMsgPath)
         {
             Name = "Research reinsurance pricing",
             NodeType = ThreadNodeType.NodeType,
             Content = new MeshThread()
-        });
+        }).Should().Emit();
         Output.WriteLine($"Sub-thread created: {subThreadPath}");
 
         // Submit via GUI handler â€” server generates message ids on the sub-thread.
-        var subResponseMsgId = await ThreadFlow.SubmitAndWait(client, subThreadPath,
-            "Find documents about reinsurance pricing models", contextPath: ContextPath).FirstAsync().ToTask(ct);
+        var subResponseMsgId = ThreadFlow.SubmitAndWait(client, subThreadPath,
+            "Find documents about reinsurance pricing models", contextPath: ContextPath).Should().Within(30.Seconds()).Emit();
         Output.WriteLine($"Sub-thread response: {subResponseMsgId}");
 
         // Verify full hierarchy is navigable via remote streams.
-        var parentThread = await ThreadFlow.ReadThread(client, threadPath,
-            t => t.Messages.Count >= 2).FirstAsync().ToTask(ct);
+        var parentThread = ThreadFlow.ReadThread(client, threadPath,
+            t => t.Messages.Count >= 2).Should().Within(30.Seconds()).Emit();
         parentThread.Messages.Should().HaveCount(2);
 
-        var subThreads = await MeshQuery
-            .QueryAsync<MeshNode>($"namespace:{parentMsgPath} nodeType:{ThreadNodeType.NodeType}")
-            .ToListAsync(ct);
+        var subThreads = MeshQuery
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{parentMsgPath} nodeType:{ThreadNodeType.NodeType}"))
+            .Should().Match(c => c.Items.Count >= 1).Items;
         subThreads.Should().ContainSingle("should find exactly one sub-thread");
         subThreads[0].Path.Should().Be(subThreadPath);
 
-        var subThread = await ThreadFlow.ReadThread(client, subThreadPath,
-            t => t is { IsExecuting: false } && t.Messages.Count >= 2).FirstAsync().ToTask(ct);
+        var subThread = ThreadFlow.ReadThread(client, subThreadPath,
+            t => t is { IsExecuting: false } && t.Messages.Count >= 2).Should().Within(30.Seconds()).Emit();
         subThread.Messages.Should().HaveCount(2);
 
-        var subUserContent = await ThreadFlow.ReadMessage(client, subThreadPath,
-            subThread.Messages[0], m => m.Role == "user").FirstAsync().ToTask(ct);
+        var subUserContent = ThreadFlow.ReadMessage(client, subThreadPath,
+            subThread.Messages[0], m => m.Role == "user").Should().Within(30.Seconds()).Emit();
         subUserContent.Text.Should().Contain("reinsurance pricing");
 
-        var subRespContent = await ThreadFlow.ReadMessage(client, subThreadPath,
-            subResponseMsgId, m => m.Role == "assistant" && !string.IsNullOrEmpty(m.Text)).FirstAsync().ToTask(ct);
+        var subRespContent = ThreadFlow.ReadMessage(client, subThreadPath,
+            subResponseMsgId, m => m.Role == "assistant" && !string.IsNullOrEmpty(m.Text)).Should().Within(30.Seconds()).Emit();
         subRespContent.Text.Should().NotBeNullOrEmpty();
 
         Output.WriteLine($"Sub-thread response: '{subRespContent.Text}'");

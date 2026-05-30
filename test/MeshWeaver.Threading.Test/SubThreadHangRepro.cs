@@ -100,24 +100,20 @@ public class SubThreadHangRepro(ITestOutputHelper output) : MonolithMeshTestBase
     /// guard.</para>
     /// </summary>
     [Fact]
-    public async Task HungSubThread_WithoutUserCancel_StaysExecuting()
+    public void HungSubThread_WithoutUserCancel_StaysExecuting()
     {
-        var ct = new CancellationTokenSource(90.Seconds()).Token;
         var client = GetClient();
         var workspace = client.GetWorkspace();
 
-        var parentPath = await CreateThreadAsync(client, "Delegate to a worker that hangs", ct);
+        var parentPath = CreateThread(client, "Delegate to a worker that hangs");
         Output.WriteLine($"Parent thread: {parentPath}");
 
         // Warm up the parent thread stream BEFORE submit â€” see CancelStream
         // test for why this matters (submission watcher races first
         // cache.GetStream and can stall the chain at Status=StartingExecution).
-        await workspace.GetMeshNodeStream(parentPath)
+        workspace.GetMeshNodeStream(parentPath)
             .Select(n => n.Content as MeshThread)
-            .Where(t => t != null)
-            .Take(1)
-            .Timeout(10.Seconds())
-            .ToTask(ct);
+            .Should().Within(10.Seconds()).Match(t => t != null);
 
         client.SubmitMessage(
             parentPath,
@@ -127,7 +123,7 @@ public class SubThreadHangRepro(ITestOutputHelper output) : MonolithMeshTestBase
         // Wait for the parent's response message to materialise and the
         // delegation tool call to be stamped with a DelegationPath. That path
         // IS the sub-thread we'll observe.
-        var subThreadPath = await WaitForDelegationPath(client, parentPath, ct);
+        var subThreadPath = WaitForDelegationPath(client, parentPath);
         Output.WriteLine($"Sub-thread: {subThreadPath}");
 
         // Wait for the sub-thread to reach IsExecuting=true â€” proves the
@@ -142,7 +138,7 @@ public class SubThreadHangRepro(ITestOutputHelper output) : MonolithMeshTestBase
         // (DeliveryFailureException) almost immediately (post-2026-05-24
         // cache change f103be08a). .Catch+Defer retries with backoff so
         // we wait for the create to land instead of failing fast.
-        var subThread = await Observable.Defer(() =>
+        var subThread = Observable.Defer(() =>
                 workspace.GetMeshNodeStream(subThreadPath)
                     .Select(n => n.Content as MeshThread)
                     .Where(t => t is { IsExecuting: true })
@@ -150,9 +146,7 @@ public class SubThreadHangRepro(ITestOutputHelper output) : MonolithMeshTestBase
             .Catch<MeshThread?, Exception>(_ =>
                 Observable.Empty<MeshThread?>().Delay(200.Milliseconds()))
             .Repeat()
-            .Take(1)
-            .Timeout(15.Seconds())
-            .ToTask(ct);
+            .Should().Within(15.Seconds()).Emit();
         subThread!.IsExecuting.Should().BeTrue();
         Output.WriteLine($"Sub-thread reached IsExecuting=true at {DateTime.UtcNow:O}");
 
@@ -173,7 +167,7 @@ public class SubThreadHangRepro(ITestOutputHelper output) : MonolithMeshTestBase
         // The wait window: 30s watchdog + 15s slack for propagation through
         // parent stream emission â†’ sub-thread cancel watcher â†’ CTS cancel â†’
         // streaming loop exit â†’ terminal Status flip. 45s total.
-        var settled = await Observable.Defer(() =>
+        var settled = Observable.Defer(() =>
                 workspace.GetMeshNodeStream(subThreadPath)
                     .Select(n => n.Content as MeshThread)
                     .Where(t => t is { IsExecuting: false })
@@ -181,9 +175,7 @@ public class SubThreadHangRepro(ITestOutputHelper output) : MonolithMeshTestBase
             .Catch<MeshThread?, Exception>(_ =>
                 Observable.Empty<MeshThread?>().Delay(500.Milliseconds()))
             .Repeat()
-            .Take(1)
-            .Timeout(45.Seconds())
-            .ToTask(ct);
+            .Should().Within(45.Seconds()).Emit();
 
         settled!.IsExecuting.Should().BeFalse(
             "FIX: sub-thread settled within the 30s watchdog + 15s propagation " +
@@ -212,41 +204,34 @@ public class SubThreadHangRepro(ITestOutputHelper output) : MonolithMeshTestBase
     /// sub-thread is dispatched, so the union is never stale.</para>
     /// </summary>
     [Fact]
-    public async Task HungSubThread_UserCancelOnParent_PropagatesAndStopsSubThread()
+    public void HungSubThread_UserCancelOnParent_PropagatesAndStopsSubThread()
     {
-        var ct = new CancellationTokenSource(60.Seconds()).Token;
         var client = GetClient();
         var workspace = client.GetWorkspace();
 
-        var parentPath = await CreateThreadAsync(client, "Cancel propagation test", ct);
+        var parentPath = CreateThread(client, "Cancel propagation test");
         Output.WriteLine($"Parent thread: {parentPath}");
 
         // Warm up the parent thread stream BEFORE submit. Without this the
         // submission watcher races the first cache.GetStream and the chain
         // stalls at Status=StartingExecution.
-        await workspace.GetMeshNodeStream(parentPath)
+        workspace.GetMeshNodeStream(parentPath)
             .Select(n => n.Content as MeshThread)
-            .Where(t => t != null)
-            .Take(1)
-            .Timeout(10.Seconds())
-            .ToTask(ct);
+            .Should().Within(10.Seconds()).Match(t => t != null);
 
         client.SubmitMessage(
             parentPath,
             "delegate this",
             contextPath: ContextPath);
 
-        var subThreadPath = await WaitForDelegationPath(client, parentPath, ct);
+        var subThreadPath = WaitForDelegationPath(client, parentPath);
         Output.WriteLine($"Sub-thread: {subThreadPath}");
 
         // Wait for the sub-thread to actually start so cancel finds something
         // running (otherwise the test could race the spin-up).
-        await workspace.GetMeshNodeStream(subThreadPath)
+        workspace.GetMeshNodeStream(subThreadPath)
             .Select(n => n.Content as MeshThread)
-            .Where(t => t is { IsExecuting: true })
-            .Take(1)
-            .Timeout(15.Seconds())
-            .ToTask(ct);
+            .Should().Within(15.Seconds()).Match(t => t is { IsExecuting: true });
         Output.WriteLine("Sub-thread reached IsExecuting=true.");
 
         // Set RequestedStatus = Cancelled on the PARENT â€” same write the GUI
@@ -254,21 +239,18 @@ public class SubThreadHangRepro(ITestOutputHelper output) : MonolithMeshTestBase
         // hub's cancel watcher unions StreamingToolCalls with the live
         // AgentChatClient.DelegationPaths registry and propagates the request
         // to every active sub-thread.
-        await workspace.GetMeshNodeStream(parentPath)
+        workspace.GetMeshNodeStream(parentPath)
             .Update(curr => curr?.Content is MeshThread t
                 ? curr with { Content = t with { RequestedStatus = ThreadExecutionStatus.Cancelled } }
                 : curr!)
-            .FirstAsync().ToTask(ct);
+            .Should().Emit();
         Output.WriteLine("Set RequestedStatus = Cancelled on parent.");
 
         // Sub-thread should settle within ~20s of the cancel write reaching
         // the propagation watcher.
-        var settled = await workspace.GetMeshNodeStream(subThreadPath)
+        var settled = workspace.GetMeshNodeStream(subThreadPath)
             .Select(n => n.Content as MeshThread)
-            .Where(t => t is { IsExecuting: false })
-            .Take(1)
-            .Timeout(CancelObservationWindow)
-            .ToTask(ct);
+            .Should().Within(CancelObservationWindow).Match(t => t is { IsExecuting: false });
 
         settled!.IsExecuting.Should().BeFalse(
             "FIX: user cancel on the parent must propagate to the hung " +
@@ -296,11 +278,11 @@ public class SubThreadHangRepro(ITestOutputHelper output) : MonolithMeshTestBase
             ? TimeSpan.FromSeconds(720)
             : TimeSpan.FromSeconds(10);
 
-    private async Task<string> CreateThreadAsync(IMessageHub client, string text, CancellationToken ct)
+    private string CreateThread(IMessageHub client, string text)
     {
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, text, "TestUser");
-        var response = await client.Observe(new CreateNodeRequest(threadNode),
-            o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
+        var response = client.Observe(new CreateNodeRequest(threadNode),
+            o => o.WithTarget(Mesh.Address)).Should().Within(15.Seconds()).Emit();
         response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         return response.Message.Node!.Path!;
     }
@@ -312,31 +294,25 @@ public class SubThreadHangRepro(ITestOutputHelper output) : MonolithMeshTestBase
     /// call has created a sub-thread and the sub-thread's hub is the next
     /// thing to observe.
     /// </summary>
-    private static async Task<string> WaitForDelegationPath(
-        IMessageHub client, string parentPath, CancellationToken ct)
+    private static string WaitForDelegationPath(
+        IMessageHub client, string parentPath)
     {
         var workspace = client.GetWorkspace();
 
         // Wait until the parent thread has its first assistant response cell.
-        var thread = await workspace.GetMeshNodeStream(parentPath)
+        var thread = workspace.GetMeshNodeStream(parentPath)
             .Select(n => n.Content as MeshThread)
-            .Where(t => t is { Messages.Count: >= 2 })
-            .Take(1)
-            .Timeout(15.Seconds())
-            .ToTask(ct);
+            .Should().Within(15.Seconds()).Match(t => t is { Messages.Count: >= 2 });
 
         var respMsgId = thread!.Messages[^1];
         var respPath = $"{parentPath}/{respMsgId}";
 
         // The sub-thread path lives on the response message's tool calls.
         // 30s budget â€” 15s tripped on slow CI runners (run 26376715753).
-        var responseMsg = await workspace.GetMeshNodeStream(respPath)
+        var responseMsg = workspace.GetMeshNodeStream(respPath)
             .Select(n => n.Content as ThreadMessage)
-            .Where(m => m?.ToolCalls != null && m.ToolCalls.Count > 0
-                && m.ToolCalls[0].DelegationPath is { Length: > 0 })
-            .Take(1)
-            .Timeout(30.Seconds())
-            .ToTask(ct);
+            .Should().Within(30.Seconds()).Match(m => m?.ToolCalls != null && m.ToolCalls.Count > 0
+                && m.ToolCalls[0].DelegationPath is { Length: > 0 });
 
         return responseMsg!.ToolCalls![0].DelegationPath!;
     }

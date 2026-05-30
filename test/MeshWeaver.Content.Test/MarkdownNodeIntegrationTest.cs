@@ -478,10 +478,10 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     /// Test that MeshWeaver namespace has children.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task MeshWeaver_HasChildren()
+    public void MeshWeaver_HasChildren()
     {
-        var children = await MeshQuery.QueryAsync<MeshNode>("namespace:MeshWeaver", ct: TestContext.Current.CancellationToken)
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var children = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("namespace:MeshWeaver"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         children.Should().NotBeEmpty("MeshWeaver should have children");
         // MeshWeaver has Documentation and Platform as direct children

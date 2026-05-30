@@ -1,9 +1,7 @@
 using System;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
-using System.Threading;
-using System.Threading.Tasks;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
@@ -37,10 +35,6 @@ namespace MeshWeaver.Query.Test;
 /// </summary>
 public class UserActivityTrackingTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private CancellationToken TestTimeout => CancellationTokenSource.CreateLinkedTokenSource(
-        new CancellationTokenSource(15.Seconds()).Token,
-        TestContext.Current.CancellationToken).Token;
-
     /// <summary>
     /// Username-in-path is the contract: <c>userId/_UserActivity/encodedPath</c>
     /// where <c>userId</c> is the User MeshNode's <c>Id</c> (e.g. <c>"alice"</c>),
@@ -48,7 +42,7 @@ public class UserActivityTrackingTests(ITestOutputHelper output) : MonolithMeshT
     /// must land a UserActivity node at the expected path.
     /// </summary>
     [Fact(Timeout = 20_000)]
-    public async Task TrackActivity_WithUsername_CreatesNodeAtExpectedPath()
+    public void TrackActivity_WithUsername_CreatesNodeAtExpectedPath()
     {
         const string user = "alice";
         const string nodePath = "alice/MyDoc";
@@ -60,9 +54,7 @@ public class UserActivityTrackingTests(ITestOutputHelper output) : MonolithMeshT
             NodeType: "Markdown",
             Namespace: "alice"));
 
-        var node = await PollForFirstAsync(
-            $"namespace:{user}/_UserActivity nodeType:UserActivity",
-            TestTimeout);
+        var node = PollForFirst($"namespace:{user}/_UserActivity nodeType:UserActivity");
 
         node.Should().NotBeNull("a UserActivity node must be created at {user}/_UserActivity after a TrackActivityRequest");
         node!.Path.Should().Be($"{user}/_UserActivity/{nodePath.Replace("/", "_")}");
@@ -77,7 +69,7 @@ public class UserActivityTrackingTests(ITestOutputHelper output) : MonolithMeshT
     /// handler must log a warning and skip.
     /// </summary>
     [Fact(Timeout = 20_000)]
-    public async Task TrackActivity_WithEmailShapedUserId_IsRejected()
+    public void TrackActivity_WithEmailShapedUserId_IsRejected()
     {
         const string emailUser = "bob@example.com";
 
@@ -88,19 +80,16 @@ public class UserActivityTrackingTests(ITestOutputHelper output) : MonolithMeshT
             NodeType: "User",
             Namespace: ""));
 
-        // Give the handler a window to either skip (correct) or produce a
-        // malformed node (the regression). No node should ever materialise
-        // — the handler logs a warning and returns.
-        await Task.Delay(2_000, TestTimeout);
-
-        var any = await MeshQuery
-            .QueryAsync<MeshNode>("nodeType:UserActivity")
-            .ToListAsync();
-
-        any.Should().NotContain(n => n.Path != null && n.Path.Contains('@'),
-            "tracking with an email-shaped userId must be skipped to avoid " +
-            "the [ROUTE] NotFound floods observed in production. See " +
-            "MeshNodeExtensions.HandleTrackActivity for the rejection guard.");
+        // No node with a '@'-shaped path should ever materialise — the handler
+        // logs a warning and returns. Negative assertion: flatten the live
+        // query's items and assert nothing matching arrives within the window.
+        MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("nodeType:UserActivity"))
+            .SelectMany(c => c.Items)
+            .Where(n => n.Path != null && n.Path.Contains('@'))
+            .Should().NotEmit(within: TimeSpan.FromSeconds(2),
+                "tracking with an email-shaped userId must be skipped to avoid " +
+                "the [ROUTE] NotFound floods observed in production. See " +
+                "MeshNodeExtensions.HandleTrackActivity for the rejection guard.");
     }
 
     /// <summary>
@@ -113,71 +102,51 @@ public class UserActivityTrackingTests(ITestOutputHelper output) : MonolithMeshT
     /// folds via <c>stream.Update</c>.
     /// </summary>
     [Fact(Timeout = 30_000)]
-    public async Task TrackActivity_ConcurrentSamePath_DoesNotRaceAlreadyExists()
+    public void TrackActivity_ConcurrentSamePath_DoesNotRaceAlreadyExists()
     {
         const string user = "charlie";
         const string nodePath = "charlie/doc";
 
-        // Fire 5 concurrent requests for the SAME path. Under the buggy
-        // probe-and-fork shape, all 5 see the path-not-found probe before
-        // any of them succeeds in writing → all 5 attempt CreateNode → 4
-        // throw "Node already exists".
-        var tasks = new Task[5];
-        for (var i = 0; i < tasks.Length; i++)
+        // Fire 5 requests for the SAME path. Under the buggy probe-and-fork
+        // shape, all 5 see the path-not-found probe before any of them succeeds
+        // in writing → all 5 attempt CreateNode → 4 throw "Node already exists".
+        for (var i = 0; i < 5; i++)
         {
-            tasks[i] = Task.Run(() =>
-            {
-                Mesh.Post(new TrackActivityRequest(
-                    NodePath: nodePath,
-                    UserId: user,
-                    NodeName: "Concurrent Doc",
-                    NodeType: "Markdown",
-                    Namespace: user));
-            }, TestTimeout);
+            Mesh.Post(new TrackActivityRequest(
+                NodePath: nodePath,
+                UserId: user,
+                NodeName: "Concurrent Doc",
+                NodeType: "Markdown",
+                Namespace: user));
         }
 
-        await Task.WhenAll(tasks);
-
-        var node = await PollForFirstAsync(
-            $"namespace:{user}/_UserActivity nodeType:UserActivity",
-            TestTimeout);
+        var node = PollForFirst($"namespace:{user}/_UserActivity nodeType:UserActivity");
         node.Should().NotBeNull("at least one concurrent TrackActivityRequest must land a node");
 
         // After settling, exactly one record per (user, encodedPath) — concurrent
         // tracks merge into the same record's AccessCount, not duplicate records.
-        var all = await MeshQuery
-            .QueryAsync<MeshNode>($"namespace:{user}/_UserActivity nodeType:UserActivity")
-            .ToListAsync();
+        var all = MeshQuery
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                $"namespace:{user}/_UserActivity nodeType:UserActivity"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
         all.Should().HaveCount(1,
             "concurrent tracks for the same path must coalesce into one record, not race-create duplicates");
     }
 
     /// <summary>
-    /// Polls the mesh query layer until at least one result arrives or the
-    /// token cancels. Each first-emission of the synced collection settles
-    /// fast; this poll re-queries every 200ms to surface the entry that
-    /// the activity handler's asynchronous create/update produced.
+    /// Folds the live query's deltas into a running list and returns the first
+    /// node the moment at least one matches — race-free replacement for the old
+    /// <c>Observable.Interval</c> re-query poll. The activity handler's
+    /// asynchronous create/update surfaces through the same change feed.
     /// </summary>
-    // Stream-based poll: re-issue the MeshQuery on a 50 ms interval until at
-    // least one node matches, capped by the caller's cancellation. Replaces
-    // a `while + Task.Delay(200)` loop with an Observable.Interval + Where +
-    // FirstAsync — the cancellation token threads through ToTask, so the
-    // operation cleanly cancels when the test framework's timeout fires.
-    private async Task<MeshNode?> PollForFirstAsync(string query, CancellationToken cancellationToken)
-    {
-        try
-        {
-            return await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
-                .SelectMany(_ => Observable.FromAsync(async () =>
-                    await MeshQuery.QueryAsync<MeshNode>(query).ToListAsync()))
-                .Where(list => list.Count > 0)
-                .Select(list => list[0])
-                .FirstAsync()
-                .ToTask(cancellationToken);
-        }
-        catch (OperationCanceledException)
-        {
-            return null;
-        }
-    }
+    private MeshNode? PollForFirst(string query)
+        => MeshQuery
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Scan(ImmutableList<MeshNode>.Empty, (acc, c) =>
+                c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset
+                    ? c.Items.ToImmutableList()
+                    : acc.AddRange(c.Items))
+            .Where(list => list.Count > 0)
+            .Select(list => list[0])
+            .Should().Within(TimeSpan.FromSeconds(15)).Emit();
 }

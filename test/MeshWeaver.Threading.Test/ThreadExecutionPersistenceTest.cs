@@ -46,17 +46,17 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
         return base.ConfigureClient(configuration).AddLayoutClient();
     }
 
-    private async Task<string> CreateContextNodeAsync(string path, CancellationToken ct)
+    private string CreateContextNode(string path)
     {
-        await NodeFactory.CreateNode(
-            new MeshNode(path) { Name = path, NodeType = "Markdown" });
+        NodeFactory.CreateNode(
+            new MeshNode(path) { Name = path, NodeType = "Markdown" }).Should().Emit();
         return path;
     }
 
-    private async Task<string> CreateThreadAsync(IMessageHub client, string ns, string text, CancellationToken ct)
+    private string CreateThread(IMessageHub client, string ns, string text)
     {
-        var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ns, text)),
-            o => o.WithTarget(new Address(ns))).FirstAsync().ToTask(ct);
+        var response = client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ns, text)),
+            o => o.WithTarget(new Address(ns))).Should().Within(30.Seconds()).Emit();
         response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         return response.Message.Node!.Path!;
     }
@@ -66,33 +66,32 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
     /// server-side dispatcher after a <see cref="ThreadSubmission.Submit"/> call.
     /// </summary>
     [Fact]
-    public async Task ExecuteThread_PersistsToCorrectPartition()
+    public void ExecuteThread_PersistsToCorrectPartition()
     {
-        var ct = new CancellationTokenSource(20.Seconds()).Token;
         var client = GetClient();
 
-        await CreateContextNodeAsync(ContextPath, ct);
-        var threadPath = await CreateThreadAsync(client, ContextPath, "Persistence test message", ct);
+        CreateContextNode(ContextPath);
+        var threadPath = CreateThread(client, ContextPath, "Persistence test message");
         Output.WriteLine($"Thread created at: {threadPath}");
 
         threadPath.Should().StartWith($"{ContextPath}/");
         threadPath.Should().Contain($"/{ThreadNodeType.ThreadPartition}/");
 
-        var responseMsgId = await ThreadFlow.SubmitAndWait(client, threadPath,
-            "Hello from persistence test", contextPath: ContextPath).FirstAsync().ToTask(ct);
+        var responseMsgId = ThreadFlow.SubmitAndWait(client, threadPath,
+            "Hello from persistence test", contextPath: ContextPath).Should().Within(20.Seconds()).Emit();
 
-        var thread = await ThreadFlow.ReadThread(client, threadPath,
-            t => t.Messages.Count >= 2).FirstAsync().ToTask(ct);
+        var thread = ThreadFlow.ReadThread(client, threadPath,
+            t => t.Messages.Count >= 2).Should().Within(20.Seconds()).Emit();
         thread.Messages.Should().HaveCount(2);
         Output.WriteLine($"Messages: [{string.Join(", ", thread.Messages)}]");
 
-        var userContent = await ThreadFlow.ReadMessage(client, threadPath, thread.Messages[0],
-            m => m.Role == "user").FirstAsync().ToTask(ct);
+        var userContent = ThreadFlow.ReadMessage(client, threadPath, thread.Messages[0],
+            m => m.Role == "user").Should().Within(20.Seconds()).Emit();
         userContent.Text.Should().Be("Hello from persistence test");
         Output.WriteLine($"User message OK: '{userContent.Text}'");
 
-        var responseContent = await ThreadFlow.ReadMessage(client, threadPath, responseMsgId,
-            m => m.Role == "assistant").FirstAsync().ToTask(ct);
+        var responseContent = ThreadFlow.ReadMessage(client, threadPath, responseMsgId,
+            m => m.Role == "assistant").Should().Within(20.Seconds()).Emit();
         responseContent.Type.Should().Be(ThreadMessageType.AgentResponse);
         Output.WriteLine($"Response message node exists at: {threadPath}/{responseMsgId}");
 
@@ -100,22 +99,21 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
     }
 
     [Fact]
-    public async Task ExecuteThread_ChildMessagesQueryableByNamespace()
+    public void ExecuteThread_ChildMessagesQueryableByNamespace()
     {
-        var ct = new CancellationTokenSource(20.Seconds()).Token;
         var client = GetClient();
 
-        await CreateContextNodeAsync(ContextPath, ct);
-        var threadPath = await CreateThreadAsync(client, ContextPath, "Child query test", ct);
+        CreateContextNode(ContextPath);
+        var threadPath = CreateThread(client, ContextPath, "Child query test");
 
-        await ThreadFlow.SubmitAndWait(client, threadPath, "Test query by namespace",
-            contextPath: ContextPath).FirstAsync().ToTask(ct);
+        ThreadFlow.SubmitAndWait(client, threadPath, "Test query by namespace",
+            contextPath: ContextPath).Should().Within(20.Seconds()).Emit();
 
-        await ThreadFlow.ReadThread(client, threadPath, t => t.Messages.Count >= 2).FirstAsync().ToTask(ct);
+        ThreadFlow.ReadThread(client, threadPath, t => t.Messages.Count >= 2).Should().Within(20.Seconds()).Emit();
 
-        var children = await MeshQuery.QueryAsync<MeshNode>(
-                $"namespace:{threadPath} nodeType:{ThreadMessageNodeType.NodeType}")
-            .ToListAsync(ct);
+        var children = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                $"namespace:{threadPath} nodeType:{ThreadMessageNodeType.NodeType}"))
+            .Should().Match(c => c.Items.Count >= 2).Items;
 
         children.Should().HaveCountGreaterThanOrEqualTo(2);
         Output.WriteLine($"Found {children.Count} ThreadMessage children:");
@@ -132,35 +130,33 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
     }
 
     [Fact]
-    public async Task ExecuteThread_SubmitMessageDoesNotTimeout()
+    public void ExecuteThread_SubmitMessageDoesNotTimeout()
     {
-        var ct = new CancellationTokenSource(15.Seconds()).Token;
         var client = GetClient();
 
-        await CreateContextNodeAsync(ContextPath, ct);
-        var threadPath = await CreateThreadAsync(client, ContextPath, "Timeout test", ct);
+        CreateContextNode(ContextPath);
+        var threadPath = CreateThread(client, ContextPath, "Timeout test");
 
-        var responseMsgId = await ThreadFlow.SubmitAndWait(client, threadPath,
-            "Test no timeout", contextPath: ContextPath, timeout: 15.Seconds()).FirstAsync().ToTask(ct);
+        var responseMsgId = ThreadFlow.SubmitAndWait(client, threadPath,
+            "Test no timeout", contextPath: ContextPath, timeout: 15.Seconds()).Should().Within(15.Seconds()).Emit();
 
         responseMsgId.Should().NotBeNullOrEmpty("SubmitMessageResponse should arrive without timeout");
         Output.WriteLine("SubmitMessageRequest completed without timeout");
     }
 
     [Fact]
-    public async Task ExecuteThread_ThreadContentPersisted()
+    public void ExecuteThread_ThreadContentPersisted()
     {
-        var ct = new CancellationTokenSource(20.Seconds()).Token;
         var client = GetClient();
 
-        await CreateContextNodeAsync(ContextPath, ct);
-        var threadPath = await CreateThreadAsync(client, ContextPath, "Persistence test", ct);
+        CreateContextNode(ContextPath);
+        var threadPath = CreateThread(client, ContextPath, "Persistence test");
 
-        await ThreadFlow.SubmitAndWait(client, threadPath, "Check persistence",
-            contextPath: ContextPath).FirstAsync().ToTask(ct);
+        ThreadFlow.SubmitAndWait(client, threadPath, "Check persistence",
+            contextPath: ContextPath).Should().Within(20.Seconds()).Emit();
 
-        var thread = await ThreadFlow.ReadThread(client, threadPath,
-            t => t.Messages.Count >= 2).FirstAsync().ToTask(ct);
+        var thread = ThreadFlow.ReadThread(client, threadPath,
+            t => t.Messages.Count >= 2).Should().Within(20.Seconds()).Emit();
         thread.Messages.Should().HaveCountGreaterThanOrEqualTo(2,
             "Messages must be persisted with message IDs");
         Output.WriteLine($"Thread persisted: [{string.Join(", ", thread.Messages)}]");

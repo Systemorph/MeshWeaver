@@ -25,7 +25,7 @@ public class CreateSpaceTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             .AddSpaceType();
 
     [Fact(Timeout = 60000)]
-    public async Task CreateSpace_CreatesAdminAccess()
+    public void CreateSpace_CreatesAdminAccess()
     {
         var spaceId = $"TestSpace_{Guid.NewGuid():N}"[..20];
 
@@ -35,7 +35,7 @@ public class CreateSpaceTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             NodeType = SpaceNodeType.NodeType,
             Content = new Space { Name = "Test Space" }
         };
-        var created = await NodeFactory.CreateNode(spaceNode).ToTask(TestContext.Current.CancellationToken);
+        var created = NodeFactory.CreateNode(spaceNode).Should().Emit();
 
         created.Should().NotBeNull();
         created.State.Should().Be(MeshNodeState.Active);
@@ -43,10 +43,10 @@ public class CreateSpaceTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         created.Name.Should().Be("Test Space");
 
         // Creator has Admin permissions on the Space namespace
-        var hasAdmin = await Mesh.HasPermissionAsync(
-            spaceId, TestUsers.Admin.ObjectId, Permission.Update, TestTimeout);
-        hasAdmin.Should().BeTrue("Creator should have Admin permissions on the space");
+        Mesh.GetEffectivePermissions(spaceId, TestUsers.Admin.ObjectId)
+            .Should().Within(90.Seconds()).Match(p => p.HasFlag(Permission.Update),
+                "Creator should have Admin permissions on the space");
 
-        await NodeFactory.DeleteNode(spaceId).ToTask(TestContext.Current.CancellationToken);
+        NodeFactory.DeleteNode(spaceId).Should().Emit();
     }
 }

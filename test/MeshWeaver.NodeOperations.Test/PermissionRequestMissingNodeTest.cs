@@ -40,10 +40,8 @@ public class PermissionRequestMissingNodeTest(ITestOutputHelper output)
     : MonolithMeshTestBase(output)
 {
     [Fact(Timeout = 30_000)]
-    public async Task GetPermissionRequest_MissingPath_ThrowsDeliveryFailure_NotFound()
+    public void GetPermissionRequest_MissingPath_ThrowsDeliveryFailure_NotFound()
     {
-        var ct = new CancellationTokenSource(20.Seconds()).Token;
-
         // A partition-rooted path that no node was ever created at.
         // First segment is the test partition (NOT a NodeType name), so the
         // request actually exercises the routing — MeshNodeStreamCache's
@@ -57,13 +55,12 @@ public class PermissionRequestMissingNodeTest(ITestOutputHelper output)
         // deadlock symptom. With the fix the routing service returns a
         // NotFound DeliveryFailure within milliseconds, which the framework
         // surfaces as DeliveryFailureException on the observable.
-        Func<Task> act = async () => await Mesh.Observe<GetPermissionResponse>(
+        Action act = () => Mesh.Observe<GetPermissionResponse>(
                 new GetPermissionRequest(),
                 o => o.WithTarget(new Address(missingPath)))
-            .FirstAsync()
-            .ToTask(ct);
+            .Wait();
 
-        var ex = await act.Should().ThrowAsync<DeliveryFailureException>(
+        var ex = act.Should().Throw<DeliveryFailureException>(
             "the routing service must surface 'node missing' as a deterministic " +
             "failure on the observable — silently hanging is the prod 2026-05-23 " +
             "deadlock symptom this test pins against");
@@ -77,10 +74,8 @@ public class PermissionRequestMissingNodeTest(ITestOutputHelper output)
     }
 
     [Fact(Timeout = 30_000)]
-    public async Task GetPermissionRequest_DeeplyNestedMissingPath_ThrowsDeliveryFailure_NotFound()
+    public void GetPermissionRequest_DeeplyNestedMissingPath_ThrowsDeliveryFailure_NotFound()
     {
-        var ct = new CancellationTokenSource(20.Seconds()).Token;
-
         // The exact prod path shape that triggered the deadlock:
         // partition / _Thread / <parent-thread> / <msg-id> / <sub-thread> / <sub-msg-id>.
         // Every segment after _Thread is a fresh GUID. If the per-node hub
@@ -89,13 +84,12 @@ public class PermissionRequestMissingNodeTest(ITestOutputHelper output)
         var deepMissingPath =
             $"{TestPartition}/_Thread/{Guid.NewGuid():N}/{Guid.NewGuid():N}/{Guid.NewGuid():N}/{Guid.NewGuid():N}";
 
-        Func<Task> act = async () => await Mesh.Observe<GetPermissionResponse>(
+        Action act = () => Mesh.Observe<GetPermissionResponse>(
                 new GetPermissionRequest(),
                 o => o.WithTarget(new Address(deepMissingPath)))
-            .FirstAsync()
-            .ToTask(ct);
+            .Wait();
 
-        var ex = await act.Should().ThrowAsync<DeliveryFailureException>(
+        var ex = act.Should().Throw<DeliveryFailureException>(
             "deeply nested missing satellite paths must error in bounded time " +
             "exactly like shallow missing paths — the routing service must not " +
             "get stuck on a non-existent leaf");
@@ -105,21 +99,18 @@ public class PermissionRequestMissingNodeTest(ITestOutputHelper output)
     }
 
     [Fact(Timeout = 30_000)]
-    public async Task GetPermissionRequest_ExistingPath_RepliesPromptly_WithRealPermissions()
+    public void GetPermissionRequest_ExistingPath_RepliesPromptly_WithRealPermissions()
     {
-        var ct = new CancellationTokenSource(20.Seconds()).Token;
-
         // Negative control: the missing-node failure path must not be over-
         // eager. The partition root exists and the test user is Admin (per
         // MonolithMeshTestBase's DevLogin) — should grant a real permission
         // quickly, NOT throw DeliveryFailure.
         var existingPath = TestPartition;
 
-        var delivery = await Mesh.Observe<GetPermissionResponse>(
+        var delivery = Mesh.Observe<GetPermissionResponse>(
                 new GetPermissionRequest(),
                 o => o.WithTarget(new Address(existingPath)))
-            .FirstAsync()
-            .ToTask(ct);
+            .Should().Within(20.Seconds()).Emit();
 
         delivery.Should().NotBeNull();
         delivery.Message.Should().NotBeNull();

@@ -80,7 +80,7 @@ public class StreamUpdateIdentityTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [HubFact]
-    public async Task StreamUpdate_WithoutAsyncLocalIdentity_FailsClosed()
+    public void StreamUpdate_WithoutAsyncLocalIdentity_FailsClosed()
     {
         var host = GetHost();
         var workspace = host.GetWorkspace();
@@ -94,14 +94,16 @@ public class StreamUpdateIdentityTest(ITestOutputHelper output) : HubTestBase(ou
         var collectionName = workspace.DataContext.GetTypeSource(typeof(MyData))!.CollectionName;
         var stream = workspace.GetStream(new CollectionsReference(collectionName))!;
 
-        var insideDelegate = new TaskCompletionSource<string?>();
+        // ReplaySubject buffers the emission so the reactive assertion below still
+        // observes it even if the delegate fires before the assertion subscribes.
+        var insideDelegate = new System.Reactive.Subjects.ReplaySubject<string?>(1);
         stream.Update(_ =>
         {
-            insideDelegate.TrySetResult(accessService.Context?.ObjectId);
+            insideDelegate.OnNext(accessService.Context?.ObjectId);
             return null;
         }, _ => { });
 
-        var seen = await insideDelegate.Task.WaitAsync(5.Seconds());
+        var seen = insideDelegate.Should().Within(5.Seconds()).Emit();
 
         // 🚨 2026-05-21 — single fail-closed branch in the PostPipeline. Per
         // the directive "we should NEVER write something as hub", non-mesh

@@ -50,50 +50,48 @@ public class AutoExecuteFlowTest(ITestOutputHelper output) : MonolithMeshTestBas
     }
 
     [Fact]
-    public async Task PortalFlow_CreateThread_CreateCells_Submit_ResponseWritten()
+    public void PortalFlow_CreateThread_CreateCells_Submit_ResponseWritten()
     {
-        var ct = new CancellationTokenSource(30.Seconds()).Token;
         var client = GetClient();
 
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, "Hello portal flow!", "TestUser");
         var threadPath = threadNode.Path!;
         Output.WriteLine($"Thread: {threadPath}");
 
-        var createResponse = await client.Observe(new CreateNodeRequest(threadNode),
-            o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
+        var createResponse = client.Observe(new CreateNodeRequest(threadNode),
+            o => o.WithTarget(Mesh.Address)).Should().Within(30.Seconds()).Emit();
         createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error ?? "");
         Output.WriteLine("Thread created");
 
-        var responseMsgId = await ThreadFlow.SubmitAndWait(client, threadPath,
+        var responseMsgId = ThreadFlow.SubmitAndWait(client, threadPath,
             "Hello portal flow!", contextPath: ContextPath, agentName: "Orchestrator",
-            timeout: 30.Seconds()).FirstAsync().ToTask(ct);
+            timeout: 30.Seconds()).Should().Within(30.Seconds()).Emit();
         Output.WriteLine($"Response msg id: {responseMsgId}");
 
-        var response = await ThreadFlow.ReadMessage(client, threadPath, responseMsgId,
-            m => !string.IsNullOrEmpty(m.Text) && m.Status != ThreadMessageStatus.Streaming).FirstAsync().ToTask(ct);
+        var response = ThreadFlow.ReadMessage(client, threadPath, responseMsgId,
+            m => !string.IsNullOrEmpty(m.Text) && m.Status != ThreadMessageStatus.Streaming).Should().Within(30.Seconds()).Emit();
         response.Text.Should().NotBeNullOrEmpty("agent should have written response");
         Output.WriteLine($"Response: {response.Text[..Math.Min(80, response.Text.Length)]}");
     }
 
     [Fact]
-    public async Task PortalFlow_ResponseCell_GetsUpdatedByExecution()
+    public void PortalFlow_ResponseCell_GetsUpdatedByExecution()
     {
-        var ct = new CancellationTokenSource(30.Seconds()).Token;
         var client = GetClient();
 
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, "Test response update", "TestUser");
         var threadPath = threadNode.Path!;
-        await client.Observe(new CreateNodeRequest(threadNode),
-            o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
+        client.Observe(new CreateNodeRequest(threadNode),
+            o => o.WithTarget(Mesh.Address)).Should().Within(30.Seconds()).Emit();
 
-        var responseMsgId = await ThreadFlow.SubmitAndWait(client, threadPath,
-            "Test response update", contextPath: ContextPath, timeout: 30.Seconds()).FirstAsync().ToTask(ct);
+        var responseMsgId = ThreadFlow.SubmitAndWait(client, threadPath,
+            "Test response update", contextPath: ContextPath, timeout: 30.Seconds()).Should().Within(30.Seconds()).Emit();
 
-        var response = await ThreadFlow.ReadMessage(client, threadPath, responseMsgId,
+        var response = ThreadFlow.ReadMessage(client, threadPath, responseMsgId,
             m => !string.IsNullOrEmpty(m.Text)
                  && !m.Text.StartsWith("Allocating")
                  && !m.Text.StartsWith("Loading")
-                 && !m.Text.StartsWith("Generating")).FirstAsync().ToTask(ct);
+                 && !m.Text.StartsWith("Generating")).Should().Within(30.Seconds()).Emit();
         Output.WriteLine($"Response cell updated: {response.Text[..Math.Min(80, response.Text.Length)]}");
     }
 

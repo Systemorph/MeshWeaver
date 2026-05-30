@@ -32,7 +32,7 @@ public class GlobalAdminSpaceCrudTest(ITestOutputHelper output) : MonolithMeshTe
             .AddSampleUsers();
 
     [Fact(Timeout = 60000)]
-    public async Task GlobalAdmin_CanCreateSpace()
+    public void GlobalAdmin_CanCreateSpace()
     {
         var spaceId = $"TestSpace_{Guid.NewGuid():N}"[..20];
 
@@ -43,17 +43,17 @@ public class GlobalAdminSpaceCrudTest(ITestOutputHelper output) : MonolithMeshTe
             Content = new Space { Name = "Test Space" }
         };
 
-        var created = await NodeFactory.CreateNode(spaceNode);
+        var created = NodeFactory.CreateNode(spaceNode).Should().Emit();
 
         created.Should().NotBeNull("Global admin should be able to create Spaces");
         created.State.Should().Be(MeshNodeState.Active);
         created.NodeType.Should().Be("Space");
 
-        await NodeFactory.DeleteNode(spaceId);
+        NodeFactory.DeleteNode(spaceId).Should().Emit();
     }
 
     [Fact(Timeout = 60000)]
-    public async Task GlobalAdmin_CanReadSpace()
+    public void GlobalAdmin_CanReadSpace()
     {
         var spaceId = $"TestSpace_{Guid.NewGuid():N}"[..20];
 
@@ -63,18 +63,18 @@ public class GlobalAdminSpaceCrudTest(ITestOutputHelper output) : MonolithMeshTe
             NodeType = SpaceNodeType.NodeType,
             Content = new Space { Name = "Test Space" }
         };
-        await NodeFactory.CreateNode(spaceNode);
+        NodeFactory.CreateNode(spaceNode).Should().Emit();
 
-        var found = await ReadNodeAsync(spaceId, ct: TestTimeout);
+        var found = ReadNode(spaceId).Should().Emit();
 
         found.Should().NotBeNull("Global admin should be able to read Spaces");
         found!.Name.Should().Be("Test Space");
 
-        await NodeFactory.DeleteNode(spaceId);
+        NodeFactory.DeleteNode(spaceId).Should().Emit();
     }
 
     [Fact(Timeout = 60000)]
-    public async Task GlobalAdmin_CanUpdateSpace()
+    public void GlobalAdmin_CanUpdateSpace()
     {
         var spaceId = $"TestSpace_{Guid.NewGuid():N}"[..20];
 
@@ -84,25 +84,25 @@ public class GlobalAdminSpaceCrudTest(ITestOutputHelper output) : MonolithMeshTe
             NodeType = SpaceNodeType.NodeType,
             Content = new Space { Name = "Original Name" }
         };
-        await NodeFactory.CreateNode(spaceNode);
+        NodeFactory.CreateNode(spaceNode).Should().Emit();
 
         var updated = spaceNode with
         {
             Name = "Updated Name",
             Content = new Space { Name = "Updated Name", Description = "Updated description" }
         };
-        await NodeFactory.UpdateNode(updated);
+        NodeFactory.UpdateNode(updated).Should().Emit();
 
-        var found = await ReadNodeAsync(spaceId, ct: TestTimeout);
+        var found = ReadNode(spaceId).Should().Emit();
 
         found.Should().NotBeNull();
         found!.Name.Should().Be("Updated Name");
 
-        await NodeFactory.DeleteNode(spaceId);
+        NodeFactory.DeleteNode(spaceId).Should().Emit();
     }
 
     [Fact(Timeout = 60000)]
-    public async Task GlobalAdmin_CanDeleteSpace()
+    public void GlobalAdmin_CanDeleteSpace()
     {
         var spaceId = $"TestSpace_{Guid.NewGuid():N}"[..20];
 
@@ -112,17 +112,18 @@ public class GlobalAdminSpaceCrudTest(ITestOutputHelper output) : MonolithMeshTe
             NodeType = SpaceNodeType.NodeType,
             Content = new Space { Name = "To Delete" }
         };
-        await NodeFactory.CreateNode(spaceNode);
+        NodeFactory.CreateNode(spaceNode).Should().Emit();
 
-        await NodeFactory.DeleteNode(spaceId);
+        NodeFactory.DeleteNode(spaceId).Should().Emit();
 
-        var found = await ReadNodeAsync(spaceId, TestTimeout);
-
-        found.Should().BeNull("Deleted space should not be found");
+        Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .StartWith(0L)
+            .SelectMany(_ => ReadNode(spaceId))
+            .Should().Within(10.Seconds()).Match(n => n is null, "Deleted space should not be found");
     }
 
     [Fact(Timeout = 60000)]
-    public async Task GlobalAdmin_HasAllPermissionsOnSpace()
+    public void GlobalAdmin_HasAllPermissionsOnSpace()
     {
         var spaceId = $"TestSpace_{Guid.NewGuid():N}"[..20];
 
@@ -132,10 +133,9 @@ public class GlobalAdminSpaceCrudTest(ITestOutputHelper output) : MonolithMeshTe
             NodeType = SpaceNodeType.NodeType,
             Content = new Space { Name = "Permission Test Space" }
         };
-        await NodeFactory.CreateNode(spaceNode);
+        NodeFactory.CreateNode(spaceNode).Should().Emit();
 
-        var permissions = await Mesh.GetPermissionAsync(
-            spaceId, TestUsers.Admin.ObjectId, TestTimeout);
+        var permissions = Mesh.GetEffectivePermissions(spaceId, TestUsers.Admin.ObjectId).Should().Emit();
 
         Output.WriteLine($"Admin permissions on {spaceId}: {permissions}");
 
@@ -144,18 +144,17 @@ public class GlobalAdminSpaceCrudTest(ITestOutputHelper output) : MonolithMeshTe
         permissions.Should().HaveFlag(Permission.Update);
         permissions.Should().HaveFlag(Permission.Delete);
 
-        var rootPermissions = await Mesh.GetPermissionAsync(
-            "", TestUsers.Admin.ObjectId, TestTimeout);
+        var rootPermissions = Mesh.GetEffectivePermissions("", TestUsers.Admin.ObjectId).Should().Emit();
 
         Output.WriteLine($"Admin permissions on root: {rootPermissions}");
         rootPermissions.Should().HaveFlag(Permission.Create,
             "Global admin should have Create permission at root level to create Spaces");
 
-        await NodeFactory.DeleteNode(spaceId);
+        NodeFactory.DeleteNode(spaceId).Should().Emit();
     }
 
     [Fact(Timeout = 60000)]
-    public async Task GlobalAdmin_CanCreateNodeUnderSpace()
+    public void GlobalAdmin_CanCreateNodeUnderSpace()
     {
         var spaceId = $"TestSpace_{Guid.NewGuid():N}"[..20];
 
@@ -165,26 +164,27 @@ public class GlobalAdminSpaceCrudTest(ITestOutputHelper output) : MonolithMeshTe
             NodeType = SpaceNodeType.NodeType,
             Content = new Space { Name = "Test Space" }
         };
-        await NodeFactory.CreateNode(spaceNode);
+        NodeFactory.CreateNode(spaceNode).Should().Emit();
 
         var childNode = new MeshNode("TestPage", spaceId)
         {
             Name = "Test Page",
             NodeType = "Markdown"
         };
-        var created = await NodeFactory.CreateNode(childNode);
+        var created = NodeFactory.CreateNode(childNode).Should().Emit();
 
         created.Should().NotBeNull("Admin should be able to create nodes under Space");
         created.Path.Should().Be($"{spaceId}/TestPage");
 
-        await NodeFactory.DeleteNode(spaceId);
+        NodeFactory.DeleteNode(spaceId).Should().Emit();
     }
 
     [Fact(Timeout = 60000)]
-    public async Task GlobalAdmin_CanAccessCreateLayoutAreaOnSpace()
+    public void GlobalAdmin_CanAccessCreateLayoutAreaOnSpace()
     {
-        var hasCreate = await Mesh.HasPermissionAsync(
-            "Space", TestUsers.Admin.ObjectId, Permission.Create, TestTimeout);
+        var hasCreate = Mesh.GetEffectivePermissions("Space", TestUsers.Admin.ObjectId)
+            .Select(p => p.HasFlag(Permission.Create))
+            .Should().Emit();
         Output.WriteLine($"Admin has Create on 'Space' via SecurityService: {hasCreate}");
         hasCreate.Should().BeTrue("Admin should have Create on Space path");
 
@@ -201,19 +201,18 @@ public class GlobalAdminSpaceCrudTest(ITestOutputHelper output) : MonolithMeshTe
             Operation = NodeOperation.Create,
             Node = MeshNode.FromPath("TestSpace") with { NodeType = "Space" }
         };
-        var ruleAllows = await spaceRule.HasAccess(ctx, TestUsers.Admin.ObjectId).FirstAsync().ToTask(TestTimeout);
+        var ruleAllows = spaceRule.HasAccess(ctx, TestUsers.Admin.ObjectId).Should().Emit();
         Output.WriteLine($"SpaceAccessRule.HasAccessAsync for Create: {ruleAllows}");
         ruleAllows.Should().BeTrue(
             "SpaceAccessRule should allow Create for admin user");
     }
 
     [Fact(Timeout = 60000)]
-    public async Task SpaceType_IsVisibleToGlobalAdmin()
+    public void SpaceType_IsVisibleToGlobalAdmin()
     {
         var provider = Mesh.ServiceProvider.GetRequiredService<ICreatableTypesProvider>();
-        var creatableTypes = await provider.GetCreatableTypes("", parentNode: null)
-            .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+        var creatableTypes = provider.GetCreatableTypes("", parentNode: null)
+            .Should().Emit();
 
         var typeNames = creatableTypes.Select(t => t.NodeTypePath).ToList();
         Output.WriteLine($"Root creatable types: {string.Join(", ", typeNames)}");
@@ -223,10 +222,11 @@ public class GlobalAdminSpaceCrudTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     [Fact(Timeout = 60000)]
-    public async Task GlobalAdmin_CanReadSpaceNodeType()
+    public void GlobalAdmin_CanReadSpaceNodeType()
     {
-        var hasRead = await Mesh.HasPermissionAsync(
-            "Space", TestUsers.Admin.ObjectId, Permission.Read, TestTimeout);
+        var hasRead = Mesh.GetEffectivePermissions("Space", TestUsers.Admin.ObjectId)
+            .Select(p => p.HasFlag(Permission.Read))
+            .Should().Emit();
 
         Output.WriteLine($"Admin has Read on 'Space': {hasRead}");
         hasRead.Should().BeTrue(

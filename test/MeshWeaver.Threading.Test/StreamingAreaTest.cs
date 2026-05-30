@@ -41,16 +41,16 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
     }
 
     [Fact]
-    public async Task StreamingArea_WhenIdle_ReturnsNull()
+    public void StreamingArea_WhenIdle_ReturnsNull()
     {
         // Create an idle thread (not executing)
         var threadPath = "User/Roland/_Thread/streaming-idle-test";
-        await NodeFactory.CreateNode(new MeshNode("streaming-idle-test", "User/Roland/_Thread")
+        NodeFactory.CreateNode(new MeshNode("streaming-idle-test", "User/Roland/_Thread")
         {
             NodeType = ThreadNodeType.NodeType,
             MainNode = "User/Roland",
             Content = new MeshThread()
-        });
+        }).Should().Emit();
 
         // Subscribe to the StreamingArea
         var client = GetClient();
@@ -68,13 +68,13 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
     }
 
     [Fact]
-    public async Task StreamingArea_WhenExecuting_ReturnsStreamingCell()
+    public void StreamingArea_WhenExecuting_ReturnsStreamingCell()
     {
         var threadPath = "User/Roland/_Thread/streaming-exec-test";
         var responseMsgId = "resp-abc";
 
         // Create the response message node
-        await NodeFactory.CreateNode(new MeshNode(responseMsgId, threadPath)
+        NodeFactory.CreateNode(new MeshNode(responseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
             MainNode = "User/Roland",
@@ -85,10 +85,10 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
                 Type = ThreadMessageType.AgentResponse,
                 AgentName = "Orchestrator"
             }
-        });
+        }).Should().Emit();
 
         // Create the thread in executing state with ActiveMessageId
-        await NodeFactory.CreateNode(new MeshNode("streaming-exec-test", "User/Roland/_Thread")
+        NodeFactory.CreateNode(new MeshNode("streaming-exec-test", "User/Roland/_Thread")
         {
             NodeType = ThreadNodeType.NodeType,
             MainNode = "User/Roland",
@@ -98,7 +98,7 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
                 ActiveMessageId = responseMsgId,
                 ExecutionStartedAt = DateTime.UtcNow
             }
-        });
+        }).Should().Emit();
 
         // Subscribe to the StreamingArea
         var client = GetClient();
@@ -116,15 +116,13 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
     }
 
     [Fact(Skip = "Layout-area observation chain doesn't propagate the executingâ†’idle MeshNode transition within 10 s. Same threadStream.Update pattern works in ToolCallsVisibilityTest when read via threadStream directly â€” only the LayoutAreaReferenceâ†’StreamingViewâ†’GetMeshNodeStream chain is slow. Needs investigation of whether StreamingView's GetMeshNodeStream subscribes to the same reducer the Update writes to.")]
-    public async Task StreamingArea_WhenExecutionCompletes_ReturnsNull()
+    public void StreamingArea_WhenExecutionCompletes_ReturnsNull()
     {
-        var ct = new CancellationTokenSource(15.Seconds()).Token;
-
         var threadPath = "User/Roland/_Thread/streaming-complete-test";
         var responseMsgId = "resp-def";
 
         // Create response message
-        await NodeFactory.CreateNode(new MeshNode(responseMsgId, threadPath)
+        NodeFactory.CreateNode(new MeshNode(responseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
             MainNode = "User/Roland",
@@ -134,10 +132,10 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
                 Text = "Done.",
                 Type = ThreadMessageType.AgentResponse
             }
-        });
+        }).Should().Emit();
 
         // Create thread in executing state
-        await NodeFactory.CreateNode(new MeshNode("streaming-complete-test", "User/Roland/_Thread")
+        NodeFactory.CreateNode(new MeshNode("streaming-complete-test", "User/Roland/_Thread")
         {
             NodeType = ThreadNodeType.NodeType,
             MainNode = "User/Roland",
@@ -147,7 +145,7 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
                 ActiveMessageId = responseMsgId,
                 ExecutionStartedAt = DateTime.UtcNow
             }
-        });
+        }).Should().Emit();
 
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -156,16 +154,15 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
             new LayoutAreaReference(ThreadNodeType.StreamingArea));
 
         // Wait for non-null emission first (executing)
-        await streamingArea!
+        streamingArea!
             .Where(ci => ci.Value.ValueKind != JsonValueKind.Null)
-            .Timeout(10.Seconds())
-            .FirstAsync();
+            .Should().Within(10.Seconds()).Emit();
 
         Output.WriteLine("Got executing emission, now completing...");
 
         // Mark execution as complete via the canonical MeshNode stream handle.
         var threadStream = workspace.GetMeshNodeStream(threadPath);
-        await threadStream.Take(1).Timeout(10.Seconds()).FirstAsync();
+        threadStream.Should().Within(10.Seconds()).Emit();
         threadStream.Update(current =>
         {
             var thread = current.Content as MeshThread ?? new MeshThread();
@@ -181,10 +178,9 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
         }).Subscribe(_ => { }, ex => Output.WriteLine($"Update failed: {ex}"));
 
         // Should get a null emission (idle)
-        var idle = await streamingArea
-            .Where(ci => ci.Value.ValueKind == JsonValueKind.Null || ci.Value.ValueKind == JsonValueKind.Undefined)
-            .Timeout(10.Seconds())
-            .FirstAsync();
+        streamingArea
+            .Should().Within(10.Seconds())
+            .Match(ci => ci.Value.ValueKind == JsonValueKind.Null || ci.Value.ValueKind == JsonValueKind.Undefined);
 
         Output.WriteLine("StreamingArea returned null after execution completed");
     }

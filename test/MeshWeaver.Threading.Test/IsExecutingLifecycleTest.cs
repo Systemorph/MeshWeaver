@@ -50,69 +50,56 @@ public class IsExecutingLifecycleTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     [Fact]
-    public async Task SingleMessage_IsExecuting_FlipsTrueThenFalse_WithRealResponse()
+    public void SingleMessage_IsExecuting_FlipsTrueThenFalse_WithRealResponse()
     {
-        var ct = new CancellationTokenSource(60.Seconds()).Token;
         var client = GetClient();
         var workspace = client.GetWorkspace();
 
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, "hello", "TestUser");
-        var createDelivery = await client.Observe(new CreateNodeRequest(threadNode),
-            o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
+        var createDelivery = client.Observe(new CreateNodeRequest(threadNode),
+            o => o.WithTarget(Mesh.Address)).Should().Within(60.Seconds()).Emit();
         createDelivery.Message.Success.Should().BeTrue(createDelivery.Message.Error ?? "");
         var threadPath = createDelivery.Message.Node!.Path!;
 
         // Warm up the remote stream subscription BEFORE submit so the
         // IsExecuting=trueâ†’false transition is captured. Same pattern
         // ThreadFlow.SubmitAndWait uses.
-        var baselineThread = await workspace.GetMeshNodeStream(threadPath)
+        var baselineThread = workspace.GetMeshNodeStream(threadPath)
             .Select(n => n.Content as MeshThread)
-            .Where(t => t != null)
-            .Take(1)
-            .Timeout(10.Seconds())
-            .ToTask(ct);
+            .Should().Within(10.Seconds()).Match(t => t != null);
         baselineThread!.IsExecuting.Should().BeFalse("thread should not be executing yet");
-
-        // Subscribe to the executing transition BEFORE submit. Wait for the
-        // committed `Executing` state â€” NOT just any non-Idle state â€” because
-        // `IsExecuting` is true during the transient `StartingExecution`
-        // claim window where `ActiveMessageId` is still null (the responseMsgId
-        // is generated downstream by DispatchAfterClaim's commit, which flips
-        // Status â†’ Executing AND stamps ActiveMessageId in one update).
-        var executingTask = workspace.GetMeshNodeStream(threadPath)
-            .Select(n => n.Content as MeshThread)
-            .Where(t => t is { Status: ThreadExecutionStatus.Executing })
-            .Take(1)
-            .Timeout(10.Seconds())
-            .ToTask(ct);
 
         client.SubmitMessage(
             threadPath,
             "hello",
             contextPath: ContextPath);
 
-        // 1) IsExecuting must flip to true within ~10s.
-        var executingState = await executingTask;
+        // 1) IsExecuting must flip to true within ~10s. Wait for the committed
+        // `Executing` state â€” NOT just any non-Idle state â€” because
+        // `IsExecuting` is true during the transient `StartingExecution`
+        // claim window where `ActiveMessageId` is still null (the responseMsgId
+        // is generated downstream by DispatchAfterClaim's commit, which flips
+        // Status â†’ Executing AND stamps ActiveMessageId in one update).
+        var executingState = workspace.GetMeshNodeStream(threadPath)
+            .Select(n => n.Content as MeshThread)
+            .Should().Within(10.Seconds()).Match(t => t is { Status: ThreadExecutionStatus.Executing });
         executingState!.IsExecuting.Should().BeTrue();
         executingState.ActiveMessageId.Should().NotBeNullOrEmpty(
             "ActiveMessageId must point at the response cell during streaming");
 
         // 2) IsExecuting must flip BACK to false within 30s.
-        var doneState = await workspace.GetMeshNodeStream(threadPath)
+        var doneState = workspace.GetMeshNodeStream(threadPath)
             .Select(n => n.Content as MeshThread)
-            .Where(t => t is { IsExecuting: false } && t.Messages.Count >= 2)
-            .Take(1)
-            .Timeout(30.Seconds())
-            .ToTask(ct);
+            .Should().Within(30.Seconds()).Match(t => t is { IsExecuting: false } && t.Messages.Count >= 2);
         doneState!.IsExecuting.Should().BeFalse(
             "execution must terminate cleanly, not stay running until the watchdog");
         doneState.ExecutionStartedAt.Should().BeNull("started-at is cleared on completion");
 
         // 3) Final ThreadMessage.CompletedAt must be set AND text non-empty.
         var lastMsgId = doneState.Messages[^1];
-        var finalMessage = await ThreadFlow.ReadMessage(client, threadPath, lastMsgId,
+        var finalMessage = ThreadFlow.ReadMessage(client, threadPath, lastMsgId,
             m => m.CompletedAt != null && !string.IsNullOrEmpty(m.Text),
-            timeout: 15.Seconds()).FirstAsync().ToTask(ct);
+            timeout: 15.Seconds()).Should().Within(15.Seconds()).Emit();
 
         finalMessage.Text.Should().Contain("I received",
             "the Echo agent's streaming reply must reach the response cell â€” "

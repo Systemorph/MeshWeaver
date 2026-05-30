@@ -46,28 +46,27 @@ public class ToolCallingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     }
 
     [Fact]
-    public async Task SubmitMessage_WithToolCalling_ExecutesSearchAndReturnsResult()
+    public void SubmitMessage_WithToolCalling_ExecutesSearchAndReturnsResult()
     {
-        var ct = new CancellationTokenSource(30.Seconds()).Token;
         var client = GetClient();
 
-        await NodeFactory.CreateNode(new MeshNode("test-doc", ContextPath)
+        NodeFactory.CreateNode(new MeshNode("test-doc", ContextPath)
         {
             Name = "Test Document",
             NodeType = "Markdown",
             Content = "Hello from test document"
-        });
+        }).Should().Emit();
 
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, "Tool calling test");
-        var created = await NodeFactory.CreateNode(threadNode);
+        var created = NodeFactory.CreateNode(threadNode).Should().Emit();
         var threadPath = created.Path;
         Output.WriteLine($"Thread created: {threadPath}");
 
-        var responseMsgId = await ThreadFlow.SubmitAndWait(client, threadPath,
-            "Search for test documents", contextPath: ContextPath).FirstAsync().ToTask(ct);
+        var responseMsgId = ThreadFlow.SubmitAndWait(client, threadPath,
+            "Search for test documents", contextPath: ContextPath).Should().Within(30.Seconds()).Emit();
 
-        var responseContent = await ThreadFlow.ReadMessage(client, threadPath, responseMsgId,
-            m => !string.IsNullOrEmpty(m.Text) && m.Status != ThreadMessageStatus.Streaming).FirstAsync().ToTask(ct);
+        var responseContent = ThreadFlow.ReadMessage(client, threadPath, responseMsgId,
+            m => !string.IsNullOrEmpty(m.Text) && m.Status != ThreadMessageStatus.Streaming).Should().Within(30.Seconds()).Emit();
         responseContent.Role.Should().Be("assistant");
 
         responseContent.Text.Should().Contain("TOOL_RESULT_RECEIVED",

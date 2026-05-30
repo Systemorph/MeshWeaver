@@ -84,12 +84,12 @@ public class CommentNodeLoadingTest(ITestOutputHelper output) : MonolithMeshTest
     /// via namespace query with nodeType filter.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task CommentNodes_AreDiscoverableByNamespaceQuery()
+    public void CommentNodes_AreDiscoverableByNamespaceQuery()
     {
-        var comments = await MeshQuery
-            .QueryAsync<MeshNode>(
-                $"namespace:{DocPartitionNamespace} nodeType:{CommentNodeType.NodeType}")
-            .ToListAsync();
+        var comments = MeshQuery
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                $"namespace:{DocPartitionNamespace} nodeType:{CommentNodeType.NodeType}"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         comments.Should().NotBeEmpty(
             $"Namespace query should find comment nodes under '{DocPartitionNamespace}'");

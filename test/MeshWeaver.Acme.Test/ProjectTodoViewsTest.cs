@@ -75,6 +75,35 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
             .AddLayoutClient();
     }
 
+    /// <summary>
+    /// Accumulate the live <c>ObserveQuery</c> deltas (Initial / Reset / Added /
+    /// Updated / Removed) into a running by-path result set and block until
+    /// <paramref name="until"/> holds. Replaces the old
+    /// <c>QueryAsync(...).ToListAsync()</c> snapshot for count-sensitive assertions
+    /// that can race eventual-consistency lag (the Initial set is short and items
+    /// trickle in as <c>Added</c>).
+    /// </summary>
+    private IReadOnlyList<MeshNode> QueryUntil(string query, Func<IReadOnlyList<MeshNode>, bool> until)
+    {
+        var byPath = new Dictionary<string, MeshNode>(StringComparer.Ordinal);
+        return MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Scan((IReadOnlyList<MeshNode>)Array.Empty<MeshNode>(), (_, change) =>
+            {
+                if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
+                    byPath.Clear();
+                foreach (var n in change.Items)
+                {
+                    if (n.Path is not { } p) continue;
+                    if (change.ChangeType is QueryChangeType.Removed)
+                        byPath.Remove(p);
+                    else
+                        byPath[p] = n;
+                }
+                return byPath.Values.ToList();
+            })
+            .Should().Within(30.Seconds()).Match(until);
+    }
+
     #region Query Tests
 
     /// <summary>
@@ -83,16 +112,15 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// Uses the same query pattern as ProjectViews: path:{project}/Todo scope:subtree
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task MeshQuery_ShouldFindTodosByNodeType()
+    public void MeshQuery_ShouldFindTodosByNodeType()
     {
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-
         // Query for all Todo items under ACME/ProductLaunch/Todo (same pattern used by ProjectViews)
         var query = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo scope:subtree";
         Output.WriteLine($"Querying: {query}");
 
-        var results = await meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query), null, TestContext.Current.CancellationToken)
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var results = MeshQuery
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         Output.WriteLine($"Found {results.Count} Todo items:");
         foreach (var node in results.Take(10))
@@ -108,16 +136,15 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// Test that IMeshService can find all 21 Todo nodes.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task MeshQuery_ShouldFindAll21TodoNodes()
+    public void MeshQuery_ShouldFindAll21TodoNodes()
     {
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-
         // Query for all Todo items - we have 21 sample Todo items
         var query = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo scope:subtree";
         Output.WriteLine($"Querying: {query}");
 
-        var results = await meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query), null, TestContext.Current.CancellationToken)
-            .ToListAsync(TestContext.Current.CancellationToken);
+        // Accumulate deltas until at least 23 items have surfaced — the Initial
+        // snapshot can be short on cold CI and items trickle in as Added.
+        var results = QueryUntil(query, r => r.Count >= 23);
 
         Output.WriteLine($"Found {results.Count} Todo items:");
         foreach (var node in results)
@@ -133,19 +160,19 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// Test that IMeshService filters by nodeType correctly.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task MeshQuery_ShouldFilterByNodeType()
+    public void MeshQuery_ShouldFilterByNodeType()
     {
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-
         // Query without nodeType filter
         var queryWithoutFilter = "path:ACME/ProductLaunch/Todo scope:subtree";
-        var allResults = await meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(queryWithoutFilter), null, TestContext.Current.CancellationToken)
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var allResults = MeshQuery
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(queryWithoutFilter))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Query with nodeType filter
         var queryWithFilter = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo scope:subtree";
-        var filteredResults = await meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(queryWithFilter), null, TestContext.Current.CancellationToken)
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var filteredResults = MeshQuery
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(queryWithFilter))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         Output.WriteLine($"Without filter: {allResults.Count}, With filter: {filteredResults.Count}");
 
@@ -341,16 +368,16 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// Note: The IContentInitializable.Initialize() method calculates DueDate from DueDateOffsetDays.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task TodaysFocus_ShouldHaveExactlyThreeOverdueItems()
+    public void TodaysFocus_ShouldHaveExactlyThreeOverdueItems()
     {
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-
         // Query for all Todo items
         var query = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo scope:subtree";
         Output.WriteLine($"Querying: {query}");
 
-        var results = await meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query), null, TestContext.Current.CancellationToken)
-            .ToListAsync(TestContext.Current.CancellationToken);
+        // Accumulate the full Todo set (≥23) before filtering for overdue — the
+        // exact-count assertion below requires the complete data set, which can
+        // trickle in as Added deltas after a short Initial snapshot on cold CI.
+        var results = QueryUntil(query, r => r.Count >= 23);
 
         Output.WriteLine($"Found {results.Count} Todo items");
 
@@ -438,14 +465,14 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// This test queries the actual data and verifies the expected task assignments.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task MyTasks_RolandShouldHaveTwoTasks()
+    public void MyTasks_RolandShouldHaveTwoTasks()
     {
         // Arrange: Query all Todo items to verify test data
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var query = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo scope:subtree";
 
-        var results = await meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query), null, TestContext.Current.CancellationToken)
-            .ToListAsync(TestContext.Current.CancellationToken);
+        // Accumulate the full Todo set (≥23) before filtering for Roland's tasks —
+        // the exact-count assertion below requires the complete data set.
+        var results = QueryUntil(query, r => r.Count >= 23);
 
         // Get Roland's tasks
         var rolandsTasks = new List<string>();

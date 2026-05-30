@@ -1,6 +1,3 @@
-using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
-using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -47,12 +44,11 @@ public class RemoteStreamCacheTest(ITestOutputHelper output) : MonolithMeshTestB
         };
 
     [Fact]
-    public async Task GetRemoteStream_TwiceForSameKey_ReturnsSameInstance()
+    public void GetRemoteStream_TwiceForSameKey_ReturnsSameInstance()
     {
-        var ct = TestContext.Current.CancellationToken;
         var path = $"{TargetNamespace}/alpha";
 
-        await NodeFactory.CreateNode(MakeNode("alpha", "Alpha")).FirstAsync().ToTask(ct);
+        NodeFactory.CreateNode(MakeNode("alpha", "Alpha")).Should().Emit();
 
         var workspace = Mesh.GetWorkspace();
         var first = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
@@ -70,12 +66,11 @@ public class RemoteStreamCacheTest(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     [Fact]
-    public async Task GetRemoteStream_AfterDispose_ReturnsFreshInstance()
+    public void GetRemoteStream_AfterDispose_ReturnsFreshInstance()
     {
-        var ct = TestContext.Current.CancellationToken;
         var path = $"{TargetNamespace}/beta";
 
-        await NodeFactory.CreateNode(MakeNode("beta", "Beta")).FirstAsync().ToTask(ct);
+        NodeFactory.CreateNode(MakeNode("beta", "Beta")).Should().Emit();
 
         var workspace = Mesh.GetWorkspace();
 

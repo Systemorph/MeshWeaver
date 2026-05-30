@@ -88,18 +88,17 @@ public class MeshNodeReadAsSystemTest(ITestOutputHelper output) : MonolithMeshTe
     /// The architectural split is "upstream = System / gate = caller".</para>
     /// </summary>
     [Fact(Timeout = 30_000)]
-    public async Task GetMeshNodeStream_UnprivilegedUser_GetsUnauthorized()
+    public void GetMeshNodeStream_UnprivilegedUser_GetsUnauthorized()
     {
-        var ct = TestContext.Current.CancellationToken;
         var nodeId = $"Md_{Guid.NewGuid().AsString()}";
         var nodePath = $"SystemReadProbe/{nodeId}";
 
-        await NodeFactory.CreateNode(
+        NodeFactory.CreateNode(
             new MeshNode(nodeId, "SystemReadProbe")
             {
                 Name = "System-read probe node",
                 NodeType = "Markdown",
-            });
+            }).Should().Emit();
 
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var workspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
@@ -112,13 +111,12 @@ public class MeshNodeReadAsSystemTest(ITestOutputHelper output) : MonolithMeshTe
 
         try
         {
-            var act = async () => await workspace.GetMeshNodeStream(nodePath)
+            Action act = () => workspace.GetMeshNodeStream(nodePath)
                 .Take(1)
                 .Timeout(10.Seconds())
-                .FirstAsync()
-                .ToTask(ct);
+                .Wait();
 
-            await act.Should().ThrowAsync<UnauthorizedAccessException>(
+            act.Should().Throw<UnauthorizedAccessException>(
                 because: "the cache's per-user RLS gate denies the read for an " +
                          "unprivileged ambient identity. The upstream remote subscription " +
                          "is system-impersonated, but the cache layer enforces per-user " +
@@ -143,27 +141,23 @@ public class MeshNodeReadAsSystemTest(ITestOutputHelper output) : MonolithMeshTe
     /// node. The upstream system-read is invisible to the consumer.</para>
     /// </summary>
     [Fact(Timeout = 30_000)]
-    public async Task CacheGetStream_WithReadPermission_EmitsNode()
+    public void CacheGetStream_WithReadPermission_EmitsNode()
     {
-        var ct = TestContext.Current.CancellationToken;
         var nodeId = $"Md_{Guid.NewGuid().AsString()}";
         var nodePath = $"CacheReadProbe/{nodeId}";
 
-        await NodeFactory.CreateNode(
+        NodeFactory.CreateNode(
             new MeshNode(nodeId, "CacheReadProbe")
             {
                 Name = "Cache-read probe",
                 NodeType = "Markdown",
-            });
+            }).Should().Emit();
 
         var cache = Mesh.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
 
-        var node = await cache.GetStream(nodePath)
+        var node = cache.GetStream(nodePath)
             .Where(n => n is not null)
-            .Take(1)
-            .Timeout(10.Seconds())
-            .FirstAsync()
-            .ToTask(ct);
+            .Should().Within(10.Seconds()).Emit();
 
         node.Should().NotBeNull();
         node.Path.Should().Be(nodePath);
@@ -184,19 +178,18 @@ public class MeshNodeReadAsSystemTest(ITestOutputHelper output) : MonolithMeshTe
     /// halves of that contract.</para>
     /// </summary>
     [Fact(Timeout = 30_000)]
-    public async Task WorkspaceGetQuery_AppliesPerUserRlsFilter()
+    public void WorkspaceGetQuery_AppliesPerUserRlsFilter()
     {
-        var ct = TestContext.Current.CancellationToken;
         var workspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
         var nodeId1 = $"Md_{Guid.NewGuid().AsString()}";
         var nodeId2 = $"Md_{Guid.NewGuid().AsString()}";
 
-        await NodeFactory.CreateNode(
-            new MeshNode(nodeId1, "QueryCacheProbe") { Name = "First", NodeType = "Markdown" });
-        await NodeFactory.CreateNode(
-            new MeshNode(nodeId2, "QueryCacheProbe") { Name = "Second", NodeType = "Markdown" });
+        NodeFactory.CreateNode(
+            new MeshNode(nodeId1, "QueryCacheProbe") { Name = "First", NodeType = "Markdown" }).Should().Emit();
+        NodeFactory.CreateNode(
+            new MeshNode(nodeId2, "QueryCacheProbe") { Name = "Second", NodeType = "Markdown" }).Should().Emit();
 
         var queryId = $"system-read-probe:{Guid.NewGuid()}";
 
@@ -207,12 +200,9 @@ public class MeshNodeReadAsSystemTest(ITestOutputHelper output) : MonolithMeshTe
             var collection = workspace.GetQuery(
                 queryId, "namespace:QueryCacheProbe nodeType:Markdown");
 
-            var snapshot = await collection
+            var snapshot = collection
                 .Where(items => items.Count() >= 2)
-                .Take(1)
-                .Timeout(10.Seconds())
-                .FirstAsync()
-                .ToTask(ct);
+                .Should().Within(10.Seconds()).Emit();
 
             snapshot.Should().Contain(n => n.Id == nodeId1);
             snapshot.Should().Contain(n => n.Id == nodeId2);

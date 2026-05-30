@@ -186,12 +186,11 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// Test that child Todo nodes can be enumerated via IMeshService.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task ChildTodos_CanBeEnumeratedViaQuery()
+    public void ChildTodos_CanBeEnumeratedViaQuery()
     {
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-
-        var todos = await meshQuery.QueryAsync<MeshNode>("namespace:ACME/ProductLaunch/Todo", null, TestContext.Current.CancellationToken)
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var todos = MeshQuery
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("namespace:ACME/ProductLaunch/Todo"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         todos.Should().NotBeEmpty("Should have child Todo nodes");
         todos.Should().HaveCountGreaterThan(10, "Should have at least 10 Todo items");
