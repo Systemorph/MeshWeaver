@@ -286,6 +286,21 @@ internal static class NodeTypeEnrichmentHelpers
                 (typeNode?.Content as NodeTypeDefinition)?.CompilationStatus,
                 (typeNode?.Content as NodeTypeDefinition)?.LatestAssemblyCollection ?? "(null)",
                 (typeNode?.Content as NodeTypeDefinition)?.LatestAssemblyPath ?? "(null)"))
+            // 🚨 Never SNAP an in-flight compile. A dynamic NodeType mid-recompile
+            // (Pending/Compiling) still carries its PREVIOUS HubConfiguration + the
+            // OLD LatestAssemblyPath, so the "has a usable config" clause below would
+            // match the transitional state — and the Take(1) would freeze the instance
+            // hub onto that stale/overlay config for its whole lifetime (it never
+            // re-enriches). This was the rbuergi/CatBond/AtlanticBond symptom: the
+            // framework-stale self-heal flips Ok→Pending→Compiling→Ok, an instance
+            // activating mid-cycle snapped the Compiling state, and ApplyStreamResult
+            // overlaid it (status≠Ok skips the framework-stale self-heal branch and
+            // falls to the bare "Compilation failed" overlay). Wait for a terminal
+            // state. A settled Ok-with-stale-framework is still allowed through
+            // (status==Ok) so ApplyStreamResult's framework-stale self-heal can run.
+            .Where(typeNode => !(typeNode.Content is NodeTypeDefinition inflight
+                                 && inflight.CompilationStatus is CompilationStatus.Pending
+                                                                or CompilationStatus.Compiling))
             // Settled compile: Status=Ok MUST carry valid assembly fields
             // (the strict check is what the self-heal above relies on —
             // a stale Ok with null fields keeps the slow-path waiting until
@@ -596,7 +611,8 @@ internal static class NodeTypeEnrichmentHelpers
             return TriggerRecompileAndRetry(
                 node, nodeType, meshConfiguration, compilationService, meshHub,
                 logger, recompileAttempts,
-                reason: $"'{nodeType}' assembly compiled against framework '{def.CompiledFrameworkVersion}' but live framework is '{NodeTypeCompilationHelpers.FrameworkVersion}' — ABI-stale, recompiling");
+                reason: $"'{nodeType}' assembly compiled against framework '{def.CompiledFrameworkVersion}' but live framework is '{NodeTypeCompilationHelpers.FrameworkVersion}' — ABI-stale, recompiling",
+                requireUsableBuild: true);
         }
 
         var error = def.CompilationError ?? "Compilation failed";
@@ -628,7 +644,8 @@ internal static class NodeTypeEnrichmentHelpers
         IMessageHub meshHub,
         ILogger? logger,
         int recompileAttempts,
-        string reason)
+        string reason,
+        bool requireUsableBuild = false)
     {
         logger?.LogInformation(
             "EnrichWithNodeType: self-heal recompile #{Attempt} for {NodeType} — {Reason}",
@@ -648,15 +665,40 @@ internal static class NodeTypeEnrichmentHelpers
             })
             .Take(1)
             .SelectMany(_ => typeStream
-                .Where(typeNode => (typeNode.HubConfiguration != null
-                                    && typeNode.Content is NodeTypeDefinition hcDef
-                                    && !string.IsNullOrEmpty(hcDef.LatestAssemblyPath))
-                    || (typeNode.Content is NodeTypeDefinition d
-                        && ((d.CompilationStatus == CompilationStatus.Ok
-                                && !string.IsNullOrEmpty(d.LatestAssemblyCollection)
-                                && !string.IsNullOrEmpty(d.LatestAssemblyPath))
-                            || d.CompilationStatus == CompilationStatus.Error))
-                    || typeNode.Content is not NodeTypeDefinition)
+                .Where(typeNode =>
+                {
+                    if (typeNode.Content is not NodeTypeDefinition d)
+                        return true; // not a NodeTypeDefinition — nothing left to wait on
+
+                    // 🚨 Never settle on an IN-FLIGHT compile, and never re-snap the
+                    // STALE pre-flip node. The Ok→Pending flip above is a cross-hub
+                    // JSON-merge patch — it does NOT round-trip synchronously, so for
+                    // a few ms after we flip, THIS stream still replays the pre-flip
+                    // node (status Ok, OLD assembly/framework). A naive "terminal Ok
+                    // with an assembly" match re-snaps that stale Ok and recurses on
+                    // it before the recompile even starts → recompileAttempts hits the
+                    // cap → the instance lands on the bare overlay (the
+                    // rbuergi/CatBond/AtlanticBond symptom; observed as the recursion
+                    // capping 5ms after the flip). So: skip in-flight states, surface
+                    // a real Error, and for the framework-stale heal require the
+                    // rebuild to be GENUINELY USABLE (HasUsableBuild — the framework
+                    // version now matches), which the stale Ok can never satisfy.
+                    if (d.CompilationStatus is CompilationStatus.Pending
+                                             or CompilationStatus.Compiling)
+                        return false;
+
+                    if (d.CompilationStatus == CompilationStatus.Error)
+                        return true;
+
+                    if (requireUsableBuild)
+                        return NodeTypeCompilationHelpers.HasUsableBuild(typeNode, d);
+
+                    return (typeNode.HubConfiguration != null
+                            && !string.IsNullOrEmpty(d.LatestAssemblyPath))
+                        || (d.CompilationStatus == CompilationStatus.Ok
+                            && !string.IsNullOrEmpty(d.LatestAssemblyCollection)
+                            && !string.IsNullOrEmpty(d.LatestAssemblyPath));
+                })
                 .Take(1)
                 .Timeout(SlowPathTimeout)
                 .SelectMany(newTypeNode => ApplyStreamResult(
