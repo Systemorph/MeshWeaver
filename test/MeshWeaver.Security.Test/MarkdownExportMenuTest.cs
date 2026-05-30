@@ -48,7 +48,7 @@ public class MarkdownExportMenuTest(ITestOutputHelper output) : MonolithMeshTest
             .AddLayoutClient()
             .WithTypes(typeof(MenuControl), typeof(NodeMenuItemDefinition));
 
-    private async Task<IReadOnlyList<NodeMenuItemDefinition>> FetchNodeMenuItemsAsync(
+    private IReadOnlyList<NodeMenuItemDefinition> FetchNodeMenuItems(
         IMessageHub client, Address nodeAddress)
     {
         var workspace = client.GetWorkspace();
@@ -56,21 +56,21 @@ public class MarkdownExportMenuTest(ITestOutputHelper output) : MonolithMeshTest
 
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, reference);
 
-        var menuControl = await stream
+        var menuControl = stream
             .GetControlStream(MenuControl.GetMenuArea(NodeMenuItemsExtensions.NodeMenuContext))
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x != null);
+            .Where(x => x != null)
+            .Should().Within(10.Seconds()).Emit();
 
         return menuControl.Should().BeOfType<MenuControl>().Which.Items;
     }
 
     [Fact(Timeout = 30000)]
-    public async Task MarkdownNode_NodeMenu_ContainsPdfAndDocxExportItems()
+    public void MarkdownNode_NodeMenu_ContainsPdfAndDocxExportItems()
     {
         var client = GetClient();
         var nodeAddress = new Address(MarkdownNodePath);
 
-        var items = await FetchNodeMenuItemsAsync(client, nodeAddress);
+        var items = FetchNodeMenuItems(client, nodeAddress);
 
         Output.WriteLine($"Node menu items for Markdown node: {items.Count}");
         foreach (var item in items)

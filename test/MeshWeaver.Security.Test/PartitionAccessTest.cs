@@ -69,15 +69,14 @@ public class PartitionAccessTest(ITestOutputHelper output) : MonolithMeshTestBas
     }
 
     [Fact(Timeout = 20000)]
-    public async Task Admin_CanSee_AllPartitions()
+    public void Admin_CanSee_AllPartitions()
     {
         // Default login is admin (Roland)
-        var results = await MeshQuery.QueryAsync<MeshNode>(
-            $"namespace:{PartitionNodeType.Namespace} nodeType:{PartitionNodeType.NodeType}",
-            ct: TestContext.Current.CancellationToken
-        ).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            $"namespace:{PartitionNodeType.Namespace} nodeType:{PartitionNodeType.NodeType}"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
-        Output.WriteLine($"Found {results.Length} partitions");
+        Output.WriteLine($"Found {results.Count} partitions");
         foreach (var r in results)
             Output.WriteLine($"  - {r.Path}: {r.Name} (Content={r.Content?.GetType().Name})");
 
@@ -87,16 +86,15 @@ public class PartitionAccessTest(ITestOutputHelper output) : MonolithMeshTestBas
     }
 
     [Fact(Timeout = 20000)]
-    public async Task AuthenticatedUser_CanRead_PartitionNodes()
+    public void AuthenticatedUser_CanRead_PartitionNodes()
     {
         LoginAsUnprivilegedUser();
 
-        var results = await MeshQuery.QueryAsync<MeshNode>(
-            $"namespace:{PartitionNodeType.Namespace} nodeType:{PartitionNodeType.NodeType}",
-            ct: TestContext.Current.CancellationToken
-        ).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            $"namespace:{PartitionNodeType.Namespace} nodeType:{PartitionNodeType.NodeType}"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
-        Output.WriteLine($"Found {results.Length} partitions as unprivileged user");
+        Output.WriteLine($"Found {results.Count} partitions as unprivileged user");
         foreach (var r in results)
             Output.WriteLine($"  - {r.Path}: {r.Name}");
 
@@ -106,15 +104,14 @@ public class PartitionAccessTest(ITestOutputHelper output) : MonolithMeshTestBas
     }
 
     [Fact(Timeout = 20000)]
-    public async Task PartitionNode_HasCorrectNamespace()
+    public void PartitionNode_HasCorrectNamespace()
     {
-        var results = await MeshQuery.QueryAsync<MeshNode>(
-            "path:Admin/Partition/TestPartition",
-            ct: TestContext.Current.CancellationToken
-        ).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            "path:Admin/Partition/TestPartition"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         results.Should().HaveCount(1);
-        var partition = results[0];
+        var partition = results.First();
         partition.Content.Should().BeOfType<PartitionDefinition>();
 
         var def = (PartitionDefinition)partition.Content!;
@@ -124,15 +121,14 @@ public class PartitionAccessTest(ITestOutputHelper output) : MonolithMeshTestBas
     }
 
     [Fact(Timeout = 20000)]
-    public async Task DocumentationPartition_HasDocNamespace()
+    public void DocumentationPartition_HasDocNamespace()
     {
-        var results = await MeshQuery.QueryAsync<MeshNode>(
-            "path:Admin/Partition/Documentation",
-            ct: TestContext.Current.CancellationToken
-        ).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            "path:Admin/Partition/Documentation"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         results.Should().HaveCount(1);
-        var partition = results[0];
+        var partition = results.First();
         partition.Content.Should().BeOfType<PartitionDefinition>();
 
         var def = (PartitionDefinition)partition.Content!;

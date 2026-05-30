@@ -3,6 +3,7 @@ using MeshWeaver.Blazor.Portal;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Markdig.Syntax;
@@ -77,54 +78,57 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
     }
 
     /// <summary>
-    /// QueryAsync goes through the catalog index which is populated asynchronously
+    /// ObserveQuery goes through the catalog index which is populated asynchronously
     /// during persistence init. Locally this completes within the implicit test
-    /// startup window; CI is slower and the first call can return an empty set
-    /// before the FileSystem partition's recursive scan finishes. Poll the query
-    /// over a short window so the tests aren't flaky in environments where the
+    /// startup window; CI is slower and the Initial snapshot can be empty before the
+    /// FileSystem partition's recursive scan finishes. Accumulate the live deltas
+    /// (Initial / Reset / Added / Updated) into a running list and block until the
+    /// ACME Space node appears, so the tests aren't flaky in environments where the
     /// scan hasn't yet seen the ACME organization node.
     /// </summary>
-    private async Task<List<MeshNode>> QueryUntilAcmeIndexedAsync(string query, CancellationToken ct)
+    private IReadOnlyList<MeshNode> QueryUntilAcmeIndexed(string query)
     {
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        // 50s polling window inside the [Fact(Timeout = 60000)] cap. The
-        // FileSystem partition's catalog scan can take 20-40s on cold CI
-        // runners (Linux, fresh testhost, swap-pressured); a 20s budget hit
-        // its ceiling consistently. 50s leaves enough headroom for the test
-        // assertion + Output.WriteLine + dispose without re-flaking the cap.
-        var deadline = DateTime.UtcNow.AddSeconds(50);
-        List<MeshNode> results = new();
-        while (DateTime.UtcNow < deadline)
-        {
-            results = await meshService.QueryAsync<MeshNode>(query, ct: ct).ToListAsync(ct);
-            if (results.Any(n => n.Path == "ACME" && n.NodeType == "Space"))
-                return results;
-            await Task.Delay(200, ct);
-        }
-        return results;
+        var byPath = new Dictionary<string, MeshNode>(StringComparer.Ordinal);
+        return MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Scan((IReadOnlyList<MeshNode>)Array.Empty<MeshNode>(), (_, change) =>
+            {
+                if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
+                    byPath.Clear();
+                foreach (var n in change.Items)
+                {
+                    if (n.Path is not { } p) continue;
+                    if (change.ChangeType is QueryChangeType.Removed)
+                        byPath.Remove(p);
+                    else
+                        byPath[p] = n;
+                }
+                return byPath.Values.ToList();
+            })
+            // 50s window inside the [Fact(Timeout = 60000)] cap. The FileSystem
+            // partition's catalog scan can take 20-40s on cold CI runners.
+            .Should().Within(50.Seconds())
+            .Match(results => results.Any(n => n.Path == "ACME" && n.NodeType == "Space"));
     }
 
     [Fact(Timeout = 60000)]
-    public async Task SubtreeSearch_FindsOrganizationRootNode()
+    public void SubtreeSearch_FindsOrganizationRootNode()
     {
-        var ct = TestContext.Current.CancellationToken;
-        var results = await QueryUntilAcmeIndexedAsync(
-            "*ACME* scope:subtree is:main limit:50", ct);
+        var results = QueryUntilAcmeIndexed(
+            "*ACME* scope:subtree is:main limit:50");
 
         results.Should().Contain(n => n.Path == "ACME" && n.NodeType == "Space",
             "scope:subtree should include the ACME root node itself");
     }
 
     [Fact(Timeout = 60000)]
-    public async Task DescendantsSearch_FindsOrganizationRootNode()
+    public void DescendantsSearch_FindsOrganizationRootNode()
     {
         // Updated 2026-04-24: was DescendantsSearch_MissesOrganizationRootNode and asserted
         // the bug behavior. The query engine was fixed elsewhere; scope:descendants now
         // returns the ACME root node when its name matches the wildcard. Test now asserts
         // the corrected behavior so a future regression of the original bug is caught.
-        var ct = TestContext.Current.CancellationToken;
-        var results = await QueryUntilAcmeIndexedAsync(
-            "*ACME* scope:descendants is:main limit:50", ct);
+        var results = QueryUntilAcmeIndexed(
+            "*ACME* scope:descendants is:main limit:50");
 
         results.Should().Contain(n => n.Path == "ACME" && n.NodeType == "Space",
             "scope:descendants should include the ACME root node (NodeType: Space)");
@@ -150,40 +154,30 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
     }
 
     [Fact(Timeout = 60000)]
-    public async Task PortalSearch_WithContextSearch_FindsAcme()
+    public void PortalSearch_WithContextSearch_FindsAcme()
     {
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-
-        var results = await meshService
-            .QueryAsync<MeshNode>("*ACME* scope:subtree context:search is:main limit:50")
-            .ToListAsync();
+        var results = QueryUntilAcmeIndexed(
+            "*ACME* scope:subtree context:search is:main limit:50");
 
         results.Should().Contain(n => n.Path == "ACME",
             "portal search with context:search should find the ACME root node");
     }
 
     [Fact(Timeout = 60000)]
-    public async Task AcmeOrganization_IsAccessibleToAuthenticatedUser()
+    public void AcmeOrganization_IsAccessibleToAuthenticatedUser()
     {
         // This tests what the portal does when navigating to /ACME:
         // SecurePersistenceServiceDecorator.HasReadAccessAsync → SpaceAccessRule
-        // → SecurityService.HasPermissionAsync("ACME", userId, Permission.Read)
+        // → CheckPermission("ACME", userId, Permission.Read)
         // The Public_Access.json at ACME/_Access grants Viewer to Public,
         // and SecurityService merges Public permissions as floor for authenticated users.
         // SecurityService loads AccessAssignment satellites asynchronously via the
         // synced query — locally this completes within test startup, CI is slower
-        // and the first HasPermissionAsync call returns false before the scan
-        // catches the ACME/_Access partition. Poll over a short window.
-        var ct = TestContext.Current.CancellationToken;
+        // and the first emission can be false before the scan catches the
+        // ACME/_Access partition. Block for the granted emission over a short window.
         var userId = TestUsers.Admin.ObjectId;
-        var deadline = DateTime.UtcNow.AddSeconds(25);
-        var hasRead = false;
-        while (DateTime.UtcNow < deadline)
-        {
-            hasRead = await Mesh.HasPermissionAsync("ACME", userId, Permission.Read, ct);
-            if (hasRead) break;
-            await Task.Delay(200, ct);
-        }
+        var hasRead = Mesh.CheckPermission("ACME", userId, Permission.Read)
+            .Should().Within(25.Seconds()).Match(granted => granted);
         hasRead.Should().BeTrue(
             "authenticated users should have Read access to ACME via Public_Access.json Viewer role");
 
@@ -193,16 +187,10 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
         // runners the FIRST read can return a node with NodeType="Markdown"
         // (the parser's fallback when frontmatter hasn't been bound yet, or a
         // cache miss that returns the JSON-shape default before the markdown
-        // parser runs). Poll until the typed Space shape lands so the
+        // parser runs). Block until the typed Space shape lands so the
         // assertion isn't flaky on cold cache.
-        var nodeDeadline = DateTime.UtcNow.AddSeconds(25);
-        MeshNode? node = null;
-        while (DateTime.UtcNow < nodeDeadline)
-        {
-            node = await ReadNodeAsync("ACME");
-            if (node?.NodeType == "Space") break;
-            await Task.Delay(200, ct);
-        }
+        var node = ReadNode("ACME")
+            .Should().Within(25.Seconds()).Match(n => n?.NodeType == "Space");
         node.Should().NotBeNull("ACME node should exist");
         node!.NodeType.Should().Be("Space");
     }

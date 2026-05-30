@@ -55,10 +55,10 @@ public class FilePersistedAccessRecursionTest(ITestOutputHelper output) : Monoli
     /// Baseline: a user with NO assignment anywhere gets <c>Permission.None</c>.
     /// </summary>
     [Fact(Timeout = 15_000)]
-    public async Task UnknownUser_OnDeepScope_HasNoPermission()
+    public void UnknownUser_OnDeepScope_HasNoPermission()
     {
-        var perms = await Mesh.GetPermissionAsync("tenant/team/project", "unknown-user", TestTimeout);
-        perms.Should().Be(Permission.None);
+        Mesh.GetEffectivePermissions("tenant/team/project", "unknown-user")
+            .Should().Match(p => p == Permission.None);
     }
 
     /// <summary>
@@ -70,11 +70,10 @@ public class FilePersistedAccessRecursionTest(ITestOutputHelper output) : Monoli
     /// statics and miss this grant.
     /// </summary>
     [Fact(Timeout = 15_000)]
-    public async Task ScopedAssignment_AtCurrentPath_ResolvesViewerRole()
+    public void ScopedAssignment_AtCurrentPath_ResolvesViewerRole()
     {
-        var perms = await Mesh.GetPermissionAsync(
-            "tenant/team/project", "DataReader",
-            until: p => p.HasFlag(Permission.Read), TestTimeout);
+        var perms = Mesh.GetEffectivePermissions("tenant/team/project", "DataReader")
+            .Should().Match(p => p.HasFlag(Permission.Read));
         perms.Should().HaveFlag(Permission.Read,
             "Viewer assignment at the SAME scope as the check must grant Read — " +
             "this exercises the SELF leg of ObserveScopeAssignments' CombineLatest.");
@@ -90,14 +89,12 @@ public class FilePersistedAccessRecursionTest(ITestOutputHelper output) : Monoli
     /// recursive parent chain.
     /// </summary>
     [Fact(Timeout = 15_000)]
-    public async Task ScopedAssignment_AtAncestorPath_InheritsToDescendant()
+    public void ScopedAssignment_AtAncestorPath_InheritsToDescendant()
     {
-        var perms = await Mesh.GetPermissionAsync(
-            "tenant/team/project/child", "DataReader",
-            until: p => p.HasFlag(Permission.Read), TestTimeout);
-        perms.Should().HaveFlag(Permission.Read,
-            "ancestor's Viewer assignment must flow down through the recursive " +
-            "ObserveScopeAssignments chain — the descendant's SELF scope has no " +
-            "_Access entry, the grant comes from the parent leg.");
+        Mesh.GetEffectivePermissions("tenant/team/project/child", "DataReader")
+            .Should().Match(p => p.HasFlag(Permission.Read),
+                "ancestor's Viewer assignment must flow down through the recursive " +
+                "ObserveScopeAssignments chain — the descendant's SELF scope has no " +
+                "_Access entry, the grant comes from the parent leg.");
     }
 }

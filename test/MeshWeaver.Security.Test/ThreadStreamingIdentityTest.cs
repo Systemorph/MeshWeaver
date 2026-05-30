@@ -75,13 +75,13 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
     }
 
     [Fact(Timeout = 30000)]
-    public async Task CreateThread_WithRLS_Succeeds()
+    public void CreateThread_WithRLS_Succeeds()
     {
         LoginAsChatUser();
         var client = GetClient();
-        var ct = new CancellationTokenSource(25.Seconds()).Token;
 
-        var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(UserPath, "Test thread")), o => o.WithTarget(new Address(UserPath))).FirstAsync().ToTask(ct);
+        var response = client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(UserPath, "Test thread")), o => o.WithTarget(new Address(UserPath)))
+            .Should().Within(25.Seconds()).Emit();
 
         response.Message.Success.Should().BeTrue(response.Message.Error ?? "CreateThread should succeed for user with Editor role");
         response.Message.Node?.Path.Should().Contain("_Thread/");
@@ -89,14 +89,14 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
     }
 
     [Fact(Timeout = 30000)]
-    public async Task SubmitMessage_StreamsResponse_WithRLS()
+    public void SubmitMessage_StreamsResponse_WithRLS()
     {
         LoginAsChatUser();
         var client = GetClient();
-        var ct = new CancellationTokenSource(25.Seconds()).Token;
 
         // 1. Create thread
-        var createResponse = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(UserPath, "Streaming test")), o => o.WithTarget(new Address(UserPath))).FirstAsync().ToTask(ct);
+        var createResponse = client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(UserPath, "Streaming test")), o => o.WithTarget(new Address(UserPath)))
+            .Should().Within(25.Seconds()).Emit();
         createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error ?? "");
         var threadPath = createResponse.Message.Node!.Path!;
         Output.WriteLine($"Thread: {threadPath}");
@@ -110,24 +110,15 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
             contextPath: UserPath);
         Output.WriteLine("Message submitted, waiting for streaming...");
 
-        // 3. Poll for the response message to be populated by streaming
+        // 3. Wait reactively for the response message to be populated by streaming.
+        //    Accumulate the live query deltas into a path-keyed snapshot, then match
+        //    on the first snapshot containing an assistant message with non-empty text.
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        ThreadMessage? responseMessage = null;
-        for (var i = 0; i < 50; i++)
-        {
-            var descendants = await meshQuery
-                .QueryAsync<MeshNode>($"path:{threadPath} scope:descendants nodeType:ThreadMessage")
-                .ToListAsync(ct);
-
-            var assistantNode = descendants
-                .FirstOrDefault(n => n.Content is ThreadMessage { Role: "assistant" });
-            if (assistantNode?.Content is ThreadMessage tm && !string.IsNullOrEmpty(tm.Text))
-            {
-                responseMessage = tm;
-                break;
-            }
-            await Task.Delay(200, ct);
-        }
+        var responseMessage = AccumulateDescendants(meshQuery, threadPath)
+            .Select(snapshot => snapshot.Values
+                .Select(n => n.Content as ThreadMessage)
+                .FirstOrDefault(tm => tm is { Role: "assistant" } && !string.IsNullOrEmpty(tm.Text)))
+            .Should().Within(25.Seconds()).Match(tm => tm is not null);
 
         responseMessage.Should().NotBeNull(
             "AI streaming should produce a response message â€” " +
@@ -136,15 +127,39 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
         Output.WriteLine($"Response: '{responseMessage.Text}'");
     }
 
+    /// <summary>
+    /// Folds the live <c>ObserveQuery</c> deltas for a thread's ThreadMessage
+    /// descendants into a running path-keyed snapshot, so a reactive assertion can
+    /// match on the accumulated state (Initial may race the streaming writes).
+    /// </summary>
+    private IObservable<IReadOnlyDictionary<string, MeshNode>> AccumulateDescendants(
+        IMeshService meshQuery, string threadPath)
+        => meshQuery
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                $"path:{threadPath} scope:descendants nodeType:ThreadMessage"))
+            .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset
+                or QueryChangeType.Added or QueryChangeType.Updated)
+            .Scan(
+                new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase),
+                (acc, change) =>
+                {
+                    if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
+                        acc.Clear();
+                    foreach (var n in change.Items)
+                        if (n.Path is { } p) acc[p] = n;
+                    return acc;
+                })
+            .Select(d => (IReadOnlyDictionary<string, MeshNode>)d);
+
     [Fact(Timeout = 30000)]
-    public async Task SubmitMessage_StreamsIncrementally_NotAllAtOnce()
+    public void SubmitMessage_StreamsIncrementally_NotAllAtOnce()
     {
         LoginAsChatUser();
         var client = GetClient();
-        var ct = new CancellationTokenSource(25.Seconds()).Token;
 
         // Create thread
-        var createResponse = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(UserPath, "Incremental test")), o => o.WithTarget(new Address(UserPath))).FirstAsync().ToTask(ct);
+        var createResponse = client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(UserPath, "Incremental test")), o => o.WithTarget(new Address(UserPath)))
+            .Should().Within(25.Seconds()).Emit();
         createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error ?? "");
         var threadPath = createResponse.Message.Node!.Path!;
 
@@ -155,28 +170,17 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
             "Stream incrementally please",
             contextPath: UserPath);
 
-        // Poll for first partial response â€” should arrive within 5 seconds,
-        // NOT after full streaming completes (which would take longer)
+        // Wait reactively for first partial response â€” should arrive within 5 seconds,
+        // NOT after full streaming completes (which would take longer).
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        DateTimeOffset? firstResponseTime = null;
-        for (var i = 0; i < 25; i++)
-        {
-            var descendants = await meshQuery
-                .QueryAsync<MeshNode>($"path:{threadPath} scope:descendants nodeType:ThreadMessage")
-                .ToListAsync(ct);
+        AccumulateDescendants(meshQuery, threadPath)
+            .Select(snapshot => snapshot.Values
+                .Select(n => n.Content as ThreadMessage)
+                .Any(tm => tm is { Role: "assistant", Text.Length: > 0 }))
+            .Should().Within(25.Seconds()).Match(hasPartial => hasPartial);
+        var firstResponseTime = DateTimeOffset.UtcNow;
 
-            var assistantNode = descendants
-                .FirstOrDefault(n => n.Content is ThreadMessage { Role: "assistant" });
-            if (assistantNode?.Content is ThreadMessage { Text.Length: > 0 })
-            {
-                firstResponseTime = DateTimeOffset.UtcNow;
-                break;
-            }
-            await Task.Delay(200, ct);
-        }
-
-        firstResponseTime.Should().NotBeNull("streaming should produce partial response");
-        var latency = (firstResponseTime!.Value - submitTime).TotalMilliseconds;
+        var latency = (firstResponseTime - submitTime).TotalMilliseconds;
         Output.WriteLine($"First response appeared {latency:F0}ms after submit");
 
         // The first partial response should arrive within 5 seconds.
@@ -194,16 +198,17 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
     /// with the final text would arrive.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task SubmitMessage_StreamingProducesMultipleGrowingEmissions()
+    public void SubmitMessage_StreamingProducesMultipleGrowingEmissions()
     {
         LoginAsChatUser();
         var client = GetClient();
         var ct = new CancellationTokenSource(25.Seconds()).Token;
 
         // Create thread + submit
-        var createResponse = await client.Observe(
+        var createResponse = client.Observe(
             new CreateNodeRequest(ThreadNodeType.BuildThreadNode(UserPath, "Growing emissions test")),
-            o => o.WithTarget(new Address(UserPath))).FirstAsync().ToTask(ct);
+            o => o.WithTarget(new Address(UserPath)))
+            .Should().Within(25.Seconds()).Emit();
         createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error ?? "");
         var threadPath = createResponse.Message.Node!.Path!;
 
@@ -212,22 +217,12 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
             "Stream me growing chunks please",
             contextPath: UserPath);
 
-        // Wait briefly for the response cell to be allocated.
+        // Wait reactively for the response cell to be allocated.
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        string? responsePath = null;
-        for (var i = 0; i < 50 && responsePath is null; i++)
-        {
-            var descendants = await meshQuery
-                .QueryAsync<MeshNode>(
-                    $"path:{threadPath} scope:descendants nodeType:ThreadMessage")
-                .ToListAsync(ct);
-            var assistantNode = descendants
-                .FirstOrDefault(n => n.Content is ThreadMessage { Role: "assistant" });
-            if (assistantNode is not null)
-                responsePath = assistantNode.Path;
-            else
-                await Task.Delay(100, ct);
-        }
+        var responsePath = AccumulateDescendants(meshQuery, threadPath)
+            .Select(snapshot => snapshot.Values
+                .FirstOrDefault(n => n.Content is ThreadMessage { Role: "assistant" })?.Path)
+            .Should().Within(25.Seconds()).Match(p => p is not null);
         responsePath.Should().NotBeNull("response cell must exist for streaming to land on it");
 
         // Subscribe to the response cell's MeshNode stream and collect emissions

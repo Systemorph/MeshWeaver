@@ -2,8 +2,6 @@ using System;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
-using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -29,10 +27,10 @@ namespace MeshWeaver.Query.Test;
 ///   virtual coordinator and is never used directly.</item>
 ///   <item>Reads + writes use the framework's data-layer messages
 ///   (<see cref="DataChangeRequest"/>, <see cref="GetDataRequest"/> via
-///   <c>ReadNodeAsync</c>, <see cref="IMeshService.UpdateNode"/>); no test-only
+///   <c>ReadNode</c>, <see cref="IMeshService.UpdateNode"/>); no test-only
 ///   request handlers, no homebrew protocol.</item>
-///   <item>Verification awaits responses + subscribes to live observables
-///   with <c>Where(predicate).FirstAsync()</c> — never <c>Task.Delay</c>.</item>
+///   <item>Verification subscribes to live observables and asserts on the
+///   matching emission via <c>.Should().Match(...)</c> — never <c>Task.Delay</c>.</item>
 /// </list>
 /// </summary>
 public class SyncedQueryDataSourceTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
@@ -65,55 +63,46 @@ public class SyncedQueryDataSourceTest(ITestOutputHelper output) : MonolithMeshT
     /// Source-side update propagates to every observer of the same per-node
     /// MeshNode stream — including the synced data source on the subscriber.
     /// Verified by subscribing to the live <c>ObserveQuery</c> stream and
-    /// awaiting the predicate.
+    /// asserting on the matching emission.
     /// </summary>
     [Fact]
-    public async Task OwningHubUpdate_SurfacesInLiveQueryStream()
+    public void OwningHubUpdate_SurfacesInLiveQueryStream()
     {
-        var ct = TestContext.Current.CancellationToken;
         var path = $"{SubjectsNamespace}/alpha";
 
-        // Subscribe to the live query stream BEFORE any writes — accumulator
-        // pattern, no Take(1), no draining; the subscription stays hot for the
-        // life of the test.
+        // Subscribe to the live query stream — the assertion subscribes the cold
+        // observable and waits for the matching emission.
         var queryStream = MeshQuery
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{SubjectsNamespace} scope:subtree nodeType:Markdown"));
 
-        // Await the response to the create — the response only fires after
-        // the source per-node hub has applied + persisted the node.
-        await NodeFactory.CreateNode(MakeSubject("alpha", "Original"))
-            .FirstAsync().ToTask(ct);
+        // The create's emission only fires after the source per-node hub has
+        // applied + persisted the node.
+        NodeFactory.CreateNode(MakeSubject("alpha", "Original")).Should().Emit();
 
         // The query stream must surface the create — wait for the predicate.
-        await queryStream
-            .Where(c => c.Items.Any(n => n.Path == path && n.Name == "Original"))
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(15)).ToTask(ct);
+        queryStream
+            .Should().Within(TimeSpan.FromSeconds(15))
+            .Match(c => c.Items.Any(n => n.Path == path && n.Name == "Original"));
 
-        // Update at source side; await the response.
-        var current = await ReadNodeAsync(path);
+        // Update at source side; the update's emission confirms the write.
+        var current = ReadNode(path).Should().Emit();
         current.Should().NotBeNull();
-        await NodeFactory.UpdateNode(current! with { Name = "Updated At Source" })
-            .FirstAsync().ToTask(ct);
+        NodeFactory.UpdateNode(current! with { Name = "Updated At Source" }).Should().Emit();
 
         // Live query must surface the update.
-        await queryStream
-            .Where(c => c.Items.Any(n => n.Path == path && n.Name == "Updated At Source"))
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(15)).ToTask(ct);
+        queryStream
+            .Should().Within(TimeSpan.FromSeconds(15))
+            .Match(c => c.Items.Any(n => n.Path == path && n.Name == "Updated At Source"));
 
-        // Source-side ground truth — wait for the cache to reflect the
-        // update too. ReadNodeAsync races a cache-routed stream against
-        // a one-shot GetMeshNode; when the cache emits the stale "Original"
-        // before the update propagates from the live query into the cache,
-        // ReadNodeAsync returns "Original" — a real race in CI. Poll until
-        // the read sees the updated name.
-        var reread = await Observable.Interval(TimeSpan.FromMilliseconds(50))
+        // Source-side ground truth — wait for the authoritative read to reflect
+        // the update too. ReadNode rounds-trips the owner hub each call, so retry
+        // via an interval until the read sees the updated name.
+        var reread = Observable.Interval(TimeSpan.FromMilliseconds(50))
             .StartWith(0L)
-            .SelectMany(_ => Observable.FromAsync(() => ReadNodeAsync(path, ct)))
-            .Where(n => n?.Name == "Updated At Source")
-            .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(10))
-            .ToTask(ct);
+            .SelectMany(_ => ReadNode(path))
+            .Should().Within(TimeSpan.FromSeconds(10))
+            .Match(n => n?.Name == "Updated At Source");
         reread!.Name.Should().Be("Updated At Source");
     }
 
@@ -125,10 +114,8 @@ public class SyncedQueryDataSourceTest(ITestOutputHelper output) : MonolithMeshT
     /// set so the predicate sees the cumulative state.
     /// </summary>
     [Fact]
-    public async Task QueryStream_TracksAddsAndRemoves()
+    public void QueryStream_TracksAddsAndRemoves()
     {
-        var ct = TestContext.Current.CancellationToken;
-
         // Hot, accumulating view of the live path set.
         var pathSet = MeshQuery
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
@@ -146,23 +133,23 @@ public class SyncedQueryDataSourceTest(ITestOutputHelper output) : MonolithMeshT
                 })
             .Replay(1).RefCount();
 
-        // Keep the subscription hot for the life of the test — never Take(1).
+        // Keep the subscription hot for the life of the test.
         using var keepAlive = pathSet.Subscribe();
 
-        await NodeFactory.CreateNode(MakeSubject("one", "One")).FirstAsync().ToTask(ct);
-        await NodeFactory.CreateNode(MakeSubject("two", "Two")).FirstAsync().ToTask(ct);
-        await NodeFactory.CreateNode(MakeSubject("three", "Three")).FirstAsync().ToTask(ct);
+        NodeFactory.CreateNode(MakeSubject("one", "One")).Should().Emit();
+        NodeFactory.CreateNode(MakeSubject("two", "Two")).Should().Emit();
+        NodeFactory.CreateNode(MakeSubject("three", "Three")).Should().Emit();
 
-        await pathSet
-            .Where(set => set.Contains($"{SubjectsNamespace}/one")
+        pathSet
+            .Should().Within(TimeSpan.FromSeconds(15))
+            .Match(set => set.Contains($"{SubjectsNamespace}/one")
                        && set.Contains($"{SubjectsNamespace}/two")
-                       && set.Contains($"{SubjectsNamespace}/three"))
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(15)).ToTask(ct);
+                       && set.Contains($"{SubjectsNamespace}/three"));
 
-        await NodeFactory.DeleteNode($"{SubjectsNamespace}/two").FirstAsync().ToTask(ct);
+        NodeFactory.DeleteNode($"{SubjectsNamespace}/two").Should().Emit();
 
-        await pathSet
-            .Where(set => !set.Contains($"{SubjectsNamespace}/two"))
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(15)).ToTask(ct);
+        pathSet
+            .Should().Within(TimeSpan.FromSeconds(15))
+            .Match(set => !set.Contains($"{SubjectsNamespace}/two"));
     }
 }

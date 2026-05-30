@@ -2,10 +2,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
-using System.Threading;
-using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Fixture;
@@ -41,12 +38,12 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
     private MessageHubConfiguration AddUpdateHandler(MessageHubConfiguration c)
         => c.WithHandler<UpdateNodeRequest>(HandleUpdateNodeRequest);
 
-    private async Task<IMessageDelivery> HandleUpdateNodeRequest(
-        IMessageHub hub, IMessageDelivery<UpdateNodeRequest> request, CancellationToken ct)
+    private IMessageDelivery HandleUpdateNodeRequest(
+        IMessageHub hub, IMessageDelivery<UpdateNodeRequest> request)
     {
         var node = request.Message.Node;
-        await _persistence.SaveNode(node, JsonOptions).FirstAsync().ToTask(ct);
-        hub.Post(UpdateNodeResponse.Ok(node), o => o.ResponseFor(request));
+        _persistence.SaveNode(node, JsonOptions)
+            .Subscribe(_ => hub.Post(UpdateNodeResponse.Ok(node), o => o.ResponseFor(request)));
         return request.Processed();
     }
 

@@ -237,13 +237,14 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
     /// and that the reply node exists on disk with correct Id and Path.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task Persistence_CommentWithReply_ShouldLoadCorrectly()
+    public void Persistence_CommentWithReply_ShouldLoadCorrectly()
     {
         // No hub initialization needed â€” RoutingMeshQueryProvider discovers
         // partitions via DiscoverNewProvidersAsync during the query.
 
         // Static node read â€” no write before, catalog read is correct (no CQRS lag).
-        var parentNode = await MeshQuery.QueryAsync<MeshNode>($"path:{CommentC1Path}").FirstOrDefaultAsync();
+        var parentNode = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{CommentC1Path}"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items.FirstOrDefault();
         parentNode.Should().NotBeNull("Parent comment c1 should exist");
         parentNode!.Id.Should().Be("c1");
         parentNode.Namespace.Should().Be(DocPath + "/_Comment");
@@ -254,7 +255,8 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
 
         // Static node read â€” no write before, catalog read is correct (no CQRS lag).
         // (Per-node hub routing for nested replies returns the parent c1, not reply1.)
-        var replyNode = await MeshQuery.QueryAsync<MeshNode>($"path:{ReplyPath}").FirstOrDefaultAsync();
+        var replyNode = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{ReplyPath}"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items.FirstOrDefault();
         replyNode.Should().NotBeNull("Reply node should exist");
         replyNode!.Id.Should().Be("reply1", "Reply Id should be the local file name, not the full path");
         replyNode.Namespace.Should().Be(CommentC1Path);
@@ -264,7 +266,8 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
         Output.WriteLine($"Reply: Id={replyNode.Id}, Path={replyNode.Path}, Author={replyComment!.Author}");
 
         // Load children of c1 via subtree query
-        var children = await MeshQuery.QueryAsync<MeshNode>($"path:{CommentC1Path} scope:subtree").ToListAsync();
+        var children = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{CommentC1Path} scope:subtree"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
         foreach (var child in children)
         {
             Output.WriteLine($"Subtree: Id={child.Id}, Path={child.Path}, NodeType={child.NodeType}");

@@ -55,19 +55,15 @@ public class MeshNodeCacheIdentityTest(ITestOutputHelper output) : MonolithMeshT
     /// The whole boundary turns on this single grant being narrow.
     /// </summary>
     [Fact(Timeout = 10000)]
-    public async Task CacheIdentity_HasOnlyReadPermission()
+    public void CacheIdentity_HasOnlyReadPermission()
     {
         // hub is Mesh — permission checks use hub.GetEffectivePermissions
 
-        var permissions = await Mesh.GetEffectivePermissions("any/path", CacheIdentityAddress)
-            .Take(1)
-            .Timeout(5.Seconds())
-            .ToTask(TestTimeout);
-
-        permissions.Should().Be(Permission.Read,
-            "cache identity is sanctioned for hydration reads only — Create / Update / " +
-            "Delete must NOT be granted, otherwise a write under this identity would " +
-            "succeed and silently widen the cache's bypass into full system access.");
+        Mesh.GetEffectivePermissions("any/path", CacheIdentityAddress)
+            .Should().Within(5.Seconds()).Be(Permission.Read,
+                "cache identity is sanctioned for hydration reads only — Create / Update / " +
+                "Delete must NOT be granted, otherwise a write under this identity would " +
+                "succeed and silently widen the cache's bypass into full system access.");
     }
 
     /// <summary>
@@ -76,11 +72,11 @@ public class MeshNodeCacheIdentityTest(ITestOutputHelper output) : MonolithMeshT
     /// maintainers.
     /// </summary>
     [Fact(Timeout = 10000)]
-    public async Task CacheIdentity_FlagBreakdown()
+    public void CacheIdentity_FlagBreakdown()
     {
         // hub is Mesh — permission checks use hub.GetEffectivePermissions
-        var permissions = await Mesh.GetEffectivePermissions("any/path", CacheIdentityAddress)
-            .Take(1).Timeout(5.Seconds()).ToTask(TestTimeout);
+        var permissions = Mesh.GetEffectivePermissions("any/path", CacheIdentityAddress)
+            .Should().Within(5.Seconds()).Emit();
 
         permissions.HasFlag(Permission.Read).Should().BeTrue(
             "Read is the whole point of the cache identity — hydration needs it");
@@ -102,7 +98,7 @@ public class MeshNodeCacheIdentityTest(ITestOutputHelper output) : MonolithMeshT
     /// indicate authorization failure (not silently succeed-then-fail later).
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task CacheIdentity_CreateNode_IsDenied()
+    public void CacheIdentity_CreateNode_IsDenied()
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -116,20 +112,19 @@ public class MeshNodeCacheIdentityTest(ITestOutputHelper output) : MonolithMeshT
 
         using (accessService.SwitchAccessContext(CacheContext))
         {
-            var act = async () => await meshService.CreateNode(node)
-                .Take(1).Timeout(10.Seconds()).ToTask(TestTimeout);
+            Action act = () => meshService.CreateNode(node)
+                .Take(1).Timeout(10.Seconds()).Wait();
 
-            var ex = await act.Should().ThrowAsync<UnauthorizedAccessException>();
-            ex.Which.Message.Should().Contain("Access denied",
-                "the denial must surface as an authorization failure, not a generic exception");
+            act.Should().Throw<UnauthorizedAccessException>()
+                .Which.Message.Should().Contain("Access denied",
+                    "the denial must surface as an authorization failure, not a generic exception");
         }
 
         // Belt-and-braces: ensure the node was never persisted.
         TestUsers.DevLogin(Mesh);
-        var probe = await meshService
+        var probe = meshService
             .ObserveQuery<MeshNode>(new MeshQueryRequest { Query = $"path:{nodePath}", Limit = 1 })
-            .Take(1).Timeout(5.Seconds())
-            .ToTask(TestTimeout);
+            .Should().Within(5.Seconds()).Emit();
         probe.Items.Should().BeEmpty(
             "the forged create must not have left any node behind even partially");
     }
@@ -139,7 +134,7 @@ public class MeshNodeCacheIdentityTest(ITestOutputHelper output) : MonolithMeshT
     /// node legitimately, then we forge cache identity and try to mutate it.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task CacheIdentity_UpdateNode_IsDenied()
+    public void CacheIdentity_UpdateNode_IsDenied()
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -151,17 +146,17 @@ public class MeshNodeCacheIdentityTest(ITestOutputHelper output) : MonolithMeshT
             Name = "Original (admin-created)",
             NodeType = "Markdown"
         };
-        await meshService.CreateNode(node).Take(1).Timeout(10.Seconds()).ToTask(TestTimeout);
+        meshService.CreateNode(node).Take(1).Should().Within(10.Seconds()).Emit();
 
         var mutated = node with { Name = "Forged update under cache identity" };
 
         using (accessService.SwitchAccessContext(CacheContext))
         {
-            var act = async () => await meshService.UpdateNode(mutated)
-                .Take(1).Timeout(10.Seconds()).ToTask(TestTimeout);
+            Action act = () => meshService.UpdateNode(mutated)
+                .Take(1).Timeout(10.Seconds()).Wait();
 
-            var ex = await act.Should().ThrowAsync<UnauthorizedAccessException>();
-            ex.Which.Message.Should().Contain("Access denied");
+            act.Should().Throw<UnauthorizedAccessException>()
+                .Which.Message.Should().Contain("Access denied");
         }
     }
 
@@ -169,7 +164,7 @@ public class MeshNodeCacheIdentityTest(ITestOutputHelper output) : MonolithMeshT
     /// Delete under the cache identity must fail.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task CacheIdentity_DeleteNode_IsDenied()
+    public void CacheIdentity_DeleteNode_IsDenied()
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -181,19 +176,19 @@ public class MeshNodeCacheIdentityTest(ITestOutputHelper output) : MonolithMeshT
             Name = "To-be-deleted",
             NodeType = "Markdown"
         };
-        await meshService.CreateNode(node).Take(1).Timeout(10.Seconds()).ToTask(TestTimeout);
+        meshService.CreateNode(node).Take(1).Should().Within(10.Seconds()).Emit();
 
         using (accessService.SwitchAccessContext(CacheContext))
         {
-            var act = async () => await meshService.DeleteNode(nodePath)
-                .Take(1).Timeout(10.Seconds()).ToTask(TestTimeout);
+            Action act = () => meshService.DeleteNode(nodePath)
+                .Take(1).Timeout(10.Seconds()).Wait();
 
-            var ex = await act.Should().ThrowAsync<UnauthorizedAccessException>();
             // Delete handler emits "Delete permission denied for '{path}'" on
             // NodeDeletionRejectionReason.Unauthorized; MeshService maps that
             // to UnauthorizedAccessException with the original message.
-            ex.Which.Message.Should().Contain("permission denied",
-                "denial must clearly indicate the authorization failure");
+            act.Should().Throw<UnauthorizedAccessException>()
+                .Which.Message.Should().Contain("permission denied",
+                    "denial must clearly indicate the authorization failure");
         }
     }
 
@@ -204,7 +199,7 @@ public class MeshNodeCacheIdentityTest(ITestOutputHelper output) : MonolithMeshT
     /// can't hydrate.
     /// </summary>
     [Fact(Timeout = 15000)]
-    public async Task CacheIdentity_Read_Succeeds()
+    public void CacheIdentity_Read_Succeeds()
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -216,23 +211,24 @@ public class MeshNodeCacheIdentityTest(ITestOutputHelper output) : MonolithMeshT
             Name = "Cache-readable",
             NodeType = "Markdown"
         };
-        await meshService.CreateNode(node).Take(1).Timeout(10.Seconds()).ToTask(TestTimeout);
+        meshService.CreateNode(node).Take(1).Should().Within(10.Seconds()).Emit();
 
         using (accessService.SwitchAccessContext(CacheContext))
         {
             // Query path: the cache uses similar paths during hydration.
             // No exception should be raised; a result is fine even if empty
             // (the security gate is what's under test, not query semantics).
-            // The library's NotThrowAsync is non-generic (asserts NO exception of any
+            // The library's NotThrow is non-generic (asserts NO exception of any
             // kind). Here only UnauthorizedAccessException must not be raised — a timeout
             // or empty completion is tolerated — so the type-specific assertion is done
-            // manually: run the act, swallow everything except UnauthorizedAccessException.
+            // manually: run the act synchronously, swallow everything except
+            // UnauthorizedAccessException.
             UnauthorizedAccessException? denied = null;
             try
             {
-                await meshService
+                meshService
                     .ObserveQuery<MeshNode>(new MeshQueryRequest { Query = $"path:{nodePath}", Limit = 1 })
-                    .Take(1).Timeout(5.Seconds()).ToTask(TestTimeout);
+                    .Take(1).Timeout(5.Seconds()).Wait();
             }
             catch (UnauthorizedAccessException ex)
             {

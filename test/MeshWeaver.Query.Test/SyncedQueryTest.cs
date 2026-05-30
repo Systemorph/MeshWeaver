@@ -126,12 +126,11 @@ public class SyncedQueryTest(ITestOutputHelper output)
     /// query pipeline or the create itself.)
     /// </summary>
     [Fact(Timeout = 15000)]
-    public async Task Sanity_CreateNode_EmitsCreatedNode()
+    public void Sanity_CreateNode_EmitsCreatedNode()
     {
-        var ct = TestContext.Current.CancellationToken;
-        var created = await NodeFactory
+        var created = NodeFactory
             .CreateNode(MakeSubject("sanity", "SanityCheck"))
-            .FirstAsync().ToTask(ct);
+            .Should().Emit();
         created.Should().NotBeNull();
         created.Path.Should().Be($"{SubjectsNamespace}/sanity");
     }
@@ -142,20 +141,19 @@ public class SyncedQueryTest(ITestOutputHelper output)
     /// new per-path remote stream is added to the inner CombineLatest.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task Add_NewMatchingNode_AppearsInCollection()
+    public void Add_NewMatchingNode_AppearsInCollection()
     {
-        var ct = TestContext.Current.CancellationToken;
         var observable = CreateQuery("$add-test");
 
         var collection = observable.Replay(1).RefCount();
         using var keepAlive = collection.Subscribe();
 
-        await NodeFactory.CreateNode(MakeSubject("alpha", "Alpha"))
-            .FirstAsync().ToTask(ct);
+        NodeFactory.CreateNode(MakeSubject("alpha", "Alpha"))
+            .Should().Emit();
 
-        await collection
+        collection
             .Where(arr => arr.Any(n => n.Path == $"{SubjectsNamespace}/alpha"))
-            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
+            .Should().Within(15.Seconds()).Emit();
     }
 
     /// <summary>
@@ -163,17 +161,16 @@ public class SyncedQueryTest(ITestOutputHelper output)
     /// inner CombineLatest emits the union as each per-path stream arrives.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task Add_MultipleNodes_CollectionAccumulates()
+    public void Add_MultipleNodes_CollectionAccumulates()
     {
-        var ct = TestContext.Current.CancellationToken;
         var observable = CreateQuery("$add-multi");
 
         var collection = observable.Replay(1).RefCount();
         using var keepAlive = collection.Subscribe();
 
-        await NodeFactory.CreateNode(MakeSubject("one", "One")).FirstAsync().ToTask(ct);
-        await NodeFactory.CreateNode(MakeSubject("two", "Two")).FirstAsync().ToTask(ct);
-        await NodeFactory.CreateNode(MakeSubject("three", "Three")).FirstAsync().ToTask(ct);
+        NodeFactory.CreateNode(MakeSubject("one", "One")).Should().Emit();
+        NodeFactory.CreateNode(MakeSubject("two", "Two")).Should().Emit();
+        NodeFactory.CreateNode(MakeSubject("three", "Three")).Should().Emit();
 
         var expected = new[]
         {
@@ -181,9 +178,9 @@ public class SyncedQueryTest(ITestOutputHelper output)
             $"{SubjectsNamespace}/two",
             $"{SubjectsNamespace}/three",
         };
-        await collection
+        collection
             .Where(arr => expected.All(p => arr.Any(n => n.Path == p)))
-            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
+            .Should().Within(15.Seconds()).Emit();
     }
 
     /// <summary>
@@ -192,29 +189,28 @@ public class SyncedQueryTest(ITestOutputHelper output)
     /// stream — CombineLatest fires when one of its sources emits.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task Update_ExistingNode_ReEmitsWithNewValue()
+    public void Update_ExistingNode_ReEmitsWithNewValue()
     {
-        var ct = TestContext.Current.CancellationToken;
         var observable = CreateQuery("$update-test");
 
         var collection = observable.Replay(1).RefCount();
         using var keepAlive = collection.Subscribe();
 
         var seedNode = MakeSubject("beta", "Original");
-        await NodeFactory.CreateNode(seedNode).FirstAsync().ToTask(ct);
+        NodeFactory.CreateNode(seedNode).Should().Emit();
 
         var path = seedNode.Path;
-        var afterCreate = await collection
+        var afterCreate = collection
             .Where(arr => arr.Any(n => n.Path == path && n.Name == "Original"))
-            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
+            .Should().Within(15.Seconds()).Emit();
         var current = afterCreate.Single(n => n.Path == path);
 
-        await NodeFactory.UpdateNode(current with { Name = "Updated" })
-            .FirstAsync().ToTask(ct);
+        NodeFactory.UpdateNode(current with { Name = "Updated" })
+            .Should().Emit();
 
-        await collection
+        collection
             .Where(arr => arr.Any(n => n.Path == path && n.Name == "Updated"))
-            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
+            .Should().Within(15.Seconds()).Emit();
     }
 
     /// <summary>
@@ -222,29 +218,28 @@ public class SyncedQueryTest(ITestOutputHelper output)
     /// the path-set drops the path and Switch tears down the per-path stream.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task Delete_RemovesFromCollection()
+    public void Delete_RemovesFromCollection()
     {
-        var ct = TestContext.Current.CancellationToken;
         var observable = CreateQuery("$delete-test");
 
         var collection = observable.Replay(1).RefCount();
         using var keepAlive = collection.Subscribe();
 
-        await NodeFactory.CreateNode(MakeSubject("keep", "Keep")).FirstAsync().ToTask(ct);
-        await NodeFactory.CreateNode(MakeSubject("drop", "Drop")).FirstAsync().ToTask(ct);
+        NodeFactory.CreateNode(MakeSubject("keep", "Keep")).Should().Emit();
+        NodeFactory.CreateNode(MakeSubject("drop", "Drop")).Should().Emit();
 
         var keepPath = $"{SubjectsNamespace}/keep";
         var dropPath = $"{SubjectsNamespace}/drop";
 
-        await collection
+        collection
             .Where(arr => arr.Any(n => n.Path == keepPath) && arr.Any(n => n.Path == dropPath))
-            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
+            .Should().Within(15.Seconds()).Emit();
 
-        await NodeFactory.DeleteNode(dropPath).FirstAsync().ToTask(ct);
+        NodeFactory.DeleteNode(dropPath).Should().Emit();
 
-        var afterDelete = await collection
+        var afterDelete = collection
             .Where(arr => arr.All(n => n.Path != dropPath))
-            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
+            .Should().Within(15.Seconds()).Emit();
         afterDelete.Should().Contain(n => n.Path == keepPath,
             "the survivor must still be in the collection");
     }
@@ -260,9 +255,8 @@ public class SyncedQueryTest(ITestOutputHelper output)
     /// switched to a mutable property the validator allows.</para>
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task PropertyChange_NoLongerMatchesQuery_RemovesFromCollection()
+    public void PropertyChange_NoLongerMatchesQuery_RemovesFromCollection()
     {
-        var ct = TestContext.Current.CancellationToken;
         // Add a state:Active filter; the seed Markdown node has State=Active.
         var observable = CreateQuery("$flip-test", "state:Active");
 
@@ -270,21 +264,21 @@ public class SyncedQueryTest(ITestOutputHelper output)
         using var keepAlive = collection.Subscribe();
 
         var seedNode = MakeSubject("flip", "Flippy");
-        await NodeFactory.CreateNode(seedNode).FirstAsync().ToTask(ct);
+        NodeFactory.CreateNode(seedNode).Should().Emit();
 
         var path = seedNode.Path;
-        var afterCreate = await collection
+        var afterCreate = collection
             .Where(arr => arr.Any(n => n.Path == path))
-            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
+            .Should().Within(15.Seconds()).Emit();
         var current = afterCreate.Single(n => n.Path == path);
 
         // Flip State to Deleted — the synced query (state:Active) should no longer match.
-        await NodeFactory.UpdateNode(current with { State = MeshNodeState.Deleted })
-            .FirstAsync().ToTask(ct);
+        NodeFactory.UpdateNode(current with { State = MeshNodeState.Deleted })
+            .Should().Emit();
 
-        await collection
+        collection
             .Where(arr => arr.All(n => n.Path != path))
-            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
+            .Should().Within(15.Seconds()).Emit();
     }
 
     /// <summary>
@@ -321,9 +315,8 @@ public class SyncedQueryTest(ITestOutputHelper output)
     /// DeleteNode of access assignments.</para>
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task DeleteAccessAssignment_RemovesFromSyncedCollection()
+    public void DeleteAccessAssignment_RemovesFromSyncedCollection()
     {
-        var ct = TestContext.Current.CancellationToken;
 
         // Synced query that mirrors SecurityService.ObserveAllMeshNodes:
         // global subtree scope, filtered by NodeType=AccessAssignment.
@@ -338,21 +331,21 @@ public class SyncedQueryTest(ITestOutputHelper output)
         // the AccessAssignmentTests deny tests exercise.
         var assignment = AssignmentNodeFactory.UserRole(
             "DeleteTestUser", "Editor", "DeleteTestScope");
-        await NodeFactory.CreateNode(assignment).FirstAsync().ToTask(ct);
+        NodeFactory.CreateNode(assignment).Should().Emit();
 
         var assignmentPath = assignment.Path;
 
         // Wait for the Added event to surface.
-        await collection
+        collection
             .Where(arr => arr.Any(n => n.Path == assignmentPath))
-            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
+            .Should().Within(15.Seconds()).Emit();
 
         // Delete it and assert the synced collection drops the path.
-        await NodeFactory.DeleteNode(assignmentPath).FirstAsync().ToTask(ct);
+        NodeFactory.DeleteNode(assignmentPath).Should().Emit();
 
-        await collection
+        collection
             .Where(arr => arr.All(n => n.Path != assignmentPath))
-            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
+            .Should().Within(15.Seconds()).Emit();
     }
 
     /// <summary>
@@ -378,9 +371,8 @@ public class SyncedQueryTest(ITestOutputHelper output)
     /// Initial (or Reset) event.</para>
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task MultiQueryUnion_FirstEmission_ContainsAllQueryResults()
+    public void MultiQueryUnion_FirstEmission_ContainsAllQueryResults()
     {
-        var ct = TestContext.Current.CancellationToken;
 
         // Two distinct namespaces, one node in each. Use unique IDs so this
         // test doesn't collide with any other [Fact] under shared mesh.
@@ -398,8 +390,8 @@ public class SyncedQueryTest(ITestOutputHelper output)
             NodeType = "Markdown",
             State = MeshNodeState.Active,
         };
-        await NodeFactory.CreateNode(nodeA).FirstAsync().ToTask(ct);
-        await NodeFactory.CreateNode(nodeB).FirstAsync().ToTask(ct);
+        NodeFactory.CreateNode(nodeA).Should().Emit();
+        NodeFactory.CreateNode(nodeB).Should().Emit();
 
         // Two-query union — the bug manifested when one query's Initial
         // emission won the .Merge race and downstream .Take(1) consumed it
@@ -420,15 +412,13 @@ public class SyncedQueryTest(ITestOutputHelper output)
         // BOTH paths would still fall through and we'd time out — proving
         // the gating bug — but the union-completeness assertion is the
         // contract callers rely on.
-        var firstEmission = await observable
+        var firstEmission = observable
             .Where(arr =>
             {
                 var paths = arr.Select(n => n.Path).ToHashSet();
                 return paths.Contains(nodeA.Path) && paths.Contains(nodeB.Path);
             })
-            .Take(1)
-            .Timeout(15.Seconds())
-            .ToTask(ct);
+            .Should().Within(15.Seconds()).Emit();
 
         var paths = firstEmission.Select(n => n.Path).ToHashSet();
         paths.Should().Contain(nodeA.Path,
@@ -473,40 +463,35 @@ public class SyncedQueryTest(ITestOutputHelper output)
     /// </para>
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task UpdatePropagation_FreshTake1_AfterAwaitedUpdate_SeesNewValue()
+    public void UpdatePropagation_FreshTake1_AfterAwaitedUpdate_SeesNewValue()
     {
-        var ct = TestContext.Current.CancellationToken;
         var observable = CreateQuery("$update-fresh-take1");
 
         var seedNode = MakeSubject("freshness", "BeforeUpdate");
-        await NodeFactory.CreateNode(seedNode).FirstAsync().ToTask(ct);
+        NodeFactory.CreateNode(seedNode).Should().Emit();
         var path = seedNode.Path;
 
         // Phase 1: prime the cache + capture the initial Name. .Where ensures we
         // wait for the just-created subject to surface even if the upstream
         // index lags the create.
-        var beforeUpdate = await observable
+        var beforeUpdate = observable
             .Where(arr => arr.Any(n => n.Path == path))
-            .Take(1)
-            .Timeout(15.Seconds())
-            .ToTask(ct);
+            .Should().Within(15.Seconds()).Emit();
         var current = beforeUpdate.Single(n => n.Path == path);
         current.Name.Should().Be("BeforeUpdate", "phase 1 sanity check");
 
         // Phase 2: update + await persistence flush.
-        await NodeFactory.UpdateNode(current with { Name = "AfterUpdate" })
-            .FirstAsync().ToTask(ct);
+        NodeFactory.UpdateNode(current with { Name = "AfterUpdate" })
+            .Should().Emit();
 
         // Phase 3: fresh subscription with .Where(...).Take(1) — the canonical
         // "wait for the post-update emission" pattern. A regression that
         // caused the synced collection to never emit the post-update value
         // would surface here as a 15s timeout. Asserts the freshness contract
         // the compile pipeline relies on.
-        var afterUpdate = await observable
+        var afterUpdate = observable
             .Where(arr => arr.Any(n => n.Path == path && n.Name == "AfterUpdate"))
-            .Take(1)
-            .Timeout(15.Seconds())
-            .ToTask(ct);
+            .Should().Within(15.Seconds()).Emit();
         afterUpdate.Single(n => n.Path == path).Name.Should().Be("AfterUpdate",
             "a fresh subscription with .Where(...).Take(1) must converge to the post-update value");
     }
@@ -532,9 +517,8 @@ public class SyncedQueryTest(ITestOutputHelper output)
     /// use, so passing this test means the chat-side dropdowns work.</para>
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task SyncedQuery_FansOutAcrossAllQueryProviders_IncludingStaticNodes()
+    public void SyncedQuery_FansOutAcrossAllQueryProviders_IncludingStaticNodes()
     {
-        var ct = TestContext.Current.CancellationToken;
 
         // Static-node-provider seeds a node under StaticNamespace at
         // mesh-init time. ConfigureMesh below registers the provider with
@@ -547,11 +531,9 @@ public class SyncedQueryTest(ITestOutputHelper output)
             "$static-fanout-test",
             $"namespace:{TestSyncedQueryStaticNodeProvider.Namespace} scope:subtree nodeType:Markdown");
 
-        var snapshot = await observable
+        var snapshot = observable
             .Where(arr => arr.Any(n => n.Path == staticPath))
-            .Take(1)
-            .Timeout(15.Seconds())
-            .ToTask(ct);
+            .Should().Within(15.Seconds()).Emit();
 
         snapshot.Should().Contain(n => n.Path == staticPath,
             "SyncedQueryMeshNodes must fan out across IEnumerable<IMeshQueryProvider> "

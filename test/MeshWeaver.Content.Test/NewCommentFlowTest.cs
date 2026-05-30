@@ -97,7 +97,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// This is the constructor: new MeshNode(commentId, nodePath)
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task NewComment_TwoArgConstructor_ShouldPersistAndBeQueryable()
+    public void NewComment_TwoArgConstructor_ShouldPersistAndBeQueryable()
     {
         var docPath = "Doc/DataMesh/CollaborativeEditing";
 
@@ -126,7 +126,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             "MeshNode(commentId, docPath) should produce Path = docPath/commentId");
 
         // Act Ã¢â‚¬â€ create the node (same as meshCatalog.CreateNodeAsync in BuildNewCommentForm)
-        var createdNode = await NodeFactory.CreateNode(commentNode);
+        var createdNode = NodeFactory.CreateNode(commentNode).Should().Emit();
 
         // Assert Ã¢â‚¬â€ node should be retrievable
         createdNode.Should().NotBeNull("CreateNodeAsync should return the created node");
@@ -134,7 +134,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"Created node path: {createdNode.Path}");
 
         // Assert Ã¢â‚¬â€ node should be retrievable via per-node stream
-        var retrieved = await ReadNodeAsync(createdNode.Path!);
+        var retrieved = ReadNode(createdNode.Path!).Should().Emit();
         retrieved.Should().NotBeNull("Comment should be retrievable after creation");
         var retrievedComment = retrieved!.Content.Should().BeOfType<Comment>().Subject;
         retrievedComment.Author.Should().Be("TestAuthor");
@@ -142,16 +142,16 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"Retrieved comment: Author={retrievedComment.Author}, Text='{retrievedComment.Text}'");
 
         // Assert Ã¢â‚¬â€ node should appear in namespace: query (this is how ReadView finds comments)
-        var children = await MeshQuery.QueryAsync<MeshNode>(
-            $"namespace:{docPath} nodeType:{CommentNodeType.NodeType}"
-        ).ToListAsync();
+        var children = MeshQuery.ObserveQuery<MeshNode>(
+                MeshQueryRequest.FromQuery($"namespace:{docPath} nodeType:{CommentNodeType.NodeType}"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         children.Should().Contain(n => n.Path == createdNode.Path,
             "New comment should appear in namespace: query (this is how the sidebar finds comments)");
         Output.WriteLine($"Comment found in children query ({children.Count} total children)");
 
         // Cleanup
-        await NodeFactory.DeleteNode(createdNode.Path!);
+        NodeFactory.DeleteNode(createdNode.Path!).Should().Emit();
     }
 
     /// <summary>
@@ -163,7 +163,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// when editing inline from the markdown view. We use persistence directly instead.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task NewComment_DoneButton_ShouldPersistTextViaPersistenceService()
+    public void NewComment_DoneButton_ShouldPersistTextViaPersistenceService()
     {
         var docPath = "Doc/DataMesh/CollaborativeEditing";
 
@@ -185,7 +185,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             Content = comment
         };
 
-        var createdNode = await NodeFactory.CreateNode(commentNode);
+        var createdNode = NodeFactory.CreateNode(commentNode).Should().Emit();
         Output.WriteLine($"Created empty comment at: {createdNode.Path}");
 
         // Step 2: Update text via NodeFactory.CreateNodeAsync (same as BuildReplyEditArea Done button)
@@ -193,10 +193,10 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var updatedNode = createdNode with { Content = updatedComment };
 
         Output.WriteLine("Saving updated comment via NodeFactory.UpdateNodeAsync...");
-        await NodeFactory.UpdateNode(updatedNode);
+        NodeFactory.UpdateNode(updatedNode).Should().Emit();
 
         // Step 3: Verify the text persisted via per-node stream (no catalog lag)
-        var retrieved = await ReadNodeAsync(createdNode.Path!);
+        var retrieved = ReadNode(createdNode.Path!).Should().Emit();
         retrieved.Should().NotBeNull("Comment should still exist after update");
         var retrievedComment = retrieved!.Content.Should().BeOfType<Comment>().Subject;
         retrievedComment.Text.Should().Be("This is my comment text",
@@ -206,7 +206,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"Verified text persisted: '{retrievedComment.Text}'");
 
         // Cleanup
-        await NodeFactory.DeleteNode(createdNode.Path!);
+        NodeFactory.DeleteNode(createdNode.Path!).Should().Emit();
     }
 
     /// <summary>

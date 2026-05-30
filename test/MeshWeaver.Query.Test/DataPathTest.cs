@@ -140,10 +140,10 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
     // re-query loop. Filter via .Where(...).FirstAsync().Timeout(...).
     private IObservable<OrderSummary> PollOrderSummary(IMessageHub client, string orderId)
         => Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
-            .SelectMany(_ => Observable.FromAsync(() => client
+            .SelectMany(_ => client
                 .Observe(new GetDataRequest(new DataPathReference("OrderSummary")),
                          o => o.WithTarget(CreateHostAddress()))
-                .FirstAsync().ToTask()))
+                .Take(1))
             .Select(r => (r.Message.Data as InstanceCollection)?.Instances.Values
                 .Cast<OrderSummary>().FirstOrDefault(s => s.OrderId == orderId))
             .Where(s => s != null)
@@ -151,10 +151,10 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
 
     private IObservable<List<OrderSummary>> PollOrderSummaries(IMessageHub client)
         => Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
-            .SelectMany(_ => Observable.FromAsync(() => client
+            .SelectMany(_ => client
                 .Observe(new GetDataRequest(new DataPathReference("OrderSummary")),
                          o => o.WithTarget(CreateHostAddress()))
-                .FirstAsync().ToTask()))
+                .Take(1))
             .Select(r => (r.Message.Data as InstanceCollection)?.Instances.Values
                 .Cast<OrderSummary>().ToList() ?? new List<OrderSummary>());
 
@@ -180,7 +180,7 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
     /// Tests that direct workspace access works and collections are registered with simple names.
     /// </summary>
     [Fact]
-    public async Task DirectWorkspaceAccess_ReturnsData()
+    public void DirectWorkspaceAccess_ReturnsData()
     {
         // Arrange
         var host = GetHost();
@@ -196,7 +196,7 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
 
         // Act - access stream directly via workspace
         var stream = workspace.GetStream(typeof(Order));
-        var data = await stream.Take(1).Timeout(TimeSpan.FromSeconds(5));
+        var data = stream.Should().Within(TimeSpan.FromSeconds(5)).Emit();
 
         // Assert
         var orders = data.Value!.GetData<Order>().ToArray();
@@ -207,14 +207,14 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
     /// Tests that DataPathReference resolves to a collection when path is just the collection name.
     /// </summary>
     [Fact]
-    public async Task DataPathReference_Collection_ReturnsAllEntities()
+    public void DataPathReference_Collection_ReturnsAllEntities()
     {
         // Arrange
         GetHost();
         var client = GetClient();
 
         // Act - request collection via DataPathReference
-        var response = await client.Observe(new GetDataRequest(new DataPathReference("Order")), o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask();
+        var response = client.Observe(new GetDataRequest(new DataPathReference("Order")), o => o.WithTarget(CreateHostAddress())).Should().Within(TimeSpan.FromSeconds(25)).Emit();
 
         // Assert
         response.Message.Error.Should().BeNull();
@@ -227,14 +227,14 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
     /// Tests that DataPathReference resolves to an entity when path includes entity ID.
     /// </summary>
     [Fact]
-    public async Task DataPathReference_Entity_ReturnsSingleEntity()
+    public void DataPathReference_Entity_ReturnsSingleEntity()
     {
         // Arrange
         GetHost();
         var client = GetClient();
 
         // Act - request entity via DataPathReference
-        var response = await client.Observe(new GetDataRequest(new DataPathReference("Order/O1")), o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask();
+        var response = client.Observe(new GetDataRequest(new DataPathReference("Order/O1")), o => o.WithTarget(CreateHostAddress())).Should().Within(TimeSpan.FromSeconds(25)).Emit();
 
         // Assert
         response.Message.Error.Should().BeNull();
@@ -249,14 +249,14 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
     /// Tests that DataPathReference works with virtual data sources.
     /// </summary>
     [Fact]
-    public async Task DataPathReference_VirtualType_ReturnsCombinedData()
+    public void DataPathReference_VirtualType_ReturnsCombinedData()
     {
         // Arrange
         GetHost();
         var client = GetClient();
 
         // Act - request virtual collection via DataPathReference
-        var response = await client.Observe(new GetDataRequest(new DataPathReference("OrderSummary")), o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask();
+        var response = client.Observe(new GetDataRequest(new DataPathReference("OrderSummary")), o => o.WithTarget(CreateHostAddress())).Should().Within(TimeSpan.FromSeconds(25)).Emit();
 
         // Assert
         response.Message.Error.Should().BeNull();
@@ -280,7 +280,7 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
     /// when underlying data changes.
     /// </summary>
     [Fact]
-    public async Task Subscription_ReceivesUpdates_WhenUnderlyingDataChanges()
+    public void Subscription_ReceivesUpdates_WhenUnderlyingDataChanges()
     {
         // Arrange
         GetHost();
@@ -288,7 +288,7 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
 
         // Subscribe to Order collection via workspace
         // First, we need to get to the target hub and subscribe
-        var subscribeResponse = await client.Observe(new GetDataRequest(new DataPathReference("Order")), o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask();
+        var subscribeResponse = client.Observe(new GetDataRequest(new DataPathReference("Order")), o => o.WithTarget(CreateHostAddress())).Should().Within(TimeSpan.FromSeconds(25)).Emit();
 
         subscribeResponse.Message.Error.Should().BeNull();
         var initialCollection = subscribeResponse.Message.Data.Should().BeOfType<InstanceCollection>().Subject;
@@ -296,12 +296,12 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
 
         // Act - Update an order
         var updatedOrder = new Order("O1", "C1", 999.99m, "Updated");
-        var updateResponse = await client.Observe(DataChangeRequest.Update([updatedOrder]), o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask();
+        var updateResponse = client.Observe(DataChangeRequest.Update([updatedOrder]), o => o.WithTarget(CreateHostAddress())).Should().Within(TimeSpan.FromSeconds(25)).Emit();
 
         updateResponse.Message.Should().BeOfType<DataChangeResponse>();
 
         // Assert - Verify the update took effect
-        var verifyResponse = await client.Observe(new GetDataRequest(new DataPathReference("Order/O1")), o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask();
+        var verifyResponse = client.Observe(new GetDataRequest(new DataPathReference("Order/O1")), o => o.WithTarget(CreateHostAddress())).Should().Within(TimeSpan.FromSeconds(25)).Emit();
 
         verifyResponse.Message.Error.Should().BeNull();
         var order = verifyResponse.Message.Data.Should().BeOfType<Order>().Subject;
@@ -313,14 +313,14 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
     /// Tests that virtual data source updates when underlying source data changes.
     /// </summary>
     [Fact]
-    public async Task VirtualDataSource_UpdatesWhenSourceChanges()
+    public void VirtualDataSource_UpdatesWhenSourceChanges()
     {
         // Arrange
         GetHost();
         var client = GetClient();
 
         // Get initial virtual data
-        var initialResponse = await client.Observe(new GetDataRequest(new DataPathReference("OrderSummary")), o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask();
+        var initialResponse = client.Observe(new GetDataRequest(new DataPathReference("OrderSummary")), o => o.WithTarget(CreateHostAddress())).Should().Within(TimeSpan.FromSeconds(25)).Emit();
 
         initialResponse.Message.Error.Should().BeNull();
         var initialSummaries = (initialResponse.Message.Data as InstanceCollection)!
@@ -331,13 +331,13 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
 
         // Act - Update the underlying Order
         var updatedOrder = new Order("O1", "C1", 500.00m, "Modified");
-        await client.Observe(DataChangeRequest.Update([updatedOrder]), o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask();
+        client.Observe(DataChangeRequest.Update([updatedOrder]), o => o.WithTarget(CreateHostAddress())).Should().Within(TimeSpan.FromSeconds(25)).Emit();
 
         // Wait actively for the virtual data source to reflect the change
         // (a fixed Task.Delay races against propagation latency under load).
-        var updatedO1Summary = await PollOrderSummary(client, "O1")
+        var updatedO1Summary = PollOrderSummary(client, "O1")
             .Where(s => s.Amount == 500.00m && s.Status == "Modified")
-            .FirstAsync().Timeout(15.Seconds()).ToTask(TestContext.Current.CancellationToken);
+            .Should().Within(15.Seconds()).Emit();
 
         updatedO1Summary.Amount.Should().Be(500.00m);
         updatedO1Summary.Status.Should().Be("Modified");
@@ -347,26 +347,26 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
     /// Tests that adding a new entity to the source updates the virtual data source.
     /// </summary>
     [Fact]
-    public async Task VirtualDataSource_ReflectsNewEntities()
+    public void VirtualDataSource_ReflectsNewEntities()
     {
         // Arrange
         GetHost();
         var client = GetClient();
 
         // Get initial count
-        var initialResponse = await client.Observe(new GetDataRequest(new DataPathReference("OrderSummary")), o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask();
+        var initialResponse = client.Observe(new GetDataRequest(new DataPathReference("OrderSummary")), o => o.WithTarget(CreateHostAddress())).Should().Within(TimeSpan.FromSeconds(25)).Emit();
 
         var initialCount = (initialResponse.Message.Data as InstanceCollection)!.Instances.Count;
         initialCount.Should().Be(3);
 
         // Act - Add a new order
         var newOrder = new Order("O4", "C3", 300.00m, "New");
-        await client.Observe(DataChangeRequest.Update([newOrder]), o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask();
+        client.Observe(DataChangeRequest.Update([newOrder]), o => o.WithTarget(CreateHostAddress())).Should().Within(TimeSpan.FromSeconds(25)).Emit();
 
         // Wait actively for the virtual data source to surface the new entity.
-        var updatedSummaries = await PollOrderSummaries(client)
+        var updatedSummaries = PollOrderSummaries(client)
             .Where(list => list.Count == 4 && list.Any(s => s.OrderId == "O4" && s.Amount == 300.00m))
-            .FirstAsync().Timeout(15.Seconds()).ToTask(TestContext.Current.CancellationToken);
+            .Should().Within(15.Seconds()).Emit();
 
         updatedSummaries.Should().HaveCount(4);
         updatedSummaries.Should().Contain(s =>
@@ -379,14 +379,14 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
     /// Tests that updating a customer updates the virtual OrderSummary data.
     /// </summary>
     [Fact]
-    public async Task VirtualDataSource_UpdatesWhenRelatedDataChanges()
+    public void VirtualDataSource_UpdatesWhenRelatedDataChanges()
     {
         // Arrange
         GetHost();
         var client = GetClient();
 
         // Get initial data
-        var initialResponse = await client.Observe(new GetDataRequest(new DataPathReference("OrderSummary")), o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask();
+        var initialResponse = client.Observe(new GetDataRequest(new DataPathReference("OrderSummary")), o => o.WithTarget(CreateHostAddress())).Should().Within(TimeSpan.FromSeconds(25)).Emit();
 
         var initialSummaries = (initialResponse.Message.Data as InstanceCollection)!
             .Instances.Values.Cast<OrderSummary>().ToList();
@@ -397,12 +397,12 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
 
         // Act - Update the customer name
         var updatedCustomer = new Customer("C1", "Alice Johnson", "alice.johnson@example.com");
-        await client.Observe(DataChangeRequest.Update([updatedCustomer]), o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask();
+        client.Observe(DataChangeRequest.Update([updatedCustomer]), o => o.WithTarget(CreateHostAddress())).Should().Within(TimeSpan.FromSeconds(25)).Emit();
 
         // Wait actively for the virtual data source to reflect the customer update.
-        var updatedSummaries = await PollOrderSummaries(client)
+        var updatedSummaries = PollOrderSummaries(client)
             .Where(list => list.Where(s => s.CustomerId == "C1").All(s => s.CustomerName == "Alice Johnson"))
-            .FirstAsync().Timeout(15.Seconds()).ToTask(TestContext.Current.CancellationToken);
+            .Should().Within(15.Seconds()).Emit();
 
         // Orders for C1 should now show the updated customer name
         updatedSummaries.Where(s => s.CustomerId == "C1")
@@ -418,14 +418,14 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
     /// Format: data:collection
     /// </summary>
     [Fact]
-    public async Task UnifiedReference_DataPrefix_ResolvesCorrectly()
+    public void UnifiedReference_DataPrefix_ResolvesCorrectly()
     {
         // Arrange
         GetHost();
         var client = GetClient();
 
         // Act - Use UnifiedReference with data: prefix format
-        var response = await client.Observe(new GetDataRequest(new UnifiedReference("data:Order")), o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask();
+        var response = client.Observe(new GetDataRequest(new UnifiedReference("data:Order")), o => o.WithTarget(CreateHostAddress())).Should().Within(TimeSpan.FromSeconds(25)).Emit();
 
         // Assert
         response.Message.Error.Should().BeNull();
@@ -439,14 +439,14 @@ public class DataPathTest(ITestOutputHelper output) : HubTestBase(output)
     /// Format: data:collection/entityId
     /// </summary>
     [Fact]
-    public async Task UnifiedReference_DataPrefix_Entity_ResolvesCorrectly()
+    public void UnifiedReference_DataPrefix_Entity_ResolvesCorrectly()
     {
         // Arrange
         GetHost();
         var client = GetClient();
 
         // Act - Use UnifiedReference with data: prefix for specific entity
-        var response = await client.Observe(new GetDataRequest(new UnifiedReference("data:Customer/C2")), o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask();
+        var response = client.Observe(new GetDataRequest(new UnifiedReference("data:Customer/C2")), o => o.WithTarget(CreateHostAddress())).Should().Within(TimeSpan.FromSeconds(25)).Emit();
 
         // Assert
         response.Message.Error.Should().BeNull();

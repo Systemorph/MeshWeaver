@@ -153,12 +153,11 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     /// Test that ProductLaunch has task children.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task ProductLaunch_HasTaskChildren()
+    public void ProductLaunch_HasTaskChildren()
     {
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-
-        var children = await meshQuery.QueryAsync<MeshNode>("namespace:ACME/ProductLaunch/Todo", null, TestContext.Current.CancellationToken)
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var children = MeshQuery
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("namespace:ACME/ProductLaunch/Todo"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         children.Should().NotBeEmpty("ProductLaunch should have task children");
         children.Should().HaveCountGreaterThan(10, "ProductLaunch should have at least 10 tasks");

@@ -51,7 +51,7 @@ public class UserLookupByEmailTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 10000)]
-    public async Task ContentEmailQuery_FindsUserByEmail()
+    public void ContentEmailQuery_FindsUserByEmail()
     {
         // Arrange - Roland.json has content.email = "rbuergi@systemorph.com"
         var email = "rbuergi@systemorph.com";
@@ -62,9 +62,8 @@ public class UserLookupByEmailTest : MonolithMeshTestBase
         MeshNode[] results;
         using (accessService.ImpersonateAsHub(Mesh))
         {
-            results = await MeshQuery.QueryAsync<MeshNode>(
-                query, ct: TestContext.Current.CancellationToken
-            ).ToArrayAsync(TestContext.Current.CancellationToken);
+            results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+                .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items.ToArray();
         }
 
         // Assert
@@ -79,7 +78,7 @@ public class UserLookupByEmailTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 10000)]
-    public async Task ContentEmailQuery_NonExistentEmail_ReturnsEmpty()
+    public void ContentEmailQuery_NonExistentEmail_ReturnsEmpty()
     {
         // Arrange - email that doesn't exist in any User node
         var email = "nonexistent@example.com";
@@ -90,9 +89,8 @@ public class UserLookupByEmailTest : MonolithMeshTestBase
         MeshNode[] results;
         using (accessService.ImpersonateAsHub(Mesh))
         {
-            results = await MeshQuery.QueryAsync<MeshNode>(
-                query, ct: TestContext.Current.CancellationToken
-            ).ToArrayAsync(TestContext.Current.CancellationToken);
+            results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+                .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items.ToArray();
         }
 
         // Assert
@@ -103,7 +101,7 @@ public class UserLookupByEmailTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 10000)]
-    public async Task ContentEmailQuery_NameCanOverrideClaim()
+    public void ContentEmailQuery_NameCanOverrideClaim()
     {
         // Arrange - simulate the middleware flow:
         // claim says name is "R. Buergi" but mesh User node says "Roland Buergi"
@@ -112,16 +110,13 @@ public class UserLookupByEmailTest : MonolithMeshTestBase
 
         // Act - look up mesh user by email (middleware pattern)
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        MeshNode? meshUser = null;
+        MeshNode? meshUser;
         using (accessService.ImpersonateAsHub(Mesh))
         {
-            await foreach (var node in MeshQuery.QueryAsync<MeshNode>(
-                $"nodeType:User namespace:User content.email:{claimEmail} limit:1",
-                ct: TestContext.Current.CancellationToken))
-            {
-                meshUser = node;
-                break;
-            }
+            meshUser = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"nodeType:User namespace:User content.email:{claimEmail} limit:1"))
+                .Should().Match(c => c.ChangeType == QueryChangeType.Initial)
+                .Items.FirstOrDefault();
         }
 
         // Override name if found

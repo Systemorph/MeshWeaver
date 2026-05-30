@@ -65,16 +65,15 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 20000)]
-    public async Task AuthenticatedUser_CanRead_UserNode_ByPath()
+    public void AuthenticatedUser_CanRead_UserNode_ByPath()
     {
         LoginAsUnprivilegedUser();
 
-        var results = await MeshQuery.QueryAsync<MeshNode>(
-            "path:User/Roland",
-            ct: TestContext.Current.CancellationToken
-        ).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            "path:User/Roland"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
-        Output.WriteLine($"Found {results.Length} results");
+        Output.WriteLine($"Found {results.Count} results");
         foreach (var r in results)
             Output.WriteLine($"  - {r.Path}: {r.Name} (NodeType={r.NodeType})");
 
@@ -84,16 +83,15 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 20000)]
-    public async Task AuthenticatedUser_CanRead_OrganizationNode_ByPath()
+    public void AuthenticatedUser_CanRead_OrganizationNode_ByPath()
     {
         LoginAsUnprivilegedUser();
 
-        var results = await MeshQuery.QueryAsync<MeshNode>(
-            "path:Acme",
-            ct: TestContext.Current.CancellationToken
-        ).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            "path:Acme"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
-        Output.WriteLine($"Found {results.Length} results");
+        Output.WriteLine($"Found {results.Count} results");
         foreach (var r in results)
             Output.WriteLine($"  - {r.Path}: {r.Name} (NodeType={r.NodeType})");
 
@@ -103,16 +101,15 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 20000)]
-    public async Task AuthenticatedUser_CanQuery_UserNodes_ByNodeType()
+    public void AuthenticatedUser_CanQuery_UserNodes_ByNodeType()
     {
         LoginAsUnprivilegedUser();
 
-        var results = await MeshQuery.QueryAsync<MeshNode>(
-            "nodeType:User",
-            ct: TestContext.Current.CancellationToken
-        ).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            "nodeType:User"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial && c.Items.Count >= 2).Items;
 
-        Output.WriteLine($"Found {results.Length} User nodes");
+        Output.WriteLine($"Found {results.Count} User nodes");
         foreach (var r in results)
             Output.WriteLine($"  - {r.Path}: {r.Name} (NodeType={r.NodeType})");
 
@@ -122,16 +119,15 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 20000)]
-    public async Task AuthenticatedUser_CanQuery_SpaceNodes_ByNodeType()
+    public void AuthenticatedUser_CanQuery_SpaceNodes_ByNodeType()
     {
         LoginAsUnprivilegedUser();
 
-        var results = await MeshQuery.QueryAsync<MeshNode>(
-            "nodeType:Space",
-            ct: TestContext.Current.CancellationToken
-        ).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            "nodeType:Space"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial && c.Items.Count >= 1).Items;
 
-        Output.WriteLine($"Found {results.Length} Space nodes");
+        Output.WriteLine($"Found {results.Count} Space nodes");
         foreach (var r in results)
             Output.WriteLine($"  - {r.Path}: {r.Name} (NodeType={r.NodeType})");
 
@@ -140,7 +136,7 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 30000)]
-    public async Task DynamicallyCreated_SpaceNode_RequiresPartitionAccess()
+    public void DynamicallyCreated_SpaceNode_RequiresPartitionAccess()
     {
         // "Creator" Admin at root is pre-seeded via ConfigureMesh's static AccessAssignment.
         var orgNode = new MeshNode("Globex")
@@ -149,17 +145,16 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
             NodeType = "Space",
             Content = new Space { Name = "Globex Corp" }
         };
-        var created = await NodeFactory.CreateNode(orgNode);
+        var created = NodeFactory.CreateNode(orgNode).Should().Emit();
         created.Should().NotBeNull();
         Output.WriteLine($"Created: {created.Path}");
 
         // Unprivileged user cannot see the org (partition access controls visibility)
         LoginAsUnprivilegedUser();
 
-        var results = await MeshQuery.QueryAsync<MeshNode>(
-            "path:Globex",
-            ct: TestContext.Current.CancellationToken
-        ).ToArrayAsync(TestContext.Current.CancellationToken);
+        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            "path:Globex"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         results.Should().BeEmpty("Organization instances require partition-level access, not public read");
 
@@ -171,22 +166,22 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
         // restore Alice for the post-grant query.
         TestUsers.DevLogin(Mesh);
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole("Alice", "Viewer", "Globex"))
-            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        meshService.CreateNode(AssignmentNodeFactory.UserRole("Alice", "Viewer", "Globex"))
+            .Should().Emit();
         LoginAsUnprivilegedUser();
 
         // Wait for the runtime AccessAssignment to surface in SecurityService's
         // synced query (the QueryAsync path checks live permissions). Without
         // this gate, the immediate query reads the cached snapshot from before
         // the grant landed → empty result.
-        await Mesh.GetPermissionAsync("Globex", "Alice",
-            until: p => p.HasFlag(Permission.Read),
-            ct: TestContext.Current.CancellationToken);
+        Mesh.GetEffectivePermissions("Globex", "Alice")
+            .Should().Match(p => p.HasFlag(Permission.Read));
 
-        var resultsAfterGrant = await MeshQuery.QueryAsync<MeshNode>(
-            "path:Globex",
-            ct: TestContext.Current.CancellationToken
-        ).ToArrayAsync(TestContext.Current.CancellationToken);
+        // The grant has landed; accumulate the live query deltas until the
+        // Globex node surfaces (Initial may still race the synced-query update).
+        var resultsAfterGrant = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            "path:Globex"))
+            .Should().Match(c => c.Items.Count == 1).Items;
 
         resultsAfterGrant.Should().HaveCount(1, "Organization should be readable after granting Viewer role");
         resultsAfterGrant[0].Name.Should().Be("Globex Corp");

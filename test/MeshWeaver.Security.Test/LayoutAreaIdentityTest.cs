@@ -57,42 +57,42 @@ public class LayoutAreaIdentityTest(ITestOutputHelper output) : MonolithMeshTest
     }
 
     [Fact(Timeout = 10000)]
-    public async Task AuthorizedUser_CanSubscribe_ToLayoutArea()
+    public void AuthorizedUser_CanSubscribe_ToLayoutArea()
     {
         var client = GetClientWithUser("Viewer1");
         var nodeAddress = new Address(NodePath);
 
-        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Emit();
 
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             nodeAddress, new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea));
 
-        var result = await stream.Timeout(3.Seconds()).FirstAsync();
+        var result = stream.Should().Within(3.Seconds()).Emit();
         result.Should().NotBeNull("Viewer1 has Read permission and should receive layout data");
     }
 
     [Fact(Timeout = 10000)]
-    public async Task UnauthorizedUser_SubscriptionDenied()
+    public void UnauthorizedUser_SubscriptionDenied()
     {
         var client = GetClientWithUser("NoAccess");
         var nodeAddress = new Address(NodePath);
 
-        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Emit();
 
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             nodeAddress, new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea));
 
-        Func<Task> act = async () => await stream.Timeout(3.Seconds()).FirstAsync();
+        Action act = () => stream.Timeout(3.Seconds()).Wait();
 
-        var ex = await Assert.ThrowsAsync<DeliveryFailureException>(act);
+        var ex = act.Should().Throw<DeliveryFailureException>().Which;
         ex.Message.Should().Contain("Access denied");
         ex.Message.Should().Contain("NoAccess");
     }
 
     [Fact(Timeout = 10000)]
-    public async Task SubscribeRequest_CarriesIdentity()
+    public void SubscribeRequest_CarriesIdentity()
     {
         // Verify that SubscribeRequest.Identity is stamped with the user ID
         var client = GetClientWithUser("Viewer1");
@@ -105,23 +105,23 @@ public class LayoutAreaIdentityTest(ITestOutputHelper output) : MonolithMeshTest
         // When the client creates a remote stream, the SubscribeRequest
         // should have Identity = "Viewer1" (stamped from CircuitContext)
         var nodeAddress = new Address(NodePath);
-        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Emit();
 
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             nodeAddress, new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea));
 
         // If we get data (not access denied), the Identity was correctly resolved
-        var result = await stream.Timeout(3.Seconds()).FirstAsync();
+        var result = stream.Should().Within(3.Seconds()).Emit();
         result.Should().NotBeNull(
             "SubscribeRequest.Identity should carry 'Viewer1' which has Read permission");
     }
 
     [Fact(Timeout = 10000)]
-    public async Task ViewerUser_CannotUpdate()
+    public void ViewerUser_CannotUpdate()
     {
-        var perms = await Mesh.GetPermissionAsync(
-            "IdentityTest/Target", "Viewer1", TestContext.Current.CancellationToken);
+        var perms = Mesh.GetEffectivePermissions("IdentityTest/Target", "Viewer1")
+            .Should().Match(p => p.HasFlag(Permission.Read));
 
         perms.HasFlag(Permission.Read).Should().BeTrue("Viewer1 has Read");
         perms.HasFlag(Permission.Update).Should().BeFalse("Viewer1 lacks Update");

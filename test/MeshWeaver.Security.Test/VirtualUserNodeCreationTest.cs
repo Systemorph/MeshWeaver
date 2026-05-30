@@ -36,9 +36,8 @@ public class VirtualUserNodeCreationTest(ITestOutputHelper output) : MonolithMes
     /// address (portal/xxx) is used as the identity for the access check.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task PortalHub_CreateVUser_Succeeds()
+    public void PortalHub_CreateVUser_Succeeds()
     {
-        var ct = TestContext.Current.CancellationToken;
         var portalHub = CreatePortalHub();
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -46,7 +45,7 @@ public class VirtualUserNodeCreationTest(ITestOutputHelper output) : MonolithMes
         var node = CreateVUserNode("visitor1");
         using (accessService.ImpersonateAsHub(portalHub))
         {
-            var created = await meshService.CreateNode(node);
+            var created = meshService.CreateNode(node).Should().Emit();
             created.Should().NotBeNull();
             created.Path.Should().Be("VUser/visitor1");
             created.State.Should().Be(MeshNodeState.Active);
@@ -59,9 +58,8 @@ public class VirtualUserNodeCreationTest(ITestOutputHelper output) : MonolithMes
     /// race condition in HubNodePersistence caused the task to never complete.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task PortalHub_CreateVUser_AlreadyExists_ReturnsFailure()
+    public void PortalHub_CreateVUser_AlreadyExists_ReturnsFailure()
     {
-        var ct = TestContext.Current.CancellationToken;
         var portalHub = CreatePortalHub();
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -71,11 +69,11 @@ public class VirtualUserNodeCreationTest(ITestOutputHelper output) : MonolithMes
         using (accessService.ImpersonateAsHub(portalHub))
         {
             // First creation succeeds
-            await meshService.CreateNode(node);
+            meshService.CreateNode(node).Should().Emit();
 
             // Second creation should throw, not hang
-            var act = async () => await meshService.CreateNode(node);
-            await act.Should().ThrowAsync<InvalidOperationException>()
+            Action act = () => meshService.CreateNode(node).Wait();
+            act.Should().Throw<InvalidOperationException>()
                 .WithMessage("*already exists*");
         }
     }
@@ -87,9 +85,8 @@ public class VirtualUserNodeCreationTest(ITestOutputHelper output) : MonolithMes
     /// 3. Second call detects VUser exists, skips creation
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task EnsureVirtualUserNode_CheckThenCreate_NoHang()
+    public void EnsureVirtualUserNode_CheckThenCreate_NoHang()
     {
-        var ct = TestContext.Current.CancellationToken;
         var portalHub = CreatePortalHub();
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -100,27 +97,26 @@ public class VirtualUserNodeCreationTest(ITestOutputHelper output) : MonolithMes
         using (accessService.ImpersonateAsHub(portalHub))
         {
             // First call: VUser doesn't exist in persistence
-            var existsBefore = await CheckNodeExistsAsync(meshService, $"VUser/{virtualUserId}", ct);
+            var existsBefore = NodeExists(meshService, $"VUser/{virtualUserId}");
             existsBefore.Should().BeFalse("VUser node should not exist yet");
 
-            await meshService.CreateNode(node);
+            meshService.CreateNode(node).Should().Emit();
 
-            // Second call: VUser exists after creation
-            var existsAfter = await CheckNodeExistsAsync(meshService, $"VUser/{virtualUserId}", ct);
+            // Second call: VUser exists after creation — wait reactively for it to surface.
+            var existsAfter = meshService.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                $"path:VUser/{virtualUserId}"))
+                .Select(c => c.Items.Any())
+                .Should().Match(any => any);
             existsAfter.Should().BeTrue("VUser node should exist after creation");
         }
     }
 
     /// <summary>
-    /// Checks if a node exists in persistence via query.
+    /// Checks if a node exists via the initial query snapshot.
     /// </summary>
-    private static async Task<bool> CheckNodeExistsAsync(IMeshService meshService, string path, CancellationToken ct)
-    {
-        var node = await meshService.QueryAsync<MeshNode>(
-            $"path:{path}", ct: ct
-        ).FirstOrDefaultAsync(ct);
-        return node != null;
-    }
+    private static bool NodeExists(IMeshService meshService, string path)
+        => meshService.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items.Count > 0;
 
     private IMessageHub CreatePortalHub()
         => Mesh.ServiceProvider.CreateMessageHub(

@@ -1,8 +1,7 @@
+using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
-using System.Threading.Tasks;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -24,47 +23,55 @@ public class MultiQueryUnionEngineTests(ITestOutputHelper output) : MonolithMesh
 
     private static string P([CallerMemberName] string name = "") => name;
 
+    /// <summary>
+    /// Reactive replacement for <c>QueryAsync(...).ToListAsync()</c>: the first
+    /// <see cref="QueryChangeType.Initial"/> emission carries the full snapshot.
+    /// </summary>
+    private IReadOnlyList<MeshNode> QueryNodes(MeshQueryRequest request)
+        => MeshQuery.ObserveQuery<MeshNode>(request)
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+
     [Fact]
-    public async Task FromQueries_QueryAsync_UnionsBothBranches()
+    public void FromQueries_QueryAsync_UnionsBothBranches()
     {
         var p = P();
-        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/A1") with { Name = "A1", NodeType = "Markdown" });
-        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/A2") with { Name = "A2", NodeType = "Markdown" });
-        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}_other/B1") with { Name = "B1", NodeType = "Markdown" });
+        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/A1") with { Name = "A1", NodeType = "Markdown" }).Should().Emit();
+        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/A2") with { Name = "A2", NodeType = "Markdown" }).Should().Emit();
+        NodeFactory.CreateNode(MeshNode.FromPath($"{p}_other/B1") with { Name = "B1", NodeType = "Markdown" }).Should().Emit();
 
-        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQueries(new[]
+        var results = QueryNodes(MeshQueryRequest.FromQueries(new[]
         {
             $"path:{p} nodeType:Markdown scope:descendants",
             $"path:{p}_other nodeType:Markdown scope:descendants",
-        })).ToListAsync();
+        }));
 
-        results.Cast<MeshNode>().Select(n => n.Name).Should().BeEquivalentTo(new[] { "A1", "A2", "B1" }, Mesh.JsonSerializerOptions);
+        results.Select(n => n.Name).Should().BeEquivalentTo(new[] { "A1", "A2", "B1" }, Mesh.JsonSerializerOptions);
     }
 
     [Fact]
-    public async Task FromQueries_DedupesNodeMatchedByMultipleBranches()
+    public void FromQueries_DedupesNodeMatchedByMultipleBranches()
     {
         var p = P();
-        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Shared") with { Name = "Shared", NodeType = "Markdown" });
+        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Shared") with { Name = "Shared", NodeType = "Markdown" }).Should().Emit();
 
         // Both queries match the same node — the engine's path-keyed dedup must
         // collapse it to one entry.
-        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQueries(new[]
+        var results = QueryNodes(MeshQueryRequest.FromQueries(new[]
         {
             $"path:{p} nodeType:Markdown scope:descendants",
             $"path:{p} nodeType:Markdown scope:descendants",
-        })).ToListAsync();
+        }));
 
         results.Should().HaveCount(1);
-        (results[0] as MeshNode)!.Name.Should().Be("Shared");
+        results[0].Name.Should().Be("Shared");
     }
 
     [Fact]
-    public async Task FromQueries_ObserveQuery_EmitsUnionedInitial()
+    public void FromQueries_ObserveQuery_EmitsUnionedInitial()
     {
         var p = P();
-        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/X") with { Name = "X", NodeType = "Markdown" });
-        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}_other/Y") with { Name = "Y", NodeType = "Markdown" });
+        NodeFactory.CreateNode(MeshNode.FromPath($"{p}/X") with { Name = "X", NodeType = "Markdown" }).Should().Emit();
+        NodeFactory.CreateNode(MeshNode.FromPath($"{p}_other/Y") with { Name = "Y", NodeType = "Markdown" }).Should().Emit();
 
         var initial = MeshQuery
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQueries(new[]
