@@ -208,7 +208,7 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
     /// When a server-side stream errors via OnError, the client stream should also fail.
     /// </summary>
     [Fact]
-    public async Task ServerStreamError_PropagatesTo_ClientStream()
+    public void ServerStreamError_PropagatesTo_ClientStream()
     {
         var host = GetHost();
         var client = GetClient();
@@ -226,19 +226,20 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
             CreateHostAddress(), new CollectionsReference(collectionName));
 
         // Wait for initial data to arrive
-        var initial = await clientStream.Timeout(3.Seconds()).FirstAsync();
+        var initial = clientStream.Should().Within(3.Seconds()).Emit();
         initial.Should().NotBeNull();
 
-        // Track errors on client stream
-        var errorReceived = new TaskCompletionSource<Exception>();
-        clientStream.Subscribe(_ => { }, ex => errorReceived.TrySetResult(ex));
+        // Track errors on client stream. ReplaySubject buffers the error so the
+        // reactive assertion below still observes it even if OnError fires before
+        // the assertion subscribes.
+        var errorReceived = new System.Reactive.Subjects.ReplaySubject<Exception>();
+        clientStream.Subscribe(_ => { }, ex => errorReceived.OnNext(ex));
 
         // Fail the data source stream — this should propagate to all subscribers
         dataSourceStream!.OnError(new InvalidOperationException("Server stream failed"));
 
         // Client should receive the error
-        var error = await errorReceived.Task
-            .WaitAsync(1.Seconds(), TestContext.Current.CancellationToken);
+        var error = errorReceived.Should().Within(1.Seconds()).Emit();
 
         error.Should().NotBeNull();
         Output.WriteLine($"Client received error: {error.Message}");

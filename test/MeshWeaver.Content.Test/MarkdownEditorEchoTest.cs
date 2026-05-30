@@ -86,7 +86,7 @@ public class MarkdownEditorEchoTest(ITestOutputHelper output) : MonolithMeshTest
     /// change rather than suppressing it.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task GetMeshNodeStreamUpdate_PropagatesToRemoteSubscriber()
+    public void GetMeshNodeStreamUpdate_PropagatesToRemoteSubscriber()
     {
         var nodePath = "Doc/DataMesh/CollaborativeEditing";
         var nodeAddress = new Address(nodePath);
@@ -97,15 +97,15 @@ public class MarkdownEditorEchoTest(ITestOutputHelper output) : MonolithMeshTest
         // Activate the per-node hub via a layout-area request.
         var editRef = new LayoutAreaReference(MarkdownLayoutAreas.EditArea);
         var editStream = subscriberWorkspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, editRef);
-        await editStream.Timeout(30.Seconds()).FirstAsync();
+        editStream.Should().Within(30.Seconds()).Emit();
 
         // Subscribe to the MeshNode via the canonical remote stream.
         var subscriberStream = subscriberWorkspace
             .GetRemoteStream<MeshNode, MeshNodeReference>(nodeAddress, new MeshNodeReference());
-        var initial = await subscriberStream
-            .Where(c => c.Value != null)
-            .Timeout(30.Seconds())
-            .FirstAsync();
+        var initial = subscriberStream
+            .Should()
+            .Within(30.Seconds())
+            .Match(c => c.Value != null);
 
         var originalContent = ExtractMarkdownContent(initial.Value!);
 
@@ -115,22 +115,22 @@ public class MarkdownEditorEchoTest(ITestOutputHelper output) : MonolithMeshTest
         var marker = $"<!-- ECHO_TEST_{Guid.NewGuid().ToString("N")[..8]} -->";
         var newContent = originalContent + $"\n\n{marker}\n";
 
-        var emissionTask = subscriberStream
-            .Skip(1)
-            .Where(c =>
-                c.Value?.Content is MarkdownContent mc &&
-                mc.Content?.Contains(marker, StringComparison.Ordinal) == true)
-            .Timeout(15.Seconds())
-            .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
-
         subscriberWorkspace.GetMeshNodeStream(nodePath).Update(node => node with
         {
             NodeType = "Markdown",
             Content = new MarkdownContent { Content = newContent }
         }).Subscribe(_ => { }, _ => { });
 
-        var observed = await emissionTask;
+        // The remote subscriber's stream is live and retains the latest reduced
+        // value, so blocking for the marker after the write is race-free —
+        // .Match waits until the propagated state satisfies the predicate.
+        var observed = subscriberStream
+            .Should()
+            .Within(15.Seconds())
+            .Match(c =>
+                c.Value?.Content is MarkdownContent mc &&
+                mc.Content?.Contains(marker, StringComparison.Ordinal) == true);
+
         var observedMarkdown = observed.Value!.Content as MarkdownContent;
         observedMarkdown.Should().NotBeNull();
         observedMarkdown!.Content.Should().Contain(marker,

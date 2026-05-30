@@ -353,9 +353,8 @@ public class NodeTypeProgressAreaTest(ITestOutputHelper output) : MonolithMeshTe
     /// emission to the new subscriber is the terminal Ok state.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task WarmCycle_AfterCompile_NoRecompile_FirstEmissionIsCachedOk()
+    public void WarmCycle_AfterCompile_NoRecompile_FirstEmissionIsCachedOk()
     {
-        var ct = TestContext.Current.CancellationToken;
         var assemblyStore = Mesh.ServiceProvider.GetRequiredService<IAssemblyStore>();
         var nodeTypeAddress = new Address(NodeTypePath);
         // Use client workspace — Mesh hub does not configure AddData; see
@@ -389,15 +388,12 @@ public class NodeTypeProgressAreaTest(ITestOutputHelper output) : MonolithMeshTe
         var warmClient = GetClient();
         var warmWorkspace = warmClient.GetWorkspace();
         var warmTransitions = new ConcurrentQueue<CompilationStatus?>();
-        var warmFirstEmissionTcs = new TaskCompletionSource<CompilationStatus?>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
         using var warmSub = warmWorkspace.GetMeshNodeStream(NodeTypePath)
             .Where(n => n?.Content is NodeTypeDefinition)
             .Subscribe(n =>
             {
                 var status = (n!.Content as NodeTypeDefinition)?.CompilationStatus;
                 warmTransitions.Enqueue(status);
-                warmFirstEmissionTcs.TrySetResult(status);
             });
 
         // Open the Progress area on the same fresh client — same as a user
@@ -410,24 +406,34 @@ public class NodeTypeProgressAreaTest(ITestOutputHelper output) : MonolithMeshTe
             .GetControlStream(progressRef.Area!)
             .Should().Within(5.Seconds()).Match(c => c != null);
 
-        var warmFirstStatus = await warmFirstEmissionTcs.Task;
+        // The PRIMARY warm-cycle assertion. Block for the first NodeTypeDefinition
+        // emission on the warm subscription and assert its status is Ok. If the
+        // first emission is Ok, the kickoff didn't bounce us through Pending →
+        // Compiling — it correctly recognised the cached assembly. Anything else
+        // (Pending, Compiling, null, Error) means HasUsableBuild misfired or the
+        // persisted state didn't survive between subscriptions.
+        var warmFirstNode = warmWorkspace.GetMeshNodeStream(NodeTypePath)
+            .Should().Within(10.Seconds()).Match(n => n?.Content is NodeTypeDefinition);
+        var warmFirstStatus = (warmFirstNode!.Content as NodeTypeDefinition)?.CompilationStatus;
 
         Output.WriteLine($"Warm cycle: first observed status = {warmFirstStatus}");
 
-        // The PRIMARY warm-cycle assertion. If the first emission is Ok, the
-        // kickoff didn't bounce us through Pending → Compiling — it correctly
-        // recognised the cached assembly. Anything else (Pending, Compiling,
-        // null, Error) means HasUsableBuild misfired or the persisted state
-        // didn't survive between subscriptions.
         warmFirstStatus.Should().Be(CompilationStatus.Ok,
             "warm-cycle subscription must observe Status=Ok immediately; " +
             "any Pending/Compiling emission means the kickoff failed to detect the cached assembly");
 
-        // Give the system a moment to see if a stray compile fires anyway.
-        // The kickoff's Pending flip is synchronous on first emission; if it
-        // didn't happen by now, it won't. 250 ms is plenty for any reactive
-        // chain in the workspace to settle.
-        await Task.Delay(250, ct);
+        // Confirm no stray compile fires: the mesh-node stream must NOT surface a
+        // Pending/Compiling transition within a short window. The kickoff's Pending
+        // flip is synchronous on first emission; if it didn't happen by now, it
+        // won't. NotEmit(250 ms) is the reactive form of "wait to confirm nothing
+        // happened" — replaces the prior Task.Delay + queue snapshot.
+        warmWorkspace.GetMeshNodeStream(NodeTypePath)
+            .Where(n => n?.Content is NodeTypeDefinition d
+                && (d.CompilationStatus == CompilationStatus.Pending
+                    || d.CompilationStatus == CompilationStatus.Compiling))
+            .Should().NotEmit(250.Milliseconds(),
+                "no Pending/Compiling transition is allowed during the warm cycle");
+
         var warmSnapshot = warmTransitions.ToArray();
         warmSnapshot.Should().NotContain(s => s == CompilationStatus.Pending,
             "no Pending transition is allowed during the warm cycle — " +

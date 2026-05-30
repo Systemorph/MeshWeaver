@@ -114,14 +114,14 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
     /// Tests that SchemaReference returns a valid JSON schema for complex types with all properties and metadata
     /// </summary>
     [Fact]
-    public async Task SchemaReference_ShouldReturnValidJsonSchemaForComplexType()
+    public void SchemaReference_ShouldReturnValidJsonSchemaForComplexType()
     {
         // arrange
         var client = GetClient();
         var typeName = nameof(TestSchemaData);
 
         // act
-        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        var response = client.Observe(new GetDataRequest(new SchemaReference(typeName)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         response.Message.Should().BeOfType<GetDataResponse>();
@@ -248,14 +248,14 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
     /// Tests that SchemaReference returns an empty schema for unknown/unregistered types
     /// </summary>
     [Fact]
-    public async Task SchemaReference_ForUnknownType_ShouldReturnEmptySchema()
+    public void SchemaReference_ForUnknownType_ShouldReturnEmptySchema()
     {
         // arrange
         var client = GetClient();
         var unknownTypeName = "UnknownType.That.Does.Not.Exist";
 
         // act
-        var response = await client.Observe(new GetDataRequest(new SchemaReference(unknownTypeName)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        var response = client.Observe(new GetDataRequest(new SchemaReference(unknownTypeName)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         response.Message.Should().BeOfType<GetDataResponse>();
@@ -268,13 +268,13 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
     /// Tests that GetDomainTypesRequest returns all available registered types in the data workspace
     /// </summary>
     [Fact]
-    public async Task GetDomainTypesRequest_ShouldReturnAvailableTypes()
+    public void GetDomainTypesRequest_ShouldReturnAvailableTypes()
     {
         // arrange
         var client = GetClient();
 
         // act
-        var response = await client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        var response = client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         var typesResponse = response.Message.Should().BeOfType<DomainTypesResponse>().Which;
@@ -292,13 +292,13 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
     /// Tests that GetDomainTypesRequest returns types in sorted order for consistent results
     /// </summary>
     [Fact]
-    public async Task GetDomainTypesRequest_ShouldReturnSortedTypes()
+    public void GetDomainTypesRequest_ShouldReturnSortedTypes()
     {
         // arrange
         var client = GetClient();
 
         // act
-        var response = await client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        var response = client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         var typesResponse = response.Message.Should().BeOfType<DomainTypesResponse>().Which;
@@ -318,7 +318,7 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
     /// Tests that schema generation properly handles nullable types and optional properties
     /// </summary>
     [Fact]
-    public async Task SchemaGeneration_ShouldHandleNullableTypes()
+    public void SchemaGeneration_ShouldHandleNullableTypes()
     {
         // This test verifies that nullable types are handled correctly in schema generation
         // arrange
@@ -326,7 +326,7 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         var typeName = typeof(TestSchemaData).FullName;
 
         // act
-        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        var response = client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         response.Message.Should().BeOfType<GetDataResponse>();
@@ -363,13 +363,13 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
     /// Tests that type descriptions provide useful information about registered types
     /// </summary>
     [Fact]
-    public async Task TypeDescription_ShouldProvideUsefulInformation()
+    public void TypeDescription_ShouldProvideUsefulInformation()
     {
         // arrange
         var client = GetClient();
 
         // act
-        var response = await client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        var response = client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         var typesResponse = response.Message.Should().BeOfType<DomainTypesResponse>().Which;
@@ -392,13 +392,13 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
     /// Debug test to show all registered types for troubleshooting purposes
     /// </summary>
     [Fact]
-    public async Task DebugAvailableTypes_ShouldShowRegisteredTypes()
+    public void DebugAvailableTypes_ShouldShowRegisteredTypes()
     {
         // arrange
         var client = GetClient();
 
         // act
-        var response = await client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        var response = client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         var typesResponse = response.Message.Should().BeOfType<DomainTypesResponse>().Which;
@@ -417,14 +417,14 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
     /// Debug test to see full schema output
     /// </summary>
     [Fact]
-    public async Task DebugFullSchema()
+    public void DebugFullSchema()
     {
         // arrange
         var client = GetClient();
         var typeName = nameof(TestSchemaData);
 
         // act
-        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        var response = client.Observe(new GetDataRequest(new SchemaReference(typeName)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         response.Message.Should().BeOfType<GetDataResponse>();
@@ -473,14 +473,14 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
     /// Debug test to see the actual schema structure
     /// </summary>
     [Fact]
-    public async Task DebugActualSchema()
+    public void DebugActualSchema()
     {
         // arrange
         var client = GetClient();
         var typeName = nameof(TestSchemaData);
 
         // act
-        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        var response = client.Observe(new GetDataRequest(new SchemaReference(typeName)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         response.Message.Should().BeOfType<GetDataResponse>();
@@ -504,14 +504,14 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
     /// Debug test to see what properties are actually in the schema
     /// </summary>
     [Fact]
-    public async Task DebugSchemaProperties()
+    public void DebugSchemaProperties()
     {
         // arrange
         var client = GetClient();
         var typeName = nameof(TestSchemaData);
 
         // act
-        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        var response = client.Observe(new GetDataRequest(new SchemaReference(typeName)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         response.Message.Should().BeOfType<GetDataResponse>();
@@ -543,14 +543,14 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
     /// Debug test to see the structure of specific properties
     /// </summary>
     [Fact]
-    public async Task DebugSpecificProperties()
+    public void DebugSpecificProperties()
     {
         // arrange
         var client = GetClient();
         var typeName = nameof(TestSchemaData);
 
         // act
-        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        var response = client.Observe(new GetDataRequest(new SchemaReference(typeName)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         response.Message.Should().BeOfType<GetDataResponse>();

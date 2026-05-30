@@ -96,24 +96,24 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
     /// </summary>
     [Theory(Timeout = 10000)]
     [MemberData(nameof(CornerstonePricingTestCases))]
-    public async Task NodeType_LoadsDataFromSourceDocuments(DataLoadingTestCase testCase)
+    public void NodeType_LoadsDataFromSourceDocuments(DataLoadingTestCase testCase)
     {
         var client = GetClient();
         var addressParts = testCase.NodeAddress.Split('/');
         var address = new Address(addressParts);
 
         // Initialize the node hub
-        await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
 
         // Get the workspace
         var hub = Mesh.GetHostedHub(address);
         var workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
 
         // Get data for the specified type
-        var data = await GetDynamicObservable(workspace, testCase.TypeName)
-            .Where(d => d != null && d.Length > 0)
-            .Timeout(10.Seconds())
-            .FirstAsync();
+        var data = GetDynamicObservable(workspace, testCase.TypeName)
+            .Should()
+            .Within(10.Seconds())
+            .Match(d => d != null && d.Length > 0)!;
 
         // Verify data was loaded
         data.Should().NotBeNull($"{testCase.TypeName} should be loaded for {testCase.NodeAddress}");
@@ -141,23 +141,31 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
     /// </summary>
     [Theory(Timeout = 10000)]
     [InlineData("Cornerstone/Microsoft/2026", new[] { "PropertyRisk", "ReinsuranceAcceptance", "ReinsuranceSection" })]
-    public async Task NodeHub_HasExpectedDataTypesRegistered(string nodeAddress, string[] expectedTypes)
+    public void NodeHub_HasExpectedDataTypesRegistered(string nodeAddress, string[] expectedTypes)
     {
         var client = GetClient();
         var addressParts = nodeAddress.Split('/');
         var address = new Address(addressParts);
 
         // Initialize the node hub
-        await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
 
         // Get the type registry
         var hub = Mesh.GetHostedHub(address);
         var typeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
 
-        // Verify all expected types are registered
+        // Verify all expected types are registered. The ping only confirms the hub
+        // exists; NodeType compilation + type registration happens asynchronously
+        // after activation, so poll the registry until each type appears.
         foreach (var typeName in expectedTypes)
         {
-            var type = typeRegistry.GetType(typeName);
+            var type = Observable.Interval(TimeSpan.FromMilliseconds(50))
+                .StartWith(0L)
+                .Select(_ => typeRegistry.GetType(typeName))
+                .Where(t => t != null)
+                .Should()
+                .Within(8.Seconds())
+                .Emit();
             type.Should().NotBeNull($"Type '{typeName}' should be registered for {nodeAddress}");
         }
     }
@@ -188,23 +196,23 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
     [InlineData("Cornerstone/Microsoft/2026", "PropertyRisk", "Id", "LocationName")]
     [InlineData("Cornerstone/Microsoft/2026", "ReinsuranceAcceptance", "Id", "Name")]
     [InlineData("Cornerstone/Microsoft/2026", "ReinsuranceSection", "Id", "Limit")]
-    public async Task LoadedData_HasValidStructure(string nodeAddress, string typeName, params string[] requiredProperties)
+    public void LoadedData_HasValidStructure(string nodeAddress, string typeName, params string[] requiredProperties)
     {
         var client = GetClient();
         var addressParts = nodeAddress.Split('/');
         var address = new Address(addressParts);
 
         // Initialize the node hub
-        await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
 
         // Get the workspace and data
         var hub = Mesh.GetHostedHub(address);
         var workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
 
-        var data = await GetDynamicObservable(workspace, typeName)
-            .Where(d => d != null && d.Length > 0)
-            .Timeout(10.Seconds())
-            .FirstAsync();
+        var data = GetDynamicObservable(workspace, typeName)
+            .Should()
+            .Within(10.Seconds())
+            .Match(d => d != null && d.Length > 0)!;
 
         // Verify each record has the required properties with non-null values
         foreach (var record in data)
@@ -226,14 +234,27 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
 
     /// <summary>
     /// Helper to get observable stream for a dynamically compiled type by name.
+    /// The type is registered asynchronously after hub activation (NodeType compile),
+    /// so the registry lookup is deferred + retried on subscription rather than read
+    /// eagerly — the caller's <c>.Within(...)</c> window covers registration.
     /// </summary>
     private IObservable<object[]?> GetDynamicObservable(IWorkspace workspace, string typeName)
     {
         var typeRegistry = workspace.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
-        var type = typeRegistry.GetType(typeName);
-        if (type == null)
-            throw new InvalidOperationException($"Type {typeName} not found in registry");
 
+        // Poll the registry until the dynamically-compiled type appears, then switch
+        // to its data stream. Subscription-time evaluation means the registration race
+        // is folded into the reactive wait instead of throwing synchronously.
+        return Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .StartWith(0L)
+            .Select(_ => typeRegistry.GetType(typeName))
+            .Where(type => type != null)
+            .Take(1)
+            .SelectMany(type => BuildTypedObservable(workspace, type!));
+    }
+
+    private static IObservable<object[]?> BuildTypedObservable(IWorkspace workspace, Type type)
+    {
         // Use reflection to call GetObservable<T>(IWorkspace)
         var getObservableMethods = typeof(WorkspaceExtensions)
             .GetMethods()

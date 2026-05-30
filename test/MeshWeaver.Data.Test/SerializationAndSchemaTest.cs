@@ -192,14 +192,14 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
                   /// Tests that schema generation includes all properties for complex types
                   /// </summary>
     [Fact]
-    public async Task GetSchemaRequest_ForComplexType_ShouldIncludeAllProperties()
+    public void GetSchemaRequest_ForComplexType_ShouldIncludeAllProperties()
     {
         // arrange
         var client = GetClient();
         var typeName = typeof(SerializationTestData).FullName;
 
         // act
-        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        var response = client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
@@ -226,14 +226,14 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
     /// Tests that schema generation properly handles enum types with their values
     /// </summary>
     [Fact]
-    public async Task GetSchemaRequest_ShouldHandleEnumTypes()
+    public void GetSchemaRequest_ShouldHandleEnumTypes()
     {
         // arrange
         var client = GetClient();
         var typeName = typeof(SerializationTestData).FullName;
 
         // act
-        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);        // assert
+        var response = client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();        // assert
         var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
         var schemaJson = JsonDocument.Parse(schemaInfo.Schema);
         var properties = FindPropertiesInSchema(schemaJson);
@@ -256,14 +256,14 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
     /// Tests that schema generation properly handles DateTime types with correct format
     /// </summary>
     [Fact]
-    public async Task GetSchemaRequest_ShouldHandleDateTimeTypes()
+    public void GetSchemaRequest_ShouldHandleDateTimeTypes()
     {
         // arrange
         var client = GetClient();
         var typeName = typeof(SerializationTestData).FullName;
 
         // act
-        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);        // assert
+        var response = client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();        // assert
         var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
         var schemaJson = JsonDocument.Parse(schemaInfo.Schema);
         var properties = FindPropertiesInSchema(schemaJson); var createdAtProperty = properties.GetProperty("createdAt");
@@ -275,14 +275,14 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
     /// Tests that schema generation properly handles nullable types
     /// </summary>
     [Fact]
-    public async Task GetSchemaRequest_ShouldHandleNullableTypes()
+    public void GetSchemaRequest_ShouldHandleNullableTypes()
     {
         // arrange
         var client = GetClient();
         var typeName = typeof(SerializationTestData).FullName;
 
         // act
-        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        var response = client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which; var schemaJson = JsonDocument.Parse(schemaInfo.Schema);
@@ -304,14 +304,14 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
     /// Tests that schema generation properly handles array and collection types
     /// </summary>
     [Fact]
-    public async Task GetSchemaRequest_ShouldHandleArrayTypes()
+    public void GetSchemaRequest_ShouldHandleArrayTypes()
     {
         // arrange
         var client = GetClient();
         var typeName = typeof(SerializationTestData).FullName;
 
         // act
-        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);        // assert
+        var response = client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();        // assert
         var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
         var schemaJson = JsonDocument.Parse(schemaInfo.Schema);
         var properties = FindPropertiesInSchema(schemaJson); var tagsProperty = properties.GetProperty("tags");
@@ -322,13 +322,13 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
     /// Tests that GetDomainTypesRequest returns all registered types
     /// </summary>
     [Fact]
-    public async Task GetDomainTypesRequest_ShouldIncludeAllRegisteredTypes()
+    public void GetDomainTypesRequest_ShouldIncludeAllRegisteredTypes()
     {
         // arrange
         var client = GetClient();
 
         // act
-        var response = await client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        var response = client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         var typesResponse = response.Message.Should().BeOfType<DomainTypesResponse>().Which;
@@ -343,7 +343,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
     /// Tests that data serialization preserves complex object structures
     /// </summary>
     [Fact]
-    public async Task DataSerialization_ShouldPreserveComplexObjects()
+    public void DataSerialization_ShouldPreserveComplexObjects()
     {
         // arrange
         var client = GetClient();
@@ -358,16 +358,16 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         );
 
         // act
-        var response = await client.Observe(DataChangeRequest.Update([testData]), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        var response = client.Observe(DataChangeRequest.Update([testData]), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         response.Message.Should().BeOfType<DataChangeResponse>();
         Logger.LogInformation("*** Data Change Finished...");
-        var retrievedData = await client
+        var retrievedData = client
             .GetWorkspace()
             .GetObservable<SerializationTestData>()
-            .Timeout(10.Seconds())
-            .FirstOrDefaultAsync(items => items.Any(x => x.Name == "Serialization Test") == true);
+            .Should().Within(10.Seconds())
+            .Match(items => items.Any(x => x.Name == "Serialization Test") == true);
 
         var item = retrievedData.First(x => x.Name == "Serialization Test");
         item.NullableNumber.Should().BeNull();
@@ -381,14 +381,14 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
     /// Tests that schema generation handles invalid property types gracefully
     /// </summary>
     [Fact]
-    public async Task SchemaGeneration_WithInvalidPropertyTypes_ShouldHandleGracefully()
+    public void SchemaGeneration_WithInvalidPropertyTypes_ShouldHandleGracefully()
     {
         // arrange
         var client = GetClient();
         var typeName = "InvalidType.That.DoesNot.Exist";
 
         // act
-        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        var response = client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
@@ -400,13 +400,13 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
     /// Tests that type descriptions provide useful metadata
     /// </summary>
     [Fact]
-    public async Task TypeDescription_ShouldProvideUsefulMetadata()
+    public void TypeDescription_ShouldProvideUsefulMetadata()
     {
         // arrange
         var client = GetClient();
 
         // act
-        var response = await client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        var response = client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         var typesResponse = response.Message.Should().BeOfType<DomainTypesResponse>().Which; foreach (var typeDesc in typesResponse.Types)
@@ -422,7 +422,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
     /// Tests that complex type updates preserve nested structure
     /// </summary>
     [Fact]
-    public async Task ComplexTypeUpdate_ShouldPreserveNestedStructure()
+    public void ComplexTypeUpdate_ShouldPreserveNestedStructure()
     {
         // arrange
         var client = GetClient();
@@ -437,16 +437,16 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         // returns a unique address per call since 8cc34791f, so it no longer
         // matches `client.Address`; routing the update through `client` keeps
         // the workspace we read from below subscribed to the same data path.
-        var response = await client.Observe(DataChangeRequest.Update([updatedData]), o => o.WithTarget(client.Address)).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        var response = client.Observe(DataChangeRequest.Update([updatedData]), o => o.WithTarget(client.Address)).Should().Within(10.Seconds()).Emit();
 
         // assert
         response.Message.Should().BeOfType<DataChangeResponse>();
 
-        var retrievedData = await client
+        var retrievedData = client
             .GetWorkspace()
             .GetObservable<SerializationTestData>()
-            .Timeout(10.Seconds())
-            .FirstAsync(items => items?.Any(x => x.Details.Flag == false) == true);
+            .Should().Within(10.Seconds())
+            .Match(items => items?.Any(x => x.Details.Flag == false) == true);
 
         var item = retrievedData.First(x => x.Name == originalData.Name);
         item.Details.Flag.Should().BeFalse();
@@ -458,14 +458,14 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
     /// Tests that schema generation handles polymorphic container inheritance properly
     /// </summary>
     [Fact]
-    public async Task GetSchemaRequest_ForPolymorphicContainer_ShouldHandleInheritance()
+    public void GetSchemaRequest_ForPolymorphicContainer_ShouldHandleInheritance()
     {
         // arrange
         var client = GetClient();
         var typeName = nameof(PolymorphicContainer);
 
         // act
-        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);        // assert
+        var response = client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();        // assert
         var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
         schemaInfo.Schema.Should().NotBe("{}");
 
@@ -496,14 +496,14 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
     /// Tests that schema generation shows abstract properties for base shapes
     /// </summary>
     [Fact]
-    public async Task GetSchemaRequest_ForBaseShape_ShouldShowAbstractProperties()
+    public void GetSchemaRequest_ForBaseShape_ShouldShowAbstractProperties()
     {
         // arrange
         var client = GetClient();
         var typeName = nameof(BaseShape);
 
         // act
-        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);        // assert
+        var response = client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();        // assert
         var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
         schemaInfo.Schema.Should().NotBe("{}");
 
@@ -523,14 +523,14 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
     /// Tests that schema generation includes inherited and own properties for Circle
     /// </summary>
     [Fact]
-    public async Task GetSchemaRequest_ForCircle_ShouldIncludeInheritedAndOwnProperties()
+    public void GetSchemaRequest_ForCircle_ShouldIncludeInheritedAndOwnProperties()
     {
         // arrange
         var client = GetClient();
         var typeName = nameof(Circle);
 
         // act
-        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);        // assert
+        var response = client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();        // assert
         var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
         schemaInfo.Schema.Should().NotBe("{}");
 
@@ -551,14 +551,14 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
     /// Tests that schema generation includes width and height for Rectangle
     /// </summary>
     [Fact]
-    public async Task GetSchemaRequest_ForRectangle_ShouldIncludeWidthAndHeight()
+    public void GetSchemaRequest_ForRectangle_ShouldIncludeWidthAndHeight()
     {
         // arrange
         var client = GetClient();
         var typeName = nameof(Rectangle);
 
         // act
-        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);        // assert
+        var response = client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();        // assert
         var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
         schemaInfo.Schema.Should().NotBe("{}");
 
@@ -582,13 +582,13 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
     /// Tests that GetDomainTypesRequest includes polymorphic types
     /// </summary>
     [Fact]
-    public async Task GetDomainTypesRequest_ShouldIncludePolymorphicTypes()
+    public void GetDomainTypesRequest_ShouldIncludePolymorphicTypes()
     {
         // arrange
         var client = GetClient();
 
         // act
-        var response = await client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        var response = client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         var typesResponse = response.Message.Should().BeOfType<DomainTypesResponse>().Which;
@@ -606,7 +606,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
     /// Tests that polymorphic data serialization preserves type information
     /// </summary>
     [Fact]
-    public async Task PolymorphicDataSerialization_ShouldPreserveTypeInformation()
+    public void PolymorphicDataSerialization_ShouldPreserveTypeInformation()
     {
         // arrange
         var client = GetClient();
@@ -628,16 +628,16 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         };
 
         // act
-        var response = await client.Observe(DataChangeRequest.Update(new object[] { container }), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        var response = client.Observe(DataChangeRequest.Update(new object[] { container }), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         response.Message.Should().BeOfType<DataChangeResponse>();
 
-        var retrievedData = await client
+        var retrievedData = client
             .GetWorkspace()
             .GetObservable<PolymorphicContainer>()
-            .Timeout(10.Seconds())
-            .FirstOrDefaultAsync(items => items?.Any(x => x.Id == "poly-test") == true);
+            .Should().Within(10.Seconds())
+            .Match(items => items?.Any(x => x.Id == "poly-test") == true);
 
         var item = retrievedData.First(x => x.Id == "poly-test");
 
@@ -673,14 +673,14 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
     /// Tests that schema generation includes $type property and default value
     /// </summary>
     [Fact]
-    public async Task GetSchemaRequest_ShouldIncludeTypePropertyAndDefault()
+    public void GetSchemaRequest_ShouldIncludeTypePropertyAndDefault()
     {
         // arrange
         var client = GetClient();
         var typeName = typeof(SerializationTestData).FullName;
 
         // act
-        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);        // assert
+        var response = client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();        // assert
         var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
         schemaInfo.Schema.Should().NotBe("{}");
 
@@ -711,14 +711,14 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
     /// Tests that schema generation includes inheritors for base shape
     /// </summary>
     [Fact]
-    public async Task GetSchemaRequest_ForBaseShape_ShouldIncludeInheritors()
+    public void GetSchemaRequest_ForBaseShape_ShouldIncludeInheritors()
     {
         // arrange
         var client = GetClient();
         var typeName = nameof(BaseShape);
 
         // act
-        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        var response = client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
@@ -746,14 +746,14 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
     /// Tests that schema generation handles complex polymorphic properties
     /// </summary>
     [Fact]
-    public async Task GetSchemaRequest_ForPolymorphicContainer_ShouldHandleComplexPolymorphicProperties()
+    public void GetSchemaRequest_ForPolymorphicContainer_ShouldHandleComplexPolymorphicProperties()
     {
         // arrange
         var client = GetClient();
         var typeName = nameof(PolymorphicContainer);
 
         // act
-        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);        // assert
+        var response = client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();        // assert
         var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
         schemaInfo.Schema.Should().NotBe("{}");
 
@@ -778,14 +778,14 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
     /// Tests that schema generation reads actual XML documentation comments
     /// </summary>
     [Fact]
-    public async Task GetSchemaRequest_ShouldReadActualXmlDocumentation()
+    public void GetSchemaRequest_ShouldReadActualXmlDocumentation()
     {
         // arrange
         var client = GetClient();
         var typeName = nameof(PolymorphicContainer);
 
         // act
-        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);        // assert
+        var response = client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();        // assert
         var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
         schemaInfo.Schema.Should().NotBe("{}");
 
@@ -827,14 +827,14 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
     /// Debug test to output the actual generated schema for inspection
     /// </summary>
     [Fact]
-    public async Task DebugSchemaGeneration_OutputActualSchema()
+    public void DebugSchemaGeneration_OutputActualSchema()
     {
         // arrange
         var client = GetClient();
         var typeName = nameof(PolymorphicContainer);
 
         // act
-        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        var response = client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
@@ -1090,13 +1090,13 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
     /// Debug test to see what types are actually registered in the type registry
     /// </summary>
     [Fact]
-    public async Task DebugRegisteredTypes()
+    public void DebugRegisteredTypes()
     {
         // arrange
         var client = GetClient();
 
         // act - get all registered types
-        var response = await client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        var response = client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         var typesResponse = response.Message.Should().BeOfType<DomainTypesResponse>().Which;
@@ -1123,14 +1123,14 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
     /// Debug test to see actual schema structure
     /// </summary>
     [Fact]
-    public async Task DebugActualSchemaStructure()
+    public void DebugActualSchemaStructure()
     {
         // arrange
         var client = GetClient();
         var typeName = typeof(SerializationTestData).FullName;
 
         // act
-        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        var response = client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
         // assert
         var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
@@ -1148,7 +1148,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
     /// Debug test to understand why polymorphic types return empty schemas
     /// </summary>
     [Fact]
-    public async Task DebugPolymorphicSchemaGeneration()
+    public void DebugPolymorphicSchemaGeneration()
     {
         // arrange
         var client = GetClient();
@@ -1163,7 +1163,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         foreach (var typeName in typeNames)
         {
             // act
-            var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+            var response = client.Observe(new GetDataRequest(new SchemaReference(typeName)), o => o.WithTarget(CreateClientAddress())).Should().Within(10.Seconds()).Emit();
 
             // assert
             var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;

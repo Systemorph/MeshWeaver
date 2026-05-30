@@ -170,7 +170,7 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
     /// Test that verifies the complete data change and view update flow
     /// </summary>
     [HubFact]
-    public async Task DataChangeRequest_ShouldUpdateLayoutAreaViews()
+    public void DataChangeRequest_ShouldUpdateLayoutAreaViews()
     {
         // Get client and workspace
         var client = GetClient();
@@ -183,23 +183,21 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
         );
 
         // Verify initial data is loaded in layout area
-        var initialControl = await stream
+        var initialControl = stream
             .GetControlStream(nameof(TaskListView))
-            .Timeout(1000.Seconds())
-            .FirstAsync(x => x != null && x.ToString().Contains("First Task"));
+            .Should().Within(1000.Seconds()).Match(x => x != null && x.ToString().Contains("First Task"));
 
         initialControl.Should().NotBeNull();
-        var initialContent = initialControl.ToString();
+        var initialContent = initialControl!.ToString();
         initialContent.Should().Contain("First Task");
         initialContent.Should().Contain("Status:** Pending"); // Initial status
 
         Output.WriteLine($"✅ Initial layout area loaded with content: {initialContent.Length} chars");
 
         // Step 3: Get the task we want to update
-        var tasksData = await workspace
+        var tasksData = workspace
             .GetRemoteStream<TestTaskItem>(CreateHostAddress())!
-            .Timeout(5.Seconds())
-            .FirstAsync();
+            .Should().Within(5.Seconds()).Emit();
 
         var taskToUpdate = tasksData.First(t => t.Id == "task-1");
         taskToUpdate.Should().NotBeNull();
@@ -218,19 +216,17 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
 
         Output.WriteLine($"📤 Sending DataChangeRequest to change status: {taskToUpdate.Status} → {updatedTask.Status}");
 
-        var updatedControlTask = stream
+        var updatedControlStream = stream
             .GetControlStream(nameof(TaskListView))
             .Skip(1)
-            .Where(x => x != null && x.ToString().Contains("Status:** InProgress"))
-            .Timeout(10.Seconds())
-            .FirstAsync();
+            .Where(x => x != null && x.ToString().Contains("Status:** InProgress"));
         client.Post(changeRequest, o => o.WithTarget(CreateHostAddress()));
 
         // Step 5: Verify that layout area updates to show the change
-        var updatedControl = await updatedControlTask;
+        var updatedControl = updatedControlStream.Should().Within(10.Seconds()).Emit();
 
         updatedControl.Should().NotBeNull();
-        var updatedContent = updatedControl.ToString();
+        var updatedContent = updatedControl!.ToString();
         updatedContent.Should().Contain("First Task");
         updatedContent.Should().Contain("Status:** InProgress"); // Updated status
         updatedContent.Should().NotContain("Status:** Pending"); // Old status should not be there for this task
@@ -243,14 +239,13 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
             new LayoutAreaReference(nameof(TaskCountView))
         );
 
-        var updatedCountControl = await countStream
+        var updatedCountControl = countStream
             .GetControlStream(nameof(TaskCountView))
             .Where(x => x != null && x.ToString().Contains("🔄 **InProgress:** 2")) // Should now have 2 InProgress tasks
-            .Timeout(10.Seconds())
-            .FirstAsync();
+            .Should().Within(10.Seconds()).Emit();
 
         updatedCountControl.Should().NotBeNull();
-        var countContent = updatedCountControl.ToString();
+        var countContent = updatedCountControl!.ToString();
         countContent.Should().Contain("🔄 **InProgress:** 2"); // task-2 was already InProgress, now task-1 too
         countContent.Should().Contain("⏳ **Pending:** 0"); // No more pending tasks
 
@@ -262,7 +257,7 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
     /// Test to verify multiple simultaneous updates work correctly
     /// </summary>
     [HubFact]
-    public async Task MultipleDataChanges_ShouldUpdateLayoutAreaViews()
+    public void MultipleDataChanges_ShouldUpdateLayoutAreaViews()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -273,16 +268,14 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
         );
 
         // Wait for initial data
-        await stream
+        stream
             .GetControlStream(nameof(TaskCountView))
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x != null && x.ToString().Contains("Total Tasks"));
+            .Should().Within(5.Seconds()).Match(x => x != null && x.ToString().Contains("Total Tasks"));
 
         // Get initial tasks
-        var tasksData = await workspace
+        var tasksData = workspace
             .GetRemoteStream<TestTaskItem>(CreateHostAddress())!
-            .Timeout(5.Seconds())
-            .FirstAsync();
+            .Should().Within(5.Seconds()).Emit();
 
         // Update multiple tasks simultaneously
         var updatedTasks = tasksData.Select(task => task with
@@ -296,19 +289,17 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
         Output.WriteLine($"📤 Sending DataChangeRequest to complete all {updatedTasks.Length} tasks");
 
         // Set up the completion watch BEFORE posting the change to avoid race condition
-        var allCompletedTask = stream
+        var allCompletedStream = stream
             .GetControlStream(nameof(TaskCountView))
-            .Where(x => x != null && x.ToString().Contains("✅ **Completed:** 3"))
-            .Timeout(10.Seconds())
-            .FirstAsync();
+            .Where(x => x != null && x.ToString().Contains("✅ **Completed:** 3"));
 
         client.Post(changeRequest, o => o.WithTarget(CreateHostAddress()));
 
         // Verify all tasks are now completed
-        var allCompletedControl = await allCompletedTask;
+        var allCompletedControl = allCompletedStream.Should().Within(10.Seconds()).Emit();
 
         allCompletedControl.Should().NotBeNull();
-        var content = allCompletedControl.ToString();
+        var content = allCompletedControl!.ToString();
         content.Should().Contain("✅ **Completed:** 3");
         content.Should().Contain("⏳ **Pending:** 0");
         content.Should().Contain("🔄 **InProgress:** 0");
@@ -320,7 +311,7 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
     /// Test to verify that creating new items works
     /// </summary>
     [HubFact]
-    public async Task CreateNewTask_ShouldUpdateLayoutAreaViews()
+    public void CreateNewTask_ShouldUpdateLayoutAreaViews()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -331,10 +322,9 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
         );
 
         // Wait for initial data (should show 3 tasks)
-        await stream
+        stream
             .GetControlStream(nameof(TaskCountView))
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x != null && x.ToString().Contains("Total Tasks:** 3"));
+            .Should().Within(5.Seconds()).Match(x => x != null && x.ToString().Contains("Total Tasks:** 3"));
 
         // Create a new task
         var newTask = new TestTaskItem(
@@ -351,14 +341,13 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
         client.Post(createRequest, o => o.WithTarget(CreateHostAddress()));
 
         // Verify task count increased
-        var updatedControl = await stream
+        var updatedControl = stream
             .GetControlStream(nameof(TaskCountView))
             .Where(x => x != null && x.ToString().Contains("Total Tasks:** 4"))
-            .Timeout(10.Seconds())
-            .FirstAsync();
+            .Should().Within(10.Seconds()).Emit();
 
         updatedControl.Should().NotBeNull();
-        var content = updatedControl.ToString();
+        var content = updatedControl!.ToString();
         content.Should().Contain("Total Tasks:** 4");
 
         Output.WriteLine("✅ New task creation updated layout area correctly");
@@ -368,7 +357,7 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
     /// Test to verify that deleting items works
     /// </summary>
     [HubFact]
-    public async Task DeleteTask_ShouldUpdateLayoutAreaViews()
+    public void DeleteTask_ShouldUpdateLayoutAreaViews()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -379,16 +368,14 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
         );
 
         // Wait for initial data
-        await stream
+        stream
             .GetControlStream(nameof(TaskListView))
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x != null && x.ToString().Contains("First Task"));
+            .Should().Within(5.Seconds()).Match(x => x != null && x.ToString().Contains("First Task"));
 
         // Get task to delete
-        var tasksData = await workspace
+        var tasksData = workspace
             .GetRemoteStream<TestTaskItem>(CreateHostAddress())!
-            .Timeout(5.Seconds())!
-            .FirstAsync();
+            .Should().Within(5.Seconds()).Emit();
 
         var taskToDelete = tasksData.First(t => t.Id == "task-1");
         var deleteRequest = new DataChangeRequest().WithDeletions(taskToDelete);
@@ -397,14 +384,13 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
         client.Post(deleteRequest, o => o.WithTarget(CreateHostAddress()));
 
         // Verify task is no longer in the list
-        var updatedControl = await stream
+        var updatedControl = stream
             .GetControlStream(nameof(TaskListView))
             .Where(x => x != null && !x.ToString().Contains("First Task"))
-            .Timeout(10.Seconds())
-            .FirstAsync();
+            .Should().Within(10.Seconds()).Emit();
 
         updatedControl.Should().NotBeNull();
-        var content = updatedControl.ToString();
+        var content = updatedControl!.ToString();
         content.Should().NotContain("First Task");
         content.Should().Contain("Second Task"); // Other tasks should still be there
 

@@ -64,10 +64,8 @@ public class CompilationErrorTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// then verifies the Overview area returns an error control.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task Overview_ShouldShowCompilationError_WhenCodeIsBroken()
+    public void Overview_ShouldShowCompilationError_WhenCodeIsBroken()
     {
-        var ct = TestContext.Current.CancellationToken;
-
         // 1. Create a NodeType definition with broken code
         var nodeTypePath = "type/BrokenType";
         var nodeTypeNode = MeshNode.FromPath(nodeTypePath) with
@@ -76,7 +74,7 @@ public class CompilationErrorTest(ITestOutputHelper output) : MonolithMeshTestBa
             NodeType = MeshNode.NodeTypePath,
             Content = new NodeTypeDefinition()
         };
-        await NodeFactory.CreateNode(nodeTypeNode);
+        NodeFactory.CreateNode(nodeTypeNode).Should().Emit();
 
         // Code with a compile error: missing required parameter
         var codeNode = new MeshNode("BrokenCode", $"{nodeTypePath}/Source")
@@ -94,7 +92,7 @@ public record BrokenType
 }"
             }
         };
-        await NodeFactory.CreateNode(codeNode);
+        NodeFactory.CreateNode(codeNode).Should().Emit();
 
         // 2. Create an instance node of the broken type
         var instanceNode = MeshNode.FromPath("test/broken-instance") with
@@ -103,14 +101,14 @@ public record BrokenType
             NodeType = nodeTypePath,
             LastModified = DateTimeOffset.UtcNow
         };
-        await NodeFactory.CreateNode(instanceNode);
+        NodeFactory.CreateNode(instanceNode).Should().Emit();
 
         // 3. Initialize the hub -- this triggers compilation
         var client = GetClient();
         var address = new Address("test/broken-instance");
 
         Output.WriteLine("Initializing hub for test/broken-instance...");
-        await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
         Output.WriteLine("Hub initialized.");
 
         // 4. Request the Overview layout area
@@ -121,10 +119,11 @@ public record BrokenType
             address, reference);
 
         Output.WriteLine("Waiting for Overview area...");
-        var control = await stream
+        var control = stream
             .GetControlStream(reference.Area!)
-            .Timeout(TimeSpan.FromSeconds(15))
-            .FirstAsync(x => x is not null);
+            .Should()
+            .Within(TimeSpan.FromSeconds(15))
+            .Match(x => x is not null);
 
         Output.WriteLine($"Received control: {control?.GetType().Name}");
 

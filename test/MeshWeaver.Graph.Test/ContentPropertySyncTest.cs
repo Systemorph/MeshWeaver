@@ -64,7 +64,7 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
 
     private string GetHubPath(string hostId = "1") => $"{HostType}/{hostId}";
 
-    private async Task SetupInitialNode(string hubPath, object content, string nodeType = "todo")
+    private void SetupInitialNode(string hubPath, object content, string nodeType = "todo")
     {
         var node = MeshNode.FromPath(hubPath) with
         {
@@ -72,16 +72,25 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
             NodeType = nodeType,
             Content = content
         };
-        await _persistence.SaveNode(node, JsonOptions).FirstAsync().ToTask();
+        _persistence.SaveNode(node, JsonOptions).Should().Emit();
     }
 
+    /// <summary>
+    /// Re-reads the persisted node by polling the one-shot <c>Read</c> snapshot until
+    /// <paramref name="predicate"/> holds — covers the debounced persistence flush without a fixed delay.
+    /// </summary>
+    private MeshNode? WaitForPersisted(string hubPath, Func<MeshNode?, bool> predicate)
+        => Observable.Interval(50.Milliseconds()).StartWith(0L)
+            .SelectMany(_ => _persistence.Read(hubPath, JsonOptions))
+            .Should().Within(5.Seconds()).Match(predicate);
+
     [HubFact]
-    public async Task MeshNode_LoadsWithContentFromPersistence()
+    public void MeshNode_LoadsWithContentFromPersistence()
     {
         // Arrange - Create initial node with content matching the host address
         var hubPath = GetHubPath();
         var initialTodo = new TodoItem { Id = "1", Title = "Original Title", Description = "Original Desc" };
-        await SetupInitialNode(hubPath, initialTodo);
+        SetupInitialNode(hubPath, initialTodo);
 
         var host = GetHost();
         var workspace = host.GetWorkspace();
@@ -93,7 +102,7 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
             .Should().Within(5.Seconds()).Match(items => items?.Any() == true)!;
 
         nodes.Should().NotBeNull();
-        var node = nodes.First();
+        var node = nodes!.First();
 
         // Content is accessed via MeshNode.Content
         node.Content.Should().NotBeNull();
@@ -101,12 +110,12 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
     }
 
     [HubFact]
-    public async Task MeshNodeUpdate_UpdatesContentInMeshNode()
+    public void MeshNodeUpdate_UpdatesContentInMeshNode()
     {
         // Arrange - Create initial node with content
         var hubPath = GetHubPath();
         var initialTodo = new TodoItem { Id = "1", Title = "Original Title", Description = "Original Desc" };
-        await SetupInitialNode(hubPath, initialTodo);
+        SetupInitialNode(hubPath, initialTodo);
 
         var host = GetHost();
         var workspace = host.GetWorkspace();
@@ -129,27 +138,23 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
         workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null, null);
 
         // Wait for update to be reflected in the stream (reactive query)
-        await nodeStream!
-            .Where(items => items?.FirstOrDefault()?.Name == "Updated Title")
-            .Timeout(5.Seconds())
-            .FirstAsync();
-
-        // Wait for debounced persistence flush (200ms debounce + buffer)
-        await Task.Delay(300);
+        nodeStream!
+            .Should().Within(5.Seconds()).Match(items => items?.FirstOrDefault()?.Name == "Updated Title");
 
         // Assert - MeshNode should have updated content in persistence
-        var meshNode = await _persistence.GetNodeAsync(hubPath, JsonOptions);
+        // (poll the debounced persistence flush instead of a fixed delay)
+        var meshNode = WaitForPersisted(hubPath, n => n?.Name == "Updated Title");
         meshNode.Should().NotBeNull();
         meshNode!.Name.Should().Be("Updated Title");
     }
 
     [HubFact]
-    public async Task MeshNode_WithAttributeMappedContent_LoadsCorrectly()
+    public void MeshNode_WithAttributeMappedContent_LoadsCorrectly()
     {
         // Arrange - Use content type with explicit attribute mapping
         var hubPath = GetHubPath("attr");
         var initialContent = new AttributeMappedItem { Id = "1", DisplayTitle = "Original", Notes = "Original Notes" };
-        await SetupInitialNode(hubPath, initialContent, "mapped");
+        SetupInitialNode(hubPath, initialContent, "mapped");
 
         // Create a new host that uses AttributeMappedItem
         var host = GetHostWithHandler("attr", c => c
@@ -164,18 +169,18 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
             .Should().Within(5.Seconds()).Match(items => items?.Any() == true)!;
         nodes.Should().NotBeNull();
 
-        var node = nodes.First();
+        var node = nodes!.First();
         node.Content.Should().NotBeNull();
         node.Name.Should().Be("Initial Name");
     }
 
     [HubFact]
-    public async Task MeshNode_WithNamedContent_LoadsCorrectly()
+    public void MeshNode_WithNamedContent_LoadsCorrectly()
     {
         // Arrange - Use content type that implements INamed
         var hubPath = GetHubPath("named");
         var initialContent = new NamedItem { Id = "1", FirstName = "John", LastName = "Doe" };
-        await SetupInitialNode(hubPath, initialContent, "named");
+        SetupInitialNode(hubPath, initialContent, "named");
 
         var host = GetHostWithHandler("named", c => c
             .AddMeshDataSource(ds => ds.WithContentType<NamedItem>()));
@@ -184,17 +189,15 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
 
         // Wait for initial data load - content is inside MeshNode
         var nodeStream = workspace.GetStream<MeshNode>();
-        var nodes = await nodeStream!
-            .Where(items => items?.Any() == true)
-            .Timeout(5.Seconds())
-            .FirstAsync();
+        var nodes = nodeStream!
+            .Should().Within(5.Seconds()).Match(items => items?.Any() == true);
 
-        var node = nodes.First();
+        var node = nodes!.First();
         node.Content.Should().NotBeNull();
     }
 
     [HubFact]
-    public async Task MeshNodeUpdate_PreservesExistingValues()
+    public void MeshNodeUpdate_PreservesExistingValues()
     {
         // Arrange
         var hubPath = GetHubPath("minimal");
@@ -206,7 +209,7 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
             NodeType = "minimal",
             Content = initialContent
         };
-        await _persistence.SaveNode(node, JsonOptions).FirstAsync().ToTask();
+        _persistence.SaveNode(node, JsonOptions).Should().Emit();
 
         var host = GetHostWithHandler("minimal", c => c
             .AddMeshDataSource(ds => ds.WithContentType<MinimalItem>()));
@@ -215,41 +218,35 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
 
         // Wait for initial data load
         var nodeStream = workspace.GetStream<MeshNode>();
-        var nodes = await nodeStream!
-            .Where(items => items?.Any() == true)
-            .Timeout(5.Seconds())
-            .FirstAsync();
+        var nodes = nodeStream!
+            .Should().Within(5.Seconds()).Match(items => items?.Any() == true);
 
         // Act - Update the content inside MeshNode
-        var currentNode = nodes.First();
+        var currentNode = nodes!.First();
         var updatedContent = new MinimalItem { Id = "1", Data = "updated data" };
         var updatedNode = currentNode with { Content = updatedContent };
         workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null, null);
 
         // Wait for update to be reflected in the stream (reactive query)
         // Since MinimalItem has no [MeshNodeProperty] mappings, we wait for Content change
-        await nodeStream!
-            .Where(items =>
+        nodeStream!
+            .Should().Within(5.Seconds()).Match(items =>
             {
                 var n = items?.FirstOrDefault();
                 if (n?.Content is MinimalItem m)
                     return m.Data == "updated data";
                 return false;
-            })
-            .Timeout(5.Seconds())
-            .FirstAsync();
-
-        // Wait for debounced persistence flush (200ms debounce + buffer)
-        await Task.Delay(300);
+            });
 
         // Assert - MeshNode should preserve manually set Name
-        var meshNode = await _persistence.GetNodeAsync(hubPath, JsonOptions);
+        // (poll the debounced persistence flush instead of a fixed delay)
+        var meshNode = WaitForPersisted(hubPath, n => n?.Content is MinimalItem m && m.Data == "updated data");
         meshNode.Should().NotBeNull();
         meshNode!.Name.Should().Be("Manually Set Name", "MeshNode.Name should be preserved");
     }
 
     [HubFact]
-    public async Task MeshNodeUpdate_SyncsAllFourProperties()
+    public void MeshNodeUpdate_SyncsAllFourProperties()
     {
         // Arrange - Content type with all four MeshNode property mappings via attributes
         var hubPath = GetHubPath("full-attr");
@@ -261,7 +258,7 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
             IconName = "Document",
             Group = "General"
         };
-        await SetupInitialNode(hubPath, initialContent, "full");
+        SetupInitialNode(hubPath, initialContent, "full");
 
         var host = GetHostWithHandler("full-attr", c => c
             .AddMeshDataSource(ds => ds.WithContentType<FullMappingItem>()));
@@ -270,13 +267,11 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
 
         // Wait for initial data load
         var nodeStream = workspace.GetStream<MeshNode>();
-        var nodes = await nodeStream!
-            .Where(items => items?.Any() == true)
-            .Timeout(5.Seconds())
-            .FirstAsync();
+        var nodes = nodeStream!
+            .Should().Within(5.Seconds()).Match(items => items?.Any() == true);
 
         // Act - Update MeshNode with new values
-        var currentNode = nodes.First();
+        var currentNode = nodes!.First();
         var updatedNode = currentNode with
         {
             Name = "Updated Name",
@@ -286,16 +281,12 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
         workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null, null);
 
         // Wait for update to be reflected in the stream (reactive query)
-        await nodeStream!
-            .Where(items => items?.FirstOrDefault()?.Name == "Updated Name")
-            .Timeout(5.Seconds())
-            .FirstAsync();
-
-        // Wait for debounced persistence flush (200ms debounce + buffer)
-        await Task.Delay(300);
+        nodeStream!
+            .Should().Within(5.Seconds()).Match(items => items?.FirstOrDefault()?.Name == "Updated Name");
 
         // Assert - All four MeshNode properties should be persisted
-        var meshNode = await _persistence.GetNodeAsync(hubPath, JsonOptions);
+        // (poll the debounced persistence flush instead of a fixed delay)
+        var meshNode = WaitForPersisted(hubPath, n => n?.Name == "Updated Name");
         meshNode.Should().NotBeNull();
         meshNode!.Name.Should().Be("Updated Name");
         meshNode.Icon.Should().Be("Star");
@@ -303,7 +294,7 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
     }
 
     [HubFact]
-    public async Task MeshNode_ConventionalProperties_LoadCorrectly()
+    public void MeshNode_ConventionalProperties_LoadCorrectly()
     {
         // Arrange - Content type with conventional property names
         var hubPath = GetHubPath("full-conv");
@@ -315,7 +306,7 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
             Icon = "Document",
             Category = "General"
         };
-        await SetupInitialNode(hubPath, initialContent, "fullconv");
+        SetupInitialNode(hubPath, initialContent, "fullconv");
 
         var host = GetHostWithHandler("full-conv", c => c
             .AddMeshDataSource(ds => ds.WithContentType<ConventionalFullItem>()));
@@ -324,13 +315,11 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
 
         // Wait for initial data load
         var nodeStream = workspace.GetStream<MeshNode>();
-        var nodes = await nodeStream!
-            .Where(items => items?.Any() == true)
-            .Timeout(5.Seconds())
-            .FirstAsync();
+        var nodes = nodeStream!
+            .Should().Within(5.Seconds()).Match(items => items?.Any() == true);
 
         // Assert - MeshNode should be loaded
-        var node = nodes.First();
+        var node = nodes!.First();
         node.Should().NotBeNull();
         node.Content.Should().NotBeNull();
     }

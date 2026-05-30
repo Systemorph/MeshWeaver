@@ -177,7 +177,7 @@ public class MapToToggleableControlTest(ITestOutputHelper output) : HubTestBase(
     /// Test that clicking on an editable property switches to edit mode.
     /// </summary>
     [Fact]
-    public async Task ClickOnProperty_SwitchesToEditControl()
+    public void ClickOnProperty_SwitchesToEditControl()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -186,10 +186,9 @@ public class MapToToggleableControlTest(ITestOutputHelper output) : HubTestBase(
             new LayoutAreaReference(DataBindingTestView));
 
         // Wait for initial render
-        var control = await stream
+        var control = stream
             .GetControlStream(DataBindingTestView)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null);
+            .Should().Within(10.Seconds()).Match(x => x is not null);
 
         var stack = control.Should().BeOfType<StackControl>().Subject;
         stack.Areas.Should().HaveCountGreaterThanOrEqualTo(2); // Label + reactive view
@@ -198,23 +197,23 @@ public class MapToToggleableControlTest(ITestOutputHelper output) : HubTestBase(
         var reactiveAreaId = stack.Areas.Skip(1).First().Area.ToString()!;
 
         // Initial control should contain a clickable Stack with LabelControl
-        var initialControl = await stream
+        var initialControl = stream
             .GetControlStream(reactiveAreaId)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x is not null);
+            .Should().Within(5.Seconds()).Match(x => x is not null);
 
         // The initial state should be a clickable Stack
         initialControl.Should().BeOfType<StackControl>();
+
+        // Set up the edit-mode watch BEFORE posting the click to avoid a race
+        var editControlStream = stream
+            .GetControlStream(reactiveAreaId)
+            .Where(x => x is TextFieldControl);
 
         // Send click event to switch to edit mode
         client.Post(new ClickedEvent(reactiveAreaId, stream.StreamId), o => o.WithTarget(CreateHostAddress()));
 
         // Wait for the control to switch to TextField
-        var editControl = await stream
-            .GetControlStream(reactiveAreaId)
-            .Where(x => x is TextFieldControl)
-            .Timeout(5.Seconds())
-            .FirstAsync();
+        var editControl = editControlStream.Should().Within(5.Seconds()).Emit();
 
         // Should now be a TextFieldControl
         var textField = editControl.Should().BeOfType<TextFieldControl>().Subject;
@@ -225,7 +224,7 @@ public class MapToToggleableControlTest(ITestOutputHelper output) : HubTestBase(
     /// Test that blur on edit control switches back to readonly mode.
     /// </summary>
     [Fact]
-    public async Task BlurOnEditControl_SwitchesBackToReadonly()
+    public void BlurOnEditControl_SwitchesBackToReadonly()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -234,35 +233,34 @@ public class MapToToggleableControlTest(ITestOutputHelper output) : HubTestBase(
             new LayoutAreaReference(DataBindingTestView));
 
         // Wait for initial render
-        var control = await stream
+        var control = stream
             .GetControlStream(DataBindingTestView)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null);
+            .Should().Within(10.Seconds()).Match(x => x is not null);
 
         var stack = control.Should().BeOfType<StackControl>().Subject;
         var reactiveAreaId = stack.Areas.Skip(1).First().Area.ToString()!;
+
+        var editControlStream = stream
+            .GetControlStream(reactiveAreaId)
+            .Where(x => x is TextFieldControl);
 
         // Click to enter edit mode
         client.Post(new ClickedEvent(reactiveAreaId, stream.StreamId), o => o.WithTarget(CreateHostAddress()));
 
         // Wait for edit mode
-        var editControl = await stream
-            .GetControlStream(reactiveAreaId)
-            .Where(x => x is TextFieldControl)
-            .Timeout(5.Seconds())
-            .FirstAsync();
+        var editControl = editControlStream.Should().Within(5.Seconds()).Emit();
 
         editControl.Should().BeOfType<TextFieldControl>();
+
+        var readonlyControlStream = stream
+            .GetControlStream(reactiveAreaId)
+            .Where(x => x is StackControl);
 
         // Send blur event to exit edit mode
         client.Post(new BlurEvent(reactiveAreaId, stream.StreamId), o => o.WithTarget(CreateHostAddress()));
 
         // Wait for the control to switch back to Stack (readonly view)
-        var readonlyControl = await stream
-            .GetControlStream(reactiveAreaId)
-            .Where(x => x is StackControl)
-            .Timeout(5.Seconds())
-            .FirstAsync();
+        var readonlyControl = readonlyControlStream.Should().Within(5.Seconds()).Emit();
 
         readonlyControl.Should().BeOfType<StackControl>();
     }
@@ -271,7 +269,7 @@ public class MapToToggleableControlTest(ITestOutputHelper output) : HubTestBase(
     /// Test that readonly properties (with [Key] or [Editable(false)]) don't have click actions.
     /// </summary>
     [Fact]
-    public async Task ReadonlyProperty_NotClickable()
+    public void ReadonlyProperty_NotClickable()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -279,20 +277,18 @@ public class MapToToggleableControlTest(ITestOutputHelper output) : HubTestBase(
             CreateHostAddress(),
             new LayoutAreaReference(ToggleableControlView));
 
-        var control = await stream
+        var control = stream
             .GetControlStream(ToggleableControlView)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null);
+            .Should().Within(10.Seconds()).Match(x => x is not null);
 
         var grid = control.Should().BeOfType<LayoutGridControl>().Subject;
 
         // Get the Id property area (first property, has [Key] attribute)
         var idAreaId = grid.Areas.First().Area.ToString()!;
 
-        var idControl = await stream
+        var idControl = stream
             .GetControlStream(idAreaId)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x is not null);
+            .Should().Within(5.Seconds()).Match(x => x is not null);
 
         // The Id control should be a Stack
         var idStack = idControl.Should().BeOfType<StackControl>().Subject;
@@ -302,24 +298,19 @@ public class MapToToggleableControlTest(ITestOutputHelper output) : HubTestBase(
         {
             var idReactiveAreaId = idStack.Areas.Skip(1).First().Area.ToString()!;
 
-            var idReactiveControl = await stream
+            stream
                 .GetControlStream(idReactiveAreaId)
-                .Timeout(5.Seconds())
-                .FirstAsync(x => x is not null);
+                .Should().Within(5.Seconds()).Match(x => x is not null);
 
             // Verify that clicking on it does NOT switch to a TextField
             client.Post(new ClickedEvent(idReactiveAreaId, stream.StreamId), o => o.WithTarget(CreateHostAddress()));
 
-            // Wait a bit and verify control is still LabelControl (not TextField)
-            await Task.Delay(200, TestContext.Current.CancellationToken);
-
-            var stillReadonly = await stream
+            // Negative assertion: clicking a [Key] (readonly) property must never switch to a TextField.
+            // There is no positive signal to await, so confirm no TextField emission within a short window.
+            stream
                 .GetControlStream(idReactiveAreaId)
-                .Timeout(5.Seconds())
-                .FirstAsync(x => x is not null);
-
-            // Should NOT be a TextFieldControl since [Key] properties are not editable
-            stillReadonly.Should().NotBeOfType<TextFieldControl>();
+                .Where(x => x is TextFieldControl)
+                .Should().NotEmit(200.Milliseconds());
         }
     }
 
@@ -327,7 +318,7 @@ public class MapToToggleableControlTest(ITestOutputHelper output) : HubTestBase(
     /// Test that data binding works correctly through mode switch.
     /// </summary>
     [Fact]
-    public async Task DataBinding_WorksThroughModeSwitch()
+    public void DataBinding_WorksThroughModeSwitch()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -336,17 +327,14 @@ public class MapToToggleableControlTest(ITestOutputHelper output) : HubTestBase(
             new LayoutAreaReference(DataBindingTestView));
 
         // Wait for initial render
-        await stream
+        stream
             .GetControlStream(DataBindingTestView)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null);
+            .Should().Within(10.Seconds()).Match(x => x is not null);
 
         // Read initial data from stream
-        var initialData = await stream
+        var initialData = stream
             .GetDataStream<TestEntity>(new JsonPointerReference("/data/\"binding_test\""))
-            .Where(x => x is not null)
-            .Timeout(5.Seconds())
-            .FirstAsync();
+            .Should().Within(5.Seconds()).Match(x => x is not null);
 
         initialData.Should().NotBeNull();
         initialData!.Title.Should().Be("Test Title");
@@ -354,15 +342,10 @@ public class MapToToggleableControlTest(ITestOutputHelper output) : HubTestBase(
         // Update the title via the data stream
         stream.UpdatePointer("Updated Title", "/data/\"binding_test\"", new JsonPointerReference("title"));
 
-        // Wait for the update to propagate
-        await Task.Delay(100, TestContext.Current.CancellationToken);
-
-        // Read updated data
-        var updatedData = await stream
+        // Read updated data (the predicate waits for the update to propagate)
+        var updatedData = stream
             .GetDataStream<TestEntity>(new JsonPointerReference("/data/\"binding_test\""))
-            .Where(x => x?.Title == "Updated Title")
-            .Timeout(5.Seconds())
-            .FirstAsync();
+            .Should().Within(5.Seconds()).Match(x => x?.Title == "Updated Title");
 
         updatedData.Should().NotBeNull();
         updatedData!.Title.Should().Be("Updated Title");
@@ -372,7 +355,7 @@ public class MapToToggleableControlTest(ITestOutputHelper output) : HubTestBase(
     /// Test that server-side subscription receives updates (auto-save pattern).
     /// </summary>
     [Fact]
-    public async Task AutoSave_TriggersOnChange()
+    public void AutoSave_TriggersOnChange()
     {
         ServerSideUpdates.Clear();
 
@@ -383,16 +366,20 @@ public class MapToToggleableControlTest(ITestOutputHelper output) : HubTestBase(
             new LayoutAreaReference(AutoSaveTestView));
 
         // Wait for initial render
-        await stream
+        stream
             .GetControlStream(AutoSaveTestView)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null);
+            .Should().Within(10.Seconds()).Match(x => x is not null);
 
         // Update the title via the client
         stream.UpdatePointer("Auto-saved Title", "/data/\"autosave_test\"", new JsonPointerReference("title"));
 
-        // Wait for debounce and server-side processing
-        await Task.Delay(200, TestContext.Current.CancellationToken);
+        // The server-side subscription debounces and appends to the shared list (not an observable),
+        // so probe the list until it reflects the update rather than sleeping for a fixed window.
+        Observable.Interval(50.Milliseconds())
+            .StartWith(0L)
+            .Select(_ => ServerSideUpdates.ToArray())
+            .Where(updates => updates.Any(u => u.Contains("Auto-saved Title")))
+            .Should().Within(5.Seconds()).Emit();
 
         // Verify server-side subscription received the update
         ServerSideUpdates.Should().NotBeEmpty("Server-side subscription should receive client updates");
@@ -519,7 +506,7 @@ public class EditPersistenceTest(ITestOutputHelper output) : HubTestBase(output)
     /// that starts with false, resetting the edit state.
     /// </summary>
     [Fact]
-    public async Task EditState_ShouldSurviveDataUpdates()
+    public void EditState_ShouldSurviveDataUpdates()
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -530,35 +517,33 @@ public class EditPersistenceTest(ITestOutputHelper output) : HubTestBase(output)
             new LayoutAreaReference(PersistenceView));
 
         // Wait for initial render
-        var control = await layoutStream
+        var control = layoutStream
             .GetControlStream(PersistenceView)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x is StackControl);
+            .Should().Within(10.Seconds()).Match(x => x is StackControl);
 
         var stack = control.Should().BeOfType<StackControl>().Subject;
 
         // Get the first property's stack (Title)
         var titleStackAreaId = stack.Areas.First().Area.ToString()!;
-        var titleStack = await layoutStream
+        var titleStack = layoutStream
             .GetControlStream(titleStackAreaId)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x is StackControl);
+            .Should().Within(5.Seconds()).Match(x => x is StackControl);
 
         var titleStackControl = titleStack.Should().BeOfType<StackControl>().Subject;
 
         // Get the reactive view area (second child - after the label)
         var reactiveAreaId = titleStackControl.Areas.Skip(1).First().Area.ToString()!;
 
+        var editControlStream = layoutStream
+            .GetControlStream(reactiveAreaId)
+            .Where(x => x is TextFieldControl);
+
         // Click to enter edit mode
         Output.WriteLine("Entering edit mode...");
         client.Post(new ClickedEvent(reactiveAreaId, layoutStream.StreamId), o => o.WithTarget(hostAddress));
 
         // Wait for edit mode
-        var editControl = await layoutStream
-            .GetControlStream(reactiveAreaId)
-            .Where(x => x is TextFieldControl)
-            .Timeout(5.Seconds())
-            .FirstAsync();
+        editControlStream.Should().Within(5.Seconds()).Emit();
 
         Output.WriteLine("Edit mode activated");
 
@@ -566,14 +551,16 @@ public class EditPersistenceTest(ITestOutputHelper output) : HubTestBase(output)
         Output.WriteLine("Triggering data update while in edit mode...");
         layoutStream.UpdatePointer(42, "/data/\"persistable_entity\"", new JsonPointerReference("count"));
 
-        // Wait for update to propagate
-        await Task.Delay(100, TestContext.Current.CancellationToken);
+        // Wait for the data update to propagate (count reaches 42) before reading the control state,
+        // so we observe the control *after* the re-render rather than sleeping for a fixed window.
+        layoutStream
+            .GetDataStream<PersistableEntity>(new JsonPointerReference("/data/\"persistable_entity\""))
+            .Should().Within(5.Seconds()).Match(x => x?.Count == 42);
 
-        // Check if still in edit mode
-        var controlAfterDataUpdate = await layoutStream
+        // Check if still in edit mode (current control after the data-driven re-render)
+        var controlAfterDataUpdate = layoutStream
             .GetControlStream(reactiveAreaId)
-            .Timeout(2.Seconds())
-            .FirstAsync();
+            .Should().Within(2.Seconds()).Emit();
 
         Output.WriteLine($"Control after data update: {controlAfterDataUpdate?.GetType().Name}");
 

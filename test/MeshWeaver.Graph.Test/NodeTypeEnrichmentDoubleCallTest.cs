@@ -2,9 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
-using System.Threading;
-using System.Threading.Tasks;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -113,11 +110,10 @@ public class NodeTypeEnrichmentDoubleCallTest
     /// dead grain to every caller (which is exactly the prod symptom).
     /// </summary>
     [Fact(Timeout = 90_000)]
-    public async Task DoubleEnrichment_StaysWithinOneSlowPathTimeout()
+    public void DoubleEnrichment_StaysWithinOneSlowPathTimeout()
     {
         var (hub, _) = BuildMeshHub();
         var cfg = EmptyMeshConfiguration();
-        var ct = new CancellationTokenSource(TimeSpan.FromSeconds(80)).Token;
 
         var bareInstance = new MeshNode("Events", "Systemorph")
         {
@@ -129,10 +125,10 @@ public class NodeTypeEnrichmentDoubleCallTest
         // Pass 1 — catalog-side enrichment via INodeConfigurationResolver. Slow
         // path fires (custom NodeType, no static fast path), times out at 30 s,
         // returns the compilation-error overlay node.
-        var afterCatalog = await NodeTypeEnrichmentHelpers
+        var afterCatalog = NodeTypeEnrichmentHelpers
             .EnrichWithNodeType(hub, cfg, compilationService: null, bareInstance)
             .Take(1)
-            .ToTask(ct);
+            .Should().Within(SingleSlowPathBudget).Emit("the slow path must always emit — fall back to overlay");
 
         var afterPass1 = sw.Elapsed;
         afterCatalog.Should().NotBeNull("the slow path must always emit — fall back to overlay");
@@ -143,10 +139,10 @@ public class NodeTypeEnrichmentDoubleCallTest
         // ResolveHubConfigurationObservable → EnrichWithNodeType. The bug: the
         // line-39 fast path requires AssemblyLocation, the overlay sets none,
         // and the slow path runs a SECOND 30 s window.
-        await NodeTypeEnrichmentHelpers
+        NodeTypeEnrichmentHelpers
             .EnrichWithNodeType(hub, cfg, compilationService: null, afterCatalog)
             .Take(1)
-            .ToTask(ct);
+            .Should().Within(SingleSlowPathBudget).Emit();
 
         sw.Stop();
 
@@ -166,7 +162,7 @@ public class NodeTypeEnrichmentDoubleCallTest
     /// downstream re-enrichment into a fresh 30 s wait — the bug.
     /// </summary>
     [Fact(Timeout = 10_000)]
-    public async Task PreEnrichedNode_DoesNotReEnterSlowPath()
+    public void PreEnrichedNode_DoesNotReEnterSlowPath()
     {
         var (hub, cache) = BuildMeshHub();
         var cfg = EmptyMeshConfiguration();
@@ -181,10 +177,10 @@ public class NodeTypeEnrichmentDoubleCallTest
         };
 
         var sw = Stopwatch.StartNew();
-        var result = await NodeTypeEnrichmentHelpers
+        var result = NodeTypeEnrichmentHelpers
             .EnrichWithNodeType(hub, cfg, compilationService: null, preEnriched)
             .Take(1)
-            .ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token);
+            .Should().Within(5.Seconds()).Emit();
         sw.Stop();
 
         sw.Elapsed.Should().BeLessThan(TimeSpan.FromMilliseconds(500),
