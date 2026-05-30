@@ -89,16 +89,14 @@ public class KernelContainer(IServiceProvider serviceProvider)
             {
                 DisposeOnTimeout(hub);
                 StartActivityControlPlane(hub);
-                // Wake-up recovery: a script activity left Running by a restart is
-                // not a resumable job — on the own node's first emission, mark it
-                // Failed("interrupted") (or honor a pending Cancelled request) so
-                // it never sits Running forever. Mirrors the thread-side
-                // InitializeThreadLifecycle. Retry stays an explicit user action
-                // (new RequestedStatus=Running on a fresh activity).
-                hub.RegisterForDisposal(hub.InitializeActivityLifecycle(
-                    interruptedStatus: ActivityStatus.Failed,
-                    interruptedMessage: "Script interrupted by a restart.",
-                    logger: logger));
+                // NOTE: deliberately NO InitializeActivityLifecycle here. The
+                // kernel hub IS the executor — it activates in order to RUN the
+                // script, so its own activity is legitimately Running the instant
+                // it comes up. A first-emission "Running ⇒ Failed(interrupted)"
+                // recovery would kill every freshly-started script. That wake-up
+                // pattern is only safe when the owner hub is DISTINCT from the
+                // executor (e.g. NodeType compile, where the owner re-requests
+                // from its own state). See ActivityControlPlane.md.
             })
             .WithHandler<SubmitCodeRequest>(ForwardSubmitCodeRequest)
             .WithHandler<CancelScriptRequest>(ForwardCancelRequest);
