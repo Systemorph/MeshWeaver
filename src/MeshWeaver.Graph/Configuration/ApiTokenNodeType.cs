@@ -82,9 +82,7 @@ public static class ApiTokenNodeType
         var hash = ValidateTokenRequest.HashToken(rawToken);
 
         hub.GetWorkspace()
-            .GetQuery($"auth:tokenByHash:{hash}", $"nodeType:{NodeType} content.tokenHash:{hash} limit:1")
-            .Take(1)
-            .Select(items => items.FirstOrDefault())
+            .GetApiTokenByHash(hash)
             .Timeout(TimeSpan.FromSeconds(10), Observable.Return<MeshNode?>(null))
             .Subscribe(
                 node =>
