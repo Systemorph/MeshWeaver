@@ -9,7 +9,6 @@ using System.Text.Json;
 using System.Text.Json.Schema;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.AI;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Data;

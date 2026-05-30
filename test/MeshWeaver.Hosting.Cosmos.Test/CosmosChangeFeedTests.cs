@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Hosting.Cosmos;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh.Services;

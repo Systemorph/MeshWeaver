@@ -2,7 +2,6 @@
 using System.Collections.Generic;
 using System.Reflection;
 using System.Text.Json;
-using FluentAssertions;
 using MeshWeaver.AI;
 using Microsoft.Extensions.AI;
 using Xunit;

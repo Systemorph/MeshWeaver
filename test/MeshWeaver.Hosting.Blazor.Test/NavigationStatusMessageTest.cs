@@ -1,4 +1,3 @@
-using FluentAssertions;
 using MeshWeaver.Mesh.Services;
 using Xunit;
 

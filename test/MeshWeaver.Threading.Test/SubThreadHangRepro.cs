@@ -5,8 +5,6 @@ using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.AI;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;

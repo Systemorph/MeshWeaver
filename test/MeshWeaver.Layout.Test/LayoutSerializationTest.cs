@@ -2,7 +2,6 @@
 using System.Collections.Immutable;
 using System.Linq;
 using System.Text.Json;
-using FluentAssertions;
 using MeshWeaver.Domain;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;

@@ -12,7 +12,6 @@
     <PackageReference Include="xunit.v3.assert" />
     <PackageReference Include="xunit.v3.extensibility.core" />
     <PackageReference Include="xunit.runner.visualstudio" />
-    <PackageReference Include="FluentAssertions" />
     <PackageReference Include="ClosedXML" />
     <PackageReference Include="xunit.v3.runner.console">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
@@ -23,6 +22,10 @@
     <ProjectReference Include="..\..\..\src\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
     <ProjectReference Include="..\MeshWeaver.Insurance.Domain\MeshWeaver.Insurance.Domain.csproj" />
     <ProjectReference Include="..\..\..\src\MeshWeaver.Import\MeshWeaver.Import.csproj" />
+    <ProjectReference Include="..\..\..\src\MeshWeaver.Reactive.Assertions\MeshWeaver.Reactive.Assertions.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Using Include="MeshWeaver.Reactive.Assertions" />
   </ItemGroup>
   <ItemGroup>
     <None Update="appsettings.json">

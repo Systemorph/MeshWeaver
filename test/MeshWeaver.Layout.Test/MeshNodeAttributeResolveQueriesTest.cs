@@ -1,4 +1,3 @@
-using FluentAssertions;
 using MeshWeaver.Domain;
 using Xunit;
 

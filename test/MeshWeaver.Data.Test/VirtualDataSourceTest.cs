@@ -5,7 +5,6 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Domain;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;

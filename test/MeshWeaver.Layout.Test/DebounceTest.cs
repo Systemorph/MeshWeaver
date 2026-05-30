@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Reactive.Linq;
-using FluentAssertions;
 using MeshWeaver.Layout.DataBinding;
 using Microsoft.Reactive.Testing;
 using Xunit;

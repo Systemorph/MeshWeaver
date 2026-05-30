@@ -1,6 +1,5 @@
 ﻿using System.Reactive.Linq;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Import.Test.Domain;

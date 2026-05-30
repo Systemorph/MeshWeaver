@@ -1,7 +1,6 @@
 ﻿#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
 using System.Collections.Generic;
-using FluentAssertions;
 using MeshWeaver.AI.ClaudeCode;
 using Microsoft.Extensions.AI;
 using Xunit;

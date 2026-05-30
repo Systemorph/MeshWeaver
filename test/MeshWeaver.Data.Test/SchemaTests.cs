@@ -5,7 +5,6 @@ using System.Reflection;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;

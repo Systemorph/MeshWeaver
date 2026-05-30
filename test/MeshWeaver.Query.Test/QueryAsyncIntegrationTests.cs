@@ -3,7 +3,6 @@ using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using System.Reactive.Threading.Tasks;
 using System.Reactive.Linq;
-using FluentAssertions;
 using MeshWeaver.AI;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;

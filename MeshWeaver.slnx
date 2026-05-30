@@ -118,8 +118,6 @@
     <Project Path="test/MeshWeaver.Hosting.Monolith.Test/MeshWeaver.Hosting.Monolith.Test.csproj" />
     <Project Path="test/MeshWeaver.Hosting.Orleans.Test/MeshWeaver.Hosting.Orleans.Test.csproj" />
     <Project Path="test/MeshWeaver.Import.Test/MeshWeaver.Import.Test.csproj" />
-    <Project Path="test/MeshWeaver.Json.Assertions.Test/MeshWeaver.Json.Assertions.Test.csproj" />
-    <Project Path="test/MeshWeaver.Json.Assertions/MeshWeaver.Json.Assertions.csproj" />
     <Project Path="test/MeshWeaver.Layout.Test/MeshWeaver.Layout.Test.csproj" />
     <Project Path="test/MeshWeaver.Markdown.Test/MeshWeaver.Markdown.Test.csproj" />
     <Project Path="test/MeshWeaver.MathDemo.Test/MeshWeaver.MathDemo.Test.csproj" />
@@ -128,7 +126,6 @@
     <Project Path="test/MeshWeaver.Northwind.Test/MeshWeaver.Northwind.Test.csproj" />
     <Project Path="test/MeshWeaver.Search.Test/MeshWeaver.Search.Test.csproj" />
     <Project Path="test/MeshWeaver.Security.Test/MeshWeaver.Security.Test.csproj" />
-    <Project Path="test/MeshWeaver.Serialization.Test/MeshWeaver.Serialization.Test.csproj" />
     <Project Path="test/MeshWeaver.Social.Test/MeshWeaver.Social.Test.csproj" />
     <Project Path="test/MeshWeaver.TestDomain/MeshWeaver.TestDomain.csproj" />
     <Project Path="test/MeshWeaver.Graph.Test/MeshWeaver.Graph.Test.csproj" />

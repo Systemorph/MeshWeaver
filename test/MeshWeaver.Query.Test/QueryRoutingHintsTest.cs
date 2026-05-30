@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using FluentAssertions;
 using MeshWeaver.Mesh;
 using Xunit;
 

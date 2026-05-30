@@ -1,7 +1,6 @@
 using System;
 using System.IO;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Persistence.Parsers;

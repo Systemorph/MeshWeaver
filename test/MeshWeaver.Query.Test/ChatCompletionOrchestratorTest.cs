@@ -2,7 +2,6 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;

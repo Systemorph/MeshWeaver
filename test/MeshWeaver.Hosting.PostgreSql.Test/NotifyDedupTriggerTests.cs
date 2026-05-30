@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.PostgreSql;
 using MeshWeaver.Mesh;

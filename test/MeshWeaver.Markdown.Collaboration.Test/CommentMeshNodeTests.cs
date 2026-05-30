@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
-using FluentAssertions;
 using MeshWeaver.Domain;
 using MeshWeaver.Graph;
 using MeshWeaver.Markdown;

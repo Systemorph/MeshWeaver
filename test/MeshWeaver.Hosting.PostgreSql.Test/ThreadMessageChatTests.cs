@@ -5,7 +5,6 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshThread = MeshWeaver.AI.Thread;
-using FluentAssertions;
 using MeshWeaver.AI;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;

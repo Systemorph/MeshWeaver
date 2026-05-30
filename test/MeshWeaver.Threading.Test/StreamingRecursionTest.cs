@@ -1,6 +1,5 @@
 ﻿using System.Collections.Immutable;
 using System.Linq;
-using FluentAssertions;
 using MeshWeaver.AI;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;

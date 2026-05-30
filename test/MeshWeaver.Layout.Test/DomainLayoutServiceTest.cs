@@ -5,8 +5,6 @@ using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using Json.More;
 using Json.Patch;
 using Json.Pointer;

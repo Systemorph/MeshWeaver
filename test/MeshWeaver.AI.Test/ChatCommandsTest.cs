@@ -3,7 +3,6 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.AI.Commands;
 using MeshWeaver.AI.Parsing;
 using Xunit;

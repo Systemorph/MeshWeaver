@@ -1,6 +1,5 @@
 using System.Linq;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;

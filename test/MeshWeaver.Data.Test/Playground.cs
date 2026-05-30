@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
-using FluentAssertions;
 using Json.Patch;
 using Json.Pointer;
 using Xunit;

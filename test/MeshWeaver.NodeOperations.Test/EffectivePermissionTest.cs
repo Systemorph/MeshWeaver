@@ -3,8 +3,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Reactive.Threading.Tasks;
 using System.Reactive.Linq;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;

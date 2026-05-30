@@ -2,7 +2,6 @@ using System;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Persistence;

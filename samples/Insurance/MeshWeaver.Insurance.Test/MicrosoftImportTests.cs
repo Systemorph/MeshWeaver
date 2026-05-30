@@ -1,6 +1,4 @@
 ﻿using System.Reactive.Linq;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Import;

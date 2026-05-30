@@ -2,13 +2,11 @@
 using System.Linq;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;
 using System;
 using System.Threading;
-using FluentAssertions.Extensions;
 using System.Collections.Immutable;
 
 namespace MeshWeaver.Data.Test;

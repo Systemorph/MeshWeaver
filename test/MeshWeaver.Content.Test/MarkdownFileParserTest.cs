@@ -1,6 +1,5 @@
 using System;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;

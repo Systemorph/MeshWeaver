@@ -7,8 +7,6 @@ using System.Reactive.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.AI.Plugins;
 using Microsoft.Extensions.AI;
 using Xunit;

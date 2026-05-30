@@ -2,7 +2,6 @@
 
 using System;
 using System.Collections.Immutable;
-using FluentAssertions;
 using Xunit;
 using MeshThread = MeshWeaver.AI.Thread;
 

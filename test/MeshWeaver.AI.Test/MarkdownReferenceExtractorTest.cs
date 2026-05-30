@@ -1,6 +1,5 @@
 ﻿#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
-using FluentAssertions;
 using Xunit;
 
 namespace MeshWeaver.AI.Test;

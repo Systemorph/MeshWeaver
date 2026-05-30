@@ -3,8 +3,6 @@
     <IsPackable>false</IsPackable>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
-    <!-- Suppress FluentAssertions license warning for open source projects -->
-    <FLUENTASSERTIONS_SUPPRESS_WARNING>true</FLUENTASSERTIONS_SUPPRESS_WARNING>
     <Nullable>enable</Nullable>
     <!-- Always emit a TRX so every `dotnet test` invocation leaves a parseable
          result file in TestResults/ — required for hang diagnosis (the only
@@ -23,10 +21,15 @@
 
   <ItemGroup>
     <Using Include="Xunit.ITestOutputHelper" Alias="ITestOutputHelper" />
+    <!-- In-house assertion library (replaced FluentAssertions). One global using
+         covers Should()/asserts + the Seconds()/Milliseconds()/… time helpers, so
+         test files need no per-file assertion import. -->
+    <Using Include="MeshWeaver.Reactive.Assertions" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="FluentAssertions" />
+    <!-- Global project reference: every test project gets the assertion library. -->
+    <ProjectReference Include="$(MSBuildThisFileDirectory)..\src\MeshWeaver.Reactive.Assertions\MeshWeaver.Reactive.Assertions.csproj" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit.v3" />
     <PackageReference Include="xunit.runner.visualstudio">

@@ -1,4 +1,3 @@
-using FluentAssertions;
 using MeshWeaver.Hosting.PostgreSql;
 using MeshWeaver.Mesh;
 using Xunit;

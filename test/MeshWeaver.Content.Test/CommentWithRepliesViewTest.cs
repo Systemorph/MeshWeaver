@@ -5,7 +5,6 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.Data;
 using MeshWeaver.Documentation;
 using MeshWeaver.Graph;

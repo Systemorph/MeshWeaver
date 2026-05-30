@@ -3,7 +3,6 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using CsvHelper;
-using FluentAssertions;
 using MeshWeaver.DataSetReader.Csv;
 using MeshWeaver.DataStructures;
 using Xunit;

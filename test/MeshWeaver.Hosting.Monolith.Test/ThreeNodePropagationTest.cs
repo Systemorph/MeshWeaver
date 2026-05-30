@@ -3,8 +3,6 @@ using System.Collections.Generic;
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Hosting.Monolith.TestBase;

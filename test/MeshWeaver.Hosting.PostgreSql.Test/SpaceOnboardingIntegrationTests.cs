@@ -4,8 +4,6 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using Memex.Portal.Shared.Authentication;
 using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Data;

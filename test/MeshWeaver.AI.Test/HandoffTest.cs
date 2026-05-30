@@ -6,7 +6,6 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.AI.Plugins;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;

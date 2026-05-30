@@ -8,7 +8,6 @@ using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.AI.Completion;
 using MeshWeaver.Data.Completion;
 using Xunit;

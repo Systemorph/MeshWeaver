@@ -10,7 +10,6 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;

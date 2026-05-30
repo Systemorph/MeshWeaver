@@ -4,7 +4,6 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Reactive.Threading.Tasks;
 using System.Reactive.Linq;
-using FluentAssertions;
 using MeshWeaver.Domain;
 using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;

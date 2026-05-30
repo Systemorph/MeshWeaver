@@ -1,7 +1,6 @@
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
-using FluentAssertions;
 using MeshWeaver.Mesh;
 using Xunit;
 

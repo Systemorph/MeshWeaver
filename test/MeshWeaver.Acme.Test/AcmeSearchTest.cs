@@ -5,7 +5,6 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentAssertions;
 using Markdig.Syntax;
 using Markdig.Syntax.Inlines;
 using MeshWeaver.Graph.Configuration;

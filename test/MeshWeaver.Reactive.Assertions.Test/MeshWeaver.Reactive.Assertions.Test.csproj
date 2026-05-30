@@ -1,7 +1,3 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <ItemGroup>
-    <ProjectReference Include="..\..\src\MeshWeaver.Reactive.Assertions\MeshWeaver.Reactive.Assertions.csproj" />
-  </ItemGroup>
-
 </Project>

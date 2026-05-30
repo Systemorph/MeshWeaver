@@ -1,6 +1,5 @@
 using System.Linq;
 using System.Security.Claims;
-using FluentAssertions;
 using Memex.Portal.Shared.Authentication;
 using MeshWeaver.Mesh.Security;
 using Xunit;
