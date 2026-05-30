@@ -820,8 +820,21 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// <see cref="IObservable{MeshNode}"/> via
     /// <see cref="MeshNodeStreamExtensions.GetMeshNodeStream(IWorkspace, string)"/>.
     /// </summary>
-    protected IObservable<MeshNode> ReadNode(string path)
-        => Mesh.GetWorkspace().GetMeshNodeStream(path);
+    /// <summary>
+    /// Authoritative single-node read as an <see cref="IObservable{T}"/>: the owner-hub round-trip via
+    /// <c>Mesh.GetMeshNode</c> — NOT the cache stream (which can serve a stale Replay(1) buffer). Emits the
+    /// node, or <c>null</c> when the routing service reports NotFound or the read exceeds
+    /// <see cref="ReadNodeTimeout"/>. Assert reactively: <c>ReadNode(path).Should().Emit()</c> /
+    /// <c>.Match(...)</c>. Never bridge back to a Task. (Replaced the old cache-stream ReadNode +
+    /// the deleted ReadNodeAsync.)
+    /// </summary>
+    protected IObservable<MeshNode?> ReadNode(string path)
+        => Mesh.GetMeshNode(path, ReadNodeTimeout)
+            .Select(n => (MeshNode?)n)
+            .Catch((Exception ex) =>
+                ex is TimeoutException || IsNotFoundFailure(ex)
+                    ? Observable.Return<MeshNode?>(null)
+                    : Observable.Throw<MeshNode?>(ex));
 
     private static readonly Address ReadHubAddress = new("test-reader", "shared");
 
