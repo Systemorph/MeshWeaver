@@ -6,7 +6,6 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
-using MeshWeaver.Reactive;
 
 namespace MeshWeaver.Markdown.Export.Layout;
 
@@ -26,46 +25,46 @@ public class MarkdownExportMenuProvider : INodeMenuProvider
 
     public string Context => NodeMenuItemsExtensions.NodeMenuContext;
 
-    public async IAsyncEnumerable<NodeMenuItemDefinition> GetItemsAsync(
+    /// <summary>
+    /// Reactive: combines the live own-node stream with the viewer's effective permissions and
+    /// re-projects the export items on every change. Emits an empty slice when the node isn't a
+    /// Markdown node or the viewer lacks Read — and re-emits (showing the items) once a runtime
+    /// grant propagates, without a reload.
+    /// </summary>
+    public IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> GetItems(
         LayoutAreaHost host, RenderingContext ctx)
     {
         var hubPath = host.Hub.Address.ToString();
-        var nodeStream = host.Workspace.GetStream<MeshNode>()
-                ?.Select(n => n ?? Array.Empty<MeshNode>())
-            ?? Observable.Return(Array.Empty<MeshNode>());
 
-        // Bridges the live MeshNode + permission streams into the IAsyncEnumerable
-        // contract: first snapshot wins via early yield break (the menu pipeline is
-        // one-shot per render today). TODO: emit live menu updates when the menu
-        // pipeline becomes fully reactive.
-        await foreach (var nodes in nodeStream.ToAsyncEnumerableSequence())
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            if (node is null || node.NodeType != "Markdown")
-                yield break;
+        // Own MeshNode via the canonical reducer. StartWith(null) so CombineLatest fires before
+        // the node loads; Catch degrades to "no node" on hubs without a MeshDataSource.
+        var nodeStream = host.Workspace.GetMeshNodeStream()
+            .Select(n => (MeshNode?)n)
+            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+            .StartWith((MeshNode?)null);
 
-            await foreach (var perms in host.Hub.GetEffectivePermissions(hubPath)
-                .ToAsyncEnumerableSequence())
+        return nodeStream.CombineLatest(
+            host.Hub.GetEffectivePermissions(hubPath),
+            (node, perms) =>
             {
-                if (!perms.HasFlag(Permission.Read))
-                    yield break;
+                if (node is null || node.NodeType != "Markdown" || !perms.HasFlag(Permission.Read))
+                    return (IReadOnlyCollection<NodeMenuItemDefinition>)[];
 
-                yield return new NodeMenuItemDefinition(
-                    Label: PdfLabel,
-                    Area: ExportDocumentLayoutArea.PdfArea,
-                    RequiredPermission: Permission.Read,
-                    Order: 27,
-                    Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ExportDocumentLayoutArea.PdfArea));
-
-                yield return new NodeMenuItemDefinition(
-                    Label: DocxLabel,
-                    Area: ExportDocumentLayoutArea.DocxArea,
-                    RequiredPermission: Permission.Read,
-                    Order: 28,
-                    Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ExportDocumentLayoutArea.DocxArea));
-                yield break;
-            }
-            yield break;
-        }
+                return
+                [
+                    new NodeMenuItemDefinition(
+                        Label: PdfLabel,
+                        Area: ExportDocumentLayoutArea.PdfArea,
+                        RequiredPermission: Permission.Read,
+                        Order: 27,
+                        Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ExportDocumentLayoutArea.PdfArea)),
+                    new NodeMenuItemDefinition(
+                        Label: DocxLabel,
+                        Area: ExportDocumentLayoutArea.DocxArea,
+                        RequiredPermission: Permission.Read,
+                        Order: 28,
+                        Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ExportDocumentLayoutArea.DocxArea)),
+                ];
+            });
     }
 }

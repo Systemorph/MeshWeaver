@@ -1,8 +1,6 @@
 using System.Reactive.Linq;
 using MeshWeaver.Blazor.Components.Monaco;
-using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
-using MeshWeaver.Reactive;
 
 namespace MeshWeaver.Blazor.Services;
 
@@ -15,10 +13,6 @@ namespace MeshWeaver.Blazor.Services;
 public class BlazorAutocompleteService(IMeshService meshQuery)
 {
     private const int CompletionLimit = 20;
-
-    // Higher score = better. Sort descending.
-    private static readonly IComparer<QuerySuggestion> ByScoreDescending =
-        Comparer<QuerySuggestion>.Create((a, b) => b.Score.CompareTo(a.Score));
 
     /// <summary>
     /// Streams completion snapshots for <paramref name="query"/>. Resolves <c>@</c>-prefixed
@@ -55,8 +49,10 @@ public class BlazorAutocompleteService(IMeshService meshQuery)
 
     private IObservable<IReadOnlyList<CompletionItem>> Stream(
         string basePath, string namePrefix, string addressCategory) =>
-        meshQuery.AutocompleteAsync(basePath, namePrefix, CompletionLimit)
-            .ScanTopN(CompletionLimit, ByScoreDescending)
+        // Reactive autocomplete: the aggregator combines providers (each StartWith(empty) so partial
+        // results render immediately), ordered by score and clipped to the limit. Each emission is a
+        // snapshot of QueryResult rows — map them to Monaco CompletionItems.
+        meshQuery.Autocomplete(basePath, namePrefix, AutocompleteMode.RelevanceFirst, CompletionLimit)
             .Select(snapshot => (IReadOnlyList<CompletionItem>)snapshot
                 .Select(s => new CompletionItem
                 {

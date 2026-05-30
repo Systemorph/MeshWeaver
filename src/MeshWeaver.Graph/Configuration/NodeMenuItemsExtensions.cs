@@ -6,7 +6,6 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
-using MeshWeaver.Reactive;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -14,8 +13,21 @@ namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
 /// Extension methods for registering node-type-specific menu item providers.
-/// Providers yield items via IAsyncEnumerable during layout rendering.
-/// Items are organised into named menu contexts — the header renders one dropdown per context.
+/// Providers are <b>reactive</b> — each yields an <see cref="IObservable{T}"/> of its complete
+/// item set and re-emits whenever its inputs (node content, the viewer's effective permissions)
+/// change. Items are organised into named menu contexts — the header renders one dropdown per
+/// context.
+/// <para>
+/// 🚨 Why reactive (and not <c>IAsyncEnumerable</c> + <c>await foreach</c>): the old contract
+/// took the <b>first</b> permission snapshot and locked it in (<c>yield break</c>), with no
+/// re-render. A runtime <c>AccessAssignment</c> (e.g. granting Editor) only reaches
+/// <see cref="HubPermissionExtensions.GetEffectivePermissions(IMessageHub, string)"/> on its
+/// <c>enriched</c> stream — <i>after</i> the synced query catches up — so a render that beat
+/// propagation baked in Viewer-level perms forever (the menu access race behind the flaky
+/// <c>Menu_Editor_ShowsCreateItems</c> test). Reactive providers re-emit when perms enrich, the
+/// renderer pushes the updated <see cref="MenuControl"/> via <c>host.UpdateArea</c>, and the menu
+/// self-corrects. Full reference: <c>Doc/GUI/NodeMenu.md</c>.
+/// </para>
 /// </summary>
 public static class NodeMenuItemsExtensions
 {
@@ -25,11 +37,14 @@ public static class NodeMenuItemsExtensions
     /// <summary>Menu context name for mesh-level operations (Create, Import, Export subtree).</summary>
     public const string MeshMenuContext = "Mesh";
 
+    /// <summary>Shared empty slice — providers emit this (never <c>Observable.Empty</c>) when they contribute nothing.</summary>
+    private static readonly IReadOnlyCollection<NodeMenuItemDefinition> EmptyItems = [];
+
     /// <summary>
     /// Registers the menu infrastructure with default menu items.
-    /// Registers a predicate-based renderer that evaluates all providers and stores
-    /// results at $Menu:{context} in the entity store (same pattern as $Dialog).
-    /// Built-in items are registered into the "Node" and "Mesh" contexts; the Portal
+    /// Registers a predicate-based renderer that subscribes to every provider's reactive stream
+    /// and writes the merged, sorted result to $Menu:{context} in the entity store (same pattern as
+    /// $Dialog). Built-in items are registered into the "Node" and "Mesh" contexts; the Portal
     /// renders one header dropdown per context.
     /// </summary>
     public static MessageHubConfiguration AddDefaultMeshMenu(this MessageHubConfiguration config)
@@ -38,126 +53,109 @@ public static class NodeMenuItemsExtensions
             return config;
         config = config.Set(true, nameof(AddDefaultMeshMenu));
 
-        // Snapshot of registered contexts at renderer-registration time. Captured so the
-        // renderer always writes to EVERY registered $Menu:{context} area, even when the
-        // bucket for a context comes back empty. Without this, a subscriber that asks for
-        // "$Menu:Node" on a node whose built-in menu items were all permission-gated out
-        // would hang forever (no control ever lands on that area).
         return config
             .WithTypes(typeof(MenuControl), typeof(NodeMenuItemDefinition))
             .AddNodeMenuItems(NodeMenuContext, DefaultNodeMenuProvider)
             .AddNodeMenuItems(MeshMenuContext, DefaultMeshMenuProvider)
-            .AddLayout(layout => layout
-                .WithRenderer(
-                    _ => true,
-                    async (host, ctx, store) =>
-                    {
-                        // Enumerate every provider exactly once for this render pass and bucket
-                        // the yielded items by context. Prevents repeated IAsyncEnumerable
-                        // evaluations that would otherwise happen once per target context.
-                        // Items are inserted into a sorted list on the fly (no final OrderBy).
-                        var byContext = await CollectMenuItemsByContextAsync(host, ctx);
-
-                        // Default (unnamed) context — kept for back-compat, typically empty.
-                        var defaultItems = byContext.TryGetValue("", out var d)
-                            ? d.ToImmutableList()
-                            : ImmutableList<NodeMenuItemDefinition>.Empty;
-                        var menuControl = (IUiControl)new MenuControl(defaultItems);
-                        var result = menuControl.Render(host, new RenderingContext(MenuControl.MenuArea), store);
-
-                        // Write every registered named context so subscribers never wait on
-                        // an area that would otherwise never be populated. The union of
-                        // "buckets that produced items" and "contexts that were registered"
-                        // covers both runtime-discovered providers and statically configured
-                        // contexts whose providers happened to yield nothing on this pass.
-                        var registered = host.Hub.Configuration.Get<RegisteredMenuContexts>()?.Contexts
-                            ?? (IReadOnlyCollection<string>)Array.Empty<string>();
-                        var contextsToRender = new HashSet<string>(byContext.Keys);
-                        contextsToRender.UnionWith(registered);
-
-                        foreach (var key in contextsToRender)
-                        {
-                            if (key.Length == 0) continue; // default already rendered above
-                            var items = byContext.TryGetValue(key, out var bucket)
-                                ? bucket.ToImmutableList()
-                                : ImmutableList<NodeMenuItemDefinition>.Empty;
-                            var contextMenu = (IUiControl)new MenuControl(items);
-                            var contextResult = contextMenu.Render(host,
-                                new RenderingContext(MenuControl.GetMenuArea(key)), result.Store);
-                            result = new EntityStoreAndUpdates(contextResult.Store,
-                                result.Updates.Concat(contextResult.Updates), result.ChangedBy);
-                        }
-
-                        return result;
-                    }));
+            .AddLayout(layout => layout.WithRenderer(_ => true, RenderMenus));
     }
 
     /// <summary>
-    /// Default provider for the "Node" menu — per-node operations.
-    /// Bridges the live <see cref="GetMenuContext"/> observable into the IAsyncEnumerable
-    /// contract via <c>await foreach</c> + early <c>yield break</c> — first snapshot wins
-    /// per render. (TODO: emit live menu updates when the menu pipeline is fully reactive.)
+    /// Predicate renderer (runs once per area render — see <c>LayoutDefinition.RenderLayoutArea</c>).
+    /// For every registered context it subscribes to the merged provider stream and pushes the
+    /// resulting <see cref="MenuControl"/> into $Menu:{context} via <c>host.UpdateArea</c> on every
+    /// emission, so the menu re-renders live when permissions or node content change. The
+    /// subscription is tied to the $Menu area's lifecycle via <c>RegisterForDisposal</c> — same
+    /// shape the framework's own reactive <c>RenderArea</c> overloads use.
     /// </summary>
-    private static async IAsyncEnumerable<NodeMenuItemDefinition> DefaultNodeMenuProvider(
-        LayoutAreaHost host, RenderingContext ctx)
+    private static EntityStoreAndUpdates RenderMenus(LayoutAreaHost host, RenderingContext ctx, EntityStore store)
     {
-        await foreach (var menuCtx in GetMenuContext(host).ToAsyncEnumerableSequence())
+        var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(NodeMenuItemsExtensions));
+
+        foreach (var (context, items) in CollectMenuItemStreamsByContext(host, ctx))
+        {
+            // Default (unnamed) context lands on "$Menu"; named contexts on "$Menu:{context}".
+            var area = context.Length == 0 ? MenuControl.MenuArea : MenuControl.GetMenuArea(context);
+            var areaContext = new RenderingContext(area);
+            host.RegisterForDisposal(
+                MenuControl.MenuArea,
+                items
+                    .DistinctUntilChanged(MenuItemsSequenceComparer.Instance)
+                    .Subscribe(
+                        slice => host.UpdateArea(areaContext, new MenuControl([.. slice])),
+                        ex => logger?.LogWarning(ex, "Menu render failed for context '{Context}'", context)));
+        }
+
+        // Areas are populated reactively via UpdateArea; return the store unchanged.
+        return new EntityStoreAndUpdates(store, [], host.Stream.StreamId);
+    }
+
+    /// <summary>
+    /// Default provider for the "Node" menu — per-node operations. Composes the live node +
+    /// permission streams (<see cref="GetMenuContext"/>) and re-projects the full item set on every
+    /// change, so granting/revoking a role re-renders the menu without a reload.
+    /// </summary>
+    private static IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> DefaultNodeMenuProvider(
+        LayoutAreaHost host, RenderingContext ctx)
+        => GetMenuContext(host).Select(menuCtx =>
         {
             var (menuPath, _, _, perms) = menuCtx;
+            var items = ImmutableList.CreateBuilder<NodeMenuItemDefinition>();
 
             var edit = MeshNodeLayoutAreas.GetEditMenuItem(menuPath, perms);
-            if (edit != null) yield return edit;
+            if (edit != null) items.Add(edit);
 
             var files = MeshNodeLayoutAreas.GetFilesMenuItem(menuPath, perms);
-            if (files != null) yield return files;
+            if (files != null) items.Add(files);
 
-            yield return MeshNodeLayoutAreas.GetThreadsMenuItem(menuPath);
+            items.Add(MeshNodeLayoutAreas.GetThreadsMenuItem(menuPath));
 
             var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
             var viewerId = accessService?.Context?.ObjectId
                            ?? accessService?.CircuitContext?.ObjectId;
             var pin = PinLayoutArea.GetMenuItem(menuPath, viewerId);
-            if (pin != null) yield return pin;
+            if (pin != null) items.Add(pin);
 
             var versions = VersionLayoutArea.GetMenuItem(menuPath, perms);
-            if (versions != null) yield return versions;
+            if (versions != null) items.Add(versions);
 
             var copy = CopyLayoutArea.GetMenuItem(menuPath, perms);
-            if (copy != null) yield return copy;
+            if (copy != null) items.Add(copy);
 
             var move = MoveLayoutArea.GetMenuItem(menuPath, perms);
-            if (move != null) yield return move;
+            if (move != null) items.Add(move);
 
             var recycle = RecycleLayoutArea.GetMenuItem(menuPath, perms);
-            if (recycle != null) yield return recycle;
+            if (recycle != null) items.Add(recycle);
 
             var delete = DeleteLayoutArea.GetMenuItem(menuPath, perms);
-            if (delete != null) yield return delete;
-            yield break;
-        }
-    }
+            if (delete != null) items.Add(delete);
+
+            return (IReadOnlyCollection<NodeMenuItemDefinition>)items.ToImmutable();
+        });
 
     /// <summary>
     /// Default provider for the "Mesh" menu — mesh-level operations.
     /// </summary>
-    private static async IAsyncEnumerable<NodeMenuItemDefinition> DefaultMeshMenuProvider(
+    private static IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> DefaultMeshMenuProvider(
         LayoutAreaHost host, RenderingContext ctx)
-    {
-        await foreach (var menuCtx in GetMenuContext(host).ToAsyncEnumerableSequence())
+        => GetMenuContext(host).Select(menuCtx =>
         {
             var (menuPath, _, menuNode, perms) = menuCtx;
+            var items = ImmutableList.CreateBuilder<NodeMenuItemDefinition>();
 
             var create = CreateLayoutArea.GetMenuItem(menuPath, menuNode, perms);
-            if (create != null) yield return create;
+            if (create != null) items.Add(create);
 
             var import = ImportLayoutArea.GetMenuItem(menuPath, perms);
-            if (import != null) yield return import;
+            if (import != null) items.Add(import);
 
             var export = ExportLayoutArea.GetMenuItem(menuPath, perms);
-            if (export != null) yield return export;
-            yield break;
-        }
-    }
+            if (export != null) items.Add(export);
+
+            return (IReadOnlyCollection<NodeMenuItemDefinition>)items.ToImmutable();
+        });
 
     /// <summary>
     /// Shared node lookup: resolves the effective menu node (satellite → main), its name,
@@ -165,7 +163,10 @@ public static class NodeMenuItemsExtensions
     /// <c>MeshNodeReference</c> reducer (per <c>Doc/Architecture/AsynchronousCalls.md</c> —
     /// never <c>GetStream&lt;MeshNode&gt;().FirstOrDefault</c>); if the own node is a
     /// satellite, fetches the main node via <see cref="MeshNodeStreamExtensions.GetMeshNodeStream(IWorkspace,string)"/>
-    /// (which routes to the owning hub's reducer remotely).
+    /// (which routes to the owning hub's reducer remotely). The result is a <b>live</b> stream:
+    /// it re-emits on node content changes and — via the <c>CombineLatest</c> with
+    /// <see cref="HubPermissionExtensions.GetEffectivePermissions(IMessageHub, string)"/> — on
+    /// permission changes (the access-race fix).
     /// </summary>
     private static IObservable<(string menuPath, string nodeName, MeshNode? menuNode, Permission perms)>
         GetMenuContext(LayoutAreaHost host)
@@ -233,7 +234,7 @@ public static class NodeMenuItemsExtensions
 
     /// <summary>
     /// Registers additional static menu items for the "Node" menu (per-node operations).
-    /// Each definition is wrapped in a trivial provider that always yields it.
+    /// Each definition is wrapped in a trivial provider that always emits it.
     /// </summary>
     public static MessageHubConfiguration AddNodeMenuItems(
         this MessageHubConfiguration config,
@@ -242,7 +243,7 @@ public static class NodeMenuItemsExtensions
 
     /// <summary>
     /// Registers additional static menu items for a specific named menu context.
-    /// Each definition is wrapped in a trivial provider that always yields it.
+    /// Each definition is wrapped in a trivial provider that always emits it.
     /// </summary>
     public static MessageHubConfiguration AddNodeMenuItems(
         this MessageHubConfiguration config,
@@ -251,8 +252,8 @@ public static class NodeMenuItemsExtensions
     {
         var providers = items.Select(item =>
         {
-            var captured = item;
-            return new NodeMenuItemProvider((_, _) => YieldSingle(captured));
+            IReadOnlyCollection<NodeMenuItemDefinition> single = [item];
+            return new NodeMenuItemProvider((_, _) => Observable.Return(single));
         }).ToArray();
         return config.AddNodeMenuItems(menuContext, providers);
     }
@@ -273,9 +274,6 @@ public static class NodeMenuItemsExtensions
         params NodeMenuItemDefinition[] items)
         => config.AddNodeMenuItems(MeshMenuContext, items);
 
-    private static IAsyncEnumerable<NodeMenuItemDefinition> YieldSingle(NodeMenuItemDefinition item)
-        => Observable.Return(item).ToAsyncEnumerableSequence();
-
     /// <summary>
     /// Comparer for <see cref="NodeMenuItemDefinition"/> used by the per-context sorted sets.
     /// Primary key: <see cref="NodeMenuItemDefinition.Order"/> (ascending). Tiebreaker: <c>Label</c>
@@ -293,72 +291,113 @@ public static class NodeMenuItemsExtensions
         });
 
     /// <summary>
-    /// Single-pass collector: enumerates every registered provider exactly once per render and
-    /// inserts each yielded item directly into an <see cref="ImmutableSortedSet{T}.Builder"/>
-    /// keyed on <see cref="NodeMenuItemDefinition.Order"/>. No post-hoc <c>OrderBy</c>, no sort
-    /// at the end — the sorted set maintains order on every <c>Add</c>. Duplicates (same Order
-    /// + Label + Area) collapse via the comparer.
-    /// Aggregates from two sources:
+    /// Builds one merged item stream per registered menu context. Within a context, every provider's
+    /// reactive stream is combined via <see cref="Observable.CombineLatest{TSource, TResult}(IEnumerable{IObservable{TSource}}, Func{IList{TSource}, TResult})"/>
+    /// so the merged set re-emits whenever <i>any</i> provider re-emits (e.g. permissions enrich).
+    /// Each provider stream is <c>StartWith(empty)</c>-seeded so <c>CombineLatest</c> fires
+    /// immediately instead of stalling on a slow provider, and wrapped so a faulting provider
+    /// degrades to empty rather than crashing the whole menu. Items are inserted into an
+    /// <see cref="ImmutableSortedSet{T}"/> keyed on <see cref="MenuItemComparer"/> — sorted on every
+    /// add, no post-hoc OrderBy. Aggregates two sources:
     /// 1. Legacy delegate-based providers registered via <see cref="AddNodeMenuItems(MessageHubConfiguration, NodeMenuItemProvider[])"/>.
     /// 2. DI-registered <see cref="INodeMenuProvider"/> instances whose <see cref="INodeMenuProvider.Context"/>
     ///    identifies their target bucket — same pattern as <c>IAutocompleteProvider</c>.
     /// </summary>
-    internal static async Task<ImmutableDictionary<string, ImmutableSortedSet<NodeMenuItemDefinition>>>
-        CollectMenuItemsByContextAsync(LayoutAreaHost host, RenderingContext ctx)
+    internal static IReadOnlyDictionary<string, IObservable<IReadOnlyCollection<NodeMenuItemDefinition>>>
+        CollectMenuItemStreamsByContext(LayoutAreaHost host, RenderingContext ctx)
     {
         var config = host.Hub.Configuration;
-        var buckets = new Dictionary<string, ImmutableSortedSet<NodeMenuItemDefinition>.Builder>();
 
-        ImmutableSortedSet<NodeMenuItemDefinition>.Builder GetBucket(string key)
-            => buckets.TryGetValue(key, out var b)
-                ? b
-                : buckets[key] = ImmutableSortedSet.CreateBuilder(MenuItemComparer);
-
-        var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
-            ?.CreateLogger(typeof(NodeMenuItemsExtensions));
-
-        async Task ConsumeAsync(string key, IAsyncEnumerable<NodeMenuItemDefinition> items)
-        {
-            var bucket = GetBucket(key);
-            // Each provider is best-effort: a single broken provider must not crash
-            // the whole menu render. The most common failure path is a transient
-            // GetMenuContext throw on disposing/uninitialised hubs (see related
-            // ObjectDisposedException pattern at SynchronizationStream..ctor).
-            try
-            {
-                await foreach (var item in items)
-                    bucket.Add(item);
-            }
-            catch (Exception ex)
-            {
-                logger?.LogWarning(ex,
-                    "Menu provider for context '{Context}' faulted; items skipped", key);
-            }
-        }
-
-        // Legacy delegate-based providers — each context has its own provider collection.
-        // We call each provider's IAsyncEnumerable exactly once per render pass.
-        var seenContexts = new HashSet<string> { "" };
+        // The renderer must write every registered context (even empty ones) so a subscriber on
+        // "$Menu:Node" never waits on an area no provider populates.
+        var contexts = new HashSet<string> { "" };
         var registered = config.Get<RegisteredMenuContexts>()?.Contexts;
-        if (registered != null) seenContexts.UnionWith(registered);
+        if (registered != null) contexts.UnionWith(registered);
 
-        foreach (var ctxKey in seenContexts)
+        var diProviders = host.Hub.ServiceProvider.GetServices<INodeMenuProvider>().ToList();
+
+        var result = new Dictionary<string, IObservable<IReadOnlyCollection<NodeMenuItemDefinition>>>(StringComparer.Ordinal);
+        foreach (var context in contexts)
         {
-            var legacyKey = ctxKey.Length == 0 ? null : ctxKey;
+            var providerStreams = new List<IObservable<IReadOnlyCollection<NodeMenuItemDefinition>>>();
+
+            // Legacy delegate-based providers — each context has its own provider collection.
+            var legacyKey = context.Length == 0 ? null : context;
             var coll = config.Get<NodeMenuProviderCollection>(legacyKey);
-            if (coll == null) continue;
-            foreach (var provider in coll.Providers)
-                await ConsumeAsync(ctxKey, provider(host, ctx));
+            if (coll != null)
+                foreach (var provider in coll.Providers)
+                    providerStreams.Add(SafeProvider(provider(host, ctx), host, context));
+
+            // DI-registered providers — routed to their declared Context.
+            foreach (var provider in diProviders)
+                if ((provider.Context ?? "") == context)
+                    providerStreams.Add(SafeProvider(provider.GetItems(host, ctx), host, context));
+
+            result[context] = CombineProviderStreams(providerStreams);
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Best-effort wrap: a single broken provider must not crash the whole menu. The most common
+    /// failure path is a transient throw on disposing/uninitialised hubs. On error we log and
+    /// degrade that provider's slice to empty — the rest of the menu still renders.
+    /// </summary>
+    private static IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> SafeProvider(
+        IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> source, LayoutAreaHost host, string context)
+        => source.Catch<IReadOnlyCollection<NodeMenuItemDefinition>, Exception>(ex =>
+        {
+            host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                ?.CreateLogger(typeof(NodeMenuItemsExtensions))
+                .LogWarning(ex, "Menu provider for context '{Context}' faulted; items skipped", context);
+            return Observable.Return(EmptyItems);
+        });
+
+    /// <summary>
+    /// Merges the provider streams for one context into a single sorted, deduped item stream.
+    /// </summary>
+    private static IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> CombineProviderStreams(
+        IReadOnlyList<IObservable<IReadOnlyCollection<NodeMenuItemDefinition>>> providerStreams)
+    {
+        if (providerStreams.Count == 0)
+            return Observable.Return(EmptyItems);
+
+        return providerStreams
+            .Select(s => s.StartWith(EmptyItems))
+            .CombineLatest(slices =>
+            {
+                var builder = ImmutableSortedSet.CreateBuilder(MenuItemComparer);
+                foreach (var slice in slices)
+                    if (slice != null)
+                        foreach (var item in slice)
+                            builder.Add(item);
+                return (IReadOnlyCollection<NodeMenuItemDefinition>)builder.ToImmutable();
+            });
+    }
+
+    /// <summary>
+    /// Sequence equality over a menu slice so <c>DistinctUntilChanged</c> suppresses redundant
+    /// re-renders when an upstream stream re-emits an identical item set (e.g. the synced
+    /// AccessAssignment query re-publishes the same snapshot). <see cref="NodeMenuItemDefinition"/>
+    /// is a record (value equality), so <c>SequenceEqual</c> compares item-by-item.
+    /// </summary>
+    private sealed class MenuItemsSequenceComparer : IEqualityComparer<IReadOnlyCollection<NodeMenuItemDefinition>>
+    {
+        public static readonly MenuItemsSequenceComparer Instance = new();
+
+        public bool Equals(IReadOnlyCollection<NodeMenuItemDefinition>? x, IReadOnlyCollection<NodeMenuItemDefinition>? y)
+        {
+            if (ReferenceEquals(x, y)) return true;
+            if (x is null || y is null || x.Count != y.Count) return false;
+            return x.SequenceEqual(y);
         }
 
-        // DI-registered providers — each invoked exactly once, items routed to their declared Context.
-        foreach (var provider in host.Hub.ServiceProvider.GetServices<INodeMenuProvider>())
-            await ConsumeAsync(provider.Context ?? "", provider.GetItemsAsync(host, ctx));
-
-        var result = ImmutableDictionary.CreateBuilder<string, ImmutableSortedSet<NodeMenuItemDefinition>>();
-        foreach (var kvp in buckets)
-            result[kvp.Key] = kvp.Value.ToImmutable();
-        return result.ToImmutable();
+        public int GetHashCode(IReadOnlyCollection<NodeMenuItemDefinition> obj)
+        {
+            var hash = new HashCode();
+            foreach (var item in obj) hash.Add(item);
+            return hash.ToHashCode();
+        }
     }
 }
 

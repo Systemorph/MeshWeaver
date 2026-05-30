@@ -72,6 +72,7 @@
     <Project Path="src/MeshWeaver.Documentation/MeshWeaver.Documentation.csproj" />
     <Project Path="src/MeshWeaver.Domain/MeshWeaver.Domain.csproj" />
     <Project Path="src/MeshWeaver.Fixture/MeshWeaver.Fixture.csproj" />
+    <Project Path="src/MeshWeaver.Reactive.Assertions/MeshWeaver.Reactive.Assertions.csproj" />
     <Project Path="src/MeshWeaver.GoogleMaps/MeshWeaver.GoogleMaps.csproj" />
     <Project Path="src/MeshWeaver.Graph/MeshWeaver.Graph.csproj" />
     <Project Path="src/MeshWeaver.GridModel/MeshWeaver.GridModel.csproj" />

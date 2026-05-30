@@ -53,39 +53,43 @@ public static class ThreadLayoutAreas
                 .WithView(MeshNodeLayoutAreas.ThreadsArea, ThreadsCatalog));
 
     /// <summary>
-    /// Side panel menu items (New Chat, History, Full Screen).
+    /// Side panel menu items (New Chat, History, Full Screen). Static set — emitted once.
     /// </summary>
-    private static async IAsyncEnumerable<NodeMenuItemDefinition> SidePanelMenuProvider(
+    private static IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> SidePanelMenuProvider(
         LayoutAreaHost host, RenderingContext ctx)
-    {
-        await Task.CompletedTask;
-        yield return new("New Chat", "new-chat", Order: 0);
-        yield return new("History", "history", Order: 10);
-        yield return new("Full Screen", "fullscreen", Order: 20);
-    }
+        => Observable.Return<IReadOnlyCollection<NodeMenuItemDefinition>>(
+        [
+            new("New Chat", "new-chat", Order: 0),
+            new("History", "history", Order: 10),
+            new("Full Screen", "fullscreen", Order: 20),
+        ]);
 
     /// <summary>
     /// Main menu item: Delegations (sub-thread history).
     /// </summary>
-    private static async IAsyncEnumerable<NodeMenuItemDefinition> DelegationsMenuProvider(
+    private static IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> DelegationsMenuProvider(
         LayoutAreaHost host, RenderingContext ctx)
     {
-        await Task.CompletedTask;
         var hubPath = host.Hub.Address.ToString();
-        yield return new("Delegations", ThreadNodeType.HistoryArea, Order: 12,
-            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ThreadNodeType.HistoryArea));
+        return Observable.Return<IReadOnlyCollection<NodeMenuItemDefinition>>(
+        [
+            new("Delegations", ThreadNodeType.HistoryArea, Order: 12,
+                Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ThreadNodeType.HistoryArea)),
+        ]);
     }
 
     /// <summary>
     /// Main menu item: Changes (aggregated node modifications + bulk revert).
     /// </summary>
-    private static async IAsyncEnumerable<NodeMenuItemDefinition> ChangesMenuProvider(
+    private static IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> ChangesMenuProvider(
         LayoutAreaHost host, RenderingContext ctx)
     {
-        await Task.CompletedTask;
         var hubPath = host.Hub.Address.ToString();
-        yield return new("Changes", ThreadNodeType.ChangesArea, Order: 13,
-            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ThreadNodeType.ChangesArea));
+        return Observable.Return<IReadOnlyCollection<NodeMenuItemDefinition>>(
+        [
+            new("Changes", ThreadNodeType.ChangesArea, Order: 13,
+                Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ThreadNodeType.ChangesArea)),
+        ]);
     }
 
     private static string GetContextDisplayName(string path)

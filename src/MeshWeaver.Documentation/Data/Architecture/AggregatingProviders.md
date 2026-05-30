@@ -3,30 +3,74 @@
 Many subsystems in MeshWeaver need to merge items contributed by many independent providers
 (autocomplete suggestions, menu entries, search results, chat completions, …). This page captures
 the **two correct shapes** for doing that so every provider-aggregator site in the codebase stays
-fast, deterministic, and cheap.
+fast, deterministic, reactive, and cheap.
 
-## Two shapes — pick by consumer
+Both shapes are **`IObservable`-first**. Neither uses `IAsyncEnumerable` / `await foreach` at the
+provider or aggregator boundary — the only `await` permitted is the innermost storage bridge inside
+a streaming provider (`Observable.Create` + `await foreach`, sealed in one helper).
+
+## Two shapes — pick by emission granularity
 
 | Consumer shape | Provider contract | Aggregator |
 |---|---|---|
-| **Streaming UI** that re-renders as items arrive (autocomplete suggest widget, live search) | `IObservable<TItem> GetItems(...)` | `Merge` + `ScanTopN` + `Subscribe` (no `await foreach` in the aggregator) |
-| **Collect-then-render** that needs the full sorted set before doing anything (node menus, settings panels) | `IAsyncEnumerable<TItem> GetItemsAsync(...)` | `await foreach` into `ImmutableSortedSet<T>.Builder` per-bucket, return immutable snapshot |
+| **Streaming items** — repaints as each individual item arrives (autocomplete suggest widget, live search) | `IObservable<TItem> GetItems(...)` | `Merge` + `ScanTopN` |
+| **Reactive snapshot set** — each emission is the provider's *complete* item set; the consumer re-renders when inputs change (node menus, permission-gated panels) | `IObservable<IReadOnlyCollection<TItem>> GetItems(...)` | `CombineLatest` per provider → merged sorted set → re-render per emission |
 
-**Rule of thumb:** if any downstream code re-renders as more items arrive, the provider returns
-`IObservable<T>`. If the consumer needs a final list to do anything, the provider returns
-`IAsyncEnumerable<T>` and is collected into a sorted set.
+**Rule of thumb:** if the consumer wants to paint items one-by-one as they trickle in, the provider
+emits **one item per `OnNext`** (`IObservable<TItem>`). If the consumer renders a whole control from
+the full current set and must re-render when that set changes, the provider emits **the whole set per
+`OnNext`** (`IObservable<IReadOnlyCollection<TItem>>`).
 
-> The autocomplete chain (`IAutocompleteProvider.GetItems`) is the canonical observable example;
-> the node-menu chain (`INodeMenuProvider.GetItemsAsync`) is the canonical collect-then-render
-> example. Same DI registration shape (`TryAddEnumerable`), different return type.
+> 🚨 **There is no `IAsyncEnumerable` "collect-then-render" shape anymore.** It took the *first*
+> snapshot of its inputs and locked it in (`await foreach … yield break`). For a permission-gated
+> menu that baked in whatever permissions had propagated by first render — a runtime
+> `AccessAssignment` that lands later never reached the menu (the access race behind the old
+> `Menu_Editor_ShowsCreateItems` flake). Reactive snapshot-set providers re-emit when their inputs
+> change and the renderer re-renders. See `Doc/GUI/NodeMenu.md`.
 
-## Observable-first providers (autocomplete, live search)
+> The autocomplete chain (`IAutocompleteProvider.GetItems`) is the canonical streaming example; the
+> node-menu chain (`INodeMenuProvider.GetItems`) is the canonical reactive-snapshot-set example. Same
+> DI registration shape (`TryAddEnumerable`), different emission granularity.
 
-The provider exposes `IObservable<TItem>` directly. Pure-in-memory providers wrap the synchronous
-projection via `IEnumerable<T>.ToObservable()`; providers that talk to an external system
-(database, file system, hub round-trip) bridge their inner `IAsyncEnumerable` via
-`Observable.Create` + `await foreach` — this is the **only** place `await` appears, sealed inside
-a single helper:
+## 🚨 The async boundary lives at the I/O edge — defer it as deep as possible
+
+`async` / `await` / `IAsyncEnumerable` are **not** a style choice — they are the bridge across a
+*real* I/O wait (a Postgres round-trip, a file read, a network call). Everything above that wait stays
+synchronous-observable. This is the rule that decides whether a provider, aggregator, or adapter is
+allowed to be async at all.
+
+- **In-memory sources are never async.** A provider, aggregator, or storage adapter that only touches
+  in-process state — a registry, a dictionary, an already-loaded `ImmutableList`, a `DataContext`'s
+  type sources — projects **synchronously** and lifts to the contract with
+  `IEnumerable<T>.ToObservable()`. No `async`, no `await`, no `IAsyncEnumerable`, no `Task`. An
+  `async IAsyncEnumerable` method that never actually awaits I/O is a bug: it pays the state-machine
+  and allocation cost and lies about doing I/O. The in-memory `CommandAutocompleteProvider`,
+  `ModelAutocompleteProvider`, `MeshCatalogAutocompleteProvider`, `DataAutocompleteProvider`, and
+  `LayoutAreaAutocompleteProvider` are all pure `.ToObservable()` — that is the target shape for
+  anything backed by memory.
+- **Only the leaf that performs the I/O crosses into async**, and it bridges back to the observable
+  contract at exactly one sealed point (`Observable.Create` + `await foreach`, or the shared
+  `FromAsyncEnumerable` helper). The Postgres / file-system / network adapters live here — e.g.
+  `PostgreSqlMeshQuery.AutocompleteAsync`. **Pool at this edge:** a connection pool for the DB, a
+  bounded `Channel` to buffer the async enumerator into the observable — so the wait is amortized and
+  back-pressured, not a fresh allocation per call.
+- **Push the boundary as deep as it will go.** If a query fans out across adapters and only one of
+  them hits Postgres, only *that* adapter is async; the in-memory adapters in the same fan-out stay
+  synchronous and the merge above them is pure Rx. The caller never sees async — it sees
+  `IObservable<T>`.
+
+> **Litmus test:** before you write `async` on a method, name the I/O it awaits. If you can't —
+> because the data is already in memory — delete the `async` and return `IObservable<T>` built from
+> the synchronous projection. The only methods that keep `async`/`IAsyncEnumerable` are the ones whose
+> body literally opens a connection, reads a file, or calls the network.
+
+## Streaming providers (autocomplete, live search)
+
+The provider exposes `IObservable<TItem>` and emits one item per `OnNext`. Pure-in-memory providers
+wrap the synchronous projection via `IEnumerable<T>.ToObservable()`; providers that talk to an
+external system (database, file system, hub round-trip) bridge their inner `IAsyncEnumerable` via
+`Observable.Create` + `await foreach` — this is the **only** place `await` appears, sealed inside a
+single helper:
 
 ```csharp
 // MeshWeaver.Data.Contract/Completion/IAutocompleteProvider.cs
@@ -58,7 +102,10 @@ public IObservable<AutocompleteItem> GetItems(string query, string? contextPath 
         .ToObservable();
 ```
 
-A provider that touches mesh state, file system, or any other async source uses the helper:
+A provider that touches mesh state, file system, or any other async source uses the helper. The
+`await foreach` here is the **sanctioned boundary** — the storage layer (`meshQuery.AutocompleteAsync`,
+file enumeration) is genuinely `IAsyncEnumerable`, and `FromAsyncEnumerable` is the one place that
+bridges it into the observable contract:
 
 ```csharp
 // UnifiedReferenceAutocompleteProvider, MeshNodeAutocompleteProvider,
@@ -78,27 +125,23 @@ The **aggregator** merges the per-provider observables and folds into a top-N sn
 keeps refining until every provider's `IObservable` completes:
 
 ```csharp
-// AgentsApplicationExtensions.HandleAutocompleteRequest
+// AutocompleteStreamProvider.Stream / HandleAutocompleteRequest
 providers
     .Select(p => p.GetItems(query, contextPath)
         .Catch(Observable.Empty<AutocompleteItem>()))   // one bad provider doesn't kill the rest
     .Merge()
-    .ScanTopN(AutocompleteTopN, AutocompleteByPriority)
-    .LastOrDefaultAsync()
-    .Subscribe(snapshot => hub.Post(
-        new AutocompleteResponse((snapshot ?? Array.Empty<AutocompleteItem>()).ToList()),
-        o => o.ResponseFor(request)));
+    .ScanTopN(topN, ByPriorityDescending);
 ```
 
-For consumers that want a *streaming* result (Blazor autocomplete widget that repaints as
-suggestions arrive), drop the `LastOrDefaultAsync` and subscribe to the `ScanTopN` snapshot
-sequence directly — see `AutocompleteStreamProvider.Stream`.
+For a request/response consumer (cross-hub `AutocompleteRequest`), append `.LastOrDefaultAsync()` to
+post only the final snapshot; for a streaming UI consumer (Monaco completion widget) subscribe to the
+`ScanTopN` sequence directly — see `AutocompleteStreamProvider.Stream`.
 
-### Tests against observable providers
+### Tests against streaming providers
 
 Tests can `await` (the test edge is the only place observable→Task bridges are sanctioned), but
-**not** via `.ToTask()` on a hub-touching observable. The right shape for tests that just want
-a materialised list of items is to convert the observable to `IAsyncEnumerable` via
+**not** via `.ToTask()` on a hub-touching observable. The right shape for tests that just want a
+materialised list of items is to convert the observable to `IAsyncEnumerable` via
 `ToAsyncEnumerableSequence` and then use the standard `await ToArrayAsync` / `await foreach`:
 
 ```csharp
@@ -109,110 +152,124 @@ var items = await provider.GetItems("@Sys", null)
     .ToArrayAsync(ct);
 ```
 
-`ToAsyncEnumerableSequence` is the reverse of `ToObservableSequence` — it bridges via an
-unbounded channel and disposes the subscription when the iterator completes. Same primitive
-the autocomplete pipeline uses internally; tests just consume it the same way.
+## Reactive snapshot-set providers (node menus, permission-gated panels)
 
-If the test wants the streaming snapshot semantics (verifying intermediate snapshots, not just
-the final list), iterate the `ScanTopN` output instead:
+The provider returns `IObservable<IReadOnlyCollection<TItem>>` — **each emission is the provider's
+complete item set** for the current state. Compose the live input streams (node content, the viewer's
+effective permissions) and project the whole set; the provider re-emits whenever an input changes, so
+the consumer re-renders without a reload:
 
 ```csharp
-await foreach (var snap in provider.GetItems(query, contextPath)
-    .ScanTopN(50, ByPriorityDescending)
-    .ToAsyncEnumerableSequence(ct))
-{
-    // assert on each snapshot as it arrives
-}
+// NodeMenuItemsExtensions.DefaultNodeMenuProvider
+private static IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> DefaultNodeMenuProvider(
+    LayoutAreaHost host, RenderingContext ctx)
+    => GetMenuContext(host)   // CombineLatest(live node stream, GetEffectivePermissions)
+        .Select(menuCtx =>
+        {
+            var (menuPath, _, _, perms) = menuCtx;
+            var items = ImmutableList.CreateBuilder<NodeMenuItemDefinition>();
+            var edit = MeshNodeLayoutAreas.GetEditMenuItem(menuPath, perms);
+            if (edit != null) items.Add(edit);
+            // … more permission-gated items …
+            return (IReadOnlyCollection<NodeMenuItemDefinition>)items.ToImmutable();
+        });
 ```
 
-## Collect-then-render providers (node menus, settings)
+Three rules:
 
-For an aggregator that gathers items from N `IAsyncEnumerable`-style providers:
+1. **Always emit at least an empty collection — never `Observable.Empty`.** The aggregator
+   `CombineLatest`s every provider in the context; a provider that never emits would stall the whole
+   context. "Contributes nothing for this node" = emit `[]`.
+2. **Each emission is the full set, not a delta.** The aggregator replaces the provider's slice on
+   every emission and re-merges.
+3. **Compose live streams, never snapshot.** `GetEffectivePermissions` emits `seed.Concat(enriched)`
+   — the static/claim seed first, then the synced-AccessAssignment-backed enrichment. Project off it
+   with `.Select` so the menu self-corrects the instant a runtime grant propagates. Snapshotting the
+   first emission is the exact access race this pattern exists to kill.
 
-1. **Enumerate each provider's `IAsyncEnumerable` exactly once per request** — no repeated
-   `foreach` over the same provider call, no calling the provider again per-filter or per-group.
-   The async sequence is the provider's side effect budget; double-enumeration doubles the work
-   (DB round-trips, permission checks, etc.) and can surface the same item twice.
-2. **Insert each yielded item directly into an `ImmutableSortedSet<T>.Builder`** (or equivalent
-   sorted collection) using a comparer that encodes the total sort order. The set keeps items
-   in order on every `Add` — no post-hoc `OrderBy`, no `List.Sort` at the end.
-3. **Do not use `Where(...).OrderBy(...)` on the intermediate collection.** Those LINQ chains
-   re-enumerate their source every time the outer result is iterated; if the source is an
-   `IAsyncEnumerable` or is wrapped through `Select`, the provider runs again. Materialize
-   into the sorted set first, then iterate the set.
-4. **Dedupe through the comparer, not with a parallel `HashSet`.** Define the comparer so
-   items that are "the same" compare equal — the sorted set drops the later duplicate in one
-   step, no extra allocation.
+The **aggregator** combines the providers for a context with `CombineLatest` — each `StartWith([])`
+so the combine fires immediately instead of stalling on a slow provider — folding into an
+`ImmutableSortedSet` keyed on a comparer that encodes the total sort order (sorted + deduped on every
+insert, no post-hoc `OrderBy`):
+
+```csharp
+// NodeMenuItemsExtensions.CombineProviderStreams
+providerStreams
+    .Select(s => s.StartWith(EmptyItems))
+    .CombineLatest(slices =>
+    {
+        var builder = ImmutableSortedSet.CreateBuilder(MenuItemComparer);
+        foreach (var slice in slices)
+            foreach (var item in slice)
+                builder.Add(item);
+        return (IReadOnlyCollection<NodeMenuItemDefinition>)builder.ToImmutable();
+    });
+```
+
+The **renderer** is a predicate renderer (`WithRenderer(_ => true, …)`) that runs once per area
+render. For each registered context it subscribes to the merged stream and pushes the result into
+`$Menu:{context}` via `host.UpdateArea` on every emission, tying the subscription to the area's
+lifecycle with `RegisterForDisposal` — the same shape the framework's own reactive `RenderArea`
+overloads use:
+
+```csharp
+// NodeMenuItemsExtensions.RenderMenus
+host.RegisterForDisposal(
+    MenuControl.MenuArea,
+    items
+        .DistinctUntilChanged(MenuItemsSequenceComparer.Instance)   // suppress identical re-renders
+        .Subscribe(slice => host.UpdateArea(areaContext, new MenuControl([.. slice]))));
+```
+
+### Tests against reactive snapshot-set providers
+
+Because the menu re-emits as permissions enrich, a test must **not** grab the first non-null
+snapshot (that is the empty / pre-propagation render). Subscribe to the layout stream and
+`.Where(predicate)` until the set reaches the expected state, with a `Timeout` as the failure signal:
+
+```csharp
+var items = await MenuStream(client, nodeAddress, NodeMenuContext)
+    .CombineLatest(MenuStream(client, nodeAddress, MeshMenuContext), Merge)
+    .Where(set => set.Select(i => i.Label).ToHashSet().SetEquals(expectedLabels))
+    .Timeout(20.Seconds())
+    .FirstAsync()
+    .ToTask(ct);
+```
+
+`SetEquals` waiting catches both *missing* items (role not yet propagated) and *extra* items (wrong
+gating) — either way the menu never reaches the expected set and the `Timeout` fails the test. See
+`MenuAccessControlTest`.
 
 ## Anti-patterns
 
 ```csharp
-// ❌ Enumerates providers once per filter context — O(providers × contexts) async calls
-foreach (var ctx in contexts)
+// ❌ await foreach + yield break in a provider — takes the FIRST input snapshot and locks it in.
+//    The menu never updates when a runtime AccessAssignment propagates → access race.
+await foreach (var perms in host.Hub.GetEffectivePermissions(path).ToAsyncEnumerableSequence())
 {
-    await foreach (var item in provider.GetItemsAsync(host, ctx))
-        ...
+    if (perms.HasFlag(Permission.Update)) yield return item;
+    yield break;   // ← first-snapshot-wins
 }
 
-// ❌ Post-hoc sort — collects into a List then sorts at the end. The List is already mutable
-//    (a Collections-Policy violation) and the O(n log n) sort runs every time instead of
-//    being amortized across inserts.
+// ❌ Observable.Empty for "contributes nothing" — stalls the aggregator's CombineLatest forever.
+return applicable ? Observable.Return(items) : Observable.Empty<IReadOnlyCollection<T>>();
+//                                              ^ must be Observable.Return((IReadOnlyCollection<T>)[])
+
+// ❌ Post-hoc sort — collects into a mutable List then sorts at the end (Collections-Policy
+//    violation + O(n log n) every render instead of amortized inserts).
 var items = new List<X>();
-await foreach (var it in provider.GetItemsAsync()) items.Add(it);
+foreach (var it in slice) items.Add(it);
 items.Sort((a, b) => a.Order.CompareTo(b.Order));
 
-// ❌ LINQ filter + order on an already-materialized set — re-runs the projection every time
-//    the caller iterates (e.g. once to count, again to render).
-return bucket.Where(x => x.Order > 0).OrderBy(x => x.Order);
-```
-
-## Canonical shape
-
-```csharp
-// Comparer first: primary key (sort order) then tiebreakers that preserve identity so items
-// with equal primary keys but different payloads don't collapse.
-private static readonly IComparer<NodeMenuItemDefinition> ItemComparer =
-    Comparer<NodeMenuItemDefinition>.Create((a, b) =>
-    {
-        var c = a.Order.CompareTo(b.Order);
-        if (c != 0) return c;
-        c = string.CompareOrdinal(a.Label, b.Label);
-        if (c != 0) return c;
-        return string.CompareOrdinal(a.Area, b.Area);
-    });
-
-internal static async Task<ImmutableDictionary<string, ImmutableSortedSet<NodeMenuItemDefinition>>>
-    CollectAsync(LayoutAreaHost host, RenderingContext ctx)
-{
-    var buckets = new Dictionary<string, ImmutableSortedSet<NodeMenuItemDefinition>.Builder>();
-
-    ImmutableSortedSet<NodeMenuItemDefinition>.Builder GetBucket(string key)
-        => buckets.TryGetValue(key, out var b)
-            ? b
-            : buckets[key] = ImmutableSortedSet.CreateBuilder(ItemComparer);
-
-    async Task ConsumeAsync(string key, IAsyncEnumerable<NodeMenuItemDefinition> items)
-    {
-        var bucket = GetBucket(key);
-        await foreach (var item in items)
-            bucket.Add(item);  // sorted-set Add inserts in position, dedupes via comparer
-    }
-
-    foreach (var provider in host.Hub.ServiceProvider.GetServices<INodeMenuProvider>())
-        await ConsumeAsync(provider.Context ?? "", provider.GetItemsAsync(host, ctx));
-
-    var result = ImmutableDictionary.CreateBuilder<string, ImmutableSortedSet<NodeMenuItemDefinition>>();
-    foreach (var kvp in buckets)
-        result[kvp.Key] = kvp.Value.ToImmutable();
-    return result.ToImmutable();
-}
+// ❌ Grabbing the first menu render in a test — that's the empty StartWith snapshot.
+var menu = await menuStream.FirstAsync(x => x != null);   // races permission propagation
 ```
 
 ## Provider registration — one instance per hub
 
-Providers are DI-registered via `TryAddEnumerable(ServiceDescriptor.Scoped<IFoo, MyFoo>())` so
-each implementation type is added at most once per hub, and the aggregator resolves them with
-`hub.ServiceProvider.GetServices<IFoo>()`. Same pattern as `IAutocompleteProvider`:
+DI-registered providers (`INodeMenuProvider`, `IAutocompleteProvider`) are added via
+`TryAddEnumerable(ServiceDescriptor.Scoped<IFoo, MyFoo>())` so each implementation type is added at
+most once per hub, and the aggregator resolves them with `hub.ServiceProvider.GetServices<IFoo>()`:
 
 ```csharp
 hub.WithServices(services =>
@@ -223,57 +280,59 @@ hub.WithServices(services =>
 });
 ```
 
-Do **not** accumulate providers into a config-level collection (e.g. `config.Set(...)` + a
-custom `Collection` record) — that path has no dedup, serializes at config time, and can't
-be resolved via standard DI idioms.
+The node-menu chain also supports **delegate** providers registered via
+`config.AddNodeMenuItems(context, NodeMenuItemProvider)` for menu items that live with a node type's
+configuration rather than a standalone class — same reactive `IObservable<IReadOnlyCollection<…>>`
+contract, resolved alongside the DI providers per context.
 
 ## Sites that follow these patterns
 
-**Observable-first** (provider returns `IObservable<T>`, aggregator uses `Merge` + `ScanTopN`):
+**Streaming** (provider returns `IObservable<TItem>`, aggregator uses `Merge` + `ScanTopN`):
 
-- `IAutocompleteProvider` + `HandleAutocompleteRequest` (`DataExtensions.cs`,
-  `AgentsApplicationExtensions.cs`) — autocomplete suggestions.
-- `IAutocompleteStreamProvider.Stream` (`AutocompleteStreamProvider`) — streaming snapshot
-  variant of the same chain for live UI consumers (Monaco completion widget, etc.).
+- `IAutocompleteProvider` + `AutocompleteStreamProvider` / `HandleAutocompleteRequest`
+  (`DataExtensions.cs`, `AgentsApplicationExtensions.cs`) — autocomplete suggestions.
 
-**Collect-then-render** (provider returns `IAsyncEnumerable<T>`, aggregator uses
-`ImmutableSortedSet` + `await foreach`):
+**Reactive snapshot set** (provider returns `IObservable<IReadOnlyCollection<TItem>>`, aggregator
+uses `CombineLatest` + per-emission re-render):
 
-- `INodeMenuProvider` + `CollectMenuItemsByContextAsync` (`NodeMenuItemsExtensions.cs`) —
-  node/mesh menu aggregator.
+- `INodeMenuProvider` + `NodeMenuItemsExtensions.CollectMenuItemStreamsByContext` /
+  `RenderMenus` (`NodeMenuItemsExtensions.cs`) — node / mesh menu aggregator. Implementers:
+  `DefaultNodeMenuProvider`, `DefaultMeshMenuProvider`, `MarkdownExportMenuProvider`,
+  `LinkedInCredentialMenuProvider`, `ApprovalMenuProvider`, the AI thread menu providers.
 
 Any new aggregator that gathers items from multiple providers should look like one of these and
-nothing else. Pick observable-first when the consumer re-renders as items arrive (any UI suggest
-widget); pick collect-then-render when the consumer needs the final sorted snapshot before doing
-anything (rendering a static menu). If it's tempting to reach for `Where` / `OrderBy` / `Distinct`
-at the aggregation boundary, stop — put the comparer into the sorted set (collect-then-render) or
-into `ScanTopN` (observable-first) and let it do the work.
+nothing else. Pick streaming when the consumer repaints as items arrive (any suggest widget); pick
+reactive-snapshot-set when the consumer renders a whole control from the current set and must
+re-render when that set changes (a permission-gated menu). If it's tempting to reach for `Where` /
+`OrderBy` / `Distinct` at the aggregation boundary, stop — put the comparer into `ScanTopN`
+(streaming) or the `ImmutableSortedSet` (snapshot-set) and let it do the work.
 
 ## Checklist for reviewers
 
-**Observable-first contracts:**
+**Streaming contracts:**
 
-- [ ] Provider returns `IObservable<T>` (not `IAsyncEnumerable<T>`, not `Task<…>`).
-- [ ] No `await` outside the innermost `Observable.Create + await foreach` bridge (or the
-      shared `*ProviderObservable.FromAsyncEnumerable` helper).
-- [ ] Aggregator uses `Merge` (not `await foreach` over each provider in a `foreach`) so
-      providers run in parallel and emit as they produce.
-- [ ] Aggregator uses `ScanTopN` (or `ScanSorted`) so the snapshot updates incrementally as
-      providers emit — no `ToList` / `LastAsync` on the merged stream unless the consumer
-      genuinely wants only the final snapshot.
+- [ ] Provider returns `IObservable<T>` (one item per `OnNext`); no `Task<…>`.
+- [ ] No `await` outside the innermost `Observable.Create + await foreach` bridge (or the shared
+      `*ProviderObservable.FromAsyncEnumerable` helper).
+- [ ] Aggregator uses `Merge` + `ScanTopN` so providers run in parallel and the snapshot refines
+      incrementally.
 - [ ] Per-provider `Catch(Observable.Empty<T>())` so one bad provider doesn't kill the merge.
-- [ ] Tests bridge back to `await` via `provider.GetItems(...).ToAsyncEnumerableSequence(ct)`
-      then `await foreach` or `await ToArrayAsync(ct)` — never `.ToTask()` on a hub-touching
-      observable.
 
-**Collect-then-render contracts:**
+**Reactive snapshot-set contracts:**
 
-- [ ] Each provider's `IAsyncEnumerable` appears in exactly one `await foreach` per request.
-- [ ] Items land in `ImmutableSortedSet<T>.Builder` (or another insert-sorted container) with
-      a comparer that defines both order and equality.
-- [ ] No `OrderBy` / `Sort` call after the `await foreach` loop.
+- [ ] Provider returns `IObservable<IReadOnlyCollection<T>>`; each emission is the full set.
+- [ ] Provider **always emits** at least `[]` — never `Observable.Empty` (would stall `CombineLatest`).
+- [ ] Provider composes live input streams (`GetMeshNodeStream`, `GetEffectivePermissions`) with
+      `Select` / `CombineLatest` — it does **not** `await foreach … yield break` or otherwise snapshot
+      the first input.
+- [ ] Aggregator uses `CombineLatest` (each `StartWith([])`) into an `ImmutableSortedSet` with a
+      comparer that defines both order and equality — no `OrderBy` / `Sort` after.
+- [ ] Renderer subscribes and pushes per emission via `host.UpdateArea`, with `RegisterForDisposal`.
 
 **Both:**
 
-- [ ] Providers are resolved via `hub.ServiceProvider.GetServices<T>()` after being registered
-      with `TryAddEnumerable`.
+- [ ] Providers are resolved via `hub.ServiceProvider.GetServices<T>()` after `TryAddEnumerable`
+      (or, for menu delegate providers, registered via `AddNodeMenuItems`).
+- [ ] Tests bridge back to `await` via `.ToAsyncEnumerableSequence(ct)` (streaming) or
+      `.Where(predicate).Timeout(...).FirstAsync().ToTask(ct)` (snapshot-set) — never `.ToTask()` on a
+      raw hub-touching observable without a bounding `Timeout`.

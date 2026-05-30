@@ -1,6 +1,5 @@
 using System.Linq;
 using System.Reactive.Linq;
-using System.Threading.Channels;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -32,43 +31,63 @@ public sealed class LinkedInCredentialMenuProvider : INodeMenuProvider
 {
     public string Context => NodeMenuItemsExtensions.NodeMenuContext;
 
-    public async IAsyncEnumerable<NodeMenuItemDefinition> GetItemsAsync(
+    /// <summary>
+    /// Reactive: switches on the live own-node stream, then (for the User case) tracks the
+    /// LinkedIn credential synced query so "Link LinkedIn account" appears/self-hides live as the
+    /// credential is created — no <c>Channel</c> bridge, no one-shot read. Emits an empty slice
+    /// for non-applicable nodes so the menu aggregator's <c>CombineLatest</c> never stalls.
+    /// </summary>
+    public IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> GetItems(
         LayoutAreaHost host, RenderingContext ctx)
     {
         var hubPath = host.Hub.Address.ToString();
         var accessService = host.Hub.ServiceProvider.GetService(typeof(AccessService)) as AccessService;
         var viewerId = accessService?.Context?.ObjectId
                        ?? accessService?.CircuitContext?.ObjectId;
-        if (string.IsNullOrEmpty(viewerId)) yield break;
+        if (string.IsNullOrEmpty(viewerId))
+            return Observable.Return<IReadOnlyCollection<NodeMenuItemDefinition>>([]);
 
-        // Bridge IObservable -> IAsyncEnumerable via Channel per the canonical pattern
-        // (UserNodeType.GetGlobalAdminTabAsync). No await on a hub round-trip; the
-        // Subscribe is fire-and-forget into the Channel, and the only `await foreach`
-        // is on the Channel reader (a synchronous queue, no hub bridge).
-        // See Doc/Architecture/AsynchronousCalls.md.
-        var node = await ReadNodeOnceAsync(host.Workspace, hubPath);
-        if (node is null) yield break;
+        // Live own-node stream. StartWith(null) so the outer Switch emits before the node loads;
+        // Catch degrades to "no node" on hubs without a MeshDataSource.
+        var nodeStream = host.Workspace.GetMeshNodeStream()
+            .Select(n => (MeshNode?)n)
+            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+            .StartWith((MeshNode?)null);
+
+        return nodeStream
+            .Select(node => BuildItems(host, hubPath, viewerId!, node))
+            .Switch();
+    }
+
+    private static IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> BuildItems(
+        LayoutAreaHost host, string hubPath, string viewerId, MeshNode? node)
+    {
+        IReadOnlyCollection<NodeMenuItemDefinition> empty = [];
+        if (node is null)
+            return Observable.Return(empty);
 
         // Case 1: viewer's own User node.
         if (hubPath.Equals($"User/{viewerId}", System.StringComparison.OrdinalIgnoreCase)
             && string.Equals(node.NodeType, "User", System.StringComparison.OrdinalIgnoreCase))
         {
-            // Only show "Link LinkedIn" when no credential exists yet. Synced query
-            // via workspace.GetQuery — bypasses RLS, gated on Initial, deduped by path.
-            var credentialExists = await CredentialExistsAsync(
-                host.Workspace, $"{hubPath}/_ApiCredentials/linkedin");
-
-            if (!credentialExists)
-            {
-                yield return new NodeMenuItemDefinition(
-                    Label: "Link LinkedIn account",
-                    Area: "ConnectLinkedIn",
-                    Icon: "LinkSquare",
-                    RequiredPermission: Permission.Update,
-                    Order: 60,
-                    Href: "/connect/linkedin/me");
-            }
-            yield break;
+            // Only show "Link LinkedIn" when no credential exists yet. Synced query via
+            // workspace.GetQuery — bypasses RLS, gated on Initial, deduped by path. Live, so the
+            // item self-hides the moment the credential lands.
+            var credentialPath = $"{hubPath}/_ApiCredentials/linkedin";
+            return host.Workspace.GetQuery($"linkedin-credential:{credentialPath}", $"path:{credentialPath}")
+                .Select(items => items.Any()
+                    ? empty
+                    : (IReadOnlyCollection<NodeMenuItemDefinition>)
+                    [
+                        new NodeMenuItemDefinition(
+                            Label: "Link LinkedIn account",
+                            Area: "ConnectLinkedIn",
+                            Icon: "LinkSquare",
+                            RequiredPermission: Permission.Update,
+                            Order: 60,
+                            Href: "/connect/linkedin/me"),
+                    ])
+                .StartWith(empty);
         }
 
         // Case 2: an ApiCredential node for LinkedIn.
@@ -76,30 +95,35 @@ public sealed class LinkedInCredentialMenuProvider : INodeMenuProvider
         {
             var platform = ExtractPlatform(node);
             if (!string.Equals(platform, LinkedInPublisher.PlatformId, System.StringComparison.OrdinalIgnoreCase))
-                yield break;
+                return Observable.Return(empty);
 
             // The credential node lives at {userPath}/_ApiCredentials/{platform} — the
             // user path is the grandparent namespace (strip the last two path segments).
             var segments = hubPath.Split('/');
-            if (segments.Length < 3) yield break;
+            if (segments.Length < 3)
+                return Observable.Return(empty);
             var userPath = string.Join("/", segments.Take(segments.Length - 2));
 
-            yield return new NodeMenuItemDefinition(
-                Label: "Download past posts",
-                Area: "PullLinkedInPosts",
-                Icon: "ArrowDownload",
-                RequiredPermission: Permission.Update,
-                Order: 10,
-                Href: $"/connect/linkedin/pull?profile={System.Uri.EscapeDataString(userPath)}");
-
-            yield return new NodeMenuItemDefinition(
-                Label: "Re-authorize",
-                Area: "ReAuthorizeLinkedIn",
-                Icon: "ArrowSync",
-                RequiredPermission: Permission.Update,
-                Order: 20,
-                Href: $"/connect/linkedin?profile={System.Uri.EscapeDataString(userPath)}");
+            return Observable.Return<IReadOnlyCollection<NodeMenuItemDefinition>>(
+            [
+                new NodeMenuItemDefinition(
+                    Label: "Download past posts",
+                    Area: "PullLinkedInPosts",
+                    Icon: "ArrowDownload",
+                    RequiredPermission: Permission.Update,
+                    Order: 10,
+                    Href: $"/connect/linkedin/pull?profile={System.Uri.EscapeDataString(userPath)}"),
+                new NodeMenuItemDefinition(
+                    Label: "Re-authorize",
+                    Area: "ReAuthorizeLinkedIn",
+                    Icon: "ArrowSync",
+                    RequiredPermission: Permission.Update,
+                    Order: 20,
+                    Href: $"/connect/linkedin?profile={System.Uri.EscapeDataString(userPath)}"),
+            ]);
         }
+
+        return Observable.Return(empty);
     }
 
     private static string? ExtractPlatform(MeshNode node)
@@ -110,48 +134,5 @@ public sealed class LinkedInCredentialMenuProvider : INodeMenuProvider
             && p.ValueKind == System.Text.Json.JsonValueKind.String)
             return p.GetString();
         return null;
-    }
-
-    /// <summary>
-    /// Channel bridge: subscribe to the workspace's MeshNode stream for
-    /// <paramref name="path"/>, push the first emission into a bounded channel,
-    /// then read it back via <c>await foreach</c>. No await on a hub round-trip —
-    /// the await is on the Channel reader (a synchronous queue), so this body is
-    /// safe to call from <c>IAsyncEnumerable</c> on the framework's iteration thread.
-    /// </summary>
-    private static async System.Threading.Tasks.Task<MeshNode?> ReadNodeOnceAsync(IWorkspace workspace, string path)
-    {
-        var channel = Channel.CreateBounded<MeshNode?>(
-            new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropOldest });
-        using var sub = workspace.GetMeshNodeStream(path)
-            .Take(1)
-            .Subscribe(
-                n => { channel.Writer.TryWrite(n); channel.Writer.TryComplete(); },
-                _ => channel.Writer.TryComplete(),
-                () => channel.Writer.TryComplete());
-        await foreach (var item in channel.Reader.ReadAllAsync())
-            return item;
-        return null;
-    }
-
-    /// <summary>
-    /// Channel bridge for existence-check via a synced query — same pattern as
-    /// <see cref="ReadNodeOnceAsync"/>. <c>workspace.GetQuery</c> runs as System
-    /// (bypasses RLS) and is gated on Initial, so the first emission is the
-    /// authoritative snapshot.
-    /// </summary>
-    private static async System.Threading.Tasks.Task<bool> CredentialExistsAsync(IWorkspace workspace, string path)
-    {
-        var channel = Channel.CreateBounded<bool>(
-            new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropOldest });
-        using var sub = workspace.GetQuery($"linkedin-credential:{path}", $"path:{path}")
-            .Take(1)
-            .Subscribe(
-                items => { channel.Writer.TryWrite(items.Any()); channel.Writer.TryComplete(); },
-                _ => channel.Writer.TryComplete(),
-                () => channel.Writer.TryComplete());
-        await foreach (var item in channel.Reader.ReadAllAsync())
-            return item;
-        return false;
     }
 }
