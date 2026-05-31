@@ -18,6 +18,9 @@ public sealed record MemexFeatureOptions
 
     public AiFeatureOptions Ai { get; init; } = new();
 
+    /// <summary>User self-provisioning (open vs closed registration).</summary>
+    public OnboardingFeatureOptions Onboarding { get; init; } = new();
+
     /// <summary>
     /// True when the deployment ships at least one in-process API provider OR one
     /// co-hosted CLI. When false, the portal has no built-in chat capability via
@@ -25,6 +28,28 @@ public sealed record MemexFeatureOptions
     /// surfaced as a startup warning, not a hard failure.
     /// </summary>
     public bool HasAnyChatCapability => Ai.Providers.HasAny || Ai.Clis.HasAny;
+}
+
+/// <summary>
+/// Controls whether a brand-new authenticated user may self-provision their own
+/// account + per-user partition through the <c>/onboarding</c> flow (open vs
+/// closed registration).
+/// </summary>
+public sealed record OnboardingFeatureOptions
+{
+    /// <summary>
+    /// When <c>true</c> (default — current behaviour, no regression), any newly
+    /// authenticated user without an Active User node may self-onboard. When
+    /// <c>false</c>, registration is closed: self-onboarding is refused with a
+    /// "contact your administrator" message instead of materialising the user.
+    ///
+    /// <para><b>First-user bootstrap exception:</b> a brand-new deployment with
+    /// ZERO existing User nodes always lets the very first user onboard (and
+    /// become platform admin) even when this flag is <c>false</c> — otherwise the
+    /// platform would lock out with no administrator. The exception reuses the
+    /// existing "no existing User nodes" detection in the onboarding flow.</para>
+    /// </summary>
+    public bool AllowSelfOnboarding { get; init; } = true;
 }
 
 public sealed record AiFeatureOptions

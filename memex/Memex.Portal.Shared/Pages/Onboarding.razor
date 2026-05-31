@@ -13,11 +13,13 @@
 @using Microsoft.Extensions.Logging
 @using System.Reactive.Disposables
 @using System.Reactive.Linq
+@using Microsoft.Extensions.Options
 @inject AccessService AccessService
 @inject UserOnboardingService OnboardingService
 @inject PortalApplication PortalApplication
 @inject NavigationManager Navigation
 @inject CircuitAccessHandler CircuitAccessHandler
+@inject IOptions<MemexFeatureOptions> Features
 @inject ILogger<Onboarding> Logger
 @implements IDisposable
 
@@ -29,6 +31,21 @@
         <div class="onboarding-card" style="text-align: center; padding: 3rem;">
             <FluentProgressRing />
             <p style="margin-top: 1rem;">@(existingUserFound ? "Redirecting..." : "Loading...")</p>
+        </div>
+    </div>
+}
+else if (registrationClosed)
+{
+    <div class="onboarding-container">
+        <div class="onboarding-card">
+            <div class="onboarding-header">
+                <FluentIcon Value="@(new Icons.Regular.Size24.PersonAdd())" />
+                <h1>Registration Closed</h1>
+            </div>
+            <FluentMessageBar Intent="@MessageIntent.Info" Style="margin-top: 1rem;">
+                Registration is closed. Please contact your administrator to have an
+                account created for you.
+            </FluentMessageBar>
         </div>
     </div>
 }
@@ -108,6 +125,7 @@ else
     private string? errorMessage;
     private bool checkCompleted;
     private bool existingUserFound;
+    private bool registrationClosed;
 
     // Holds the subscriptions from OnInitialized (existing-user lookup) and
     // HandleSubmit (the dual-write pipeline). Disposed when the page tears
@@ -140,13 +158,29 @@ else
         // Synced query — bypasses RLS (runs as System) and is gated on Initial,
         // so the first emission IS the authoritative snapshot. Take(1) completes
         // the subscription after that single emission; no FirstAsync, no ToTask.
+        var byEmailQuery = workspace.GetQuery(
+            $"onboarding:byEmail:{email}",
+            $"nodeType:User namespace:User content.email:{email} limit:1");
+
+        // Closed-registration: if self-onboarding is disabled we also need the
+        // first-user-bootstrap signal up front, so we can render the "registration
+        // closed" message instead of the form for non-first users (the real gate
+        // still lives at the CreateUser call in HandleSubmit). When open we skip
+        // the extra query entirely — same single-query path as before.
+        var allowSelfOnboarding = Features.Value.Onboarding.AllowSelfOnboarding;
+        var firstUserQuery = allowSelfOnboarding
+            ? Observable.Return(Enumerable.Empty<MeshNode>())
+            : workspace.GetQuery("onboarding:firstUserCheck", "namespace:User limit:1");
+
         subscriptions.Add(
-            workspace.GetQuery(
-                    $"onboarding:byEmail:{email}",
-                    $"nodeType:User namespace:User content.email:{email} limit:1")
+            Observable.CombineLatest(byEmailQuery, firstUserQuery,
+                    (byEmail, all) => (byEmail, all))
                 .Take(1)
                 .Subscribe(
-                    snapshot => OnExistingUserCheckCompleted(email, snapshot.FirstOrDefault()),
+                    checks => OnExistingUserCheckCompleted(
+                        email,
+                        checks.byEmail.FirstOrDefault(),
+                        isFirstUser: !checks.all.Any()),
                     ex =>
                     {
                         Logger.LogWarning(ex,
@@ -155,7 +189,7 @@ else
                     }));
     }
 
-    private void OnExistingUserCheckCompleted(string email, MeshNode? existing)
+    private void OnExistingUserCheckCompleted(string email, MeshNode? existing, bool isFirstUser)
     {
         if (existing is { State: MeshNodeState.Active })
         {
@@ -181,7 +215,17 @@ else
         }
         else
         {
-            InvokeAsync(() => { checkCompleted = true; StateHasChanged(); });
+            // No existing account for this email. If self-onboarding is closed and
+            // this is NOT the first-user bootstrap, show the closed message rather
+            // than the profile form. First user always passes (becomes platform
+            // admin) so the deployment never locks out.
+            var closed = !Features.Value.Onboarding.AllowSelfOnboarding && !isFirstUser;
+            InvokeAsync(() =>
+            {
+                registrationClosed = closed;
+                checkCompleted = true;
+                StateHasChanged();
+            });
         }
     }
 
@@ -256,6 +300,19 @@ else
                             "Please sign in with that account."));
 
                     var isFirstUser = !checks.all.Any();
+
+                    // Closed-registration gate. When the operator disables
+                    // self-onboarding (Features:Onboarding:AllowSelfOnboarding=false)
+                    // we refuse to materialise the user — EXCEPT for the first-user
+                    // bootstrap (zero existing User nodes), which must always succeed
+                    // or the platform locks out with no administrator. The security
+                    // boundary is here (gating the CreateUser call), not the UI: the
+                    // page is the only caller that orchestrates CreateUser, and it
+                    // already knows isFirstUser from the synced firstUserQuery above.
+                    if (!Features.Value.Onboarding.AllowSelfOnboarding && !isFirstUser)
+                        return Observable.Throw<MeshNode>(new InvalidOperationException(
+                            "Registration is closed. Please contact your administrator " +
+                            "to have an account created for you."));
 
                     // Dual-write (3 rows) → self-AccessAssignment → optional
                     // platform-Admin grant. All four steps are sequenced via

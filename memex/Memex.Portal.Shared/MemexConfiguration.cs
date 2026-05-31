@@ -108,6 +108,12 @@ public static class MemexConfiguration
             .GetSection(MemexFeatureOptions.SectionName)
             .Get<MemexFeatureOptions>() ?? new MemexFeatureOptions();
 
+        // Bind Features as IOptions so application code (e.g. the onboarding flow's
+        // self-provisioning gate) resolves the toggles through standard DI rather
+        // than re-reading the configuration section ad hoc.
+        services.Configure<MemexFeatureOptions>(
+            builder.Configuration.GetSection(MemexFeatureOptions.SectionName));
+
         if (features.Ai.Clis.Copilot)
             services.AddCopilot(config =>
                 builder.Configuration.GetSection("Copilot").Bind(config));
