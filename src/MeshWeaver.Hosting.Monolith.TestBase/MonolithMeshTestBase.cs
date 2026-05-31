@@ -652,48 +652,6 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// </summary>
     protected virtual Task SetupAccessRightsAsync() => Task.CompletedTask;
 
-    /// <summary>
-    /// 🚨 2026-05-21 — kickoff-on-grain-activation was deleted (prod EventCalendar
-    /// regression). Tests that pre-seed a dynamic NodeType and expect its
-    /// Configuration lambda to be Roslyn-compiled before the first instance hub
-    /// activates MUST trigger compile explicitly via <see cref="NodeTypeDefinition.RequestedReleaseAt"/>.
-    /// This helper performs that handshake: flip the trigger field then wait for
-    /// <see cref="CompilationStatus.Ok"/> + a non-empty <c>LatestReleasePath</c>.
-    /// Defaults to a 60 s budget — matches the Roslyn cold-cache compile time on
-    /// CI agents.
-    /// </summary>
-    protected async Task TriggerCompileForNodeTypeAsync(
-        string nodeTypePath,
-        CancellationToken ct = default,
-        TimeSpan? timeout = null)
-    {
-        var workspace = Mesh.GetWorkspace();
-        var triggerAt = DateTimeOffset.UtcNow;
-        await workspace.GetMeshNodeStream(nodeTypePath).Update(curr =>
-        {
-            if (curr?.Content is not NodeTypeDefinition def) return curr!;
-            return curr with
-            {
-                Content = def with
-                {
-                    RequestedReleaseAt = triggerAt,
-                    RequestedReleaseForce = true,
-                }
-            };
-        }).FirstAsync().ToTask(ct);
-
-        var budget = timeout ?? TimeSpan.FromSeconds(60);
-        await workspace.GetMeshNodeStream(nodeTypePath)
-            .Where(n => n.Content is NodeTypeDefinition d
-                && d.LastReleaseRequestHandledAt is { } h && h >= triggerAt
-                && d.CompilationStatus == CompilationStatus.Ok
-                && !string.IsNullOrEmpty(d.LatestReleasePath))
-            .Take(1)
-            .Timeout(budget)
-            .FirstAsync()
-            .ToTask(ct);
-    }
-
     protected IMessageHub Mesh => ServiceProvider.GetRequiredService<IMessageHub>();
     protected IRoutingService RoutingService => ServiceProvider.GetRequiredService<IRoutingService>();
 
@@ -713,14 +671,6 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// Public API for resolving URL paths to hub addresses in tests.
     /// </summary>
     protected IPathResolver PathResolver => Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
-
-    /// <summary>
-    /// Creates a test node using the public IMeshService API.
-    /// Use this for dynamic test data. For static test data known at setup time,
-    /// override <see cref="ConfigureMesh"/> and use <c>builder.AddMeshNodes(...)</c> instead.
-    /// </summary>
-    protected Task<MeshNode> CreateNodeAsync(MeshNode node, CancellationToken ct = default)
-        => NodeFactory.CreateNode(node).ToTask(ct);
 
     /// <summary>
     /// Test-only Task wrapper around <see cref="MessageHubExtensions.Observe{TResponse}"/>:
@@ -771,28 +721,6 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     private static readonly Address ReadHubAddress = new("test-reader", "shared");
 
     /// <summary>
-    /// Convenience: targets the per-node hub's <see cref="MeshNodeReference"/>
-    /// reducer via <see cref="GetDataRequest"/>, dispatched from a dedicated
-    /// hosted reader hub so the response delivery never races the calling pump.
-    /// Cancelled by <see cref="TestContext.Current"/>'s
-    /// <see cref="ITestContext.CancellationToken"/> — every test inherits the
-    /// same token automatically; never pass <c>default</c>.
-    /// <para>
-    /// Returns <c>null</c> only when the routing service reports
-    /// <see cref="ErrorType.NotFound"/> (no per-node hub for this path — i.e.,
-    /// the node was deleted or never existed). All other failures (timeout,
-    /// cancellation, generic delivery failures) propagate so a hung lookup or a
-    /// real bug surfaces as a test failure rather than a silent <c>null</c>.
-    /// </para>
-    /// <para>
-    /// Replaces <c>await MeshQuery.QueryAsync&lt;MeshNode&gt;($"path:{X}").FirstOrDefaultAsync()</c>
-    /// — see <c>Doc/Architecture/CqrsAndContentAccess.md</c>.
-    /// </para>
-    /// </summary>
-    protected Task<MeshNode?> ReadNodeAsync(string path)
-        => ReadNodeAsync(path, TestContext.Current.CancellationToken);
-
-    /// <summary>
     /// Default upper bound for a single-node read in tests. Bounded so a misrouted
     /// request fails the test loudly with a <see cref="TimeoutException"/> instead
     /// of hanging the whole CI run until the inactivity guard aborts. 30 seconds
@@ -805,92 +733,6 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     // the first per-node hub activation; the prior 30s tripped before the
     // hub responded — symptom: FullFlow_CreateThread + similar AI tests).
     protected static readonly TimeSpan ReadNodeTimeout = TimeSpan.FromSeconds(60);
-
-    /// <summary>
-    /// Same as <see cref="ReadNodeAsync(string)"/> with an explicit token for
-    /// tests that compose their own cancellation source on top of the
-    /// test-context token. Composes the explicit token with a
-    /// <see cref="ReadNodeTimeout"/> watchdog so a hung lookup surfaces quickly.
-    /// </summary>
-    protected async Task<MeshNode?> ReadNodeAsync(string path, CancellationToken ct)
-    {
-        // 🚨 2026-05-23 (revised): use request/response only — DO NOT race
-        // the cache stream.
-        //
-        // The earlier shape merged `workspace.GetMeshNodeStream(path).Take(1)`
-        // (cache-routed) with `Mesh.GetMeshNode(...)` and returned whichever
-        // emitted first. The cache stream is backed by a `Replay(1)` subject
-        // populated by a single SubscribeRequest the cache opens on first
-        // access; subsequent owner-hub writes don't always propagate back
-        // through to that Replay buffer. The cache wins the race every time
-        // (instant emission from the buffer), so polling loops like
-        // `WaitForThreadAsync` saw the SAME stale snapshot on every
-        // iteration even after the watcher had moved Messages forward.
-        // Symptom: every `ThreadSubmissionIntegrationTest.Submit_*` and the
-        // `InboxToolIntegrationTest.CheckInbox_*` polls hung on the initial
-        // buffered MeshThread. Bisected to commit 02dbf1630.
-        //
-        // Tests need *authoritative* per-poll reads, so go through the
-        // owner-hub round-trip every call. `Mesh.GetMeshNode` returns null
-        // after its own short timeout when the node doesn't exist —
-        // sufficient for the "deleted" case the previous shape was trying
-        // to handle, without the staleness trade-off.
-        try
-        {
-            return await Mesh.GetMeshNode(path, ReadNodeTimeout)
-                .FirstAsync()
-                .ToTask(ct);
-        }
-        catch (TimeoutException) { return null; }
-        catch (Exception ex) when (IsNotFoundFailure(ex)) { return null; }
-    }
-
-    /// <summary>
-    /// Subscribes to <c>ObserveQuery&lt;MeshNode&gt;</c> for <paramref name="query"/>
-    /// and folds the live deltas (Initial / Reset / Added / Updated / Removed) into
-    /// a running path set. Returns the path set the moment <paramref name="predicate"/>
-    /// is satisfied. Wall-clock-bounded by <see cref="ReadNodeTimeout"/>.
-    /// <para>
-    /// Use this when a write changed the catalog state (Active ↔ Deleted, hard
-    /// delete, etc.) and a follow-up <see cref="QueryAsync"/> would race the
-    /// catalog update. Lossless replacement for poll-loops on stale snapshots.
-    /// </para>
-    /// </summary>
-    protected async Task<IReadOnlySet<string>> WaitForQueryPathSetAsync(
-        string query,
-        Func<IReadOnlySet<string>, bool> predicate,
-        CancellationToken ct)
-    {
-        var paths = new HashSet<string>(StringComparer.Ordinal);
-        var observable = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
-            .Scan(paths, (acc, change) =>
-            {
-                if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
-                {
-                    acc.Clear();
-                    foreach (var n in change.Items) if (n.Path is { } p) acc.Add(p);
-                }
-                else if (change.ChangeType is QueryChangeType.Added or QueryChangeType.Updated)
-                {
-                    foreach (var n in change.Items) if (n.Path is { } p) acc.Add(p);
-                }
-                else if (change.ChangeType is QueryChangeType.Removed)
-                {
-                    foreach (var n in change.Items) if (n.Path is { } p) acc.Remove(p);
-                }
-                return acc;
-            })
-            .Where(predicate);
-
-        var set = await Task.WhenAny(
-            observable.FirstAsync().ToTask(ct),
-            Task.Delay(ReadNodeTimeout, ct).ContinueWith<IReadOnlySet<string>>(_ =>
-                throw new TimeoutException(
-                    $"WaitForQueryPathSetAsync('{query}') exceeded {ReadNodeTimeout.TotalSeconds:F0}s. " +
-                    $"Likely cause: a write completed but the query catalog never reflected the change. " +
-                    $"Current path set ({paths.Count}): [{string.Join(", ", paths)}]"), ct));
-        return await set;
-    }
 
     /// <summary>
     /// Recognise the two routing-failure flavours that mean "this path has no
