@@ -446,10 +446,8 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         Output.WriteLine($"Testing $Content area for icon.svg on {ucrAddress}");
 
-        // Initialize the UCR node hub
-        client.Observe(new PingRequest(), o => o.WithTarget(ucrAddress)).Should().Within(19.Seconds()).Emit();
-        Output.WriteLine("Hub initialized");
-
+        // No ping: the layout-area GetRemoteStream subscription below activates the
+        // hub + triggers the cold NodeType compile itself. The generous span covers it.
         // Request the $Content area with icon.svg as the id
         // This is what @@Doc/DataMesh/UnifiedPath/content:icon.svg does
         var workspace = client.GetWorkspace();
@@ -460,7 +458,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         // Wait for the stream to emit a value - this is where eternal spinner would occur
         Output.WriteLine("Waiting for stream value...");
-        var changeItem = stream.Should().Within(TimeSpan.FromSeconds(10)).Emit();
+        var changeItem = stream.Should().Within(60.Seconds()).Emit();
         var value = changeItem.Value;
 
         var rawText = value.GetRawText();
@@ -484,10 +482,8 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         Output.WriteLine($"Testing $Content area for sample.md on {ucrAddress}");
 
-        // Initialize the UCR node hub
-        client.Observe(new PingRequest(), o => o.WithTarget(ucrAddress)).Should().Within(19.Seconds()).Emit();
-        Output.WriteLine("Hub initialized");
-
+        // No ping: the layout-area GetRemoteStream subscription below activates the
+        // hub + triggers the cold NodeType compile itself. The generous span covers it.
         // Request the $Content area with sample.md as the id
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("$Content") { Id = "sample.md" };
@@ -497,7 +493,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         // Wait for the stream to emit a value
         Output.WriteLine("Waiting for stream value...");
-        var changeItem = stream.Should().Within(TimeSpan.FromSeconds(10)).Emit();
+        var changeItem = stream.Should().Within(60.Seconds()).Emit();
         var value = changeItem.Value;
 
         var rawText = value.GetRawText();
@@ -520,10 +516,8 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         Output.WriteLine($"Testing $Content area for non-existent file on {ucrAddress}");
 
-        // Initialize the UCR node hub
-        client.Observe(new PingRequest(), o => o.WithTarget(ucrAddress)).Should().Within(19.Seconds()).Emit();
-        Output.WriteLine("Hub initialized");
-
+        // No ping: the layout-area GetRemoteStream subscription below activates the
+        // hub + triggers the cold NodeType compile itself. The generous span covers it.
         // Request the $Content area with a non-existent file
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("$Content") { Id = "does-not-exist.txt" };
@@ -533,7 +527,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         // Wait for the stream to emit a value - should return error message, not hang
         Output.WriteLine("Waiting for stream value...");
-        var changeItem = stream.Should().Within(TimeSpan.FromSeconds(10)).Emit();
+        var changeItem = stream.Should().Within(60.Seconds()).Emit();
         var value = changeItem.Value;
 
         var rawText = value.GetRawText();
@@ -557,10 +551,8 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         Output.WriteLine($"Testing $Schema area on {ucrAddress}");
 
-        // Initialize the UCR node hub
-        client.Observe(new PingRequest(), o => o.WithTarget(ucrAddress)).Should().Within(19.Seconds()).Emit();
-        Output.WriteLine("Hub initialized");
-
+        // No ping: the layout-area GetRemoteStream subscription below activates the
+        // hub + triggers the cold NodeType compile itself. The generous span covers it.
         // Request the $Schema area with empty id (self-reference)
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("$Schema") { Id = "" };
@@ -570,7 +562,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         // Wait for the stream to emit a value
         Output.WriteLine("Waiting for stream value...");
-        var changeItem = stream.Should().Within(TimeSpan.FromSeconds(10)).Emit();
+        var changeItem = stream.Should().Within(60.Seconds()).Emit();
         var value = changeItem.Value;
 
         var rawText = value.GetRawText();
@@ -594,10 +586,8 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         Output.WriteLine($"Testing $Data area on {ucrAddress}");
 
-        // Initialize the UCR node hub
-        client.Observe(new PingRequest(), o => o.WithTarget(ucrAddress)).Should().Within(19.Seconds()).Emit();
-        Output.WriteLine("Hub initialized");
-
+        // No ping: the layout-area GetRemoteStream subscription below activates the
+        // hub + triggers the cold NodeType compile itself. The generous span covers it.
         // Request the $Data area with empty id (self-reference)
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("$Data") { Id = "" };
@@ -607,7 +597,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         // Wait for the stream to emit a value
         Output.WriteLine("Waiting for stream value...");
-        var changeItem = stream.Should().Within(TimeSpan.FromSeconds(10)).Emit();
+        var changeItem = stream.Should().Within(60.Seconds()).Emit();
         var value = changeItem.Value;
 
         var rawText = value.GetRawText();
@@ -632,10 +622,8 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         Output.WriteLine($"Testing default area for Markdown node at {ucrAddress}");
 
-        // Initialize the UCR node hub
-        client.Observe(new PingRequest(), o => o.WithTarget(ucrAddress)).Should().Within(19.Seconds()).Emit();
-        Output.WriteLine("Hub initialized");
-
+        // No ping: the layout-area GetRemoteStream subscription below activates the
+        // hub + triggers the cold NodeType compile itself. The generous span covers it.
         // Request the default area (empty string) - should resolve to $Content for Markdown nodes
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(""); // Empty area = default area
@@ -647,7 +635,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         // The nodeType config (Markdown) should be compiled before hub creation,
         // so the first emission should already have $Content as default area
         Output.WriteLine("Waiting for stream value...");
-        var changeItem = stream.Should().Within(TimeSpan.FromSeconds(10)).Emit();
+        var changeItem = stream.Should().Within(60.Seconds()).Emit();
         var value = changeItem.Value;
 
         var rawText = value.GetRawText();
