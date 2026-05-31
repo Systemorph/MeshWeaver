@@ -701,6 +701,16 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
     private System.Collections.Immutable.ImmutableDictionary<object, IObservable<IEnumerable<MeshNode>>> _queries =
         System.Collections.Immutable.ImmutableDictionary<object, IObservable<IEnumerable<MeshNode>>>.Empty;
 
+    // Memoised options-wrapped observables, keyed by (id, options). The
+    // options overload wraps the raw cached stream in a content-deserialising
+    // Select; without memoisation every call returns a FRESH Select instance,
+    // so two infrastructure callers wrapped in ImpersonateAsSystem (which
+    // short-circuit WrapWithPerUserRls straight to this upstream) would get
+    // distinct references instead of the shared system-security cache entry.
+    // Keyed on the caller's stable hub JsonSerializerOptions (one instance per
+    // hub) so repeated GetQuery(id, options, …) calls reuse the same wrapper.
+    private readonly ConcurrentDictionary<(object Id, JsonSerializerOptions Options), IObservable<IEnumerable<MeshNode>>> _optionsWrappedQueries = new();
+
     public IObservable<IEnumerable<MeshNode>> GetQuery(object id, params string[] queries)
     {
         if (queries is null || queries.Length == 0)
@@ -766,8 +776,18 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
         // (AccessAssignment, PartitionAccessPolicy, etc.) rather than the
         // raw JsonElement the cache hub stores. Same shape as
         // GetStream(path, options).
-        return System.Reactive.Linq.Observable.Select(raw, items =>
-            (IEnumerable<MeshNode>)items.Select(node => DeserializeContent(node, options)).ToArray());
+        //
+        // Memoise by (id, options) so the wrapper is reference-stable across
+        // calls — infrastructure callers (ImpersonateAsSystem) bypass the
+        // per-user RLS wrap and rely on getting the SAME shared observable for
+        // the same id (perf shortcut for SecurityService / NodeType compile
+        // watchers). GetOrAdd's factory may run more than once under a race,
+        // but each candidate wraps the same cached raw stream — losers are
+        // inert (no Subscribe), so there's no upstream leak.
+        return _optionsWrappedQueries.GetOrAdd((id, options), static (_, state) =>
+            System.Reactive.Linq.Observable.Select(state.raw, items =>
+                (IEnumerable<MeshNode>)items.Select(node => DeserializeContent(node, state.options)).ToArray()),
+            (raw, options));
     }
 
     private static MeshNode DeserializeContent(MeshNode node, JsonSerializerOptions options)
