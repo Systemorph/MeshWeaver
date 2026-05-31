@@ -174,7 +174,14 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
             area.UpdatePointer(i, editor.DataContext!, new("x"));
         }
 
-        var controls = controlStream.Where(x => x is not null).ToArray().Should().Within(10.Seconds()).Emit();
+        // The original async form `await controlStream.Where(...).ToArray()` had NO explicit
+        // .Timeout(), so it was bounded only by the 30s xUnit methodTimeout. Five sequential
+        // UpdatePointer round-trips through the remote JsonElement sync stream — each render
+        // blocked by Thread.Sleep(100) plus serialization — can exceed 10s on a slow CI runner
+        // while staying well under 30s. Clamping this final wait to 10s (the value the other two
+        // reads legitimately carried) is what made TestEditorWithDelayed fail in CI but pass
+        // locally. Restore the original effective bound by waiting up to the method timeout.
+        var controls = controlStream.Where(x => x is not null).ToArray().Should().Within(30.Seconds()).Emit();
         controls.Length.Should().BeLessThanOrEqualTo(3);
         controls.Last().Should().BeOfType<MarkdownControl>().Which.Markdown.ToString().Should().StartWith("5");
     }

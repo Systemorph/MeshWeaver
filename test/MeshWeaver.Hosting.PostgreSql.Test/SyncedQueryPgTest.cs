@@ -151,10 +151,25 @@ public class SyncedQueryPgTest : IAsyncLifetime
             .Replay(1)
             .RefCount();
 
-        // Wait for the Initial emission deterministically — first subscriber
-        // triggers the upstream pull; Replay(1) ensures we won't miss it even
-        // if another concurrent subscriber attaches first.
-        stream.Should().Within(15.Seconds()).Match(c => c.ChangeType == QueryChangeType.Initial);
+        // Hold a keep-alive subscription for the whole test so RefCount never
+        // drops to 0. Without it, waiting for Initial on one subscription and
+        // then attaching the Removed subscription separately tears the upstream
+        // ObserveQuery down (RefCount 1→0) and reconnects it (0→1) — re-issuing
+        // the PG LISTEN. If the delete's pg_notify races that reconnect gap the
+        // Removed event is lost and the test times out at 15s. A single
+        // persistent subscriber pins the LISTEN open from Initial through delete.
+        using var keepAlive = stream.Subscribe();
+
+        // Wait for the Initial emission deterministically via the tests-only
+        // Rx→Task bridge — NOT a blocking .Should().Match(...). This method must
+        // stay async (it awaits DeleteAsync + the Removed payload out-of-band),
+        // and a blocking ManualResetEventSlim.Wait() inside an xUnit async
+        // SynchronizationContext can starve the continuations delivering the PG
+        // emission → deadlock/timeout under CI load.
+        var initial = await stream
+            .Where(c => c.ChangeType == QueryChangeType.Initial)
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(15)).ToTask(ct);
+        initial.ChangeType.Should().Be(QueryChangeType.Initial);
 
         // Pre-subscribe to Removed BEFORE issuing the delete. The hot Task
         // completes when the next Removed emission arrives — Replay(1)'s
