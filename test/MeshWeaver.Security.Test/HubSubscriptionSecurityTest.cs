@@ -1,4 +1,5 @@
 using System;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -11,7 +12,6 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
-using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Security.Test;
 
 /// <summary>
@@ -64,7 +64,7 @@ public class HubSubscriptionSecurityTest(ITestOutputHelper output) : MonolithMes
     /// The stream error is about unmapped collections, not about access denial.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task Subscription_WithReadAccess_PassesAccessCheck()
+    public void Subscription_WithReadAccess_PassesAccessCheck()
     {
         // Admin's Viewer access on SecuredHub is pre-seeded via the static
         // AccessAssignment in ConfigureMesh — no runtime mutation needed.
@@ -72,18 +72,22 @@ public class HubSubscriptionSecurityTest(ITestOutputHelper output) : MonolithMes
 
         // Ensure hub is started
         var client = GetClient();
-        await client.Observe(new PingRequest(), o => o.WithTarget(hubAddress)).FirstAsync();
+        client.Observe(new PingRequest(), o => o.WithTarget(hubAddress))
+            .Should().Within(20.Seconds()).Emit();
 
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<EntityStore>(hubAddress, new CollectionsReference("test"));
 
-        var act = async () => await stream
+        // The stream must ERROR (about unmapped collections) rather than emit — with
+        // read access the error must NOT be "Access denied". Materialize folds the
+        // OnError into a value so we assert it reactively (no await, no ThrowsAnyAsync).
+        var notification = stream
             .Timeout(5.Seconds())
-            .FirstAsync();
+            .Take(1)
+            .Materialize()
+            .Should().Within(20.Seconds()).Match(n => n.Kind == NotificationKind.OnError);
 
-        // With access, we don't get "Access denied" â€” the error is about unmapped collections
-        var ex = await Assert.ThrowsAnyAsync<Exception>(act);
-        ex.ToString().Should().NotContain("Access denied",
+        notification.Exception!.ToString().Should().NotContain("Access denied",
             "with read access, the error should NOT be about access denial");
     }
 }
