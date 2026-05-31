@@ -653,6 +653,22 @@ internal static class ThreadSubmissionServer
                         if (response.Message is not CreateNodeResponse { Success: true })
                         {
                             var err = (response.Message as CreateNodeResponse)?.Error ?? "unknown";
+                            // 🚨 "Already exists" is EXPECTED, not a failure. The response
+                            // cell id is deterministic per claim, and the claim Status
+                            // oscillates (rollback→re-claim, Executing→StartingExecution
+                            // resume bounce), so the _Exec round watcher fires DispatchRound
+                            // several times for ONE round. The first creates the cell; the
+                            // siblings hit "Node already exists at path". Rolling back to Idle
+                            // on that re-triggered the claim → re-dispatch → already-exists
+                            // loop and WEDGED the round — the Resubmit_*_DoesNotDeadlock hangs.
+                            // Instead proceed to CommitRoundAndExecute (single-fire guarded):
+                            // the cell is present, so the round commits exactly once and the
+                            // oscillation terminates.
+                            if (err.Contains("already exists", StringComparison.OrdinalIgnoreCase))
+                            {
+                                CommitRoundAndExecute();
+                                return;
+                            }
                             logger?.LogWarning("[ThreadSubmission] Response cell creation failed for {ResponseMsgId} on {ThreadPath}: {Error}",
                                 responseMsgId, threadPath, err);
                             onFailure?.Invoke();
