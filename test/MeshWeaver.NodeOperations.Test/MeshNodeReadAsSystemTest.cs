@@ -87,18 +87,23 @@ public class MeshNodeReadAsSystemTest(ITestOutputHelper output) : MonolithMeshTe
     /// surface <see cref="UnauthorizedAccessException"/> from the cache gate.
     /// The architectural split is "upstream = System / gate = caller".</para>
     /// </summary>
+    // async Task + `await … FirstAsync()` / `await act.Should().ThrowAsync<T>()` (§2a): the
+    // blocking reactive forms (`.Should().Emit()` on the CreateNode, `.Wait()` on the read)
+    // starve the mesh-hub pump on the test thread under RLS and deadlock. The await yields the
+    // thread so the pump runs.
     [Fact(Timeout = 30_000)]
-    public void GetMeshNodeStream_UnprivilegedUser_GetsUnauthorized()
+    public async Task GetMeshNodeStream_UnprivilegedUser_GetsUnauthorized()
     {
+        var ct = TestContext.Current.CancellationToken;
         var nodeId = $"Md_{Guid.NewGuid().AsString()}";
         var nodePath = $"SystemReadProbe/{nodeId}";
 
-        NodeFactory.CreateNode(
+        await NodeFactory.CreateNode(
             new MeshNode(nodeId, "SystemReadProbe")
             {
                 Name = "System-read probe node",
                 NodeType = "Markdown",
-            }).Should().Emit();
+            }).FirstAsync().ToTask(ct);
 
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var workspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
@@ -111,12 +116,13 @@ public class MeshNodeReadAsSystemTest(ITestOutputHelper output) : MonolithMeshTe
 
         try
         {
-            Action act = () => workspace.GetMeshNodeStream(nodePath)
+            var act = async () => await workspace.GetMeshNodeStream(nodePath)
                 .Take(1)
                 .Timeout(10.Seconds())
-                .Wait();
+                .FirstAsync()
+                .ToTask(ct);
 
-            act.Should().Throw<UnauthorizedAccessException>(
+            await act.Should().ThrowAsync<UnauthorizedAccessException>(
                 because: "the cache's per-user RLS gate denies the read for an " +
                          "unprivileged ambient identity. The upstream remote subscription " +
                          "is system-impersonated, but the cache layer enforces per-user " +
@@ -140,24 +146,31 @@ public class MeshNodeReadAsSystemTest(ITestOutputHelper output) : MonolithMeshTe
     /// the ambient user has Read permission, the cached stream emits the
     /// node. The upstream system-read is invisible to the consumer.</para>
     /// </summary>
+    // async Task + `await … FirstAsync()` (§2a): the blocking reactive `.Should().Emit()` on
+    // the CreateNode round-trip (and on the cache stream's upstream owner-hub round-trip)
+    // starves the mesh-hub pump on the test thread under RLS and deadlocks. The await yields
+    // the thread so the pump runs.
     [Fact(Timeout = 30_000)]
-    public void CacheGetStream_WithReadPermission_EmitsNode()
+    public async Task CacheGetStream_WithReadPermission_EmitsNode()
     {
+        var ct = TestContext.Current.CancellationToken;
         var nodeId = $"Md_{Guid.NewGuid().AsString()}";
         var nodePath = $"CacheReadProbe/{nodeId}";
 
-        NodeFactory.CreateNode(
+        await NodeFactory.CreateNode(
             new MeshNode(nodeId, "CacheReadProbe")
             {
                 Name = "Cache-read probe",
                 NodeType = "Markdown",
-            }).Should().Emit();
+            }).FirstAsync().ToTask(ct);
 
         var cache = Mesh.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
 
-        var node = cache.GetStream(nodePath)
+        var node = await cache.GetStream(nodePath)
             .Where(n => n is not null)
-            .Should().Within(10.Seconds()).Emit();
+            .Timeout(28.Seconds())
+            .FirstAsync()
+            .ToTask(ct);
 
         node.Should().NotBeNull();
         node.Path.Should().Be(nodePath);
@@ -177,19 +190,24 @@ public class MeshNodeReadAsSystemTest(ITestOutputHelper output) : MonolithMeshTe
     /// unprivileged user sees a filtered (empty) view. This test pins both
     /// halves of that contract.</para>
     /// </summary>
+    // async Task + `await … FirstAsync()` (§2a): the blocking reactive `.Should().Emit()` on
+    // the CreateNode round-trips starves the mesh-hub pump on the test thread under RLS and
+    // deadlocks. The await yields the thread so the pump runs. The GetQuery read is also
+    // awaited (its upstream mirror loads off the test thread) so nothing blocks the pump.
     [Fact(Timeout = 30_000)]
-    public void WorkspaceGetQuery_AppliesPerUserRlsFilter()
+    public async Task WorkspaceGetQuery_AppliesPerUserRlsFilter()
     {
+        var ct = TestContext.Current.CancellationToken;
         var workspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
         var nodeId1 = $"Md_{Guid.NewGuid().AsString()}";
         var nodeId2 = $"Md_{Guid.NewGuid().AsString()}";
 
-        NodeFactory.CreateNode(
-            new MeshNode(nodeId1, "QueryCacheProbe") { Name = "First", NodeType = "Markdown" }).Should().Emit();
-        NodeFactory.CreateNode(
-            new MeshNode(nodeId2, "QueryCacheProbe") { Name = "Second", NodeType = "Markdown" }).Should().Emit();
+        await NodeFactory.CreateNode(
+            new MeshNode(nodeId1, "QueryCacheProbe") { Name = "First", NodeType = "Markdown" }).FirstAsync().ToTask(ct);
+        await NodeFactory.CreateNode(
+            new MeshNode(nodeId2, "QueryCacheProbe") { Name = "Second", NodeType = "Markdown" }).FirstAsync().ToTask(ct);
 
         var queryId = $"system-read-probe:{Guid.NewGuid()}";
 
@@ -200,9 +218,11 @@ public class MeshNodeReadAsSystemTest(ITestOutputHelper output) : MonolithMeshTe
             var collection = workspace.GetQuery(
                 queryId, "namespace:QueryCacheProbe nodeType:Markdown");
 
-            var snapshot = collection
+            var snapshot = await collection
                 .Where(items => items.Count() >= 2)
-                .Should().Within(10.Seconds()).Emit();
+                .Timeout(28.Seconds())
+                .FirstAsync()
+                .ToTask(ct);
 
             snapshot.Should().Contain(n => n.Id == nodeId1);
             snapshot.Should().Contain(n => n.Id == nodeId2);

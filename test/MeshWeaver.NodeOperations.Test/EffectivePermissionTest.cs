@@ -36,16 +36,24 @@ public class EffectivePermissionTest(ITestOutputHelper output) : MonolithMeshTes
         await meshService.CreateNode(AssignmentNodeFactory.UserRole(TestUsers.Admin.ObjectId, "Admin", null)).FirstAsync().ToTask(TestTimeout);
     }
 
+    // async Task + `await … FirstAsync()` (§2a): the blocking reactive `.Should().Emit()` on
+    // the CreateNode round-trip starves the mesh-hub pump on the test thread under RLS and
+    // deadlocks (it ran the full 45s with no emission). The await yields the thread so the
+    // pump runs and the create completes. The GetEffectivePermissions assertion stays blocking
+    // — it's a synced-query read served off the test thread (proven by the passing
+    // CreateNode_ImpersonateAsHub_UsesHubIdentity which blocks on the same primitive).
     [Fact(Timeout = 60000)]
-    public void CreateSpace_HasPermission_ReturnsAdmin()
+    public async Task CreateSpace_HasPermission_ReturnsAdmin()
     {
+        var ct = TestContext.Current.CancellationToken;
+
         var spaceNode = MeshNode.FromPath("Systemorph") with
         {
             Name = "Systemorph",
             NodeType = SpaceNodeType.NodeType,
             Content = new Space { Name = "Systemorph" }
         };
-        NodeFactory.CreateNode(spaceNode).Should().Emit();
+        await NodeFactory.CreateNode(spaceNode).FirstAsync().ToTask(ct);
 
         var permissions = Mesh.GetEffectivePermissions("Systemorph", TestUsers.Admin.ObjectId)
             .Should().Within(90.Seconds()).Match(p => p != Permission.None);
