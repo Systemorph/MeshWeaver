@@ -137,10 +137,10 @@ public static class PostgreSqlSchemaInitializer
 
     /// <summary>
     /// Acquires a Postgres session-level advisory lock keyed by
-    /// <paramref name="schema"/>, runs <paramref name="ddl"/> on the locked
-    /// connection, then releases the lock. The returned awaitable disposable
-    /// is intended for <c>await using</c> at the caller; disposing releases
-    /// the lock and the underlying connection.
+    /// <paramref name="schema"/> so the caller can run schema-init DDL on the
+    /// locked connection, then release the lock. The returned awaitable
+    /// disposable is intended for <c>await using</c> at the caller; disposing
+    /// releases the lock and the underlying connection.
     /// <para>
     /// Without cross-silo serialisation, two silos (HA pair, multiple
     /// Memex.Portal.Distributed replicas, …) racing the schema-init DDL on

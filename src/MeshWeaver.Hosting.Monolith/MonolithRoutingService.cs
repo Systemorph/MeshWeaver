@@ -101,7 +101,7 @@ internal class MonolithRoutingService(
     /// Returns an <see cref="IObservable{T}"/> that emits the per-node hub
     /// once <c>ResolveHubConfiguration</c> settles. 100% reactive composition —
     /// no <c>await</c>, no inner <c>.ToTask()</c>. The caller bridges to <see cref="Task"/>
-    /// once at the framework boundary (<see cref="RouteImplAsync"/>).
+    /// once at the framework boundary (<see cref="RouteImpl"/>).
     /// </summary>
     private IObservable<IMessageHub?> CreateHub(MeshNode? node, Address address)
     {

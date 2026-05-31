@@ -3,7 +3,7 @@ using System.Collections.Immutable;
 namespace MeshWeaver.Markdown.Export.Model;
 
 /// <summary>
-/// A flattened block-level element in the document model. Produced by <see cref="DocumentBuilder"/>
+/// A flattened block-level element in the document model. Produced by <see cref="MeshWeaver.Markdown.Export.Ast.DocumentBuilder"/>
 /// from a Markdig AST and consumed by the PDF and DOCX renderers.
 /// </summary>
 public abstract record DocumentElement;

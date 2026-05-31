@@ -16,7 +16,7 @@ namespace MeshWeaver.AI;
 ///         matching <c>{section}:ApiKey</c> / <c>{section}:Endpoint</c>
 ///         IConfiguration entries. This preserves backward compatibility for
 ///         deployments that wire credentials via appsettings.</item>
-///   <item><b>User layer</b>: <see cref="ModelProviderService"/> creates
+///   <item><b>User layer</b>: <c>ModelProviderService</c> creates
 ///         user-authored <c>ModelProvider</c> nodes at
 ///         <c>{userId}/Model/{providerName}</c> when a user pastes their
 ///         personal key in the Models settings tab. The factory resolver
@@ -34,7 +34,7 @@ public record ModelProviderConfiguration
     /// <summary>
     /// Provider label — matches <see cref="IChatClientFactory.Name"/> and
     /// the <see cref="ModelDefinition.Provider"/> stamp on each child
-    /// LanguageModel node. Looked up in <see cref="ProviderRegistry.Find"/>
+    /// LanguageModel node. Looked up in <c>ProviderRegistry.Find</c>
     /// to pull default endpoint / default model ids.
     /// </summary>
     public required string Provider { get; init; }
@@ -48,8 +48,8 @@ public record ModelProviderConfiguration
 
     /// <summary>
     /// Optional endpoint override. Null means "use the
-    /// <see cref="KnownProviderProfile.DefaultEndpoint"/> from
-    /// <see cref="ProviderRegistry"/>". A non-null value flows through to
+    /// <c>KnownProviderProfile.DefaultEndpoint</c> from
+    /// <c>ProviderRegistry</c>". A non-null value flows through to
     /// the factory unchanged.
     /// </summary>
     public string? Endpoint { get; init; }

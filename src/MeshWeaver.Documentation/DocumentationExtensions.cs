@@ -17,7 +17,7 @@ public static class DocumentationExtensions
     /// <see cref="EmbeddedResourceStorageAdapter"/>; it does NOT go
     /// through <c>IStaticNodeProvider</c>. The legacy provider path
     /// caused a cyclic-DI stack overflow because
-    /// <see cref="MeshDataSource.WithMeshNodes"/> enumerated providers
+    /// <see cref="MeshWeaver.Graph.MeshDataSource.WithMeshNodes"/> enumerated providers
     /// during hub construction, and <c>DocumentationNodeProvider</c>'s
     /// dependency on <c>IMessageHub</c> re-entered the singleton
     /// factory.</para>

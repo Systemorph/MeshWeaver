@@ -29,7 +29,7 @@ public static class AccessAction
 /// Delegate for evaluating access restrictions reactively. Emits a single bool
 /// (allowed / denied) when the check completes. Hub-reachable code composes through
 /// <see cref="IObservable{T}"/>; sync/async restrictions wrap their work via the
-/// helper overloads on <see cref="DataContext"/> and <see cref="TypeSourceWithType{T,TTypeSource}"/>.
+/// helper overloads on <c>DataContext</c> and <c>TypeSourceWithType&lt;T,TTypeSource&gt;</c>.
 /// </summary>
 /// <param name="action">The action being performed (Create, Read, Update, Delete)</param>
 /// <param name="operationContext">

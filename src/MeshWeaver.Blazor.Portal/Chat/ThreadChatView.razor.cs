@@ -1046,7 +1046,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     /// <summary>
     /// Writes the user's sticky agent / model selection onto the
-    /// <see cref="Thread"/> node so the picker re-populates after a reload.
+    /// <see cref="MeshWeaver.AI.Thread"/> node so the picker re-populates after a reload.
     /// Distinct from <see cref="MeshWeaver.AI.Thread.PendingAgentName"/> /
     /// <see cref="MeshWeaver.AI.Thread.PendingModelName"/> which the server
     /// clears after each round — those describe the *next* execution, not
@@ -1233,7 +1233,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// <summary>
     /// Streams top-N completion snapshots from <see cref="IChatCompletionOrchestrator"/>.
     /// The orchestrator yields batches as providers finish (fast local first, remote later);
-    /// each item flows through <see cref="ObservableTopNExtensions.ScanTopN"/>, which folds it
+    /// each item flows through <see cref="MeshWeaver.Reactive.ObservableTopNExtensions.ScanTopN{T}(System.IObservable{T}, int, System.Collections.Generic.IComparer{T})"/>, which folds it
     /// into a sorted snapshot. Monaco subscribes once per query and pushes each snapshot to
     /// the suggest widget — pure reactive, no Task, no await, no IAsyncEnumerable bridge.
     ///
@@ -1833,7 +1833,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// <summary>
     /// 1-second ticker that drives the elapsed-time chips' re-render. Subscribed
     /// in <see cref="OnInitialized"/>; disposed in <see cref="DisposeAsync"/>.
-    /// Only triggers <see cref="StateHasChanged"/> when <em>something</em> is
+    /// Only triggers <c>StateHasChanged</c> when <em>something</em> is
     /// executing (own thread or a sub-thread) — silent otherwise so an idle
     /// thread view doesn't burn render cycles every second.
     /// </summary>

@@ -794,7 +794,7 @@ internal static class NodeTypeCompilationHelpers
     /// writes the outcome back to the NodeType's own MeshNode
     /// (<see cref="NodeTypeDefinition.CompilationStatus"/>,
     /// <see cref="NodeTypeDefinition.CompilationError"/>,
-    /// <see cref="MeshNode.AssemblyLocation"/>,
+    /// <c>AssemblyLocation</c>,
     /// <see cref="NodeTypeDefinition.LastCompileSucceededAt"/>,
     /// <see cref="NodeTypeDefinition.LatestReleasePath"/>,
     /// <see cref="NodeTypeDefinition.CompiledSources"/>), and (best-effort)

@@ -112,7 +112,7 @@ internal sealed class PgPartitionCache : IDisposable
     /// <summary>
     /// Kicks off the schema-existence probe as an <see cref="IObservable{T}"/>
     /// and subscribes once to push the resulting state into the entry's
-    /// subject. <see cref="Observable.FromAsync(System.Func{System.Threading.CancellationToken, System.Threading.Tasks.Task{PartitionState}})"/>
+    /// subject. <c>Observable.FromAsync</c>
     /// keeps the bridge reactive (no naked <c>Task.Run</c>) and lets us
     /// compose <see cref="Observable.Catch{TSource, TException}(IObservable{TSource}, System.Func{TException, IObservable{TSource}})"/>
     /// for the failure branch — yielding <see cref="PartitionState.Absent"/>

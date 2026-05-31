@@ -8,7 +8,7 @@ namespace MeshWeaver.Data.Validation;
 /// <summary>
 /// Data validator that enforces Row-Level Security based on access restrictions.
 /// Reactive end-to-end: the validator surface returns <see cref="IObservable{T}"/>,
-/// each restriction call is wrapped with <see cref="Observable.FromAsync"/> at the
+/// each restriction call is wrapped with <see cref="Observable.FromAsync{TResult}(System.Func{System.Threading.Tasks.Task{TResult}})"/> at the
 /// inner edge, and the chain composes via recursive <c>SelectMany</c> with no <c>await</c>.
 /// </summary>
 public class RlsDataValidator : IDataValidator

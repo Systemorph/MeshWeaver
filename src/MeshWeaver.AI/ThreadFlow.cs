@@ -9,14 +9,14 @@ namespace MeshWeaver.AI;
 /// <summary>
 /// Reactive read-side primitives for observing a thread chat flow from any
 /// CLIENT — Blazor side panel, MCP clients, tests. Writes go through the
-/// canonical <see cref="WorkspaceThreadExtensions"/> surface
+/// canonical <see cref="HubThreadExtensions"/> surface
 /// (<c>workspace.SubmitMessage</c>, <c>workspace.StartThread</c>, etc.);
 /// this class only exposes the matching read-side primitives:
 /// <list type="bullet">
 ///   <item><c>workspace.GetMeshNodeStream(path)</c> — the cache-routed,
 ///         write-coherent thread stream</item>
 ///   <item><see cref="SubmitAndWait"/> — convenience composition of
-///         <see cref="WorkspaceThreadExtensions.SubmitMessage"/> + a wait
+///         <see cref="HubThreadExtensions.SubmitMessage"/> + a wait
 ///         for the round to land</item>
 /// </list>
 ///

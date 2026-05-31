@@ -587,7 +587,7 @@ public static class NodeTypeLayoutAreas
     /// <summary>
     /// Testable pure helper: builds a <see cref="CodeTreeFolder"/> representing the
     /// hierarchy a caller would render as a <see cref="NavGroupControl"/>. Filters by
-    /// <paramref name="subPrefix"/> exactly like <see cref="BuildCodeNavGroup"/> so
+    /// <c>subPrefix</c> exactly like <see cref="BuildCodeNavGroup"/> so
     /// tests can assert the bucketing (outside-namespace files filtered, nested folders
     /// grouped, alphabetical order) without walking the UI control tree.
     /// </summary>
@@ -1018,7 +1018,7 @@ public static class NodeTypeLayoutAreas
 
     /// <summary>
     /// Debounced autosave for the NodeType Configuration form. On changes, writes
-    /// the form values back through <see cref="MeshNodeExtensions.UpdateMeshNode(IWorkspace, Func{MeshNode, MeshNode}, Address?, string?)"/>
+    /// the form values back through <c>UpdateMeshNode</c>
     /// so the edits flow through the live MeshNode stream (GetStream on <see cref="MeshNodeReference"/>)
     /// — the standard reactive write path. Using <c>UpdateNodeRequest</c> targeted at the local hub
     /// address would skip the stream patch and leave subscribed views showing stale state.

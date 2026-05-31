@@ -359,7 +359,8 @@ public static class PersistenceExtensions
     /// <param name="services">The service collection</param>
     /// <param name="cosmosClient">The Cosmos DB client</param>
     /// <param name="databaseName">The database name</param>
-    /// <param name="throughput">The throughput for containers (default: 400)</param>
+    /// <param name="nodesContainerName">The name of the nodes container (default: "nodes")</param>
+    /// <param name="partitionsContainerName">The name of the partitions container (default: "partitions")</param>
     /// <returns>The service collection for chaining</returns>
     public static IServiceCollection AddPartitionedCosmosPersistence(
         this IServiceCollection services,

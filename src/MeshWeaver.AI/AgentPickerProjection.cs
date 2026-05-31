@@ -65,7 +65,7 @@ public static class AgentPickerProjection
     /// <inheritdoc cref="BuildAgentQueries" />
     /// <remarks>
     /// Follows the canonical picker-query shape (see
-    /// <see cref="MeshWeaver.Documentation.Data.Architecture.SyncedMeshNodeQueries">SyncedMeshNodeQueries</see>):
+    /// the <c>SyncedMeshNodeQueries</c> architecture doc):
     /// every query carries the SAME <c>nodeType:</c> filter, varying
     /// only on namespace + scope. Mixed-filter multi-query is what trips
     /// the synced-collection's all-Initial gating.
@@ -109,7 +109,7 @@ public static class AgentPickerProjection
     ///         <c>ACME/Project/TodoAgent</c> (namespace <c>ACME/Project</c> = self)
     ///         AND any agent declared at namespace <c>ACME</c> or root.
     ///         <c>selfAndAncestors</c> ≡ <c>AncestorsAndSelf</c> in
-    ///         <see cref="PathMatcher"/>.</item>
+    ///         <c>PathMatcher</c>.</item>
     /// </list>
     /// </summary>
     private static string[] BuildQueries(string nodeType, string rootNamespace, string? currentPath, string? nodeTypePath)

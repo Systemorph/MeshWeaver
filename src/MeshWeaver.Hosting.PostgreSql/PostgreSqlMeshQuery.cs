@@ -738,7 +738,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
 
     /// <summary>
     /// Per-item scoring for ObserveQuery initial emissions. Composes the same
-    /// pieces <see cref="AutocompleteAsync"/> already uses — name-prefix bonus
+    /// pieces <see cref="AutocompleteAsync(string, string, System.Text.Json.JsonSerializerOptions, MeshWeaver.Mesh.Services.AutocompleteMode, int, string, string, System.Threading.CancellationToken)"/> already uses — name-prefix bonus
     /// (100, scaled by length), name-substring bonus (50), path-substring
     /// bonus (30), <see cref="PathProximity.ComputeBoost"/> (max 40, decays
     /// with namespace distance from the requesting hub) — so cross-provider

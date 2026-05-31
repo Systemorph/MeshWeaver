@@ -10,20 +10,20 @@ namespace MeshWeaver.Hosting.Persistence;
 /// Fluent partition-storage configuration on
 /// <see cref="MeshBuilder"/>. Each call registers an
 /// <see cref="IPartitionStorageProvider"/> on the top-level service
-/// collection; <see cref="RoutingPersistenceServiceCore"/> picks them
+/// collection; <c>RoutingPersistenceServiceCore</c> picks them
 /// up at startup and routes reads/writes whose first path segment
 /// matches the partition <c>Namespace</c> through the registered
 /// adapter.
 ///
 /// <para>This is the supported wire-up path going forward. The legacy
 /// <c>IStaticNodeProvider</c> registrations (which made
-/// <see cref="MeshDataSource.WithMeshNodes"/> re-enter the
+/// <see cref="MeshWeaver.Graph.MeshDataSource.WithMeshNodes"/> re-enter the
 /// <c>IMessageHub</c> singleton factory and stack-overflow under
 /// certain configurations) are being retired one provider at a time;
 /// <c>AddDocumentation</c> is the first migration.</para>
 ///
 /// <para><b>Why MeshBuilder, not MessageHubConfiguration.</b>
-/// <see cref="RoutingPersistenceServiceCore"/> is a top-level
+/// <c>RoutingPersistenceServiceCore</c> is a top-level
 /// singleton; per-hub <c>WithServices</c> registrations are scoped to
 /// the per-hub container and are invisible to it. Registrations have
 /// to land on the <see cref="MeshBuilder"/>'s services so the routing

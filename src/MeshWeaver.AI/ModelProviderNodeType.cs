@@ -21,7 +21,7 @@ namespace MeshWeaver.AI;
 ///         IConfiguration <c>{section}:ApiKey</c> / <c>{section}:Endpoint</c>
 ///         entries. Existing deployments that wire credentials via
 ///         appsettings keep working unchanged.</item>
-///   <item><b>User layer</b>: <see cref="ModelProviderService"/> creates
+///   <item><b>User layer</b>: <c>ModelProviderService</c> creates
 ///         user-authored <c>ModelProvider</c> nodes in the user's partition
 ///         when they paste a key in the Models settings tab.</item>
 /// </list>

@@ -22,7 +22,7 @@ namespace MeshWeaver.Graph;
 ///     re-emitted as <c>IEnumerable&lt;MeshNode&gt;</c> snapshots).</item>
 ///   <item>A workspace-level reducer that resolves
 ///     <c>MeshNodeReference(path)</c> to the workspace's cached per-(addr, ref)
-///     remote stream when <paramref name="path"/> is in this source's live
+///     remote stream when <c>path</c> is in this source's live
 ///     path set. <c>.Update(...)</c> on the resulting stream propagates
 ///     through the synchronization protocol to the owning per-node hub. The
 ///     reducer returns null for paths outside the source's set so a sibling
@@ -131,6 +131,26 @@ public static class SyncedQueryDataSourceExtensions
     }
 
     /// <summary>
+    /// Hub-shorthand: <c>hub.GetQuery(id, queries)</c> is the canonical
+    /// surface for getting a synced <see cref="MeshNode"/> collection.
+    /// Resolves the workspace from the hub and delegates to the workspace
+    /// overload. Application code should prefer this over poking at the
+    /// workspace directly — same shape as <c>hub.CheckPermission</c>,
+    /// <c>hub.GetMeshNodeStream</c>, <c>hub.StartThread</c>.
+    /// </summary>
+    public static IObservable<IEnumerable<MeshNode>>? GetQuery(
+        this IMessageHub hub, object id)
+        => hub.GetWorkspace().GetQuery(id);
+
+    /// <summary>
+    /// Hub-shorthand: get-or-create overload. See workspace-side overload for
+    /// the per-user RLS contract and cache semantics.
+    /// </summary>
+    public static IObservable<IEnumerable<MeshNode>> GetQuery(
+        this IMessageHub hub, object id, params string[] queries)
+        => hub.GetWorkspace().GetQuery(id, queries);
+
+    /// <summary>
     /// Get-or-create overload: returns the cached observable for
     /// <paramref name="id"/> if one is already registered; otherwise spins up
     /// a new <see cref="SyncedQueryMeshNodes"/> on the workspace using the
@@ -151,7 +171,7 @@ public static class SyncedQueryDataSourceExtensions
     /// <c>(id, userId)</c>. Each user gets their own
     /// <see cref="SyncedQueryMeshNodes"/> instance which opens its upstream
     /// <see cref="IMeshQueryProvider.ObserveQuery"/> under the caller's
-    /// identity — the secured surface of <see cref="MeshQuery"/> then
+    /// identity — the secured surface of <c>MeshQuery</c> then
     /// applies per-result RLS validators at the source, so the cached
     /// snapshot only ever contains nodes that user has Read on.
     /// Two users sharing the same <paramref name="id"/> with different
@@ -160,26 +180,6 @@ public static class SyncedQueryDataSourceExtensions
     /// system tasks (no AsyncLocal identity) share a single System-loaded
     /// cache keyed under the well-known <c>system-security</c> user.</para>
     /// </summary>
-    /// <summary>
-    /// Hub-shorthand: <c>hub.GetQuery(id, queries)</c> is the canonical
-    /// surface for getting a synced <see cref="MeshNode"/> collection.
-    /// Resolves the workspace from the hub and delegates to the workspace
-    /// overload. Application code should prefer this over poking at the
-    /// workspace directly — same shape as <c>hub.CheckPermission</c>,
-    /// <c>hub.GetMeshNodeStream</c>, <c>hub.StartThread</c>.
-    /// </summary>
-    public static IObservable<IEnumerable<MeshNode>>? GetQuery(
-        this IMessageHub hub, object id)
-        => hub.GetWorkspace().GetQuery(id);
-
-    /// <summary>
-    /// Hub-shorthand: get-or-create overload. See workspace-side overload for
-    /// the per-user RLS contract and cache semantics.
-    /// </summary>
-    public static IObservable<IEnumerable<MeshNode>> GetQuery(
-        this IMessageHub hub, object id, params string[] queries)
-        => hub.GetWorkspace().GetQuery(id, queries);
-
     public static IObservable<IEnumerable<MeshNode>> GetQuery(
         this IWorkspace workspace, object id, params string[] queries)
     {
@@ -201,12 +201,12 @@ public static class SyncedQueryDataSourceExtensions
     /// Wraps the shared (System-loaded) synced query observable with a
     /// per-subscriber RLS filter. The filter captures the subscriber's
     /// AccessContext at Subscribe time and uses
-    /// <see cref="SecurityService.HasPermission"/> to drop nodes the
+    /// <c>SecurityService.HasPermission</c> to drop nodes the
     /// subscriber can't Read on. Bypasses for System / no AsyncLocal — those
     /// callers are infrastructure and need the full snapshot.
     ///
     /// <para>🚨 Service resolution is DEFERRED to Subscribe time. Resolving
-    /// <see cref="SecurityService"/> at wrap time recurses through Autofac
+    /// <c>SecurityService</c> at wrap time recurses through Autofac
     /// when SecurityService's own constructor calls
     /// <c>workspace.GetQuery("Security:_Access", ...)</c> — the GetService
     /// call back into the half-constructed SecurityService spins the resolve

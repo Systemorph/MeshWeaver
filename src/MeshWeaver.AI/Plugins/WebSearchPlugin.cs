@@ -33,7 +33,7 @@ public class WebSearchConfiguration
 
 /// <summary>
 /// Plugin providing web search and web page fetching tools for AI agents.
-/// Register via <see cref="WebSearchPluginExtensions.AddWebSearchPlugin"/>.
+/// Register via <c>AIExtensions.AddWebSearchPlugin</c>.
 /// </summary>
 public class WebSearchPlugin : IAgentPlugin
 {

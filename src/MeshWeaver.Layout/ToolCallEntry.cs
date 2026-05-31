@@ -88,7 +88,7 @@ public record ToolCallEntry
     /// <summary>
     /// FCC call identifier (e.g. <c>"call_abc123"</c>). The dedup key across
     /// streaming-loop and StampTerminal writers — FCC can re-emit the same
-    /// <see cref="Microsoft.Extensions.AI.FunctionCallContent"/> in turn 2's
+    /// <c>FunctionCallContent</c> in turn 2's
     /// output stream as history echo, and without an identifier the streaming
     /// branch's append + the late-arriving mirror's update would produce
     /// duplicate entries for the same logical call.

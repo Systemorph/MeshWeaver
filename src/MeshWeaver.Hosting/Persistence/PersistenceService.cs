@@ -64,8 +64,8 @@ public sealed class PersistenceService : IStorageAdapter
 
     /// <summary>
     /// Try each adapter's Read in order; emit the first non-null result, or
-    /// null if no adapter has the path. <see cref="Observable.Concat"/> with
-    /// <see cref="Observable.FirstOrDefaultAsync"/> keeps the chain lazy —
+    /// null if no adapter has the path. <see cref="Observable.Concat{TSource}(IObservable{IObservable{TSource}})"/> with
+    /// <see cref="Observable.FirstOrDefaultAsync{TSource}(IObservable{TSource})"/> keeps the chain lazy —
     /// later adapters aren't queried once a hit lands.
     /// </summary>
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
@@ -125,7 +125,7 @@ public sealed class PersistenceService : IStorageAdapter
 
     /// <summary>
     /// Fan-out OR: any adapter reporting true wins. Implemented via
-    /// <see cref="Observable.Any"/> over the merged stream so the chain
+    /// <see cref="Observable.Any{TSource}(IObservable{TSource})"/> over the merged stream so the chain
     /// completes as soon as the first true lands.
     /// </summary>
     public IObservable<bool> Exists(string path)

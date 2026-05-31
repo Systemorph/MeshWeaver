@@ -61,7 +61,7 @@ internal class MeshNodeCompilationService(
 
     /// <summary>
     /// Builds the process-wide MetadataReference list — TPA assemblies plus a few
-    /// well-known additions. Uses <see cref="MetadataReference.CreateFromFile(string)"/>
+    /// well-known additions. Uses <see cref="MetadataReference.CreateFromFile(string, MetadataReferenceProperties, DocumentationProvider)"/>
     /// (mmap, lazy read) — Roslyn typically reads only a small fraction of each
     /// assembly's metadata, so the upfront cost is tiny. An earlier attempt at
     /// <see cref="MetadataReference.CreateFromStream(Stream, MetadataReferenceProperties, DocumentationProvider, string?)"/>

@@ -709,7 +709,7 @@ public class MeshQuery : IMeshQueryCore
     /// 100 must beat a static-catalog hit with score 0 for the same query.
     /// Putting the score sort in <c>ClipMergedInitial</c> ensures every
     /// downstream consumer of <see cref="ObserveQuery{T}"/> /
-    /// <see cref="QueryAsync"/> sees a single deterministic top-N regardless
+    /// <see cref="MeshWeaver.Mesh.Services.IMeshQuery.QueryAsync"/> sees a single deterministic top-N regardless
     /// of which providers contributed.</para>
     /// </summary>
     private static QueryResultChange<T> ClipMergedInitial<T>(

@@ -26,9 +26,8 @@ public record CredentialResolution(string? Endpoint, string? ApiKey, string Sour
 /// <para>Consumes the same <c>workspace.GetQuery</c> snapshot the chat
 /// model-picker uses (<see cref="AgentPickerProjection.BuildModelQueries"/>
 /// returns <c>nodeType:LanguageModel|ModelProvider</c>) — one synced
-/// subscription, two consumers. See
-/// <see cref="MeshWeaver.Documentation.Data.Architecture.SyncedMeshNodeQueries">Synced Mesh Node Queries</see>
-/// for the canonical query semantics.</para>
+/// subscription, two consumers. See the <c>SyncedMeshNodeQueries</c>
+/// architecture doc for the canonical query semantics.</para>
 ///
 /// <para>Resolution precedence (top wins):</para>
 /// <list type="number">
@@ -113,7 +112,7 @@ public sealed class ChatClientCredentialResolver : IDisposable
     /// Subscribe to ModelProvider + LanguageModel nodes under a user
     /// partition so their credentials participate in <see cref="Resolve"/>
     /// lookups. Called from the per-chat <c>AgentChatClient</c> with the
-    /// chat user's partition (their <see cref="MeshWeaver.Mesh.Security.AccessContext.ObjectId"/>).
+    /// chat user's partition (their <see cref="MeshWeaver.Messaging.AccessContext.ObjectId"/>).
     /// Idempotent on partition.
     /// </summary>
     public IDisposable WatchPartition(string userPartition)

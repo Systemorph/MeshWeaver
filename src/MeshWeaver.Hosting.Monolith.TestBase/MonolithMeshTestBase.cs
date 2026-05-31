@@ -209,7 +209,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// Writes one structured line to <see cref="MemoryDeltaLogPath"/> capturing
     /// the per-test-instance INIT_MEM → DISPOSE_MEM delta after a forced full
     /// GC. Format is grep-friendly: <c>HH:mm:ss.fff [TestClass] DELTA managed=…
-    /// rss=… rssAnon=… unmanaged=… shared=…</c>. Cannot use <see cref="ILogger"/>
+    /// rss=… rssAnon=… unmanaged=… shared=…</c>. Cannot use <see cref="Microsoft.Extensions.Logging.ILogger"/>
     /// here — DisposeAsync runs after the test's logging scope has been torn down.
     /// <para>
     /// <c>rssAnon</c> = anonymous resident pages (native heap + JIT code + stacks)
@@ -592,12 +592,12 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     }
 
     /// <summary>
-    /// Override <see cref="ServiceSetup.Initialize"/> so that test classes
+    /// Override <see cref="MeshWeaver.Fixture.ServiceSetup.Initialize()"/> so that test classes
     /// opting in via <see cref="ShareMeshAcrossTests"/> reuse a cached
     /// <see cref="IServiceProvider"/> across every <c>[Fact]</c>. The first
     /// instance of the class builds the SP normally and stores it in the
     /// static cache; every subsequent instance grabs that same SP and skips
-    /// <see cref="ServiceSetup.BuildServiceProvider"/> entirely.
+    /// <see cref="MeshWeaver.Fixture.ServiceSetup.BuildServiceProvider()"/> entirely.
     ///
     /// <para><c>Buildup(this)</c> still runs per-instance because <c>[Inject]</c>
     /// fields/properties live on the test instance, not the SP.</para>
@@ -855,7 +855,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// <summary>
     /// Cadence at which we snapshot the hub's <see cref="IMessageHub.GetDisposalDiagnostics"/>
     /// while waiting for <see cref="IMessageHub.Disposal"/> — every tick lands in
-    /// <see cref="TestBase.FileOutput"/> (xUnit test output) so a slow dispose shows
+    /// <see cref="MeshWeaver.Fixture.TestBase.FileOutput"/> (xUnit test output) so a slow dispose shows
     /// progress incrementally instead of producing one giant snapshot at the timeout.
     /// </summary>
     private static readonly TimeSpan DisposeProgressInterval = TimeSpan.FromSeconds(3);
@@ -1036,7 +1036,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// <summary>
     /// Awaits <see cref="IMessageHub.Disposal"/> with periodic progress snapshots.
     /// Every <see cref="DisposeProgressInterval"/>, dumps
-    /// <see cref="IMessageHub.GetDisposalDiagnostics"/> to <see cref="TestBase.FileOutput"/>
+    /// <see cref="IMessageHub.GetDisposalDiagnostics"/> to <see cref="MeshWeaver.Fixture.TestBase.FileOutput"/>
     /// so a hang shows up as a stream of snapshots converging on the offending hub
     /// — instead of one big snapshot at the timeout.
     /// </summary>

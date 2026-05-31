@@ -12,7 +12,7 @@ namespace MeshWeaver.Messaging;
 /// <see cref="SystemMessageAttribute"/> bypasses the safety net that
 /// catches "this Post lost the user's identity" bugs. Only attach it to
 /// genuinely identity-free framework traffic. Responses propagate identity
-/// via <see cref="PostOptions.ResponseFor"/> automatically and should NOT
+/// via <c>PostOptions.ResponseFor</c> automatically and should NOT
 /// be marked — let the framework wire identity through them.</para>
 /// </summary>
 [AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct, Inherited = true)]

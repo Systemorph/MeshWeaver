@@ -76,7 +76,7 @@ internal sealed class ChatCompletionOrchestrator(
 
     /// <summary>
     /// Lists partitions for <c>@/</c> or <c>@/&lt;filter&gt;</c>. Backed by a
-    /// regular <see cref="IMeshService.QueryAsync"/> against
+    /// regular <see cref="MeshWeaver.Mesh.Services.IMeshQuery.QueryAsync"/> against
     /// <c>namespace:Admin/Partition</c> — each backend's <see cref="IMeshQueryProvider"/>
     /// answers from its own source of truth: Postgres queries
     /// <c>public.partitions</c>, in-memory / embedded / static return their
@@ -157,7 +157,7 @@ internal sealed class ChatCompletionOrchestrator(
     /// <summary>
     /// Runs A and B in parallel (merge), then runs C only after both complete and only
     /// when results are sparse (or the reference forces broadening with <c>../</c> / <c>/</c>).
-    /// <para>The reactive shape is <c>Merge(A, B).Concat(Defer(maybeC))</c>: <see cref="Observable.Concat"/>
+    /// <para>The reactive shape is <c>Merge(A, B).Concat(Defer(maybeC))</c>: <see cref="Observable.Concat{TSource}(IObservable{TSource}, IObservable{TSource})"/>
     /// subscribes to the deferred C only after the merged A+B stream completes, and the deferred
     /// closure reads the accumulated count to decide whether to actually run broadening.</para>
     /// </summary>

@@ -15,7 +15,7 @@ namespace MeshWeaver.Hosting.Persistence.Http;
 ///
 /// <para><b>Symmetric:</b> reads/writes/deletes on the wrapped adapter
 /// always see the <em>target-side</em> path. The <see cref="MeshNode.Namespace"/>
-/// + <see cref="MeshNode.Id"/> on a node passed to <see cref="WriteAsync"/>
+/// + <see cref="MeshNode.Id"/> on a node passed to <see cref="IStorageAdapter.Write"/>
 /// are rewritten so the remote stores it at the new path; the original
 /// node's other content (NodeType, Content payload, etc.) is preserved.</para>
 ///

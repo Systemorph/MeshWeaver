@@ -20,7 +20,7 @@ namespace MeshWeaver.Graph;
 /// Unified Settings page with Splitter layout: left NavMenu + right content pane.
 /// URL pattern: /{nodePath}/Settings/{tabId}
 /// The host.Reference.Id determines which tab to show.
-/// Tabs are registered via <see cref="SettingsMenuItemsExtensions.AddSettingsMenuItems"/>.
+/// Tabs are registered via <see cref="SettingsMenuItemsExtensions.AddSettingsMenuItems(MeshWeaver.Messaging.MessageHubConfiguration, MeshWeaver.Mesh.SettingsMenuItemProvider[])"/>.
 /// </summary>
 public static class SettingsLayoutArea
 {

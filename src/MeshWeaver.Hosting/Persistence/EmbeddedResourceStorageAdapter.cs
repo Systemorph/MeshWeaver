@@ -24,7 +24,7 @@ namespace MeshWeaver.Hosting.Persistence;
 /// <c>Doc/X/_Comment/Y</c> on top of an embedded <c>Doc/X.md</c>) be
 /// created without rejecting the SaveNodeAsync. The overlay survives
 /// for the lifetime of the adapter — typically the partition's lifetime
-/// in <see cref="RoutingPersistenceServiceCore"/> — and intentionally
+/// in <c>RoutingPersistenceServiceCore</c> — and intentionally
 /// does NOT persist across hub restarts; the embedded-resource layer
 /// represents authored content only.</para>
 ///
@@ -32,9 +32,9 @@ namespace MeshWeaver.Hosting.Persistence;
 /// to surface assembly-bundled documentation, agent definitions and
 /// node-type templates as a partition (<c>Doc</c>, <c>Agent</c>, …)
 /// without going through the legacy <see cref="IStaticNodeProvider"/>
-/// path. Static-provider enumeration during <see cref="MeshDataSource.WithMeshNodes"/>
+/// path. Static-provider enumeration during <see cref="MeshWeaver.Graph.MeshDataSource.WithMeshNodes"/>
 /// could re-enter the <c>IMessageHub</c> singleton factory and stack-
-/// overflow; this adapter sits behind <see cref="RoutingPersistenceServiceCore"/>
+/// overflow; this adapter sits behind <c>RoutingPersistenceServiceCore</c>
 /// instead and is touched only on first read.</para>
 /// </summary>
 public sealed class EmbeddedResourceStorageAdapter : IStorageAdapter

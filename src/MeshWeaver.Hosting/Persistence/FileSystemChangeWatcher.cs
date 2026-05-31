@@ -7,7 +7,7 @@ using MeshWeaver.Messaging;
 namespace MeshWeaver.Hosting.Persistence;
 
 /// <summary>
-/// Watches a directory for file system changes and publishes notifications to IObserver<DataChangeNotification>.
+/// Watches a directory for file system changes and publishes notifications to <see cref="IObserver{T}"/> of <see cref="DataChangeNotification"/>.
 /// This enables reactive updates when files are modified externally (e.g., by another process or editor).
 /// </summary>
 public class FileSystemChangeWatcher : IDisposable

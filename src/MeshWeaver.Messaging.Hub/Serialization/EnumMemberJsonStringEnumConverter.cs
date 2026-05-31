@@ -13,7 +13,7 @@ namespace MeshWeaver.Messaging.Serialization;
 /// <summary>
 /// Provides an AOT-compatible extension for <see cref="JsonStringEnumConverter"/> that adds support for <see cref="EnumMemberAttribute"/>.
 /// </summary>
-/// <typeparam name="TEnum">The type of the <see cref="TEnum"/>.</typeparam>
+/// <typeparam name="TEnum">The enum type whose <see cref="EnumMemberAttribute"/> values are honored.</typeparam>
 public sealed class EnumMemberJsonStringEnumConverter<
     [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicFields)] TEnum>()
     : JsonStringEnumConverter<TEnum>(namingPolicy: ResolveNamingPolicy())

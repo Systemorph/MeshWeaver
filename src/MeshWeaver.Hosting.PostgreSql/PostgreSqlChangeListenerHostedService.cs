@@ -7,9 +7,9 @@ namespace MeshWeaver.Hosting.PostgreSql;
 /// <see cref="IHostedService"/> wrapper that auto-starts
 /// <see cref="PostgreSqlChangeListener"/> at host startup. Without this
 /// wrapper the listener is registered as a DI singleton but is never
-/// activated — pg_notify events fired by Postgres triggers reach
-/// <see cref="MeshWeaver.Mesh.Services.IDataChangeNotifier"/> only when the
-/// listener's <c>LISTEN</c> session is open. Synced queries
+/// activated — pg_notify events fired by Postgres triggers surface as
+/// <see cref="MeshWeaver.Mesh.Services.DataChangeNotification"/> events only
+/// when the listener's <c>LISTEN</c> session is open. Synced queries
 /// (<c>workspace.GetQuery(...)</c> over Postgres-backed namespaces) depend
 /// on this propagation; without it, the cached <c>Replay(1)</c> entries
 /// stay frozen at their initial value and never re-emit on writes.

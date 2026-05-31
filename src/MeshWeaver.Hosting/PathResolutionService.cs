@@ -20,7 +20,7 @@ namespace MeshWeaver.Hosting;
 ///
 /// where <c>a|b|c</c> is the requested path plus each ancestor. The
 /// multi-value <c>path:</c> parses to <c>WHERE path IN (...)</c> on backends
-/// that push it down; <see cref="Observable.Scan"/> over the change stream
+/// that push it down; <see cref="Observable.Scan{TSource, TAccumulate}(IObservable{TSource}, TAccumulate, Func{TAccumulate, TSource, TAccumulate})"/> over the change stream
 /// maintains a path-keyed set so deletions of the current top fall back to
 /// the next-deepest ancestor without re-querying.
 ///
@@ -187,7 +187,7 @@ internal class PathResolutionService : IPathResolver
     }
 
     /// <summary>
-    /// Resolution-equality for <see cref="Observable.DistinctUntilChanged"/>.
+    /// Resolution-equality for <see cref="Observable.DistinctUntilChanged{TSource, TKey}(IObservable{TSource}, Func{TSource, TKey}, IEqualityComparer{TKey})"/>.
     /// Path-shape (Prefix + Remainder) is the cache key; the Node is metadata
     /// that can change without altering the route.
     /// </summary>

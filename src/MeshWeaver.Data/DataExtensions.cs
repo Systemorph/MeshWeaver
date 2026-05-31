@@ -596,7 +596,7 @@ public static class DataExtensions
     /// patch, then posts the merged instance through the hub's regular
     /// <see cref="DataChangeRequest"/> pipeline. This routes through the source
     /// data-source stream (not the reduced reference stream), so the
-    /// <see cref="InstanceCollection{T}"/> update + persistence + reduced-view
+    /// <see cref="InstanceCollection"/> update + persistence + reduced-view
     /// propagation all happen exactly once — same as a normal Update would do.
     /// Subscribers to any reduced reference over the same data source see the
     /// change tick on their stream for free.

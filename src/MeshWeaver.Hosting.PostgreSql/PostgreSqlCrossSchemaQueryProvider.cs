@@ -71,7 +71,7 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
     /// Syncs the searchable_schemas table by querying information_schema for
     /// schemas that contain a <c>mesh_nodes</c> table. Same SQL the legacy
     /// factory's <c>DiscoverPartitionsAsync</c> ran; inlined here so this
-    /// class is self-contained — no <see cref="PostgreSqlPartitionedStoreFactory"/>
+    /// class is self-contained — no <c>PostgreSqlPartitionedStoreFactory</c>
     /// dependency.
     /// </summary>
     public async Task SyncSearchableSchemasAsync(CancellationToken ct = default)

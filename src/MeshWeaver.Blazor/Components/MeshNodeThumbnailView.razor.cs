@@ -8,7 +8,7 @@ namespace MeshWeaver.Blazor.Components;
 
 /// <summary>
 /// Code-behind for <see cref="MeshNodeThumbnailView"/>. Subscribes to
-/// <see cref="IMeshNodeStreamCache.GetStream"/> on the bound
+/// <see cref="IMeshNodeStreamCache.GetStream(string)"/> on the bound
 /// <see cref="MeshNodeThumbnailControl.NodePath"/> and refreshes title /
 /// image-url on every emission.
 ///

@@ -7,7 +7,7 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.Hosting.Cosmos;
 
 /// <summary>
-/// Processes Cosmos DB Change Feed and publishes changes to IObserver<DataChangeNotification>.
+/// Processes Cosmos DB Change Feed and publishes changes to <see cref="IObserver{T}"/> of <see cref="DataChangeNotification"/>.
 /// </summary>
 public class CosmosChangeFeedProcessor : IAsyncDisposable
 {

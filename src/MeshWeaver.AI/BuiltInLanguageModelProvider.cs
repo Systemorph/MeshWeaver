@@ -15,7 +15,7 @@ namespace MeshWeaver.AI;
 ///
 /// <para>Reads <see cref="LanguageModelCatalogOptions.Sources"/> — a plain
 /// singleton populated by
-/// <see cref="LanguageModelNodeType.AddLanguageModelCatalogSource{TBuilder}"/>.
+/// <see cref="LanguageModelNodeType.AddLanguageModelCatalogSource{TBuilder}(TBuilder, LanguageModelCatalogSource)"/>.
 /// Each entry pairs a config section (where the deployed
 /// <see cref="IChatClientFactory"/> reads its config from) with the
 /// provider label that should appear on the resulting Model node. The
@@ -208,7 +208,7 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
 /// Catalog of <see cref="IConfiguration"/> sections that
 /// <see cref="BuiltInLanguageModelProvider"/> scans for models. Plain
 /// singleton — populated by
-/// <see cref="LanguageModelNodeType.AddLanguageModelCatalogSource{TBuilder}"/>.
+/// <see cref="LanguageModelNodeType.AddLanguageModelCatalogSource{TBuilder}(TBuilder, LanguageModelCatalogSource)"/>.
 /// </summary>
 public class LanguageModelCatalogOptions
 {
@@ -218,7 +218,7 @@ public class LanguageModelCatalogOptions
     /// <summary>
     /// Idempotently appends a source — does nothing if (sectionName, providerName)
     /// is already present. Called from
-    /// <see cref="LanguageModelNodeType.AddLanguageModelCatalogSource{TBuilder}"/>;
+    /// <see cref="LanguageModelNodeType.AddLanguageModelCatalogSource{TBuilder}(TBuilder, LanguageModelCatalogSource)"/>;
     /// safe to call multiple times across multiple
     /// <c>builder.ConfigureServices</c> blocks.
     /// </summary>

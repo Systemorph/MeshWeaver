@@ -55,7 +55,7 @@ public enum MeshNodeErrorCode
 /// Wire-serializable error payload for MeshNode read/write failures. Embedded
 /// in response messages (e.g. <c>PatchDataResponse.NodeError</c>) so the
 /// failure travels across silo / Orleans / SignalR boundaries as a plain
-/// record. The consumer-side <see cref="MeshNodeStreamHandle"/> inspects the
+/// record. The consumer-side <c>MeshNodeStreamHandle</c> inspects the
 /// response, synthesizes a <see cref="MeshNodeStreamException"/>, and surfaces
 /// it via <c>OnError</c> — that's the only place an exception exists.
 /// <para>

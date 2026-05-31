@@ -69,7 +69,7 @@ internal class VersionWritingStorageAdapter(
     /// <summary>
     /// Explicit forward — without this, the interface default routes through
     /// <c>this.FindBestPrefixMatch</c>, stripping the Postgres satellite-UNION
-    /// that <see cref="MeshWeaver.Hosting.PostgreSql.PostgreSqlPathRoutingAdapter.ResolvePath"/>
+    /// that <c>MeshWeaver.Hosting.PostgreSql.PostgreSqlPathRoutingAdapter.ResolvePath</c>
     /// produces. FileSystem doesn't need the override (its
     /// <c>FindBestPrefixMatch</c> already walks segments), but preserving the
     /// stronger Postgres contract requires the forward.

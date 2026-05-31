@@ -22,7 +22,7 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
     /// partition set (data-driven, no hard-coded namespace list).
     ///
     /// <para>Accepts the query when any of the pre-extracted
-    /// <paramref name="queryNamespaces"/> is in our segment set. Unscoped
+    /// <c>queryNamespaces</c> is in our segment set. Unscoped
     /// queries are pre-filtered by the aggregator (every provider
     /// participates) so this predicate is only consulted for scoped ones.</para>
     /// </summary>
@@ -330,7 +330,7 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
     }
 
     /// <summary>
-    /// Score the result set with <see cref="FuzzyScorer"/> when the query has
+    /// Score the result set with <see cref="MeshWeaver.AI.Completion.FuzzyScorer"/> when the query has
     /// a <c>TextSearch</c> term — fzf-style ranking against the item's Name
     /// (with Path as a fallback for items without a Name). The aggregator
     /// (<c>MeshQuery.ClipMergedInitial</c>) sorts by these scores descending

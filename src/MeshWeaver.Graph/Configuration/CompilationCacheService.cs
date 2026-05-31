@@ -493,7 +493,7 @@ internal class CompilationCacheService(
     /// whose write-time satisfies both the source-modified deadline and the
     /// framework-DLL deadline. Returns null when no valid cache entry exists.
     ///
-    /// <para>Layout: <see cref="CompileToDiskAsync"/> writes to
+    /// <para>Layout: <c>CompileToDiskAsync</c> writes to
     /// <c>{cacheDir}/{nodeName}_{ticks_hex}/{nodeName}.dll</c> so V1 and V2
     /// historical compiles coexist (ALC-safety: each subdir is a unique load
     /// context). The newest subdir's DLL is the live one; older subdirs are

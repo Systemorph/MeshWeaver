@@ -330,6 +330,19 @@ public class SatelliteRoutingExhaustiveTest
             BuildSatelliteNode(satNodeId, $"TestOrg/{satSuffix}", nodeTypeName, nodeTypeName),
             _options, ct);
 
+        // Pin the routing target: the seeded node MUST live in the satellite
+        // table `testorg.{expectedTable}` — never in a schema named after the
+        // NodeType (the prod-2026-05-21 regression) and never in mesh_nodes.
+        await using (var probe = ds.CreateCommand($@"
+            SELECT count(*) FROM testorg.{expectedTable} WHERE path = @p"))
+        {
+            probe.Parameters.AddWithValue("p", satPath);
+            var satRows = (long)(await probe.ExecuteScalarAsync(ct) ?? 0L);
+            satRows.Should().Be(1,
+                $"{nodeTypeName} satellite node MUST be stored in testorg.{expectedTable}, " +
+                $"not in a schema named `{nodeTypeName.ToLowerInvariant()}`");
+        }
+
         // `nodeType:X` (no path) — this is the canonical type-only query.
         // The PG provider's resolution chain must:
         //   1. Recognize the query has no concrete path.

@@ -21,7 +21,7 @@ namespace MeshWeaver.Graph.Configuration;
 /// 🚨 Why reactive (and not <c>IAsyncEnumerable</c> + <c>await foreach</c>): the old contract
 /// took the <b>first</b> permission snapshot and locked it in (<c>yield break</c>), with no
 /// re-render. A runtime <c>AccessAssignment</c> (e.g. granting Editor) only reaches
-/// <see cref="HubPermissionExtensions.GetEffectivePermissions(IMessageHub, string)"/> on its
+/// <see cref="MeshWeaver.Mesh.HubPermissionExtensions.GetEffectivePermissions(MeshWeaver.Messaging.IMessageHub, string)"/> on its
 /// <c>enriched</c> stream — <i>after</i> the synced query catches up — so a render that beat
 /// propagation baked in Viewer-level perms forever (the menu access race behind the flaky
 /// <c>Menu_Editor_ShowsCreateItems</c> test). Reactive providers re-emit when perms enrich, the
@@ -165,7 +165,7 @@ public static class NodeMenuItemsExtensions
     /// satellite, fetches the main node via <see cref="MeshNodeStreamExtensions.GetMeshNodeStream(IWorkspace,string)"/>
     /// (which routes to the owning hub's reducer remotely). The result is a <b>live</b> stream:
     /// it re-emits on node content changes and — via the <c>CombineLatest</c> with
-    /// <see cref="HubPermissionExtensions.GetEffectivePermissions(IMessageHub, string)"/> — on
+    /// <see cref="MeshWeaver.Mesh.HubPermissionExtensions.GetEffectivePermissions(MeshWeaver.Messaging.IMessageHub, string)"/> — on
     /// permission changes (the access-race fix).
     /// </summary>
     private static IObservable<(string menuPath, string nodeName, MeshNode? menuNode, Permission perms)>

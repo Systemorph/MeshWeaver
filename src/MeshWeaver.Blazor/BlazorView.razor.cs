@@ -64,7 +64,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     private bool _viewDisposed;
 
     /// <summary>True after <see cref="DisposeAsync"/> has been entered. Subscription callbacks
-    /// can check this to avoid invoking <see cref="StateHasChanged"/> on a dead renderer.</summary>
+    /// can check this to avoid invoking <c>StateHasChanged</c> on a dead renderer.</summary>
     protected bool IsViewDisposed => _viewDisposed;
 
     public virtual ValueTask DisposeAsync()

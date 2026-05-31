@@ -44,7 +44,7 @@ internal static class ThreadExecution
     ///
     /// Use this for one-off cell updates from outside the streaming loop
     /// (recovery, "Allocating agent…" placeholders). Writes via
-    /// <see cref="IMeshNodeStreamCache.Update"/> — the same shared handle the
+    /// <see cref="IMeshNodeStreamCache.Update(string, System.Func{MeshNode, MeshNode})"/> — the same shared handle the
     /// GUI subscribers read from, so the patch is observed in order.
     /// </summary>
     internal static void UpdateResponseCell(

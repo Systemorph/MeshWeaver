@@ -181,7 +181,7 @@ public class AgentChatClient : IAgentChat
     /// <c>Thread.StreamingToolCalls[].DelegationPath</c>, and by the
     /// streaming-loop's stamp pass that walks unmatched
     /// <c>delegate_to_agent</c> tool-call entries. Replaces the legacy
-    /// <see cref="DelegationPaths"/> dictionary (which keyed by transient
+    /// <c>DelegationPaths</c> dictionary (which keyed by transient
     /// display name).
     /// </summary>
     private ImmutableHashSet<string> _activeDelegationPaths = ImmutableHashSet<string>.Empty;

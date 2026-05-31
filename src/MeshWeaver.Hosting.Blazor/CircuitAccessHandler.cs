@@ -160,7 +160,7 @@ public class CircuitAccessHandler : CircuitHandler
     /// User node sits at its root (<c>path = username</c>). The portal's
     /// convention is <c>username == email local-part</c> (e.g.
     /// <c>rbuergi@systemorph.com → rbuergi</c>), so the local part is the
-    /// correct partition match when the <see cref="UserIdentityCache"/> hasn't
+    /// correct partition match when the <see cref="MeshWeaver.Blazor.Infrastructure.UserIdentityCache"/> hasn't
     /// hydrated yet. Falls back to the input unchanged when there's no <c>@</c>.
     /// </summary>
     private static string UsernameFromEmail(string email)

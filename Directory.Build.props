@@ -9,7 +9,11 @@
     <Authors>Systemorph</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/Systemorph/MeshWeaver</RepositoryUrl>
-    <NoWarn>649;CA2255;NU5104;CS1591;CS1573;CS1574;CS1570;CS1572;CS1587;CS1712;CS1723;CS1734;CS0419;xUnit1026;$(NoWarn)</NoWarn>
+    <!-- Suppress only doc-COMPLETENESS (CS1591 missing member doc, CS1573 missing param doc, CS1712
+         missing typeparam doc) — filling those is opportunistic, thousands of members. Doc-QUALITY
+         warnings (broken/ambiguous crefs, bad paramrefs, malformed XML) are real bugs and are fixed,
+         not suppressed. -->
+    <NoWarn>649;CA2255;NU5104;CS1591;CS1573;CS1712;$(NoWarn)</NoWarn>
     <!-- Generate XML doc files for all assemblies (IntelliSense + NuGet). The doc-completeness
          warning family (CS1591 missing member doc, CS1573 missing param, CS1574 unresolved cref,
          CS1570 malformed XML, CS1712 missing typeparam) is suppressed centrally so enabling

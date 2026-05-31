@@ -12,7 +12,7 @@ namespace MeshWeaver.Blazor.Components;
 /// <summary>
 /// Code-behind for <see cref="CompileProgressIndicator"/>. When a
 /// <c>NodeTypePath</c> is provided, subscribes via
-/// <see cref="IMeshNodeStreamCache.GetStream"/> on that path and surfaces
+/// <see cref="IMeshNodeStreamCache.GetStream(string)"/> on that path and surfaces
 /// progress whenever <c>NodeTypeDefinition.CompilationStatus = Compiling</c>.
 /// Without a path, falls back to the global synced
 /// <c>nodeType:NodeType</c> query.

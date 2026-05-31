@@ -149,7 +149,7 @@ internal sealed record RoundDispatch(
 ///   <item><description><c>Where</c>: not currently executing AND has at least one
 ///     unprocessed user id or pending message.</description></item>
 ///   <item><description><c>SelectMany</c>: each dispatchable emission produces a single
-///     <see cref="DispatchRoundObs"/> observable that creates satellite cells, commits
+///     <see cref="DispatchRound"/> observable that creates satellite cells, commits
 ///     the round to the thread node, and posts to the <c>_Exec</c> hub.</description></item>
 /// </list>
 ///

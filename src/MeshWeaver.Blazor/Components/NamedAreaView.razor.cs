@@ -200,7 +200,7 @@ public partial class NamedAreaView
     /// <see cref="TimeoutException"/> from <c>MessageHub.BuildTimeoutMessage</c>
     /// — "No response received in hub … within … for request …" — which fires
     /// when the SubscribeRequest's target hub doesn't respond inside
-    /// <see cref="MessageHubConfiguration.RequestTimeout"/> (default 30 s).
+    /// <c>MessageHubConfiguration.RequestTimeout</c> (default 30 s).
     /// Causes range from "the per-node hub is still bootstrapping its
     /// SecurityService data sources" to "the workspace synced query has not
     /// emitted yet" — both self-heal once the upstream catches up.
