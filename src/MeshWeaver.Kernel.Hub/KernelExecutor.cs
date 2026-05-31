@@ -92,23 +92,24 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         var cts = new CancellationTokenSource();
         lock (cancellationLock) { activeCancellation = cts; }
 
-        // 🚨 Run the execution pipeline OFF the action block. The first stage,
-        // Observable.FromAsync(_ => executionLock.WaitAsync(ct)), completes
-        // SYNCHRONOUSLY whenever the semaphore is uncontended (the common case:
-        // one submission at a time), which makes the entire downstream chain —
-        // including EnsureInitialized's AppDomain reference scan and the cold
-        // Roslyn CSharpScript.RunAsync compile — run inline on the subscribing
-        // thread. Without SubscribeOn that thread is the executor's action
-        // block, so the SubmitCodeRequest delivery stays "Executing" for the
-        // whole multi-second compile: the public hub's response callback never
-        // resolves until the script finishes, and a caller that returns as soon
-        // as it sees its side effect (e.g. the Code node's Last* stamp) leaves
-        // the SubmitCodeRequest callback leaked at dispose (Quiescing-budget
-        // failure in ScriptExecutionInUserHomeTest). Scheduling the subscription
-        // on the TaskPool frees the action block immediately; the semaphore
-        // still serialises concurrent submissions on pool threads.
+        // 🚨 Subscribe INLINE on the action block — do NOT SubscribeOn(TaskPool).
+        // This is a REPL: submissions must execute in the order they were posted
+        // (block #1 defines `x`, block #2 reads it). The action block delivers
+        // SubmitCodeRequests FIFO, and callers fire them back-to-back without
+        // awaiting each response (see MonolithKernelTest.ThreeSubmissions_ShareState),
+        // so submission order is established ONLY by the order in which each
+        // pipeline acquires `executionLock`. Subscribing here, on the action
+        // block, calls executionLock.WaitAsync(ct) synchronously and in order, so
+        // the semaphore queues the waiters FIFO. SubscribeOn(TaskPool) instead
+        // scheduled the whole subscription — including the WaitAsync call — onto
+        // unordered pool threads, letting block #2 win the lock before block #1
+        // and run against an empty ScriptState (CS0103 "name does not exist").
+        // Execute() offloads the heavy work (EnsureInitialized's AppDomain scan +
+        // the cold Roslyn compile) off the action block itself via ObserveOn right
+        // after the lock is acquired, so the delivery still returns Processed()
+        // immediately and the action block is never blocked on a compile (the
+        // leak that d936e31e2 fixed stays fixed).
         Execute(msg.Code, msg.Id, msg.Inputs, activityLogger, cts.Token)
-            .SubscribeOn(TaskPoolScheduler.Default)
             .Subscribe(
                 returnValue =>
                 {
@@ -185,6 +186,12 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         CancellationToken ct)
     {
         return Observable.FromAsync(_ => executionLock.WaitAsync(ct))
+            // The lock is acquired in submission order (the subscription runs
+            // inline on the action block — see HandleSubmitCodeRequest). Hop to
+            // the TaskPool ONLY for the work that follows, so the cold Roslyn
+            // compile + AppDomain scan never run on the action block while still
+            // preserving FIFO execution across submissions.
+            .ObserveOn(TaskPoolScheduler.Default)
             .SelectMany(_ =>
             {
                 EnsureInitialized();
