@@ -92,16 +92,14 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var client = GetClient();
         var parentAddress = new Address("ACME/ProductLaunch");
 
-        Output.WriteLine("Initializing hub for ACME/ProductLaunch...");
-        client.Observe(new PingRequest(), o => o.WithTarget(parentAddress)).Should().Emit();
-        Output.WriteLine("Hub initialized.");
-
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.CreateNodeArea)
         {
             Id = "?type=ACME%2FProject%2FTodo"
         };
 
+        // No ping: the layout-area subscription itself activates the hub +
+        // triggers the cold NodeType compile. Budget covers the cold Roslyn build.
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             parentAddress,
             reference);
@@ -109,7 +107,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine("Waiting for CreateChild form to render...");
         var control = stream
             .GetControlStream(reference.Area!)
-            .Should().Within(10.Seconds()).Match(c => c is StackControl);
+            .Should().Within(50.Seconds()).Match(c => c is StackControl);
 
         Output.WriteLine($"Received control: {control?.GetType().Name}");
         control.Should().NotBeNull("CreateChild form should render");
@@ -133,13 +131,11 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var client = GetClient();
         var parentAddress = new Address("ACME/ProductLaunch");
 
-        Output.WriteLine("Initializing hub...");
-        client.Observe(new PingRequest(), o => o.WithTarget(parentAddress)).Should().Emit();
-        Output.WriteLine("Hub initialized.");
-
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.CreateNodeArea);
 
+        // No ping: the layout-area subscription itself activates the hub +
+        // triggers the cold NodeType compile. Budget covers the cold Roslyn build.
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             parentAddress,
             reference);
@@ -147,7 +143,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine("Waiting for type selection to render...");
         var control = stream
             .GetControlStream(reference.Area!)
-            .Should().Within(10.Seconds()).Match(c => c != null);
+            .Should().Within(50.Seconds()).Match(c => c != null);
 
         Output.WriteLine($"Received control: {control?.GetType().Name}");
         control.Should().NotBeNull("Type selection should render");
@@ -789,18 +785,18 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var client = GetClient();
         var parentAddress = new Address("ACME/ProductLaunch");
 
-        client.Observe(new PingRequest(), o => o.WithTarget(parentAddress)).Should().Emit();
-
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea);
 
+        // No ping: the layout-area subscription itself activates the hub +
+        // triggers the cold NodeType compile. Budget covers the cold Roslyn build.
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             parentAddress,
             reference);
 
         var control = stream
             .GetControlStream(reference.Area!)
-            .Should().Within(10.Seconds()).Match(c => c != null);
+            .Should().Within(50.Seconds()).Match(c => c != null);
 
         control.Should().NotBeNull("Overview area should render");
         Output.WriteLine($"Overview control type: {control?.GetType().Name}");

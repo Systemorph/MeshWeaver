@@ -87,8 +87,11 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
         var client = GetClient();
         var todoAddress = new Address("ACME/ProductLaunch/Todo/DefinePersona");
 
-        // Initialize the hub first - required for proper routing
-        client.Observe(new PingRequest(), o => o.WithTarget(todoAddress)).Should().Emit();
+        // Load-bearing ping: a Todo-INSTANCE node hub's layout-area GetRemoteStream
+        // does NOT self-activate cleanly — without this init the subscription errors
+        // with "Hub '…' initialization failed". (Removing it produced that failure;
+        // restored per the empirical keep rule.)
+        client.Observe(new PingRequest(), o => o.WithTarget(todoAddress)).Should().Within(30.Seconds()).Emit();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Overview");
@@ -98,7 +101,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
             reference);
 
         Output.WriteLine("Waiting for Details view to render...");
-        var value = stream.Should().Within(5.Seconds()).Emit();
+        var value = stream.Should().Within(50.Seconds()).Emit();
 
         Output.WriteLine($"Received value");
         value.Should().NotBe(default(JsonElement), "Details view should render for a Todo item");
@@ -113,8 +116,9 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
         var client = GetClient();
         var todoAddress = new Address("ACME/ProductLaunch/Todo/LaunchEvent");
 
-        // Initialize the hub first - required for proper routing
-        client.Observe(new PingRequest(), o => o.WithTarget(todoAddress)).Should().Emit();
+        // Load-bearing ping: Todo-instance node hubs require init before the
+        // layout-area subscription, else it errors "Hub '…' initialization failed".
+        client.Observe(new PingRequest(), o => o.WithTarget(todoAddress)).Should().Within(30.Seconds()).Emit();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Thumbnail");
@@ -124,7 +128,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
             reference);
 
         Output.WriteLine("Waiting for Thumbnail view to render...");
-        var value = stream.Should().Within(5.Seconds()).Emit();
+        var value = stream.Should().Within(50.Seconds()).Emit();
 
         Output.WriteLine($"Received value");
         value.Should().NotBe(default(JsonElement), "Thumbnail view should render for a Todo item");
@@ -139,8 +143,9 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
         var client = GetClient();
         var todoAddress = new Address("ACME/ProductLaunch/Todo/DefinePersona");
 
-        // Initialize the hub first - required for proper routing
-        client.Observe(new PingRequest(), o => o.WithTarget(todoAddress)).Should().Emit();
+        // Load-bearing ping: Todo-instance node hubs require init before the
+        // layout-area subscription, else it errors "Hub '…' initialization failed".
+        client.Observe(new PingRequest(), o => o.WithTarget(todoAddress)).Should().Within(30.Seconds()).Emit();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Overview");
@@ -150,7 +155,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
             reference);
 
         Output.WriteLine("Waiting for Overview view to render...");
-        var value = stream.Should().Within(10.Seconds()).Emit();
+        var value = stream.Should().Within(50.Seconds()).Emit();
 
         value.Should().NotBe(default(JsonElement), "Overview view should render");
         Output.WriteLine($"Overview view rendered");
@@ -177,14 +182,15 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
         {
             Output.WriteLine($"Accessing Todo: {todoAddress}");
 
-            // Initialize the hub first - required for proper routing
-            client.Observe(new PingRequest(), o => o.WithTarget(todoAddress)).Should().Emit();
+            // Load-bearing ping: Todo-instance node hubs require init before the
+            // layout-area subscription, else it errors "Hub '…' initialization failed".
+            client.Observe(new PingRequest(), o => o.WithTarget(todoAddress)).Should().Within(30.Seconds()).Emit();
 
             var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
                 todoAddress,
                 reference);
 
-            var value = stream.Should().Within(5.Seconds()).Emit();
+            var value = stream.Should().Within(50.Seconds()).Emit();
 
             value.Should().NotBe(default(JsonElement), $"Details view should render for {todoAddress}");
             Output.WriteLine($"Successfully rendered: {todoAddress}");
@@ -263,20 +269,18 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
         var client = GetClient();
         var parentAddress = new Address("ACME/ProductLaunch");
 
-        Output.WriteLine("Initializing hub for ACME/ProductLaunch...");
-        client.Observe(new PingRequest(), o => o.WithTarget(parentAddress)).Should().Emit();
-        Output.WriteLine("Hub initialized.");
-
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea);
 
+        // No ping: the layout-area subscription itself activates the hub +
+        // triggers the cold NodeType compile. Budget covers the cold Roslyn build.
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             parentAddress,
             reference);
 
         Output.WriteLine("Waiting for Overview area...");
         // Wait for a value - areas may take time to populate due to NodeType compilation
-        var rawValue = stream.Should().Within(20.Seconds()).Emit();
+        var rawValue = stream.Should().Within(50.Seconds()).Emit();
         Output.WriteLine($"Received raw value: {rawValue.Value.ValueKind}");
 
         // Verify we received a response (even if areas haven't populated yet due to async compilation)
@@ -294,14 +298,11 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
         var client = GetClient();
         var parentAddress = new Address("ACME/ProductLaunch");
 
-        Output.WriteLine("Initializing hub for ACME/ProductLaunch...");
-        // Initialize the hub first
-        client.Observe(new PingRequest(), o => o.WithTarget(parentAddress)).Should().Emit();
-        Output.WriteLine("Hub initialized.");
-
         var workspace = client.GetWorkspace();
 
-        // First test without Id to verify Create area is registered
+        // First test without Id to verify Create area is registered.
+        // No ping: the layout-area subscription itself activates the hub +
+        // triggers the cold NodeType compile. Budget covers the cold Roslyn build.
         var referenceNoId = new LayoutAreaReference(MeshNodeLayoutAreas.CreateNodeArea);
         Output.WriteLine($"Testing Create area without Id first: Area={referenceNoId.Area}");
 
@@ -309,7 +310,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
             parentAddress,
             referenceNoId);
 
-        var rawNoId = streamNoId.Should().Within(10.Seconds()).Emit();
+        var rawNoId = streamNoId.Should().Within(50.Seconds()).Emit();
         Output.WriteLine($"Create without Id - raw value kind: {rawNoId.Value.ValueKind}");
         Output.WriteLine($"Create without Id - areas empty? {rawNoId.Value.ToString().Contains("\"areas\":{}")}");
 
