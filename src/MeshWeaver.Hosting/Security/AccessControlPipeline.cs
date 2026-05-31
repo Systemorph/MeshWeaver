@@ -31,7 +31,7 @@ public static class AccessControlPipeline
     /// the <see cref="GetPermissionRequest"/> handler so every per-node hub
     /// answers "what permissions does the caller have on this path?" via the
     /// canonical message-bus path — this is what <see cref="MeshNodeStreamCache"/>
-    /// uses to gate <see cref="MeshNodeStreamCache.GetStream"/> per user.
+    /// uses to gate <c>MeshNodeStreamCache.GetStream</c> per user.
     /// </summary>
     public static MessageHubConfiguration AddAccessControlPipeline(this MessageHubConfiguration config)
         => config
@@ -201,7 +201,7 @@ public static class AccessControlPipeline
     /// Sync handler for <see cref="GetPermissionRequest"/>. The hub always
     /// evaluates permissions on its OWN path (<c>hub.Address.ToString()</c>) —
     /// the request never carries a path; routing decides which hub responds.
-    /// Resolves the per-hub scoped <see cref="SecurityService"/> and replies
+    /// Resolves the per-hub scoped <c>SecurityService</c> and replies
     /// via Subscribe — no await, no scope juggling at the caller site.
     /// </summary>
     internal static IMessageDelivery HandleGetPermission(IMessageHub hub, IMessageDelivery<GetPermissionRequest> request)

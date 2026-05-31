@@ -238,7 +238,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
 
     /// <summary>
     /// Shared collector: iterates <see cref="MeshQueryRequest.EffectiveQueries"/>,
-    /// runs <see cref="FindMatchingNodesAsync"/> per query, and unions hits by
+    /// runs <see cref="FindMatchingNodes"/> per query, and unions hits by
     /// <see cref="MeshNode.Path"/>. Returns the matched nodes plus the FIRST
     /// query's parsed form + the union of every query's base path (used by
     /// the post-filter / sort blocks in the public callers).

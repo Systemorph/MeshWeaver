@@ -19,15 +19,15 @@ namespace MeshWeaver.Graph.Configuration;
 /// of candidate types is independent of the user's permissions on
 /// individual instances — visibility of an instance has nothing to do
 /// with whether a type is offered to a user who has Create permission
-/// at <paramref name="nodePath"/>. The Create-permission gate runs at
-/// the outer level via <see cref="SecurityService.HasPermission"/>.</para>
+/// at <c>nodePath</c>. The Create-permission gate runs at
+/// the outer level via <see cref="PermissionEvaluator.HasPermission(IMessageHub, string, Permission)"/>.</para>
 ///
 /// <para>Sources merged into the result (deduped by NodeType path):</para>
 /// <list type="number">
 ///   <item>NodeType MeshNodes returned by the query (dynamic NodeTypes
 ///     persisted as <c>nodeType:NodeType</c> rows + static NodeTypes
 ///     surfaced by <see cref="IStaticNodeProvider"/>).</item>
-///   <item>Static <see cref="MeshConfiguration.Nodes"/> entries with
+///   <item>Static <c>MeshConfiguration</c> node entries with
 ///     <c>NodeType = "NodeType"</c> — for AddMeshNodes registrations
 ///     that aren't persisted (built-in types like Markdown, Thread).</item>
 ///   <item>Explicit <c>CreatableTypes</c> JSON on the parent NodeType
@@ -178,7 +178,7 @@ internal sealed class CreatableTypesProvider(
     /// Resolves the <see cref="NodeTypeDefinition"/> for <paramref name="currentType"/>.
     /// Static config (built-in types) first, then a live
     /// <c>GetMeshNodeStream</c> lookup so RUNTIME NodeTypes — which are not in
-    /// <see cref="MeshConfiguration.Nodes"/> — still surface their
+    /// <c>MeshConfiguration</c>'s static nodes — still surface their
     /// <c>CreatableTypes</c> / <c>IncludeGlobalTypes</c> settings.
     /// </summary>
     private IObservable<NodeTypeDefinition?> ResolveParentNodeTypeDefinition(string? currentType)

@@ -16,7 +16,7 @@ namespace MeshWeaver.Graph;
 /// <summary>
 /// Global settings page with Splitter layout: left NavMenu + right content pane.
 /// URL pattern: /_settings/GlobalSettings/{tabId}
-/// Tabs are registered via <see cref="GlobalSettingsMenuItemsExtensions.AddGlobalSettingsMenuItems"/>.
+/// Tabs are registered via <see cref="GlobalSettingsMenuItemsExtensions.AddGlobalSettingsMenuItems(MeshWeaver.Messaging.MessageHubConfiguration, MeshWeaver.Mesh.GlobalSettingsMenuItemProvider[])"/>.
 /// Follows the same pattern as <see cref="SettingsLayoutArea"/> for node settings.
 /// </summary>
 public static class GlobalSettingsLayoutArea

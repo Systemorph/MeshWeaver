@@ -16,7 +16,7 @@ namespace MeshWeaver.Graph.Configuration;
 /// subscription.
 ///
 /// <para>The cache key is the NodeType path. Two calls with the same
-/// <paramref name="nodeTypePath"/> on the same <paramref name="workspace"/>
+/// <c>nodeTypePath</c> on the same <c>workspace</c>
 /// return the same underlying observable; a third caller doesn't open a
 /// fresh <c>SubscribeRequest</c>, doesn't re-walk the query providers.
 /// Mirrors the <see cref="MeshWeaver.Mesh.Services.IMeshNodeStreamCache"/>
@@ -65,7 +65,7 @@ public static class NodeSources
     }
 
     /// <summary>
-    /// Canonical <see cref="WorkspaceExtensions.GetQuery"/> id for a
+    /// Canonical <c>GetQuery</c> id for a
     /// NodeType's source set. Exposed so consumers that want to interact
     /// with the cache directly (e.g. tests asserting cache reuse) can
     /// reference the exact same key.

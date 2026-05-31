@@ -204,7 +204,7 @@ public static class MeshDataSourceExtensions
 
     /// <summary>
     /// Per-node hub handler for <see cref="SaveMeshNodeRequest"/>: writes the
-    /// supplied <see cref="MeshNode"/> through <see cref="IStorageAdapter.SaveNode"/>.
+    /// supplied <see cref="MeshNode"/> through <see cref="IStorageAdapter.Write"/>.
     /// Fire-and-forget Subscribe — the hub's inbox serialises requests so writes
     /// for the same path arrive in order; failures log and drop. Posted from
     /// <c>MeshNodeTypeSource.UpdateImpl</c> on every workspace change.
@@ -243,7 +243,7 @@ public static class MeshDataSourceExtensions
 
     /// <summary>
     /// Per-node hub handler for <see cref="DeleteMeshNodeRequest"/>: removes the
-    /// node at the supplied path through <see cref="IStorageAdapter.DeleteNode"/>.
+    /// node at the supplied path through <see cref="IStorageAdapter.Delete"/>.
     /// Fire-and-forget; failures log and drop.
     /// </summary>
     private static IMessageDelivery HandleDeleteMeshNode(
@@ -375,7 +375,7 @@ public static class MeshDataSourceExtensions
     /// <summary>
     /// Per-hub long-standing cache: holds the latest own MeshNode (kept fresh by a
     /// subscription to <c>workspace.GetMeshNodeStream()</c> at hub init) and the
-    /// IsDeleted flag flipped by <see cref="IDataChangeNotifier"/>. Both fields
+    /// IsDeleted flag flipped by <c>IDataChangeNotifier</c>. Both fields
     /// are read synchronously by the read pipeline — no per-delivery Take(1), no
     /// per-delivery subscription. The subscription stays alive for the hub's
     /// lifetime; updates flow through naturally as the workspace's MeshNode

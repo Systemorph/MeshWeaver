@@ -17,7 +17,7 @@ public static class AssemblyStoreExtensions
     /// <summary>
     /// Register a <see cref="FileSystemAssemblyStore"/> rooted at <paramref name="rootDirectory"/>.
     /// Intended for the monolith portal and tests. Safe to call multiple times —
-    /// <see cref="TryAddSingleton"/> keeps the first registration.
+    /// <c>TryAddSingleton</c> keeps the first registration.
     /// </summary>
     public static IServiceCollection AddFileSystemAssemblyStore(
         this IServiceCollection services, string rootDirectory)

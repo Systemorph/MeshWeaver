@@ -14,9 +14,10 @@ namespace MeshWeaver.Hosting.Monolith.TestBase;
 /// Test helpers for querying effective permissions via the
 /// <see cref="GetPermissionRequest"/> / <see cref="GetPermissionResponse"/>
 /// request-response pair. Lets tests stay scope-agnostic — the per-node hub
-/// receives the request and resolves its scoped <see cref="SecurityService"/>.
+/// receives the request and resolves permissions via
+/// <see cref="MeshWeaver.Mesh.HubPermissionExtensions.GetEffectivePermissions(MeshWeaver.Messaging.IMessageHub, System.String, System.String)"/>.
 /// Tests should NOT call <c>ServiceProvider.GetRequiredService&lt;SecurityService&gt;()</c>
-/// directly (it's scoped, not available from the root provider).
+/// directly (there is no such service — permissions resolve only through the hub).
 /// </summary>
 public static class PermissionTestExtensions
 {
@@ -33,7 +34,7 @@ public static class PermissionTestExtensions
 
     /// <summary>
     /// Wait-for-predicate overload: subscribes to
-    /// <see cref="SecurityService.GetEffectivePermissions(string,string)"/>
+    /// <see cref="MeshWeaver.Mesh.HubPermissionExtensions.GetEffectivePermissions(MeshWeaver.Messaging.IMessageHub, System.String, System.String)"/>
     /// (a hot observable backed by the workspace's synced AccessAssignment
     /// query) and returns the first emission satisfying <paramref name="until"/>.
     ///

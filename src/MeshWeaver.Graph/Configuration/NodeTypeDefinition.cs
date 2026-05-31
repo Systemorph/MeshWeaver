@@ -204,7 +204,7 @@ public record NodeTypeDefinition
     public long? LastCompiledVersion { get; init; }
 
     /// <summary>
-    /// Path of the most recent compilation <see cref="ActivityLog"/> persisted under
+    /// Path of the most recent compilation <see cref="MeshWeaver.Data.ActivityLog"/> persisted under
     /// <c>{nodeTypePath}/_activity/{logId}</c>. Set by the compile watcher every time a
     /// compile completes (success or failure) so the layout area can render a clickable
     /// "Last compilation" link, and so anyone observing the NodeType remote stream can

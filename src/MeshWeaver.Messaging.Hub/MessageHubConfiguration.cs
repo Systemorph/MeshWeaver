@@ -185,7 +185,7 @@ public record MessageHubConfiguration
     /// + module extensions) silently stacks duplicate init runs — each watcher /
     /// subscription that runs in the init then fires N×, dispatching N rounds
     /// per state change. Symptom: Resubmit test saw Thread.Messages accumulate
-    /// the same response id 3× because <see cref="ThreadSubmissionServer.InstallServerWatcher"/>
+    /// the same response id 3× because <c>ThreadSubmissionServer.InstallServerWatcher</c>
     /// was running on N stacked subscriptions.
     /// </summary>
     public MessageHubConfiguration WithInitialization(Action<IMessageHub> action) => this with

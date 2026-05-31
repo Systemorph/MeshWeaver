@@ -19,7 +19,7 @@ public static class SecurityServiceExtensions
     /// Adds Row-Level Security to the mesh. Registers:
     /// <list type="bullet">
     /// <item><see cref="EffectivePermissionsDelegate"/> →
-    ///   <see cref="PermissionEvaluator.GetEffectivePermissions"/> injected
+    ///   <see cref="PermissionEvaluator.GetEffectivePermissions(MeshWeaver.Messaging.IMessageHub, string, string)"/> injected
     ///   into every per-node hub's <c>MessageHubConfiguration</c>, so every
     ///   <c>hub.CheckPermission</c> / <c>hub.GetEffectivePermissions</c>
     ///   resolves the real algorithm. Without this registration the default

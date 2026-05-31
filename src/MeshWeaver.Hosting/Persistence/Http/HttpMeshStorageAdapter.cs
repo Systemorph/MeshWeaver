@@ -8,7 +8,7 @@ namespace MeshWeaver.Hosting.Persistence.Http;
 
 /// <summary>
 /// <see cref="IStorageAdapter"/> backed by a remote MeshWeaver portal over its MCP
-/// HTTP surface. Plug it in as the <em>target</em> of <see cref="StorageImporter"/>
+/// HTTP surface. Plug it in as the <em>target</em> of <c>StorageImporter</c>
 /// to push a subtree out, or as the <em>source</em> to pull a subtree in.
 ///
 /// <para>All operations route through <see cref="IRemoteMeshClient"/> which has an

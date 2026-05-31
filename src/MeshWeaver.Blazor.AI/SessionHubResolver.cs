@@ -15,8 +15,8 @@ namespace MeshWeaver.Blazor.AI;
 ///
 /// <para>
 /// Both transports must share this helper so their routing semantics stay
-/// identical — same address shape, same <see cref="MessageHubConfiguration.AddData"/>
-/// + <see cref="IRoutingService.RegisterStream"/> wiring, same fallback to the
+/// identical — same address shape, same <see cref="DataExtensions.AddData(MessageHubConfiguration)"/>
+/// + <see cref="IRoutingService.RegisterStream(IMessageHub)"/> wiring, same fallback to the
 /// root hub when no session is resolvable.
 /// </para>
 /// </summary>

@@ -231,7 +231,7 @@ public static class ImportLayoutArea
     /// Builds the "Mirror from / to another instance" sub-form using standard
     /// <see cref="UiControl"/>s only (text fields, radio, checkboxes, button +
     /// dialog for the result). Click handler resolves
-    /// <see cref="IMirrorOperations"/> via DI and runs Push/Pull. The remote
+    /// <c>IMirrorOperations</c> via DI and runs Push/Pull. The remote
     /// portal must be reachable over HTTPS from THIS instance — for local↔prod
     /// that's always public direction (local pulls/pushes; prod cannot reach
     /// localhost).

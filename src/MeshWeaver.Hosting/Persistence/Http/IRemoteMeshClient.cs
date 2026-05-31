@@ -27,7 +27,7 @@ public interface IRemoteMeshClientFactory
 /// call emits exactly one value (or completes with no value for the void-shaped
 /// ops) and then completes. Subscribers compose with <c>.Select</c> /
 /// <c>.SelectMany</c>; the only Task bridge is at the storage-adapter boundary
-/// (where <see cref="IStorageAdapter"/> still has Task-based methods).</para>
+/// (where <see cref="MeshWeaver.Mesh.Services.IStorageAdapter"/> still has Task-based methods).</para>
 ///
 /// <para>Why an interface instead of using <c>McpClient</c> directly: tests need to
 /// verify request shape (tool name, arguments, headers) and exercise error paths

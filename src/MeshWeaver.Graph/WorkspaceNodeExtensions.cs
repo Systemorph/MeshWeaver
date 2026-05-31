@@ -14,7 +14,7 @@ public static class WorkspaceNodeExtensions
 {
     /// <summary>
     /// Gets the MeshNode for the current hub as a stream.
-    /// Delegates to <see cref="MeshNodeExtensions.GetMeshNodeStream(IWorkspace)"/> —
+    /// Delegates to <see cref="MeshNodeStreamExtensions.GetMeshNodeStream(IWorkspace)"/> —
     /// uses the live MeshNodeReference stream, never a query.
     /// </summary>
     public static IObservable<MeshNode?> GetNodeStream(this IWorkspace workspace)
@@ -32,7 +32,7 @@ public static class WorkspaceNodeExtensions
     /// <summary>
     /// Gets the MeshNode for a specific path as a stream.
     /// Auto-dispatches to local own-node stream or remote MeshNodeReference subscription
-    /// (see <see cref="MeshNodeExtensions.GetMeshNodeStream(IWorkspace, string)"/>).
+    /// (see <see cref="MeshNodeStreamExtensions.GetMeshNodeStream(IWorkspace, string)"/>).
     /// </summary>
     public static IObservable<MeshNode?> GetNodeStream(this IWorkspace workspace, string path)
         => workspace.GetMeshNodeStream(path).Select(n => (MeshNode?)n);

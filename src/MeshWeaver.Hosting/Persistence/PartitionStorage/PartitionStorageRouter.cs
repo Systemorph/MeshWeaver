@@ -58,8 +58,8 @@ public sealed class PartitionStorageRouter : IDisposable
     /// access and resets the sliding-expiration timer on every call.
     /// Emits null when no provider claims the path.
     /// <para>Routing iterates providers in registration order; the first
-    /// whose <see cref="IPartitionStorageProvider.Matches"/> emits true
-    /// wins. Per-provider <c>Take(1)</c> bounds each subscription so a
+    /// whose adapter claims the path (rather than short-circuiting with
+    /// null) wins. Per-provider <c>Take(1)</c> bounds each subscription so a
     /// silent subject can't strand the resolution.</para>
     /// </summary>
     public IObservable<Address?> AddressFor(string path)

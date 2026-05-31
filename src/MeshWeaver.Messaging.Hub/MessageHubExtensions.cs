@@ -37,7 +37,7 @@ public static class MessageHubExtensions
     /// Posts <paramref name="request"/> and observes the typed response.
     /// <para>
     /// Pre-registers the callback BEFORE posting (via the framework's
-    /// <see cref="IMessageHub.AwaitResponse(object,Func{PostOptions,PostOptions},Func{IMessageDelivery,object?},CancellationToken)"/>
+    /// <c>AwaitResponse(object, Func&lt;PostOptions,PostOptions&gt;, Func&lt;IMessageDelivery,object?&gt;, CancellationToken)</c>
     /// primitive which uses <see cref="PostOptions.WithMessageId"/>) so a synchronously-handled
     /// response can't slip through before the callback is registered. Emits exactly one
     /// <see cref="IMessageDelivery{TResponse}"/> on the response, or <c>OnError</c> for

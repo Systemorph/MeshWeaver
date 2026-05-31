@@ -151,11 +151,11 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
     /// <list type="number">
     ///   <item>Acquire <see cref="executionLock"/> (SDK boundary → <see cref="Observable.FromAsync(System.Func{System.Threading.CancellationToken,System.Threading.Tasks.Task})"/>).</item>
     ///   <item>Resolve NuGet refs (SDK boundary → <see cref="Observable.FromAsync(System.Func{System.Threading.CancellationToken,System.Threading.Tasks.Task})"/>).</item>
-    ///   <item>Bind per-submission globals (sync — <see cref="Observable.Defer{T}"/>).</item>
-    ///   <item>Run Roslyn script under stdout capture (<see cref="Observable.Using{TResult, TResource}"/> + Roslyn boundary).</item>
+    ///   <item>Bind per-submission globals (sync — <c>Observable.Defer</c>).</item>
+    ///   <item>Run Roslyn script under stdout capture (<c>Observable.Using</c> + Roslyn boundary).</item>
     ///   <item>Render return value if any (sync tail).</item>
     /// </list>
-    /// Errors flow through <see cref="Observable.Catch{TSource}(System.IObservable{TSource}, System.Func{System.Exception, System.IObservable{TSource}})"/> —
+    /// Errors flow through <c>Observable.Catch</c> —
     /// <see cref="CompilationErrorException"/> wraps to <see cref="ScriptExecutionException"/>;
     /// other exceptions render an inline error control. The lock is always released
     /// via <see cref="Observable.Finally{TSource}"/>.
@@ -191,7 +191,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
 
     /// <summary>
     /// One Roslyn submission inside an active stdout-capture scope. Splits out
-    /// from <see cref="Execute"/> so <see cref="Observable.Using{TResult, TResource}"/>
+    /// from <see cref="Execute"/> so <c>Observable.Using</c>
     /// can scope the <see cref="LoggerTextWriter"/> + <see cref="CapturingTextWriter"/>
     /// pair to the lifetime of the script run. Emits the script's
     /// <c>ReturnValue</c> (possibly null) so the caller can publish it on the

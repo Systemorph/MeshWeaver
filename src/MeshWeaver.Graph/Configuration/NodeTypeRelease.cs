@@ -50,10 +50,10 @@ public record NodeTypeRelease
     public string? Version { get; init; }
 
     /// <summary>
-    /// The integer <see cref="MeshNode.Version"/> the parent NodeType MeshNode
+    /// The integer <see cref="MeshWeaver.Mesh.MeshNode.Version"/> the parent NodeType MeshNode
     /// carried at the time the release was produced — i.e. the key
     /// <see cref="AssemblyCollection"/> + <see cref="AssemblyContentPath"/>
-    /// were written under in <see cref="IAssemblyStore"/>. Pinned-release
+    /// were written under in <see cref="MeshWeaver.Mesh.Services.IAssemblyStore"/>. Pinned-release
     /// activation needs this to call <c>IAssemblyStore.TryGetAssemblyPath
     /// (NodeTypePath, AssemblyStoreVersion)</c> — the display
     /// <see cref="Version"/> (a timestamp/hash string) does NOT round-trip to

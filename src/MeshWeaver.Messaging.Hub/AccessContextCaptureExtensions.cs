@@ -5,7 +5,7 @@ namespace MeshWeaver.Messaging;
 /// <summary>
 /// Cross-cutting helper that makes <see cref="AccessService.Context"/>
 /// "survive Subscribe()" on cold observables returned by framework primitives
-/// (<see cref="MeshWeaver.Mesh.Services.IMeshService.CreateNode"/>,
+/// (<c>IMeshService.CreateNode</c>,
 /// <c>MeshNodeStreamHandle.Update</c>, <c>IMeshNodeStreamCache.Update</c>, …).
 ///
 /// <para><b>Why this exists.</b> The messaging layer already restores
@@ -18,13 +18,13 @@ namespace MeshWeaver.Messaging;
 /// the cold pipeline schedules the callback on a different thread (workspace
 /// emission scheduler, thread pool); that thread has no AsyncLocal value;
 /// the inner <c>CreateNode</c>'s PostPipeline sees a null context and the
-/// resulting <see cref="AccessControl"/> check denies or — worse, before the
+/// resulting <c>AccessControl</c> check denies or — worse, before the
 /// 2026-05-21 cleanup — silently falls back to stamping the hub's own
 /// address as principal.</para>
 ///
 /// <para><b>The model: MessageHub sets, framework primitive preserves.</b>
 /// Every framework method that returns a cold <see cref="IObservable{T}"/>
-/// wraps its return with <see cref="CarryAccessContext{T}"/> internally. The
+/// wraps its return with <see cref="CarryAccessContext{T}(System.IObservable{T},System.IServiceProvider)"/> internally. The
 /// helper captures <see cref="AccessService.Context"/> at the moment the
 /// primitive runs (the caller's thread, where AsyncLocal is correct) and
 /// re-stamps it on every emission of the returned pipeline via a per-callback

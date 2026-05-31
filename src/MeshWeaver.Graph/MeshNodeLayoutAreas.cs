@@ -83,7 +83,7 @@ public static class MeshNodeLayoutAreas
     public const string ModelArea = "$Model";
 
     /// <summary>
-    /// Marker that records whether <see cref="AddDefaultLayoutAreas"/> has
+    /// Marker that records whether <see cref="AddDefaultLayoutAreas(MeshWeaver.Messaging.MessageHubConfiguration)"/> has
     /// already run on this <see cref="MessageHubConfiguration"/>, so a second
     /// call is a safe no-op. Necessary because <c>AddGraph</c> now applies
     /// <c>AddDefaultLayoutAreas</c> via <c>ConfigureDefaultNodeHub</c>, and

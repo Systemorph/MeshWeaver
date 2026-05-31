@@ -21,13 +21,13 @@ namespace MeshWeaver.Hosting;
 /// Every consumer — the routing path, every per-instance hub of a NodeType,
 /// <c>NodeTypeEnrichmentHelpers</c>, compile-activity hubs writing terminal
 /// state, path-resolution lookups — goes through that ONE handle. Reads
-/// (<see cref="GetStream"/>) and writes (<see cref="Update"/>) share the same
+/// (<c>GetStream</c>) and writes (<c>Update</c>) share the same
 /// underlying stream, so an update is always visible to every reader.
 ///
 /// <para>The handle is opened on the mesh hub's workspace under
 /// <see cref="AccessService.ImpersonateAsSystem"/> — that's correct for the
 /// system-internal infrastructure subscription. Per-user enforcement lives
-/// at the <see cref="GetStream"/> seam: the cache asks the owning node hub
+/// at the <c>GetStream</c> seam: the cache asks the owning node hub
 /// via <see cref="GetPermissionRequest"/> for the current user's effective
 /// permissions on the path; only when the response carries
 /// <see cref="Permission.Read"/> does the gated observable forward the
@@ -38,7 +38,7 @@ namespace MeshWeaver.Hosting;
 /// <c>workspace.GetRemoteStream(...)</c> from some other hub is a SEPARATE
 /// stream instance; updating it is "lost" — never seen by the readers of the
 /// cached stream (this was the bug behind compile state never landing on a
-/// NodeType's MeshNode). Non-owning hubs MUST use <see cref="Update"/>.</para>
+/// NodeType's MeshNode). Non-owning hubs MUST use <c>Update</c>.</para>
 ///
 /// <para><b>No side-effects on emission.</b> The cache does not kick
 /// compilation — opening the stream activates the per-NodeType hub via the
@@ -52,7 +52,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
     /// <summary>One cache entry: the updatable handle plus the shared,
     /// replay-cached read view over it. The Shared observable is the raw
     /// system-side stream; per-user access gating is applied in
-    /// <see cref="GetStream"/> before each subscriber consumes it.</summary>
+    /// <c>GetStream</c> before each subscriber consumes it.</summary>
     private sealed record Entry(MeshNodeStreamHandle Handle, IObservable<MeshNode> Shared, IDisposable HydrationSub);
 
     /// <summary>
@@ -70,7 +70,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
     /// Maximum time we wait for the owning per-node hub to answer
     /// <see cref="GetPermissionRequest"/>. The handler is synchronous
     /// (`AccessControlPipeline.HandleGetPermission` resolves the local
-    /// <see cref="SecurityService"/> and posts a response immediately)
+    /// <c>SecurityService</c> and posts a response immediately)
     /// once the hub is active. The catch is Orleans cold-start: the per-node
     /// grain may take 5-10s to activate on first touch (cluster placement,
     /// MeshNode hydration, SecurityService warm-up). 15s covers cold start
@@ -482,7 +482,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
     /// invisible to callers.
     ///
     /// 🚨 The cached VALUE is a <see cref="Lazy{T}"/>, not the Subject
-    /// directly, because <see cref="MemoryCacheExtensions.GetOrCreate"/>
+    /// directly, because <c>MemoryCacheExtensions.GetOrCreate</c>
     /// is NOT atomic — the factory can run more than once under contention,
     /// and only ONE result wins per key. Losers would orphan a Subject +
     /// Concat subscription that never gets evicted (their eviction
@@ -659,14 +659,6 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
     }
 
     /// <summary>
-    /// Removes the cached entry for <paramref name="path"/> so the next
-    /// <see cref="GetStream"/> call rebuilds a fresh stream. Called by
-    /// <c>HandleDeleteNodeRequest</c> after the persistence delete commits —
-    /// the Replay(1) cache otherwise holds the pre-delete MeshNode forever
-    /// (the upstream observable doesn't emit "deleted" — the per-node hub is
-    /// gone). Idempotent.
-    /// </summary>
-    /// <summary>
     /// Process-wide synced-query cache. Replaces the legacy
     /// <c>ConditionalWeakTable&lt;IWorkspace, SyncedQueryRegistry&gt;</c> in
     /// <c>SyncedQueryDataSourceExtensions</c> — one registry, one set of
@@ -793,6 +785,14 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
         }
     }
 
+    /// <summary>
+    /// Removes the cached entry for <paramref name="path"/> so the next
+    /// <c>GetStream</c> call rebuilds a fresh stream. Called by
+    /// <c>HandleDeleteNodeRequest</c> after the persistence delete commits —
+    /// the Replay(1) cache otherwise holds the pre-delete MeshNode forever
+    /// (the upstream observable doesn't emit "deleted" — the per-node hub is
+    /// gone). Idempotent.
+    /// </summary>
     public void Invalidate(string path)
     {
         if (_streams.TryRemove(path, out var lazyEntry))
@@ -817,9 +817,9 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
     /// <summary>
     /// True when <paramref name="path"/> is empty or its first segment matches
     /// a known NodeType name (from <see cref="PartitionDefinition.NodeTypeToSuffix"/>).
-    /// Used by <see cref="GetStream"/> to skip the access-check round-trip on
+    /// Used by <c>GetStream</c> to skip the access-check round-trip on
     /// non-partition-rooted paths, which previously triggered the prod
-    /// 2026-05-21 regression where <see cref="PostgreSqlPathRoutingAdapter"/>
+    /// 2026-05-21 regression where <c>PostgreSqlPathRoutingAdapter</c>
     /// lower-cased the segment as a schema name and blew up with
     /// <c>relation "thread.mesh_nodes" does not exist</c>.
     /// </summary>

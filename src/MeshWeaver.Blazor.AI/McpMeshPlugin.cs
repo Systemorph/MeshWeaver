@@ -395,7 +395,7 @@ Returns the same JSON summary shape as MirrorToRemote, with direction='Pull'. Sa
     /// Shared MCP-tool body: posts the mirror request at the mesh hub via
     /// the standard request/response pattern (`hub.Observe`) and serialises
     /// the response. The handler is registered by
-    /// <see cref="MirrorHubExtensions.AddMirrorHandler"/> on the mesh hub
+    /// <c>MirrorHubExtensions.AddMirrorHandler</c> on the mesh hub
     /// (wired into every <c>AddPersistence</c>-enabled host).
     /// </summary>
     private Task<string> PostMirror(MirrorRequest request) =>

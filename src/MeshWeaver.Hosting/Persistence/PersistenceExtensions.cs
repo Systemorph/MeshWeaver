@@ -114,7 +114,7 @@ public static class PersistenceExtensions
     /// Registers <see cref="IMeshQueryCore"/> as a singleton on the top-most
     /// mesh hub's service container. Resolves to <see cref="StorageAdapterMeshQueryProvider"/>,
     /// the unsecured surface (no <c>SecurityService</c> dep) used by
-    /// <see cref="SyncedQueryMeshNodes"/> and other infrastructure paths
+    /// <see cref="MeshWeaver.Graph.SyncedQueryMeshNodes"/> and other infrastructure paths
     /// (NavigationService, VUserHelper, etc.).
     ///
     /// <para>Per-node hubs inherit the registration through Autofac child-scope
@@ -244,9 +244,9 @@ public static class PersistenceExtensions
 
     /// <summary>
     /// Adds in-memory persistence (no file system backing) using a single
-    /// <see cref="AdapterPersistenceService"/> singleton. Use this when the test
+    /// <c>AdapterPersistenceService</c> singleton. Use this when the test
     /// or app does not need <see cref="IPartitionStorageProvider"/> rules
-    /// (e.g. <see cref="EmbeddedResourcePartition"/>) — those go through the
+    /// (e.g. <c>EmbeddedResourcePartition</c>) — those go through the
     /// routing core and require <see cref="AddPartitionedInMemoryPersistence(IServiceCollection)"/>.
     /// </summary>
     /// <param name="services">The service collection</param>
@@ -265,17 +265,17 @@ public static class PersistenceExtensions
 
     /// <summary>
     /// Adds in-memory persistence using the partition-routing stack. Each
-    /// first-segment partition gets its own <see cref="AdapterPersistenceService"/>
-    /// via <see cref="InMemoryPartitionedStoreFactory"/>; explicit
+    /// first-segment partition gets its own <c>AdapterPersistenceService</c>
+    /// via <c>InMemoryPartitionedStoreFactory</c>; explicit
     /// <see cref="IPartitionStorageProvider"/> rules (e.g.
     /// <see cref="EmbeddedResourcePartitionStorageProvider"/> registered by
     /// <c>AddEmbeddedResourcePartition</c>) are honoured first-match-wins; the
     /// in-memory factory is the writable catch-all fallback. Static partitions
     /// (<see cref="PartitionDefinition"/> with <c>DataSource = "static"</c>) are
-    /// surfaced read-only by <see cref="RoutingPersistenceServiceCore"/>.
+    /// surfaced read-only by <c>RoutingPersistenceServiceCore</c>.
     ///
-    /// <para>Use this when the host registers <see cref="EmbeddedResourcePartition"/>
-    /// rules — e.g. <see cref="MeshWeaver.Documentation.DocumentationExtensions.AddDocumentation"/>.
+    /// <para>Use this when the host registers <c>EmbeddedResourcePartition</c>
+    /// rules — e.g. <c>MeshWeaver.Documentation.DocumentationExtensions.AddDocumentation</c>.
     /// Plain <see cref="AddInMemoryPersistence(IServiceCollection)"/> registers a
     /// single store and bypasses the routing core, so embedded-resource
     /// partitions wouldn't be reachable.</para>
@@ -375,9 +375,6 @@ public static class PersistenceExtensions
         return builder.RegisterMeshQueryCoreOnMeshHub();
     }
 
-    /// <summary>
-    /// Adds cached partitioned file system persistence that pre-loads all files into memory.
-    /// </summary>
     // AddCachedPartitionedFileSystemPersistence deleted — no consumers in
     // src/, test/, samples/, or memex/. CachingStorageAdapter survives for
     // AddCachedFileSystemPersistence (single-partition fixture path).
@@ -464,7 +461,7 @@ public static class PersistenceExtensions
 
     /// <summary>
     /// Matches a path that contains <c>Release</c> as a whole path segment —
-    /// the shape <see cref="MeshDataSourceExtensions"/>'s
+    /// the shape <see cref="MeshWeaver.Graph.MeshDataSourceExtensions"/>'s
     /// <c>TryCreateReleaseNode</c> emits at <c>{nodeTypePath}/Release/{version}</c>.
     /// Anchored at start, after a <c>/</c>, and bounded by <c>/</c> or end-of-string
     /// so partition names that merely start with "Release" don't accidentally
