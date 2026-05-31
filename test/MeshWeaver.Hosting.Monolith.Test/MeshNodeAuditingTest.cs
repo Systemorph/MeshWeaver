@@ -1,4 +1,5 @@
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -8,7 +9,6 @@ using MeshWeaver.Messaging;
 using Xunit;
 
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
@@ -24,18 +24,17 @@ public class MeshNodeAuditingTest(ITestOutputHelper output) : MonolithMeshTestBa
     protected override bool ShareMeshAcrossTests => true;
 
     [Fact(Timeout = 20000)]
-    public async Task CreateNodeRequest_StampsCreatedAndLastModifiedFromIdentity()
+    public void CreateNodeRequest_StampsCreatedAndLastModifiedFromIdentity()
     {
-        var ct = TestContext.Current.CancellationToken;
         var client = GetClient();
-        await client.Observe(new PingRequest(), o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
+        client.Observe(new PingRequest(), o => o.WithTarget(Mesh.Address)).Should().Within(15.Seconds()).Emit();
 
         var request = new CreateNodeRequest(
             new MeshNode("audit-create", TestPartition) { Name = "Audit Create", NodeType = "Markdown" })
         {
             CreatedBy = "alice@example.com"
         };
-        var response = await client.Observe(request, o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
+        var response = client.Observe(request, o => o.WithTarget(Mesh.Address)).Should().Within(15.Seconds()).Emit();
 
         response.Message.Success.Should().BeTrue();
         var saved = response.Message.Node!;
@@ -46,11 +45,10 @@ public class MeshNodeAuditingTest(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     [Fact(Timeout = 20000)]
-    public async Task UpdateNodeRequest_PreservesCreatedAndRefreshesLastModified()
+    public void UpdateNodeRequest_PreservesCreatedAndRefreshesLastModified()
     {
-        var ct = TestContext.Current.CancellationToken;
         var client = GetClient();
-        await client.Observe(new PingRequest(), o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
+        client.Observe(new PingRequest(), o => o.WithTarget(Mesh.Address)).Should().Within(15.Seconds()).Emit();
 
         // Create
         var create = new CreateNodeRequest(
@@ -58,20 +56,20 @@ public class MeshNodeAuditingTest(ITestOutputHelper output) : MonolithMeshTestBa
         {
             CreatedBy = "alice@example.com"
         };
-        var createResp = await client.Observe(create, o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
+        var createResp = client.Observe(create, o => o.WithTarget(Mesh.Address)).Should().Within(15.Seconds()).Emit();
         createResp.Message.Success.Should().BeTrue();
         var created = createResp.Message.Node!;
         var originalCreatedDate = created.CreatedDate;
 
-        // Small wait so LastModified is visibly different
-        await Task.Delay(10, ct);
+        // Small wait so LastModified is visibly different (sanctioned distinct-timestamp delay)
+        Thread.Sleep(10);
 
         // Update via UpdateNodeRequest with a new user
         var update = new UpdateNodeRequest(created with { Name = "Renamed" })
         {
             UpdatedBy = "bob@example.com"
         };
-        var updateResp = await client.Observe(update, o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
+        var updateResp = client.Observe(update, o => o.WithTarget(Mesh.Address)).Should().Within(15.Seconds()).Emit();
         updateResp.Message.Success.Should().BeTrue();
         var updated = updateResp.Message.Node!;
 
@@ -86,11 +84,10 @@ public class MeshNodeAuditingTest(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     [Fact(Timeout = 20000)]
-    public async Task CreateNode_PreservesExplicitCreatedDate()
+    public void CreateNode_PreservesExplicitCreatedDate()
     {
-        var ct = TestContext.Current.CancellationToken;
         var client = GetClient();
-        await client.Observe(new PingRequest(), o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
+        client.Observe(new PingRequest(), o => o.WithTarget(Mesh.Address)).Should().Within(15.Seconds()).Emit();
 
         // Import flows (e.g. file-system seed) set CreatedDate explicitly; the handler
         // must not overwrite it with "now".
@@ -101,7 +98,7 @@ public class MeshNodeAuditingTest(ITestOutputHelper output) : MonolithMeshTestBa
             NodeType = "Markdown",
             CreatedDate = historicCreated
         });
-        var response = await client.Observe(request, o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
+        var response = client.Observe(request, o => o.WithTarget(Mesh.Address)).Should().Within(15.Seconds()).Emit();
 
         response.Message.Success.Should().BeTrue();
         response.Message.Node!.CreatedDate.Should().Be(historicCreated);

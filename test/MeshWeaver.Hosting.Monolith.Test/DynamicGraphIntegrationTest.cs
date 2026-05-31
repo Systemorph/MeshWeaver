@@ -1,10 +1,10 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Graph;
@@ -106,62 +106,63 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     #region Hub Initialization Tests
 
     [Fact(Timeout = 20000)]
-    public async Task GraphHub_LoadsChildrenFromPersistence_AtInitialization()
+    public void GraphHub_LoadsChildrenFromPersistence_AtInitialization()
     {
         var client = GetClient();
         var testDataAddress = new Address(TestPartition);
 
         // Initialize TestData hub via ping
-        await client.Observe(new PingRequest(), o => o.WithTarget(testDataAddress)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(testDataAddress)).Should().Within(20.Seconds()).Emit();
 
-        // Verify IMeshService finds the pre-seeded data
-        var children = await MeshQuery.QueryAsync<MeshNode>($"namespace:{TestPartition}", null, TestContext.Current.CancellationToken)
-            .ToListAsync(TestContext.Current.CancellationToken);
+        // Verify IMeshService finds the pre-seeded data — ObserveQuery is the live
+        // fan-out feed; match the first snapshot that carries both org children.
+        var children = MeshQuery.ObserveQuery<MeshNode>($"namespace:{TestPartition}")
+            .Should().Within(20.Seconds())
+            .Match(c => c.Items.Any(n => n.Path == $"{TestPartition}/org1")
+                && c.Items.Any(n => n.Path == $"{TestPartition}/org2")).Items;
         children.Should().HaveCountGreaterThanOrEqualTo(2, "TestData should have at least 2 org children pre-seeded");
-        children.Should().Contain(n => n.Path == $"{TestPartition}/org1");
-        children.Should().Contain(n => n.Path == $"{TestPartition}/org2");
     }
 
     [Fact(Timeout = 20000)]
-    public async Task OrgHub_LoadsChildrenFromPersistence_AtInitialization()
+    public void OrgHub_LoadsChildrenFromPersistence_AtInitialization()
     {
         var client = GetClient();
         var testDataAddress = new Address(TestPartition);
         var orgAddress = new Address($"{TestPartition}/org1");
 
         // Initialize TestData hub first (required for routing to child hubs)
-        await client.Observe(new PingRequest(), o => o.WithTarget(testDataAddress)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(testDataAddress)).Should().Within(20.Seconds()).Emit();
 
         // Initialize org hub via ping
-        await client.Observe(new PingRequest(), o => o.WithTarget(orgAddress)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(orgAddress)).Should().Within(20.Seconds()).Emit();
 
         // Verify IMeshService finds the pre-seeded projects
-        var children = await MeshQuery.QueryAsync<MeshNode>($"namespace:{TestPartition}/org1", null, TestContext.Current.CancellationToken)
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var children = MeshQuery.ObserveQuery<MeshNode>($"namespace:{TestPartition}/org1")
+            .Should().Within(20.Seconds())
+            .Match(c => c.Items.Any(n => n.Path == $"{TestPartition}/org1/proj1")
+                && c.Items.Any(n => n.Path == $"{TestPartition}/org1/proj2")).Items;
         children.Should().HaveCount(2, "org1 should have 2 project children pre-seeded");
-        children.Should().Contain(n => n.Path == $"{TestPartition}/org1/proj1");
-        children.Should().Contain(n => n.Path == $"{TestPartition}/org1/proj2");
     }
 
     [Fact(Timeout = 20000)]
-    public async Task ProjectHub_LoadsChildrenFromPersistence_AtInitialization()
+    public void ProjectHub_LoadsChildrenFromPersistence_AtInitialization()
     {
         var client = GetClient();
         var testDataAddress = new Address(TestPartition);
         var projAddress = new Address($"{TestPartition}/org1/proj1");
 
         // Initialize TestData hub first (required for routing to child hubs)
-        await client.Observe(new PingRequest(), o => o.WithTarget(testDataAddress)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(testDataAddress)).Should().Within(20.Seconds()).Emit();
 
         // Initialize project hub via ping
-        await client.Observe(new PingRequest(), o => o.WithTarget(projAddress)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(projAddress)).Should().Within(20.Seconds()).Emit();
 
         // Verify IMeshService finds the pre-seeded items
-        var children = await MeshQuery.QueryAsync<MeshNode>($"namespace:{TestPartition}/org1/proj1", null, TestContext.Current.CancellationToken)
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var children = MeshQuery.ObserveQuery<MeshNode>($"namespace:{TestPartition}/org1/proj1")
+            .Should().Within(20.Seconds())
+            .Match(c => c.Items.Any(n => n.Path == $"{TestPartition}/org1/proj1/item1")
+                && c.Items.Any(n => n.Path == $"{TestPartition}/org1/proj1/item2")).Items;
         children.Should().HaveCount(2, "proj1 should have 2 item children pre-seeded");
-        children.Should().Contain(n => n.Path == $"{TestPartition}/org1/proj1/item1");
-        children.Should().Contain(n => n.Path == $"{TestPartition}/org1/proj1/item2");
     }
 
     #endregion
@@ -169,10 +170,10 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     #region ResolvePath Tests
 
     [Fact(Timeout = 20000)]
-    public async Task ResolvePath_FindsPersistedNode_NotInConfig()
+    public void ResolvePath_FindsPersistedNode_NotInConfig()
     {
         // Act
-        var resolution = await PathResolver.ResolvePath($"{TestPartition}/org1").FirstAsync().ToTask();
+        var resolution = PathResolver.ResolvePath($"{TestPartition}/org1").Should().Within(20.Seconds()).Emit();
 
         // Assert
         resolution.Should().NotBeNull($"persistence has {TestPartition}/org1");
@@ -181,10 +182,10 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 20000)]
-    public async Task ResolvePath_WalksUpHierarchy_FindsBestMatch()
+    public void ResolvePath_WalksUpHierarchy_FindsBestMatch()
     {
         // Act: resolve path that goes deeper than persisted (nonexistent/deep doesn't exist)
-        var resolution = await PathResolver.ResolvePath($"{TestPartition}/org1/proj1/nonexistent/deep").FirstAsync().ToTask();
+        var resolution = PathResolver.ResolvePath($"{TestPartition}/org1/proj1/nonexistent/deep").Should().Within(20.Seconds()).Emit();
 
         // Assert: should match TestData/org1/proj1 with remainder
         resolution.Should().NotBeNull();
@@ -193,10 +194,10 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 20000)]
-    public async Task ResolvePath_ReturnsExactMatch_WhenFullPathExists()
+    public void ResolvePath_ReturnsExactMatch_WhenFullPathExists()
     {
         // Act
-        var resolution = await PathResolver.ResolvePath($"{TestPartition}/org1/proj1/item1").FirstAsync().ToTask();
+        var resolution = PathResolver.ResolvePath($"{TestPartition}/org1/proj1/item1").Should().Within(20.Seconds()).Emit();
 
         // Assert
         resolution.Should().NotBeNull();
@@ -205,10 +206,10 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 20000)]
-    public async Task ResolvePath_WithRemainder_ReturnsCorrectParts()
+    public void ResolvePath_WithRemainder_ReturnsCorrectParts()
     {
         // Act: resolve path with additional segments beyond existing node
-        var resolution = await PathResolver.ResolvePath($"{TestPartition}/org1/proj1/item1/Overview").FirstAsync().ToTask();
+        var resolution = PathResolver.ResolvePath($"{TestPartition}/org1/proj1/item1/Overview").Should().Within(20.Seconds()).Emit();
 
         // Assert
         resolution.Should().NotBeNull();
@@ -217,20 +218,20 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 20000)]
-    public async Task ResolvePath_ReturnsNull_WhenNoMatchFound()
+    public void ResolvePath_ReturnsNull_WhenNoMatchFound()
     {
         // Act: resolve path that doesn't exist anywhere
-        var resolution = await PathResolver.ResolvePath("nonexistent/path/here").FirstAsync().ToTask();
+        var resolution = PathResolver.ResolvePath("nonexistent/path/here").Should().Within(20.Seconds()).Emit();
 
         // Assert
         resolution.Should().BeNull();
     }
 
     [Fact(Timeout = 20000)]
-    public async Task ResolvePath_UnderscoreNamespaceedSegment_ParsesAsRemainder()
+    public void ResolvePath_UnderscoreNamespaceedSegment_ParsesAsRemainder()
     {
         // Act: resolve path with underscore-prefixed segment (layout area)
-        var resolution = await PathResolver.ResolvePath($"{TestPartition}/_Nodes").FirstAsync().ToTask();
+        var resolution = PathResolver.ResolvePath($"{TestPartition}/_Nodes").Should().Within(20.Seconds()).Emit();
 
         // Assert: TestPartition is the address, "_Nodes" is the remainder (layout area)
         resolution.Should().NotBeNull();
@@ -246,13 +247,13 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     /// Navigating to Space should resolve to the Space node type.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task ResolvePath_Space_ResolvesToSpaceNode()
+    public void ResolvePath_Space_ResolvesToSpaceNode()
     {
         // Arrange
         var pathResolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
 
         // Act
-        var resolution = await pathResolver.ResolvePath("Space").FirstAsync().ToTask();
+        var resolution = pathResolver.ResolvePath("Space").Should().Within(20.Seconds()).Emit();
 
         // Assert
         resolution.Should().NotBeNull("Space should be resolvable");
@@ -283,13 +284,13 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     [InlineData("Space")]
     [InlineData("ACME/Project")]
     [InlineData("ACME/Project/Todo")]
-    public async Task ResolvePath_TypePaths_ResolveCorrectly(string typePath)
+    public void ResolvePath_TypePaths_ResolveCorrectly(string typePath)
     {
         // Arrange
         var pathResolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
 
         // Act
-        var resolution = await pathResolver.ResolvePath(typePath).FirstAsync().ToTask();
+        var resolution = pathResolver.ResolvePath(typePath).Should().Within(20.Seconds()).Emit();
 
         // Assert
         resolution.Should().NotBeNull($"{typePath} should be resolvable");
@@ -449,10 +450,10 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     /// Move node throws when source doesn't exist.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task MoveNodeAsync_ThrowsWhenSourceNotFound()
+    public void MoveNodeAsync_ThrowsWhenSourceNotFound()
     {
         // Act - move via MoveNodeRequest (unique names to avoid filesystem collisions)
-        var response = await Mesh.Observe<MoveNodeResponse>(new MoveNodeRequest($"{TestPartition}/nonexistent-{_uid}", $"{TestPartition}/newpath-{_uid}"), o => o).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var response = Mesh.Observe<MoveNodeResponse>(new MoveNodeRequest($"{TestPartition}/nonexistent-{_uid}", $"{TestPartition}/newpath-{_uid}"), o => o).Should().Within(20.Seconds()).Emit();
 
         // Assert - should fail with source not found
         response.Message.Success.Should().BeFalse("Move should fail when source doesn't exist");
@@ -463,16 +464,16 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     /// Move node throws when target path already exists.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task MoveNodeAsync_ThrowsWhenTargetExists()
+    public void MoveNodeAsync_ThrowsWhenTargetExists()
     {
         // Arrange (unique per run)
         var src = $"{TestPartition}/source-{_uid}";
         var dst = $"{TestPartition}/target-{_uid}";
-        await NodeFactory.CreateNode(MeshNode.FromPath(src) with { Name = "Source", NodeType = "Markdown" });
-        await NodeFactory.CreateNode(MeshNode.FromPath(dst) with { Name = "Target", NodeType = "Markdown" });
+        NodeFactory.CreateNode(MeshNode.FromPath(src) with { Name = "Source", NodeType = "Markdown" }).Should().Within(20.Seconds()).Emit();
+        NodeFactory.CreateNode(MeshNode.FromPath(dst) with { Name = "Target", NodeType = "Markdown" }).Should().Within(20.Seconds()).Emit();
 
         // Act - move via MoveNodeRequest
-        var response = await Mesh.Observe<MoveNodeResponse>(new MoveNodeRequest(src, dst), o => o).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var response = Mesh.Observe<MoveNodeResponse>(new MoveNodeRequest(src, dst), o => o).Should().Within(20.Seconds()).Emit();
 
         // Assert - should fail because target already exists
         response.Message.Success.Should().BeFalse("Move should fail when target already exists");
@@ -489,7 +490,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     /// This validates that default views are properly configured for Space type.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task Space_GetDefaultLayoutArea_DoesNotHang()
+    public void Space_GetDefaultLayoutArea_DoesNotHang()
     {
         var orgAddress = new Address($"{TestPartition}/org1");
 
@@ -497,7 +498,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         var client = GetClient(c => c.AddData(data => data));
 
         // Initialize org hub - this should also set up default views
-        await client.Observe(new PingRequest(), o => o.WithTarget(orgAddress)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(orgAddress)).Should().Within(20.Seconds()).Emit();
 
         // Act: Request the default layout area (Overview) using stream
         // This should not hang if default views are properly configured
@@ -505,8 +506,8 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(orgAddress, reference);
 
-        // Wait for the stream to emit a value (with timeout from test attribute)
-        var value = await stream.Timeout(10.Seconds()).FirstAsync();
+        // Wait for the stream to emit a value
+        var value = stream.Should().Within(10.Seconds()).Emit();
 
         // Assert
         value.Should().NotBe(default(JsonElement), "Default layout area should return content");
@@ -518,7 +519,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     /// This matches the pattern used in LayoutTest.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task Space_GetEmptyArea_ReturnsDefaultView()
+    public void Space_GetEmptyArea_ReturnsDefaultView()
     {
         var orgAddress = new Address($"{TestPartition}/org1");
 
@@ -526,7 +527,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         var client = GetClient(c => c.AddData(data => data));
 
         // Initialize org hub - this should also set up default views
-        await client.Observe(new PingRequest(), o => o.WithTarget(orgAddress)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(orgAddress)).Should().Within(20.Seconds()).Emit();
 
         // Act: Request empty area - should return default view (Details)
         var workspace = client.GetWorkspace();
@@ -534,7 +535,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(orgAddress, reference);
 
         // Wait for the stream to emit a value
-        var value = await stream.Timeout(10.Seconds()).FirstAsync();
+        var value = stream.Should().Within(10.Seconds()).Emit();
 
         // Assert
         value.Should().NotBe(default(JsonElement), "Empty area should return default view content");
@@ -547,7 +548,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     /// space thumbnails or "No items found" message.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task SpaceType_GetCatalog_ShowsSpaces()
+    public void SpaceType_GetCatalog_ShowsSpaces()
     {
         // Arrange
         var typeOrgAddress = new Address("Space");
@@ -556,7 +557,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         var client = GetClient(c => c.AddData(data => data));
 
         // Initialize Space hub - this is a NodeType node
-        await client.Observe(new PingRequest(), o => o.WithTarget(typeOrgAddress)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(typeOrgAddress)).Should().Within(20.Seconds()).Emit();
 
         // Act: Request Search area directly (the default view for NodeType)
         var workspace = client.GetWorkspace();
@@ -567,11 +568,10 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         // namespace filter. The initial "loading" frame contains only the menu/data scaffolding;
         // we don't want to assert against that. This is robust regardless of whether the Search
         // view renders the NodeType-catalog branch or the instance-catalog fallback.
-        var json = await stream
+        var json = stream
             .Select(ci => ci.Value.GetRawText())
-            .Where(j => j.Contains("MeshSearchControl"))
-            .Timeout(TimeSpan.FromSeconds(12))
-            .FirstAsync();
+            .Should().Within(TimeSpan.FromSeconds(12))
+            .Match(j => j.Contains("MeshSearchControl"));
 
         Output.WriteLine($"Catalog JSON (first 3000 chars): {json.Substring(0, Math.Min(3000, json.Length))}");
 
@@ -590,16 +590,18 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     /// This tests the underlying query that the search uses.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task QueryAsync_NodeTypeOrg_ReturnsSpaces()
+    public void QueryAsync_NodeTypeOrg_ReturnsSpaces()
     {
-        // Act - query for all nodes with nodeType Space
+        // Act - query for all nodes with nodeType Space (ObserveQuery = live fan-out feed)
         var query = "nodeType:Space scope:descendants";
-        var nodes = await MeshQuery.QueryAsync<MeshNode>(query, null, TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        var nodes = MeshQuery.ObserveQuery<MeshNode>(query)
+            .Should().Within(20.Seconds())
+            .Match(c => c.Items.Any(n => n.Path == $"{TestPartition}/org1")
+                && c.Items.Any(n => n.Path == $"{TestPartition}/org2")).Items;
         foreach (var node in nodes)
             Output.WriteLine($"Found: {node.Path}");
 
         // Assert
-        nodes.Should().NotBeEmpty("Query should return spaces");
         nodes.Should().Contain(n => n.Path == $"{TestPartition}/org1", "Should find org1");
         nodes.Should().Contain(n => n.Path == $"{TestPartition}/org2", "Should find org2");
     }
@@ -633,12 +635,13 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     /// grandchildren), so namespace: would miss them. scope:descendants is required.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task QueryAsync_ScopeDescendants_FindsCodeNodesUnderNodeType()
+    public void QueryAsync_ScopeDescendants_FindsCodeNodesUnderNodeType()
     {
         // Act: Query for Code nodes under ACME/Project using scope:descendants
         var query = "path:ACME/Project nodeType:Code scope:descendants";
-        var nodes = await MeshQuery.QueryAsync<MeshNode>(query, null, TestContext.Current.CancellationToken)
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var nodes = MeshQuery.ObserveQuery<MeshNode>(query)
+            .Should().Within(20.Seconds())
+            .Match(c => c.Items.Any()).Items;
 
         foreach (var node in nodes)
             Output.WriteLine($"Found Code node: {node.Path} (NodeType={node.NodeType})");
@@ -653,12 +656,14 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     /// This confirms the bug that was fixed by switching to scope:descendants.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task QueryAsync_ScopeChildren_DoesNotFindCodeNodes()
+    public void QueryAsync_ScopeChildren_DoesNotFindCodeNodes()
     {
-        // Act: Query for Code nodes under ACME/Project using namespace: (1 level deep only)
+        // Act: Query for Code nodes under ACME/Project using namespace: (1 level deep only).
+        // Match the Initial snapshot (the legacy QueryAsync result) and assert it's empty.
         var query = "namespace:ACME/Project nodeType:Code";
-        var nodes = await MeshQuery.QueryAsync<MeshNode>(query, null, TestContext.Current.CancellationToken)
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var nodes = MeshQuery.ObserveQuery<MeshNode>(query)
+            .Should().Within(20.Seconds())
+            .Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         foreach (var node in nodes)
             Output.WriteLine($"Found with namespace: {node.Path}");
@@ -673,12 +678,13 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     /// and NodeTypeLayoutAreas.Overview (for code list in left menu).
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task QueryAsync_AcmeProject_HasCodeDescendants()
+    public void QueryAsync_AcmeProject_HasCodeDescendants()
     {
         // Act
         var query = "path:ACME/Project nodeType:Code scope:descendants";
-        var nodes = await MeshQuery.QueryAsync<MeshNode>(query, null, TestContext.Current.CancellationToken)
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var nodes = MeshQuery.ObserveQuery<MeshNode>(query)
+            .Should().Within(20.Seconds())
+            .Match(c => c.Items.Any()).Items;
 
         foreach (var node in nodes)
             Output.WriteLine($"ACME/Project -> Code node: {node.Path}");
@@ -899,10 +905,12 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
     /// Code is now stored as regular MeshNodes with nodeType="Code" and content=CodeConfiguration.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task FileSystem_CodeConfiguration_LoadedFromChildMeshNodes()
+    public void FileSystem_CodeConfiguration_LoadedFromChildMeshNodes()
     {
         // Act - get children of the Code path
-        var codeChildren = await MeshQuery.QueryAsync<MeshNode>("namespace:Type/Organizations/Source", ct: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        var codeChildren = MeshQuery.ObserveQuery<MeshNode>("namespace:Type/Organizations/Source")
+            .Should().Within(20.Seconds())
+            .Match(c => c.Items.Any()).Items;
 
         // Assert
         codeChildren.Should().NotBeEmpty("Code path should have child MeshNodes with CodeConfiguration");
@@ -987,20 +995,21 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 20000)]
-    public async Task Project_CanBeResolved()
+    public void Project_CanBeResolved()
     {
         var pathResolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
-        var resolution = await pathResolver.ResolvePath(ProjectNodeTypePath).FirstAsync().ToTask();
+        var resolution = pathResolver.ResolvePath(ProjectNodeTypePath).Should().Within(20.Seconds()).Emit();
         resolution.Should().NotBeNull($"{ProjectNodeTypePath} should be resolvable");
         Output.WriteLine($"Resolved: Prefix={resolution!.Prefix}, Remainder={resolution.Remainder}");
     }
 
     [Fact(Timeout = 20000)]
-    public async Task Project_QueryAsync_ScopeDescendants_FindsCodeNodes()
+    public void Project_QueryAsync_ScopeDescendants_FindsCodeNodes()
     {
         var queryString = $"namespace:{ProjectNodeTypePath}/Source nodeType:Code";
-        var results = await MeshQuery.QueryAsync<MeshNode>(queryString)
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var results = MeshQuery.ObserveQuery<MeshNode>(queryString)
+            .Should().Within(20.Seconds())
+            .Match(c => c.Items.Any()).Items;
         Output.WriteLine($"Query '{queryString}' returned {results.Count} results");
         foreach (var r in results)
             Output.WriteLine($"  {r.Path} ({r.NodeType})");
@@ -1008,11 +1017,12 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 20000)]
-    public async Task Todo_QueryAsync_FindsCodeNodes()
+    public void Todo_QueryAsync_FindsCodeNodes()
     {
         var queryString = $"namespace:{TodoNodeTypePath}/Source nodeType:Code";
-        var results = await MeshQuery.QueryAsync<MeshNode>(queryString)
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var results = MeshQuery.ObserveQuery<MeshNode>(queryString)
+            .Should().Within(20.Seconds())
+            .Match(c => c.Items.Any()).Items;
         Output.WriteLine($"Query '{queryString}' returned {results.Count} results");
         foreach (var r in results)
             Output.WriteLine($"  {r.Path} ({r.NodeType})");
@@ -1020,10 +1030,10 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 20000)]
-    public async Task Project_PingRequest_ShouldNotDeadlock()
+    public void Project_PingRequest_ShouldNotDeadlock()
     {
         var client = GetClient();
-        var response = await client.Observe(new PingRequest(), o => o.WithTarget(new Address(ProjectNodeTypePath))).FirstAsync().ToTask();
+        var response = client.Observe(new PingRequest(), o => o.WithTarget(new Address(ProjectNodeTypePath))).Should().Within(20.Seconds()).Emit();
         response.Should().NotBeNull();
     }
 

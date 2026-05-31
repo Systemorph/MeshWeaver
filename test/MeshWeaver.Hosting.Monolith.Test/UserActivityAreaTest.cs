@@ -5,7 +5,6 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -132,12 +131,12 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// and that it responds to PingRequest (hub is alive).
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task UserHub_Roland_CanBeCreated()
+    public void UserHub_Roland_CanBeCreated()
     {
         var client = GetClient();
         var rolandAddress = new Address("User/TestUser");
 
-        var response = await client.Observe(new PingRequest(), o => o.WithTarget(rolandAddress)).FirstAsync().ToTask();
+        var response = client.Observe(new PingRequest(), o => o.WithTarget(rolandAddress)).Should().Within(15.Seconds()).Emit();
 
         response.Should().NotBeNull("User/TestUser hub should be created and respond to ping");
     }
@@ -149,12 +148,12 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// the built-in HubConfiguration, losing layout areas.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task ActivityArea_CanBeResolved_ForUserRoland()
+    public void ActivityArea_CanBeResolved_ForUserRoland()
     {
         var client = GetClient();
         var rolandAddress = new Address("User/TestUser");
 
-        await client.Observe(new PingRequest(), o => o.WithTarget(rolandAddress)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(rolandAddress)).Should().Within(15.Seconds()).Emit();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(UserActivityLayoutAreas.ActivityArea);
@@ -163,7 +162,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
             rolandAddress,
             reference);
 
-        var value = await stream.Timeout(TimeSpan.FromSeconds(15)).FirstAsync();
+        var value = stream.Should().Within(TimeSpan.FromSeconds(15)).Emit();
 
         value.Should().NotBe(default(JsonElement),
             "Activity area should render for User/TestUser Ã¢â‚¬â€ AddUserActivityViews() must be invoked");
@@ -175,7 +174,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// This tests the path: persistence Ã¢â€ â€™ MeshCatalog.ResolvePathAsync Ã¢â€ â€™ routing Ã¢â€ â€™ hub creation.
     /// </summary>
     [Fact(Timeout = 15000)]
-    public async Task ActivityArea_WorksForRuntimeCreatedUser()
+    public void ActivityArea_WorksForRuntimeCreatedUser()
     {
         // Arrange Ã¢â‚¬â€ create a user node at runtime (simulating onboarding)
         var username = $"RuntimeUser_{Guid.NewGuid():N}"[..20];
@@ -184,13 +183,13 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
 
         using (accessService.ImpersonateAsHub(Mesh))
         {
-            await meshService.CreateNode(new MeshNode(username, "User")
+            meshService.CreateNode(new MeshNode(username, "User")
             {
                 Name = "Runtime Test User",
                 NodeType = "User",
                 State = MeshNodeState.Active,
                 Content = new User { Email = "runtime@test.com", Bio = "Created at runtime" }
-            });
+            }).Should().Within(15.Seconds()).Emit();
         }
 
         // Act Ã¢â‚¬â€ request the Activity area (same as Index.razor does)
@@ -198,7 +197,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
         var userAddress = new Address("User", username);
 
         // First, verify the hub can be created
-        var pingResponse = await client.Observe(new PingRequest(), o => o.WithTarget(userAddress)).FirstAsync().ToTask();
+        var pingResponse = client.Observe(new PingRequest(), o => o.WithTarget(userAddress)).Should().Within(15.Seconds()).Emit();
         pingResponse.Should().NotBeNull($"User/{username} hub should be created and respond to ping");
 
         // Now request the Activity layout area
@@ -207,7 +206,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             userAddress, reference);
 
-        var value = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
+        var value = stream.Should().Within(TimeSpan.FromSeconds(10)).Emit();
 
         // Assert
         value.Should().NotBe(default(JsonElement),
@@ -219,12 +218,12 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// Also verify the Overview area works (baseline Ã¢â‚¬â€ this uses AddDefaultLayoutAreas).
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task OverviewArea_CanBeResolved_ForUserRoland()
+    public void OverviewArea_CanBeResolved_ForUserRoland()
     {
         var client = GetClient();
         var rolandAddress = new Address("User/TestUser");
 
-        await client.Observe(new PingRequest(), o => o.WithTarget(rolandAddress)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(rolandAddress)).Should().Within(15.Seconds()).Emit();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea);
@@ -233,7 +232,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
             rolandAddress,
             reference);
 
-        var value = await stream.Timeout(TimeSpan.FromSeconds(15)).FirstAsync();
+        var value = stream.Should().Within(TimeSpan.FromSeconds(15)).Emit();
 
         value.Should().NotBe(default(JsonElement),
             "Overview area should render for User/TestUser Ã¢â‚¬â€ AddDefaultLayoutAreas() must be invoked");

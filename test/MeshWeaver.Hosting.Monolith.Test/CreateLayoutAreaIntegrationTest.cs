@@ -82,15 +82,10 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     /// Should show the Name+Description form when ?type=ACME/Project/Todo is specified.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task CreateArea_WithTypeParam_ShowsCreateForm()
+    public void CreateArea_WithTypeParam_ShowsCreateForm()
     {
         var client = GetClient();
         var parentAddress = new Address("ACME/ProductLaunch");
-
-        Output.WriteLine("Initializing hub...");
-        // Initialize the hub first - this triggers dynamic compilation which can take time
-        await client.Observe(new PingRequest(), o => o.WithTarget(parentAddress)).FirstAsync().ToTask();
-        Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
         // Query parameters are passed via the Id property
@@ -99,13 +94,14 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
             Id = "?type=ACME%2FProject%2FTodo"
         };
 
+        // No ping: the layout-area subscription itself activates the hub +
+        // triggers the cold NodeType compile. Budget covers the cold Roslyn build.
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             parentAddress,
             reference);
 
         Output.WriteLine("Waiting for Create form to render...");
-        // Use simpler pattern: just FirstAsync() which waits for any value
-        var value = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
+        var value = stream.Should().Within(TimeSpan.FromSeconds(40)).Emit();
 
         Output.WriteLine($"Received value");
         value.Should().NotBe(default(JsonElement), "Create form should render when type parameter is specified");
@@ -116,26 +112,22 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     /// Should show type selection grid or a message.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task CreateArea_WithoutTypeParam_ShowsTypeSelection()
+    public void CreateArea_WithoutTypeParam_ShowsTypeSelection()
     {
         var client = GetClient();
         var parentAddress = new Address("ACME/ProductLaunch");
 
-        Output.WriteLine("Initializing hub...");
-        // Initialize the hub first - this triggers dynamic compilation which can take time
-        await client.Observe(new PingRequest(), o => o.WithTarget(parentAddress)).FirstAsync().ToTask();
-        Output.WriteLine("Hub initialized.");
-
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.CreateNodeArea);
 
+        // No ping: the layout-area subscription activates the hub + triggers the
+        // cold NodeType compile on its own.
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             parentAddress,
             reference);
 
         Output.WriteLine("Waiting for type selection to render...");
-        // Use simpler pattern: just FirstAsync() which waits for any value
-        var value = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
+        var value = stream.Should().Within(TimeSpan.FromSeconds(40)).Emit();
 
         Output.WriteLine($"Received value");
         value.Should().NotBe(default(JsonElement), "Type selection should render when no type parameter is specified");
@@ -145,26 +137,22 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     /// Test that the Overview area works for ProductLaunch (baseline test).
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task OverviewArea_WorksForProductLaunch()
+    public void OverviewArea_WorksForProductLaunch()
     {
         var client = GetClient();
         var parentAddress = new Address("ACME/ProductLaunch");
 
-        Output.WriteLine("Initializing hub...");
-        // Initialize the hub first - this triggers dynamic compilation which can take time
-        await client.Observe(new PingRequest(), o => o.WithTarget(parentAddress)).FirstAsync().ToTask();
-        Output.WriteLine("Hub initialized.");
-
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea);
 
+        // No ping: the layout-area subscription activates the hub + triggers the
+        // cold NodeType compile on its own.
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             parentAddress,
             reference);
 
         Output.WriteLine("Waiting for Overview to render...");
-        // Use simpler pattern: just FirstAsync() which waits for any value
-        var value = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
+        var value = stream.Should().Within(TimeSpan.FromSeconds(40)).Emit();
 
         Output.WriteLine($"Received value");
         value.Should().NotBe(default(JsonElement), "Overview should render for ProductLaunch");
@@ -174,23 +162,19 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     /// Test that IMeshService service is available for CreateLayoutArea.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task MeshNodeFactory_IsRegistered()
+    public void MeshNodeFactory_IsRegistered()
     {
         var nodeFactory = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         nodeFactory.Should().NotBeNull("IMeshService should be registered for CreateLayoutArea to work");
-
-        await Task.CompletedTask;
     }
 
     /// <summary>
     /// Test that ICreatableTypesProvider is available for CreateLayoutArea.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task CreatableTypesProvider_IsRegistered()
+    public void CreatableTypesProvider_IsRegistered()
     {
         var provider = Mesh.ServiceProvider.GetService<ICreatableTypesProvider>();
         provider.Should().NotBeNull("ICreatableTypesProvider should be registered for type selection");
-
-        await Task.CompletedTask;
     }
 }

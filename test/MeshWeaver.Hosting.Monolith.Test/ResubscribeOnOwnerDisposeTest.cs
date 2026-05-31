@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Graph;
@@ -39,71 +38,48 @@ public class ResubscribeOnOwnerDisposeTest(ITestOutputHelper output) : MonolithM
                 return services;
             });
 
-    // NOTE: kept async. This test is timing-sensitive around owner-hub dispose +
-    // reactivation: the post-dispose ReadNode must wait for the dispose to settle
-    // before reactivating the owner, and there is no positive "dispose completed"
-    // signal to fold into a reactive Match. The blocking-reactive conversion raced
-    // the dispose (ReadNode reactivated mid-teardown → owner returned null → the
-    // wait timed out). The original async shape with an explicit settle is correct
-    // here; test-edge await is sanctioned (WritingTests.md golden rule #1).
     [Fact(Timeout = 60000)]
-    public async Task SubscriberResubscribes_AfterOwnerDispose()
+    public void SubscriberResubscribes_AfterOwnerDispose()
     {
-        // CI agents can be slower than local dev: grain dispose + reactivate + heartbeat
-        // resubscribe cycle needs breathing room.
-        var ct = new CancellationTokenSource(45.Seconds()).Token;
-
         // Arrange — create a node with an initial name; activates the owner hub on first read.
         var path = $"{TestPartition}/resub-target";
-        await NodeFactory.CreateNode(
-            new MeshNode("resub-target", TestPartition) { Name = "Original", NodeType = "Markdown" });
+        NodeFactory.CreateNode(
+            new MeshNode("resub-target", TestPartition) { Name = "Original", NodeType = "Markdown" })
+            .Should().Within(30.Seconds()).Emit();
 
         var client = GetClient(c => c.AddData());
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<MeshNode>(
             new Address(path), new MeshNodeReference());
 
-        var snapshots = new List<string?>();
-        using var sub = stream
-            .Select(ci => ci.Value?.Name)
-            .Where(n => n != null)
-            .Subscribe(n => { lock (snapshots) snapshots.Add(n); });
+        var names = stream.Select(ci => ci.Value?.Name).Where(n => n != null);
 
         // Wait for the initial snapshot — proves the subscription is wired up.
-        await WaitFor(() => { lock (snapshots) return snapshots.Count >= 1; }, 15.Seconds(), ct);
-        string? firstSnapshot;
-        lock (snapshots) firstSnapshot = snapshots[0];
+        // The live stream IS the authoritative source here, so we read `current`
+        // off it rather than re-activating the owner via ReadNode.
+        var firstSnapshot = names.Should().Within(15.Seconds()).Match(n => n == "Original");
         firstSnapshot.Should().Be("Original", "subscriber should receive the initial snapshot");
+        var current = stream.Should().Within(15.Seconds()).Match(ci => ci.Value is { Name: "Original" }).Value!;
 
         // Act — kill the owner grain, then update the node. The update flows through
         // the freshly-reactivated owner; the OLD subscriber is silent until its
         // heartbeat fails and resubscribes.
         client.Post(new DisposeRequest(), o => o.WithTarget(new Address(path)));
-        await Task.Delay(50, ct); // let dispose settle before reactivating the owner
 
-        var current = await ReadNode(path).FirstAsync().ToTask(ct);
-        current.Should().NotBeNull();
-        await NodeFactory.UpdateNode(current! with { Name = "Updated" });
+        // The write races the in-flight dispose: an UpdateNode that lands while the
+        // owner is mid-teardown is dropped / never completes. Rather than a fixed
+        // settle delay, retry the write on a short cadence until the freshly
+        // reactivated owner accepts it — the reactive "wait for owner ready" shape.
+        Observable.Interval(TimeSpan.FromMilliseconds(250)).StartWith(0L)
+            .SelectMany(_ => NodeFactory.UpdateNode(current with { Name = "Updated" })
+                .Select(n => (MeshNode?)n)
+                .Catch((Exception _) => Observable.Return<MeshNode?>(null)))
+            .Should().Within(30.Seconds()).Match(n => n is { Name: "Updated" });
 
         // Assert — within a few heartbeat cycles, the subscriber must see the new value.
-        // Without auto-resubscribe, snapshots stays at ["Original"] forever; with it,
+        // Without auto-resubscribe, the stream stays at "Original" forever; with it,
         // a fresh Initial arrives carrying the updated name.
-        await WaitFor(() => { lock (snapshots) return snapshots.Contains("Updated"); }, 20.Seconds(), ct);
-        string?[] finalSnapshots;
-        lock (snapshots) finalSnapshots = snapshots.ToArray();
-        finalSnapshots.Should().Contain("Updated",
+        names.Should().Within(20.Seconds()).Match(n => n == "Updated",
             "subscriber must auto-resubscribe to the new owner grain and pick up post-dispose updates");
-    }
-
-    private static async Task WaitFor(Func<bool> predicate, TimeSpan timeout, CancellationToken ct)
-    {
-        var deadline = DateTime.UtcNow + timeout;
-        while (!predicate())
-        {
-            ct.ThrowIfCancellationRequested();
-            if (DateTime.UtcNow > deadline)
-                throw new TimeoutException($"Predicate did not become true within {timeout}.");
-            await Task.Delay(50, ct);
-        }
     }
 }

@@ -1,7 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.AI;
 using MeshWeaver.Data;
@@ -81,7 +80,7 @@ public class LanguageModelSyncedQueryTest : MonolithMeshTestBase
     }
 
     [Fact]
-    public async Task SyncedQuery_AgentsAndModels_FullyPopulated()
+    public void SyncedQuery_AgentsAndModels_FullyPopulated()
     {
         // 🚨 Drive the EXACT same workspace.GetQuery call the chat view
         // makes (ThreadChatView.SubscribeToAgentNodes). Three queries,
@@ -99,11 +98,9 @@ public class LanguageModelSyncedQueryTest : MonolithMeshTestBase
         // agents keeps the test resilient against the long-standing CI failure
         // where models don't surface in the synced query (see the conditional
         // model block).
-        var snapshot = await observable
-            .Where(s => s.Any(n => n.NodeType == AgentNodeType.NodeType))
-            .Take(1)
-            .Timeout(15.Seconds())
-            .ToTask();
+        var snapshot = observable
+            .Should().Within(15.Seconds())
+            .Match(s => s.Any(n => n.NodeType == AgentNodeType.NodeType));
 
         var nodes = snapshot.ToList();
         nodes.Should().NotBeEmpty(

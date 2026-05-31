@@ -55,16 +55,16 @@ public class ThreeNodePropagationTest(ITestOutputHelper output) : MonolithMeshTe
     protected override bool ShareMeshAcrossTests => true;
 
     [Fact(Timeout = 30_000)]
-    public async Task ChangeInC_PropagatesViaA_ToB()
+    public void ChangeInC_PropagatesViaA_ToB()
     {
         Output.WriteLine("[test] start");
-        var ct = new CancellationTokenSource(20.Seconds()).Token;
 
         // 1. Create the owning node `a` with an initial Name.
         var pathA = $"{TestPartition}/a";
         Output.WriteLine($"[test] before CreateNode pathA={pathA}");
-        await NodeFactory.CreateNode(
-            new MeshNode("a", TestPartition) { Name = "A0", NodeType = "Markdown" });
+        NodeFactory.CreateNode(
+            new MeshNode("a", TestPartition) { Name = "A0", NodeType = "Markdown" })
+            .Should().Within(20.Seconds()).Emit();
         Output.WriteLine("[test] CreateNode succeeded");
 
         // 2. Create two distinct client hubs (b, c). Each gets its own address +
@@ -84,31 +84,24 @@ public class ThreeNodePropagationTest(ITestOutputHelper output) : MonolithMeshTe
             new Address(pathA), new MeshNodeReference());
 
         // 4. Capture every emission b sees so we can assert the propagation.
+        var bNames = streamFromB.Select(ci => ci.Value?.Name);
         var bSnapshots = new List<string?>();
-        using var subB = streamFromB
-            .Select(ci => ci.Value?.Name)
+        using var subB = bNames
             .Subscribe(name =>
             {
-                bSnapshots.Add(name);
-                Output.WriteLine($"[b] emission #{bSnapshots.Count}: {name ?? "(null)"}");
+                lock (bSnapshots) bSnapshots.Add(name);
+                Output.WriteLine($"[b] emission: {name ?? "(null)"}");
             });
 
         // 5. Wait for b's initial snapshot — proves the stream is wired up.
-        await WaitFor(() => bSnapshots.Contains("A0"), 10.Seconds(), ct);
-        Output.WriteLine($"[b] received initial snapshot 'A0' after {bSnapshots.Count} emission(s)");
+        bNames.Should().Within(10.Seconds()).Match(n => n == "A0");
+        Output.WriteLine("[b] received initial snapshot 'A0'");
 
         // 6. Likewise wait for c — its Update closure receives the latest node so
         //    we want it to have seen at least one emission first (otherwise the
         //    update transform runs against null/stale state).
-        var cSnapshots = new List<string?>();
-        using var subC = streamFromC
-            .Select(ci => ci.Value?.Name)
-            .Subscribe(name =>
-            {
-                cSnapshots.Add(name);
-                Output.WriteLine($"[c] emission #{cSnapshots.Count}: {name ?? "(null)"}");
-            });
-        await WaitFor(() => cSnapshots.Contains("A0"), 10.Seconds(), ct);
+        var cNames = streamFromC.Select(ci => ci.Value?.Name);
+        cNames.Should().Within(10.Seconds()).Match(n => n == "A0");
 
         // 7. C writes via its stream. The synchronization protocol carries the
         //    patch to a's owning hub, which validates + applies + broadcasts.
@@ -124,21 +117,8 @@ public class ThreeNodePropagationTest(ITestOutputHelper output) : MonolithMeshTe
         });
 
         // 8. B's subscription must observe the new state — propagation through a.
-        await WaitFor(() => bSnapshots.Contains("A1"), 10.Seconds(), ct);
-        bSnapshots.Should().Contain("A1",
+        bNames.Should().Within(10.Seconds()).Match(n => n == "A1",
             "b's subscription must observe c's update via a's broadcast");
-        Output.WriteLine($"[b] saw 'A1' propagation after {bSnapshots.Count} emission(s)");
-    }
-
-    private static async Task WaitFor(Func<bool> predicate, TimeSpan timeout, CancellationToken ct)
-    {
-        var deadline = DateTime.UtcNow + timeout;
-        while (!predicate())
-        {
-            ct.ThrowIfCancellationRequested();
-            if (DateTime.UtcNow > deadline)
-                throw new TimeoutException($"Predicate did not become true within {timeout}.");
-            await Task.Delay(50, ct);
-        }
+        Output.WriteLine("[b] saw 'A1' propagation");
     }
 }

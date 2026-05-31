@@ -1,6 +1,6 @@
 using System;
+using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -37,22 +37,21 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// </summary>
 public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private CancellationToken TestTimeout => new CancellationTokenSource(30.Seconds()).Token;
-
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder);
 
-    protected override async Task SetupAccessRightsAsync()
+    protected override Task SetupAccessRightsAsync()
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         // Grant admin on TestPartition to the test runner so this base's
         // CreateNode setup succeeds. Tests then switch ambient identity to
         // unprivileged users to assert that downstream SubscribeRequests
         // carry the SWITCHED identity, not the admin's, and not System.
-        await meshService.CreateNode(
+        meshService.CreateNode(
             AssignmentNodeFactory.UserRole(
                 Mesh.Address.ToFullString(), "Admin", TestPartition))
-            .FirstAsync().ToTask(TestTimeout);
+            .Should().Within(30.Seconds()).Emit();
+        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -69,9 +68,8 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
     /// <c>"alice"</c>.</para>
     /// </summary>
     [Fact(Timeout = 20_000)]
-    public async Task SubscribeRequest_FromRealUser_CarriesUserIdentity()
+    public void SubscribeRequest_FromRealUser_CarriesUserIdentity()
     {
-        var ct = new CancellationTokenSource(15.Seconds()).Token;
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
@@ -81,23 +79,21 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
         // it. So set up the grant first, then assert read succeeds.
         using (accessService.ImpersonateAsSystem())
         {
-            await meshService.CreateNode(
+            meshService.CreateNode(
                 AssignmentNodeFactory.UserRole("alice", "Editor", TestPartition))
-                .FirstAsync().ToTask(ct);
+                .Should().Within(15.Seconds()).Emit();
         }
-        await Mesh.WaitForPermissionAsync(TestPartition, "alice", Permission.Read, ct);
+        Mesh.GetEffectivePermissions(TestPartition, "alice")
+            .Should().Within(90.Seconds()).Match(p => p.HasFlag(Permission.Read));
 
         accessService.SetContext(new AccessContext { ObjectId = "alice", Name = "Alice" });
 
         var workspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
         var stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
             new Address(TestPartition), new MeshNodeReference());
-        var first = await stream
-            .Where(c => c.Value != null)
-            .Take(1)
-            .Timeout(10.Seconds())
-            .FirstAsync()
-            .ToTask(ct);
+        var first = stream
+            .Should().Within(10.Seconds())
+            .Match(c => c.Value != null);
 
         first.Value.Should().NotBeNull(
             "Alice's identity must propagate through the SubscribeRequest to the " +
@@ -113,9 +109,8 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
     /// matches, and the subscription throws "Access denied: user 'sync/…'".
     /// </summary>
     [Fact(Timeout = 20_000)]
-    public async Task SubscribeRequest_FromSyncHubPrincipal_FallsBackToSystem()
+    public void SubscribeRequest_FromSyncHubPrincipal_FallsBackToSystem()
     {
-        var ct = new CancellationTokenSource(15.Seconds()).Token;
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
         // Simulate the workspace-emission-thread leak: AsyncLocal carries a
@@ -134,12 +129,9 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
         // identity → owner denies → OnError or empty.
         var stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
             new Address(TestPartition), new MeshNodeReference());
-        var first = await stream
-            .Where(c => c.Value != null)
-            .Take(1)
-            .Timeout(10.Seconds())
-            .FirstAsync()
-            .ToTask(ct);
+        var first = stream
+            .Should().Within(10.Seconds())
+            .Match(c => c.Value != null);
 
         first.Value.Should().NotBeNull(
             "hub-shaped principals MUST fall back to system-security so the workspace " +
@@ -153,9 +145,8 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
     /// owner can decide. System is the right fallback for "no identity".
     /// </summary>
     [Fact(Timeout = 20_000)]
-    public async Task SubscribeRequest_WithNullContext_FallsBackToSystem()
+    public void SubscribeRequest_WithNullContext_FallsBackToSystem()
     {
-        var ct = new CancellationTokenSource(15.Seconds()).Token;
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         accessService.SetContext(null);
         accessService.SetCircuitContext(null);
@@ -164,12 +155,9 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
 
         var stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
             new Address(TestPartition), new MeshNodeReference());
-        var first = await stream
-            .Where(c => c.Value != null)
-            .Take(1)
-            .Timeout(10.Seconds())
-            .FirstAsync()
-            .ToTask(ct);
+        var first = stream
+            .Should().Within(10.Seconds())
+            .Match(c => c.Value != null);
 
         first.Value.Should().NotBeNull(
             "null AsyncLocal falls back to system-security so background-task " +
@@ -191,7 +179,7 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
     /// ObjectId at the owner side must be "alice" — not "system-security".</para>
     /// </summary>
     [Fact(Timeout = 20_000)]
-    public async Task LayoutAreaSubscription_DeniesWhenUserLacksPermission_ProvesIdentityRouted()
+    public void LayoutAreaSubscription_DeniesWhenUserLacksPermission_ProvesIdentityRouted()
     {
         // The disambiguating shape: subscribe as a user WITHOUT permission.
         // If Alice's identity were silently dropped to "system-security"
@@ -199,7 +187,6 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
         // see content. With the fix, Alice's identity propagates through the
         // SubscribeRequest → owner-side RLS sees Alice + no grant → denies →
         // OnError DeliveryFailureException with "user 'alice' lacks Read".
-        var ct = new CancellationTokenSource(15.Seconds()).Token;
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         accessService.SetContext(new AccessContext { ObjectId = "alice", Name = "Alice" });
 
@@ -207,20 +194,17 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
         var stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
             new Address(TestPartition), new MeshNodeReference());
 
-        Func<Task> act = async () => await stream
+        var notification = stream
             .Where(c => c.Value != null)
-            .Take(1)
-            .Timeout(5.Seconds())
-            .FirstAsync()
-            .ToTask(ct);
-
-        var ex = await act.Should().ThrowAsync<Exception>(
+            .Materialize()
+            .Should().Within(15.Seconds()).Match(n => n.Kind == NotificationKind.OnError);
+        var ex = notification.Exception!;
+        ex.Message.Should().Contain("alice",
+            "the denial message must name Alice as the failing principal — proves " +
+            "her identity reached the owner's RLS gate (not 'system-security'). " +
             "Alice has no grant on TestPartition; her identity-routed SubscribeRequest " +
             "MUST be denied at the owner. If this passes silently the System bypass " +
             "regression is back.");
-        ex.Which.Message.Should().Contain("alice",
-            "the denial message must name Alice as the failing principal — proves " +
-            "her identity reached the owner's RLS gate (not 'system-security')");
     }
 
     /// <summary>
@@ -233,9 +217,8 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
     /// Test 6.
     /// </summary>
     [Fact(Timeout = 20_000)]
-    public async Task SubscribeRequest_PerUserNode_GrantedUserReceivesContent()
+    public void SubscribeRequest_PerUserNode_GrantedUserReceivesContent()
     {
-        var ct = new CancellationTokenSource(15.Seconds()).Token;
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
@@ -245,22 +228,23 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
         var nodePath = $"{TestPartition}/{nodeId}";
         using (accessService.ImpersonateAsSystem())
         {
-            await meshService.CreateNode(new MeshNode(nodeId, TestPartition)
+            meshService.CreateNode(new MeshNode(nodeId, TestPartition)
             {
                 Name = "Alice's private note",
                 NodeType = "Markdown"
-            }).FirstAsync().ToTask(ct);
+            }).Should().Within(15.Seconds()).Emit();
 
-            await meshService.CreateNode(
+            meshService.CreateNode(
                 AssignmentNodeFactory.UserRole("alice", "Editor", nodePath))
-                .FirstAsync().ToTask(ct);
+                .Should().Within(15.Seconds()).Emit();
         }
 
         // Wait for the AccessAssignment to land in SecurityService's per-scope
         // synced cache — without this, the SubscribeRequest race-loses against
         // the synced-query refresh and the test sees Read-denied even though
         // the assignment has been persisted.
-        await Mesh.WaitForPermissionAsync(nodePath, "alice", Permission.Read, ct);
+        Mesh.GetEffectivePermissions(nodePath, "alice")
+            .Should().Within(90.Seconds()).Match(p => p.HasFlag(Permission.Read));
 
         // Switch to Alice. With my fix, SubscribeRequest carries
         // ObjectId="alice" → owner RLS sees Alice → Read granted → emits.
@@ -270,12 +254,9 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
         var stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
             new Address(nodePath), new MeshNodeReference());
 
-        var first = await stream
-            .Where(c => c.Value != null)
-            .Take(1)
-            .Timeout(10.Seconds())
-            .FirstAsync()
-            .ToTask(ct);
+        var first = stream
+            .Should().Within(10.Seconds())
+            .Match(c => c.Value != null);
 
         first.Value.Should().NotBeNull();
         first.Value!.Path.Should().Be(nodePath);
@@ -293,9 +274,8 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
     /// regression.</para>
     /// </summary>
     [Fact(Timeout = 20_000)]
-    public async Task SubscribeRequest_PerUserNode_NonGrantedUserDenied()
+    public void SubscribeRequest_PerUserNode_NonGrantedUserDenied()
     {
-        var ct = new CancellationTokenSource(15.Seconds()).Token;
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
@@ -303,22 +283,23 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
         var nodePath = $"{TestPartition}/{nodeId}";
         using (accessService.ImpersonateAsSystem())
         {
-            await meshService.CreateNode(new MeshNode(nodeId, TestPartition)
+            meshService.CreateNode(new MeshNode(nodeId, TestPartition)
             {
                 Name = "Alice-only note",
                 NodeType = "Markdown"
-            }).FirstAsync().ToTask(ct);
+            }).Should().Within(15.Seconds()).Emit();
 
-            await meshService.CreateNode(
+            meshService.CreateNode(
                 AssignmentNodeFactory.UserRole("alice", "Editor", nodePath))
-                .FirstAsync().ToTask(ct);
+                .Should().Within(15.Seconds()).Emit();
         }
 
         // Wait for the AccessAssignment to land in SecurityService's per-scope
         // synced cache — without this, the SubscribeRequest race-loses against
         // the synced-query refresh and the test sees Read-denied even though
         // the assignment has been persisted.
-        await Mesh.WaitForPermissionAsync(nodePath, "alice", Permission.Read, ct);
+        Mesh.GetEffectivePermissions(nodePath, "alice")
+            .Should().Within(90.Seconds()).Match(p => p.HasFlag(Permission.Read));
 
         // Bob has no grant on the per-user node. Switch to him.
         accessService.SetContext(new AccessContext { ObjectId = "bob", Name = "Bob" });
@@ -332,19 +313,15 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
         // grant on the Alice-only node and replies with DeliveryFailure.
         // If the System bypass were back, Bob would silently see Alice's
         // private content — this is the canonical regression catch.
-        Func<Task> act = async () => await stream
+        var notification = stream
             .Where(c => c.Value != null)
-            .Take(1)
-            .Timeout(5.Seconds())
-            .FirstAsync()
-            .ToTask(ct);
-
-        var ex = await act.Should().ThrowAsync<Exception>(
-            "Bob has no grant; SubscribeRequest must carry his identity → " +
-            "owner-side RLS denies → DeliveryFailureException");
-        ex.Which.Message.Should().Contain("bob",
+            .Materialize()
+            .Should().Within(15.Seconds()).Match(n => n.Kind == NotificationKind.OnError);
+        var ex = notification.Exception!;
+        ex.Message.Should().Contain("bob",
             "denial message names Bob as the failing principal — proves his " +
-            "identity reached the gate (not 'system-security')");
+            "identity reached the gate (not 'system-security'). Bob has no grant; " +
+            "SubscribeRequest must carry his identity → owner-side RLS denies → DeliveryFailureException");
     }
 
     /// <summary>

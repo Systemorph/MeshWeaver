@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Reflection;
 using System.Threading.Tasks;
 using MeshWeaver.Graph;
@@ -41,7 +40,7 @@ public class MeshNodeCompilationIntegrationTest(ITestOutputHelper output) : Mono
     /// completes only after persistence commit, so the next step sees the node.
     /// Single ToTask at the test edge.
     /// </summary>
-    private Task<GetCompilationPathResponse> CreateAndCompile(
+    private IObservable<GetCompilationPathResponse> CreateAndCompile(
         string nodeTypeId,
         NodeTypeDefinition definition,
         params (string Name, string Code)[] sources)
@@ -72,43 +71,41 @@ public class MeshNodeCompilationIntegrationTest(ITestOutputHelper output) : Mono
                     Mesh,
                     (MeshWeaver.Messaging.IRequest<GetCompilationPathResponse>)new GetCompilationPathRequest(),
                     o => o.WithTarget(new Address(nodeTypePath))))
-            .Select(d => d.Message)
-            .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+            .Select(d => d.Message);
     }
 
     [Fact]
-    public async Task CompilesSimpleNodeTypeWithDefaultSources()
+    public void CompilesSimpleNodeTypeWithDefaultSources()
     {
-        var response = await CreateAndCompile("Story",
+        var response = CreateAndCompile("Story",
             new NodeTypeDefinition { Configuration = "config => config.WithContentType<Story>()" },
             ("code", @"
 public record Story
 {
     public string Id { get; init; } = string.Empty;
     public string Title { get; init; } = string.Empty;
-}"));
+}")).Should().Within(60.Seconds()).Emit();
 
         response.Success.Should().BeTrue($"compile should succeed; error: {response.Error}");
         response.AssemblyLocation.Should().NotBeNullOrEmpty();
     }
 
     [Fact]
-    public async Task CompileFailsWhenSourceCodeIsInvalid()
+    public void CompileFailsWhenSourceCodeIsInvalid()
     {
-        var response = await CreateAndCompile("Broken",
+        var response = CreateAndCompile("Broken",
             new NodeTypeDefinition { Configuration = "config => config.WithContentType<Broken>()" },
-            ("code", "public record Broken { this is not valid C# }"));
+            ("code", "public record Broken { this is not valid C# }")).Should().Within(60.Seconds()).Emit();
 
         response.Success.Should().BeFalse("compile should fail for invalid source");
         response.Error.Should().NotBeNullOrEmpty();
     }
 
     [Fact]
-    public async Task CompileWithMultipleSourceLocationsPullsInExternalCode()
+    public void CompileWithMultipleSourceLocationsPullsInExternalCode()
     {
         // Post NodeType has Platform record under its Source.
-        var postResponse = await CreateAndCompile("Post",
+        var postResponse = CreateAndCompile("Post",
             new NodeTypeDefinition { Configuration = "config => config.WithContentType<Post>()" },
             ("code", @"
 public record Platform
@@ -118,28 +115,19 @@ public record Platform
 public record Post
 {
     public string Id { get; init; } = string.Empty;
-}"));
+}")).Should().Within(60.Seconds()).Emit();
         postResponse.Success.Should().BeTrue($"Post should compile; error: {postResponse.Error}");
 
         // Wait for the catalog index to pick up Post's Source/code node before
         // Profile's compile queries `namespace:type/Post/Source scope:subtree`.
-        // The compilation service uses QueryAsync which goes through the
-        // eventually-consistent catalog — on cold-start CI, the just-created
-        // Code node for Post takes 200-2000ms to appear there. Stream-poll
-        // the re-query on a 100 ms cadence — replaces a hand-rolled while +
-        // Task.Delay(100) loop. Pattern (b) from WritingTests.md.
-        var ct = TestContext.Current.CancellationToken;
-        await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
-            .SelectMany(_ => Observable.FromAsync(() => MeshService
-                .QueryAsync<MeshNode>("namespace:type/Post/Source scope:subtree nodeType:Code", ct: ct)
-                .ToListAsync(ct).AsTask()))
-            .Where(list => list.Any(n => n.Path == "type/Post/Source/code"))
-            .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(15))
-            .ToTask(ct);
+        // ObserveQuery is a live change feed (fan-out baked in) — it emits the
+        // Added change when the just-created Code node surfaces, so we just match
+        // the first snapshot that contains it. No Interval poll.
+        MeshService.ObserveQuery<MeshNode>("namespace:type/Post/Source scope:subtree nodeType:Code")
+            .Should().Within(15.Seconds()).Match(c => c.Items.Any(n => n.Path == "type/Post/Source/code"));
 
         // Profile NodeType references Platform via cross-NodeType Sources.
-        var response = await CreateAndCompile("Profile",
+        var response = CreateAndCompile("Profile",
             new NodeTypeDefinition
             {
                 Configuration = "config => config.WithContentType<Profile>()",
@@ -154,7 +142,7 @@ public record Profile
 {
     public string Id { get; init; } = string.Empty;
     public Platform? Platform { get; init; }
-}"));
+}")).Should().Within(60.Seconds()).Emit();
 
         response.Success.Should().BeTrue($"Profile should compile with cross-NodeType Sources; error: {response.Error}");
         response.AssemblyLocation.Should().NotBeNullOrEmpty();

@@ -1,8 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -32,35 +32,33 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : MonolithMeshTestBase
 
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-    private Task CreateNode(string path, string? name = null, string? nodeType = null, object? content = null)
+    private void CreateNode(string path, string? name = null, string? nodeType = null, object? content = null)
         => MeshService.CreateNode(MeshNode.FromPath(path) with
         {
             Name = name ?? path.Split('/').Last(),
             NodeType = nodeType ?? "Markdown",
             Content = content,
             State = MeshNodeState.Active
-        }).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        }).Should().Within(30.Seconds()).Emit();
 
-    private Task<MeshNode?> GetNode(string path)
+    private MeshNode? GetNode(string path)
         => Mesh.GetMeshNode(path, TimeSpan.FromSeconds(15))
-            .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+            .Should().Within(15.Seconds()).Emit();
 
-    private Task<int> CopyTree(string source, string target, bool force)
+    private int CopyTree(string source, string target, bool force)
         => NodeCopyHelper.CopyNodeTree(MeshService, MeshService, Mesh, source, target, force)
-            .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+            .Should().Within(30.Seconds()).Emit();
 
     [Fact]
-    public async Task CopySingleNode_ToNewNamespace()
+    public void CopySingleNode_ToNewNamespace()
     {
-        await CreateNode("org/Acme", "Acme Corp", "Markdown");
+        CreateNode("org/Acme", "Acme Corp", "Markdown");
 
-        var copied = await CopyTree("org/Acme", "workspace", force: false);
+        var copied = CopyTree("org/Acme", "workspace", force: false);
 
         copied.Should().Be(1);
 
-        var target = await GetNode("workspace/Acme");
+        var target = GetNode("workspace/Acme");
         target.Should().NotBeNull();
         target!.Name.Should().Be("Acme Corp");
         target.NodeType.Should().Be("Markdown");
@@ -68,102 +66,105 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact]
-    public async Task CopyNodeTree_WithDescendants()
+    public void CopyNodeTree_WithDescendants()
     {
-        await CreateNode("org/Acme", "Acme Corp", "Markdown");
-        await CreateNode("org/Acme/Team1", "Team One", "Markdown");
-        await CreateNode("org/Acme/Team2", "Team Two", "Markdown");
-        await CreateNode("org/Acme/Team1/Alice", "Alice", "Markdown");
+        CreateNode("org/Acme", "Acme Corp", "Markdown");
+        CreateNode("org/Acme/Team1", "Team One", "Markdown");
+        CreateNode("org/Acme/Team2", "Team Two", "Markdown");
+        CreateNode("org/Acme/Team1/Alice", "Alice", "Markdown");
 
-        var copied = await CopyTree("org/Acme", "workspace", force: false);
+        var copied = CopyTree("org/Acme", "workspace", force: false);
 
         copied.Should().Be(4);
 
-        (await GetNode("workspace/Acme")).Should().NotBeNull();
-        (await GetNode("workspace/Acme/Team1")).Should().NotBeNull();
-        (await GetNode("workspace/Acme/Team2")).Should().NotBeNull();
-        (await GetNode("workspace/Acme/Team1/Alice")).Should().NotBeNull();
+        GetNode("workspace/Acme").Should().NotBeNull();
+        GetNode("workspace/Acme/Team1").Should().NotBeNull();
+        GetNode("workspace/Acme/Team2").Should().NotBeNull();
+        GetNode("workspace/Acme/Team1/Alice").Should().NotBeNull();
 
-        var alice = await GetNode("workspace/Acme/Team1/Alice");
+        var alice = GetNode("workspace/Acme/Team1/Alice");
         alice!.Name.Should().Be("Alice");
     }
 
     [Fact]
-    public async Task CopyNodeTree_SkipsExistingWhenNotForced()
+    public void CopyNodeTree_SkipsExistingWhenNotForced()
     {
-        await CreateNode("org/Acme", "Acme Corp", "Markdown");
-        await CreateNode("org/Acme/Team1", "Team One", "Markdown");
-        await CreateNode("workspace/Acme", "Existing Acme", "Markdown");
+        CreateNode("org/Acme", "Acme Corp", "Markdown");
+        CreateNode("org/Acme/Team1", "Team One", "Markdown");
+        CreateNode("workspace/Acme", "Existing Acme", "Markdown");
 
-        var copied = await CopyTree("org/Acme", "workspace", force: false);
+        var copied = CopyTree("org/Acme", "workspace", force: false);
 
         copied.Should().Be(1);
 
-        var existing = await GetNode("workspace/Acme");
+        var existing = GetNode("workspace/Acme");
         existing!.Name.Should().Be("Existing Acme");
     }
 
     [Fact]
-    public async Task CopyNodeTree_OverwritesExistingWhenForced()
+    public void CopyNodeTree_OverwritesExistingWhenForced()
     {
-        await CreateNode("org/Acme", "Acme Corp", "Markdown");
-        await CreateNode("workspace/Acme", "Existing Acme", "Markdown");
+        CreateNode("org/Acme", "Acme Corp", "Markdown");
+        CreateNode("workspace/Acme", "Existing Acme", "Markdown");
 
-        var copied = await CopyTree("org/Acme", "workspace", force: true);
+        var copied = CopyTree("org/Acme", "workspace", force: true);
 
         copied.Should().Be(1);
 
-        var overwritten = await GetNode("workspace/Acme");
+        var overwritten = GetNode("workspace/Acme");
         overwritten!.Name.Should().Be("Acme Corp");
     }
 
     [Fact]
-    public async Task CopyNodeTree_ThrowsWhenSourceNotFound()
+    public void CopyNodeTree_ThrowsWhenSourceNotFound()
     {
-        var act = () => CopyTree("nonexistent/path", "workspace", force: false);
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*Source node not found*");
+        var notification = NodeCopyHelper
+            .CopyNodeTree(MeshService, MeshService, Mesh, "nonexistent/path", "workspace", force: false)
+            .Materialize()
+            .Should().Within(30.Seconds()).Match(n => n.Kind == NotificationKind.OnError);
+        notification.Exception.Should().BeOfType<InvalidOperationException>()
+            .Which.Message.Should().Contain("Source node not found");
     }
 
     [Fact]
-    public async Task CopyNodeTree_ToEmptyNamespace()
+    public void CopyNodeTree_ToEmptyNamespace()
     {
-        await CreateNode("org/Acme", "Acme Corp", "Markdown");
-        await CreateNode("org/Acme/Sub", "Sub Node", "Markdown");
+        CreateNode("org/Acme", "Acme Corp", "Markdown");
+        CreateNode("org/Acme/Sub", "Sub Node", "Markdown");
 
-        var copied = await CopyTree("org/Acme", "", force: false);
+        var copied = CopyTree("org/Acme", "", force: false);
 
         copied.Should().Be(2);
 
-        (await GetNode("Acme")).Should().NotBeNull();
-        (await GetNode("Acme/Sub")).Should().NotBeNull();
+        GetNode("Acme").Should().NotBeNull();
+        GetNode("Acme/Sub").Should().NotBeNull();
     }
 
     [Fact]
-    public async Task CopyNodeTree_PreservesContent()
+    public void CopyNodeTree_PreservesContent()
     {
         var content = new Dictionary<string, object?> { ["key"] = "value" };
-        await CreateNode("src/Doc", "My Doc", "Markdown", content);
+        CreateNode("src/Doc", "My Doc", "Markdown", content);
 
-        var copied = await CopyTree("src/Doc", "dest", force: false);
+        var copied = CopyTree("src/Doc", "dest", force: false);
 
         copied.Should().Be(1);
 
-        var target = await GetNode("dest/Doc");
+        var target = GetNode("dest/Doc");
         target.Should().NotBeNull();
         target!.Content.Should().NotBeNull();
     }
 
     [Fact]
-    public async Task CopyRootLevelNode_ToNamespace()
+    public void CopyRootLevelNode_ToNamespace()
     {
-        await CreateNode("TopLevel", "Top Level Node", "Markdown");
+        CreateNode("TopLevel", "Top Level Node", "Markdown");
 
-        var copied = await CopyTree("TopLevel", "workspace", force: false);
+        var copied = CopyTree("TopLevel", "workspace", force: false);
 
         copied.Should().Be(1);
 
-        var target = await GetNode("workspace/TopLevel");
+        var target = GetNode("workspace/TopLevel");
         target.Should().NotBeNull();
         target!.Name.Should().Be("Top Level Node");
     }

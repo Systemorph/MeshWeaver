@@ -1,9 +1,7 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -39,39 +37,36 @@ public class MeshNodeStreamCacheConcurrencyTest(ITestOutputHelper output) : Mono
     private const string Namespace = $"{TestPartition}/CacheConcurrency";
 
     [Fact(Timeout = 30_000)]
-    public async Task GetQuery_ManyConcurrentCallersSameId_AllSeeSameSnapshot()
+    public void GetQuery_ManyConcurrentCallersSameId_AllSeeSameSnapshot()
     {
         var cache = Mesh.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
         var id = $"$concurrency-test-{Guid.NewGuid():N}";
         var query = $"namespace:{Namespace} nodeType:Markdown";
 
         // Seed one node so the snapshot is non-empty.
-        await NodeFactory.CreateNode(new MeshNode("seed", Namespace)
+        NodeFactory.CreateNode(new MeshNode("seed", Namespace)
         {
             Name = "Seed",
             NodeType = "Markdown",
             State = MeshNodeState.Active,
-        }).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        }).Should().Within(15.Seconds()).Emit();
 
-        // Fan-out: N concurrent calls to GetQuery for the same id, each takes
-        // the first emission. With AutoConnect(1) the first to subscribe
-        // triggers the upstream connect; the rest read from Replay(1). If
-        // the CAS loop's per-iteration AutoConnect(0) was leaking subscriptions
-        // (the bug fixed in 04fae8415), we'd see N upstream queries instead
-        // of 1 — measurable by counting StaticNodeQueryProvider's ObserveQuery
-        // hits via the dispatch trace, but for the contract test we just
-        // assert all N subscribers see the same snapshot.
+        // Fan-out reactively: N independent subscriptions to GetQuery for the
+        // same id, each taking its first emission, merged into one stream. With
+        // AutoConnect(1) the first to subscribe triggers the upstream connect;
+        // the rest read from Replay(1). If the CAS loop's per-iteration
+        // AutoConnect(0) was leaking subscriptions (the bug fixed in 04fae8415),
+        // we'd see N upstream queries instead of 1 — for the contract test we
+        // assert all N subscribers see the same snapshot. No Task.Run: the
+        // observable fan-out IS the concurrency.
         const int Concurrency = 64;
-        var results = new ConcurrentBag<IReadOnlyList<string>>();
-        var tasks = Enumerable.Range(0, Concurrency).Select(_ => Task.Run(async () =>
-        {
-            var snapshot = await cache.GetQuery(id, query)
-                .FirstAsync()
-                .ToTask(TestContext.Current.CancellationToken);
-            results.Add(snapshot.Select(n => n.Path).OrderBy(p => p).ToList());
-        })).ToArray();
-
-        await Task.WhenAll(tasks);
+        var results = Observable.Merge(Enumerable.Range(0, Concurrency)
+                .Select(_ => cache.GetQuery(id, query)
+                    .Take(1)
+                    .Select(snapshot => snapshot.Select(n => n.Path).OrderBy(p => p).ToList())))
+            .Take(Concurrency)
+            .ToList()
+            .Should().Within(20.Seconds()).Emit();
 
         results.Should().HaveCount(Concurrency, "every concurrent caller must complete");
         var distinct = results.Select(r => string.Join("|", r)).Distinct().ToList();
@@ -82,7 +77,7 @@ public class MeshNodeStreamCacheConcurrencyTest(ITestOutputHelper output) : Mono
     }
 
     [Fact(Timeout = 30_000)]
-    public async Task GetQuery_ReturnsLiveUpdatesAfterRuntimeCreate()
+    public void GetQuery_ReturnsLiveUpdatesAfterRuntimeCreate()
     {
         var cache = Mesh.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
         var id = $"$live-update-test-{Guid.NewGuid():N}";
@@ -92,26 +87,23 @@ public class MeshNodeStreamCacheConcurrencyTest(ITestOutputHelper output) : Mono
         // upstream and starts buffering the synced-query change feed.
         var liveSnapshots = new List<int>();
         using var sub = cache.GetQuery(id, query)
-            .Subscribe(snapshot => liveSnapshots.Add(snapshot.Count()));
+            .Subscribe(snapshot => { lock (liveSnapshots) liveSnapshots.Add(snapshot.Count()); });
 
         // Seed two nodes.
-        await NodeFactory.CreateNode(new MeshNode("live-1", Namespace)
+        NodeFactory.CreateNode(new MeshNode("live-1", Namespace)
         {
             Name = "Live 1", NodeType = "Markdown", State = MeshNodeState.Active,
-        }).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await NodeFactory.CreateNode(new MeshNode("live-2", Namespace)
+        }).Should().Within(15.Seconds()).Emit();
+        NodeFactory.CreateNode(new MeshNode("live-2", Namespace)
         {
             Name = "Live 2", NodeType = "Markdown", State = MeshNodeState.Active,
-        }).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        }).Should().Within(15.Seconds()).Emit();
 
         // Subscribers attaching AFTER the writes must see at least 2 nodes —
         // the AutoConnect(1) Replay buffer should reflect the live state, not
         // the empty Initial.
-        var lateSubscriberCount = await cache.GetQuery(id, query)
-            .Where(s => s.Count() >= 2)
-            .Timeout(10.Seconds())
-            .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+        var lateSubscriberCount = cache.GetQuery(id, query)
+            .Should().Within(10.Seconds()).Match(s => s.Count() >= 2);
         lateSubscriberCount.Count().Should().BeGreaterThanOrEqualTo(2);
 
         // The first subscriber (held open across both creates) should also
@@ -121,31 +113,30 @@ public class MeshNodeStreamCacheConcurrencyTest(ITestOutputHelper output) : Mono
     }
 
     [Fact(Timeout = 30_000)]
-    public async Task GetQuery_ConcurrentDifferentIds_AllResolveIndependently()
+    public void GetQuery_ConcurrentDifferentIds_AllResolveIndependently()
     {
         var cache = Mesh.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
 
-        await NodeFactory.CreateNode(new MeshNode("indep-seed", Namespace)
+        NodeFactory.CreateNode(new MeshNode("indep-seed", Namespace)
         {
             Name = "Seed", NodeType = "Markdown", State = MeshNodeState.Active,
-        }).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        }).Should().Within(15.Seconds()).Emit();
 
-        // Each task uses a distinct id — exercises the CAS swap with N
+        // Each subscription uses a distinct id — exercises the CAS swap with N
         // different keys hitting _queries simultaneously. The ImmutableDictionary
-        // CAS retry loop must converge for every key.
+        // CAS retry loop must converge for every key. Merged reactive fan-out,
+        // no Task.Run.
         const int Concurrency = 32;
         var query = $"namespace:{Namespace} nodeType:Markdown";
 
-        var tasks = Enumerable.Range(0, Concurrency).Select(i => Task.Run(async () =>
-        {
-            var id = $"$independent-{i}";
-            var snapshot = await cache.GetQuery(id, query)
-                .FirstAsync()
-                .ToTask(TestContext.Current.CancellationToken);
-            return snapshot.Any(n => n.Path == $"{Namespace}/indep-seed");
-        })).ToArray();
+        var results = Observable.Merge(Enumerable.Range(0, Concurrency)
+                .Select(i => cache.GetQuery($"$independent-{i}", query)
+                    .Take(1)
+                    .Select(snapshot => snapshot.Any(n => n.Path == $"{Namespace}/indep-seed"))))
+            .Take(Concurrency)
+            .ToList()
+            .Should().Within(20.Seconds()).Emit();
 
-        var results = await Task.WhenAll(tasks);
         results.Should().AllBeEquivalentTo(true,
             System.Text.Json.JsonSerializerOptions.Default,
             because: "every distinct-id concurrent caller must see the seeded node");
