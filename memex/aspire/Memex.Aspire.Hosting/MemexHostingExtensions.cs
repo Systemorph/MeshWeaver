@@ -48,7 +48,11 @@ public static class MemexHostingExtensions
             .WaitFor(db);
 
         // --- Portal (co-hosted Orleans silo + Blazor web) ---
-        var portal = builder.AddContainer(name, $"{registry}/{portalRepo}", tag)
+        // Resource name is "{name}-portal" so it never collides with the "memex" database
+        // resource that AddDatabase("memex") creates (Aspire resource names are case-insensitive
+        // and must be unique). The DB resource name stays "memex" because WithReference injects
+        // ConnectionStrings__memex, which the portal reads as ConnectionStrings:memex.
+        var portal = builder.AddContainer($"{name}-portal", $"{registry}/{portalRepo}", tag)
             .WithHttpEndpoint(targetPort: 8080, name: "http")
             .WithExternalHttpEndpoints()
             .WithReference(db)
