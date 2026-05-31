@@ -99,7 +99,7 @@ internal static class ThreadSubmission
         // of the SAME claim resolve to the SAME cell (idempotent create/commit),
         // while a genuinely new round (next turn / resubmit, Messages.Count advanced)
         // gets a distinct cell.
-        var responseMessageId = DeriveDeterministicResponseId(ids, thread.Messages.Count);
+        var responseMessageId = DeriveDeterministicResponseId(ids, thread.Messages.Count, thread.PendingUserMessages);
         return new RoundDispatch(
             ids,
             responseMessageId,
@@ -126,9 +126,22 @@ internal static class ThreadSubmission
     /// repeated dispatches of the same claim (status oscillation) reuse one cell;
     /// distinct across rounds because either the user ids or Messages.Count differ.
     /// </summary>
-    internal static string DeriveDeterministicResponseId(IReadOnlyList<string> ids, int messageCount)
+    internal static string DeriveDeterministicResponseId(
+        IReadOnlyList<string> ids, int messageCount,
+        IReadOnlyDictionary<string, ThreadMessage> pending)
     {
-        var key = string.Join(",", ids) + "|" + messageCount;
+        // Include each drained pending message's Timestamp + Text in the key, not
+        // just the ids + count. A resubmit re-adds the SAME user id with a fresh
+        // Timestamp (DateTime.UtcNow) and new text (ResubmitMessage), so keying only
+        // on (ids, Messages.Count) collided with the original round → the resubmit
+        // reused the old response cell instead of creating a new one
+        // (Resubmit_*_NewRoundCreated / Resubmit_*_DoesNotDeadlock). The Timestamp
+        // makes each round's cell distinct; the value is fixed on the pending message
+        // (not recomputed per dispatch), so it stays stable across one claim's
+        // re-dispatch oscillation.
+        var content = string.Join("|", ids.Select(id =>
+            pending.TryGetValue(id, out var m) ? $"{m.Timestamp.Ticks}:{m.Text}" : id));
+        var key = string.Join(",", ids) + "|" + messageCount + "|" + content;
         var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(key));
         return Convert.ToHexString(hash, 0, 4).ToLowerInvariant();
     }
