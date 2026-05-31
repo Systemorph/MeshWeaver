@@ -1,0 +1,119 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/0.1.2-preview/CreateUIDefinition.MultiVm.json#",
+  "handler": "Microsoft.Azure.CreateUIDef",
+  "version": "0.1.2-preview",
+  "parameters": {
+    "config": {
+      "isWizard": false,
+      "basics": {
+        "description": "Deploy the **MeshWeaver Memex** portal into your own Azure subscription. You own the infrastructure and the data; updates ship as new offer versions. The portal and its database run as Azure Container Apps from the public images at `ghcr.io/systemorph`.",
+        "location": {
+          "label": "Region",
+          "toolTip": "Azure region for the Container Apps environment, Postgres, and storage.",
+          "resourceTypes": [ "Microsoft.App/managedEnvironments" ]
+        }
+      }
+    },
+    "basics": [],
+    "steps": [
+      {
+        "name": "sizing",
+        "label": "Sizing",
+        "elements": [
+          {
+            "name": "imageTag",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Image tag",
+            "defaultValue": "latest",
+            "toolTip": "Tag of the ghcr.io/systemorph/memex-portal-ai + memex-migration images to deploy (e.g. a released version).",
+            "constraints": { "required": true }
+          },
+          {
+            "name": "replicas",
+            "type": "Microsoft.Common.Slider",
+            "label": "Portal replicas",
+            "min": 1,
+            "max": 6,
+            "defaultValue": 2,
+            "toolTip": "Orleans needs >= 2 for resilience under load. Single-node uses localhost clustering; >1 uses ADO.NET-Postgres clustering (HA)."
+          }
+        ]
+      },
+      {
+        "name": "ai",
+        "label": "AI capabilities",
+        "elements": [
+          {
+            "name": "providers",
+            "type": "Microsoft.Common.OptionsGroup",
+            "label": "In-process model providers to enable",
+            "multiselect": true,
+            "defaultValue": [ "Azure OpenAI" ],
+            "toolTip": "Which API-key providers ship (Features:Ai:Providers). Bring your own key below.",
+            "constraints": {
+              "allowedValues": [
+                { "label": "Anthropic", "value": "Anthropic" },
+                { "label": "Azure OpenAI", "value": "AzureOpenAI" },
+                { "label": "Azure AI Foundry", "value": "AzureFoundry" },
+                { "label": "OpenAI", "value": "OpenAI" }
+              ]
+            }
+          },
+          {
+            "name": "modelProviderKey",
+            "type": "Microsoft.Common.PasswordBox",
+            "label": { "password": "Model provider API key", "confirmPassword": "Confirm key" },
+            "toolTip": "Your Azure OpenAI / Azure AI Foundry / Anthropic key. Stored as an ARM secureString; injected as a container secret.",
+            "options": { "hideConfirmation": true },
+            "constraints": { "required": false }
+          },
+          {
+            "name": "modelProviderEndpoint",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Model provider endpoint",
+            "toolTip": "Azure OpenAI / Foundry endpoint URL (leave blank for direct OpenAI/Anthropic).",
+            "constraints": { "required": false }
+          },
+          {
+            "name": "includeAiClis",
+            "type": "Microsoft.Common.CheckBox",
+            "label": "Bundle co-hosted Claude Code + GitHub Copilot CLIs (portal-ai image)",
+            "toolTip": "Deploys the larger portal-ai image so users can connect their own Claude/Copilot subscriptions. Uncheck for the lean portal."
+          }
+        ]
+      },
+      {
+        "name": "security",
+        "label": "Security",
+        "elements": [
+          {
+            "name": "masterKey",
+            "type": "Microsoft.Common.PasswordBox",
+            "label": { "password": "Provider-key encryption master key", "confirmPassword": "Confirm master key" },
+            "toolTip": "Base64 32-byte key (Ai:KeyProtection:MasterKey) that envelope-encrypts stored provider credentials at rest. Keep it safe; rotating it invalidates stored keys.",
+            "options": { "hideConfirmation": true },
+            "constraints": { "required": true }
+          },
+          {
+            "name": "allowSelfOnboarding",
+            "type": "Microsoft.Common.CheckBox",
+            "label": "Allow new users to self-onboard (open registration)",
+            "defaultValue": true,
+            "toolTip": "When unchecked, only an administrator can provision users (the first user still bootstraps as admin). Maps to Features:Onboarding:AllowSelfOnboarding."
+          }
+        ]
+      }
+    ],
+    "outputs": {
+      "location": "[location()]",
+      "imageTag": "[steps('sizing').imageTag]",
+      "replicas": "[steps('sizing').replicas]",
+      "aiProviders": "[steps('ai').providers]",
+      "modelProviderKey": "[steps('ai').modelProviderKey]",
+      "modelProviderEndpoint": "[steps('ai').modelProviderEndpoint]",
+      "includeAiClis": "[steps('ai').includeAiClis]",
+      "keyProtectionMasterKey": "[steps('security').masterKey]",
+      "allowSelfOnboarding": "[steps('security').allowSelfOnboarding]"
+    }
+  }
+}

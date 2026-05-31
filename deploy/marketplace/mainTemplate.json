@@ -1,0 +1,408 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.41.2.15936",
+      "templateHash": "8255626853934111120"
+    }
+  },
+  "parameters": {
+    "resourceGroupName": {
+      "type": "string"
+    },
+    "location": {
+      "type": "string"
+    },
+    "principalId": {
+      "type": "string"
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/resourceGroups",
+      "apiVersion": "2023-07-01",
+      "name": "[parameters('resourceGroupName')]",
+      "location": "[parameters('location')]"
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "memex-aca-acr",
+      "resourceGroup": "[parameters('resourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.41.2.15936",
+              "templateHash": "17549538876489140601"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "defaultValue": "[resourceGroup().location]",
+              "metadata": {
+                "description": "The location for the resource(s) to be deployed."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.ContainerRegistry/registries",
+              "apiVersion": "2025-04-01",
+              "name": "[take(format('memexacaacr{0}', uniqueString(resourceGroup().id)), 50)]",
+              "location": "[parameters('location')]",
+              "sku": {
+                "name": "Basic"
+              },
+              "tags": {
+                "aspire-resource-name": "memex-aca-acr"
+              }
+            }
+          ],
+          "outputs": {
+            "name": {
+              "type": "string",
+              "value": "[take(format('memexacaacr{0}', uniqueString(resourceGroup().id)), 50)]"
+            },
+            "loginServer": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.ContainerRegistry/registries', take(format('memexacaacr{0}', uniqueString(resourceGroup().id)), 50)), '2025-04-01').loginServer]"
+            },
+            "id": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.ContainerRegistry/registries', take(format('memexacaacr{0}', uniqueString(resourceGroup().id)), 50))]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "memex-aca",
+      "resourceGroup": "[parameters('resourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "memex_aca_acr_outputs_name": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'memex-aca-acr'), '2025-04-01').outputs.name.value]"
+          },
+          "userPrincipalId": {
+            "value": "[parameters('principalId')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.41.2.15936",
+              "templateHash": "13259423154412693621"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "defaultValue": "[resourceGroup().location]",
+              "metadata": {
+                "description": "The location for the resource(s) to be deployed."
+              }
+            },
+            "userPrincipalId": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {}
+            },
+            "memex_aca_acr_outputs_name": {
+              "type": "string"
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+              "apiVersion": "2024-11-30",
+              "name": "[take(format('memex_aca_mi-{0}', uniqueString(resourceGroup().id)), 128)]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]"
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.ContainerRegistry/registries', parameters('memex_aca_acr_outputs_name'))]",
+              "name": "[guid(resourceId('Microsoft.ContainerRegistry/registries', parameters('memex_aca_acr_outputs_name')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', take(format('memex_aca_mi-{0}', uniqueString(resourceGroup().id)), 128)), subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d'))]",
+              "properties": {
+                "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', take(format('memex_aca_mi-{0}', uniqueString(resourceGroup().id)), 128)), '2024-11-30').principalId]",
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')]",
+                "principalType": "ServicePrincipal"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', take(format('memex_aca_mi-{0}', uniqueString(resourceGroup().id)), 128))]"
+              ]
+            },
+            {
+              "type": "Microsoft.OperationalInsights/workspaces",
+              "apiVersion": "2025-02-01",
+              "name": "[take(format('memexacalaw-{0}', uniqueString(resourceGroup().id)), 63)]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "sku": {
+                  "name": "PerGB2018"
+                }
+              },
+              "tags": "[parameters('tags')]"
+            },
+            {
+              "type": "Microsoft.App/managedEnvironments",
+              "apiVersion": "2025-07-01",
+              "name": "[take(format('memexaca{0}', uniqueString(resourceGroup().id)), 24)]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "appLogsConfiguration": {
+                  "destination": "log-analytics",
+                  "logAnalyticsConfiguration": {
+                    "customerId": "[reference(resourceId('Microsoft.OperationalInsights/workspaces', take(format('memexacalaw-{0}', uniqueString(resourceGroup().id)), 63)), '2025-02-01').customerId]",
+                    "sharedKey": "[listKeys(resourceId('Microsoft.OperationalInsights/workspaces', take(format('memexacalaw-{0}', uniqueString(resourceGroup().id)), 63)), '2025-02-01').primarySharedKey]"
+                  }
+                },
+                "workloadProfiles": [
+                  {
+                    "name": "consumption",
+                    "workloadProfileType": "Consumption"
+                  }
+                ]
+              },
+              "tags": "[parameters('tags')]",
+              "dependsOn": [
+                "[resourceId('Microsoft.OperationalInsights/workspaces', take(format('memexacalaw-{0}', uniqueString(resourceGroup().id)), 63))]"
+              ]
+            },
+            {
+              "type": "Microsoft.App/managedEnvironments/dotNetComponents",
+              "apiVersion": "2025-10-02-preview",
+              "name": "[format('{0}/{1}', take(format('memexaca{0}', uniqueString(resourceGroup().id)), 24), 'aspire-dashboard')]",
+              "properties": {
+                "componentType": "AspireDashboard"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.App/managedEnvironments', take(format('memexaca{0}', uniqueString(resourceGroup().id)), 24))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts",
+              "apiVersion": "2024-01-01",
+              "name": "[take(format('memexacastoragevolume{0}', uniqueString(resourceGroup().id)), 24)]",
+              "kind": "StorageV2",
+              "location": "[parameters('location')]",
+              "sku": {
+                "name": "Standard_LRS"
+              },
+              "properties": {
+                "largeFileSharesState": "Enabled",
+                "minimumTlsVersion": "TLS1_2"
+              },
+              "tags": "[parameters('tags')]"
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/fileServices",
+              "apiVersion": "2024-01-01",
+              "name": "[format('{0}/{1}', take(format('memexacastoragevolume{0}', uniqueString(resourceGroup().id)), 24), 'default')]",
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts', take(format('memexacastoragevolume{0}', uniqueString(resourceGroup().id)), 24))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/fileServices/shares",
+              "apiVersion": "2024-01-01",
+              "name": "[format('{0}/{1}/{2}', take(format('memexacastoragevolume{0}', uniqueString(resourceGroup().id)), 24), 'default', take(format('sharesvolumesmemexpostgres0-{0}', uniqueString(resourceGroup().id)), 63))]",
+              "properties": {
+                "enabledProtocols": "SMB",
+                "shareQuota": 1024
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts/fileServices', take(format('memexacastoragevolume{0}', uniqueString(resourceGroup().id)), 24), 'default')]"
+              ]
+            },
+            {
+              "type": "Microsoft.App/managedEnvironments/storages",
+              "apiVersion": "2025-07-01",
+              "name": "[format('{0}/{1}', take(format('memexaca{0}', uniqueString(resourceGroup().id)), 24), take(format('managedstoragevolumesmemexpostgres{0}', uniqueString(resourceGroup().id)), 24))]",
+              "properties": {
+                "azureFile": {
+                  "accountName": "[take(format('memexacastoragevolume{0}', uniqueString(resourceGroup().id)), 24)]",
+                  "accountKey": "[listKeys(resourceId('Microsoft.Storage/storageAccounts', take(format('memexacastoragevolume{0}', uniqueString(resourceGroup().id)), 24)), '2024-01-01').keys[0].value]",
+                  "accessMode": "ReadWrite",
+                  "shareName": "[take(format('sharesvolumesmemexpostgres0-{0}', uniqueString(resourceGroup().id)), 63)]"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.App/managedEnvironments', take(format('memexaca{0}', uniqueString(resourceGroup().id)), 24))]",
+                "[resourceId('Microsoft.Storage/storageAccounts', take(format('memexacastoragevolume{0}', uniqueString(resourceGroup().id)), 24))]",
+                "[resourceId('Microsoft.Storage/storageAccounts/fileServices/shares', take(format('memexacastoragevolume{0}', uniqueString(resourceGroup().id)), 24), 'default', take(format('sharesvolumesmemexpostgres0-{0}', uniqueString(resourceGroup().id)), 63))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/fileServices/shares",
+              "apiVersion": "2024-01-01",
+              "name": "[format('{0}/{1}/{2}', take(format('memexacastoragevolume{0}', uniqueString(resourceGroup().id)), 24), 'default', take(format('sharesvolumesmemexportal0-{0}', uniqueString(resourceGroup().id)), 63))]",
+              "properties": {
+                "enabledProtocols": "SMB",
+                "shareQuota": 1024
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts/fileServices', take(format('memexacastoragevolume{0}', uniqueString(resourceGroup().id)), 24), 'default')]"
+              ]
+            },
+            {
+              "type": "Microsoft.App/managedEnvironments/storages",
+              "apiVersion": "2025-07-01",
+              "name": "[format('{0}/{1}', take(format('memexaca{0}', uniqueString(resourceGroup().id)), 24), take(format('managedstoragevolumesmemexportal{0}', uniqueString(resourceGroup().id)), 24))]",
+              "properties": {
+                "azureFile": {
+                  "accountName": "[take(format('memexacastoragevolume{0}', uniqueString(resourceGroup().id)), 24)]",
+                  "accountKey": "[listKeys(resourceId('Microsoft.Storage/storageAccounts', take(format('memexacastoragevolume{0}', uniqueString(resourceGroup().id)), 24)), '2024-01-01').keys[0].value]",
+                  "accessMode": "ReadWrite",
+                  "shareName": "[take(format('sharesvolumesmemexportal0-{0}', uniqueString(resourceGroup().id)), 63)]"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.App/managedEnvironments', take(format('memexaca{0}', uniqueString(resourceGroup().id)), 24))]",
+                "[resourceId('Microsoft.Storage/storageAccounts', take(format('memexacastoragevolume{0}', uniqueString(resourceGroup().id)), 24))]",
+                "[resourceId('Microsoft.Storage/storageAccounts/fileServices/shares', take(format('memexacastoragevolume{0}', uniqueString(resourceGroup().id)), 24), 'default', take(format('sharesvolumesmemexportal0-{0}', uniqueString(resourceGroup().id)), 63))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/fileServices/shares",
+              "apiVersion": "2024-01-01",
+              "name": "[format('{0}/{1}/{2}', take(format('memexacastoragevolume{0}', uniqueString(resourceGroup().id)), 24), 'default', take(format('sharesvolumesmemexportal1-{0}', uniqueString(resourceGroup().id)), 63))]",
+              "properties": {
+                "enabledProtocols": "SMB",
+                "shareQuota": 1024
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts/fileServices', take(format('memexacastoragevolume{0}', uniqueString(resourceGroup().id)), 24), 'default')]"
+              ]
+            },
+            {
+              "type": "Microsoft.App/managedEnvironments/storages",
+              "apiVersion": "2025-07-01",
+              "name": "[format('{0}/{1}', take(format('memexaca{0}', uniqueString(resourceGroup().id)), 24), take(format('managedstoragevolumesmemexportal{0}', uniqueString(resourceGroup().id)), 24))]",
+              "properties": {
+                "azureFile": {
+                  "accountName": "[take(format('memexacastoragevolume{0}', uniqueString(resourceGroup().id)), 24)]",
+                  "accountKey": "[listKeys(resourceId('Microsoft.Storage/storageAccounts', take(format('memexacastoragevolume{0}', uniqueString(resourceGroup().id)), 24)), '2024-01-01').keys[0].value]",
+                  "accessMode": "ReadWrite",
+                  "shareName": "[take(format('sharesvolumesmemexportal1-{0}', uniqueString(resourceGroup().id)), 63)]"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.App/managedEnvironments', take(format('memexaca{0}', uniqueString(resourceGroup().id)), 24))]",
+                "[resourceId('Microsoft.Storage/storageAccounts', take(format('memexacastoragevolume{0}', uniqueString(resourceGroup().id)), 24))]",
+                "[resourceId('Microsoft.Storage/storageAccounts/fileServices/shares', take(format('memexacastoragevolume{0}', uniqueString(resourceGroup().id)), 24), 'default', take(format('sharesvolumesmemexportal1-{0}', uniqueString(resourceGroup().id)), 63))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "volumes_memex_postgres_0": {
+              "type": "string",
+              "value": "[take(format('managedstoragevolumesmemexpostgres{0}', uniqueString(resourceGroup().id)), 24)]"
+            },
+            "volumes_memex_portal_0": {
+              "type": "string",
+              "value": "[take(format('managedstoragevolumesmemexportal{0}', uniqueString(resourceGroup().id)), 24)]"
+            },
+            "volumes_memex_portal_1": {
+              "type": "string",
+              "value": "[take(format('managedstoragevolumesmemexportal{0}', uniqueString(resourceGroup().id)), 24)]"
+            },
+            "AZURE_LOG_ANALYTICS_WORKSPACE_NAME": {
+              "type": "string",
+              "value": "[take(format('memexacalaw-{0}', uniqueString(resourceGroup().id)), 63)]"
+            },
+            "AZURE_LOG_ANALYTICS_WORKSPACE_ID": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.OperationalInsights/workspaces', take(format('memexacalaw-{0}', uniqueString(resourceGroup().id)), 63))]"
+            },
+            "AZURE_CONTAINER_REGISTRY_NAME": {
+              "type": "string",
+              "value": "[parameters('memex_aca_acr_outputs_name')]"
+            },
+            "AZURE_CONTAINER_REGISTRY_ENDPOINT": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.ContainerRegistry/registries', parameters('memex_aca_acr_outputs_name')), '2025-04-01').loginServer]"
+            },
+            "AZURE_CONTAINER_REGISTRY_MANAGED_IDENTITY_ID": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', take(format('memex_aca_mi-{0}', uniqueString(resourceGroup().id)), 128))]"
+            },
+            "AZURE_CONTAINER_APPS_ENVIRONMENT_NAME": {
+              "type": "string",
+              "value": "[take(format('memexaca{0}', uniqueString(resourceGroup().id)), 24)]"
+            },
+            "AZURE_CONTAINER_APPS_ENVIRONMENT_ID": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.App/managedEnvironments', take(format('memexaca{0}', uniqueString(resourceGroup().id)), 24))]"
+            },
+            "AZURE_CONTAINER_APPS_ENVIRONMENT_DEFAULT_DOMAIN": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.App/managedEnvironments', take(format('memexaca{0}', uniqueString(resourceGroup().id)), 24)), '2025-07-01').defaultDomain]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'memex-aca-acr')]",
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "memex_aca_AZURE_CONTAINER_APPS_ENVIRONMENT_DEFAULT_DOMAIN": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'memex-aca'), '2025-04-01').outputs.AZURE_CONTAINER_APPS_ENVIRONMENT_DEFAULT_DOMAIN.value]"
+    },
+    "memex_aca_AZURE_CONTAINER_APPS_ENVIRONMENT_ID": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'memex-aca'), '2025-04-01').outputs.AZURE_CONTAINER_APPS_ENVIRONMENT_ID.value]"
+    },
+    "memex_aca_volumes_memex_postgres_0": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'memex-aca'), '2025-04-01').outputs.volumes_memex_postgres_0.value]"
+    },
+    "memex_aca_volumes_memex_portal_0": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'memex-aca'), '2025-04-01').outputs.volumes_memex_portal_0.value]"
+    },
+    "memex_aca_volumes_memex_portal_1": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'memex-aca'), '2025-04-01').outputs.volumes_memex_portal_1.value]"
+    }
+  }
+}
