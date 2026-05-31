@@ -152,38 +152,48 @@ public class OrleansSubThreadAutoResumeTest(ITestOutputHelper output) : TestBase
         var initialEntry = delegationEntryAppeared!.First(tc => tc.DelegationPath != null);
         var subThreadPath = initialEntry.DelegationPath!;
         Output.WriteLine($"Sub-thread path on parent's tool call: {subThreadPath}");
-        initialEntry.Status.Should().Be(ToolCallStatus.Streaming,
-            "newly-dispatched delegation should start in Streaming");
+        // The parent's tool call carries only the DelegationPath pointer (and,
+        // at the end, the terminal result). Live sub-agent progress is NOT
+        // mirrored ("wrapped") onto the parent tool call — it is received by
+        // binding DIRECTLY to the sub-thread's response-cell mesh node stream,
+        // which is where the sub-agent streams its text. Resolve that cell
+        // (sub-thread Messages[1]) and watch its Text grow.
+        var subThreadStream = workspace
+            .GetRemoteStream<MeshNode, MeshNodeReference>(new Address(subThreadPath), new MeshNodeReference());
+        var subMsgIds = subThreadStream
+            .Select(change => (change.Value?.Content as MeshThread)?.Messages)
+            .Should().Within(30.Seconds())
+            .Match(ids => ids is { Count: >= 2 });
+        var subRespPath = $"{subThreadPath}/{subMsgIds![1]}";
+        Output.WriteLine($"Sub-thread response cell: {subRespPath}");
+        var subRespStream = workspace
+            .GetRemoteStream<MeshNode, MeshNodeReference>(new Address(subRespPath), new MeshNodeReference());
 
-        // 3) Live-progress assertion: collect ToolCallEntry snapshots while the
-        //    sub-agent streams. The Result preview is the last 10 lines of the
-        //    sub-agent's text — it MUST grow across at least 3 distinct
-        //    observations while Status stays Streaming. That's the "GUI sees
-        //    sub-agent output land live on the parent's tool call" invariant.
+        // 3) Live-progress assertion: the sub-thread's response cell Text MUST
+        //    grow across ≥3 distinct observations while the sub-agent streams.
+        //    This is the load-bearing invariant — progress lands on the mesh
+        //    node stream live, not batched to a single end-of-stream write.
         var liveProgressSnapshots = new List<string>();
-        using (parentRespStream
-            .Select(change => (change.Value?.Content as ThreadMessage)?.ToolCalls
-                ?.FirstOrDefault(tc => tc.DelegationPath == subThreadPath))
-            .Where(tc => tc is { Status: ToolCallStatus.Streaming, Result: { Length: > 0 } })
-            .Subscribe(tc =>
+        using (subRespStream
+            .Select(change => (change.Value?.Content as ThreadMessage)?.Text)
+            .Where(text => !string.IsNullOrEmpty(text))
+            .Subscribe(text =>
             {
                 lock (liveProgressSnapshots)
                 {
-                    var preview = tc!.Result!;
                     if (liveProgressSnapshots.Count == 0
-                        || liveProgressSnapshots[^1] != preview)
+                        || liveProgressSnapshots[^1] != text)
                     {
-                        liveProgressSnapshots.Add(preview);
+                        liveProgressSnapshots.Add(text!);
                         Output.WriteLine($"  [progress {liveProgressSnapshots.Count}] " +
-                            $"{preview.Length} chars, last line: " +
-                            $"\"{preview.Split('\n').LastOrDefault()?.Trim()}\"");
+                            $"{text!.Length} chars, last line: " +
+                            $"\"{text.Split('\n').LastOrDefault()?.Trim()}\"");
                     }
                 }
             }))
         {
             // 4) Wait for the sub-thread to finish: its IsExecuting flips false.
-            var subThreadSettled = workspace
-                .GetRemoteStream<MeshNode, MeshNodeReference>(new Address(subThreadPath), new MeshNodeReference())
+            var subThreadSettled = subThreadStream
                 .Select(change => change.Value?.Content as MeshThread)
                 .Should().Within(60.Seconds())
                 .Match(t => t is { IsExecuting: false } && t.Messages.Count >= 2);
@@ -197,26 +207,24 @@ public class OrleansSubThreadAutoResumeTest(ITestOutputHelper output) : TestBase
         lock (liveProgressSnapshots)
         {
             liveProgressSnapshots.Count.Should().BeGreaterThanOrEqualTo(3,
-                $"parent ToolCallEntry must show ≥3 distinct live previews during " +
-                $"sub-thread streaming (saw {liveProgressSnapshots.Count}). This is " +
-                $"the load-bearing assertion: a fix that batches the projection to " +
-                $"a single end-of-stream write would fail here.");
+                $"sub-thread response cell must emit ≥3 distinct growing Text snapshots " +
+                $"during streaming (saw {liveProgressSnapshots.Count}). Progress is bound " +
+                $"directly off the sub-thread mesh node stream; a fix that batches the " +
+                $"sub-agent output to a single end-of-stream write would fail here.");
             for (var i = 1; i < liveProgressSnapshots.Count; i++)
-            {
-                // Don't require strict prefix monotonicity — LastNLines may
-                // shift the window. Just require length is non-decreasing
-                // OR the content changed, i.e., some signal is moving.
                 (liveProgressSnapshots[i] != liveProgressSnapshots[i - 1])
                     .Should().BeTrue("each captured snapshot should differ from the previous");
-            }
         }
 
         // 5) ToolCallEntry must flip to Success with full final text in Result.
+        //    Status=Success (terminal stamp) and Result (the resolved sub-thread
+        //    summary) arrive in separate stream updates, so wait for the SETTLED
+        //    state — both present — not merely the first Success emission.
         var finalEntry = parentRespStream
             .Select(change => (change.Value?.Content as ThreadMessage)?.ToolCalls
                 ?.FirstOrDefault(tc => tc.DelegationPath == subThreadPath))
             .Should().Within(30.Seconds())
-            .Match(tc => tc is { Status: ToolCallStatus.Success });
+            .Match(tc => tc is { Status: ToolCallStatus.Success } && !string.IsNullOrEmpty(tc.Result));
         finalEntry!.Status.Should().Be(ToolCallStatus.Success);
         finalEntry.IsSuccess.Should().BeTrue();
         finalEntry.Result.Should().NotBeNullOrEmpty(
