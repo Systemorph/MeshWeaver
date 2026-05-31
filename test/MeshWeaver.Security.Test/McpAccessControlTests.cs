@@ -5,8 +5,8 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Reactive.Threading.Tasks;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Blazor.AI;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Graph.Configuration;
@@ -28,7 +28,7 @@ namespace MeshWeaver.Security.Test;
 /// </summary>
 public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private CancellationToken TestTimeout => new CancellationTokenSource(30.Seconds()).Token;
+    private static readonly TimeSpan StepTimeout = 30.Seconds();
 
     private const string User1 = "user1@example.com";
     private const string User2 = "user2@example.com";
@@ -43,7 +43,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
     /// Creates an API token for a user and stores it as a MeshNode.
     /// Returns the raw token string (mw_...) that can be used with LoginWithToken.
     /// </summary>
-    private async Task<string> CreateApiTokenAsync(string userId, string userName)
+    private string CreateApiToken(string userId, string userName)
     {
         var rawBytes = RandomNumberGenerator.GetBytes(32);
         var rawToken = ValidateTokenRequest.TokenPrefix + Convert.ToBase64String(rawBytes)
@@ -77,7 +77,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
             }
         };
 
-        await NodeFactory.CreateNode(tokenNode);
+        NodeFactory.CreateNode(tokenNode).Should().Within(StepTimeout).Emit();
         return rawToken;
     }
 
@@ -85,9 +85,10 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
     /// Logs in a user via API token — sends ValidateTokenRequest through the message hub,
     /// same flow as UserContextMiddleware uses for Bearer tokens.
     /// </summary>
-    private async Task LoginWithToken(string rawToken)
+    private void LoginWithToken(string rawToken)
     {
-        var response = await UserContextMiddleware.ValidateTokenViaHub(rawToken, Mesh).FirstAsync();
+        var response = UserContextMiddleware.ValidateTokenViaHub(rawToken, Mesh)
+            .Should().Within(StepTimeout).Emit();
         response.Should().NotBeNull("token validation should return a response");
         response!.Success.Should().BeTrue("token should be valid, got error: {0}", response.Error ?? "");
 
@@ -106,7 +107,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
     /// <summary>
     /// Sets up the test data and creates API tokens for both users.
     /// </summary>
-    private async Task SetupTestData()
+    private void SetupTestData()
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -120,57 +121,62 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         // the DevLogin admin throughout setup is simpler and free of the race.
 
         // Create namespace nodes
-        await NodeFactory.CreateNode(new MeshNode("SharedOrg")
+        NodeFactory.CreateNode(new MeshNode("SharedOrg")
         {
             Name = "Shared Organization",
             NodeType = "Group",
-        });
+        }).Should().Within(StepTimeout).Emit();
 
-        await NodeFactory.CreateNode(new MeshNode("Public", "SharedOrg")
+        NodeFactory.CreateNode(new MeshNode("Public", "SharedOrg")
         {
             Name = "Public Project",
             NodeType = "Markdown",
             Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Public\nInitial content." },
-        });
+        }).Should().Within(StepTimeout).Emit();
 
-        await NodeFactory.CreateNode(new MeshNode("Confidential", "SharedOrg")
+        NodeFactory.CreateNode(new MeshNode("Confidential", "SharedOrg")
         {
             Name = "Confidential Project",
             NodeType = "Markdown",
             Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Confidential" },
-        });
+        }).Should().Within(StepTimeout).Emit();
 
-        await NodeFactory.CreateNode(new MeshNode("PrivateOrg")
+        NodeFactory.CreateNode(new MeshNode("PrivateOrg")
         {
             Name = "Private Organization",
             NodeType = "Group",
-        });
+        }).Should().Within(StepTimeout).Emit();
 
-        await NodeFactory.CreateNode(new MeshNode("Secret", "PrivateOrg")
+        NodeFactory.CreateNode(new MeshNode("Secret", "PrivateOrg")
         {
             Name = "Secret Data",
             NodeType = "Markdown",
             Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Secret" },
-        });
+        }).Should().Within(StepTimeout).Emit();
 
         // Create API tokens for test users (while admin context is active)
-        _tokenUser1 = await CreateApiTokenAsync(User1, "User One");
-        _tokenUser2 = await CreateApiTokenAsync(User2, "User Two");
+        _tokenUser1 = CreateApiToken(User1, "User One");
+        _tokenUser2 = CreateApiToken(User2, "User Two");
 
         // User1: Viewer on SharedOrg (can read), no access to PrivateOrg
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(User1, "Viewer", "SharedOrg"));
+        meshService.CreateNode(AssignmentNodeFactory.UserRole(User1, "Viewer", "SharedOrg"))
+            .Should().Within(StepTimeout).Emit();
 
         // User2: Editor on SharedOrg, Admin on PrivateOrg
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(User2, "Editor", "SharedOrg"));
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(User2, "Admin", "PrivateOrg"));
+        meshService.CreateNode(AssignmentNodeFactory.UserRole(User2, "Editor", "SharedOrg"))
+            .Should().Within(StepTimeout).Emit();
+        meshService.CreateNode(AssignmentNodeFactory.UserRole(User2, "Admin", "PrivateOrg"))
+            .Should().Within(StepTimeout).Emit();
 
         // Break inheritance on SharedOrg/Confidential so parent roles don't propagate.
         // Policy is just a MeshNode at "{ns}/_Policy".
-        await meshService.CreateNode(AssignmentNodeFactory.Policy("SharedOrg/Confidential",
-            new PartitionAccessPolicy { BreaksInheritance = true }));
+        meshService.CreateNode(AssignmentNodeFactory.Policy("SharedOrg/Confidential",
+            new PartitionAccessPolicy { BreaksInheritance = true }))
+            .Should().Within(StepTimeout).Emit();
 
         // Re-grant User2 as Editor on Confidential (after inheritance break)
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(User2, "Editor", "SharedOrg/Confidential"));
+        meshService.CreateNode(AssignmentNodeFactory.UserRole(User2, "Editor", "SharedOrg/Confidential"))
+            .Should().Within(StepTimeout).Emit();
 
         // Clear admin context so tests start clean — moved AFTER all the
         // AccessAssignment writes so the seeds run as the DevLogin admin
@@ -190,24 +196,19 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         //      the policy synced query still has the empty initial emission,
         //      and User1 ends up reading Confidential through inheritance.
         // hub is Mesh — permission checks use hub.GetEffectivePermissions
-        var waitUser1Read = Mesh.GetEffectivePermissions("SharedOrg", User1)
-            .Where(p => p.HasFlag(Permission.Read))
-            .Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask(TestTimeout);
-        var waitUser2Update = Mesh.GetEffectivePermissions("SharedOrg/Confidential", User2)
-            .Where(p => p.HasFlag(Permission.Update))
-            .Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask(TestTimeout);
-        var waitBreakActive = Mesh.GetEffectivePermissions("SharedOrg/Confidential", User1)
-            .Where(p => !p.HasFlag(Permission.Read))
-            .Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask(TestTimeout);
+        Mesh.GetEffectivePermissions("SharedOrg", User1)
+            .Should().Within(StepTimeout).Match(p => p.HasFlag(Permission.Read));
+        Mesh.GetEffectivePermissions("SharedOrg/Confidential", User2)
+            .Should().Within(StepTimeout).Match(p => p.HasFlag(Permission.Update));
+        Mesh.GetEffectivePermissions("SharedOrg/Confidential", User1)
+            .Should().Within(StepTimeout).Match(p => !p.HasFlag(Permission.Read));
         // 4. User2 has Read at PrivateOrg/Secret — the Admin-on-PrivateOrg
         //    assignment has propagated AND inherited down to the Secret node.
         //    Without this probe McpUpdate_User1CannotUpdatePrivateOrg_User2Can
         //    races ahead and the User2 read of PrivateOrg/Secret returns null
         //    because the AccessAssignment synced query hasn't landed yet.
-        var waitUser2PrivateOrg = Mesh.GetEffectivePermissions("PrivateOrg/Secret", User2)
-            .Where(p => p.HasFlag(Permission.Read))
-            .Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask(TestTimeout);
-        await Task.WhenAll(waitUser1Read, waitUser2Update, waitBreakActive, waitUser2PrivateOrg);
+        Mesh.GetEffectivePermissions("PrivateOrg/Secret", User2)
+            .Should().Within(StepTimeout).Match(p => p.HasFlag(Permission.Read));
     }
 
     /// <summary>
@@ -221,169 +222,188 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
     /// <c>LoginWithToken</c> so the wait runs under the same context the
     /// subsequent <c>plugin.Search</c> call uses.
     /// </summary>
-    private Task WaitForFilteredQuery(
+    private void WaitForFilteredQuery(
         string query, Func<IReadOnlyList<MeshNode>, bool> until)
         => Mesh.ServiceProvider.GetRequiredService<IMeshService>()
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
-            .Where(c => until(c.Items))
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(15))
-            .ToTask(TestTimeout);
+            .Should().Within(StepTimeout).Match(c => until(c.Items));
 
     [Fact(Timeout = 30000)]
-    public async Task McpGet_User1CannotReadConfidentialNode_User2Can()
+    public void McpGet_User1CannotReadConfidentialNode_User2Can()
     {
-        await SetupTestData();
+        SetupTestData();
         var plugin = CreatePlugin();
 
         // User1 (Viewer) should NOT see the Confidential node (read denied by policy)
-        await LoginWithToken(_tokenUser1!);
-        var result1 = await plugin.Get("SharedOrg/Confidential");
+        LoginWithToken(_tokenUser1!);
+        var result1 = plugin.Get("SharedOrg/Confidential").ToObservable()
+            .Should().Within(StepTimeout).Emit();
         result1.Should().Contain("Not found",
             "User1 (Viewer) should not be able to read Confidential node");
 
         // User2 (Editor with explicit grant) should see the Confidential node
-        await LoginWithToken(_tokenUser2!);
-        var result2 = await plugin.Get("SharedOrg/Confidential");
+        LoginWithToken(_tokenUser2!);
+        var result2 = plugin.Get("SharedOrg/Confidential").ToObservable()
+            .Should().Within(StepTimeout).Emit();
         result2.Should().NotContain("Not found");
         result2.Should().Contain("Confidential Project");
     }
 
     [Fact(Timeout = 30000)]
-    public async Task McpGet_User1CannotReadPrivateOrg_User2Can()
+    public void McpGet_User1CannotReadPrivateOrg_User2Can()
     {
-        await SetupTestData();
+        SetupTestData();
         var plugin = CreatePlugin();
 
         // User1 has no access to PrivateOrg at all
-        await LoginWithToken(_tokenUser1!);
-        var result1 = await plugin.Get("PrivateOrg/Secret");
+        LoginWithToken(_tokenUser1!);
+        var result1 = plugin.Get("PrivateOrg/Secret").ToObservable()
+            .Should().Within(StepTimeout).Emit();
         result1.Should().Contain("Not found",
             "User1 should not be able to read nodes in PrivateOrg");
 
         // User2 (Admin) should see the Secret node
-        await LoginWithToken(_tokenUser2!);
-        var result2 = await plugin.Get("PrivateOrg/Secret");
+        LoginWithToken(_tokenUser2!);
+        var result2 = plugin.Get("PrivateOrg/Secret").ToObservable()
+            .Should().Within(StepTimeout).Emit();
         result2.Should().NotContain("Not found");
         result2.Should().Contain("Secret Data");
     }
 
     [Fact(Timeout = 30000)]
-    public async Task McpGet_User1CanReadPublicNode()
+    public void McpGet_User1CanReadPublicNode()
     {
-        await SetupTestData();
+        SetupTestData();
         var plugin = CreatePlugin();
 
         // User1 (Viewer on SharedOrg) should see the Public node
-        await LoginWithToken(_tokenUser1!);
-        var result = await plugin.Get("SharedOrg/Public");
+        LoginWithToken(_tokenUser1!);
+        var result = plugin.Get("SharedOrg/Public").ToObservable()
+            .Should().Within(StepTimeout).Emit();
         result.Should().NotContain("Not found");
         result.Should().Contain("Public Project");
     }
 
     [Fact(Timeout = 30000)]
-    public async Task McpSearch_User1SeesOnlyPermittedNodes()
+    public void McpSearch_User1SeesOnlyPermittedNodes()
     {
-        await SetupTestData();
+        SetupTestData();
         var plugin = CreatePlugin();
 
         // User1 search under SharedOrg should only return Public, not Confidential
-        await LoginWithToken(_tokenUser1!);
+        LoginWithToken(_tokenUser1!);
         // Wait until the filtered query path (same path plugin.Search rides)
         // has settled for User1's context — the partition hub's scoped
         // SecurityService lags the mesh-hub one SetupTestData probes, so
         // without this the search can still surface Confidential to the Viewer.
-        await WaitForFilteredQuery("namespace:SharedOrg nodeType:Markdown",
+        WaitForFilteredQuery("namespace:SharedOrg nodeType:Markdown",
             items => items.Any(n => n.Id == "Public")
                      && items.All(n => n.Id != "Confidential"));
-        var result1 = await plugin.Search("nodeType:Markdown namespace:", "SharedOrg");
+        var result1 = plugin.Search("nodeType:Markdown namespace:", "SharedOrg").ToObservable()
+            .Should().Within(StepTimeout).Emit();
         result1.Should().Contain("Public");
         result1.Should().NotContain("Confidential",
             "User1 (Viewer) should not see Confidential project in search results");
 
         // User2 search under SharedOrg should return both
-        await LoginWithToken(_tokenUser2!);
-        await WaitForFilteredQuery("namespace:SharedOrg nodeType:Markdown",
+        LoginWithToken(_tokenUser2!);
+        WaitForFilteredQuery("namespace:SharedOrg nodeType:Markdown",
             items => items.Any(n => n.Id == "Public")
                      && items.Any(n => n.Id == "Confidential"));
-        var result2 = await plugin.Search("nodeType:Markdown namespace:", "SharedOrg");
+        var result2 = plugin.Search("nodeType:Markdown namespace:", "SharedOrg").ToObservable()
+            .Should().Within(StepTimeout).Emit();
         result2.Should().Contain("Public");
         result2.Should().Contain("Confidential");
     }
 
     [Fact(Timeout = 30000)]
-    public async Task McpSearch_User1CannotSearchPrivateOrg()
+    public void McpSearch_User1CannotSearchPrivateOrg()
     {
-        await SetupTestData();
+        SetupTestData();
         var plugin = CreatePlugin();
 
         // User1 search under PrivateOrg should return nothing
-        await LoginWithToken(_tokenUser1!);
-        var result1 = await plugin.Search("namespace:", "PrivateOrg");
+        LoginWithToken(_tokenUser1!);
+        var result1 = plugin.Search("namespace:", "PrivateOrg").ToObservable()
+            .Should().Within(StepTimeout).Emit();
         result1.Should().NotContain("Secret",
             "User1 should not see any nodes from PrivateOrg");
 
         // User2 search under PrivateOrg should find the Secret node
-        await LoginWithToken(_tokenUser2!);
-        var result2 = await plugin.Search("namespace:", "PrivateOrg");
+        LoginWithToken(_tokenUser2!);
+        var result2 = plugin.Search("namespace:", "PrivateOrg").ToObservable()
+            .Should().Within(StepTimeout).Emit();
         result2.Should().Contain("Secret");
     }
 
     [Fact(Timeout = 30000)]
-    public async Task McpUpdate_User1CannotUpdate_User2Can()
+    public void McpUpdate_User1CannotUpdate_User2Can()
     {
-        await SetupTestData();
+        SetupTestData();
         var plugin = CreatePlugin();
         var options = Mesh.JsonSerializerOptions;
 
         // Query node as User2 (Editor on SharedOrg) — has read access
-        await LoginWithToken(_tokenUser2!);
-        var publicNode = await MeshQuery.QueryAsync<MeshNode>("path:SharedOrg/Public").FirstOrDefaultAsync();
+        LoginWithToken(_tokenUser2!);
+        var publicNode = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:SharedOrg/Public"))
+            .Should().Within(StepTimeout)
+            .Match(c => c.ChangeType == QueryChangeType.Initial && c.Items.Count > 0)
+            .Items[0];
         publicNode.Should().NotBeNull();
 
         // User1 (Viewer on SharedOrg) should NOT be able to update the Public node
-        await LoginWithToken(_tokenUser1!);
+        LoginWithToken(_tokenUser1!);
         var updatedNode = publicNode! with { Name = "Hacked by User1" };
         var updateJson = JsonSerializer.Serialize(new[] { updatedNode }, options);
-        var updateResult1 = await plugin.Update(updateJson);
+        var updateResult1 = plugin.Update(updateJson).ToObservable()
+            .Should().Within(StepTimeout).Emit();
         updateResult1.Should().Contain("Error",
             "User1 (Viewer) should not be able to update nodes");
 
         // User2 (Editor on SharedOrg) should be able to update
-        await LoginWithToken(_tokenUser2!);
+        LoginWithToken(_tokenUser2!);
         var updatedNode2 = publicNode with { Name = "Updated by User2" };
         var updateJson2 = JsonSerializer.Serialize(new[] { updatedNode2 }, options);
-        var updateResult2 = await plugin.Update(updateJson2);
+        var updateResult2 = plugin.Update(updateJson2).ToObservable()
+            .Should().Within(StepTimeout).Emit();
         updateResult2.Should().Contain("Updated");
 
         // Verify the update persisted
-        var reloaded = await MeshQuery.QueryAsync<MeshNode>("path:SharedOrg/Public").FirstOrDefaultAsync();
-        reloaded!.Name.Should().Be("Updated by User2");
+        MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:SharedOrg/Public"))
+            .Should().Within(StepTimeout)
+            .Match(c => c.Items.Any(n => n.Name == "Updated by User2"));
     }
 
     [Fact(Timeout = 30000)]
-    public async Task McpUpdate_User1CannotUpdatePrivateOrg_User2Can()
+    public void McpUpdate_User1CannotUpdatePrivateOrg_User2Can()
     {
-        await SetupTestData();
+        SetupTestData();
         var plugin = CreatePlugin();
         var options = Mesh.JsonSerializerOptions;
 
         // Query node as User2 (Admin on PrivateOrg) — has read access
-        await LoginWithToken(_tokenUser2!);
-        var secretNode = await MeshQuery.QueryAsync<MeshNode>("path:PrivateOrg/Secret").FirstOrDefaultAsync();
+        LoginWithToken(_tokenUser2!);
+        var secretNode = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:PrivateOrg/Secret"))
+            .Should().Within(StepTimeout)
+            .Match(c => c.ChangeType == QueryChangeType.Initial && c.Items.Count > 0)
+            .Items[0];
         secretNode.Should().NotBeNull();
 
         // User1 should NOT be able to update Secret node (no permissions at all)
-        await LoginWithToken(_tokenUser1!);
+        LoginWithToken(_tokenUser1!);
         var updatedNode = secretNode! with { Name = "Hacked by User1" };
         var updateJson = JsonSerializer.Serialize(new[] { updatedNode }, options);
-        var updateResult = await plugin.Update(updateJson);
+        var updateResult = plugin.Update(updateJson).ToObservable()
+            .Should().Within(StepTimeout).Emit();
         updateResult.Should().Contain("Error",
             "User1 should not be able to update nodes in PrivateOrg");
 
         // Verify name was NOT changed (check as User2 who has access)
-        await LoginWithToken(_tokenUser2!);
-        var reloaded = await MeshQuery.QueryAsync<MeshNode>("path:PrivateOrg/Secret").FirstOrDefaultAsync();
+        LoginWithToken(_tokenUser2!);
+        var reloaded = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:PrivateOrg/Secret"))
+            .Should().Within(StepTimeout)
+            .Match(c => c.ChangeType == QueryChangeType.Initial && c.Items.Count > 0)
+            .Items[0];
         reloaded!.Name.Should().Be("Secret Data");
     }
 }
