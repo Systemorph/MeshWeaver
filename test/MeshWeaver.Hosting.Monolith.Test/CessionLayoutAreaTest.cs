@@ -82,15 +82,13 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
         var address = new Address(resolution!.Prefix.ToString()!);
         var client = GetClient(c => c.AddData(data => data));
 
-        // Initialize hub (triggers NodeType compilation)
-        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Within(50.Seconds()).Emit();
-
-        // Request default layout area
+        // No ping: the layout-area subscription activates the hub + triggers the
+        // cold Cession NodeType compile itself. Budget covers the cold Roslyn build.
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(address, reference);
 
-        var value = stream.Should().Within(30.Seconds()).Emit();
+        var value = stream.Should().Within(50.Seconds()).Emit();
         value.Should().NotBe(default(JsonElement), "Layout area should return content, not spin forever");
     }
 
@@ -132,17 +130,15 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
         var client = GetClient(c => c.AddData(data => data));
         var address = new Address(MotorXLPath);
 
-        Output.WriteLine($"Initializing hub for {MotorXLPath}...");
-        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Within(50.Seconds()).Emit();
-        Output.WriteLine("Hub initialized.");
-
+        // No ping: the layout-area subscription activates the hub + triggers the
+        // cold Cession NodeType compile itself.
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea);
 
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(address, reference);
 
         Output.WriteLine("Waiting for Overview area...");
-        var rawValue = stream.Should().Within(20.Seconds()).Emit();
+        var rawValue = stream.Should().Within(50.Seconds()).Emit();
         Output.WriteLine($"Received raw value: {rawValue.Value.ValueKind}");
 
         rawValue.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined,
