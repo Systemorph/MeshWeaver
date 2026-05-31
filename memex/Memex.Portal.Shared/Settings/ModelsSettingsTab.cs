@@ -1,7 +1,9 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.AI;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -191,7 +193,108 @@ public static class ModelsSettingsTab
                         "<p style=\"color: var(--neutral-foreground-hint);\">No providers configured yet. Add one above.</p>")
                     : BuildProviderList(providers, providerService, resultDataId)));
 
+        // ── Active models (provider selection) ────────────────────────────
+        // Fan out ALL models the user can see via workspace.GetQuery — public
+        // LanguageModel nodes surface regardless of provider Api-gating — group
+        // by provider, and let the user toggle which providers feed their chat.
+        // Toggling persists ModelProviderSelection; AgentChatClient + the
+        // ChatClientCredentialResolver react (use-without-see handles org keys).
+        stack = stack.WithView(Controls.Html(
+            "<h3 style=\"margin: 24px 0 8px 0; font-size: 1rem;\">Active models</h3>" +
+            "<p style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-bottom: 12px;\">" +
+            "Choose which providers' models appear in your chat. Models an organisation shared with you " +
+            "work even though their key stays hidden.</p>"));
+
+        stack = stack.WithView((h, _) =>
+        {
+            var ws = h.Hub.GetWorkspace();
+            var models = ws.GetQuery($"model-fanout:{ownerPath}", $"nodeType:{LanguageModelNodeType.NodeType}")
+                .Select(nodes => nodes
+                    .Where(n => string.Equals(n.NodeType, LanguageModelNodeType.NodeType, StringComparison.OrdinalIgnoreCase))
+                    .ToList());
+            var selection = providerService.GetSelection(ownerPath)
+                .StartWith(ImmutableArray<string>.Empty);
+            return models.CombineLatest(selection, (modelNodes, selected) =>
+                (UiControl?)BuildModelSelectionList(modelNodes, selected, providerService, ownerPath, resultDataId));
+        });
+
         return stack;
+    }
+
+    /// <summary>
+    /// Renders the fanned-out models grouped by provider, each row toggling
+    /// that provider's membership in the owner's <c>ModelProviderSelection</c>.
+    /// </summary>
+    private static UiControl BuildModelSelectionList(
+        IReadOnlyList<MeshNode> modelNodes,
+        ImmutableArray<string> selected,
+        ModelProviderService service,
+        string ownerPath,
+        string resultDataId)
+    {
+        var byProvider = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        foreach (var n in modelNodes)
+        {
+            var providerPath = ProviderPathOf(n);
+            if (string.IsNullOrEmpty(providerPath)) continue;
+            if (!byProvider.TryGetValue(providerPath, out var list))
+                byProvider[providerPath] = list = new List<string>();
+            list.Add(n.Name ?? n.Id);
+        }
+
+        if (byProvider.Count == 0)
+            return Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">No models discovered.</p>");
+
+        var selectedSet = selected.IsDefault
+            ? new HashSet<string>(StringComparer.Ordinal)
+            : selected.ToHashSet(StringComparer.Ordinal);
+        var container = Controls.Stack.WithWidth("100%").WithStyle("gap: 8px;");
+
+        foreach (var kvp in byProvider.OrderBy(k => k.Key, StringComparer.Ordinal))
+        {
+            var providerPath = kvp.Key;
+            var isActive = selectedSet.Contains(providerPath);
+            var preview = string.Join(", ", kvp.Value.Take(6)) + (kvp.Value.Count > 6 ? "…" : "");
+
+            var row = Controls.Stack.WithOrientation(Orientation.Horizontal)
+                .WithStyle("padding: 10px 12px; border: 1px solid var(--neutral-stroke-rest); border-radius: 6px; align-items: center; gap: 16px;");
+            row = row.WithView(Controls.Html(
+                $"<div style=\"flex: 1;\"><strong>{Esc(providerPath)}</strong>" +
+                $"<div style=\"font-size: 0.8rem; color: var(--neutral-foreground-hint);\">{Esc(preview)}</div></div>"));
+
+            var capturedPath = providerPath;
+            var capturedActive = isActive;
+            row = row.WithView(Controls.Button(isActive ? "Remove" : "Add")
+                .WithAppearance(isActive ? Appearance.Outline : Appearance.Accent)
+                .WithClickAction(ctx =>
+                {
+                    service.GetSelection(ownerPath).Take(1).Subscribe(cur =>
+                    {
+                        var set = cur.IsDefault ? new List<string>() : cur.ToList();
+                        if (capturedActive) set.Remove(capturedPath);
+                        else if (!set.Contains(capturedPath)) set.Add(capturedPath);
+                        service.SetSelection(ownerPath, set.ToImmutableArray()).Subscribe(
+                            ok => ctx.Host.UpdateData(resultDataId, ok
+                                ? SuccessHtml(capturedActive ? $"Removed {capturedPath}." : $"Added {capturedPath}.")
+                                : ErrorHtml("Failed to update selection.")),
+                            ex => ctx.Host.UpdateData(resultDataId, ErrorHtml(ex.Message)));
+                    });
+                    return Task.CompletedTask;
+                }));
+            container = container.WithView(row);
+        }
+        return container;
+    }
+
+    /// <summary>Provider path for a LanguageModel node — its ProviderRef, else its parent path.</summary>
+    private static string? ProviderPathOf(MeshNode n)
+    {
+        if (n.Content is ModelDefinition md && !string.IsNullOrEmpty(md.ProviderRef))
+            return md.ProviderRef;
+        var path = n.Path;
+        if (string.IsNullOrEmpty(path)) return null;
+        var idx = path.LastIndexOf('/');
+        return idx > 0 ? path[..idx] : null;
     }
 
     private static UiControl BuildProviderList(

@@ -103,6 +103,19 @@ var modelTierHeavy = builder.AddParameter("model-tier-heavy", secret: false);
 var modelTierStandard = builder.AddParameter("model-tier-standard", secret: false);
 var modelTierLight = builder.AddParameter("model-tier-light", secret: false);
 
+// Provider-key encryption master key (Ai:KeyProtection:MasterKey). Encrypts the
+// literal ApiKey stored on ModelProvider nodes at rest so a Postgres/backup leak
+// alone yields no usable key. Read config/user-secrets first; fall back to a
+// clearly-dev default so local dev encrypts out of the box. test/prod MUST
+// override via `Parameters:key-protection-master-key` (user-secrets / GitHub
+// secret) — the dev default below is NOT secret and must never protect real keys.
+// (Manual config read + non-empty value avoids the `value: ""` user-secrets-skip
+// trap documented on the model-tier params above.)
+var masterKeyValue = builder.Configuration["Parameters:key-protection-master-key"];
+if (string.IsNullOrEmpty(masterKeyValue))
+    masterKeyValue = "meshweaver-dev-key-protection-master-do-not-use-in-prod";
+var keyProtectionMasterKey = builder.AddParameter("key-protection-master-key", secret: true, value: masterKeyValue);
+
 // Optional secrets/params: ACA rejects secrets with empty values; ConfigureCustomDomain
 // rejects empty hostnames. Read actual config values to guard optional registrations.
 var embeddingKeyValue = builder.Configuration["Parameters:embedding-key"] ?? "";
@@ -229,6 +242,8 @@ var portal = builder
     .WithEnvironment("ModelTier__Heavy", modelTierHeavy)
     .WithEnvironment("ModelTier__Standard", modelTierStandard)
     .WithEnvironment("ModelTier__Light", modelTierLight)
+    // Provider-key encryption master key (ConfigMasterKeyProvider reads this).
+    .WithEnvironment("Ai__KeyProtection__MasterKey", keyProtectionMasterKey)
     // LLM: Azure AI Foundry (multi-model inference endpoint — covers OpenAI,
     // Mistral, DeepSeek, etc. through one endpoint).
     .WithEnvironment("AzureAIS__Endpoint", azureFoundryEndpoint)
@@ -263,6 +278,42 @@ var portal = builder
         // completes before SIGKILL arrives.
         app.Template.TerminationGracePeriodSeconds = 120;
     });
+
+// --- Claude Code co-hosting (Phase 5b) — opt-in feature flag ---
+// Claude Code runs IN-PROCESS in the portal: the CLI is spawned per chat, each
+// under the calling user's own CLAUDE_CONFIG_DIR + subscription token (so
+// concurrent users on a replica never share credentials). Enabled at deploy via
+// `Parameters:enable-claude-code=true`. When on, the portal:
+//   • mounts the per-user `.claude` share at /mnt/users, and
+//   • learns the mount root via ClaudeCode__ConfigDirRoot.
+//
+// 🚨 DEPLOY CHOICES gated by this flag (not compile-checkable here):
+//   1. PORTAL IMAGE must include node + the claude CLI. The portal is AddProject,
+//      so select the CLI-enabled image at deploy via the portal's
+//      <ContainerBaseImage> (or a portal Dockerfile variant) — toggled by the
+//      same flag in the deploy pipeline.
+//   2. STORAGE for /mnt/users must be durable + cross-replica. `WithVolume` below
+//      is auto-translated by Aspire 13.x into an *Aspire-managed* Azure Files
+//      share. To bring YOUR OWN account, attach a
+//      ContainerAppManagedEnvironmentStorage (AzureFile: account+key from
+//      Parameters:claude-storage-account / claude-storage-key, ShareName,
+//      AccessMode=ReadWrite) to the `memex-aca` environment and reference it from
+//      the portal's `.PublishAsAzureContainerApp` volume + volumeMount.
+var enableClaudeCode = (builder.Configuration["Parameters:enable-claude-code"] ?? "false")
+    .Equals("true", StringComparison.OrdinalIgnoreCase);
+if (enableClaudeCode)
+{
+    // App-level wiring: tell the co-hosted client where per-user .claude lives.
+    portal.WithEnvironment("ClaudeCode__ConfigDirRoot", "/mnt/users");
+    // 🚨 The /mnt/users MOUNT itself can't use container `WithVolume` here — the
+    // portal is AddProject (a ProjectResource), not a ContainerResource. Mount it
+    // at the ACA layer inside the portal's existing `.PublishAsAzureContainerApp(
+    // (module, app) => { … })` block: add an Azure Files volume to
+    // `app.Template.Volumes` + a `VolumeMount` at /mnt/users on the container,
+    // backed by a ContainerAppManagedEnvironmentStorage on `memex-aca` (BYO
+    // account+key from Parameters:claude-storage-account / claude-storage-key).
+    // Left for the deploy pass — needs a publish/deploy to finalize + verify.
+}
 
 // Optional secrets: only add as env vars when configured (ACA rejects empty secrets)
 if (embeddingKey is not null)
