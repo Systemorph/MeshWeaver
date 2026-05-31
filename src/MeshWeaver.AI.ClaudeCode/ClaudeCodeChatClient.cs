@@ -1,6 +1,9 @@
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Text;
 using ClaudeAgentSdk;
+using MeshWeaver.AI.Connect;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
@@ -16,6 +19,10 @@ public class ClaudeCodeChatClient : IChatClient
     private readonly string? modelName;
     private readonly string? configDir;
     private readonly string? oauthToken;
+    private readonly IMcpBackConnection? mcpBackConnection;
+    private readonly string? userId;
+    private readonly string? userName;
+    private readonly string? userEmail;
     private readonly ILogger? logger;
 
     public ClaudeCodeChatClient(
@@ -23,7 +30,11 @@ public class ClaudeCodeChatClient : IChatClient
         string? modelName = null,
         ILogger<ClaudeCodeChatClient>? logger = null,
         string? configDir = null,
-        string? oauthToken = null)
+        string? oauthToken = null,
+        IMcpBackConnection? mcpBackConnection = null,
+        string? userId = null,
+        string? userName = null,
+        string? userEmail = null)
     {
         this.configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         this.modelName = modelName;
@@ -34,6 +45,11 @@ public class ClaudeCodeChatClient : IChatClient
         // replica never share credentials or session state.
         this.configDir = configDir;
         this.oauthToken = oauthToken;
+        // Automatic MCP back-connection (the mesh is the CLI's workspace) — resolved per spawn.
+        this.mcpBackConnection = mcpBackConnection;
+        this.userId = userId;
+        this.userName = userName;
+        this.userEmail = userEmail;
     }
 
     /// <inheritdoc />
@@ -121,6 +137,40 @@ public class ClaudeCodeChatClient : IChatClient
             env["CLAUDE_CODE_OAUTH_TOKEN"] = oauthToken;
 
         var claudeOptions = new ClaudeAgentOptions { Env = env };
+
+        // Automatic MCP back-connection — the mesh is this CLI's workspace (no file tree). Inject a
+        // per-spawn HTTP MCP server at the portal's /mcp, authenticated AS THE USER via a Bearer
+        // token (minted/reused on demand by IMcpBackConnection). In-memory only — the token is
+        // never written to the config dir / Azure Files share.
+        if (mcpBackConnection != null && !string.IsNullOrEmpty(userId))
+        {
+            McpConnectionInfo? mcpInfo = null;
+            try
+            {
+                mcpInfo = await mcpBackConnection.EnsureForUser(userId, userName, userEmail)
+                    .FirstOrDefaultAsync().ToTask(cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex, "Could not provision the MCP back-connection; Claude Code will run without mesh access.");
+            }
+            if (mcpInfo != null)
+            {
+                claudeOptions.McpServers = new Dictionary<string, McpHttpServerConfig>
+                {
+                    ["meshweaver"] = new McpHttpServerConfig
+                    {
+                        Type = "http",
+                        Url = mcpInfo.McpUrl,
+                        Headers = new Dictionary<string, string>
+                        {
+                            ["Authorization"] = $"Bearer {mcpInfo.BearerToken}"
+                        }
+                    }
+                };
+                logger?.LogInformation("Claude Code MCP workspace wired to {McpUrl}", mcpInfo.McpUrl);
+            }
+        }
 
         if (!string.IsNullOrEmpty(modelName))
         {

@@ -62,18 +62,24 @@ public class ClaudeCodeChatClientAgentFactory(
             // No separate container, no HTTP hop.
             var resolver = Hub.ServiceProvider.GetService<ChatClientCredentialResolver>();
             var token = !string.IsNullOrEmpty(modelName) ? resolver?.Resolve(modelName).ApiKey : null;
-            var userId = Hub.ServiceProvider.GetService<AccessService>()?.Context?.ObjectId;
+            var accessCtx = Hub.ServiceProvider.GetService<AccessService>()?.Context;
+            var userId = accessCtx?.ObjectId;
             var root = configuration.ConfigDirRoot?.TrimEnd('/');
             var configDir = !string.IsNullOrEmpty(root) && !string.IsNullOrEmpty(userId)
                 ? $"{root}/{userId}/.claude" : null;
 
+            // Automatic, token-based MCP back-connection (no manual step): resolved per spawn so
+            // the CLI reaches the mesh AS THE USER. Injected in-memory; the Bearer never hits disk.
+            var mcp = Hub.ServiceProvider.GetService<MeshWeaver.AI.Connect.IMcpBackConnection>();
+
             var clientLogger = Hub.ServiceProvider.GetService(typeof(ILogger<ClaudeCodeChatClient>)) as ILogger<ClaudeCodeChatClient>;
 
             logger.LogInformation(
-                "[ClaudeCode] Co-hosted agent={AgentName} model={Model} user={User} configDir={ConfigDir} tokenFp={Fp}",
-                agentConfig.Id, modelName, userId ?? "(none)", configDir ?? "(default)", Fingerprint(token));
+                "[ClaudeCode] Co-hosted agent={AgentName} model={Model} user={User} configDir={ConfigDir} tokenFp={Fp} mcp={Mcp}",
+                agentConfig.Id, modelName, userId ?? "(none)", configDir ?? "(default)", Fingerprint(token), mcp != null);
 
-            return new ClaudeCodeChatClient(configuration, modelName, clientLogger, configDir, token);
+            return new ClaudeCodeChatClient(configuration, modelName, clientLogger, configDir, token,
+                mcp, userId, accessCtx?.Name, accessCtx?.Email);
         }
         catch (Exception ex)
         {

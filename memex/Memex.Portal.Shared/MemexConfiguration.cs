@@ -137,6 +137,9 @@ public static class MemexConfiguration
         // Register API token service for MCP bearer auth and OAuth code store
         services.AddSingleton<ApiTokenService>();
         services.AddSingleton<OAuthCodeStore>();
+        // Automatic, token-based MCP back-connection for the co-hosted Claude Code / Copilot CLIs.
+        // The chat clients resolve this at spawn to mint/reuse the per-user MCP ApiToken + URL.
+        services.AddSingleton<MeshWeaver.AI.Connect.IMcpBackConnection, McpBackConnectionService>();
         // ModelProviderService backs the Models settings tab — users store
         // their own AI provider credentials as MeshNodes in their namespace.
         services.AddSingleton<Memex.Portal.Shared.Models.ModelProviderService>();
