@@ -1,9 +1,8 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
@@ -26,80 +25,73 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// <summary>
 /// Orleans integration test: cold-start scenario.
 /// Pre-seeds a thread with 2 user + 2 assistant messages in persistence.
-/// Submits a 3rd message and verifies the agent sees ALL 5 previous messages
-/// via GetDataRequest + CombineLatest (not from cache or local workspace).
+/// Submits a 3rd message and verifies the agent sees ALL previous messages
+/// via the live response cell (not from cache or local workspace).
+///
+/// 🚨 Test is <c>void</c> + reactive assertions (no <c>async</c>/<c>await</c>):
+/// blocking inside an async test deadlocks the in-process hub scheduler — the
+/// agent's streaming execution shares the process and its continuations are
+/// starved by the captured async SynchronizationContext. See
+/// FluentAssertionsToReactive.md §2a + ObservableAssertions remarks.
 /// </summary>
 public class OrleansChatHistoryTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
     private const string ThreadPath = "TestUser/_Thread/history-cold-start";
 
-    private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
-        => await base.GetClientAsync($"hist-{name}-{Guid.NewGuid():N}", "TestUser");
+    private IMessageHub GetClient([CallerMemberName] string? name = null)
+        => base.GetClient($"hist-{name}-{Guid.NewGuid():N}", "TestUser");
 
     [Fact]
-    public async Task ColdStart_AgentSeesAllPreviousMessages()
+    public void ColdStart_AgentSeesAllPreviousMessages()
     {
         // Swap to echo factory
         SharedOrleansFixture.SwappableFactory.SetInner(new EchoChatClientFactory());
         try
         {
-            var ct = new CancellationTokenSource(30.Seconds()).Token;
-            var client = await GetClientAsync();
-            // Thread + 4 messages are pre-seeded in SharedOrleansFixture via AddMeshNodes.
+            var client = GetClient();
+            var workspace = client.GetWorkspace();
+            // Thread + 4 messages are pre-seeded in SharedOrleansFixture via the seed provider.
             // This simulates a cold start: grains not yet activated, data in persistence.
-            Output.WriteLine("Thread pre-seeded with 4 messages via AddMeshNodes");
+            Output.WriteLine("Thread pre-seeded with 4 messages");
 
-            // Submit via the SAME entry point production uses (ThreadSubmission.Submit
-            // -> ThreadInput.AppendUserInput -> workspace.GetMeshNodeStream(threadPath)
-            // .Update(...)). The agent's response text lives on the response satellite
-            // cell; read it via the workspace stream once execution completes.
-            Output.WriteLine("ThreadSubmission.Submit (production entry point)...");            var workspace = client.GetWorkspace();
+            // Submit via the SAME entry point production uses (workspace.SubmitMessage
+            // -> ThreadInput.AppendUserInput -> stream.Update on the thread node).
+            Output.WriteLine("SubmitMessage (production entry point)...");
 
-            // The thread is pre-seeded with 4 messages. Subscribe for Messages.Count >= 6
-            // (4 seed + 1 user input cell + 1 agent response cell created by this submission).
-            // The agent response is the LAST id appended.
-            var sixMessages = workspace.GetRemoteStream<MeshNode>(new Address(ThreadPath))!
+            // The thread is pre-seeded with 4 messages. Wait for Messages.Count >= 6
+            // (4 seed + 1 user input cell + 1 agent response cell created by this
+            // submission). The agent response is the LAST id appended.
+            var messagesStream = workspace.GetRemoteStream<MeshNode>(new Address(ThreadPath))!
                 .Select(nodes =>
                 {
                     var node = nodes?.FirstOrDefault(n => n.Path == ThreadPath);
-                    return (node?.Content as MeshThread)?.Messages ?? [];
-                })
-                .Where(ids => ids.Count >= 6)
-                .Timeout(20.Seconds())
-                .FirstAsync()
-                .ToTask(ct);
+                    return (node?.Content as MeshThread)?.Messages
+                           ?? (IReadOnlyList<string>)ImmutableList<string>.Empty;
+                });
 
-            // Stream-update submit - see RequestViaStreamUpdate.md.
             client.SubmitMessage(
                 ThreadPath,
                 "Third question - can you see history?",
                 contextPath: "TestUser");
             Output.WriteLine("Append dispatched");
 
-            // Resolve message ids Ã¢â‚¬â€ last id is the new agent response cell.
-            var msgIds = await sixMessages;
+            // Resolve message ids — last id is the new agent response cell.
+            var msgIds = messagesStream.Should().Within(30.Seconds()).Match(ids => ids.Count >= 6);
             var responseMsgId = msgIds[^1];
             var responsePath = $"{ThreadPath}/{responseMsgId}";
             Output.WriteLine($"Response cell: {responseMsgId} (full list: [{string.Join(",", msgIds)}])");
 
-            // Wait for the response cell text to fill in. Skip transient placeholders
-            // ("Allocating agent...", "Initializing...") Ã¢â‚¬â€ the EchoChatClient's final
+            // Wait for the response cell text to fill in. The EchoChatClient's final
             // streaming text always contains "received" once execution is done.
-            ThreadMessage? responseMsg = null;
-            for (var i = 0; i < 100; i++)
-            {
-                var resp = await client.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(responsePath))).FirstAsync().ToTask(ct);
-                var node = resp.Message.Data as MeshNode;
-                if (node == null && resp.Message.Data is JsonElement je)
-                    node = je.Deserialize<MeshNode>(client.JsonSerializerOptions);
-                if (node?.Content is ThreadMessage tm) responseMsg = tm;
-                else if (node?.Content is JsonElement cje)
-                    responseMsg = cje.Deserialize<ThreadMessage>(client.JsonSerializerOptions);
-
-                if (responseMsg?.Text is { } text && text.Contains("received", StringComparison.OrdinalIgnoreCase))
-                    break;
-                await Task.Delay(200, ct);
-            }
+            var responseMsg = workspace.GetMeshNodeStream(responsePath)
+                .Select(node =>
+                {
+                    if (node?.Content is ThreadMessage tm) return tm;
+                    if (node?.Content is JsonElement cje) return cje.Deserialize<ThreadMessage>(client.JsonSerializerOptions);
+                    return null;
+                })
+                .Should().Within(30.Seconds())
+                .Match(m => m?.Text is { } text && text.Contains("received", StringComparison.OrdinalIgnoreCase));
 
             Output.WriteLine($"Execution completed: text={responseMsg?.Text}");
             responseMsg.Should().NotBeNull("response cell must be populated");

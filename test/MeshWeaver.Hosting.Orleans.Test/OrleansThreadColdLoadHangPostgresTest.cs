@@ -77,7 +77,7 @@ public class OrleansThreadColdLoadHangPostgresTest(ITestOutputHelper output) : T
         await base.DisposeAsync();
     }
 
-    private async Task<IMessageHub> GetClientAsync(
+    private IMessageHub GetClient(
         string userPartition, [CallerMemberName] string? name = null)
     {
         var client = ClientMesh.ServiceProvider.CreateMessageHub(
@@ -261,7 +261,7 @@ public class OrleansThreadColdLoadHangPostgresTest(ITestOutputHelper output) : T
 
         var paths = await SeedParentAndSubThreadAsync(userPartition, ct);
 
-        var client = await GetClientAsync(userPartition);
+        var client = GetClient(userPartition);
         var workspace = client.GetWorkspace();
 
         // Activate the sub-thread — the user-stuck URL pattern.

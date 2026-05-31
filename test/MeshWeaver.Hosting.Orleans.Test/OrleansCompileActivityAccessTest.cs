@@ -144,7 +144,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         //    is the shape every background path uses — NodeType enrichment
         //    fan-out, autocomplete enumeration, synced-query SubscribeRequest
         //    routing. Plain GetDataRequest. No user intent to recompile.
-        var client = await GetClientAsync($"background-{Guid.NewGuid():N}", userId: "TestUser");
+        var client = GetClient($"background-{Guid.NewGuid():N}", userId: "TestUser");
         var dataResp = await client
             .Observe(new GetDataRequest(new MeshNodeReference()),
                 o => o.WithTarget(new Address(typePath)))
@@ -254,7 +254,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         // As TestUser, flip RequestedReleaseAt — the canonical explicit
         // recompile trigger. UI does the same thing when the user clicks
         // "Compile" (NodeTypeLayoutAreas.BuildCompileStatusPanel).
-        var client = await GetClientAsync($"edit-ok-{Guid.NewGuid():N}", userId: "TestUser");
+        var client = GetClient($"edit-ok-{Guid.NewGuid():N}", userId: "TestUser");
         var streamCache = ((InProcessSiloHandle)Cluster.Silos[0]).SiloHost.Services
             .GetRequiredService<IMessageHub>()
             .ServiceProvider
@@ -400,7 +400,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         await SeedAsSystem(typeNode, ct);
 
         // As TestUser (no Edit on OtherUser/), attempt the Update.
-        var client = await GetClientAsync($"no-edit-{Guid.NewGuid():N}", userId: "TestUser");
+        var client = GetClient($"no-edit-{Guid.NewGuid():N}", userId: "TestUser");
         var streamCache = ((InProcessSiloHandle)Cluster.Silos[0]).SiloHost.Services
             .GetRequiredService<IMessageHub>()
             .ServiceProvider
@@ -507,7 +507,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         }, ct);
         Output.WriteLine($"Seeded dynamic NodeType + Code at {typePath} (no build yet)");
 
-        var client = await GetClientAsync($"responsive-{Guid.NewGuid():N}", userId: "TestUser");
+        var client = GetClient($"responsive-{Guid.NewGuid():N}", userId: "TestUser");
 
         // First read activates the per-NodeType grain and kicks off the
         // first-build compile (InstallCompileWatcher → Pending → dispatch).
@@ -623,7 +623,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         // Activate the grain. The recovery kickoff in InstallCompileWatcher fires
         // on the first emission, sees Compiling + no running activity, and flips
         // Compiling → Pending — which the watcher turns into a fresh compile.
-        var client = await GetClientAsync($"stranded-{Guid.NewGuid():N}", userId: "TestUser");
+        var client = GetClient($"stranded-{Guid.NewGuid():N}", userId: "TestUser");
         await client.Observe(new GetDataRequest(new MeshNodeReference()),
                 o => o.WithTarget(new Address(typePath)))
             .FirstAsync().Timeout(20.Seconds()).ToTask(ct);
@@ -703,7 +703,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         }, ct);
         Output.WriteLine($"Seeded STRANDED NodeType (Compiling, RECENT activity {recordedActivityPath}) at {typePath}");
 
-        var client = await GetClientAsync($"stranded-recent-{Guid.NewGuid():N}", userId: "TestUser");
+        var client = GetClient($"stranded-recent-{Guid.NewGuid():N}", userId: "TestUser");
         await client.Observe(new GetDataRequest(new MeshNodeReference()),
                 o => o.WithTarget(new Address(typePath)))
             .FirstAsync().Timeout(20.Seconds()).ToTask(ct);
@@ -781,7 +781,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         // inbound user AccessContext rides into the grain via
         // AccessContextGrainCallFilter, so the activation — and the
         // InstallSourcesWatcher source read — runs under TestUser, not System.
-        var client = await GetClientAsync($"selfdl-{Guid.NewGuid():N}", userId: "TestUser");
+        var client = GetClient($"selfdl-{Guid.NewGuid():N}", userId: "TestUser");
         await client.Observe(new GetDataRequest(new MeshNodeReference()),
                 o => o.WithTarget(new Address(typePath)))
             .FirstAsync().Timeout(20.Seconds()).ToTask(ct);
@@ -872,7 +872,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         }, ct);
         Output.WriteLine($"Seeded dynamic NodeType + Code at {typePath}");
 
-        var client = await GetClientAsync($"fwstale-{Guid.NewGuid():N}", userId: "TestUser");
+        var client = GetClient($"fwstale-{Guid.NewGuid():N}", userId: "TestUser");
         var siloHub = ((InProcessSiloHandle)Cluster.Silos[0]).SiloHost.Services
             .GetRequiredService<IMessageHub>();
 

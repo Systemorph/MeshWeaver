@@ -36,8 +36,8 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// </summary>
 public class OrleansSubThreadRoutingTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
-    private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
-        => await base.GetClientAsync($"subrouting-{name}-{Guid.NewGuid():N}", "TestUser");
+    private IMessageHub GetClient([CallerMemberName] string? name = null)
+        => base.GetClient($"subrouting-{name}-{Guid.NewGuid():N}", "TestUser");
 
     private async Task<string> CreateNodeAsync(IMessageHub client, MeshNode node, string targetAddress, CancellationToken ct)
     {
@@ -92,7 +92,7 @@ public class OrleansSubThreadRoutingTest(ITestOutputHelper output) : OrleansShar
     public async Task SubThreadDelegation_RoutesAcrossMultipleSegments()
     {
         var ct = new CancellationTokenSource(50.Seconds()).Token;
-        var client = await GetClientAsync();
+        var client = GetClient();
 
         // 1. Create a thread under TestUser
         var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Routing test thread", "TestUser");
@@ -197,7 +197,7 @@ public class OrleansSubThreadRoutingTest(ITestOutputHelper output) : OrleansShar
     public async Task SubThreadCreation_AccessContextPropagates()
     {
         var ct = new CancellationTokenSource(50.Seconds()).Token;
-        var client = await GetClientAsync();
+        var client = GetClient();
 
         // 1. Create a thread
         var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Access context test", "TestUser");

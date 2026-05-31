@@ -520,23 +520,23 @@ public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBa
 
     // Framework setup hook: must keep the base's `Task` signature (the base
     // awaits it during fixture init). Not a test body â€” no deadlock risk â€” so
-    // awaiting the CreateNode observables directly is the right shape here.
-    protected override async Task SetupAccessRightsAsync()
+    // blocking .Should().Emit() on the CreateNode streams is the right shape here.
+    protected override Task SetupAccessRightsAsync()
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         // Admin user gets full access globally
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(AdminUserId, "Admin", null));
+        meshService.CreateNode(AssignmentNodeFactory.UserRole(AdminUserId, "Admin", null)).Should().Emit();
 
         // Viewer gets only Read+Execute (no Update) at the test context
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(ViewerUserId, "Viewer", "SecureProject"));
+        meshService.CreateNode(AssignmentNodeFactory.UserRole(ViewerUserId, "Viewer", "SecureProject")).Should().Emit();
+
+        return Task.CompletedTask;
     }
 
     [Fact]
     public void CreateThread_WithUpdatePermission_Succeeds()
     {
-        var ct = new CancellationTokenSource(15.Seconds()).Token;
-
         // Login as admin
         TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = AdminUserId, Name = "Admin" });
 
@@ -546,10 +546,8 @@ public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBa
         // return false before the synced query catches up. Stream-poll until
         // admin has Create permission â€” replaces a hand-rolled while +
         // Task.Delay(100) loop.
-        Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
-            .SelectMany(_ => Observable.FromAsync(() =>
-                Mesh.HasPermissionAsync("SecureProject", AdminUserId, Permission.Create, ct)))
-            .Should().Within(10.Seconds()).Match(b => b);
+        Mesh.GetEffectivePermissions("SecureProject", AdminUserId)
+            .Should().Within(10.Seconds()).Match(p => p.HasFlag(Permission.Create));
 
         // Create context node
         NodeFactory.CreateNode(
@@ -566,18 +564,14 @@ public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBa
     [Fact]
     public void CreateThread_WithoutUpdatePermission_IsDenied()
     {
-        var ct = new CancellationTokenSource(15.Seconds()).Token;
-
         // Create context node as admin first
         TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = AdminUserId, Name = "Admin" });
 
         // Wait for the admin AccessAssignment from SetupAccessRightsAsync to land
         // through SyncedQuery â€” same eventually-consistent race as the sibling
         // test. Stream-poll until admin has Create permission.
-        Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
-            .SelectMany(_ => Observable.FromAsync(() =>
-                Mesh.HasPermissionAsync("SecureProject", AdminUserId, Permission.Create, ct)))
-            .Should().Within(10.Seconds()).Match(b => b);
+        Mesh.GetEffectivePermissions("SecureProject", AdminUserId)
+            .Should().Within(10.Seconds()).Match(p => p.HasFlag(Permission.Create));
 
         NodeFactory.CreateNode(
             new MeshNode("SecureProject") { Name = "Secure Project", NodeType = "Markdown" }).Should().Emit();

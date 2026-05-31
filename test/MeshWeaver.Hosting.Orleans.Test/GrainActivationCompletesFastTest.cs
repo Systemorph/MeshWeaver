@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Threading;
@@ -51,7 +51,7 @@ public class GrainActivationCompletesFastTest(ITestOutputHelper output)
     public async Task NonExistentPath_ActivationFailsFast_NotThirtySecondTimeout()
     {
         var ct = new CancellationTokenSource(FastFailBudget).Token;
-        var client = await GetClientAsync($"nonexistent-{Guid.NewGuid():N}");
+        var client = GetClient($"nonexistent-{Guid.NewGuid():N}");
 
         // A path that no provider can claim. Persistence has no row, no static
         // node provider declares it. Pre-fix, the activation chain's source

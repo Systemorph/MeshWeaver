@@ -39,7 +39,7 @@ public class OrleansChatTest(ITestOutputHelper output) : OrleansTestBase<ChatSil
 {
     private const string ContextPath = "TestUser";
 
-    // Cluster lifecycle, ClientMesh, GetClientAsync, ConfigureClient, and the standard
+    // Cluster lifecycle, ClientMesh, GetClient, ConfigureClient, and the standard
     // mesh-node handler chain are inherited from OrleansTestBase<TSiloConfigurator>.
 
     private async Task<string> CreateThreadAsync(IMessageHub client, string text, CancellationToken ct)
@@ -80,7 +80,7 @@ public class OrleansChatTest(ITestOutputHelper output) : OrleansTestBase<ChatSil
     public async Task CreateThread_AndSubmitMessage_ProducesThreadMessages()
     {
         var ct = new CancellationTokenSource(50.Seconds()).Token;
-        var client = await GetClientAsync();
+        var client = GetClient();
 
         // 1. Create thread
         Output.WriteLine("Creating thread...");

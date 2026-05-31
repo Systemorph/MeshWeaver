@@ -81,7 +81,7 @@ public class OrleansThreadColdLoadHangTest(ITestOutputHelper output) : TestBase(
         await base.DisposeAsync();
     }
 
-    private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
+    private IMessageHub GetClient([CallerMemberName] string? name = null)
     {
         var client = ClientMesh.ServiceProvider.CreateMessageHub(
             new Address("client", $"coldload-{name}-{Guid.NewGuid():N}"),
@@ -277,7 +277,7 @@ public class OrleansThreadColdLoadHangTest(ITestOutputHelper output) : TestBase(
         var ct = new CancellationTokenSource(80.Seconds()).Token;
         var paths = await SeedParentAndSubThreadAsync(ct);
 
-        var client = await GetClientAsync();
+        var client = GetClient();
         var workspace = client.GetWorkspace();
 
         // 1) Activate the SUB-THREAD by subscribing to its per-node reducer.
@@ -412,7 +412,7 @@ public class OrleansThreadColdLoadHangTest(ITestOutputHelper output) : TestBase(
             }
         }, options).FirstAsync().ToTask(ct);
 
-        var client = await GetClientAsync();
+        var client = GetClient();
         var workspace = client.GetWorkspace();
         var threadSyncStream = workspace
             .GetRemoteStream<MeshNode, MeshNodeReference>(new Address(threadPath), new MeshNodeReference());

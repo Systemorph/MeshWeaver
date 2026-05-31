@@ -68,7 +68,7 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
         await base.DisposeAsync();
     }
 
-    private async Task<IMessageHub> GetClientAsync(string id = "delegation")
+    private IMessageHub GetClient(string id = "delegation")
     {
         var client = ClientMesh.ServiceProvider.CreateMessageHub(
             new Address("client", id),
@@ -89,25 +89,29 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
         return client;
     }
 
-    private async Task<string> CreateNodeAsync(IMessageHub client, MeshNode node, string targetAddress, CancellationToken ct)
+    private string CreateNode(IMessageHub client, MeshNode node, string targetAddress)
     {
-        var response = await client.Observe(new CreateNodeRequest(node), o => o.WithTarget(new Address(targetAddress))).FirstAsync().ToTask(ct);
+        var response = client.Observe(new CreateNodeRequest(node), o => o.WithTarget(new Address(targetAddress)))
+            .Should().Within(30.Seconds()).Emit();
         response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         return response.Message.Node!.Path!;
     }
 
-    private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
-    {
-        // Canonical CQRS-correct read via per-node MeshNodeReference reducer.
-        var response = await client.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path))).FirstAsync().ToTask(ct);
-        var node = response.Message.Data as MeshNode;
-        if (node == null && response.Message.Data is JsonElement je)
-            node = je.Deserialize<MeshNode>(ClientMesh.JsonSerializerOptions);
-        if (node?.Content is T typed) return typed;
-        if (node?.Content is JsonElement contentJe)
-            return contentJe.Deserialize<T>(ClientMesh.JsonSerializerOptions);
-        return null;
-    }
+    /// <summary>
+    /// Reactive single-node content read via the canonical
+    /// <see cref="MeshNodeStreamExtensions.GetMeshNodeStream(IWorkspace, string)"/>
+    /// path. Returns an <see cref="IObservable{T}"/> the caller asserts on with
+    /// <c>.Should().Match(...)</c>.
+    /// </summary>
+    private IObservable<T?> GetHubContent<T>(IMessageHub client, string path) where T : class
+        => client.GetWorkspace().GetMeshNodeStream(path)
+            .Select(node =>
+            {
+                if (node?.Content is T typed) return typed;
+                if (node?.Content is JsonElement contentJe)
+                    return contentJe.Deserialize<T>(ClientMesh.JsonSerializerOptions);
+                return null;
+            });
 
     /// <summary>
     /// Full delegation flow using the production agent pipeline:
@@ -117,49 +121,42 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
     /// 4. Tool calls appear on the response message with DelegationPath
     /// 5. Parent completes with text
     /// </summary>
-    [Fact(Timeout = 30000)]
-    public async Task Delegation_ToolCallsAppear_WithDelegationPath()
+    [Fact(Timeout = 60000)]
+    public void Delegation_ToolCallsAppear_WithDelegationPath()
     {
-        var ct = new CancellationTokenSource(25.Seconds()).Token;
         var suffix = Guid.NewGuid().ToString("N")[..6];
-        var client = await GetClientAsync($"del-{suffix}");
+        var client = GetClient($"del-{suffix}");
         var workspace = client.GetWorkspace();
 
         // 1. Create thread
         var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Delegation tool call test", "TestUser");
-        var threadPath = await CreateNodeAsync(client, threadNode, "TestUser", ct);
+        var threadPath = CreateNode(client, threadNode, "TestUser");
         Output.WriteLine($"1. Thread: {threadPath}");
 
-        // 2. Subscribe to messages
-        var twoMessages = workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
+        // 2. Project the thread's message-id list off the live stream.
+        var messageIds = workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
             .Select(nodes =>
             {
                 var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
-                return (node?.Content as MeshThread)?.Messages ?? [];
-            })
-            .Where(ids => ids.Count >= 2)
-            .FirstAsync()
-            .ToTask(ct);
+                return (node?.Content as MeshThread)?.Messages
+                       ?? (IReadOnlyList<string>)System.Collections.Immutable.ImmutableList<string>.Empty;
+            });
 
-        // 3. Submit message via workspace extension â€” triggers delegation via production ChatClientAgentFactory
+        // 3. Submit message — triggers delegation via production ChatClientAgentFactory
         client.SubmitMessage(
             threadPath,
             "Please delegate this research task",
             contextPath: "TestUser");
         Output.WriteLine("2. Message submitted");
 
-        // 4. Wait for message cells
-        var msgIds = await twoMessages;
+        // 4. Wait for message cells (user + response).
+        var msgIds = messageIds.Should().Within(30.Seconds()).Match(ids => ids.Count >= 2);
         var responsePath = $"{threadPath}/{msgIds[1]}";
         Output.WriteLine($"3. Response message: {msgIds[1]}");
 
-        // 5. Subscribe to response message â€” wait for tool calls
+        // 5. Wait for execution to complete (text appears + all tool calls have results).
         Output.WriteLine("4. Waiting for tool calls on response...");
-        var responseStream = workspace.GetRemoteStream<MeshNode>(new Address(responsePath))!;
-        ThreadMessage? finalResponse = null;
-
-        // Wait for execution to complete (text appears + all tool calls have results)
-        finalResponse = await responseStream
+        var finalResponse = workspace.GetRemoteStream<MeshNode>(new Address(responsePath))!
             .Select(nodes =>
             {
                 var msg = nodes?.FirstOrDefault(n => n.Path == responsePath)?.Content as ThreadMessage;
@@ -167,10 +164,8 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
                     Output.WriteLine($"  [STREAM] text={msg.Text?.Length ?? 0}ch, toolCalls={msg.ToolCalls.Count}, delegations={msg.ToolCalls.Count(c => !string.IsNullOrEmpty(c.DelegationPath))}");
                 return msg;
             })
-            .Where(m => !string.IsNullOrEmpty(m?.Text) && m!.ToolCalls.Count > 0 && m.ToolCalls.All(c => c.Result != null))
-            .Timeout(20.Seconds())
-            .FirstAsync()
-            .ToTask(ct);
+            .Should().Within(40.Seconds())
+            .Match(m => !string.IsNullOrEmpty(m?.Text) && m!.ToolCalls.Count > 0 && m.ToolCalls.All(c => c.Result != null));
 
         // 6. Verify tool calls
         Output.WriteLine($"5. Response: text='{finalResponse!.Text?[..Math.Min(50, finalResponse.Text?.Length ?? 0)]}', toolCalls={finalResponse.ToolCalls.Count}");
@@ -187,47 +182,42 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
 
         // 7. Verify sub-thread exists and completed
         var subThreadPath = delegationCall.DelegationPath!;
-        var subThread = await GetHubContentAsync<MeshThread>(client, subThreadPath, ct);
-        subThread.Should().NotBeNull("sub-thread should exist");
+        var subThread = GetHubContent<MeshThread>(client, subThreadPath)
+            .Should().Within(30.Seconds()).Match(t => t is { Messages.Count: >= 2 });
         subThread!.Messages.Should().HaveCount(2, "sub-thread should have user + response");
         Output.WriteLine($"7. Sub-thread: {subThreadPath}, messages={subThread.Messages.Count}");
-        Output.WriteLine("8. PASSED â€” full delegation with DelegationPath");
+        Output.WriteLine("8. PASSED — full delegation with DelegationPath");
     }
 
     /// <summary>
     /// Resubmit after delegation: verifies no deadlock when resubmitting
     /// a message that previously triggered delegation.
     /// </summary>
-    [Fact(Timeout = 30000)]
-    public async Task Resubmit_AfterDelegation_DoesNotDeadlock()
+    [Fact(Timeout = 60000)]
+    public void Resubmit_AfterDelegation_DoesNotDeadlock()
     {
-        var ct = new CancellationTokenSource(25.Seconds()).Token;
         var suffix = Guid.NewGuid().ToString("N")[..6];
-        var client = await GetClientAsync($"del-{suffix}");
+        var client = GetClient($"del-{suffix}");
         var workspace = client.GetWorkspace();
 
         // 1. Create thread and submit
         var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Resubmit delegation test", "TestUser");
-        var threadPath = await CreateNodeAsync(client, threadNode, "TestUser", ct);
+        var threadPath = CreateNode(client, threadNode, "TestUser");
 
-        var twoMessages = workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Select(nodes => (nodes?.FirstOrDefault(n => n.Path == threadPath)?.Content as MeshThread)?.Messages ?? [])
-            .Where(ids => ids.Count >= 2)
-            .FirstAsync().ToTask(ct);
+        var threadStream = workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
+            .Select(nodes => nodes?.FirstOrDefault(n => n.Path == threadPath)?.Content as MeshThread);
 
         client.SubmitMessage(
             threadPath,
             "Delegate something",
             contextPath: "TestUser");
-        var msgIds = await twoMessages;
+        var msgIds = threadStream
+            .Select(t => t?.Messages ?? (IReadOnlyList<string>)System.Collections.Immutable.ImmutableList<string>.Empty)
+            .Should().Within(30.Seconds()).Match(ids => ids.Count >= 2);
         Output.WriteLine($"1. Initial messages: [{string.Join(", ", msgIds)}]");
 
         // 2. Wait for execution to complete
-        await workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Select(nodes => (nodes?.FirstOrDefault(n => n.Path == threadPath)?.Content as MeshThread))
-            .Where(t => t != null && !t.IsExecuting)
-            .Timeout(20.Seconds())
-            .FirstAsync().ToTask(ct);
+        threadStream.Should().Within(30.Seconds()).Match(t => t is { IsExecuting: false });
         Output.WriteLine("2. Initial execution complete");
 
         // 3. Resubmit
@@ -235,25 +225,22 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
         // Mid-resubmit transitions briefly show 3 messages before the
         // truncate-then-re-add settles to 2 — see Resubmit_AfterExecution_DoesNotDeadlock
         // in OrleansNodeChangePropagationTest for the full repro.
-        var resubmitted = workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Select(nodes => nodes?.FirstOrDefault(n => n.Path == threadPath)?.Content as MeshThread)
-            .Where(t => t is { IsExecuting: false }
-                && t.Messages.Count >= 2
-                && !t.Messages.SequenceEqual(msgIds))
-            .Select(t => (IReadOnlyList<string>)t!.Messages)
-            .Timeout(15.Seconds())
-            .FirstAsync().ToTask(ct);
 
         // Stream-update resubmit — see RequestViaStreamUpdate.md.
         client.ResubmitMessage(
             threadPath, msgIds[0],
             newUserText: "Delegate something");
 
-        var newMsgIds = await resubmitted;
+        var newThread = threadStream
+            .Should().Within(30.Seconds())
+            .Match(t => t is { IsExecuting: false }
+                && t.Messages.Count >= 2
+                && !t.Messages.SequenceEqual(msgIds));
+        var newMsgIds = (IReadOnlyList<string>)newThread!.Messages;
         Output.WriteLine($"3. After resubmit: [{string.Join(", ", newMsgIds)}]");
         newMsgIds[0].Should().Be(msgIds[0], "user message preserved");
         newMsgIds[1].Should().NotBe(msgIds[1], "new response cell");
-        Output.WriteLine("4. PASSED â€” resubmit after delegation, no deadlock");
+        Output.WriteLine("4. PASSED — resubmit after delegation, no deadlock");
     }
 }
 

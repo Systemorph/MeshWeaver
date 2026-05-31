@@ -56,9 +56,9 @@ public abstract class OrleansSharedTestBase : TestBase
     /// Creates a tracked client hub. The returned hub will be disposed in
     /// <see cref="DisposeAsync"/>; do not dispose it manually.
     /// </summary>
-    protected async Task<IMessageHub> GetClientAsync(string clientId, string userId = "TestUser")
+    protected IMessageHub GetClient(string clientId, string userId = "TestUser")
     {
-        var client = await Fixture.GetClientAsync(clientId, userId);
+        var client = Fixture.GetClient(clientId, userId);
         _clientHubs.Add(client);
         return client;
     }

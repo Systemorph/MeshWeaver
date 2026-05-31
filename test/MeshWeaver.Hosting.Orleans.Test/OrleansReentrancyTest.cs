@@ -70,7 +70,7 @@ public class OrleansReentrancyTest(ITestOutputHelper output) : TestBase(output)
         await base.DisposeAsync();
     }
 
-    private async Task<IMessageHub> GetClientAsync(string id)
+    private IMessageHub GetClient(string id)
     {
         var client = ClientMesh.ServiceProvider.CreateMessageHub(
             new Address("client", id),
@@ -99,7 +99,7 @@ public class OrleansReentrancyTest(ITestOutputHelper output) : TestBase(output)
     {
         var ct = new CancellationTokenSource(50.Seconds()).Token;
         var suffix = Guid.NewGuid().ToString("N")[..6];
-        var client = await GetClientAsync($"reent-{suffix}");
+        var client = GetClient($"reent-{suffix}");
 
         // Create thread
         var threadNode = ThreadNodeType.BuildThreadNode("User/TestUser", "Reentrancy test", "TestUser");

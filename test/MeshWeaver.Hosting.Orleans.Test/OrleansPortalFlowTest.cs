@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
@@ -34,8 +34,8 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// </summary>
 public class OrleansPortalFlowTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
-    private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
-        => await base.GetClientAsync($"portal-{name}-{Guid.NewGuid():N}", "TestUser");
+    private IMessageHub GetClient([CallerMemberName] string? name = null)
+        => base.GetClient($"portal-{name}-{Guid.NewGuid():N}", "TestUser");
 
     [Fact]
     public async Task PortalFlow_CreateThread_CreateCells_Submit_ExecutionCompletes()
@@ -44,7 +44,7 @@ public class OrleansPortalFlowTest(ITestOutputHelper output) : OrleansSharedTest
         try
         {
             var ct = new CancellationTokenSource(60.Seconds()).Token;
-            var client = await GetClientAsync();
+            var client = GetClient();
 
             // Step 1: Create thread
             var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Portal flow Orleans test", "TestUser");
@@ -110,7 +110,7 @@ public class OrleansPortalFlowTest(ITestOutputHelper output) : OrleansSharedTest
         try
         {
             var ct = new CancellationTokenSource(60.Seconds()).Token;
-            var client = await GetClientAsync();
+            var client = GetClient();
 
             var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Rapid submits test", "TestUser");
             var createResp = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("TestUser"))).FirstAsync().ToTask(ct);

@@ -36,8 +36,8 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// </summary>
 public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
-    private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
-        => await base.GetClientAsync($"completion-{name}-{Guid.NewGuid():N}", "TestUser");
+    private IMessageHub GetClient([CallerMemberName] string? name = null)
+        => base.GetClient($"completion-{name}-{Guid.NewGuid():N}", "TestUser");
 
     /// <summary>
     /// User submission produces a user-message cell + an agent-response cell;
@@ -45,16 +45,15 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
     /// observed via the response cell's MeshNode stream.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task SubmitMessage_ResponseCellGetsTerminalText()
+    public void SubmitMessage_ResponseCellGetsTerminalText()
     {
-        var ct = new CancellationTokenSource(50.Seconds()).Token;
-        var client = await GetClientAsync();
+        var client = GetClient();
 
         // 1. Create thread
-        var response = await client
+        var response = client
             .Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("TestUser", "Completion test", "TestUser")),
                 o => o.WithTarget(new Address("TestUser")))
-            .FirstAsync().ToTask(ct);
+            .Should().Within(45.Seconds()).Emit();
         response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         var threadPath = response.Message.Node!.Path!;
         Output.WriteLine($"Thread: {threadPath}");
@@ -69,11 +68,10 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
         // 3. Observe the thread stream until BOTH messages exist.
         //    GetMeshNodeStream(path) is the canonical API — auto-dispatches own → local → remote.
         var workspace = client.GetWorkspace();
-        var msgIds = await workspace.GetMeshNodeStream(threadPath)
+        var msgIds = workspace.GetMeshNodeStream(threadPath)
             .Select(node => (node?.Content as MeshThread)?.Messages
                             ?? System.Collections.Immutable.ImmutableList<string>.Empty)
-            .Where(ids => ids.Count >= 2)
-            .Take(1).Timeout(45.Seconds()).ToTask(ct);
+            .Should().Within(45.Seconds()).Match(ids => ids.Count >= 2);
         var responseMsgId = msgIds[1];
         var responsePath = $"{threadPath}/{responseMsgId}";
         Output.WriteLine($"Response message cell: {responsePath}");
@@ -81,10 +79,9 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
         // 4. Observe the response cell's stream until it reaches Completed with
         //    non-empty Text. This is "execution completed" in the stream-only
         //    world — replaces the obsolete SubmitMessageResponse(ExecutionCompleted).
-        var finalMsg = await workspace.GetMeshNodeStream(responsePath)
+        var finalMsg = workspace.GetMeshNodeStream(responsePath)
             .Select(node => node?.Content as ThreadMessage)
-            .Where(m => m is { Status: ThreadMessageStatus.Completed } && !string.IsNullOrEmpty(m.Text))
-            .Take(1).Timeout(45.Seconds()).ToTask(ct);
+            .Should().Within(45.Seconds()).Match(m => m is { Status: ThreadMessageStatus.Completed } && !string.IsNullOrEmpty(m.Text));
 
         finalMsg!.Status.Should().Be(ThreadMessageStatus.Completed,
             "response cell reaches terminal Status when agent finishes");
@@ -95,22 +92,12 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
         //    satellite at {threadPath}/_Notification/{id} (routes to "notifications"
         //    table per StandardTableMappings). The bell-icon UI in the portal
         //    databinds to notifications under the user; we assert the same shape.
-        //    Tests the "agent completion ⇒ notification" reactive trigger.
+        //    Reactive children-query poll — no await, no Task.Delay.
         var meshService = client.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Services.IMeshService>();
-        var notificationAppeared = false;
-        for (var i = 0; i < 30 && !notificationAppeared; i++)
-        {
-            var notifications = await meshService
-                .QueryAsync<MeshNode>($"path:{threadPath}/_Notification scope:children nodeType:Notification", ct)
-                .ToListAsync(ct);
-            notificationAppeared = notifications.Any(n =>
-                n.Content is MeshWeaver.Mesh.Notification notif
-                && notif.TargetNodePath == threadPath);
-            if (!notificationAppeared) await Task.Delay(200, ct);
-        }
-        notificationAppeared.Should().BeTrue(
-            "EmitCompletionNotification must create a Notification MeshNode targeting the thread, " +
-            "which the user's notification bell databinds to");
+        var notificationQuery = $"path:{threadPath}/_Notification scope:children nodeType:Notification";
+        meshService.ObserveQuery<MeshNode>(new MeshQueryRequest { Query = notificationQuery })
+            .Should().Within(20.Seconds()).Match(c => c.Items.Any(n =>
+                n.Content is MeshWeaver.Mesh.Notification notif && notif.TargetNodePath == threadPath));
         Output.WriteLine("Verified: completion notification appeared in user's bell");
 
         // 6. Dedicated Summary on ThreadMessage AND Thread. ExecuteMessageAsync
@@ -126,11 +113,10 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
         finalMsg.Summary.Should().NotBeNullOrEmpty("summary must contain text");
         Output.WriteLine($"Verified: response cell Summary length = {finalMsg.Summary!.Length}");
 
-        var threadAtIdle = await workspace.GetMeshNodeStream(threadPath)
+        var threadAtIdle = workspace.GetMeshNodeStream(threadPath)
             .Select(node => node?.Content as MeshThread)
-            .Where(t => t is { Status: MeshWeaver.AI.ThreadExecutionStatus.Idle }
-                        && !string.IsNullOrEmpty(t.Summary))
-            .Take(1).Timeout(10.Seconds()).ToTask(ct);
+            .Should().Within(10.Seconds()).Match(t => t is { Status: MeshWeaver.AI.ThreadExecutionStatus.Idle }
+                        && !string.IsNullOrEmpty(t.Summary));
         threadAtIdle!.Summary.Should().NotBeNullOrEmpty(
             "Thread.Summary must be populated atomically with Status=Idle so a delegating " +
             "parent observing the sub-thread sees the summary in the same emission as the Idle flip");
@@ -150,20 +136,19 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
     /// reactive DelegationTool subscription uses to resolve the TCS.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task DelegationOfDelegation_SummaryPropagatesUp()
+    public void DelegationOfDelegation_SummaryPropagatesUp()
     {
-        var ct = new CancellationTokenSource(50.Seconds()).Token;
-        var client = await GetClientAsync();
+        var client = GetClient();
         var workspace = client.GetWorkspace();
 
         // 1. Submit at the grandparent — produces a normal terminal thread
         //    with a Summary. We'll then verify a parent and child below can
         //    propagate their summaries to observers via the same primitive.
-        var gpResponse = await client
+        var gpResponse = client
             .Observe(new CreateNodeRequest(
                 ThreadNodeType.BuildThreadNode("TestUser", "Grandparent thread", "TestUser")),
                 o => o.WithTarget(new Address("TestUser")))
-            .FirstAsync().ToTask(ct);
+            .Should().Within(45.Seconds()).Emit();
         gpResponse.Message.Success.Should().BeTrue(gpResponse.Message.Error ?? "");
         var gpPath = gpResponse.Message.Node!.Path!;
         Output.WriteLine($"Grandparent: {gpPath}");
@@ -171,10 +156,9 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
             gpPath,
             "First level work",
             contextPath: "TestUser");
-        var gpFinal = await workspace.GetMeshNodeStream(gpPath)
+        var gpFinal = workspace.GetMeshNodeStream(gpPath)
             .Select(node => node?.Content as MeshThread)
-            .Where(t => t is { Status: ThreadExecutionStatus.Idle } && !string.IsNullOrEmpty(t.Summary))
-            .Take(1).Timeout(45.Seconds()).ToTask(ct);
+            .Should().Within(45.Seconds()).Match(t => t is { Status: ThreadExecutionStatus.Idle } && !string.IsNullOrEmpty(t.Summary));
         gpFinal!.Summary.Should().NotBeNullOrEmpty(
             "Level-1 thread must write Summary atomically with Status=Idle so an observer " +
             "(e.g. a delegating parent) can read it in the same emission as the Idle flip");
@@ -184,11 +168,11 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
         //    the same way — proving the propagation chain works at any depth.
         //    This is the Scan-based "Running → Idle" subscription the
         //    DelegationTool uses, applied identically here in a test.
-        var childResponse = await client
+        var childResponse = client
             .Observe(new CreateNodeRequest(
                 ThreadNodeType.BuildThreadNode("TestUser", "Child thread", "TestUser")),
                 o => o.WithTarget(new Address("TestUser")))
-            .FirstAsync().ToTask(ct);
+            .Should().Within(45.Seconds()).Emit();
         childResponse.Message.Success.Should().BeTrue(childResponse.Message.Error ?? "");
         var childPath = childResponse.Message.Node!.Path!;
         Output.WriteLine($"Child: {childPath}");
@@ -196,7 +180,7 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
             childPath,
             "Second level work",
             contextPath: "TestUser");
-        var childRunningToIdle = await workspace.GetMeshNodeStream(childPath)
+        var childRunningToIdle = workspace.GetMeshNodeStream(childPath)
             .Select(node => node?.Content as MeshThread)
             .Where(t => t is not null)
             .Scan((sawRunning: false, terminal: (MeshThread?)null), (state, t) =>
@@ -209,8 +193,7 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
                     return (state.sawRunning, t);
                 return state;
             })
-            .Where(s => s.terminal is not null)
-            .Take(1).Timeout(45.Seconds()).ToTask(ct);
+            .Should().Within(45.Seconds()).Match(s => s.terminal is not null);
         childRunningToIdle.terminal!.Summary.Should().NotBeNullOrEmpty(
             "Level-2 (child) thread reactive Running→Idle subscription must surface the " +
             "child's Summary — same shape the DelegationTool uses for sub-thread tool-call results");
@@ -225,10 +208,8 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
     /// marker from the user-visible <c>ThreadMessage.Text</c>.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task SummaryBlock_ParsedFromAgentResponse_AndStrippedFromText()
+    public void SummaryBlock_ParsedFromAgentResponse_AndStrippedFromText()
     {
-        var ct = new CancellationTokenSource(50.Seconds()).Token;
-
         const string expectedSummary = "Greeting acknowledged.";
         const string visibleBody = "Hello! How can I help you today?";
         var streamedResponse = $"{visibleBody} <summary>{expectedSummary}</summary>";
@@ -239,14 +220,14 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
         SharedOrleansFixture.SwappableFactory.SetInner(new SteerableFakeChatClientFactory(streamedResponse));
         try
         {
-            var client = await GetClientAsync();
+            var client = GetClient();
             var workspace = client.GetWorkspace();
 
-            var createResp = await client
+            var createResp = client
                 .Observe(new CreateNodeRequest(
                     ThreadNodeType.BuildThreadNode("TestUser", "Summary block test", "TestUser")),
                     o => o.WithTarget(new Address("TestUser")))
-                .FirstAsync().ToTask(ct);
+                .Should().Within(45.Seconds()).Emit();
             createResp.Message.Success.Should().BeTrue(createResp.Message.Error ?? "");
             var threadPath = createResp.Message.Node!.Path!;
 
@@ -255,11 +236,10 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
                 "Hi",
                 contextPath: "TestUser");
 
-            var threadAtIdle = await workspace.GetMeshNodeStream(threadPath)
+            var threadAtIdle = workspace.GetMeshNodeStream(threadPath)
                 .Select(node => node?.Content as MeshThread)
-                .Where(t => t is { Status: MeshWeaver.AI.ThreadExecutionStatus.Idle }
-                            && !string.IsNullOrEmpty(t.Summary))
-                .Take(1).Timeout(45.Seconds()).ToTask(ct);
+                .Should().Within(45.Seconds()).Match(t => t is { Status: MeshWeaver.AI.ThreadExecutionStatus.Idle }
+                            && !string.IsNullOrEmpty(t.Summary));
 
             threadAtIdle!.Summary.Should().Be(expectedSummary,
                 "ExecuteMessageAsync must parse <summary>...</summary> from the agent " +
@@ -268,10 +248,9 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
             // Response cell carries the same Summary and clean Text (marker stripped).
             var responseMsgId = threadAtIdle.Messages.Last();
             var responsePath = $"{threadPath}/{responseMsgId}";
-            var responseMsg = await workspace.GetMeshNodeStream(responsePath)
+            var responseMsg = workspace.GetMeshNodeStream(responsePath)
                 .Select(node => node?.Content as ThreadMessage)
-                .Where(m => m is { Status: ThreadMessageStatus.Completed } && !string.IsNullOrEmpty(m.Summary))
-                .Take(1).Timeout(45.Seconds()).ToTask(ct);
+                .Should().Within(45.Seconds()).Match(m => m is { Status: ThreadMessageStatus.Completed } && !string.IsNullOrEmpty(m.Summary));
             responseMsg!.Summary.Should().Be(expectedSummary,
                 "ThreadMessage.Summary on the response cell must match Thread.Summary");
             responseMsg.Text.Should().NotContain("<summary>",

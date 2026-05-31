@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Reactive.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
@@ -31,13 +31,13 @@ public class OrleansKernelProgressTest(ITestOutputHelper output) : OrleansShared
 {
     private const int DefaultTimeoutMs = 30_000;
 
-    private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
-        => await base.GetClientAsync($"kernel-{name}-{Guid.NewGuid():N}", "TestUser");
+    private IMessageHub GetClient([CallerMemberName] string? name = null)
+        => base.GetClient($"kernel-{name}-{Guid.NewGuid():N}", "TestUser");
 
     [Fact(Timeout = DefaultTimeoutMs)]
     public async Task Log_from_script_is_observable_on_activity_log_stream()
     {
-        var client = await GetClientAsync();
+        var client = GetClient();
         var kernelAddress = AddressExtensions.CreateKernelAddress();
 
         const string code =

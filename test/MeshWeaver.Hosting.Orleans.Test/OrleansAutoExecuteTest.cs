@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -20,7 +20,6 @@ using Xunit;
 using MeshThread = MeshWeaver.AI.Thread;
 
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
@@ -34,37 +33,38 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// This reproduces the production bug where UpdateThreadMessageContent
 /// went to the thread grain instead of the response message grain
 /// because the child nodes weren't created in persistence.
+///
+/// 🚨 Tests are <c>void</c> + reactive assertions (no <c>async</c>/<c>await</c>):
+/// blocking inside an async test deadlocks the in-process hub scheduler — the
+/// agent's streaming execution shares the process and its continuations are
+/// starved by the captured async SynchronizationContext. See
+/// FluentAssertionsToReactive.md §2a + ObservableAssertions remarks.
 /// </summary>
 public class OrleansAutoExecuteTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
-    private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
-        => await base.GetClientAsync($"autoexec-{name}-{Guid.NewGuid():N}", "TestUser");
+    // Synchronous client acquisition — the await-free test bodies resolve the
+    // client hub once, up front, on the plain xUnit thread (no async context to
+    // starve). The hub-reachable waits all live inside .Should() blocking
+    // assertions afterward.
+    private IMessageHub GetClient([CallerMemberName] string? name = null)
+        => base.GetClient($"autoexec-{name}-{Guid.NewGuid():N}", "TestUser");
 
-    private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
-    {
-        // Canonical CQRS-correct read: target the per-node hub's MeshNodeReference
-        // reducer, not an EntityCollection lookup. The owning hub is the source of
-        // truth for MeshNode content; this avoids any catalog / index lag.
-        // Polling tests call this while a node is still being materialized (response
-        // cell created async by the agent loop) â€” routing returns NotFound until then.
-        // Swallow that as null so the caller's polling loop can keep trying.
-        IMessageDelivery<GetDataResponse> response;
-        try
-        {
-            response = await client.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path))).FirstAsync().ToTask(ct);
-        }
-        catch (DeliveryFailureException)
-        {
-            return null;
-        }
-        var node = response.Message.Data as MeshNode;
-        if (node == null && response.Message.Data is JsonElement je)
-            node = je.Deserialize<MeshNode>(Fixture.ClientMesh.JsonSerializerOptions);
-        if (node?.Content is T typed) return typed;
-        if (node?.Content is JsonElement contentJe)
-            return contentJe.Deserialize<T>(Fixture.ClientMesh.JsonSerializerOptions);
-        return null;
-    }
+    /// <summary>
+    /// Reactive single-node content read via the canonical
+    /// <see cref="MeshNodeStreamExtensions.GetMeshNodeStream(IWorkspace, string)"/>
+    /// path. Returns an <see cref="IObservable{T}"/> the caller asserts on with
+    /// <c>.Should().Match(...)</c>; the stream filters pre-load empty snapshots so
+    /// the first content-bearing emission carries the node.
+    /// </summary>
+    private static IObservable<T?> GetHubContent<T>(IMessageHub client, string path) where T : class
+        => client.GetWorkspace().GetMeshNodeStream(path)
+            .Select(node =>
+            {
+                if (node?.Content is T typed) return typed;
+                if (node?.Content is JsonElement contentJe)
+                    return contentJe.Deserialize<T>(client.JsonSerializerOptions);
+                return null;
+            });
 
     /// <summary>
     /// BuildThreadWithMessages creates thread + auto-executes.
@@ -72,13 +72,12 @@ public class OrleansAutoExecuteTest(ITestOutputHelper output) : OrleansSharedTes
     /// and have final response text. Thread must end with IsExecuting=false.
     /// </summary>
     [Fact]
-    public async Task AutoExecute_CreatesResponseCell_And_CompletesExecution()
+    public void AutoExecute_CreatesResponseCell_And_CompletesExecution()
     {
         SharedOrleansFixture.SwappableFactory.SetInner(new AutoExecEchoChatClientFactory());
         try
         {
-            var ct = new CancellationTokenSource(30.Seconds()).Token;
-            var client = await GetClientAsync();
+            var client = GetClient();
 
             // Build thread with pre-populated messages (auto-execute on activation)
             var (threadNode, userMsgId, responseMsgId) = ThreadNodeType.BuildThreadWithMessages(
@@ -87,36 +86,31 @@ public class OrleansAutoExecuteTest(ITestOutputHelper output) : OrleansSharedTes
             var threadPath = threadNode.Path!;
             Output.WriteLine($"Thread: {threadPath}, user={userMsgId}, response={responseMsgId}");
 
-            // Create the thread Ã¢â‚¬â€ AutoExecutePendingMessage should fire on grain activation
-            var createResponse = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("TestUser"))).FirstAsync().ToTask(ct);
+            // Create the thread — AutoExecutePendingMessage should fire on grain activation
+            var createResponse = client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("TestUser")))
+                .Should().Within(30.Seconds()).Emit();
             createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error ?? "");
             Output.WriteLine("Thread created, waiting for execution...");
 
-            // Poll for execution to complete
-            ThreadMessage? response = null;
+            // Subscribing to the thread stream also activates the per-thread hub
+            // (WatchForExecution → auto-execute dispatch). Wait for execution to settle.
+            var thread = GetHubContent<MeshThread>(client, threadPath)
+                .Should().Within(30.Seconds())
+                .Match(t => t is { IsExecuting: false, PendingUserMessage: null });
+            Output.WriteLine("Thread execution complete");
+
+            // Verify response cell has final text.
             var responsePath = $"{threadPath}/{responseMsgId}";
-            for (var i = 0; i < 60; i++)
-            {
-                // Check thread state
-                var thread = await GetHubContentAsync<MeshThread>(client, threadPath, ct);
-                if (thread is { IsExecuting: false, PendingUserMessage: null })
-                {
-                    Output.WriteLine($"Thread execution complete after {i * 500}ms");
-
-                    // Verify response cell has content
-                    response = await GetHubContentAsync<ThreadMessage>(client, responsePath, ct);
-                    break;
-                }
-                await Task.Delay(500, ct);
-            }
-
-            response.Should().NotBeNull("response message must exist in persistence");
+            var response = GetHubContent<ThreadMessage>(client, responsePath)
+                .Should().Within(30.Seconds())
+                .Match(m => !string.IsNullOrEmpty(m?.Text));
             response!.Text.Should().NotBeNullOrEmpty("agent should have written response text");
-            Output.WriteLine($"Response: {response.Text[..Math.Min(100, response.Text.Length)]}");
+            Output.WriteLine($"Response: {response.Text![..Math.Min(100, response.Text.Length)]}");
 
-            // Verify user cell exists
-            var userMsg = await GetHubContentAsync<ThreadMessage>(client, $"{threadPath}/{userMsgId}", ct);
-            userMsg.Should().NotBeNull("user message must exist in persistence");
+            // Verify user cell exists.
+            var userMsg = GetHubContent<ThreadMessage>(client, $"{threadPath}/{userMsgId}")
+                .Should().Within(30.Seconds())
+                .Match(m => m is not null);
             userMsg!.Text.Should().Be("Hello Orleans auto-execute!");
             userMsg.Role.Should().Be("user");
 
@@ -133,13 +127,12 @@ public class OrleansAutoExecuteTest(ITestOutputHelper output) : OrleansSharedTes
     /// The response cell should have text != "" and != "Allocating agent...".
     /// </summary>
     [Fact]
-    public async Task AutoExecute_UpdateThreadMessageContent_RoutesToResponseGrain()
+    public void AutoExecute_UpdateThreadMessageContent_RoutesToResponseGrain()
     {
         SharedOrleansFixture.SwappableFactory.SetInner(new AutoExecEchoChatClientFactory());
         try
         {
-            var ct = new CancellationTokenSource(30.Seconds()).Token;
-            var client = await GetClientAsync();
+            var client = GetClient();
 
             var (threadNode, _, responseMsgId) = ThreadNodeType.BuildThreadWithMessages(
                 "TestUser", "Test routing to response grain",
@@ -147,30 +140,25 @@ public class OrleansAutoExecuteTest(ITestOutputHelper output) : OrleansSharedTes
             var threadPath = threadNode.Path!;
             var responsePath = $"{threadPath}/{responseMsgId}";
 
-            await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("TestUser"))).FirstAsync().ToTask(ct);
+            client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("TestUser")))
+                .Should().Within(30.Seconds()).Emit();
 
-            // Activate the per-thread hub by sending it a message â€” CreateNodeRequest above
-            // landed at TestUser, the catalog has the node, but the per-thread grain
-            // is created lazily on its first inbound message. Without this ping, the hub's
-            // WithInitialization callbacks (including WatchForExecution that fires the
-            // auto-execute dispatch) never run and the response cell is never created.
-            // AutoExecute_CreatesResponseCell_And_CompletesExecution gets this for free
-            // because it polls the THREAD path (which activates the hub on first poll);
-            // this test polls only the response cell, so it must trigger activation explicitly.
-            await GetHubContentAsync<MeshThread>(client, threadPath, ct);
+            // Activate the per-thread hub by subscribing to its stream — CreateNodeRequest
+            // above landed at TestUser, the catalog has the node, but the per-thread grain
+            // is created lazily on its first inbound message. Without this the hub's
+            // WithInitialization callbacks (WatchForExecution that fires the auto-execute
+            // dispatch) never run and the response cell is never created.
+            GetHubContent<MeshThread>(client, threadPath)
+                .Should().Within(30.Seconds()).Match(t => t is not null);
 
-            // Poll for response cell to have final text (not empty, not "Allocating agent...")
-            for (var i = 0; i < 60; i++)
-            {
-                var msg = await GetHubContentAsync<ThreadMessage>(client, responsePath, ct);
-                if (msg?.Text is { Length: > 0 } text && !text.StartsWith("Allocating") && !text.StartsWith("Loading") && !text.StartsWith("Generating"))
-                {
-                    Output.WriteLine($"Response cell has final text after {i * 500}ms: {text[..Math.Min(80, text.Length)]}");
-                    return; // SUCCESS
-                }
-                await Task.Delay(500, ct);
-            }
-            throw new TimeoutException("UpdateThreadMessageContent never reached response cell with final text");
+            // Wait for the response cell to have final text (not empty, not a placeholder).
+            var msg = GetHubContent<ThreadMessage>(client, responsePath)
+                .Should().Within(30.Seconds())
+                .Match(m => m?.Text is { Length: > 0 } text
+                    && !text.StartsWith("Allocating")
+                    && !text.StartsWith("Loading")
+                    && !text.StartsWith("Generating"));
+            Output.WriteLine($"Response cell has final text: {msg!.Text![..Math.Min(80, msg.Text.Length)]}");
         }
         finally
         {

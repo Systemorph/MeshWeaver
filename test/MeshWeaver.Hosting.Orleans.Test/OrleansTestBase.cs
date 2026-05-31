@@ -34,7 +34,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// <para>Provides:</para>
 /// <list type="bullet">
 ///   <item>TestCluster lifecycle (Initialize/Dispose).</item>
-///   <item><see cref="GetClientAsync"/> — creates a participating client mesh hub
+///   <item><see cref="GetClient"/> — creates a participating client mesh hub
 ///   with the standard mesh-node handler chain (<see cref="GraphConfigurationExtensions.AddMeshDataSource"/>
 ///   + <see cref="LayoutExtensions.AddLayoutClient"/> + <see cref="AIExtensions.AddAITypes"/>).</item>
 ///   <item>Per-call <see cref="AccessContext"/> seeding so the client posts under
@@ -75,7 +75,7 @@ public abstract class OrleansTestBase<TSiloConfigurator>(ITestOutputHelper outpu
     }
 
     /// <summary>
-    /// Per-test-method client tracking. Every GetClientAsync() is appended;
+    /// Per-test-method client tracking. Every GetClient() is appended;
     /// DisposeAsync disposes them before the cluster teardown so leaked
     /// server-side sync streams (paired with the abandoned client hubs)
     /// complete cleanly. Without this, cross-test mesh state accumulates
@@ -126,7 +126,7 @@ public abstract class OrleansTestBase<TSiloConfigurator>(ITestOutputHelper outpu
     /// per-circuit <see cref="AccessContext"/> with <paramref name="userId"/>, and
     /// registers the client address with the silo's <see cref="IRoutingService"/>.
     /// </summary>
-    protected async Task<IMessageHub> GetClientAsync(string? clientId = null, string userId = "TestUser")
+    protected IMessageHub GetClient(string? clientId = null, string userId = "TestUser")
     {
         var address = CreateClientAddress(clientId);
         var client = ClientMesh.ServiceProvider.CreateMessageHub(address, ConfigureClient);

@@ -2,8 +2,8 @@
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -150,16 +150,15 @@ public class LoadConversationHistoryTest(ITestOutputHelper output) : MonolithMes
     }
 
     [Fact]
-    public async Task AllCellsMissing_ThrowsTimeoutException()
+    public void AllCellsMissing_ThrowsTimeoutException()
     {
-        var ct = new CancellationTokenSource(60.Seconds()).Token;
         var client = GetClient();
         // This test stays async (verifies the loader observable errors with a
         // specific TimeoutException via ThrowAsync), so it must NOT use blocking
         // reactive .Should() assertions â€” inline the thread create with await.
-        var createResp = await client.Observe(
+        var createResp = client.Observe(
             new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Loader all-fail test", "TestUser")),
-            o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
+            o => o.WithTarget(Mesh.Address)).Should().Within(60.Seconds()).Emit();
         createResp.Message.Success.Should().BeTrue(createResp.Message.Error ?? "");
         var threadPath = createResp.Message.Node!.Path!;
 
@@ -167,37 +166,38 @@ public class LoadConversationHistoryTest(ITestOutputHelper output) : MonolithMes
         // typed MeshThread (not JsonElement) â€” otherwise the workspace.Update
         // lambda below treats `node.Content is not MeshThread` as true and
         // short-circuits to a no-op, leaving Messages empty.
-        await ThreadFlow.ReadThread(client, threadPath, _ => true)
-            .FirstAsync().ToTask(ct);
+        ThreadFlow.ReadThread(client, threadPath, _ => true)
+            .Should().Within(60.Seconds()).Emit();
 
         // Stamp two phantom cell IDs into Messages â€” no per-node hub will ever
         // emit content at those paths, so every per-cell read times out and the
         // loader's guard must refuse to return empty history.
-        await Mesh.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
+        Mesh.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
         {
             if (node.Content is not MeshThread t) return node;
             return node with { Content = t with { Messages = ImmutableList.Create("phantom-1", "phantom-2") } };
-        }).FirstAsync().ToTask(ct);
+        }).Should().Within(60.Seconds()).Emit();
 
         // Confirm the thread's Messages list actually carries the phantoms before
         // we kick off the loader â€” otherwise a stale cache snapshot would let the
         // loader sail through "cellIds.Count == 0" and miss the guard entirely.
-        var settled = await ThreadFlow.ReadThread(client, threadPath,
+        var settled = ThreadFlow.ReadThread(client, threadPath,
             t => t.Messages.Contains("phantom-1") && t.Messages.Contains("phantom-2"))
-            .FirstAsync().ToTask(ct);
+            .Should().Within(60.Seconds()).Emit();
         settled.Messages.Should().HaveCount(2);
 
-        Func<Task> act = async () =>
-        {
-            await ThreadExecution.LoadFullConversationHistoryFromMesh(
-                    Mesh, threadPath,
-                    excludeUserMessageId: null, excludeResponseMessageId: null,
-                    NullLogger.Instance,
-                    cellTimeout: 500.Milliseconds())
-                .FirstAsync().ToTask(ct);
-        };
-
-        await act.Should().ThrowAsync<TimeoutException>(
+        // Loader must ERROR with TimeoutException (every phantom cell read times out).
+        // Materialize folds the OnError into a value so we assert it reactively — no
+        // await, no ThrowAsync. Within() must exceed the loader's own cellTimeout so
+        // the loader's TimeoutException fires first.
+        var loadResult = ThreadExecution.LoadFullConversationHistoryFromMesh(
+                Mesh, threadPath,
+                excludeUserMessageId: null, excludeResponseMessageId: null,
+                NullLogger.Instance,
+                cellTimeout: 500.Milliseconds())
+            .Materialize()
+            .Should().Within(60.Seconds()).Match(n => n.Kind == NotificationKind.OnError);
+        loadResult.Exception.Should().BeOfType<TimeoutException>(
             "loader must refuse to return empty history when cells were expected");
     }
 

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
@@ -46,8 +46,8 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// </summary>
 public class OrleansHostedHubRoutingTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
-    private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
-        => await base.GetClientAsync($"hostedhubrouting-{name}-{Guid.NewGuid():N}", "TestUser");
+    private IMessageHub GetClient([CallerMemberName] string? name = null)
+        => base.GetClient($"hostedhubrouting-{name}-{Guid.NewGuid():N}", "TestUser");
 
     /// <summary>
     /// Foundation: the per-thread grain hub answers a request that has a synchronous
@@ -58,7 +58,7 @@ public class OrleansHostedHubRoutingTest(ITestOutputHelper output) : OrleansShar
     public async Task PostToThreadHub_HandlerResponds_RoundTripsViaRouting()
     {
         var ct = new CancellationTokenSource(20.Seconds()).Token;
-        var client = await GetClientAsync();
+        var client = GetClient();
 
         // 1. Create the Thread node so the per-thread grain has something to activate
         //    against. Use BuildThreadNode (NOT BuildThreadWithMessages) so no auto-execute
@@ -114,7 +114,7 @@ public class OrleansHostedHubRoutingTest(ITestOutputHelper output) : OrleansShar
     public async Task ThreadHub_LocalWorkspaceWrite_VisibleViaGetDataRequest()
     {
         var ct = new CancellationTokenSource(20.Seconds()).Token;
-        var client = await GetClientAsync();
+        var client = GetClient();
 
         // 1. Create the Thread (no auto-execute).
         var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Workspace propagation test", "TestUser");
