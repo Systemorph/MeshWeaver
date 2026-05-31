@@ -26,6 +26,12 @@ bld/
 [Oo]utput/
 [Dd]eploy/
 
+# MeshWeaver deployment artifacts (Aspire-generated compose/Helm, Marketplace ARM, the
+# co-hosted-CLI base image, env templates) live under /deploy — re-include them from the
+# Visual Studio "[Dd]eploy/" web-deploy-output rule above.
+!/deploy/
+!/deploy/**
+
 # Visual Studio 2015/2017 cache/options directory
 .vs/
 .vscode

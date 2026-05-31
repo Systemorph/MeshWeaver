@@ -3,6 +3,7 @@ using Azure.Storage.Blobs;
 using Memex.Portal.ServiceDefaults;
 using Memex.Portal.Shared;
 using Microsoft.AspNetCore.DataProtection;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Orleans;
 using MeshWeaver.Hosting.PostgreSql;
 using MeshWeaver.Messaging;
@@ -11,6 +12,7 @@ using MeshWeaver.NuGet.AzureBlob;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Npgsql;
 using Orleans.Configuration;
+using Orleans.Hosting;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
@@ -22,41 +24,80 @@ builder.Services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSe
 
 // Log levels controlled via appsettings.Development.json
 
-// Register Aspire-injected clients
-builder.AddKeyedAzureTableServiceClient("orleans-clustering");
-builder.AddKeyedAzureBlobServiceClient("storage");
-builder.AddKeyedAzureBlobServiceClient("orleans-grain-state");
-// Shared NodeType compile cache — versioned assemblies live here, replacing the
-// per-replica in-memory compile cache with a durable cross-replica lookup.
-builder.AddKeyedAzureBlobServiceClient("nodetype-cache");
+// Deployment backend switch. Default "Azure" preserves the current ACA/Marketplace
+// behaviour exactly (no regression). "Filesystem" is the Azure-free self-host path:
+// object storage, the NodeType compile cache, the NuGet package cache, and
+// DataProtection keys move to a (local or shared) volume. Mesh data still lives in
+// Postgres in BOTH modes — the Postgres auth path below already auto-detects
+// Azure-managed-identity vs basic auth from the connection string.
+var deploymentBackend = builder.Configuration["Deployment:Backend"] ?? "Azure";
+var useAzureBackend = !string.Equals(deploymentBackend, "Filesystem", StringComparison.OrdinalIgnoreCase);
 
-// Persistent NuGet package cache backed by the content-storage account. Each resolved
-// package is stored as a .zip blob under container "nuget-cache" keyed by {id}/{version}.
-// On a new replica the resolver hydrates from blob instead of re-downloading from nuget.org.
-builder.Services.Replace(ServiceDescriptor.Singleton<INuGetPackageCache>(sp =>
-    new BlobNuGetPackageCache(
-        sp.GetRequiredKeyedService<BlobServiceClient>("storage"),
-        containerName: "nuget-cache",
-        logger: sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<BlobNuGetPackageCache>>())));
+if (useAzureBackend)
+{
+    // Register Aspire-injected clients
+    builder.AddKeyedAzureTableServiceClient("orleans-clustering");
+    builder.AddKeyedAzureBlobServiceClient("storage");
+    builder.AddKeyedAzureBlobServiceClient("orleans-grain-state");
+    // Shared NodeType compile cache — versioned assemblies live here, replacing the
+    // per-replica in-memory compile cache with a durable cross-replica lookup.
+    builder.AddKeyedAzureBlobServiceClient("nodetype-cache");
 
-// Data protection: persist keys to Azure Blob Storage (shared across replicas)
-var dpConfig = builder.Configuration.GetSection("DataProtection");
-var containerName = dpConfig["ContainerName"] ?? "dataprotection";
-var blobName = dpConfig["BlobName"] ?? "keys.xml";
+    // Persistent NuGet package cache backed by the content-storage account. Each resolved
+    // package is stored as a .zip blob under container "nuget-cache" keyed by {id}/{version}.
+    // On a new replica the resolver hydrates from blob instead of re-downloading from nuget.org.
+    builder.Services.Replace(ServiceDescriptor.Singleton<INuGetPackageCache>(sp =>
+        new BlobNuGetPackageCache(
+            sp.GetRequiredKeyedService<BlobServiceClient>("storage"),
+            containerName: "nuget-cache",
+            logger: sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<BlobNuGetPackageCache>>())));
 
-builder.Services.AddDataProtection()
-    .SetApplicationName("MemexPortal")
-    .PersistKeysToAzureBlobStorage(sp =>
-    {
-        var blobServiceClient = sp.GetRequiredKeyedService<BlobServiceClient>("storage");
-        var containerClient = blobServiceClient.GetBlobContainerClient(containerName);
-        // Exists() probe before Create() avoids the Azure SDK's per-response
-        // "409 ContainerAlreadyExists" warning that CreateIfNotExists() emits
-        // on every startup against a pre-existing container.
-        if (!containerClient.Exists())
-            containerClient.Create();
-        return containerClient.GetBlobClient(blobName);
-    });
+    // Data protection: persist keys to Azure Blob Storage (shared across replicas)
+    var dpConfig = builder.Configuration.GetSection("DataProtection");
+    var containerName = dpConfig["ContainerName"] ?? "dataprotection";
+    var blobName = dpConfig["BlobName"] ?? "keys.xml";
+
+    builder.Services.AddDataProtection()
+        .SetApplicationName("MemexPortal")
+        .PersistKeysToAzureBlobStorage(sp =>
+        {
+            var blobServiceClient = sp.GetRequiredKeyedService<BlobServiceClient>("storage");
+            var containerClient = blobServiceClient.GetBlobContainerClient(containerName);
+            // Exists() probe before Create() avoids the Azure SDK's per-response
+            // "409 ContainerAlreadyExists" warning that CreateIfNotExists() emits
+            // on every startup against a pre-existing container.
+            if (!containerClient.Exists())
+                containerClient.Create();
+            return containerClient.GetBlobClient(blobName);
+        });
+}
+else
+{
+    // ---- Self-host filesystem backend (Azure-free) ----
+    // Single-node: a local volume. HA: a shared volume (NFS/CIFS) so every replica
+    // sees the same compile cache / package cache / DataProtection keys.
+    var dataRoot = builder.Configuration["Deployment:DataRoot"]
+        ?? Path.Combine(AppContext.BaseDirectory, "data");
+
+    // NodeType compile cache → filesystem. Registered BEFORE ConfigureMemexMesh's
+    // AddBlobAssemblyStore() runs; both use TryAddSingleton<IAssemblyStore>, so this
+    // first registration wins and the blob factory (which needs a keyed BlobServiceClient
+    // we deliberately don't register here) is never constructed.
+    builder.Services.AddFileSystemAssemblyStore(Path.Combine(dataRoot, "assembly-cache"));
+
+    // NuGet package cache → filesystem (zip-per-version, shared-volume safe).
+    builder.Services.Replace(ServiceDescriptor.Singleton<INuGetPackageCache>(sp =>
+        new FileSystemNuGetPackageCache(
+            Path.Combine(dataRoot, "nuget-cache"),
+            sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<FileSystemNuGetPackageCache>>())));
+
+    // DataProtection keys → filesystem (shared volume across replicas in HA).
+    var keysDir = Path.Combine(dataRoot, "dataprotection-keys");
+    Directory.CreateDirectory(keysDir);
+    builder.Services.AddDataProtection()
+        .SetApplicationName("MemexPortal")
+        .PersistKeysToFileSystem(new DirectoryInfo(keysDir));
+}
 
 // Register Aspire-injected PostgreSQL data source (with pgvector support)
 // Single shared pool for all partition queries (schema-qualified SQL).
@@ -89,14 +130,25 @@ builder.ConfigureMemexServices();
 var embeddingOptions = builder.Configuration.GetSection("Embedding").Get<EmbeddingOptions>() ?? new EmbeddingOptions();
 builder.Services.AddAzureFoundryEmbeddings(embeddingOptions);
 
-// Configure Orleans with Azure Table Storage (co-hosted silo + web)
+// Configure Orleans clustering (co-hosted silo + web).
+//  - "AzureTables" (default): Aspire injects Azure Table clustering via config — no
+//    explicit provider here, exactly as before (no regression for ACA/Marketplace).
+//  - "Localhost": single-silo in-process membership for single-node self-host (compose
+//    without an Aspire orchestrator to inject clustering config).
+//  - "AdoNet" (Postgres): HA self-host — wired in Track A / compose-ha.
+var orleansClustering = builder.Configuration["Deployment:Orleans:Clustering"] ?? "AzureTables";
 var address = AddressExtensions.CreateMeshAddress();
 builder.UseOrleansMeshServer(address, silo =>
+    {
         silo.Configure<ClusterOptions>(opts =>
         {
             opts.ClusterId = MemexDistributedConstants.ClusterId;
             opts.ServiceId = MemexDistributedConstants.ServiceId;
-        })
+        });
+        if (string.Equals(orleansClustering, "Localhost", StringComparison.OrdinalIgnoreCase))
+            silo.UseLocalhostClustering();
+        return silo;
+    }
     )
     .ConfigureServices(services => services
         .AddPartitionedPostgreSqlPersistence(

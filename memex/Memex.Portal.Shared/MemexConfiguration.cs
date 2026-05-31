@@ -97,12 +97,24 @@ public static class MemexConfiguration
         // single per-provider builder extension (.AddAnthropic() etc.)
         // wired in ConfigureMemexMesh — that one call registers the catalog
         // source + IOptions binding + IChatClientFactory.
+        //
+        // Deploy-time feature flags gate which providers/CLIs ship. Defaults are
+        // all-on (an absent Features section = current behaviour, no regression).
+        // A disabled flag is the operator's intent and wins even if a key is
+        // configured. Both the services-tier factory registration here AND the
+        // mesh-tier catalog source in ConfigureMemexMesh are gated symmetrically
+        // so a provider can't half-register.
+        var features = builder.Configuration
+            .GetSection(MemexFeatureOptions.SectionName)
+            .Get<MemexFeatureOptions>() ?? new MemexFeatureOptions();
 
-        services.AddCopilot(config =>
-            builder.Configuration.GetSection("Copilot").Bind(config));
+        if (features.Ai.Clis.Copilot)
+            services.AddCopilot(config =>
+                builder.Configuration.GetSection("Copilot").Bind(config));
 
-        services.AddClaudeCode(config =>
-            builder.Configuration.GetSection("ClaudeCode").Bind(config));
+        if (features.Ai.Clis.ClaudeCode)
+            services.AddClaudeCode(config =>
+                builder.Configuration.GetSection("ClaudeCode").Bind(config));
 
         // Register the AI chat services (must be after all factory registrations)
         services.AddAgentChatServices();
@@ -313,7 +325,12 @@ public static class MemexConfiguration
             var usePartitioned = string.Equals(graphStorageConfig.Type, "FileSystem", StringComparison.OrdinalIgnoreCase)
                 && !string.IsNullOrEmpty(graphStorageConfig.BasePath);
 
-            return (TBuilder)builder
+            // Deploy-time feature flags (symmetric with ConfigureMemexServices).
+            var features = configuration
+                .GetSection(MemexFeatureOptions.SectionName)
+                .Get<MemexFeatureOptions>() ?? new MemexFeatureOptions();
+
+            MeshBuilder mb = builder
                 // Configure persistence from Graph:Storage section.
                 // Skip if any IPartitionStorageProvider was already registered upstream
                 // (e.g., AddPartitionedPostgreSqlPersistence in Memex.Portal.Distributed/Program.cs).
@@ -337,18 +354,24 @@ public static class MemexConfiguration
                 .AddMeshNodes(Authentication.GlobalAdminSeed.Build(configuration))
                 .AddSpaceType()
                 .AddPortalType()
-                .AddAI()
-                // Each AI provider self-registers everything (catalog
-                // source + IOptions binding + IChatClientFactory) via one
-                // builder extension. The Models settings tab + the
-                // ModelProviderService read these out of the live
-                // LanguageModelCatalogOptions — no central registry.
-                .AddAnthropic()
-                .AddAzureFoundry()
-                .AddAzureOpenAI()
-                .AddOpenAI()
-                .AddClaudeCode()   // catalog source (factory + config via services.AddClaudeCode below)
-                .AddCopilot()      // catalog source (factory + config via services.AddCopilot below)
+                .AddAI();
+
+            // Each AI provider self-registers everything (catalog source +
+            // IOptions binding + IChatClientFactory) via one builder extension.
+            // The Models settings tab + the ModelProviderService read these out
+            // of the live LanguageModelCatalogOptions — no central registry.
+            // Gated by deploy-time feature flags (symmetric with the services-tier
+            // AddCopilot/AddClaudeCode in ConfigureMemexServices). A disabled flag
+            // drops the catalog source → the provider vanishes from the model
+            // picker and its Model/<id> nodes never seed.
+            if (features.Ai.Providers.Anthropic) mb = mb.AddAnthropic();
+            if (features.Ai.Providers.AzureFoundry) mb = mb.AddAzureFoundry();
+            if (features.Ai.Providers.AzureOpenAI) mb = mb.AddAzureOpenAI();
+            if (features.Ai.Providers.OpenAI) mb = mb.AddOpenAI();
+            if (features.Ai.Clis.ClaudeCode) mb = mb.AddClaudeCode();   // catalog source (factory + config via services.AddClaudeCode)
+            if (features.Ai.Clis.Copilot) mb = mb.AddCopilot();         // catalog source (factory + config via services.AddCopilot)
+
+            return (TBuilder)mb
                 .AddSelfRegistry()
                 .AddDocumentation()
                 .AddMarkdownExport()
@@ -457,6 +480,17 @@ public static class MemexConfiguration
 #pragma warning disable CA1416
         logger.LogInformation("Starting Memex portal on PID: {PID}", Environment.ProcessId);
 #pragma warning restore CA1416
+
+        // Startup capability guard: if every AI provider AND every co-hosted CLI is
+        // disabled via Features:Ai, the model picker is empty unless users bring
+        // their own keys. Warn (not fail) — a pure data portal is a valid config.
+        var features = app.Configuration
+            .GetSection(MemexFeatureOptions.SectionName)
+            .Get<MemexFeatureOptions>() ?? new MemexFeatureOptions();
+        if (!features.HasAnyChatCapability)
+            logger.LogWarning(
+                "No AI chat capability is enabled (Features:Ai has all providers and CLIs disabled). " +
+                "The model picker will be empty unless users add their own provider keys via ModelProviders.");
 
         // Configure the HTTP request pipeline.
         if (!app.Environment.IsDevelopment())
