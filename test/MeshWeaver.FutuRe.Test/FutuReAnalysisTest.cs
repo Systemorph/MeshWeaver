@@ -155,10 +155,9 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var client = GetClient();
         var address = new Address("FutuRe/EuropeRe");
 
-        Output.WriteLine("Initializing hub for FutuRe/EuropeRe...");
-        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
-        Output.WriteLine("Hub initialized.");
-
+        // No ping: the Overview subscription below activates the hub + triggers the
+        // cold LocalAnalysis compile itself; the 50s GetControlStream budget carries
+        // it. The ping was redundant (it just serialized a block beforehand).
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Overview");
 
@@ -195,10 +194,8 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var client = GetClient();
         var address = new Address("FutuRe/AmericasIns");
 
-        Output.WriteLine("Initializing hub for FutuRe/AmericasIns...");
-        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
-        Output.WriteLine("Hub initialized.");
-
+        // No ping: the Overview subscription activates the hub + triggers the cold
+        // compile itself; the 50s GetControlStream budget carries it.
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Overview");
 
@@ -236,10 +233,8 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var client = GetClient();
         var address = new Address("FutuRe/AsiaRe");
 
-        Output.WriteLine("Initializing hub for FutuRe/AsiaRe...");
-        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
-        Output.WriteLine("Hub initialized.");
-
+        // No ping: the Overview subscription activates the hub + triggers the cold
+        // compile itself; the 100s GetControlStream budget carries it.
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Overview");
 
@@ -414,10 +409,8 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var client = GetClient();
         var address = new Address("FutuRe/EuropeRe/LineOfBusiness/HOUSEHOLD");
 
-        Output.WriteLine("Initializing hub for FutuRe/EuropeRe/LineOfBusiness/HOUSEHOLD...");
-        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
-        Output.WriteLine("Hub initialized.");
-
+        // No ping: the Overview subscription activates the hub + triggers the cold
+        // compile itself; the 50s budget (was 10s + a redundant ping warm) carries it.
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Overview");
 
@@ -427,7 +420,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine("Waiting for Overview control...");
         var control = stream
             .GetControlStream(reference.Area!)
-            .Should().Within(10.Seconds())
+            .Should().Within(50.Seconds())
             .Match(x => x is not null);
 
         Output.WriteLine($"Received control: {control?.GetType().Name}");
@@ -448,8 +441,8 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var client = GetClient();
         var address = new Address("FutuRe/LineOfBusiness");
 
-        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
-
+        // No ping: the Search subscription activates the hub + triggers the cold
+        // compile itself; the 50s budget carries it.
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Search");
 
@@ -458,7 +451,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         var control = stream
             .GetControlStream(reference.Area!)
-            .Should().Within(10.Seconds())
+            .Should().Within(50.Seconds())
             .Match(x => x is not null);
 
         var searchControl = control.Should().BeOfType<MeshSearchControl>().Subject;
@@ -488,8 +481,8 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var client = GetClient();
         var address = new Address("FutuRe/EuropeRe/LineOfBusiness");
 
-        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
-
+        // No ping: the Search subscription activates the hub + triggers the cold
+        // compile itself; the 50s budget carries it.
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Search");
 
@@ -498,7 +491,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         var control = stream
             .GetControlStream(reference.Area!)
-            .Should().Within(10.Seconds())
+            .Should().Within(50.Seconds())
             .Match(x => x is not null);
 
         var searchControl = control.Should().BeOfType<MeshSearchControl>().Subject;
@@ -568,9 +561,8 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var client = GetClient();
         var address = new Address("FutuRe/EuropeRe/Analysis");
 
-        Output.WriteLine("Initializing hub for FutuRe/EuropeRe/Analysis...");
-        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
-
+        // No ping: the default-area subscription activates the hub + triggers the
+        // cold compile itself; the 50s budget carries it.
         var workspace = client.GetWorkspace();
         // null area = mimics browser navigation to /FutuRe/EuropeRe/Analysis
         var reference = new LayoutAreaReference((string?)null);
@@ -582,7 +574,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         // The default area stores a NamedAreaControl at the "" key
         var control = stream
             .GetControlStream("")
-            .Should().Within(15.Seconds())
+            .Should().Within(50.Seconds())
             .Match(x => x is not null);
 
         Output.WriteLine($"Default area control type: {control?.GetType().Name}");
@@ -832,8 +824,8 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var client = GetClient();
         var address = new Address("FutuRe/EuropeRe");
 
-        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
-
+        // No ping: the Search subscription activates the hub + triggers the cold
+        // compile itself; the 50s budget carries it.
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Search");
 
@@ -842,7 +834,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         var control = stream
             .GetControlStream(reference.Area!)
-            .Should().Within(10.Seconds())
+            .Should().Within(50.Seconds())
             .Match(x => x is not null);
 
         var searchControl = control.Should().BeOfType<MeshSearchControl>().Subject;
@@ -918,10 +910,8 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var client = GetClient();
         var address = new Address("FutuRe/Analysis/AnnualReport");
 
-        Output.WriteLine("Initializing hub for FutuRe/Analysis/AnnualReport...");
-        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
-        Output.WriteLine("Hub initialized.");
-
+        // No ping: the Overview subscription activates the hub + triggers the cold
+        // compile itself; the 50s budget carries it.
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Overview");
 
@@ -929,7 +919,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             address, reference);
 
         Output.WriteLine("Waiting for Overview area...");
-        var value = stream.Should().Within(10.Seconds()).Emit();
+        var value = stream.Should().Within(50.Seconds()).Emit();
 
         Output.WriteLine($"Received value: {value.Value.ValueKind}");
         value.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined,
@@ -948,15 +938,15 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var client = GetClient();
         var address = new Address("FutuRe/Analysis/AnnualReport");
 
-        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
-
+        // No ping: the Overview subscription activates the hub + triggers the cold
+        // compile itself; the 50s budget carries it.
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Overview");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(address, reference);
 
         // Get the Overview control (StackControl with title + MarkdownControl + children)
         var control = stream.GetControlStream(reference.Area!)
-            .Should().Within(15.Seconds())
+            .Should().Within(50.Seconds())
             .Match(x => x is not null);
 
         var stack = control.Should().BeOfType<StackControl>().Subject;
@@ -1066,14 +1056,14 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var client = GetClient();
         var address = new Address("FutuRe/EuropeRe/Analysis/AnnualReport");
 
-        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
-
+        // No ping: the Overview subscription activates the hub + triggers the cold
+        // compile itself; the 50s budget carries it.
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Overview");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(address, reference);
 
         var control = stream.GetControlStream(reference.Area!)
-            .Should().Within(15.Seconds())
+            .Should().Within(50.Seconds())
             .Match(x => x is not null);
 
         var stack = control.Should().BeOfType<StackControl>().Subject;
@@ -1244,8 +1234,10 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var client = GetClient();
         var address = new Address(addressPath);
 
-        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
-
+        // No ping: the area subscription activates the hub + triggers the cold
+        // compile itself. The first wait carries the activation budget (>= 50s to
+        // cover a cold-cache compile); the caller's timeoutSeconds still applies if
+        // larger. The ping was redundant — it just serialized an activation block.
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(areaName);
 
@@ -1254,7 +1246,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         var control = stream
             .GetControlStream(reference.Area!)
-            .Should().Within(timeoutSeconds.Seconds())
+            .Should().Within(Math.Max(timeoutSeconds, 50).Seconds())
             .Match(x => x is not null, $"{areaName} should render at {addressPath}");
 
         if (unwrap)
