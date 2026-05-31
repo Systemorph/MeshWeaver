@@ -297,10 +297,8 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
     // directly — the actual unit under test for "persistence preserves
     // Content shape" is the adapter, not the CreateNodeRequest pipeline.
     [Fact(Timeout = 10000)]
-    public async Task Persistence_CanCreateNodeWithContent()
+    public void Persistence_CanCreateNodeWithContent()
     {
-        var ct = TestContext.Current.CancellationToken;
-
         var newStory = MeshNode.FromPath("graph/story3") with
         {
             Name = "Story 3",
@@ -313,9 +311,10 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
                 Points = 21
             }
         };
-        await _persistence!.SaveNode(newStory, SetupJsonOptions).FirstAsync().ToTask(ct);
+        _persistence!.SaveNode(newStory, SetupJsonOptions).Should().Emit();
 
-        var persistedNode = await _persistence!.GetNodeAsync("graph/story3", SetupJsonOptions, ct);
+        var persistedNode = _persistence!.Read("graph/story3", SetupJsonOptions)
+            .Should().Match(n => n is not null);
 
         persistedNode.Should().NotBeNull("New story should be persisted");
         persistedNode!.Name.Should().Be("Story 3");
@@ -330,10 +329,10 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 10000)]
-    public async Task Persistence_CanUpdateNodeWithContent()
+    public void Persistence_CanUpdateNodeWithContent()
     {
         // This test verifies that nodes with Content can be updated directly via persistence.
-        // Note: CreateNodeAsync rejects existing nodes ("Node already exists"),
+        // Note: CreateNode rejects existing nodes ("Node already exists"),
         // and UpdateNodeRequest requires DataChangeRequest handlers which are not
         // registered on the mesh hub in this minimal test setup.
         //
@@ -341,15 +340,14 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         // bypassing the catalog index — this avoids the CQRS lag that made the
         // QueryAsync-based version flaky on CI.
 
-        var ct = TestContext.Current.CancellationToken;
-
-        var initialNode = await _persistence!.GetNodeAsync("graph/story1", SetupJsonOptions, ct);
+        var initialNode = _persistence!.Read("graph/story1", SetupJsonOptions)
+            .Should().Match(n => n is not null);
         initialNode.Should().NotBeNull();
         var initialContent = initialNode!.Content as TestStory;
         initialContent.Should().NotBeNull();
         initialContent!.Points.Should().Be(5);
 
-        // Act - update node directly via persistence (SaveNodeAsync is create-or-update)
+        // Act - update node directly via persistence (Write is create-or-update)
         var updatedNode = initialNode with
         {
             Content = new TestStory
@@ -360,9 +358,10 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
                 Points = 13
             }
         };
-        await _persistence!.SaveNode(updatedNode, SetupJsonOptions).FirstAsync().ToTask(ct);
+        _persistence!.SaveNode(updatedNode, SetupJsonOptions).Should().Emit();
 
-        var persistedNode = await _persistence!.GetNodeAsync("graph/story1", SetupJsonOptions, ct);
+        var persistedNode = _persistence!.Read("graph/story1", SetupJsonOptions)
+            .Should().Match(n => n is not null && (n.Content as TestStory)!.Title == "Updated Story");
         persistedNode.Should().NotBeNull();
         var content = persistedNode!.Content as TestStory;
         content.Should().NotBeNull();

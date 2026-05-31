@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Threading.Tasks;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence.Query;
@@ -11,7 +10,6 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Xunit;
 
-using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Persistence.Test;
 
 /// <summary>
@@ -33,69 +31,44 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     private string QueryFilter(string extra = "") => $"namespace:{_ns} scope:subtree {extra}".TrimEnd();
 
     /// <summary>
-    /// Wait until the accumulator list has at least <paramref name="expectedMinCount"/>
-    /// items. Polls the list size on a 50 ms interval via Observable.Interval.
-    /// <para>
-    /// <b>Timeout is an error.</b> If the expected count is not reached within
-    /// <paramref name="timeoutMs"/>, throws <see cref="TimeoutException"/> with the
-    /// observed-vs-expected counts. Silent timeouts were hiding flakes — when a
-    /// notification dropped, the assertion later failed with a confusing
-    /// "expected N got 0" instead of "I waited and never saw it". A loud
-    /// timeout here points straight at the missed signal. The 30 s default is
-    /// generous enough to absorb CI contention; the test budget per xUnit's
-    /// <c>methodTimeout</c> (60 s) is the upper bound either way.
-    /// </para>
+    /// Block (polling the accumulator size on a 50 ms interval) until the
+    /// accumulator <paramref name="changes"/> has at least
+    /// <paramref name="expectedMinCount"/> items, or the timeout elapses (a
+    /// failed assertion). Keeps the test bodies <c>void</c> and await-free per
+    /// the reactive assertion model. The 30 s default absorbs CI contention; the
+    /// per-method xUnit <c>methodTimeout</c> (60 s) is the upper bound either way.
     /// </summary>
-    private static Task WaitForChanges<T>(
+    private static void WaitForChanges<T>(
         List<T> changes,
         int expectedMinCount,
         int timeoutMs = 30_000)
         => Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .Where(_ => changes.Count >= expectedMinCount)
-            .FirstAsync()
-            .Timeout(
-                TimeSpan.FromMilliseconds(timeoutMs),
-                Observable.Throw<long>(new TimeoutException(
-                    $"WaitForChanges timed out after {timeoutMs} ms: expected at least " +
-                    $"{expectedMinCount} change(s) on the accumulator, observed {changes.Count}.")))
-            .ToTask();
-
-    /// <summary>
-    /// Blocking sibling of <see cref="WaitForChanges{T}"/> for synchronous (void)
-    /// test methods: polls the accumulator size on a 50 ms interval and blocks via
-    /// the reactive assertion until at least <paramref name="expectedMinCount"/>
-    /// items are present, or the timeout elapses.
-    /// </summary>
-    private static void WaitForChangesBlocking<T>(
-        List<T> changes,
-        int expectedMinCount,
-        int timeoutMs = 30_000)
-        => Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
-            .Where(_ => changes.Count >= expectedMinCount)
-            .Should().Within(TimeSpan.FromMilliseconds(timeoutMs)).Emit();
+            .Should().Within(TimeSpan.FromMilliseconds(timeoutMs)).Emit(
+                $"expected at least {expectedMinCount} change(s) on the accumulator");
 
     #region Create Tests
 
     [Fact]
-    public async Task ObserveQuery_Create_EmitsAddedNotification()
+    public void ObserveQuery_Create_EmitsAddedNotification()
     {
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
             .Subscribe(change => receivedChanges.Add(change));
 
-        await WaitForChanges(receivedChanges, 1);
+        WaitForChanges(receivedChanges, 1);
         receivedChanges.Should().HaveCount(1);
         receivedChanges[0].ChangeType.Should().Be(QueryChangeType.Initial);
         receivedChanges[0].Items.Should().BeEmpty();
 
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath(NodePath("Project1")) with
+        NodeFactory.CreateNode(MeshNode.FromPath(NodePath("Project1")) with
         {
             Name = "Project 1",
             NodeType = "Markdown"
-        });
+        }).Should().Within(30.Seconds()).Emit();
 
-        await WaitForChanges(receivedChanges, 2);
+        WaitForChanges(receivedChanges, 2);
 
         receivedChanges.Should().HaveCount(2);
         receivedChanges[1].ChangeType.Should().Be(QueryChangeType.Added);
@@ -106,30 +79,28 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     }
 
     [Fact]
-    public async Task ObserveQuery_CreateMultiple_EmitsBatchedNotification()
+    public void ObserveQuery_CreateMultiple_EmitsBatchedNotification()
     {
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
             .Subscribe(change => receivedChanges.Add(change));
 
-        await WaitForChanges(receivedChanges, 1); // Initial
+        WaitForChanges(receivedChanges, 1); // Initial
 
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath(NodePath("Project1")) with { Name = "Project 1", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath(NodePath("Project2")) with { Name = "Project 2", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath(NodePath("Project3")) with { Name = "Project 3", NodeType = "Markdown" });
+        NodeFactory.CreateNode(MeshNode.FromPath(NodePath("Project1")) with { Name = "Project 1", NodeType = "Markdown" }).Should().Within(30.Seconds()).Emit();
+        NodeFactory.CreateNode(MeshNode.FromPath(NodePath("Project2")) with { Name = "Project 2", NodeType = "Markdown" }).Should().Within(30.Seconds()).Emit();
+        NodeFactory.CreateNode(MeshNode.FromPath(NodePath("Project3")) with { Name = "Project 3", NodeType = "Markdown" }).Should().Within(30.Seconds()).Emit();
 
         // Wait until 3 Added items have been observed (possibly batched into
         // a single Added emission). Polling the inner item-count via
         // Observable.Interval — replaces a fixed Task.Delay(300).
-        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+        Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .Where(_ => receivedChanges
                 .Where(c => c.ChangeType == QueryChangeType.Added)
                 .SelectMany(c => c.Items)
                 .Count() >= 3)
-            .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(5))
-            .ToTask();
+            .Should().Within(5.Seconds()).Emit();
 
         var addedChanges = receivedChanges.Where(c => c.ChangeType == QueryChangeType.Added).ToList();
         addedChanges.Should().HaveCountGreaterThanOrEqualTo(1);
@@ -143,17 +114,17 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     #region Read Tests
 
     [Fact]
-    public async Task ObserveQuery_Read_EmitsInitialResults()
+    public void ObserveQuery_Read_EmitsInitialResults()
     {
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath(NodePath("Project1")) with { Name = "Project 1", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath(NodePath("Project2")) with { Name = "Project 2", NodeType = "Markdown" });
+        NodeFactory.CreateNode(MeshNode.FromPath(NodePath("Project1")) with { Name = "Project 1", NodeType = "Markdown" }).Should().Within(30.Seconds()).Emit();
+        NodeFactory.CreateNode(MeshNode.FromPath(NodePath("Project2")) with { Name = "Project 2", NodeType = "Markdown" }).Should().Within(30.Seconds()).Emit();
 
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
             .Subscribe(change => receivedChanges.Add(change));
 
-        await WaitForChanges(receivedChanges, 1);
+        WaitForChanges(receivedChanges, 1);
 
         receivedChanges.Should().HaveCount(1);
         receivedChanges[0].ChangeType.Should().Be(QueryChangeType.Initial);
@@ -168,30 +139,30 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     #region Update Tests
 
     [Fact]
-    public async Task ObserveQuery_Update_EmitsUpdatedNotification()
+    public void ObserveQuery_Update_EmitsUpdatedNotification()
     {
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath(NodePath("Project1")) with
+        NodeFactory.CreateNode(MeshNode.FromPath(NodePath("Project1")) with
         {
             Name = "Project 1",
             NodeType = "Markdown"
-        });
+        }).Should().Within(30.Seconds()).Emit();
 
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
             .Subscribe(change => receivedChanges.Add(change));
 
-        await WaitForChanges(receivedChanges, 1);
+        WaitForChanges(receivedChanges, 1);
         receivedChanges.Should().HaveCount(1);
         receivedChanges[0].Items[0].Name.Should().Be("Project 1");
 
-        await NodeFactory.UpdateNodeAsync(MeshNode.FromPath(NodePath("Project1")) with
+        NodeFactory.UpdateNode(MeshNode.FromPath(NodePath("Project1")) with
         {
             Name = "Updated Project 1",
             NodeType = "Markdown"
-        });
+        }).Should().Within(30.Seconds()).Emit();
 
-        await WaitForChanges(receivedChanges, 2);
+        WaitForChanges(receivedChanges, 2);
 
         receivedChanges.Should().HaveCountGreaterThanOrEqualTo(2);
         var updateChange = receivedChanges.Last(c => c.ChangeType == QueryChangeType.Updated);
@@ -206,23 +177,23 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     #region Delete Tests
 
     [Fact]
-    public async Task ObserveQuery_Delete_EmitsRemovedNotification()
+    public void ObserveQuery_Delete_EmitsRemovedNotification()
     {
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath(NodePath("Project1")) with { Name = "Project 1", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath(NodePath("Project2")) with { Name = "Project 2", NodeType = "Markdown" });
+        NodeFactory.CreateNode(MeshNode.FromPath(NodePath("Project1")) with { Name = "Project 1", NodeType = "Markdown" }).Should().Within(30.Seconds()).Emit();
+        NodeFactory.CreateNode(MeshNode.FromPath(NodePath("Project2")) with { Name = "Project 2", NodeType = "Markdown" }).Should().Within(30.Seconds()).Emit();
 
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
             .Subscribe(change => receivedChanges.Add(change));
 
-        await WaitForChanges(receivedChanges, 1);
+        WaitForChanges(receivedChanges, 1);
         receivedChanges.Should().HaveCount(1);
         receivedChanges[0].Items.Should().HaveCount(2);
 
-        await NodeFactory.DeleteNodeAsync(NodePath("Project1"));
+        NodeFactory.DeleteNode(NodePath("Project1")).Should().Within(30.Seconds()).Emit();
 
-        await WaitForChanges(receivedChanges, 2);
+        WaitForChanges(receivedChanges, 2);
 
         receivedChanges.Should().HaveCount(2);
         receivedChanges[1].ChangeType.Should().Be(QueryChangeType.Removed);
@@ -237,27 +208,27 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     #region Full CRUD Cycle Tests
 
     [Fact]
-    public async Task ObserveQuery_FullCRUDCycle_EmitsCorrectNotifications()
+    public void ObserveQuery_FullCRUDCycle_EmitsCorrectNotifications()
     {
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
             .Subscribe(change => receivedChanges.Add(change));
 
-        await WaitForChanges(receivedChanges, 1);
+        WaitForChanges(receivedChanges, 1);
         receivedChanges.Should().HaveCountGreaterThanOrEqualTo(1);
         receivedChanges[0].ChangeType.Should().Be(QueryChangeType.Initial);
 
         // CREATE
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath(NodePath("Project1")) with { Name = "Project 1", NodeType = "Markdown" });
-        await WaitForChanges(receivedChanges, 2);
+        NodeFactory.CreateNode(MeshNode.FromPath(NodePath("Project1")) with { Name = "Project 1", NodeType = "Markdown" }).Should().Within(30.Seconds()).Emit();
+        WaitForChanges(receivedChanges, 2);
 
         var addedChange = receivedChanges.Last(c => c.ChangeType == QueryChangeType.Added);
         addedChange.Items[0].Name.Should().Be("Project 1");
 
         // UPDATE
-        await NodeFactory.UpdateNodeAsync(MeshNode.FromPath(NodePath("Project1")) with { Name = "Updated Project 1", NodeType = "Markdown" });
-        await WaitForChanges(receivedChanges, 3);
+        NodeFactory.UpdateNode(MeshNode.FromPath(NodePath("Project1")) with { Name = "Updated Project 1", NodeType = "Markdown" }).Should().Within(30.Seconds()).Emit();
+        WaitForChanges(receivedChanges, 3);
 
         var updatedChange = receivedChanges.Last(c => c.ChangeType == QueryChangeType.Updated);
         updatedChange.Items[0].Name.Should().Be("Updated Project 1");
@@ -266,12 +237,10 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
         // Under CI load the delete propagation can take longer than the 3s
         // WaitForChanges budget, so the silent-timeout path leaves the test
         // with no Removed in receivedChanges and the .Last() below throws.
-        await NodeFactory.DeleteNodeAsync(NodePath("Project1"));
-        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+        NodeFactory.DeleteNode(NodePath("Project1")).Should().Within(30.Seconds()).Emit();
+        Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .Where(_ => receivedChanges.Any(c => c.ChangeType == QueryChangeType.Removed))
-            .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(10))
-            .ToTask();
+            .Should().Within(10.Seconds()).Emit();
 
         var removedChange = receivedChanges.Last(c => c.ChangeType == QueryChangeType.Removed);
         removedChange.Items[0].Name.Should().Be("Updated Project 1");
@@ -280,7 +249,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     }
 
     [Fact]
-    public async Task ObserveQuery_CRUDWithMultipleSubscribers_AllReceiveNotifications()
+    public void ObserveQuery_CRUDWithMultipleSubscribers_AllReceiveNotifications()
     {
         var changes1 = new List<QueryResultChange<MeshNode>>();
         var changes2 = new List<QueryResultChange<MeshNode>>();
@@ -293,12 +262,12 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter()))
             .Subscribe(change => changes2.Add(change));
 
-        await WaitForChanges(changes1, 1);
-        await WaitForChanges(changes2, 1);
+        WaitForChanges(changes1, 1);
+        WaitForChanges(changes2, 1);
 
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath(NodePath("Project1")) with { Name = "Project 1", NodeType = "Markdown" });
-        await WaitForChanges(changes1, 2);
-        await WaitForChanges(changes2, 2);
+        NodeFactory.CreateNode(MeshNode.FromPath(NodePath("Project1")) with { Name = "Project 1", NodeType = "Markdown" }).Should().Within(30.Seconds()).Emit();
+        WaitForChanges(changes1, 2);
+        WaitForChanges(changes2, 2);
 
         changes1.Should().HaveCount(2);
         changes2.Should().HaveCount(2);
@@ -314,31 +283,34 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     #region Scope Tests
 
     [Fact]
-    public async Task ObserveQuery_ScopeExact_OnlyNotifiesExactPath()
+    public void ObserveQuery_ScopeExact_OnlyNotifiesExactPath()
     {
         var orgPath = NodePath("TestOrg");
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath(orgPath) with { Name = "TestOrg", NodeType = "Group" });
+        NodeFactory.CreateNode(MeshNode.FromPath(orgPath) with { Name = "TestOrg", NodeType = "Group" }).Should().Within(30.Seconds()).Emit();
 
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{orgPath}"))
             .Subscribe(change => receivedChanges.Add(change));
 
-        await WaitForChanges(receivedChanges, 1);
+        WaitForChanges(receivedChanges, 1);
         receivedChanges.Should().HaveCount(1);
 
-        await NodeFactory.UpdateNodeAsync(MeshNode.FromPath(orgPath) with { Name = "TestOrg Updated", NodeType = "Group" });
-        await WaitForChanges(receivedChanges, 2);
+        NodeFactory.UpdateNode(MeshNode.FromPath(orgPath) with { Name = "TestOrg Updated", NodeType = "Group" }).Should().Within(30.Seconds()).Emit();
+        WaitForChanges(receivedChanges, 2);
 
         receivedChanges.Should().HaveCount(2);
         receivedChanges[1].ChangeType.Should().Be(QueryChangeType.Updated);
 
         // Create a child — should NOT trigger for exact-path query
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{orgPath}/Project1") with { Name = "Project 1", NodeType = "Markdown" });
-        // Negative assertion ("no new emission") — keep a small barrier so any
-        // out-of-scope emission would land before the count assertion runs.
-        // 300 ms is the original budget and is consistent with sibling tests.
-        await Task.Delay(300);
+        NodeFactory.CreateNode(MeshNode.FromPath($"{orgPath}/Project1") with { Name = "Project 1", NodeType = "Markdown" }).Should().Within(30.Seconds()).Emit();
+        // Negative assertion ("no new emission") — a third change must NOT land
+        // within a small barrier. The polling observable fires only if a 3rd
+        // change is accumulated; NotEmit asserts it never does (300 ms barrier,
+        // the original budget, consistent with sibling tests).
+        Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Where(_ => receivedChanges.Count >= 3)
+            .Should().NotEmit(within: TimeSpan.FromMilliseconds(300));
 
         receivedChanges.Should().HaveCount(2);
 
@@ -346,29 +318,30 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     }
 
     [Fact]
-    public async Task ObserveQuery_ScopeChildren_OnlyNotifiesDirectChildren()
+    public void ObserveQuery_ScopeChildren_OnlyNotifiesDirectChildren()
     {
         var proj1 = NodePath("Project1");
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath(proj1) with { Name = "Project 1", NodeType = "Markdown" });
+        NodeFactory.CreateNode(MeshNode.FromPath(proj1) with { Name = "Project 1", NodeType = "Markdown" }).Should().Within(30.Seconds()).Emit();
 
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{_ns}"))
             .Subscribe(change => receivedChanges.Add(change));
 
-        await WaitForChanges(receivedChanges, 1);
+        WaitForChanges(receivedChanges, 1);
         receivedChanges.Should().HaveCount(1);
 
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath(NodePath("Project2")) with { Name = "Project 2", NodeType = "Markdown" });
-        await WaitForChanges(receivedChanges, 2);
+        NodeFactory.CreateNode(MeshNode.FromPath(NodePath("Project2")) with { Name = "Project 2", NodeType = "Markdown" }).Should().Within(30.Seconds()).Emit();
+        WaitForChanges(receivedChanges, 2);
 
         receivedChanges.Should().HaveCount(2);
 
         // Create a grandchild — should NOT trigger for namespace query
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{proj1}/Task1") with { Name = "Task 1", NodeType = "Code" });
-        // Negative assertion — keep a small barrier so any out-of-scope
-        // emission would land before the count assertion runs.
-        await Task.Delay(300);
+        NodeFactory.CreateNode(MeshNode.FromPath($"{proj1}/Task1") with { Name = "Task 1", NodeType = "Code" }).Should().Within(30.Seconds()).Emit();
+        // Negative assertion — a third change must NOT land within a small barrier.
+        Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Where(_ => receivedChanges.Count >= 3)
+            .Should().NotEmit(within: TimeSpan.FromMilliseconds(300));
 
         receivedChanges.Should().HaveCount(2);
 
@@ -380,25 +353,26 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     #region Filter Tests
 
     [Fact]
-    public async Task ObserveQuery_WithFilter_IgnoresNonMatchingNodes()
+    public void ObserveQuery_WithFilter_IgnoresNonMatchingNodes()
     {
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
             .Subscribe(change => receivedChanges.Add(change));
 
-        await WaitForChanges(receivedChanges, 1);
+        WaitForChanges(receivedChanges, 1);
 
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath(NodePath("Project1")) with { Name = "Project 1", NodeType = "Markdown" });
-        await WaitForChanges(receivedChanges, 2);
+        NodeFactory.CreateNode(MeshNode.FromPath(NodePath("Project1")) with { Name = "Project 1", NodeType = "Markdown" }).Should().Within(30.Seconds()).Emit();
+        WaitForChanges(receivedChanges, 2);
 
         receivedChanges.Should().HaveCount(2);
 
         // Create a non-matching node (different NodeType)
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath(NodePath("Task1")) with { Name = "Task 1", NodeType = "Code" });
-        // Negative assertion — keep a small barrier so any out-of-filter
-        // emission would land before the count assertion runs.
-        await Task.Delay(300);
+        NodeFactory.CreateNode(MeshNode.FromPath(NodePath("Task1")) with { Name = "Task 1", NodeType = "Code" }).Should().Within(30.Seconds()).Emit();
+        // Negative assertion — a third change must NOT land within a small barrier.
+        Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Where(_ => receivedChanges.Count >= 3)
+            .Should().NotEmit(within: TimeSpan.FromMilliseconds(300));
 
         receivedChanges.Should().HaveCount(2);
 
@@ -420,13 +394,13 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
             .Subscribe(change => receivedChanges.Add(change));
 
-        WaitForChangesBlocking(receivedChanges, 1);
+        WaitForChanges(receivedChanges, 1);
         receivedChanges.Should().HaveCount(1);
         receivedChanges[0].Items.Should().HaveCount(1);
 
         var movedPath = NodePath("Project1Moved");
         Mesh.Observe(new MoveNodeRequest(proj1, movedPath), o => o).Should().Emit();
-        WaitForChangesBlocking(receivedChanges, 2);
+        WaitForChanges(receivedChanges, 2);
 
         receivedChanges.Count.Should().BeGreaterThanOrEqualTo(2);
 
@@ -445,20 +419,20 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     #region Version Tests
 
     [Fact]
-    public async Task ObserveQuery_VersionIncrementsOnEachChange()
+    public void ObserveQuery_VersionIncrementsOnEachChange()
     {
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
             .Subscribe(change => receivedChanges.Add(change));
 
-        await WaitForChanges(receivedChanges, 1);
+        WaitForChanges(receivedChanges, 1);
 
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath(NodePath("Project1")) with { Name = "Project 1", NodeType = "Markdown" });
-        await WaitForChanges(receivedChanges, 2);
+        NodeFactory.CreateNode(MeshNode.FromPath(NodePath("Project1")) with { Name = "Project 1", NodeType = "Markdown" }).Should().Within(30.Seconds()).Emit();
+        WaitForChanges(receivedChanges, 2);
 
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath(NodePath("Project2")) with { Name = "Project 2", NodeType = "Markdown" });
-        await WaitForChanges(receivedChanges, 3);
+        NodeFactory.CreateNode(MeshNode.FromPath(NodePath("Project2")) with { Name = "Project 2", NodeType = "Markdown" }).Should().Within(30.Seconds()).Emit();
+        WaitForChanges(receivedChanges, 3);
 
         receivedChanges.Should().HaveCountGreaterThanOrEqualTo(2);
         for (int i = 1; i < receivedChanges.Count; i++)
@@ -472,25 +446,27 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     #region Disposal Tests
 
     [Fact]
-    public async Task ObserveQuery_DisposalStopsNotifications()
+    public void ObserveQuery_DisposalStopsNotifications()
     {
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath(NodePath("Project1")) with { Name = "Project 1", NodeType = "Markdown" });
+        NodeFactory.CreateNode(MeshNode.FromPath(NodePath("Project1")) with { Name = "Project 1", NodeType = "Markdown" }).Should().Within(30.Seconds()).Emit();
 
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
             .Subscribe(change => receivedChanges.Add(change));
 
-        await WaitForChanges(receivedChanges, 1);
+        WaitForChanges(receivedChanges, 1);
         receivedChanges.Should().HaveCount(1);
 
         subscription.Dispose();
 
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath(NodePath("Project2")) with { Name = "Project 2", NodeType = "Markdown" });
+        NodeFactory.CreateNode(MeshNode.FromPath(NodePath("Project2")) with { Name = "Project 2", NodeType = "Markdown" }).Should().Within(30.Seconds()).Emit();
         // Negative assertion — disposed subscription should NOT receive any
         // more emissions. Small barrier to surface a regression if Dispose
         // accidentally leaks the subscription.
-        await Task.Delay(300);
+        Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Where(_ => receivedChanges.Count >= 2)
+            .Should().NotEmit(within: TimeSpan.FromMilliseconds(300));
 
         receivedChanges.Should().HaveCount(1);
     }
