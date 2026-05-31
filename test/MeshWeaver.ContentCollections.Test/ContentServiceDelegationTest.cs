@@ -164,7 +164,7 @@ public class MapContentCollectionTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [Fact]
-    public async Task MapContentCollection_ShouldNotCauseStackOverflow()
+    public void MapContentCollection_ShouldNotCauseStackOverflow()
     {
         // Arrange - this should NOT cause stack overflow
         var meshHub = Mesh;

@@ -91,7 +91,7 @@ public class HierarchicalPathDeletionTests
         var fake = new FakeDeleter();
         var deleted = HierarchicalPathDeletion
             .DeleteSubtree("root", Array.Empty<string>(), fake.Delete)
-            .Wait();
+            .Should().Emit();
 
         deleted.Should().ContainSingle().Which.Should().Be("root");
         fake.Completed.Should().ContainSingle().Which.Should().Be("root");
@@ -103,7 +103,7 @@ public class HierarchicalPathDeletionTests
         var fake = new FakeDeleter();
         var deleted = HierarchicalPathDeletion
             .DeleteSubtree("a", new[] { "a/b", "a/b/c" }, fake.Delete)
-            .Wait();
+            .Should().Emit();
 
         deleted.Should().Equal("a/b/c", "a/b", "a");
         fake.Completed.Should().Equal("a/b/c", "a/b", "a");
@@ -115,7 +115,7 @@ public class HierarchicalPathDeletionTests
         var fake = new FakeDeleter();
         var deleted = HierarchicalPathDeletion
             .DeleteSubtree("a", new[] { "a/b", "a/c" }, fake.Delete)
-            .Wait();
+            .Should().Emit();
 
         deleted.Should().HaveCount(3);
         deleted.Last().Should().Be("a", "root must be last");
@@ -124,16 +124,19 @@ public class HierarchicalPathDeletionTests
     }
 
     [Fact]
-    public async Task Siblings_run_in_parallel_neither_blocks_the_other()
+    public void Siblings_run_in_parallel_neither_blocks_the_other()
     {
         // Gate both siblings — neither delete completes until we release it.
         // Both Start() calls must happen BEFORE we release either, proving
         // the per-sibling Observable.Merge fired them concurrently.
         var fake = new FakeDeleter(gatedPaths: new[] { "a/b", "a/c" });
 
-        var resultTask = HierarchicalPathDeletion
+        // Eagerly connect so the gated deletes subscribe NOW; replay buffers the
+        // final emission so the later blocking assertion still observes it.
+        var result = HierarchicalPathDeletion
             .DeleteSubtree("a", new[] { "a/b", "a/c" }, fake.Delete)
-            .ToTask();
+            .Replay();
+        using var connection = result.Connect();
 
         // Wait briefly for both subscriptions to register Start().
         SpinWait.SpinUntil(() => fake.Started.Count == 2, TimeSpan.FromSeconds(2))
@@ -143,12 +146,12 @@ public class HierarchicalPathDeletionTests
         fake.Release("a/b");
         fake.Release("a/c");
 
-        var deleted = await resultTask;
+        var deleted = result.Should().Emit();
         deleted.Last().Should().Be("a");
     }
 
     [Fact]
-    public async Task Unrelated_branches_progress_independently()
+    public void Unrelated_branches_progress_independently()
     {
         // Tree:  root → branchA → leafA
         //         root → branchB → leafB
@@ -156,12 +159,15 @@ public class HierarchicalPathDeletionTests
         // even though leafB / branchB are blocked.
         var fake = new FakeDeleter(gatedPaths: new[] { "root/branchB/leafB" });
 
-        var resultTask = HierarchicalPathDeletion
+        // Eagerly connect so the gated deletes subscribe NOW; replay buffers the
+        // final emission so the later blocking assertion still observes it.
+        var result = HierarchicalPathDeletion
             .DeleteSubtree("root", new[]
             {
                 "root/branchA", "root/branchA/leafA",
                 "root/branchB", "root/branchB/leafB"
-            }, fake.Delete).ToTask();
+            }, fake.Delete).Replay();
+        using var connection = result.Connect();
 
         SpinWait.SpinUntil(() => fake.Completed.Contains("root/branchA"),
             TimeSpan.FromSeconds(2))
@@ -170,7 +176,7 @@ public class HierarchicalPathDeletionTests
 
         fake.Release("root/branchB/leafB");
 
-        var deleted = await resultTask;
+        var deleted = result.Should().Emit();
         deleted.Should().HaveCount(5);
         deleted.Last().Should().Be("root");
     }
@@ -245,7 +251,7 @@ public class HierarchicalPathDeletionTests
         var fake = new FakeDeleter();
         var deleted = HierarchicalPathDeletion
             .DeleteSubtree("only-root", Array.Empty<string>(), fake.Delete)
-            .Wait();
+            .Should().Emit();
 
         deleted.Should().ContainSingle().Which.Should().Be("only-root");
     }
@@ -258,7 +264,7 @@ public class HierarchicalPathDeletionTests
         var fake = new FakeDeleter();
         var deleted = HierarchicalPathDeletion
             .DeleteSubtree("a", new[] { "a/b", "a/b" }, fake.Delete)
-            .Wait();
+            .Should().Emit();
 
         deleted.Should().Equal("a/b", "a");
         fake.Started.Count(p => p == "a/b").Should().Be(1);

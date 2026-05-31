@@ -56,10 +56,18 @@ public class MarkdownExportMenuTest(ITestOutputHelper output) : MonolithMeshTest
 
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, reference);
 
+        // The menu renders incrementally: providers that emit synchronously
+        // (e.g. "Request Approval") land in an early menu snapshot, while
+        // MarkdownExportMenuProvider gates its items on the own-node stream and
+        // the viewer's effective permissions (StartWith(null) + CombineLatest),
+        // so its export items appear only in a LATER emission once the node
+        // loads and Read resolves. Match on the snapshot that actually carries
+        // the export items rather than grabbing the first non-null (partial) one.
         var menuControl = stream
             .GetControlStream(MenuControl.GetMenuArea(NodeMenuItemsExtensions.NodeMenuContext))
-            .Where(x => x != null)
-            .Should().Within(10.Seconds()).Emit();
+            .Should().Within(10.Seconds()).Match(
+                x => x is MenuControl m
+                     && m.Items.Any(i => i.Label == MarkdownExportMenuProvider.PdfLabel));
 
         return menuControl.Should().BeOfType<MenuControl>().Which.Items;
     }

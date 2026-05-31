@@ -40,15 +40,14 @@ public class NodeTypeReleaseTest(ITestOutputHelper output) : MonolithMeshTestBas
     private const string NodeTypePath = $"{ReleaseTestPartition}/{NodeTypeId}";
 
     [Fact(Timeout = 120_000)]
-    public async Task CompilationPending_CreatesReleaseMeshNode_WithNotes()
+    public void CompilationPending_CreatesReleaseMeshNode_WithNotes()
     {
-        var ct = TestContext.Current.CancellationToken;
         var workspace = Mesh.GetWorkspace();
 
         // 1. Create the NodeType. The per-NodeType hub's auto-watcher
         //    (`InstallCompileWatcher`) flips Pending on activation
         //    (HasUsableBuild=false) and produces a kickoff Release with no notes.
-        await NodeFactory.CreateNode(new MeshNode(NodeTypeId, ReleaseTestPartition)
+        NodeFactory.CreateNode(new MeshNode(NodeTypeId, ReleaseTestPartition)
         {
             Name = "Sample Type",
             NodeType = MeshNode.NodeTypePath,
@@ -57,21 +56,19 @@ public class NodeTypeReleaseTest(ITestOutputHelper output) : MonolithMeshTestBas
                 Description = "Sample for the Release-on-compile test.",
                 Configuration = "config => config.AddDefaultLayoutAreas()"
             }
-        });
+        }).Should().Emit();
 
         // 2. Wait for the kickoff compile to settle. Reading via the live
         //    MeshNode stream is path-known and authoritative; ObserveQuery is
         //    eventually consistent and would miss the post-compile tick.
         //    Cold Roslyn compile on CI Linux runners can take 60-90s; budget
         //    generously so we never race the slow path.
-        var kickoffSnapshot = await workspace
+        var kickoffSnapshot = workspace
             .GetMeshNodeStream(NodeTypePath)
-            .Where(n => n.Content is NodeTypeDefinition d
+            .Should().Within(90.Seconds())
+            .Match(n => n.Content is NodeTypeDefinition d
                 && d.CompilationStatus == CompilationStatus.Ok
-                && !string.IsNullOrEmpty(d.LatestReleasePath))
-            .Take(1)
-            .Timeout(90.Seconds())
-            .ToTask(ct);
+                && !string.IsNullOrEmpty(d.LatestReleasePath));
         var kickoffReleasePath = ((NodeTypeDefinition)kickoffSnapshot.Content!).LatestReleasePath!;
 
         // 3. Author ReleaseNotes via `stream.Update` (the same path the UI's
@@ -84,7 +81,7 @@ public class NodeTypeReleaseTest(ITestOutputHelper output) : MonolithMeshTestBas
         //    caught up guarantees the explicit-release compile observes the
         //    just-written notes.
         var releaseNotes = "First release of Sample. **Bold** + _italic_ + a list:\n- one\n- two";
-        await workspace.GetMeshNodeStream(NodeTypePath).Update(curr =>
+        workspace.GetMeshNodeStream(NodeTypePath).Update(curr =>
             {
                 if (curr?.Content is not NodeTypeDefinition def) return curr!;
                 return curr with
@@ -92,15 +89,12 @@ public class NodeTypeReleaseTest(ITestOutputHelper output) : MonolithMeshTestBas
                     Content = def with { ReleaseNotes = releaseNotes }
                 };
             })
-            .FirstAsync()
-            .ToTask(ct);
+            .Should().Emit();
 
-        await workspace.GetMeshNodeStream(NodeTypePath)
-            .Where(n => n.Content is NodeTypeDefinition d
-                && string.Equals(d.ReleaseNotes, releaseNotes, StringComparison.Ordinal))
-            .Take(1)
-            .Timeout(15.Seconds())
-            .ToTask(ct);
+        workspace.GetMeshNodeStream(NodeTypePath)
+            .Should().Within(15.Seconds())
+            .Match(n => n.Content is NodeTypeDefinition d
+                && string.Equals(d.ReleaseNotes, releaseNotes, StringComparison.Ordinal));
 
         // 4. Fire the explicit-release trigger via the canonical
         //    `RequestedReleaseAt + RequestedReleaseForce` flip. The
@@ -115,7 +109,7 @@ public class NodeTypeReleaseTest(ITestOutputHelper output) : MonolithMeshTestBas
         //    request leaked DataChangeRequest callbacks on the mesh hub and
         //    wedged the per-NodeType hub on CI).
         var triggerAt = DateTimeOffset.UtcNow;
-        await workspace.GetMeshNodeStream(NodeTypePath).Update(curr =>
+        workspace.GetMeshNodeStream(NodeTypePath).Update(curr =>
             {
                 if (curr?.Content is not NodeTypeDefinition def) return curr!;
                 return curr with
@@ -127,8 +121,7 @@ public class NodeTypeReleaseTest(ITestOutputHelper output) : MonolithMeshTestBas
                     }
                 };
             })
-            .FirstAsync()
-            .ToTask(ct);
+            .Should().Emit();
 
         // 4. Wait for the recompile triggered by this trigger to land —
         //    `LastReleaseRequestHandledAt >= triggerAt` is the watermark the
@@ -136,24 +129,20 @@ public class NodeTypeReleaseTest(ITestOutputHelper output) : MonolithMeshTestBas
         //    `CompilationStatus == Ok` and a fresh `LatestReleasePath` (≠
         //    kickoff), we know the explicit-trigger release is the one
         //    currently active on the NodeType.
-        var settled = await workspace.GetMeshNodeStream(NodeTypePath)
-            .Where(n => n.Content is NodeTypeDefinition d
+        var settled = workspace.GetMeshNodeStream(NodeTypePath)
+            .Should().Within(60.Seconds())
+            .Match(n => n.Content is NodeTypeDefinition d
                 && d.LastReleaseRequestHandledAt is { } h && h >= triggerAt
                 && d.CompilationStatus == CompilationStatus.Ok
                 && !string.IsNullOrEmpty(d.LatestReleasePath)
-                && d.LatestReleasePath != kickoffReleasePath)
-            .Take(1)
-            .Timeout(60.Seconds())
-            .ToTask(ct);
+                && d.LatestReleasePath != kickoffReleasePath);
         var newReleasePath = ((NodeTypeDefinition)settled.Content!).LatestReleasePath!;
 
         // 5. Read the new Release MeshNode directly by path — no lagged
         //    namespace query, no race with index propagation.
-        var release = await workspace.GetMeshNodeStream(newReleasePath)
-            .Where(n => n is not null && n.Content is NodeTypeRelease)
-            .Take(1)
-            .Timeout(15.Seconds())
-            .ToTask(ct);
+        var release = workspace.GetMeshNodeStream(newReleasePath)
+            .Should().Within(15.Seconds())
+            .Match(n => n is not null && n.Content is NodeTypeRelease);
 
         release.Should().NotBeNull();
         release.NodeType.Should().Be(ReleaseNodeType.NodeType);

@@ -72,7 +72,7 @@ public class SubscribeRequestNotFoundSurfaceTest(ITestOutputHelper output) : Mon
     /// into the swallowed-timeout shape is loud.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task GetRemoteStream_on_nonexistent_address_surfaces_OnError_with_NotFound_message()
+    public void GetRemoteStream_on_nonexistent_address_surfaces_OnError_with_NotFound_message()
     {
         var client = GetClient(c => c.AddData(data => data));
 

@@ -72,7 +72,7 @@ public class HubSubscriptionSecurityTest(ITestOutputHelper output) : MonolithMes
 
         // Ensure hub is started
         var client = GetClient();
-        await client.Observe(new PingRequest(), o => o.WithTarget(hubAddress)).FirstAsync().ToTask();
+        await client.Observe(new PingRequest(), o => o.WithTarget(hubAddress)).FirstAsync();
 
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<EntityStore>(hubAddress, new CollectionsReference("test"));

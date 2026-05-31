@@ -1,4 +1,5 @@
-﻿using System.Text.Json;
+using System.Reactive.Linq;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -20,35 +21,34 @@ public abstract class InsuranceTestBase(ITestOutputHelper output) : MonolithMesh
             .InstallAssemblies(typeof(InsuranceApplicationAttribute).Assembly.Location);
     }
 
-    protected async Task<IReadOnlyCollection<PropertyRisk>> GetPropertyRisksAsync(Address address)
+    protected IObservable<IReadOnlyCollection<PropertyRisk>> GetPropertyRisks(Address address)
     {
         var hub = Mesh;
-        var risksResp = await AwaitResponseAsync(
-            new GetDataRequest(new CollectionReference(nameof(PropertyRisk))),
-            o => o.WithTarget(address));
-
-        return (risksResp?.Message?.Data as IEnumerable<object>)?
-            .Select(x => x as PropertyRisk ?? (x as JsonObject)?.Deserialize<PropertyRisk>(hub.JsonSerializerOptions))
-            .Where(x => x != null)
-            .Cast<PropertyRisk>()
-            .ToList()
-            ?? [];
+        return hub.Observe(
+                new GetDataRequest(new CollectionReference(nameof(PropertyRisk))),
+                o => o.WithTarget(address))
+            .Select(risksResp =>
+                (IReadOnlyCollection<PropertyRisk>)((risksResp?.Message?.Data as IEnumerable<object>)?
+                    .Select(x => x as PropertyRisk ?? (x as JsonObject)?.Deserialize<PropertyRisk>(hub.JsonSerializerOptions))
+                    .Where(x => x != null)
+                    .Cast<PropertyRisk>()
+                    .ToList()
+                    ?? []));
     }
 
-    protected async Task<IReadOnlyCollection<Pricing>> GetPricingsAsync()
+    protected IObservable<IReadOnlyCollection<Pricing>> GetPricings()
     {
         var hub = Mesh;
-        var pricingsResp = await AwaitResponseAsync(
-            new GetDataRequest(new CollectionReference(nameof(Pricing))),
-            o => o.WithTarget(InsuranceApplicationAttribute.Address),
-            ct: new CancellationTokenSource(10.Seconds()).Token);
-
-        return (pricingsResp.Message.Data as InstanceCollection)?
-               .Instances.Values
-               .Select(x => x as Pricing ?? (x as JsonObject)?.Deserialize<Pricing>(hub.JsonSerializerOptions))
-            .Where(x => x != null)
-            .Cast<Pricing>()
-            .ToList()
-            ?? [];
+        return hub.Observe(
+                new GetDataRequest(new CollectionReference(nameof(Pricing))),
+                o => o.WithTarget(InsuranceApplicationAttribute.Address))
+            .Select(pricingsResp =>
+                (IReadOnlyCollection<Pricing>)((pricingsResp.Message.Data as InstanceCollection)?
+                    .Instances.Values
+                    .Select(x => x as Pricing ?? (x as JsonObject)?.Deserialize<Pricing>(hub.JsonSerializerOptions))
+                    .Where(x => x != null)
+                    .Cast<Pricing>()
+                    .ToList()
+                    ?? []));
     }
 }

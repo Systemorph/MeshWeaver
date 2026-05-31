@@ -297,7 +297,7 @@ public class MeshNodeCacheIdentityTest(ITestOutputHelper output) : MonolithMeshT
             Name = "Original",
             NodeType = "Markdown"
         };
-        await meshService.CreateNode(node).Take(1).Timeout(10.Seconds()).ToTask(TestTimeout);
+        await meshService.CreateNode(node).Take(1).Timeout(10.Seconds());
 
         // 2. Switch to a real user — Alice — and call cache.Update under her identity.
         //    The OnNext callback's observed AsyncLocal value is the contract.
@@ -389,7 +389,7 @@ public class MeshNodeCacheIdentityTest(ITestOutputHelper output) : MonolithMeshT
             Name = "Original",
             NodeType = "Markdown"
         };
-        await meshService.CreateNode(node).Take(1).Timeout(10.Seconds()).ToTask(TestTimeout);
+        await meshService.CreateNode(node).Take(1).Timeout(10.Seconds());
 
         var bob = new AccessContext { ObjectId = "bob@example.com", Name = "Bob" };
         var observedContext = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);

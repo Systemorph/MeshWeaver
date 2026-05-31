@@ -61,21 +61,19 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
 
     private ImportFormat.ImportFunctionAsync? customImportFunctionAsync;
 
-    private async Task<ActivityLog> DoImport(string content, string format = ImportFormat.Default)
+    private ActivityLog DoImport(string content, string format = ImportFormat.Default)
     {
         var importRequest = new ImportRequest(content) { Format = format };
-        var importResponse = await GetClient().Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken
-            , new CancellationTokenSource(10.Seconds()).Token
-            ).Token);
+        var importResponse = GetClient().Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create()))
+            .Should().Within(10.Seconds()).Emit();
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         return importResponse.Message.Log;
     }
 
     [Fact]
-    public async Task DefaultMappingsTest()
+    public void DefaultMappingsTest()
     {
-        // Test debug message for MeshWeaver.Import namespace 
+        // Test debug message for MeshWeaver.Import namespace
         Logger.LogDebug("This is a debug message from MeshWeaver.Import.Test - should appear if Debug config works");
 
         const string content =
@@ -83,15 +81,15 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
 SystemName,DisplayName,Number,StringsArray0,StringsArray1,StringsArray2,StringsList0,StringsList1,StringsList2,IntArray0,IntArray1,IntArray2,IntList0,IntList1,IntList2
 SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
 
-        var log = await DoImport(content);
+        var log = DoImport(content);
         log.Status.Should().Be(ActivityStatus.Succeeded);
         Logger.LogInformation("*** Import Finished ***");
 
-        var ret2 = await GetDataAsync<MyRecord2>(ImportAddress, x => true);
+        var ret2 = GetData<MyRecord2>(ImportAddress, x => true);
 
         ret2.Should().BeEmpty();
 
-        var ret = await GetDataAsync<MyRecord>(ImportAddress, x => x.Count > 0);
+        var ret = GetData<MyRecord>(ImportAddress, x => x.Count > 0);
 
         ret.Should().HaveCount(1);
 
@@ -112,11 +110,11 @@ SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
     }
 
     [Fact]
-    public async Task EmptyDataSetImportTest()
+    public void EmptyDataSetImportTest()
     {
-        _ = await DoImport(string.Empty);
+        _ = DoImport(string.Empty);
 
-        var ret = await GetDataAsync<MyRecord>(ImportAddress, x => true);
+        var ret = GetData<MyRecord>(ImportAddress, x => true);
 
         ret.Should().BeEmpty();
     }
@@ -133,7 +131,7 @@ SystemName,DisplayName
 Record3SystemName,Record3DisplayName";
 
     [Fact]
-    public async Task SingleTableMappingTest()
+    public void SingleTableMappingTest()
     {
         customImportFunctionAsync = (_, set, ws, store, _) =>
         {
@@ -148,13 +146,13 @@ Record3SystemName,Record3DisplayName";
             return Task.FromResult(ws.AddInstances(store, instances));
         };
 
-        var log = await DoImport(ThreeTablesContent, "Test");
+        var log = DoImport(ThreeTablesContent, "Test");
         log.Status.Should().Be(ActivityStatus.Succeeded);
         //Check that didn't appeared what we don't import
 
         Logger.LogInformation("*** Import Finished ***");
 
-        var ret = await GetDataAsync<MyRecord>(ImportAddress, x => x.Count > 0);
+        var ret = GetData<MyRecord>(ImportAddress, x => x.Count > 0);
 
         ret.Should().HaveCount(1);
 
@@ -171,7 +169,7 @@ Record3SystemName,Record3DisplayName";
     }
 
     [Fact]
-    public async Task TwoTablesMappingTest()
+    public void TwoTablesMappingTest()
     {
         customImportFunctionAsync = (_, set, ws, store, _) =>
         {
@@ -186,15 +184,15 @@ Record3SystemName,Record3DisplayName";
             return Task.FromResult(ws.AddInstances(store, instances));
         };
 
-        var log = await DoImport(ThreeTablesContent, "Test2");
+        var log = DoImport(ThreeTablesContent, "Test2");
         log.Status.Should().Be(ActivityStatus.Succeeded);
 
         Logger.LogInformation("*** Import Finished ***");
         var address = TestDomain.TestImportAddress.Create();
-        var ret2 = await GetDataAsync<MyRecord2>(address, x => x.Count > 0);
+        var ret2 = GetData<MyRecord2>(address, x => x.Count > 0);
 
         ret2.Should().HaveCount(1);
-        var ret = await GetDataAsync<MyRecord>(address, x => x.Count > 1);
+        var ret = GetData<MyRecord>(address, x => x.Count > 1);
 
         ret.Should().HaveCount(2);
 
@@ -210,7 +208,7 @@ Record3SystemName,Record3DisplayName";
         resRecord.Number.Should().Be(0);
     }
 
-    private async Task<IReadOnlyCollection<TData>?> GetDataAsync<TData>(
+    private IReadOnlyCollection<TData> GetData<TData>(
         Address address,
         System.Func<IReadOnlyCollection<TData>, bool> predicate,
         TimeSpan? timeout = null)
@@ -218,10 +216,8 @@ Record3SystemName,Record3DisplayName";
         timeout ??= 10.Seconds();
         var hub = Mesh.GetHostedHub(address);
         var workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
-        return await workspace
+        return workspace
             .GetObservable<TData>()
-            .Where(predicate)
-            .Timeout(timeout.Value)
-            .FirstAsync();
+            .Should().Within(timeout.Value).Match(predicate);
     }
 }

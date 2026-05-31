@@ -75,7 +75,7 @@ public class ImportRemappingTest(ITestOutputHelper output) : HubTestBase(output)
     private const string Prefix = "Prefix_";
 
     [Fact]
-    public async Task SimpleRemappingPropertyTest()
+    public void SimpleRemappingPropertyTest()
     {
         const string systemName = nameof(MyRecord.SystemName);
         const string displayName = nameof(MyRecord.DisplayName);
@@ -93,12 +93,14 @@ public class ImportRemappingTest(ITestOutputHelper output) : HubTestBase(output)
         var importRequest = new ImportRequest(content) { Format = RemappingTestFormat, };
 
         // act
-        var importResponse = await client.Observe(importRequest, o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask(new CancellationTokenSource(10.Seconds()).Token);
+        var importResponse = client.Observe(importRequest, o => o.WithTarget(CreateHostAddress()))
+            .Should().Within(10.Seconds()).Emit();
 
         // assert
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         var host = GetHost();
-        var ret = await host.GetWorkspace().GetObservable<MyRecord>().FirstAsync(x => x.Any());
+        var ret = host.GetWorkspace().GetObservable<MyRecord>()
+            .Should().Match(x => x.Any());
 
         var resRecord = ret.Should().ContainSingle().Which;
         resRecord.Should().NotBeNull();

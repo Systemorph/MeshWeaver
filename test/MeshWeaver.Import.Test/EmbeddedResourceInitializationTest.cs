@@ -23,13 +23,13 @@ public class EmbeddedResourceInitializationTest(ITestOutputHelper output) : HubT
 
 
     [Fact]
-    public async Task BasicInitialization()
+    public void BasicInitialization()
     {
         var host = GetHost();
         var workspace = host.GetWorkspace();
-        var categories = await workspace
+        var categories = workspace
             .GetObservable<Category>()
-            .FirstAsync(x => x?.Count > 0);
+            .Should().Match(x => x?.Count > 0);
         categories.Should().NotBeEmpty();
     }
 }

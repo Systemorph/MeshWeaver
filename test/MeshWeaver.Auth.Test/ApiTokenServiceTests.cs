@@ -81,7 +81,13 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         var result = service.CreateToken(
             "user1", "Test User", "test@example.com", "Valid Token").Should().Emit();
 
-        var validated = service.ValidateToken(result.RawToken).Should().Emit();
+        // ValidateToken reads via the live GetApiTokenByHash synced query,
+        // whose first snapshot can be empty right after the create (read-side
+        // index lag). Re-issue on a 50 ms interval until the token becomes
+        // visible — same primitive as ValidateToken_RevokedToken_ReturnsNull.
+        var validated = Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => service.ValidateToken(result.RawToken).Take(1))
+            .Should().Match(v => v is not null);
 
         validated.Should().NotBeNull();
         validated!.UserId.Should().Be("user1");
@@ -389,7 +395,11 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
             "user1", "Test User", "test@example.com", "Future",
             expiresAt: DateTimeOffset.UtcNow.AddDays(30)).Should().Emit();
 
-        var validated = service.ValidateToken(result.RawToken).Should().Emit();
+        // Live synced-query read — re-issue until the just-created token
+        // lands (absorbs read-side index lag).
+        var validated = Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => service.ValidateToken(result.RawToken).Take(1))
+            .Should().Match(v => v is not null);
 
         validated.Should().NotBeNull();
         validated!.UserId.Should().Be("user1");

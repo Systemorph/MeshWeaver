@@ -202,8 +202,14 @@ public class ApiTokenViaCreateNodeTest(ITestOutputHelper output) : MonolithMeshT
             Content = new ApiTokenIndex { TokenHash = hash, TokenPath = tokenPath },
         }).Should().Emit();
 
-        // Validate via the MCP auth read path.
-        var validated = GetApiTokenService().ValidateToken(rawToken).Should().Emit();
+        // Validate via the MCP auth read path. ValidateToken reads the live
+        // GetApiTokenByHash synced query, whose first snapshot can be empty
+        // right after the create (read-side index lag) — re-issue on a 50 ms
+        // interval until the token becomes visible.
+        var service = GetApiTokenService();
+        var validated = Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => service.ValidateToken(rawToken).Take(1))
+            .Should().Match(v => v is not null);
 
         validated.Should().NotBeNull("ValidateToken is the function MCP auth calls — null = 401");
         validated!.UserId.Should().Be(UserId);

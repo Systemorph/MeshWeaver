@@ -61,9 +61,9 @@ public class ApplicationPageResolutionTest(ITestOutputHelper output) : MonolithM
     /// When this returns null, the page shows "Page Not Found".
     /// </summary>
     [Fact(Timeout = 10000)]
-    public async Task ResolvePathAsync_FutuRe_ShouldNotReturnNull()
+    public void ResolvePathAsync_FutuRe_ShouldNotReturnNull()
     {
-        var resolution = await PathResolver.ResolvePath("FutuRe").FirstAsync().ToTask();
+        var resolution = PathResolver.ResolvePath("FutuRe").Should().Emit();
 
         Output.WriteLine($"Resolution: {resolution?.Prefix ?? "NULL"}, Remainder: {resolution?.Remainder ?? "NULL"}");
         resolution.Should().NotBeNull("FutuRe should resolve â€” it has an index.md in the data directory");
@@ -79,10 +79,10 @@ public class ApplicationPageResolutionTest(ITestOutputHelper output) : MonolithM
     [InlineData("FutuRe/Analysis", "FutuRe/Analysis", null)]
     [InlineData("FutuRe/EuropeRe/LineOfBusiness", "FutuRe/EuropeRe/LineOfBusiness", null)]
     [InlineData("FutuRe/EuropeRe/Overview", "FutuRe/EuropeRe", "Overview")]
-    public async Task ResolvePathAsync_FutuReSubPaths_ShouldResolve(
+    public void ResolvePathAsync_FutuReSubPaths_ShouldResolve(
         string path, string expectedPrefix, string? expectedRemainder)
     {
-        var resolution = await PathResolver.ResolvePath(path).FirstAsync().ToTask();
+        var resolution = PathResolver.ResolvePath(path).Should().Emit();
 
         Output.WriteLine($"Path: {path} => Prefix: {resolution?.Prefix ?? "NULL"}, Remainder: {resolution?.Remainder ?? "NULL"}");
         resolution.Should().NotBeNull($"'{path}' should resolve to a valid address");
@@ -98,9 +98,9 @@ public class ApplicationPageResolutionTest(ITestOutputHelper output) : MonolithM
     /// — covered by PartitionRootActivationTest in the Orleans suite.
     /// </summary>
     [Fact(Timeout = 10000)]
-    public async Task ResolvePathAsync_UnknownDeepPath_ShouldReturnNull()
+    public void ResolvePathAsync_UnknownDeepPath_ShouldReturnNull()
     {
-        var resolution = await PathResolver.ResolvePath("CompletelyUnknown/Subpath").FirstAsync().ToTask();
+        var resolution = PathResolver.ResolvePath("CompletelyUnknown/Subpath").Should().Emit();
 
         resolution.Should().BeNull("multi-segment paths with no known ancestor should not synthesize a partition root");
     }

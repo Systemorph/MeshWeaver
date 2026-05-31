@@ -88,8 +88,15 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
     /// CreateNodeRequest without permission should be rejected.
     /// The RlsNodeValidator checks permission on the parent path.
     /// </summary>
+    // Genuine-throw test: stays `async Task` and uses `await act.Should().ThrowAsync<T>()`
+    // (the sanctioned async leaf — see FluentAssertionsToReactive.md §2a). A blocking
+    // `Action act = () => CreateNode(node).Wait()` deadlocked here: under RLS the
+    // CreateNode validation pipeline pumps the mesh hub, and `.Wait()` blocks the test
+    // thread that pump needs → 60s [Fact] kill. The await yields the thread, so the pump
+    // runs and the UnauthorizedAccessException surfaces. No blocking reactive `.Should()`
+    // in this method (the post-throw read awaits its own FirstAsync leaf).
     [Fact(Timeout = 60000)]
-    public void CreateNode_WithoutPermission_Rejected()
+    public async Task CreateNode_WithoutPermission_Rejected()
     {
         // Arrange — switch to "no-access-user" who has no permissions on "Restricted" namespace
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
@@ -109,11 +116,11 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
         try
         {
             // Act & Assert — should throw UnauthorizedAccessException
-            Action act = () => NodeFactory.CreateNode(node).Wait();
-            act.Should().Throw<UnauthorizedAccessException>();
+            var act = async () => await NodeFactory.CreateNode(node);
+            await act.Should().ThrowAsync<UnauthorizedAccessException>();
 
             // Verify node does NOT exist (per-node hub returns NotFound — ReadNode surfaces null)
-            var fetched = ReadNode(nodePath).Should().Emit();
+            var fetched = await ReadNode(nodePath).FirstAsync();
             fetched.Should().BeNull("rejected node should not exist");
         }
         finally
@@ -126,8 +133,10 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
     /// <summary>
     /// CreateNodeRequest with an invalid NodeType should be rejected.
     /// </summary>
+    // Genuine-throw test: async + `await act.Should().ThrowAsync<T>()` (§2a). The blocking
+    // `.Wait()` form deadlocked the cold-start validation pump → 60s [Fact] kill.
     [Fact(Timeout = 60000)]
-    public void CreateNode_InvalidNodeType_Rejected()
+    public async Task CreateNode_InvalidNodeType_Rejected()
     {
         // Arrange
         var nodeId = $"Md_{Guid.NewGuid().AsString()}";
@@ -140,8 +149,8 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
         };
 
         // Act & Assert — should throw InvalidOperationException
-        Action act = () => NodeFactory.CreateNode(node).Wait();
-        act.Should().Throw<InvalidOperationException>()
+        var act = async () => await NodeFactory.CreateNode(node);
+        await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*NodeType*");
     }
 

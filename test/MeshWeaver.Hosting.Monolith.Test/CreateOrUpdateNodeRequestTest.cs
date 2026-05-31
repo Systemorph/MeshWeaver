@@ -32,10 +32,8 @@ public class CreateOrUpdateNodeRequestTest(ITestOutputHelper output)
     /// internally; the response carries <see cref="CreateOrUpdateNodeResponse.WasCreated"/> = true.
     /// </summary>
     [Fact(Timeout = 30_000)]
-    public async Task Upsert_OnMissingTarget_CreatesAndReports_WasCreated_True()
+    public void Upsert_OnMissingTarget_CreatesAndReports_WasCreated_True()
     {
-        var ct = new CancellationTokenSource(20.Seconds()).Token;
-
         var path = $"{TestPartition}/upsert-create-{Guid.NewGuid():N}";
         var sourceNode = new MeshNode(path.Split('/').Last(), TestPartition)
         {
@@ -45,11 +43,10 @@ public class CreateOrUpdateNodeRequestTest(ITestOutputHelper output)
             State = MeshNodeState.Active,
         };
 
-        var resp = await Mesh
+        var resp = Mesh
             .Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(sourceNode))
             .Select(d => d.Message)
-            .FirstAsync()
-            .ToTask(ct);
+            .Should().Emit();
 
         resp.Success.Should().BeTrue(resp.Error ?? "");
         resp.WasCreated.Should().BeTrue(
@@ -60,7 +57,7 @@ public class CreateOrUpdateNodeRequestTest(ITestOutputHelper output)
         resp.Log.Should().NotBeNull("every upsert rides on a single ActivityLog");
 
         // Verify the node lives in the mesh — single-node read via per-node hub.
-        var live = await Mesh.GetMeshNode(path, 10.Seconds()).FirstAsync().ToTask(ct);
+        var live = Mesh.GetMeshNode(path, 10.Seconds()).Should().Emit();
         live.Should().NotBeNull();
         live!.Name.Should().Be("Brand-new node");
         live.Content.Should().BeOfType<MarkdownContent>()
@@ -74,21 +71,19 @@ public class CreateOrUpdateNodeRequestTest(ITestOutputHelper output)
     /// the post-update node has the source's writable fields merged in.
     /// </summary>
     [Fact(Timeout = 30_000)]
-    public async Task Upsert_OnExistingTarget_UpdatesViaStream_WasCreated_False()
+    public void Upsert_OnExistingTarget_UpdatesViaStream_WasCreated_False()
     {
-        var ct = new CancellationTokenSource(20.Seconds()).Token;
-
         var path = $"{TestPartition}/upsert-update-{Guid.NewGuid():N}";
 
         // Seed an existing node — first via NodeFactory so the per-node hub
         // is alive and owns the state we'll update through GetMeshNodeStream.
-        await NodeFactory.CreateNode(new MeshNode(path.Split('/').Last(), TestPartition)
+        NodeFactory.CreateNode(new MeshNode(path.Split('/').Last(), TestPartition)
         {
             Name = "Original",
             NodeType = "Markdown",
             Content = new MarkdownContent { Content = "# v1" },
             State = MeshNodeState.Active,
-        });
+        }).Should().Emit();
 
         // Send the upsert with the same path but new writable fields. The
         // handler must take the existence path and apply via the stream.
@@ -100,11 +95,10 @@ public class CreateOrUpdateNodeRequestTest(ITestOutputHelper output)
             State = MeshNodeState.Active,
         };
 
-        var resp = await Mesh
+        var resp = Mesh
             .Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(sourceNode))
             .Select(d => d.Message)
-            .FirstAsync()
-            .ToTask(ct);
+            .Should().Emit();
 
         resp.Success.Should().BeTrue(resp.Error ?? "");
         resp.WasCreated.Should().BeFalse(
@@ -119,11 +113,9 @@ public class CreateOrUpdateNodeRequestTest(ITestOutputHelper output)
         // 200ms; an immediate point-in-time read can race that. Subscribe to
         // the per-node hub's MeshNode stream and wait for the new Name.
         var workspace = GetClient(c => c.AddData()).GetWorkspace();
-        var converged = await workspace.GetMeshNodeStream(path)
-            .Where(n => n?.Name == "Overwritten")
-            .Take(1)
-            .Timeout(10.Seconds())
-            .ToTask(ct);
+        var converged = workspace.GetMeshNodeStream(path)
+            .Should().Within(10.Seconds())
+            .Match(n => n?.Name == "Overwritten");
         converged.Name.Should().Be("Overwritten");
         converged.Content.Should().BeOfType<MarkdownContent>()
             .Which.Content.Should().Be("# v2");
@@ -136,24 +128,23 @@ public class CreateOrUpdateNodeRequestTest(ITestOutputHelper output)
     /// Category, Content, State, PreRenderedHtml) flows through.
     /// </summary>
     [Fact(Timeout = 30_000)]
-    public async Task Upsert_OnExistingTarget_PreservesIdentityFields()
+    public void Upsert_OnExistingTarget_PreservesIdentityFields()
     {
-        var ct = new CancellationTokenSource(20.Seconds()).Token;
         var path = $"{TestPartition}/upsert-identity-{Guid.NewGuid():N}";
 
-        await NodeFactory.CreateNode(new MeshNode(path.Split('/').Last(), TestPartition)
+        NodeFactory.CreateNode(new MeshNode(path.Split('/').Last(), TestPartition)
         {
             Name = "Original",
             NodeType = "Markdown",
             Content = new MarkdownContent { Content = "# original" },
             State = MeshNodeState.Active,
-        });
-        var before = await Mesh.GetMeshNode(path, 10.Seconds()).FirstAsync().ToTask(ct);
+        }).Should().Emit();
+        var before = Mesh.GetMeshNode(path, 10.Seconds()).Should().Emit();
         before.Should().NotBeNull();
         var originalCreatedDate = before!.CreatedDate;
         var originalCreatedBy = before.CreatedBy;
 
-        var resp = await Mesh
+        var resp = Mesh
             .Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(
                 new MeshNode(path.Split('/').Last(), TestPartition)
                 {
@@ -163,17 +154,14 @@ public class CreateOrUpdateNodeRequestTest(ITestOutputHelper output)
                     State = MeshNodeState.Active,
                 }))
             .Select(d => d.Message)
-            .FirstAsync()
-            .ToTask(ct);
+            .Should().Emit();
         resp.Success.Should().BeTrue(resp.Error ?? "");
 
         // Wait for the stream to converge on the renamed state.
         var workspace = GetClient(c => c.AddData()).GetWorkspace();
-        var after = await workspace.GetMeshNodeStream(path)
-            .Where(n => n?.Name == "Renamed")
-            .Take(1)
-            .Timeout(10.Seconds())
-            .ToTask(ct);
+        var after = workspace.GetMeshNodeStream(path)
+            .Should().Within(10.Seconds())
+            .Match(n => n?.Name == "Renamed");
         after.CreatedDate.Should().Be(originalCreatedDate,
             "CreatedDate is identity — UpdateAccordingToSourceNode preserves it");
         after.CreatedBy.Should().Be(originalCreatedBy,

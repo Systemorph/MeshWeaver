@@ -45,7 +45,7 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// and returns its address. Replaces the legacy `kernel/*` standalone hub
     /// addressing — every kernel session is now an Activity-hosted sub-hub.
     /// </summary>
-    private async Task<Address> CreateKernelSessionAsync()
+    private Address CreateKernelSession()
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var kernelId = Guid.NewGuid().ToString("N");
@@ -59,7 +59,7 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
             State = MeshNodeState.Active,
             Content = new ActivityLog("KernelExecution") { Status = ActivityStatus.Running }
         };
-        await meshService.CreateNode(activityNode).FirstAsync().ToTask();
+        meshService.CreateNode(activityNode).Should().Emit();
         return new Address($"{activityNamespace}/markdown-{kernelId}");
     }
 
@@ -73,45 +73,42 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// emission, and the test times out. See
     /// <c>Doc/Architecture/WritingTests.md</c> → "Stream assertions".
     /// </summary>
-    private Task<ActivityLog> WatchForActivityLogAsync(
-        IMessageHub client, Address activityAddress, Func<ActivityLog, bool> predicate, TimeSpan? timeout = null)
+    // Returns the (cold, filtered) activity-log stream. The workspace
+    // GetRemoteStream replays its current snapshot to late subscribers, so the
+    // reactive .Should().Match(...) at the call site may subscribe AFTER the
+    // trigger post and still observe the matching emission. The reactive
+    // assertion supplies its own blocking wait + timeout (25s budget — kernel
+    // session activation on cold CI Linux runners can take ~10-15s alone for
+    // Roslyn compile + ALC load).
+    private IObservable<ActivityLog> WatchForActivityLog(
+        IMessageHub client, Address activityAddress, Func<ActivityLog, bool> predicate)
         => client.GetWorkspace()
             .GetRemoteStream<MeshNode, MeshNodeReference>(activityAddress, new MeshNodeReference())
             .Select(change => change.Value?.Content as ActivityLog)
             .Where(log => log is not null && predicate(log!))
-            .Select(log => log!)
-            .Take(1)
-            // 25s budget — kernel session activation on cold CI Linux runners
-            // can take ~10-15s alone (Roslyn compile + ALC load), then a few
-            // hundred ms for the first script. Local repros come in at ~5-8s
-            // total; the 15s default we used to ship was tight on CI and
-            // produced spurious failures across every kernel test.
-            .Timeout(timeout ?? 25.Seconds())
-            .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+            .Select(log => log!);
 
     [Fact(Timeout = DefaultTimeoutMs)]
-    public async Task HelloWorld()
+    public void HelloWorld()
     {
         var client = GetClient();
-        var kernelAddress = await CreateKernelSessionAsync();
+        var kernelAddress = CreateKernelSession();
 
-        // Subscribe BEFORE posting — see WatchForActivityLogAsync's docstring.
-        var logTask = WatchForActivityLogAsync(client, kernelAddress,
+        var logStream = WatchForActivityLog(client, kernelAddress,
             l => l.Messages.Any(m => m.Message.Contains("Hello World")));
 
         client.Post(
             new SubmitCodeRequest("Console.WriteLine(\"Hello World\");"),
             o => o.WithTarget(kernelAddress));
 
-        var log = await logTask;
+        var log = logStream.Should().Within(25.Seconds()).Emit();
 
         log.Messages.Select(m => m.Message)
             .Should().Contain(m => m.Contains("Hello World"));
     }
 
     [Fact(Timeout = DefaultTimeoutMs)]
-    public async Task CalculatorDirectlyThroughKernel()
+    public void CalculatorDirectlyThroughKernel()
     {
         const string Code = @"using MeshWeaver.Layout;
 using static MeshWeaver.Layout.Controls;
@@ -122,32 +119,27 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
 ";
         const string Area = nameof(Area);
         var client = GetClient();
-        var kernelAddress = await CreateKernelSessionAsync();
+        var kernelAddress = CreateKernelSession();
 
-        // Subscribe BEFORE posting — see WatchForActivityLogAsync's docstring.
         var stream = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(kernelAddress, new LayoutAreaReference(Area));
 
         client.Post(
             new SubmitCodeRequest(Code) { Id = Area },
             o => o.WithTarget(kernelAddress));
 
-        var control = await stream.GetControlStream(Area)
-            .Timeout(20.Seconds())
-            .FirstAsync(x => x is not null);
+        var control = stream.GetControlStream(Area)
+            .Should().Within(20.Seconds()).Match(x => x is not null);
 
         var stack = control.Should().BeOfType<StackControl>().Which;
-        control = await stream.GetControlStream(stack.Areas.First().Area.ToString()!)
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null);
+        control = stream.GetControlStream(stack.Areas.First().Area.ToString()!)
+            .Should().Within(10.Seconds()).Match(x => x is not null);
         var editor = control.Should().BeOfType<EditorControl>().Which;
         editor.DataContext.Should().NotBeNull();
-        var data = await stream.GetDataStream<object?>(new(editor.DataContext!))
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null);
+        var data = stream.GetDataStream<object?>(new(editor.DataContext!))
+            .Should().Within(10.Seconds()).Match(x => x is not null);
         stream.UpdatePointer(3, editor.DataContext, new("summand1"));
-        var md = await stream.GetControlStream(stack.Areas.Last().Area.ToString()!)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => !(x as MarkdownControl)?.Markdown?.ToString()?.Contains("3") == true);
+        var md = stream.GetControlStream(stack.Areas.Last().Area.ToString()!)
+            .Should().Within(5.Seconds()).Match(x => !(x as MarkdownControl)?.Markdown?.ToString()?.Contains("3") == true);
 
         md.Should().BeOfType<MarkdownControl>().Which.Markdown.ToString().Should().Contain("5");
     }
@@ -157,13 +149,12 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
     /// (the same path that Blazor interactive markdown views use).
     /// </summary>
     [Fact(Timeout = DefaultTimeoutMs)]
-    public async Task SubmitCodeRequest_ProducesLayoutAreaResult()
+    public void SubmitCodeRequest_ProducesLayoutAreaResult()
     {
         var client = GetClient();
-        var kernelAddress = await CreateKernelSessionAsync();
+        var kernelAddress = CreateKernelSession();
         const string viewId = "test-view-1";
 
-        // Subscribe BEFORE posting — see WatchForActivityLogAsync's docstring.
         var stream = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
             kernelAddress, new LayoutAreaReference(viewId));
 
@@ -171,9 +162,8 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
             new SubmitCodeRequest("MeshWeaver.Layout.Controls.Markdown(\"Hello from kernel\")") { Id = viewId },
             o => o.WithTarget(kernelAddress));
 
-        var control = await stream.GetControlStream(viewId)
-            .Timeout(15.Seconds())
-            .FirstAsync(x => x is not null);
+        var control = stream.GetControlStream(viewId)
+            .Should().Within(15.Seconds()).Match(x => x is not null);
 
         control.Should().BeOfType<MarkdownControl>();
         (control as MarkdownControl)!.Markdown.ToString().Should().Contain("Hello from kernel");
@@ -184,12 +174,11 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
     /// share state (like a notebook — variables persist between cells).
     /// </summary>
     [Fact(Timeout = DefaultTimeoutMs)]
-    public async Task MultipleSubmissions_ShareKernelState()
+    public void MultipleSubmissions_ShareKernelState()
     {
         var client = GetClient();
-        var kernelAddress = await CreateKernelSessionAsync();
+        var kernelAddress = CreateKernelSession();
 
-        // Subscribe BEFORE posting — see WatchForActivityLogAsync's docstring.
         var stream = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
             kernelAddress, new LayoutAreaReference("cell-2"));
 
@@ -203,9 +192,8 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
             new SubmitCodeRequest("MeshWeaver.Layout.Controls.Markdown($\"Value is {myValue}\")") { Id = "cell-2" },
             o => o.WithTarget(kernelAddress));
 
-        var control = await stream.GetControlStream("cell-2")
-            .Timeout(15.Seconds())
-            .FirstAsync(x => x is not null);
+        var control = stream.GetControlStream("cell-2")
+            .Should().Within(15.Seconds()).Match(x => x is not null);
 
         control.Should().BeOfType<MarkdownControl>();
         (control as MarkdownControl)!.Markdown.ToString().Should().Contain("Value is 42");
@@ -217,10 +205,10 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
     /// per-Activity MeshNode path; uniqueness comes from the kernel-id GUID.
     /// </summary>
     [Fact]
-    public async Task MultipleKernelSessions_HaveUniqueAddresses()
+    public void MultipleKernelSessions_HaveUniqueAddresses()
     {
-        var address1 = await CreateKernelSessionAsync();
-        var address2 = await CreateKernelSessionAsync();
+        var address1 = CreateKernelSession();
+        var address2 = CreateKernelSession();
 
         address1.Should().NotBe(address2, "Each kernel session should have a unique address");
     }
@@ -230,12 +218,11 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
     /// Submits block 1 (defines x), block 2 (uses x), block 3 (uses x again).
     /// </summary>
     [Fact(Timeout = DefaultTimeoutMs)]
-    public async Task ThreeSubmissions_ShareState()
+    public void ThreeSubmissions_ShareState()
     {
         var client = GetClient();
-        var kernelAddress = await CreateKernelSessionAsync();
+        var kernelAddress = CreateKernelSession();
 
-        // Subscribe to each area BEFORE posting — see WatchForActivityLogAsync's docstring.
         var stream2 = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
             kernelAddress, new LayoutAreaReference("s2"));
         var stream3 = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
@@ -245,10 +232,10 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
         client.Post(new SubmitCodeRequest("MeshWeaver.Layout.Controls.Markdown($\"first: {sharedValue}\")") { Id = "s2" }, o => o.WithTarget(kernelAddress));
         client.Post(new SubmitCodeRequest("MeshWeaver.Layout.Controls.Markdown($\"second: {sharedValue * 2}\")") { Id = "s3" }, o => o.WithTarget(kernelAddress));
 
-        var r2 = await stream2.GetControlStream("s2").Timeout(20.Seconds()).FirstAsync(x => x is not null);
+        var r2 = stream2.GetControlStream("s2").Should().Within(20.Seconds()).Match(x => x is not null);
         (r2 as MarkdownControl)!.Markdown.ToString().Should().Contain("first: 100");
 
-        var r3 = await stream3.GetControlStream("s3").Timeout(20.Seconds()).FirstAsync(x => x is not null);
+        var r3 = stream3.GetControlStream("s3").Should().Within(20.Seconds()).Match(x => x is not null);
         (r3 as MarkdownControl)!.Markdown.ToString().Should().Contain("second: 200");
     }
 
@@ -258,10 +245,10 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
     /// If variables don't persist, subsequent blocks fail with CS0103 "does not exist".
     /// </summary>
     [Fact(Timeout = DefaultTimeoutMs)]
-    public async Task InteractiveShowcase_VariablesPersistAcrossAllBlocks()
+    public void InteractiveShowcase_VariablesPersistAcrossAllBlocks()
     {
         var client = GetClient();
-        var kernelAddress = await CreateKernelSessionAsync();
+        var kernelAddress = CreateKernelSession();
 
         // Act I — silent setup: variables, collections, and local functions
         const string actI = @"
@@ -305,7 +292,6 @@ var wordFreq = corpus.Split(' ')
         // Act V — uses `wordFreq` dictionary from Act I
         const string actV = @"MeshWeaver.Layout.Controls.Markdown($""Most frequent word: '{wordFreq.First().Key}' ({wordFreq.First().Value}x)"")";
 
-        // Subscribe to each area BEFORE posting — see WatchForActivityLogAsync's docstring.
         var stream2 = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
             kernelAddress, new LayoutAreaReference("act-2"));
         var stream3 = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
@@ -322,19 +308,19 @@ var wordFreq = corpus.Split(' ')
         client.Post(new SubmitCodeRequest(actIV) { Id = "act-4" }, o => o.WithTarget(kernelAddress));
         client.Post(new SubmitCodeRequest(actV) { Id = "act-5" }, o => o.WithTarget(kernelAddress));
 
-        async Task<MarkdownControl> GetMarkdown(ISynchronizationStream<JsonElement> stream, string areaId)
+        MarkdownControl GetMarkdown(ISynchronizationStream<JsonElement> stream, string areaId)
         {
-            var control = await stream.GetControlStream(areaId).Timeout(20.Seconds()).FirstAsync(x => x is not null);
-            return (MarkdownControl)control;
+            var control = stream.GetControlStream(areaId).Should().Within(20.Seconds()).Match(x => x is not null);
+            return (MarkdownControl)control!;
         }
 
-        (await GetMarkdown(stream2, "act-2")).Markdown.ToString().Should().Contain("Uptime:",
+        GetMarkdown(stream2, "act-2").Markdown.ToString().Should().Contain("Uptime:",
             "Act II must see `now` and `epoch` from Act I");
-        (await GetMarkdown(stream3, "act-3")).Markdown.ToString().Should().Contain("Primes below 200: 46",
+        GetMarkdown(stream3, "act-3").Markdown.ToString().Should().Contain("Primes below 200: 46",
             "Act III must see `primes` collection from Act I");
-        (await GetMarkdown(stream4, "act-4")).Markdown.ToString().Should().Contain("Collatz(27) has 111 steps",
+        GetMarkdown(stream4, "act-4").Markdown.ToString().Should().Contain("Collatz(27) has 111 steps",
             "Act IV must see `Collatz` local function from Act I");
-        (await GetMarkdown(stream5, "act-5")).Markdown.ToString().Should().Contain("'the' (4x)",
+        GetMarkdown(stream5, "act-5").Markdown.ToString().Should().Contain("'the' (4x)",
             "Act V must see `wordFreq` dictionary from Act I");
     }
 
@@ -347,7 +333,7 @@ var wordFreq = corpus.Split(' ')
     /// This exercises the exact pipeline used by the UI.
     /// </summary>
     [Fact(Timeout = DefaultTimeoutMs)]
-    public async Task InteractiveShowcaseMd_FullPipeline_AllBlocksExecute()
+    public void InteractiveShowcaseMd_FullPipeline_AllBlocksExecute()
     {
         var markdownPath = Path.Combine(
             Path.GetDirectoryName(GetType().Assembly.Location)!,
@@ -379,11 +365,12 @@ var wordFreq = corpus.Split(' ')
         Output.WriteLine($"Parsed {submissions.Count} submissions from markdown");
 
         var client = GetClient();
-        var kernelAddress = await CreateKernelSessionAsync();
+        var kernelAddress = CreateKernelSession();
 
-        // Subscribe to ALL areas BEFORE posting any submission — see
-        // WatchForActivityLogAsync's docstring. Materialise the streams in a
-        // dictionary so the assertion loop can pull them out by submission id.
+        // Materialise the streams in a dictionary so the assertion loop can
+        // pull them out by submission id. The workspace GetRemoteStream replays
+        // its current snapshot to late subscribers, so the reactive assertion
+        // below still observes results posted before it subscribes.
         var streams = submissions.ToDictionary(
             s => s.Id,
             s => client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
@@ -404,9 +391,8 @@ var wordFreq = corpus.Split(' ')
             var stream = streams[submission.Id];
             try
             {
-                var control = await stream.GetControlStream(submission.Id)
-                    .Timeout(15.Seconds())
-                    .FirstAsync(x => x is not null);
+                var control = stream.GetControlStream(submission.Id)
+                    .Should().Within(15.Seconds()).Match(x => x is not null);
 
                 var asMarkdown = (control as MarkdownControl);
                 asMarkdown.Should().NotBeNull($"Block #{i} ({submission.Id}) should return MarkdownControl");
@@ -415,7 +401,7 @@ var wordFreq = corpus.Split(' ')
                 rendered.Should().NotContain("Execution failed",
                     $"Block #{i} failed. Code:\n{submission.Code}");
             }
-            catch (TimeoutException)
+            catch (ObservableAssertionException)
             {
                 Assert.Fail($"Block #{i} ({submission.Id}) timed out. Code:\n{submission.Code}");
             }

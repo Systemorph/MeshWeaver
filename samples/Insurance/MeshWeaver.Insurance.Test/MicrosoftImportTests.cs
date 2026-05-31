@@ -6,6 +6,7 @@ using MeshWeaver.Import.Configuration;
 using MeshWeaver.Insurance.Domain;
 using MeshWeaver.Insurance.Domain.Services;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -83,7 +84,7 @@ public class MicrosoftImportTests(ITestOutputHelper output) : InsuranceTestBase(
     };
 
     [Fact(Timeout = 30000)]
-    public async Task Import_Microsoft_File_WithConfiguration()
+    public void Import_Microsoft_File_WithConfiguration()
     {
         // Skip test if file doesn't exist
         var fullPath = Path.Combine(_testFilesPath, "Microsoft.xlsx");
@@ -98,10 +99,10 @@ public class MicrosoftImportTests(ITestOutputHelper output) : InsuranceTestBase(
             Configuration = Config
         };
 
-        var importResponse = await AwaitResponseAsync(
-            importRequest,
-            o => o.WithTarget(Mesh.Address)
-        );
+        var importResponse = Mesh.Observe(
+                importRequest,
+                o => o.WithTarget(Mesh.Address))
+            .Should().Within(20.Seconds()).Emit();
 
         // Assert
         importResponse.Should().NotBeNull();
@@ -131,7 +132,7 @@ public class MicrosoftImportTests(ITestOutputHelper output) : InsuranceTestBase(
     }
 
     [Fact(Timeout = 30000)]
-    public async Task Import_Microsoft_WithAllocation()
+    public void Import_Microsoft_WithAllocation()
     {
         // Skip test if file doesn't exist
         var fullPath = Path.Combine(_testFilesPath, "Microsoft.xlsx");
@@ -144,10 +145,10 @@ public class MicrosoftImportTests(ITestOutputHelper output) : InsuranceTestBase(
             Configuration = Config
         };
 
-        var importResponse = await AwaitResponseAsync(
-            importRequest,
-            o => o.WithTarget(Mesh.Address)
-        );
+        var importResponse = Mesh.Observe(
+                importRequest,
+                o => o.WithTarget(Mesh.Address))
+            .Should().Within(20.Seconds()).Emit();
 
         // Assert
         importResponse.Should().NotBeNull();
@@ -182,7 +183,7 @@ public class MicrosoftImportTests(ITestOutputHelper output) : InsuranceTestBase(
     }
 
     [Fact(Timeout = 30000)]
-    public async Task Import_Microsoft_UsingSumMapping()
+    public void Import_Microsoft_UsingSumMapping()
     {
         // Skip test if file doesn't exist
         var fullPath = Path.Combine(_testFilesPath, "Microsoft.xlsx");
@@ -197,10 +198,10 @@ public class MicrosoftImportTests(ITestOutputHelper output) : InsuranceTestBase(
             Configuration = Config
         };
 
-        var importResponse = await AwaitResponseAsync(
-            importRequest,
-            o => o.WithTarget(Mesh.Address)
-        );
+        var importResponse = Mesh.Observe(
+                importRequest,
+                o => o.WithTarget(Mesh.Address))
+            .Should().Within(20.Seconds()).Emit();
 
         // Assert
         importResponse.Should().NotBeNull();

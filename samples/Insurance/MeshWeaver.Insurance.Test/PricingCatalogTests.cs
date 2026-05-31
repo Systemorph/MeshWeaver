@@ -26,10 +26,10 @@ public class PricingCatalogTests(ITestOutputHelper output) : InsuranceTestBase(o
     }
 
     [Fact(Timeout = 30000)]
-    public async Task GetPricingCatalog_ShouldReturnPricings()
+    public void GetPricingCatalog_ShouldReturnPricings()
     {
         // Act - Get the pricing catalog from the Insurance hub
-        var pricings = await GetPricingsAsync();
+        var pricings = GetPricings().Should().Match(p => p.Count > 0, "catalog should contain sample pricings");
 
         // Assert - Verify that the catalog contains pricings
         pricings.Should().NotBeNull("catalog should not be null");
@@ -49,10 +49,10 @@ public class PricingCatalogTests(ITestOutputHelper output) : InsuranceTestBase(o
     }
 
     [Fact(Timeout = 30000)]
-    public async Task GetPricingCatalog_ShouldHaveValidDimensions()
+    public void GetPricingCatalog_ShouldHaveValidDimensions()
     {
         // Act
-        var pricings = await GetPricingsAsync();
+        var pricings = GetPricings().Should().Match(p => p.Count > 0);
 
         // Assert - Verify dimension fields are populated
         pricings.Should().NotBeEmpty();
@@ -69,10 +69,10 @@ public class PricingCatalogTests(ITestOutputHelper output) : InsuranceTestBase(o
     }
 
     [Fact(Timeout = 30000)]
-    public async Task GetPricingCatalog_ShouldHaveValidDates()
+    public void GetPricingCatalog_ShouldHaveValidDates()
     {
         // Act
-        var pricings = await GetPricingsAsync();
+        var pricings = GetPricings().Should().Match(p => p.Count > 0);
 
         // Assert
         pricings.Should().NotBeEmpty();
@@ -100,13 +100,13 @@ public class PricingCatalogTests(ITestOutputHelper output) : InsuranceTestBase(o
     }
 
     [Fact(Timeout = 30000)]
-    public async Task PricingHub_ShouldStartSuccessfully()
+    public void PricingHub_ShouldStartSuccessfully()
     {
         // This test verifies that the pricing hub initializes correctly
         // by successfully retrieving the catalog without errors
 
         // Act
-        var pricings = await GetPricingsAsync();
+        var pricings = GetPricings().Should().Match(p => p.Count > 0, "hub should start and return catalog");
 
         // Assert - Hub started if we can get data
         pricings.Should().NotBeNull("hub should start and return catalog");

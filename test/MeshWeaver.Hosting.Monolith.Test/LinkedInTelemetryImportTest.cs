@@ -67,13 +67,9 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
             });
 
     [Fact(Timeout = 60000)]
-    public async Task LinkedInTelemetryImport_CompilesAndRendersImportArea()
+    public void LinkedInTelemetryImport_CompilesAndRendersImportArea()
     {
-        // 60s CT; if 60s isn't enough then there's a real bug we need to fix
-        // (per user direction: max 60s, log out to see what's happening).
-        var ct = new CancellationTokenSource(60.Seconds()).Token;
-
-        await NodeFactory.CreateNode(new MeshNode("LinkedInProfile", "Systemorph")
+        NodeFactory.CreateNode(new MeshNode("LinkedInProfile", "Systemorph")
         {
             Name = "LinkedIn Profile",
             NodeType = MeshNode.NodeTypePath,
@@ -86,13 +82,13 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
                     ".AddLayout(layout => layout.WithView(\"ImportTelemetry\", LinkedInTelemetryImport.ImportTelemetry))",
                 ShowChildrenInDetails = false,
             }
-        });
+        }).Should().Emit();
 
-        await CreateCodeAsync("LinkedInProfile", LinkedInProfileSource, ct);
-        await CreateCodeAsync("LinkedInTelemetryImport", LinkedInTelemetryImportSource, ct);
+        CreateCode("LinkedInProfile", LinkedInProfileSource).Should().Emit();
+        CreateCode("LinkedInTelemetryImport", LinkedInTelemetryImportSource).Should().Emit();
 
         var instancePath = $"{NodeTypePath}/test-profile";
-        await NodeFactory.CreateNode(new MeshNode("test-profile", NodeTypePath)
+        NodeFactory.CreateNode(new MeshNode("test-profile", NodeTypePath)
         {
             Name = "Test",
             NodeType = NodeTypePath,
@@ -102,7 +98,7 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
                 ["displayName"] = "Test",
                 ["connectedAt"] = DateTimeOffset.UtcNow,
             }
-        });
+        }).Should().Emit();
 
         // 🚨 Race workaround: wait for the NodeType compile to reach a terminal
         // status BEFORE opening the area's GetRemoteStream. The LayoutAreaHost's
@@ -114,17 +110,15 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
         // beforehand ensures the per-instance hub + LayoutAreaHost are fully
         // initialised when the test's own subscription lands. Framework-level
         // fix needs the SubscribeRequest reply to await init completion.
-        await Mesh.GetWorkspace().GetMeshNodeStream(NodeTypePath)
-            .Where(n => n.Content is NodeTypeDefinition d
+        Mesh.GetWorkspace().GetMeshNodeStream(NodeTypePath)
+            .Should().Within(30.Seconds())
+            .Match(n => n.Content is NodeTypeDefinition d
                 && (d.CompilationStatus == CompilationStatus.Ok
-                    || d.CompilationStatus == CompilationStatus.Error))
-            .Take(1)
-            .Timeout(45.Seconds())
-            .ToTask(ct);
+                    || d.CompilationStatus == CompilationStatus.Error));
 
         // The NodeType must compile cleanly — render the Import area to trigger
         // the compile, then assert we got back a Stack containing the form.
-        var control = await RenderAreaAsync(instancePath, "ImportTelemetry", ct);
+        var control = RenderArea(instancePath, "ImportTelemetry");
 
         control.Should().NotBeNull();
         control.Should().BeOfType<StackControl>("ImportTelemetry composes instructions + textarea + button + result via Controls.Stack");
@@ -134,20 +128,20 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
             "Import area should at least contain the instructions, the textarea, and the import button");
     }
 
-    private Task CreateCodeAsync(string id, string source, CancellationToken ct) =>
+    private IObservable<MeshNode> CreateCode(string id, string source) =>
         NodeFactory.CreateNode(new MeshNode(id, SourceNamespace)
         {
             Name = id,
             NodeType = "Code",
             Content = new CodeConfiguration { Code = source, Language = "csharp" }
-        }).ToTask(ct);
+        });
 
-    private async Task<UiControl> RenderAreaAsync(string path, string area, CancellationToken ct)
+    private UiControl RenderArea(string path, string area)
     {
         var client = GetClient(c => c.AddData());
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(area);
-        Output.WriteLine($"[{DateTime.UtcNow:O}] RenderAreaAsync opening GetRemoteStream for {path}/{area}");
+        Output.WriteLine($"[{DateTime.UtcNow:O}] RenderArea opening GetRemoteStream for {path}/{area}");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new Address(path), reference);
 
@@ -158,14 +152,13 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
                 c => Output.WriteLine($"[{DateTime.UtcNow:O}] stream emission: kind={c.ChangeType} hasValue={c.Value.ValueKind != JsonValueKind.Undefined}"),
                 ex => Output.WriteLine($"[{DateTime.UtcNow:O}] stream ERROR: {ex.GetType().Name}: {ex.Message}"));
 
-        var control = await stream
+        var control = stream
             .GetControlStream(reference.Area!)
             .Do(c => Output.WriteLine($"[{DateTime.UtcNow:O}] GetControlStream emission: {c?.GetType().Name ?? "null"}"))
-            .Timeout(60.Seconds())
-            .FirstAsync(x => x is StackControl or HtmlControl or MarkdownControl)
-            .ToTask(ct);
+            .Should().Within(25.Seconds())
+            .Match(x => x is StackControl or HtmlControl or MarkdownControl);
 
-        Output.WriteLine($"[{DateTime.UtcNow:O}] RenderAreaAsync resolved control: {control?.GetType().Name}");
+        Output.WriteLine($"[{DateTime.UtcNow:O}] RenderArea resolved control: {control?.GetType().Name}");
         control.Should().NotBeNull("ImportTelemetry must emit a control before the timeout");
         return (UiControl)control!;
     }

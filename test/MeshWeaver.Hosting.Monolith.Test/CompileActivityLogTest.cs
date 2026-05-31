@@ -34,7 +34,7 @@ public class CompileActivityLogTest(ITestOutputHelper output) : MonolithMeshTest
 
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-    private Task<GetCompilationPathResponse> CreateAndCompile(
+    private IObservable<GetCompilationPathResponse> CreateAndCompile(
         string nodeTypeId,
         NodeTypeDefinition definition,
         params (string Name, string Code)[] sources)
@@ -62,17 +62,16 @@ public class CompileActivityLogTest(ITestOutputHelper output) : MonolithMeshTest
             .SelectMany(_ => Mesh.Observe(
                     new GetCompilationPathRequest(),
                     o => o.WithTarget(new Address(nodeTypePath))))
-            .Select(d => d.Message)
-            .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+            .Select(d => d.Message);
     }
 
     [Fact(Timeout = 30_000)]
-    public async Task SuccessfulCompile_ReportsActivityLogWithSourceQueriesAndMatchedPaths()
+    public void SuccessfulCompile_ReportsActivityLogWithSourceQueriesAndMatchedPaths()
     {
-        var response = await CreateAndCompile("LogStory",
+        var response = CreateAndCompile("LogStory",
             new NodeTypeDefinition { Configuration = "config => config.WithContentType<LogStory>()" },
-            ("code", "public record LogStory { public string Title { get; init; } = string.Empty; }"));
+            ("code", "public record LogStory { public string Title { get; init; } = string.Empty; }"))
+            .Should().Within(25.Seconds()).Emit();
 
         response.Success.Should().BeTrue($"compile should succeed; error: {response.Error}");
         response.Log.Should().NotBeNull("activity log must be returned for every compile");
@@ -90,11 +89,12 @@ public class CompileActivityLogTest(ITestOutputHelper output) : MonolithMeshTest
     }
 
     [Fact(Timeout = 30_000)]
-    public async Task FailedCompile_FaultsActivityAndIncludesLogInResponse()
+    public void FailedCompile_FaultsActivityAndIncludesLogInResponse()
     {
-        var response = await CreateAndCompile("LogBroken",
+        var response = CreateAndCompile("LogBroken",
             new NodeTypeDefinition { Configuration = "config => config.WithContentType<LogBroken>()" },
-            ("code", "public record LogBroken { this is not valid C# }"));
+            ("code", "public record LogBroken { this is not valid C# }"))
+            .Should().Within(25.Seconds()).Emit();
 
         response.Success.Should().BeFalse("invalid source must fault the compile");
         response.Log.Should().NotBeNull("the activity log must be returned even when compile fails");
@@ -115,7 +115,7 @@ public class CompileActivityLogTest(ITestOutputHelper output) : MonolithMeshTest
     /// recompile-needed checks survive portal restart and silo move.
     /// </summary>
     [Fact(Timeout = 30_000)]
-    public async Task SuccessfulCompile_PopulatesCompiledSourcesSnapshot()
+    public void SuccessfulCompile_PopulatesCompiledSourcesSnapshot()
     {
         const string nodeTypeId = "SnapStory";
         const string nodeTypePath = "type/SnapStory";
@@ -129,10 +129,9 @@ public class CompileActivityLogTest(ITestOutputHelper output) : MonolithMeshTest
             },
             State = MeshNodeState.Active
         };
-        await MeshService.CreateNode(typeNode).FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+        MeshService.CreateNode(typeNode).Should().Emit();
 
-        await MeshService.CreateNode(new MeshNode("code", $"{nodeTypePath}/Source")
+        MeshService.CreateNode(new MeshNode("code", $"{nodeTypePath}/Source")
         {
             NodeType = "Code",
             Name = "code",
@@ -142,15 +141,15 @@ public class CompileActivityLogTest(ITestOutputHelper output) : MonolithMeshTest
                 Language = "csharp"
             },
             State = MeshNodeState.Active
-        }).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        }).Should().Emit();
 
         // Drive the compile through the same service the watcher uses. The
         // result carries the snapshot directly — no need to wait for the
         // separate watcher → UpdateMeshNode round-trip.
         var compilationService = Mesh.ServiceProvider
             .GetRequiredService<IMeshNodeCompilationService>();
-        var result = await compilationService.CompileAndGetConfigurations(typeNode)
-            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var result = compilationService.CompileAndGetConfigurations(typeNode)
+            .Should().Within(25.Seconds()).Emit();
 
         result.Should().NotBeNull();
         result!.AssemblyLocation.Should().NotBeNullOrEmpty(

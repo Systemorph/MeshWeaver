@@ -78,7 +78,7 @@ public class ImportValidationTest(ITestOutputHelper output) : HubTestBase(output
     }
 
     [Fact]
-    public async Task SimpleValidationAttributeTest()
+    public void SimpleValidationAttributeTest()
     {
         const string content =
             @"@@Contract
@@ -88,10 +88,8 @@ SystemName,FoundationYear,ContractType
 
         var client = GetClient();
         var importRequest = new ImportRequest(content);
-        var importResponse = await client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken
-                , new CancellationTokenSource(10.Seconds()).Token
-            ).Token);
+        var importResponse = client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create()))
+            .Should().Within(10.Seconds()).Emit();
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
         importResponse
             .Message.Log.Messages
@@ -112,7 +110,7 @@ SystemName,FoundationYear,ContractType
     }
 
     [Fact]
-    public async Task ImportWithSimpleValidationRuleTest()
+    public void ImportWithSimpleValidationRuleTest()
     {
         const string Content =
             @"@@Country
@@ -122,10 +120,8 @@ FR,France";
 
         var client = GetClient();
         var importRequest = new ImportRequest(Content) { Format = "Test1", SaveLog = true };
-        var importResponse = await client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken
-                , new CancellationTokenSource(1000.Seconds()).Token
-            ).Token);
+        var importResponse = client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create()))
+            .Should().Within(1000.Seconds()).Emit();
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
 
         importResponse
@@ -139,7 +135,7 @@ FR,France";
     }
 
     [Fact]
-    public async Task ImportOfPercentageTest()
+    public void ImportOfPercentageTest()
     {
         const string content =
             @"@@Discount
@@ -148,10 +144,8 @@ DoubleValue,Country
 
         var client = GetClient();
         var importRequest = new ImportRequest(content);
-        var importResponse = await client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
-            ).Token);
+        var importResponse = client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create()))
+            .Should().Within(10.Seconds()).Emit();
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
         importResponse
             .Message.Log.Messages
@@ -173,7 +167,7 @@ DoubleValue,Country
     }
 
     [Fact]
-    public async Task ImportWithSaveLogTest()
+    public void ImportWithSaveLogTest()
     {
         const string content =
             @"@@Country
@@ -182,10 +176,8 @@ A,B";
 
         var client = GetClient();
         var importRequest = new ImportRequest(content) { Format = "Test1", SaveLog = true };
-        var importResponse = await client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
-            ).Token);
+        var importResponse = client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create()))
+            .Should().Within(10.Seconds()).Emit();
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
 
         importResponse

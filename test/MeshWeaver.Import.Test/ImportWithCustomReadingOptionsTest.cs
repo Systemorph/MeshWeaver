@@ -29,7 +29,7 @@ public class ImportWithCustomReadingOptionsTest(ITestOutputHelper output) : HubT
     private const char CustomDelimiter = ';';
 
     [Fact]
-    public async Task SimpleCustomDelimiterTest()
+    public void SimpleCustomDelimiterTest()
     {
         const string SystemName = nameof(MyRecord.SystemName);
         const string DisplayName = nameof(MyRecord.DisplayName);
@@ -51,16 +51,16 @@ public class ImportWithCustomReadingOptionsTest(ITestOutputHelper output) : HubT
         };
 
         // act
-        var importResponse = await client.Observe(importRequest, o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask(new CancellationTokenSource(10.Seconds()).Token);
+        var importResponse = client.Observe(importRequest, o => o.WithTarget(CreateHostAddress()))
+            .Should().Within(10.Seconds()).Emit();
 
         // assert
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         var host = GetHost();
         var workspace = host
             .GetWorkspace();
-        var ret = await workspace.GetObservable<MyRecord>()
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x.Any());
+        var ret = workspace.GetObservable<MyRecord>()
+            .Should().Within(10.Seconds()).Match(x => x.Any());
 
         var resRecord = ret.Should().ContainSingle().Which;
         resRecord.Should().NotBeNull();

@@ -32,13 +32,11 @@ public class WorkspaceCacheEvictionTest(ITestOutputHelper output) : MonolithMesh
     protected override bool ShareMeshAcrossTests => true;
 
     [Fact(Timeout = 30000)]
-    public async Task NewSubscriber_AfterUpdate_GetsFreshSnapshot()
+    public void NewSubscriber_AfterUpdate_GetsFreshSnapshot()
     {
-        var ct = new CancellationTokenSource(20.Seconds()).Token;
-
         var path = $"{TestPartition}/cache-evict";
-        await NodeFactory.CreateNode(
-            new MeshNode("cache-evict", TestPartition) { Name = "Original", NodeType = "Markdown" });
+        NodeFactory.CreateNode(
+            new MeshNode("cache-evict", TestPartition) { Name = "Original", NodeType = "Markdown" }).Should().Emit();
 
         // First subscription warms up the singleton workspace's _remoteStreamCache.
         var client1 = GetClient(c => c.AddData());
@@ -46,36 +44,31 @@ public class WorkspaceCacheEvictionTest(ITestOutputHelper output) : MonolithMesh
         var stream1 = workspace1.GetRemoteStream<MeshNode>(
             new Address(path), new MeshNodeReference());
 
-        var first = await stream1
+        stream1
             .Select(ci => ci.Value?.Name)
-            .Where(n => n != null)
-            .Timeout(10.Seconds())
-            .FirstAsync()
-            .ToTask(ct);
-        first.Should().Be("Original");
+            .Should().Match(n => n == "Original");
 
         // Subscribe to the change feed BEFORE the update so we never race the
         // event. The Workspace's own subscription to the feed evicts the cache
         // entry; once we see the Updated event on the feed, the eviction has
         // happened by the time .OnNext returns (handlers run synchronously).
         var feed = Mesh.ServiceProvider.GetRequiredService<IMeshChangeFeed>();
-        var updateObserved = new TaskCompletionSource();
+        var updateObserved = new ReplaySubject<bool>();
         using var feedSub = feed.Subscribe(ev =>
         {
             if (ev.Path == path && ev.Kind == MeshChangeKind.Updated)
-                updateObserved.TrySetResult();
+                updateObserved.OnNext(true);
         });
 
         // Update the node — handler publishes MeshChangeEvent.Updated to IMeshChangeFeed.
-        var current = await ReadNodeAsync(path, ct);
-        current.Should().NotBeNull();
-        await NodeFactory.UpdateNode(current! with { Name = "Updated" });
+        var current = ReadNode(path).Should().Match(n => n is not null);
+        NodeFactory.UpdateNode(current! with { Name = "Updated" }).Should().Emit();
 
         // Stream-wait for the eviction to have happened — replaces a fixed
         // Task.Delay(150). The feed handler runs synchronously off Publish,
-        // so by the time our TCS resolves, Workspace's subscriber has also
+        // so by the time the ReplaySubject emits, Workspace's subscriber has also
         // run and evicted the cache.
-        await updateObserved.Task.WaitAsync(5.Seconds(), ct);
+        updateObserved.Should().Within(5.Seconds()).Emit();
 
         // A SECOND, completely fresh subscription must observe "Updated" as its first
         // emission. If the cache wasn't evicted, GetRemoteStream returns the previously
@@ -85,72 +78,62 @@ public class WorkspaceCacheEvictionTest(ITestOutputHelper output) : MonolithMesh
         var stream2 = workspace2.GetRemoteStream<MeshNode>(
             new Address(path), new MeshNodeReference());
 
-        var freshFirst = await stream2
+        var freshFirst = stream2
             .Select(ci => ci.Value?.Name)
             .Where(n => n != null)
-            .Timeout(10.Seconds())
-            .FirstAsync()
-            .ToTask(ct);
+            .Should().Emit();
         freshFirst.Should().Be("Updated",
             "a fresh subscriber after an update must see the post-update name, not a cached snapshot");
     }
 
     [Fact(Timeout = 30000)]
-    public async Task NewSubscriber_AfterRecreate_GetsFreshSnapshot()
+    public void NewSubscriber_AfterRecreate_GetsFreshSnapshot()
     {
-        var ct = new CancellationTokenSource(20.Seconds()).Token;
-
         var path = $"{TestPartition}/cache-recreate";
-        await NodeFactory.CreateNode(
-            new MeshNode("cache-recreate", TestPartition) { Name = "First", NodeType = "Markdown" });
+        NodeFactory.CreateNode(
+            new MeshNode("cache-recreate", TestPartition) { Name = "First", NodeType = "Markdown" }).Should().Emit();
 
         // Warm cache with a subscription.
         var client1 = GetClient(c => c.AddData());
         var stream1 = client1.GetWorkspace().GetRemoteStream<MeshNode>(
             new Address(path), new MeshNodeReference());
-        var first = await stream1
+        stream1
             .Select(ci => ci.Value?.Name)
-            .Where(n => n != null)
-            .Timeout(10.Seconds())
-            .FirstAsync()
-            .ToTask(ct);
-        first.Should().Be("First");
+            .Should().Match(n => n == "First");
 
         // Subscribe to the change feed BEFORE delete/recreate. The workspace
         // subscriber to the feed runs first (registered at startup) so by the
-        // time our TCS resolves for the Created event, the cache eviction is
+        // time the ReplaySubject emits the Created event, the cache eviction is
         // already done.
         var feed = Mesh.ServiceProvider.GetRequiredService<IMeshChangeFeed>();
-        var deleteObserved = new TaskCompletionSource();
-        var createObserved = new TaskCompletionSource();
+        var deleteObserved = new ReplaySubject<bool>();
+        var createObserved = new ReplaySubject<bool>();
         using var feedSub = feed.Subscribe(ev =>
         {
             if (ev.Path != path) return;
-            if (ev.Kind == MeshChangeKind.Deleted) deleteObserved.TrySetResult();
-            if (ev.Kind == MeshChangeKind.Created) createObserved.TrySetResult();
+            if (ev.Kind == MeshChangeKind.Deleted) deleteObserved.OnNext(true);
+            if (ev.Kind == MeshChangeKind.Created) createObserved.OnNext(true);
         });
 
         // Delete + recreate — emits Deleted then Created on the change feed.
-        await NodeFactory.DeleteNode(path);
+        NodeFactory.DeleteNode(path).Should().Emit();
         // Stream-wait for the Deleted event to have fanned out (workspace's
         // cache evicted) — replaces a fixed Task.Delay(50).
-        await deleteObserved.Task.WaitAsync(5.Seconds(), ct);
+        deleteObserved.Should().Within(5.Seconds()).Emit();
 
-        await NodeFactory.CreateNode(
-            new MeshNode("cache-recreate", TestPartition) { Name = "Second", NodeType = "Markdown" });
+        NodeFactory.CreateNode(
+            new MeshNode("cache-recreate", TestPartition) { Name = "Second", NodeType = "Markdown" }).Should().Emit();
         // Stream-wait for the Created event — replaces a fixed Task.Delay(150).
-        await createObserved.Task.WaitAsync(5.Seconds(), ct);
+        createObserved.Should().Within(5.Seconds()).Emit();
 
         var client2 = GetClient(c => c.AddData());
         var stream2 = client2.GetWorkspace().GetRemoteStream<MeshNode>(
             new Address(path), new MeshNodeReference());
 
-        var freshFirst = await stream2
+        var freshFirst = stream2
             .Select(ci => ci.Value?.Name)
             .Where(n => n != null)
-            .Timeout(10.Seconds())
-            .FirstAsync()
-            .ToTask(ct);
+            .Should().Emit();
         freshFirst.Should().Be("Second",
             "a fresh subscriber after delete+recreate must see the new node, not the original cached one");
     }

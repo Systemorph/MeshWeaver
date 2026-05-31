@@ -87,7 +87,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
     /// </summary>
     private async Task LoginWithToken(string rawToken)
     {
-        var response = await UserContextMiddleware.ValidateTokenViaHub(rawToken, Mesh).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var response = await UserContextMiddleware.ValidateTokenViaHub(rawToken, Mesh).FirstAsync();
         response.Should().NotBeNull("token validation should return a response");
         response!.Success.Should().BeTrue("token should be valid, got error: {0}", response.Error ?? "");
 
@@ -158,24 +158,19 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         _tokenUser2 = await CreateApiTokenAsync(User2, "User Two");
 
         // User1: Viewer on SharedOrg (can read), no access to PrivateOrg
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(User1, "Viewer", "SharedOrg"))
-            .FirstAsync().ToTask(TestTimeout);
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(User1, "Viewer", "SharedOrg"));
 
         // User2: Editor on SharedOrg, Admin on PrivateOrg
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(User2, "Editor", "SharedOrg"))
-            .FirstAsync().ToTask(TestTimeout);
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(User2, "Admin", "PrivateOrg"))
-            .FirstAsync().ToTask(TestTimeout);
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(User2, "Editor", "SharedOrg"));
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(User2, "Admin", "PrivateOrg"));
 
         // Break inheritance on SharedOrg/Confidential so parent roles don't propagate.
         // Policy is just a MeshNode at "{ns}/_Policy".
         await meshService.CreateNode(AssignmentNodeFactory.Policy("SharedOrg/Confidential",
-            new PartitionAccessPolicy { BreaksInheritance = true }))
-            .FirstAsync().ToTask(TestTimeout);
+            new PartitionAccessPolicy { BreaksInheritance = true }));
 
         // Re-grant User2 as Editor on Confidential (after inheritance break)
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(User2, "Editor", "SharedOrg/Confidential"))
-            .FirstAsync().ToTask(TestTimeout);
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(User2, "Editor", "SharedOrg/Confidential"));
 
         // Clear admin context so tests start clean — moved AFTER all the
         // AccessAssignment writes so the seeds run as the DevLogin admin

@@ -138,25 +138,21 @@ SystemName,DisplayName
 ";
 
     [Fact]
-    public async Task MultipleTypes()
+    public void MultipleTypes()
     {
         var client = GetClient();
         var importRequest = new ImportRequest(MultipleTypesCsv)
             .WithTimeout(15.Seconds()); // Add timeout for bulk test scenarios
-        var importResponse = await client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024))).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(15.Seconds()).Token
-            ).Token);
+        var importResponse = client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024)))
+            .Should().Within(15.Seconds()).Emit();
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
-        await Task.Delay(100, CancellationTokenSource.CreateLinkedTokenSource(
-            TestContext.Current.CancellationToken,
-            new CancellationTokenSource(5.Seconds()).Token
-        ).Token);
         var workspace = GetWorkspace(
             Mesh.GetHostedHub(ReferenceDataAddress.Create(), null!)
         );
-        var actualLoBs = await workspace.GetObservable<LineOfBusiness>().FirstAsync(x => x.First().DisplayName.StartsWith("LoB"));
-        var actualBUs = await workspace.GetObservable<BusinessUnit>().FirstAsync(x => x.Count > 2);
+        var actualLoBs = workspace.GetObservable<LineOfBusiness>()
+            .Should().Match(x => x.Count > 0 && x.First().DisplayName.StartsWith("LoB"));
+        var actualBUs = workspace.GetObservable<BusinessUnit>()
+            .Should().Match(x => x.Count > 2);
         var expectedLoBs = new[]
         {
             new LineOfBusiness("1", "LoB_one"),
