@@ -39,13 +39,19 @@ public class BuiltInAgentProvider : IStaticNodeProvider
 
     public IEnumerable<MeshNode> GetStaticNodes()
     {
-        // Read-only policy for the Agent namespace — built-in agents are unmodifiable
+        // Read-only, world-readable policy for the Agent namespace. PublicRead grants
+        // Read to every user (the agent catalog is a public catalog) WITHOUT needing a
+        // per-user role at the Agent scope — and because this is a static provider node,
+        // it is present from the first permission evaluation (no synced-query cold-start
+        // race, which previously left the agent picker empty → "No suitable agent").
+        // The write caps keep the built-in agents unmodifiable.
         yield return new MeshNode("_Policy", RootNamespace)
         {
             NodeType = "PartitionAccessPolicy",
             Name = "Access Policy",
             Content = new PartitionAccessPolicy
             {
+                PublicRead = true,
                 Create = false,
                 Update = false,
                 Delete = false,

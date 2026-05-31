@@ -118,14 +118,21 @@ internal static class PermissionEvaluator
                 })
             .Select(snap => ComputeRoleState(snap.Granted, nodePath, userId, capturedContext, capturedCircuitContext, staticPolicies, snap.Denied, snap.RuntimePolicies));
 
-        var seed = fast.RoleIds.Count > 0
+        // Emit the synchronous static snapshot whenever it carries ANY signal —
+        // roles OR a static public-read grant. The public grant is computed from
+        // static policies (collected synchronously above), so a PublicRead catalog
+        // (e.g. the built-in Agent namespace) yields Read on the FIRST emission with
+        // no wait for the synced AccessAssignment/Policy queries. Skipping the seed
+        // on RoleIds-only left role-less readers of a public catalog blocked on the
+        // synced cold-start path — the "No suitable agent" race during execution.
+        var seed = (fast.RoleIds.Count > 0 || fast.PublicGrant != Permission.None)
             ? Observable.Return(fast)
-            : Observable.Empty<(ImmutableHashSet<string>, Permission)>();
+            : Observable.Empty<(ImmutableHashSet<string>, Permission, Permission)>();
 
         return seed.Concat(enriched)
             .SelectMany(state =>
             {
-                var (roleIds, permissionCap) = state;
+                var (roleIds, permissionCap, publicGrant) = state;
 
                 // Fast path: every role is built-in → resolve synchronously.
                 Permission rolePermsValue = Permission.None;
@@ -156,6 +163,7 @@ internal static class PermissionEvaluator
                 return withPublic.Select(p =>
                 {
                     p &= permissionCap;
+                    p |= publicGrant;   // public-read override — precedence over (roles ∩ cap)
                     // Use the snapshot captured on caller's thread, NOT
                     // accessService.Context (AsyncLocal doesn't flow through
                     // the Rx schedulers cache.GetQuery uses).
@@ -331,7 +339,7 @@ internal static class PermissionEvaluator
 
     #region Scope hierarchy / role-state composition
 
-    private static (ImmutableHashSet<string> RoleIds, Permission PermissionCap) ComputeRoleState(
+    private static (ImmutableHashSet<string> RoleIds, Permission PermissionCap, Permission PublicGrant) ComputeRoleState(
         ImmutableDictionary<string, ImmutableHashSet<string>> scopeToRoles,
         string nodePath,
         string userId,
@@ -345,6 +353,7 @@ internal static class PermissionEvaluator
     {
         var roleIds = ImmutableHashSet<string>.Empty;
         var permissionCap = Permission.All;
+        var publicGrant = Permission.None;
         var isSelfScopeOwner = userId != WellKnownUsers.Anonymous
                                && userId != WellKnownUsers.Public;
         foreach (var scope in GetScopeHierarchy(nodePath))
@@ -364,7 +373,14 @@ internal static class PermissionEvaluator
             if (scopeToRoles.TryGetValue(scope, out var roles))
                 roleIds = roleIds.Union(roles);
             if (policy is not null)
+            {
                 permissionCap &= policy.GetPermissionCap();
+                // Public-read override: a policy with PublicRead grants Read to every
+                // user at this scope and below. Accumulated here, ORed in AFTER the
+                // per-user (roles ∩ cap) below — so it has precedence and needs no role.
+                if (policy.PublicRead)
+                    publicGrant |= Permission.Read;
+            }
 
             if (scopeToDeniedRoles is not null
                 && scopeToDeniedRoles.TryGetValue(scope, out var deniedRoles))
@@ -389,7 +405,7 @@ internal static class PermissionEvaluator
             }
         }
 
-        return (roleIds, permissionCap);
+        return (roleIds, permissionCap, publicGrant);
     }
 
     private static List<string> GetScopeHierarchy(string nodePath)
