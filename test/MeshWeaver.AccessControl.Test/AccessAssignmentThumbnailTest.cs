@@ -250,7 +250,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
 
         // Re-read the node authoritatively until the role is removed. Each
         // tick is a fresh per-node-hub round-trip (Mesh.GetMeshNode = the
-        // request/response read ReadNodeAsync wraps, always fresh) — the
+        // authoritative request/response read, always fresh) — the
         // GetMeshNodeStream cache subscription proved unreliable here: the
         // Where(...) never matched after the click, even though the per-node
         // hub had committed the new state. The wait lives in the assertion;

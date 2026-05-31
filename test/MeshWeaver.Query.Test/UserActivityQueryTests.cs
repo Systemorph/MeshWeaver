@@ -364,14 +364,14 @@ public class ActivityTrackingFilterTests(ITestOutputHelper output) : MonolithMes
 
     /// <summary>
     /// Verify that the satellite MainNode auto-setting works correctly:
-    /// satellite types created via CreateNodeAsync should have MainNode == Namespace (not Path).
+    /// satellite types created via NodeFactory.CreateNode should have MainNode == Namespace (not Path).
     /// </summary>
     [Fact(Timeout = 30000)]
     public void SatelliteTypes_HaveMainNodeSetToNamespace()
     {
         var p = P();
 
-        // Create satellite nodes via the normal CreateNodeAsync path
+        // Create satellite nodes via the normal NodeFactory.CreateNode path
         NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Thread/t1") with
         {
             Name = "Thread", NodeType = "Thread"

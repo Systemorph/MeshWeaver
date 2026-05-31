@@ -139,7 +139,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
 
     /// <summary>
     /// Full end-to-end flow:
-    /// 1. Create Thread via NodeFactory.CreateNodeAsync
+    /// 1. Create Thread via NodeFactory.CreateNode
     /// 2. Create user ThreadMessage as child node
     /// 3. Initialize AgentChatClient, choose context and agent
     /// 4. Send message via GetStreamingResponseAsync
@@ -182,7 +182,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         var agentChat = new AgentChatClient(Mesh.ServiceProvider);
         await agentChat.Initialize("ACME/ProductLaunch").WhenInitialized.FirstAsync().ToTask(ct);
 
-        var contextNode = await ReadNodeAsync("ACME/ProductLaunch", ct);
+        var contextNode = await ReadNode("ACME/ProductLaunch").FirstAsync().ToTask(ct);
         contextNode.Should().NotBeNull("ACME/ProductLaunch node should exist in test data");
 
         agentChat.SetContext(new AgentContext
@@ -277,7 +277,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         var agentChat = new AgentChatClient(Mesh.ServiceProvider);
         await agentChat.Initialize("ACME/ProductLaunch").WhenInitialized.FirstAsync().ToTask(ct);
 
-        var contextNode = await ReadNodeAsync("ACME/ProductLaunch", ct);
+        var contextNode = await ReadNode("ACME/ProductLaunch").FirstAsync().ToTask(ct);
 
         agentChat.SetContext(new AgentContext
         {
@@ -343,7 +343,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         var agentChat = new AgentChatClient(Mesh.ServiceProvider);
         await agentChat.Initialize("ACME/ProductLaunch").WhenInitialized.FirstAsync().ToTask(ct);
 
-        var contextNode = await ReadNodeAsync("ACME/ProductLaunch", ct);
+        var contextNode = await ReadNode("ACME/ProductLaunch").FirstAsync().ToTask(ct);
 
         agentChat.SetContext(new AgentContext
         {

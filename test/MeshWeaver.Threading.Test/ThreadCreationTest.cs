@@ -21,7 +21,7 @@ using MeshThread = MeshWeaver.AI.Thread;
 namespace MeshWeaver.Threading.Test;
 
 /// <summary>
-/// Tests for thread creation via CreateNodeRequest + ThreadNodeType.BuildThreadNode and IMeshService.CreateNodeAsync.
+/// Tests for thread creation via CreateNodeRequest + ThreadNodeType.BuildThreadNode and IMeshService.CreateNode.
 /// Threads are satellite nodes created under {namespace}/_Thread/{speakingId}.
 /// Messages are stored as child MeshNodes with nodeType="ThreadMessage".
 /// </summary>

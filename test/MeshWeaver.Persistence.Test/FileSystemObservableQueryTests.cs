@@ -60,6 +60,20 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
                     $"{expectedMinCount} change(s) on the accumulator, observed {changes.Count}.")))
             .ToTask();
 
+    /// <summary>
+    /// Blocking sibling of <see cref="WaitForChanges{T}"/> for synchronous (void)
+    /// test methods: polls the accumulator size on a 50 ms interval and blocks via
+    /// the reactive assertion until at least <paramref name="expectedMinCount"/>
+    /// items are present, or the timeout elapses.
+    /// </summary>
+    private static void WaitForChangesBlocking<T>(
+        List<T> changes,
+        int expectedMinCount,
+        int timeoutMs = 30_000)
+        => Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Where(_ => changes.Count >= expectedMinCount)
+            .Should().Within(TimeSpan.FromMilliseconds(timeoutMs)).Emit();
+
     #region Create Tests
 
     [Fact]
@@ -396,31 +410,31 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     #region Move Tests
 
     [Fact]
-    public async Task ObserveQuery_MoveNode_EmitsDeleteAndCreate()
+    public void ObserveQuery_MoveNode_EmitsDeleteAndCreate()
     {
         var proj1 = NodePath("Project1");
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath(proj1) with { Name = "Project 1", NodeType = "Markdown" });
+        NodeFactory.CreateNode(MeshNode.FromPath(proj1) with { Name = "Project 1", NodeType = "Markdown" }).Should().Emit();
 
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
             .Subscribe(change => receivedChanges.Add(change));
 
-        await WaitForChanges(receivedChanges, 1);
+        WaitForChangesBlocking(receivedChanges, 1);
         receivedChanges.Should().HaveCount(1);
         receivedChanges[0].Items.Should().HaveCount(1);
 
         var movedPath = NodePath("Project1Moved");
-        await Mesh.Observe(new MoveNodeRequest(proj1, movedPath), o => o).FirstAsync().ToTask();
-        await WaitForChanges(receivedChanges, 2);
+        Mesh.Observe(new MoveNodeRequest(proj1, movedPath), o => o).Should().Emit();
+        WaitForChangesBlocking(receivedChanges, 2);
 
         receivedChanges.Count.Should().BeGreaterThanOrEqualTo(2);
 
-        var movedNode = await ReadNodeAsync(movedPath);
+        var movedNode = ReadNode(movedPath).Should().Emit();
         movedNode.Should().NotBeNull();
         movedNode!.Name.Should().Be("Project 1");
 
-        var oldNode = await ReadNodeAsync(proj1);
+        var oldNode = ReadNode(proj1).Should().Emit();
         oldNode.Should().BeNull();
 
         subscription.Dispose();

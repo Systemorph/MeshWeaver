@@ -72,6 +72,37 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
             try { Directory.Delete(_cacheDirectory, recursive: true); } catch { }
     }
 
+    /// <summary>
+    /// Reactive path-set wait: folds the live query deltas into a running path
+    /// set and blocks (≤ 60 s) until
+    /// <paramref name="predicate"/> holds. Returns the satisfying path set.
+    /// </summary>
+    private IReadOnlySet<string> WaitForQueryPathSet(
+        string query, Func<IReadOnlySet<string>, bool> predicate)
+    {
+        var paths = new HashSet<string>(StringComparer.Ordinal);
+        return MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Scan((IReadOnlySet<string>)paths, (acc, change) =>
+            {
+                var set = (HashSet<string>)acc;
+                if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
+                {
+                    set.Clear();
+                    foreach (var n in change.Items) if (n.Path is { } p) set.Add(p);
+                }
+                else if (change.ChangeType is QueryChangeType.Added or QueryChangeType.Updated)
+                {
+                    foreach (var n in change.Items) if (n.Path is { } p) set.Add(p);
+                }
+                else if (change.ChangeType is QueryChangeType.Removed)
+                {
+                    foreach (var n in change.Items) if (n.Path is { } p) set.Remove(p);
+                }
+                return acc;
+            })
+            .Should().Within(ReadNodeTimeout).Match(predicate);
+    }
+
     #region Hub Initialization Tests
 
     [Fact(Timeout = 20000)]
@@ -233,10 +264,10 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     /// GetNodeAsync for Space should return the NodeType definition node.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task GetNodeAsync_Space_ReturnsNodeTypeDefinition()
+    public void GetNodeAsync_Space_ReturnsNodeTypeDefinition()
     {
         // Act
-        var node = await ReadNodeAsync("Space");
+        var node = ReadNode("Space").Should().Emit();
 
         // Assert
         node.Should().NotBeNull("Space node should exist");
@@ -270,14 +301,14 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     /// Type nodes should exist in persistence and be retrievable.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task TypeNodes_ExistInPersistence()
+    public void TypeNodes_ExistInPersistence()
     {
         // Assert that type nodes exist
-        var orgType = await ReadNodeAsync("Space");
+        var orgType = ReadNode("Space").Should().Emit();
         orgType.Should().NotBeNull("Space should exist in persistence");
         orgType!.NodeType.Should().Be("NodeType");
 
-        var projectType = await ReadNodeAsync("ACME/Project");
+        var projectType = ReadNode("ACME/Project").Should().Emit();
         projectType.Should().NotBeNull("ACME/Project should exist in persistence");
         projectType!.NodeType.Should().Be("NodeType");
     }
@@ -290,19 +321,18 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     /// Move single node to new path.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task MoveNodeAsync_MovesNodeToNewPath()
+    public void MoveNodeAsync_MovesNodeToNewPath()
     {
-        var ct = TestContext.Current.CancellationToken;
         // Arrange - create a node to move (unique per run to avoid file system collisions)
         var src = $"{TestPartition}/movetest-{_uid}";
         var dst = $"{TestPartition}/movetest-renamed-{_uid}";
         var subtreeQuery = $"path:{TestPartition} scope:subtree";
 
-        await NodeFactory.CreateNode(MeshNode.FromPath(src) with { Name = "Move Test", NodeType = "Markdown" });
-        await WaitForQueryPathSetAsync(subtreeQuery, set => set.Contains(src), ct);
+        NodeFactory.CreateNode(MeshNode.FromPath(src) with { Name = "Move Test", NodeType = "Markdown" }).Should().Emit();
+        WaitForQueryPathSet(subtreeQuery, set => set.Contains(src));
 
         // Act
-        var response = await Mesh.Observe<MoveNodeResponse>(new MoveNodeRequest(src, dst), o => o).FirstAsync().ToTask(ct);
+        var response = Mesh.Observe<MoveNodeResponse>(new MoveNodeRequest(src, dst), o => o).Should().Emit();
         var moved = response.Message.Node;
 
         // Assert
@@ -310,14 +340,14 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         moved!.Path.Should().Be(dst);
         moved.Name.Should().Be("Move Test");
 
-        // Catalog-bound wait Ã¢â‚¬â€ ReadNodeAsync(src) would falsely succeed via the
+        // Catalog-bound wait Ã¢â‚¬â€ ReadNode(src) would falsely succeed via the
         // TestPartition ancestor's MeshNodeReference reducer.
-        var paths = await WaitForQueryPathSetAsync(subtreeQuery,
-            set => !set.Contains(src) && set.Contains(dst), ct);
+        var paths = WaitForQueryPathSet(subtreeQuery,
+            set => !set.Contains(src) && set.Contains(dst));
         paths.Should().NotContain(src, "Original node should be deleted");
         paths.Should().Contain(dst, "Node should exist at new path");
 
-        var newNode = await ReadNodeAsync(dst, ct);
+        var newNode = ReadNode(dst).Should().Emit();
         newNode.Should().NotBeNull("Node should be readable at new path");
         newNode!.Name.Should().Be("Move Test");
     }
@@ -326,31 +356,30 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     /// Move node with descendants - all paths should be updated.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task MoveNodeAsync_MovesDescendantsWithUpdatedPaths()
+    public void MoveNodeAsync_MovesDescendantsWithUpdatedPaths()
     {
-        var ct = TestContext.Current.CancellationToken;
         // Arrange - create a hierarchy to move (unique per run)
         var parent = $"{TestPartition}/parent-{_uid}";
         var newParentPath = $"{TestPartition}/newparent-{_uid}";
         var subtreeQuery = $"path:{TestPartition} scope:subtree";
 
-        await NodeFactory.CreateNode(MeshNode.FromPath(parent) with { Name = "Parent", NodeType = "Markdown" });
-        await NodeFactory.CreateNode(MeshNode.FromPath($"{parent}/child1") with { Name = "Child 1", NodeType = "Markdown" });
-        await NodeFactory.CreateNode(MeshNode.FromPath($"{parent}/child2") with { Name = "Child 2", NodeType = "Markdown" });
-        await NodeFactory.CreateNode(MeshNode.FromPath($"{parent}/child1/grandchild") with { Name = "Grandchild", NodeType = "Markdown" });
-        await WaitForQueryPathSetAsync(subtreeQuery,
+        NodeFactory.CreateNode(MeshNode.FromPath(parent) with { Name = "Parent", NodeType = "Markdown" }).Should().Emit();
+        NodeFactory.CreateNode(MeshNode.FromPath($"{parent}/child1") with { Name = "Child 1", NodeType = "Markdown" }).Should().Emit();
+        NodeFactory.CreateNode(MeshNode.FromPath($"{parent}/child2") with { Name = "Child 2", NodeType = "Markdown" }).Should().Emit();
+        NodeFactory.CreateNode(MeshNode.FromPath($"{parent}/child1/grandchild") with { Name = "Grandchild", NodeType = "Markdown" }).Should().Emit();
+        WaitForQueryPathSet(subtreeQuery,
             set => set.Contains(parent)
                 && set.Contains($"{parent}/child1")
                 && set.Contains($"{parent}/child2")
-                && set.Contains($"{parent}/child1/grandchild"), ct);
+                && set.Contains($"{parent}/child1/grandchild"));
 
         // Act
-        await Mesh.Observe<MoveNodeResponse>(new MoveNodeRequest(parent, newParentPath), o => o).FirstAsync().ToTask(ct);
+        Mesh.Observe<MoveNodeResponse>(new MoveNodeRequest(parent, newParentPath), o => o).Should().Emit();
 
         // Assert - old paths should not exist, new paths should exist (catalog-bound).
-        // ReadNodeAsync on the old paths would falsely succeed via the TestPartition
+        // ReadNode on the old paths would falsely succeed via the TestPartition
         // ancestor's MeshNodeReference reducer.
-        var paths = await WaitForQueryPathSetAsync(subtreeQuery,
+        var paths = WaitForQueryPathSet(subtreeQuery,
             set => !set.Contains(parent)
                 && !set.Contains($"{parent}/child1")
                 && !set.Contains($"{parent}/child2")
@@ -358,26 +387,26 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
                 && set.Contains(newParentPath)
                 && set.Contains($"{newParentPath}/child1")
                 && set.Contains($"{newParentPath}/child2")
-                && set.Contains($"{newParentPath}/child1/grandchild"), ct);
+                && set.Contains($"{newParentPath}/child1/grandchild"));
         paths.Should().NotContain(parent);
         paths.Should().NotContain($"{parent}/child1");
         paths.Should().NotContain($"{parent}/child2");
         paths.Should().NotContain($"{parent}/child1/grandchild");
 
         // Per-node stream reads on the NEW paths are safe (those nodes exist).
-        var newParent = await ReadNodeAsync(newParentPath, ct);
+        var newParent = ReadNode(newParentPath).Should().Emit();
         newParent.Should().NotBeNull();
         newParent!.Name.Should().Be("Parent");
 
-        var newChild1 = await ReadNodeAsync($"{newParentPath}/child1", ct);
+        var newChild1 = ReadNode($"{newParentPath}/child1").Should().Emit();
         newChild1.Should().NotBeNull();
         newChild1!.Name.Should().Be("Child 1");
 
-        var newChild2 = await ReadNodeAsync($"{newParentPath}/child2", ct);
+        var newChild2 = ReadNode($"{newParentPath}/child2").Should().Emit();
         newChild2.Should().NotBeNull();
         newChild2!.Name.Should().Be("Child 2");
 
-        var newGrandchild = await ReadNodeAsync($"{newParentPath}/child1/grandchild", ct);
+        var newGrandchild = ReadNode($"{newParentPath}/child1/grandchild").Should().Emit();
         newGrandchild.Should().NotBeNull();
         newGrandchild!.Name.Should().Be("Grandchild");
     }
@@ -387,33 +416,32 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     /// Note: Comment migration is handled internally by the persistence layer.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task MoveNodeAsync_MovesNodeViaRequest()
+    public void MoveNodeAsync_MovesNodeViaRequest()
     {
-        var ct = TestContext.Current.CancellationToken;
         // Arrange - create node (unique per run)
         var src = $"{TestPartition}/commented-{_uid}";
         var dst = $"{TestPartition}/commented-moved-{_uid}";
         var subtreeQuery = $"path:{TestPartition} scope:subtree";
 
-        await NodeFactory.CreateNode(MeshNode.FromPath(src) with { Name = "Commented Node", NodeType = "Markdown" });
-        await WaitForQueryPathSetAsync(subtreeQuery, set => set.Contains(src), ct);
+        NodeFactory.CreateNode(MeshNode.FromPath(src) with { Name = "Commented Node", NodeType = "Markdown" }).Should().Emit();
+        WaitForQueryPathSet(subtreeQuery, set => set.Contains(src));
 
         // Act - move via MoveNodeRequest
-        var response = await Mesh.Observe<MoveNodeResponse>(new MoveNodeRequest(src, dst), o => o).FirstAsync().ToTask(ct);
+        var response = Mesh.Observe<MoveNodeResponse>(new MoveNodeRequest(src, dst), o => o).Should().Emit();
 
         // Assert - node should be at new path
         response.Message.Success.Should().BeTrue("Move should succeed");
         response.Message.Node.Should().NotBeNull();
         response.Message.Node!.Path.Should().Be(dst);
 
-        // Catalog-bound check Ã¢â‚¬â€ ReadNodeAsync on src would falsely succeed via
+        // Catalog-bound check Ã¢â‚¬â€ ReadNode on src would falsely succeed via
         // the TestPartition ancestor.
-        var paths = await WaitForQueryPathSetAsync(subtreeQuery,
-            set => !set.Contains(src) && set.Contains(dst), ct);
+        var paths = WaitForQueryPathSet(subtreeQuery,
+            set => !set.Contains(src) && set.Contains(dst));
         paths.Should().Contain(dst, "Node should exist at new path");
         paths.Should().NotContain(src, "Node should not remain at old path");
 
-        var movedNode = await ReadNodeAsync(dst, ct);
+        var movedNode = ReadNode(dst).Should().Emit();
         movedNode.Should().NotBeNull("Node should be readable at new path");
     }
 
@@ -848,10 +876,10 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
     /// 3. $type discriminator is respected during JSON deserialization
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task FileSystem_PersistenceService_FindsNodeTypeNode_WithPolymorphicDeserialization()
+    public void FileSystem_PersistenceService_FindsNodeTypeNode_WithPolymorphicDeserialization()
     {
         // Act - this should find Type/Organizations by reading from disk
-        var nodeTypeNode = await ReadNodeAsync("Type/Organizations");
+        var nodeTypeNode = ReadNode("Type/Organizations").Should().Emit();
 
         // Assert
         nodeTypeNode.Should().NotBeNull(
@@ -892,19 +920,17 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
     /// This is the end-to-end test for the production scenario.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task FileSystem_Organizations_GetsHubConfiguration_FromCompiledAssembly()
+    public void FileSystem_Organizations_GetsHubConfiguration_FromCompiledAssembly()
     {
         // Act - get the Organizations node (triggers on-demand compilation from disk files)
-        var node = await ReadNodeAsync("Organizations");
+        var node = ReadNode("Organizations").Should().Emit();
 
         // Assert
         node.Should().NotBeNull("Organizations node should exist on disk");
 
         // Resolve via INodeConfigurationResolver to trigger compilation and populate HubConfiguration.
         var resolver = Mesh.ServiceProvider.GetRequiredService<INodeConfigurationResolver>();
-        node = await resolver.ResolveConfiguration(node!)
-            .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+        node = resolver.ResolveConfiguration(node!).Should().Emit();
 
         node.HubConfiguration.Should().NotBeNull(
             "Organizations node should have HubConfiguration from the compiled assembly. " +
@@ -1002,7 +1028,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 20000)]
-    public async Task CreateNode_PreservesName()
+    public void CreateNode_PreservesName()
     {
         var name = "My Test Article";
         // Unique suffix per run — SamplesGraphDataTest uses
@@ -1011,16 +1037,16 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         // run with NodeAlreadyExists.
         var nodePath = $"{TestPartition}/name-preservation-{Guid.NewGuid():N}";
 
-        await NodeFactory.CreateNode(MeshNode.FromPath(nodePath) with
+        NodeFactory.CreateNode(MeshNode.FromPath(nodePath) with
         {
             Name = name,
             NodeType = "Markdown"
-        });
+        }).Should().Emit();
 
-        var node = await ReadNodeAsync(nodePath, TestContext.Current.CancellationToken);
+        var node = ReadNode(nodePath).Should().Emit();
 
         node.Should().NotBeNull("node should exist after creation");
-        node!.Name.Should().Be(name, "Name should be preserved through CreateNodeAsync");
+        node!.Name.Should().Be(name, "Name should be preserved through CreateNode");
         node.State.Should().Be(MeshNodeState.Active);
     }
 }

@@ -17,7 +17,7 @@ namespace MeshWeaver.Security.Test;
 
 /// <summary>
 /// Tests the VUser node creation flow as used by VirtualUserMiddleware.
-/// Verifies that CreateNodeAsync (via AwaitResponse) works correctly
+/// Verifies that IMeshService.CreateNode works correctly
 /// and handles the "already exists" case without hanging.
 /// </summary>
 public class VirtualUserNodeCreationTest(ITestOutputHelper output) : MonolithMeshTestBase(output)

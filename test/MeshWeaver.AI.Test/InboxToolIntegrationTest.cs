@@ -441,7 +441,7 @@ public class InboxToolIntegrationTest : AITestBase
     private async Task<IMessageHub> GetThreadHubAsync(string threadPath, CancellationToken ct)
     {
         // Trigger hub activation by reading the node once via the workspace.
-        await ReadNodeAsync(threadPath, ct);
+        await ReadNode(threadPath).FirstAsync().ToTask(ct);
         // Resolve the hub through the mesh service.
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         // GetHub is internal â€” we use the same trick as ThreadExecution: the
@@ -454,7 +454,7 @@ public class InboxToolIntegrationTest : AITestBase
 
     private async Task<MeshThread> ReadThreadAsync(string threadPath, CancellationToken ct)
     {
-        var node = await ReadNodeAsync(threadPath, ct);
+        var node = await ReadNode(threadPath).FirstAsync().ToTask(ct);
         node.Should().NotBeNull();
         var content = node!.Content as MeshThread;
         content.Should().NotBeNull();
