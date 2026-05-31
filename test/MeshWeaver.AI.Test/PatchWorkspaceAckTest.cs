@@ -111,13 +111,16 @@ public class PatchWorkspaceAckTest : MonolithMeshTestBase
     /// stream right after Patch should observe the updated node.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task Patch_AfterOk_WorkspaceStreamReflectsNewState()
+    public void Patch_AfterOk_WorkspaceStreamReflectsNewState()
     {
         var plugin = CreatePlugin();
         var id = $"ws-{Guid.NewGuid():N}";
-        var path = await SeedAsync(plugin, id);
+        // SeedAsync / Patch are genuine Task<string> SDK boundaries — bridge them
+        // via .ToObservable() so the body stays await-free (§2a).
+        var path = SeedAsync(plugin, id).ToObservable().Should().Within(30.Seconds()).Emit();
 
-        var patched = await plugin.Patch($"@{path}", "{\"name\":\"Updated via stream test\"}");
+        var patched = plugin.Patch($"@{path}", "{\"name\":\"Updated via stream test\"}")
+            .ToObservable().Should().Within(30.Seconds()).Emit();
         patched.Should().StartWith("Patched:");
 
         // Workspace stream of the node hub must observe the new name within a short window.
@@ -129,12 +132,10 @@ public class PatchWorkspaceAckTest : MonolithMeshTestBase
         // emission wait is asserted below via observedName.Should().Be(...).
         Assert.NotNull(stream);
 
-        var observedName = await stream!
+        var observedName = stream!
             .Where(nodes => nodes != null && nodes.Any(n => n.Path == path))
             .Select(nodes => nodes!.First(n => n.Path == path).Name)
-            .Where(name => name == "Updated via stream test")
-            .Timeout(5.Seconds())
-            .FirstAsync();
+            .Should().Within(5.Seconds()).Match(name => name == "Updated via stream test");
 
         observedName.Should().Be("Updated via stream test");
     }
