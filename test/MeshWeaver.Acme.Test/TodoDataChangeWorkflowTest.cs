@@ -136,10 +136,10 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     }
 
     /// <summary>
-    /// Reactive analogue of <see cref="MonolithMeshTestBase.WaitForQueryPathSetAsync"/>:
-    /// folds the live <c>ObserveQuery</c> deltas (Initial / Reset / Added / Updated /
-    /// Removed) into a running path set and surfaces it as an observable so tests can
-    /// assert with <c>.Should().Match(predicate)</c> instead of awaiting a Task.
+    /// Reactive path-set fold: subscribes to <c>ObserveQuery</c> and folds the live
+    /// deltas (Initial / Reset / Added / Updated / Removed) into a running path set,
+    /// surfacing it as an observable so tests assert with <c>.Should().Match(predicate)</c>
+    /// instead of awaiting a Task.
     /// </summary>
     private IObservable<IReadOnlySet<string>> ObserveQueryPathSet(string query)
     {

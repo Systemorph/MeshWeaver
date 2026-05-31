@@ -79,13 +79,13 @@ public class AcmePathResolutionDiagnosticTest(ITestOutputHelper output) : Monoli
     }
 
     /// <summary>
-    /// Hits the per-node hub via <see cref="MonolithMeshTestBase.ReadNodeAsync(string)"/>
+    /// Hits the per-node hub via <see cref="MonolithMeshTestBase.ReadNode(string)"/>
     /// (GetDataRequest → MeshNodeReference). If LaunchEvent returns null while
     /// DefinePersona returns a node, the bug is downstream of the storage adapter
     /// (routing / catalog / per-hub data source).
     /// </summary>
     [Fact]
-    public void ReadNodeAsync_BothPaths_ReturnNonNull()
+    public void ReadNode_BothPaths_ReturnNonNull()
     {
         var defNode = ReadNode("ACME/ProductLaunch/Todo/DefinePersona")
             .Should().Within(60.Seconds()).Match(n => n is not null,
@@ -109,7 +109,7 @@ public class AcmePathResolutionDiagnosticTest(ITestOutputHelper output) : Monoli
     /// mutated by the first lookup making the second one match a stale prefix).
     /// </summary>
     [Fact]
-    public void ReadNodeAsync_ReverseOrder_BothPathsReturnNonNull()
+    public void ReadNode_ReverseOrder_BothPathsReturnNonNull()
     {
         var launchNode = ReadNode("ACME/ProductLaunch/Todo/LaunchEvent")
             .Should().Within(60.Seconds()).Match(n => n is not null,

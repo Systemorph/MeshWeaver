@@ -113,18 +113,16 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// Verify that the Roland user node can be loaded and enriched with HubConfiguration.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task UserNode_Roland_CanBeLoaded()
+    public void UserNode_Roland_CanBeLoaded()
     {
         var resolver = Mesh.ServiceProvider.GetRequiredService<INodeConfigurationResolver>();
 
-        var node = await ReadNodeAsync("User/TestUser");
+        var node = ReadNode("User/TestUser").Should().Emit();
         node.Should().NotBeNull("Oliver user node should exist in samples/Graph/Data/User/TestUser.json");
         node!.NodeType.Should().Be("User");
 
         // Enrich with node type Ã¢â‚¬â€ this should attach HubConfiguration
-        var enriched = await resolver.ResolveConfiguration(node)
-            .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+        var enriched = resolver.ResolveConfiguration(node).Should().Emit();
         enriched.HubConfiguration.Should().NotBeNull(
             "After resolution, User node should have HubConfiguration from UserNodeType");
     }

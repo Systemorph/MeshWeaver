@@ -81,7 +81,7 @@ public class ResubscribeOnOwnerDisposeTest(ITestOutputHelper output) : MonolithM
         client.Post(new DisposeRequest(), o => o.WithTarget(new Address(path)));
         await Task.Delay(50, ct); // let dispose settle before reactivating the owner
 
-        var current = await ReadNodeAsync(path, ct);
+        var current = await ReadNode(path).FirstAsync().ToTask(ct);
         current.Should().NotBeNull();
         await NodeFactory.UpdateNode(current! with { Name = "Updated" });
 

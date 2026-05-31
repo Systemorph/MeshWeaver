@@ -226,7 +226,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         MeshNode? parentNode = null;
         if (!string.IsNullOrEmpty(parentPath))
         {
-            parentNode = await ReadNodeAsync(parentPath, ct);
+            parentNode = await ReadNode(parentPath).FirstAsync().ToTask(ct);
             currentNodeType = parentNode?.NodeType;
         }
         currentNodeType.Should().Be("Space", "Software should be of NodeType Space");
@@ -299,7 +299,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         var ct = TestContext.Current.CancellationToken;
 
         // At "ACME" (an Space), the default type should be "Space"
-        var node = await ReadNodeAsync("ACME", ct);
+        var node = await ReadNode("ACME").FirstAsync().ToTask(ct);
         var currentNodeType = node?.NodeType;
 
         currentNodeType.Should().Be("Space");
@@ -354,7 +354,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         // Simulate: user is on the "Space" NodeType definition page and opens Create
         var parentPath = "Space";
 
-        var parentNode = await ReadNodeAsync(parentPath, ct);
+        var parentNode = await ReadNode(parentPath).FirstAsync().ToTask(ct);
         var currentNodeType = parentNode?.NodeType;
 
         parentNode.Should().NotBeNull("Space node should exist");
@@ -420,7 +420,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
 
         var parentPath = "ACME/ProductLaunch";
 
-        var parentNode = await ReadNodeAsync(parentPath, ct);
+        var parentNode = await ReadNode(parentPath).FirstAsync().ToTask(ct);
         var currentNodeType = parentNode?.NodeType;
         currentNodeType.Should().Be("ACME/Project");
 
@@ -518,15 +518,16 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     public async Task ProductLaunch_CreatableTypes_VerifyFullAlgorithm()
     {
         // Arrange - Verify the data setup is correct
-        var productLaunchNode = await ReadNodeAsync("ACME/ProductLaunch");
+        var ct = TestContext.Current.CancellationToken;
+        var productLaunchNode = await ReadNode("ACME/ProductLaunch").FirstAsync().ToTask(ct);
         productLaunchNode.Should().NotBeNull("ProductLaunch node should exist");
         productLaunchNode!.NodeType.Should().Be("ACME/Project", "ProductLaunch should be of NodeType ACME/Project");
 
-        var projectTypeNode = await ReadNodeAsync("ACME/Project");
+        var projectTypeNode = await ReadNode("ACME/Project").FirstAsync().ToTask(ct);
         projectTypeNode.Should().NotBeNull("ACME/Project NodeType should exist");
         projectTypeNode!.NodeType.Should().Be("NodeType", "ACME/Project should be a NodeType");
 
-        var todoTypeNode = await ReadNodeAsync("ACME/Project/Todo");
+        var todoTypeNode = await ReadNode("ACME/Project/Todo").FirstAsync().ToTask(ct);
         todoTypeNode.Should().NotBeNull("ACME/Project/Todo NodeType should exist");
         todoTypeNode!.NodeType.Should().Be("NodeType", "ACME/Project/Todo should be a NodeType");
 
@@ -560,7 +561,8 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         await NodeFactory.CreateNode(newTodoNode);
 
         // Assert - Verify the node was created
-        var createdNode = await ReadNodeAsync("ACME/ProductLaunch/my-todo");
+        var createdNode = await ReadNode("ACME/ProductLaunch/my-todo")
+            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
         createdNode.Should().NotBeNull();
         createdNode!.Name.Should().Be("My Todo");
         createdNode.NodeType.Should().Be("ACME/Project/Todo");
@@ -657,7 +659,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
 
         // Step 2: Verify node exists via stream (CQRS-correct — no catalog lag)
         Output.WriteLine($"Step 2: Verifying node exists via per-node stream");
-        var persistedNode = await ReadNodeAsync(nodePath, TestContext.Current.CancellationToken);
+        var persistedNode = await ReadNode(nodePath).FirstAsync().ToTask(TestContext.Current.CancellationToken);
         persistedNode.Should().NotBeNull($"Node {nodePath} should exist after CreateNodeAsync");
         Output.WriteLine($"Node exists: Name={persistedNode!.Name}, NodeType={persistedNode.NodeType}");
 
@@ -802,7 +804,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
 
         // Step 2: Verify node exists with Transient state via stream
         Output.WriteLine($"Step 2: Verifying transient node exists");
-        var persistedNode = await ReadNodeAsync(nodePath, ct);
+        var persistedNode = await ReadNode(nodePath).FirstAsync().ToTask(ct);
         persistedNode.Should().NotBeNull($"Transient node {nodePath} should exist");
         persistedNode!.State.Should().Be(MeshNodeState.Transient, "Persisted node should be Transient");
         Output.WriteLine($"Node found: State={persistedNode.State}, Name={persistedNode.Name}");
@@ -837,7 +839,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
 
         // Step 3: Verify via stream (CQRS-correct)
         Output.WriteLine($"Step 3: Getting node via per-node stream");
-        var catalogNode = await ReadNodeAsync(nodePath, ct);
+        var catalogNode = await ReadNode(nodePath).FirstAsync().ToTask(ct);
         catalogNode.Should().NotBeNull($"Stream should return the transient node");
 
         // Step 4: Request Edit view (simulates redirect)
@@ -939,7 +941,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             Output.WriteLine("TIMEOUT: Edit view request timed out");
 
             // Check if node exists via stream
-            var catalogNode = await ReadNodeAsync(nodePath, TestContext.Current.CancellationToken);
+            var catalogNode = await ReadNode(nodePath).FirstAsync().ToTask(TestContext.Current.CancellationToken);
             Output.WriteLine($"Stream result: {(catalogNode != null ? $"Found: {catalogNode.Path}" : "NULL")}");
 
             // Check persistence (same query)
@@ -1034,7 +1036,7 @@ public class CreatableTypesFileSystemTest : MonolithMeshTestBase
     public async Task FileSystem_VerifyDataStructure()
     {
         // No InitializeAsync needed - FileSystemPersistenceService uses lazy loading.
-        // Use the IMeshService query path because ReadNodeAsync's per-node-hub
+        // Use the IMeshService query path because ReadNode's per-node-hub
         // routing applies a path-mismatch safety net that turns ancestor-fallback
         // responses into null (correct behavior for post-delete reads, but here
         // we want the authoritative persistence-layer existence check).
