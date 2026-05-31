@@ -1,0 +1,25 @@
+---
+apiVersion: "v1"
+kind: "ConfigMap"
+metadata:
+  name: "memex-portal-config"
+  labels:
+    app.kubernetes.io/name: "{{ .Chart.Name }}"
+    app.kubernetes.io/component: "memex-portal"
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+data:
+  MEMEX_HOST: "{{ .Values.config.memex_portal.MEMEX_HOST }}"
+  MEMEX_PORT: "{{ .Values.config.memex_portal.MEMEX_PORT }}"
+  MEMEX_USERNAME: "{{ .Values.config.memex_portal.MEMEX_USERNAME }}"
+  MEMEX_JDBCCONNECTIONSTRING: "{{ .Values.config.memex_portal.MEMEX_JDBCCONNECTIONSTRING }}"
+  MEMEX_DATABASENAME: "{{ .Values.config.memex_portal.MEMEX_DATABASENAME }}"
+  ASPNETCORE_HTTP_PORTS: "{{ .Values.config.memex_portal.ASPNETCORE_HTTP_PORTS }}"
+  Deployment__Backend: "{{ .Values.config.memex_portal.Deployment__Backend }}"
+  Deployment__DataRoot: "{{ .Values.config.memex_portal.Deployment__DataRoot }}"
+  Deployment__Orleans__Clustering: "{{ .Values.config.memex_portal.Deployment__Orleans__Clustering }}"
+  Storage__Name: "{{ .Values.config.memex_portal.Storage__Name }}"
+  Storage__SourceType: "{{ .Values.config.memex_portal.Storage__SourceType }}"
+  Storage__BasePath: "{{ .Values.config.memex_portal.Storage__BasePath }}"
+  Graph__Storage__Type: "{{ .Values.config.memex_portal.Graph__Storage__Type }}"
+  Graph__Storage__BasePath: "{{ .Values.config.memex_portal.Graph__Storage__BasePath }}"
+  Mcp__BaseUrl: "{{ .Values.config.memex_portal.Mcp__BaseUrl }}"
