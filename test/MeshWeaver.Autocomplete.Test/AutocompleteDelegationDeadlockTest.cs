@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Reactive.Linq;
 using System.Threading.Tasks;
 using MeshWeaver.Reactive;
 using Memex.Portal.Shared;
@@ -79,7 +80,7 @@ public class AutocompleteDelegationDeadlockTest : MonolithMeshTestBase
     /// on the ToTask continuation — classic ActionBlock deadlock.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task DelegatedAutocomplete_ConcurrentRequests_DoNotDeadlock()
+    public void DelegatedAutocomplete_ConcurrentRequests_DoNotDeadlock()
     {
         var provider = GetUnifiedReferenceProvider();
 
@@ -88,17 +89,17 @@ public class AutocompleteDelegationDeadlockTest : MonolithMeshTestBase
         // AutocompleteRequest to the per-node hub at "Systemorph/Marketing".
         const string Query = "@/Systemorph/Marketing/";
 
-        async Task RunOne(int idx)
-        {
-            var items = await provider.GetItems(Query, null)
-                .ToAsyncEnumerableSequence(TestContext.Current.CancellationToken)
-                .ToArrayAsync(TestContext.Current.CancellationToken);
-            // No content assertion — the existence test is "did the call return".
-            items.Should().NotBeNull($"call {idx} should have returned a result");
-        }
+        // Observable.Merge subscribes to all 8 cold GetItems streams concurrently —
+        // the same parallel-load fan-out that reproduced the ActionBlock deadlock,
+        // expressed purely reactively (no Task.WhenAll, no async-enumerable bridge).
+        // Each inner .ToList() yields one snapshot; the merged stream yields 8.
+        var results = Observable
+            .Merge(Enumerable.Range(0, 8).Select(_ => provider.GetItems(Query, null).ToList()))
+            .ToList()
+            .Should().Within(15.Seconds()).Match(snapshots => snapshots.Count == 8);
 
-        var all = Task.WhenAll(Enumerable.Range(0, 8).Select(RunOne));
-        await all.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
+        // No content assertion — the existence test is "did all calls return".
+        results.Should().AllSatisfy(items => items.Should().NotBeNull());
     }
 
     /// <summary>
@@ -107,16 +108,14 @@ public class AutocompleteDelegationDeadlockTest : MonolithMeshTestBase
     /// posts back to the same hub the caller's handler is running on.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task DelegatedAutocomplete_RelativeContextSelfDelegation_ResolvesQuickly()
+    public void DelegatedAutocomplete_RelativeContextSelfDelegation_ResolvesQuickly()
     {
         var provider = GetUnifiedReferenceProvider();
 
         // Relative mode: query is empty + ends with '/' so the provider asks the
         // contextPath node for its own completions (areas, data, content).
-        var items = await provider.GetItems("@", "Systemorph/Marketing")
-            .ToAsyncEnumerableSequence(TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken).AsTask()
-            .WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        var items = provider.GetItems("@", "Systemorph/Marketing")
+            .ToList().Should().Within(10.Seconds()).Emit();
 
         items.Should().NotBeNull();
     }
@@ -129,17 +128,15 @@ public class AutocompleteDelegationDeadlockTest : MonolithMeshTestBase
     /// without blocking.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task DelegatedAutocomplete_NonexistentTarget_DoesNotHang()
+    public void DelegatedAutocomplete_NonexistentTarget_DoesNotHang()
     {
         var provider = GetUnifiedReferenceProvider();
 
         // Path that does not exist anywhere — there is no per-node hub at this address.
         const string Query = "@/ZzzNonexistent/Bogus/";
 
-        var items = await provider.GetItems(Query, null)
-            .ToAsyncEnumerableSequence(TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken).AsTask()
-            .WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
+        var items = provider.GetItems(Query, null)
+            .ToList().Should().Within(15.Seconds()).Emit();
 
         // Whether the result is empty or not is irrelevant — the contract is "must return".
         items.Should().NotBeNull();
@@ -151,7 +148,7 @@ public class AutocompleteDelegationDeadlockTest : MonolithMeshTestBase
     /// reentrantly from the source hub's aggregator handler.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task DelegatedAutocomplete_FanOutAcrossPartitions_DoesNotDeadlock()
+    public void DelegatedAutocomplete_FanOutAcrossPartitions_DoesNotDeadlock()
     {
         var provider = GetUnifiedReferenceProvider();
         var queries = new[]
@@ -164,15 +161,15 @@ public class AutocompleteDelegationDeadlockTest : MonolithMeshTestBase
             "@/ACME/ProductLaunch/",
         };
 
-        var tasks = queries.Select(async q =>
-        {
-            var items = await provider.GetItems(q, null)
-                .ToAsyncEnumerableSequence(TestContext.Current.CancellationToken)
-                .ToArrayAsync(TestContext.Current.CancellationToken);
-            items.Should().NotBeNull();
-        });
+        // Interleaved concurrent load across distinct delegation targets, fanned out
+        // reactively via Observable.Merge (no Task.WhenAll). Each inner GetItems is a
+        // cold stream collected with .ToList(); the merged stream yields one snapshot
+        // per query and must complete with all six.
+        var results = Observable
+            .Merge(queries.Select(q => provider.GetItems(q, null).ToList()))
+            .ToList()
+            .Should().Within(20.Seconds()).Match(snapshots => snapshots.Count == queries.Length);
 
-        await Task.WhenAll(tasks)
-            .WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+        results.Should().AllSatisfy(items => items.Should().NotBeNull());
     }
 }

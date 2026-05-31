@@ -1,7 +1,9 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Reactive.Linq;
 using System.Threading.Tasks;
+using MeshWeaver.Reactive;
 using Memex.Portal.Shared;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
@@ -50,12 +52,12 @@ public class AutocompleteIconTests : MonolithMeshTestBase
     #region Icon Tests
 
     [Fact(Timeout = 10000)]
-    public async Task Autocomplete_ReturnsIconForNodesWithIcon()
+    public void Autocomplete_ReturnsIconForNodesWithIcon()
     {
         // Arrange - Systemorph has icon: "/static/storage/content/Systemorph/logo_t.png"
-        var suggestions = await MeshQuery
+        var suggestions = MeshQuery
             .AutocompleteAsync("", "Systemorph", AutocompleteMode.RelevanceFirst, 10)
-            .ToListAsync();
+            .ToObservableSequence().ToList().Should().Within(10.Seconds()).Emit();
 
         // Assert
         Output.WriteLine($"Got {suggestions.Count} suggestions for 'Systemorph':");
@@ -70,12 +72,12 @@ public class AutocompleteIconTests : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 10000)]
-    public async Task Autocomplete_ReturnsIconForACME()
+    public void Autocomplete_ReturnsIconForACME()
     {
         // Arrange - ACME has icon: "/static/storage/content/Software/logo.svg"
-        var suggestions = await MeshQuery
+        var suggestions = MeshQuery
             .AutocompleteAsync("", "ACME", AutocompleteMode.RelevanceFirst, 10)
-            .ToListAsync();
+            .ToObservableSequence().ToList().Should().Within(10.Seconds()).Emit();
 
         // Assert
         Output.WriteLine($"Got {suggestions.Count} suggestions for 'ACME':");
@@ -90,12 +92,12 @@ public class AutocompleteIconTests : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 10000)]
-    public async Task Autocomplete_EmptyPrefix_ReturnsIconsWhereAvailable()
+    public void Autocomplete_EmptyPrefix_ReturnsIconsWhereAvailable()
     {
         // Arrange - empty prefix returns top-level nodes, many of which have icons
-        var suggestions = await MeshQuery
+        var suggestions = MeshQuery
             .AutocompleteAsync("", "", AutocompleteMode.RelevanceFirst, 20)
-            .ToListAsync();
+            .ToObservableSequence().ToList().Should().Within(10.Seconds()).Emit();
 
         // Assert
         Output.WriteLine($"Got {suggestions.Count} suggestions for empty prefix:");
@@ -111,12 +113,12 @@ public class AutocompleteIconTests : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 10000)]
-    public async Task Autocomplete_WithBasePath_ReturnsIconsForChildren()
+    public void Autocomplete_WithBasePath_ReturnsIconsForChildren()
     {
         // Arrange - search within Systemorph which has children with icons (Marketing, Projects, etc.)
-        var suggestions = await MeshQuery
+        var suggestions = MeshQuery
             .AutocompleteAsync("Systemorph", "", AutocompleteMode.RelevanceFirst, 20)
-            .ToListAsync();
+            .ToObservableSequence().ToList().Should().Within(10.Seconds()).Emit();
 
         // Assert
         Output.WriteLine($"Got {suggestions.Count} suggestions under 'Systemorph':");
@@ -134,12 +136,12 @@ public class AutocompleteIconTests : MonolithMeshTestBase
     #region Text Matching Tests (no wildcards)
 
     [Fact(Timeout = 10000)]
-    public async Task Autocomplete_PrefixMatch_FindsByNameStart()
+    public void Autocomplete_PrefixMatch_FindsByNameStart()
     {
         // "Mar" should match "Marketing" by prefix
-        var suggestions = await MeshQuery
+        var suggestions = MeshQuery
             .AutocompleteAsync("", "Mar", AutocompleteMode.RelevanceFirst, 10)
-            .ToListAsync();
+            .ToObservableSequence().ToList().Should().Within(10.Seconds()).Emit();
 
         Output.WriteLine($"Got {suggestions.Count} suggestions for 'Mar':");
         foreach (var s in suggestions)
@@ -152,12 +154,12 @@ public class AutocompleteIconTests : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 10000)]
-    public async Task Autocomplete_ContainsMatch_FindsBySubstring()
+    public void Autocomplete_ContainsMatch_FindsBySubstring()
     {
         // "arke" should match "Marketing" by contains
-        var suggestions = await MeshQuery
+        var suggestions = MeshQuery
             .AutocompleteAsync("", "arke", AutocompleteMode.RelevanceFirst, 10)
-            .ToListAsync();
+            .ToObservableSequence().ToList().Should().Within(10.Seconds()).Emit();
 
         Output.WriteLine($"Got {suggestions.Count} suggestions for 'arke':");
         foreach (var s in suggestions)
@@ -167,12 +169,12 @@ public class AutocompleteIconTests : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 10000)]
-    public async Task Autocomplete_CaseInsensitive_MatchesLowerInput()
+    public void Autocomplete_CaseInsensitive_MatchesLowerInput()
     {
         // "acme" (lowercase) should match "ACME"
-        var suggestions = await MeshQuery
+        var suggestions = MeshQuery
             .AutocompleteAsync("", "acme", AutocompleteMode.RelevanceFirst, 10)
-            .ToListAsync();
+            .ToObservableSequence().ToList().Should().Within(10.Seconds()).Emit();
 
         Output.WriteLine($"Got {suggestions.Count} suggestions for 'acme':");
         foreach (var s in suggestions)
@@ -183,12 +185,12 @@ public class AutocompleteIconTests : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 10000)]
-    public async Task Autocomplete_PathMatch_FindsByPathSubstring()
+    public void Autocomplete_PathMatch_FindsByPathSubstring()
     {
         // Search for "Project" which exists as ACME/Project
-        var suggestions = await MeshQuery
+        var suggestions = MeshQuery
             .AutocompleteAsync("", "Project", AutocompleteMode.RelevanceFirst, 10)
-            .ToListAsync();
+            .ToObservableSequence().ToList().Should().Within(10.Seconds()).Emit();
 
         Output.WriteLine($"Got {suggestions.Count} suggestions for 'Project':");
         foreach (var s in suggestions)
@@ -198,12 +200,12 @@ public class AutocompleteIconTests : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 10000)]
-    public async Task Autocomplete_NoMatch_ReturnsEmpty()
+    public void Autocomplete_NoMatch_ReturnsEmpty()
     {
         // A completely non-existent term should return nothing
-        var suggestions = await MeshQuery
+        var suggestions = MeshQuery
             .AutocompleteAsync("", "xyznonexistent999", AutocompleteMode.RelevanceFirst, 10)
-            .ToListAsync();
+            .ToObservableSequence().ToList().Should().Within(10.Seconds()).Emit();
 
         Output.WriteLine($"Got {suggestions.Count} suggestions for 'xyznonexistent999'");
 
@@ -211,12 +213,12 @@ public class AutocompleteIconTests : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 10000)]
-    public async Task Autocomplete_RelevanceFirst_PrefixMatchScoresHigher()
+    public void Autocomplete_RelevanceFirst_PrefixMatchScoresHigher()
     {
         // "Sys" prefix-matches "Systemorph" — should score higher than a contains-match
-        var suggestions = await MeshQuery
+        var suggestions = MeshQuery
             .AutocompleteAsync("", "Sys", AutocompleteMode.RelevanceFirst, 10)
-            .ToListAsync();
+            .ToObservableSequence().ToList().Should().Within(10.Seconds()).Emit();
 
         Output.WriteLine($"Got {suggestions.Count} suggestions for 'Sys' (RelevanceFirst):");
         foreach (var s in suggestions)
@@ -233,11 +235,11 @@ public class AutocompleteIconTests : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 10000)]
-    public async Task Autocomplete_LimitIsRespected()
+    public void Autocomplete_LimitIsRespected()
     {
-        var suggestions = await MeshQuery
+        var suggestions = MeshQuery
             .AutocompleteAsync("", "", AutocompleteMode.RelevanceFirst, 3)
-            .ToListAsync();
+            .ToObservableSequence().ToList().Should().Within(10.Seconds()).Emit();
 
         Output.WriteLine($"Got {suggestions.Count} suggestions with limit 3");
 
@@ -249,12 +251,12 @@ public class AutocompleteIconTests : MonolithMeshTestBase
     #region BasePath + Prefix Combination Tests
 
     [Fact(Timeout = 10000)]
-    public async Task Autocomplete_BasePathWithPrefix_SearchesWithinPath()
+    public void Autocomplete_BasePathWithPrefix_SearchesWithinPath()
     {
         // Search within Systemorph for "Mar" — should find Marketing
-        var suggestions = await MeshQuery
+        var suggestions = MeshQuery
             .AutocompleteAsync("Systemorph", "Mar", AutocompleteMode.RelevanceFirst, 10)
-            .ToListAsync();
+            .ToObservableSequence().ToList().Should().Within(10.Seconds()).Emit();
 
         Output.WriteLine($"Got {suggestions.Count} suggestions for 'Mar' under 'Systemorph':");
         foreach (var s in suggestions)
@@ -266,12 +268,12 @@ public class AutocompleteIconTests : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 10000)]
-    public async Task Autocomplete_BasePathWithPrefix_ReturnsIcons()
+    public void Autocomplete_BasePathWithPrefix_ReturnsIcons()
     {
         // Verify icons come through even with basePath + prefix
-        var suggestions = await MeshQuery
+        var suggestions = MeshQuery
             .AutocompleteAsync("Systemorph", "Mar", AutocompleteMode.RelevanceFirst, 10)
-            .ToListAsync();
+            .ToObservableSequence().ToList().Should().Within(10.Seconds()).Emit();
 
         var marketing = suggestions.FirstOrDefault(s => s.Name != null && s.Name.Contains("Marketing"));
         if (marketing != null)
