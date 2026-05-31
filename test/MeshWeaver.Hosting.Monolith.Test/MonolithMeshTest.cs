@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading;
@@ -11,7 +12,6 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Xunit;
 
-using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
@@ -32,15 +32,15 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
 
 
     [Fact(Timeout = 20000)]
-    public async Task PingToNonExistentHub_ThrowsDeliveryFailure()
+    public void PingToNonExistentHub_ThrowsDeliveryFailure()
     {
         var client = GetClient();
         var nonExistentAddress = new Address("NonExistent", "Hub");
 
-        var ex = await Assert.ThrowsAnyAsync<Exception>(async () =>
-        {
-            await client.Observe(new PingRequest(), o => o.WithTarget(nonExistentAddress)).FirstAsync().ToTask(new CancellationTokenSource(3.Seconds()).Token);
-        });
+        var notification = client.Observe(new PingRequest(), o => o.WithTarget(nonExistentAddress))
+            .Materialize()
+            .Should().Within(10.Seconds()).Match(n => n.Kind == NotificationKind.OnError);
+        var ex = notification.Exception!;
 
         // Should be a routing failure, NOT a timeout
         ex.Should().NotBeOfType<OperationCanceledException>();
@@ -49,7 +49,7 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     }
 
     [Fact(Timeout = 20000)]
-    public async Task StreamToNonExistentHub_ThrowsDeliveryFailure()
+    public void StreamToNonExistentHub_ThrowsDeliveryFailure()
     {
         var client = GetClient(c => c.AddData());
         var nonExistentAddress = new Address("NonExistent", "Hub");
@@ -59,10 +59,10 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             nonExistentAddress,
             new LayoutAreaReference("Overview"));
 
-        var ex = await Assert.ThrowsAnyAsync<Exception>(async () =>
-        {
-            await stream.Timeout(5.Seconds()).FirstAsync();
-        });
+        var notification = stream
+            .Materialize()
+            .Should().Within(10.Seconds()).Match(n => n.Kind == NotificationKind.OnError);
+        var ex = notification.Exception!;
 
         // Should be a DeliveryFailure, NOT a timeout
         ex.Should().NotBeOfType<TimeoutException>();

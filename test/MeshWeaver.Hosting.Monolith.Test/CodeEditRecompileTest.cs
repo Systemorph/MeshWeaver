@@ -2,7 +2,6 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -85,12 +84,10 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
     ///   8. Create fresh instance â†’ must serve V2 layout.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task CodeEdit_ExplicitRelease_IsUpToDate_RecompilesOnSourceChange()
+    public void CodeEdit_ExplicitRelease_IsUpToDate_RecompilesOnSourceChange()
     {
-        var ct = new CancellationTokenSource(75.Seconds()).Token;
-
         // 1. Create the NodeType.
-        await NodeFactory.CreateNode(new MeshNode("CodeEditType", TestPartition)
+        NodeFactory.CreateNode(new MeshNode("CodeEditType", TestPartition)
         {
             Name = "Code Edit Type",
             NodeType = MeshNode.NodeTypePath,
@@ -100,15 +97,15 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
                 Configuration = "config => config.AddDefaultLayoutAreas().AddLayout(layout => layout.WithView(\"Overview\", CodeEditLayoutAreas.Overview))",
                 ShowChildrenInDetails = false,
             }
-        });
+        }).Should().Within(30.Seconds()).Emit();
 
         // 2. Create the V1 source.
-        await NodeFactory.CreateNode(new MeshNode("code", $"{TestPartition}/CodeEditType/Source")
+        NodeFactory.CreateNode(new MeshNode("code", $"{TestPartition}/CodeEditType/Source")
         {
             Name = "Code",
             NodeType = "Code",
             Content = new CodeConfiguration { Code = CodeV1, Language = "csharp" }
-        });
+        }).Should().Within(30.Seconds()).Emit();
 
         // 3. Trigger V1 compilation. The per-NodeType hub's
         // InstallCompileWatcher kickoff also flips Pending â†’ Compile on first
@@ -117,45 +114,42 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         // the canonical explicit trigger AND to wait for the compile to settle.
         // AlreadyUpToDate may legitimately be true here if the kickoff beat us
         // to first compile â€” what we check is that V1 release is produced.
-        var v1Response = await SendCreateReleaseAsync(NodeTypePath, force: false, ct);
+        var v1Response = SendCreateRelease(NodeTypePath, force: false);
         v1Response.Success.Should().BeTrue("CreateReleaseRequest should succeed");
 
-        var v1Release = await WaitForNewReleaseAsync(NodeTypePath, knownReleases: [], ct);
+        var v1Release = WaitForNewRelease(NodeTypePath, knownReleases: []);
         Output.WriteLine($"=== V1 release at {v1Release} ===");
 
         // 4. CreateReleaseRequest again without changes â†’ AlreadyUpToDate.
-        var dupResponse = await SendCreateReleaseAsync(NodeTypePath, force: false, ct);
+        var dupResponse = SendCreateRelease(NodeTypePath, force: false);
         dupResponse.AlreadyUpToDate.Should().BeTrue("sources unchanged since V1 compile");
 
         // 5. Create an instance and verify it serves V1.
-        await NodeFactory.CreateNode(new MeshNode("instance1", $"{TestPartition}/CodeEditType")
+        NodeFactory.CreateNode(new MeshNode("instance1", $"{TestPartition}/CodeEditType")
         {
             Name = "Instance 1",
             NodeType = NodeTypePath,
-        });
-        var v1Html = await ReadOverviewAsync(InstancePath, ct);
+        }).Should().Within(30.Seconds()).Emit();
+        var v1Html = ReadOverview(InstancePath);
         v1Html.Should().Contain("MARKER_V1", "V1 release must be served");
 
         // 6. Modify the source to V2. Live remote stream â€” path is known, no
         // index lag (per CqrsAndContentAccess.md).
         var sourceClient = GetClient(c => c.AddData());
-        var codeNode = await sourceClient.GetWorkspace()
+        var codeNode = sourceClient.GetWorkspace()
             .GetMeshNodeStream($"{TestPartition}/CodeEditType/Source/code")
-            .Where(n => n is not null)
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(15))
-            .ToTask(ct);
-        await NodeFactory.UpdateNode(codeNode with
+            .Should().Within(TimeSpan.FromSeconds(15)).Match(n => n is not null);
+        NodeFactory.UpdateNode(codeNode with
         {
             Content = new CodeConfiguration { Code = CodeV2, Language = "csharp" }
-        });
+        }).Should().Within(30.Seconds()).Emit();
 
         // 7. Explicitly trigger V2 compilation â€” sources changed, should recompile.
-        var v2Response = await SendCreateReleaseAsync(NodeTypePath, force: false, ct);
+        var v2Response = SendCreateRelease(NodeTypePath, force: false);
         v2Response.Success.Should().BeTrue("CreateReleaseRequest should succeed after source change");
         v2Response.AlreadyUpToDate.Should().BeFalse("source was modified, must recompile");
 
-        var v2Release = await WaitForNewReleaseAsync(NodeTypePath, knownReleases: [v1Release], ct);
+        var v2Release = WaitForNewRelease(NodeTypePath, knownReleases: [v1Release]);
         v2Release.Should().NotBe(v1Release, "second release must be distinct");
         Output.WriteLine($"=== V2 release at {v2Release} ===");
 
@@ -173,23 +167,21 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         // and bind instance2 to the V1 assembly for its entire lifetime
         // (HubConfiguration is captured ONCE at activation).
         //
-        await WaitForMeshHubViewAsync(NodeTypePath,
+        WaitForMeshHubView(NodeTypePath,
             n => n?.Content is NodeTypeDefinition def
                 && def.LatestReleasePath == v2Release
-                && def.CompilationStatus == CompilationStatus.Ok,
-            ct);
+                && def.CompilationStatus == CompilationStatus.Ok);
 
-        await NodeFactory.CreateNode(new MeshNode("instance2", $"{TestPartition}/CodeEditType")
+        NodeFactory.CreateNode(new MeshNode("instance2", $"{TestPartition}/CodeEditType")
         {
             Name = "Instance 2",
             NodeType = NodeTypePath,
-        });
+        }).Should().Within(30.Seconds()).Emit();
         // Wait for the V2 marker explicitly: the per-instance hub may render a stale
         // (V1) snapshot first while the new release's HubConfiguration is still
-        // propagating, then re-render once V2 is wired. Plain ReadOverviewAsync
+        // propagating, then re-render once V2 is wired. Plain ReadOverview
         // takes the first HtmlControl emission and would race that pre-V2 tick.
-        var v2Html = await ReadOverviewMatchingAsync(Instance2Path,
-            html => html.Contains("MARKER_V2"), ct);
+        var v2Html = ReadOverviewMatching(Instance2Path, html => html.Contains("MARKER_V2"));
         v2Html.Should().Contain("MARKER_V2", "V2 release must be served after recompile");
         v2Html.Should().NotContain("MARKER_V1", "stale V1 assembly must not be reused");
     }
@@ -214,15 +206,14 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
     /// timeouts → compilation-error overlay → MARKER_V1 never rendered).
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task NodeType_RequestedReleasePath_PinsToHistoricalRelease()
+    public void NodeType_RequestedReleasePath_PinsToHistoricalRelease()
     {
-        var ct = new CancellationTokenSource(75.Seconds()).Token;
         var workspace = Mesh.GetWorkspace();
         var pinTypePath = $"{TestPartition}/PinType";
         var sourceCodePath = $"{TestPartition}/PinType/Source/code";
 
         // 1. Create the NodeType.
-        await NodeFactory.CreateNode(new MeshNode("PinType", TestPartition)
+        NodeFactory.CreateNode(new MeshNode("PinType", TestPartition)
         {
             Name = "Pin Type",
             NodeType = MeshNode.NodeTypePath,
@@ -232,7 +223,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
                 Configuration = "config => config.AddDefaultLayoutAreas().AddLayout(layout => layout.WithView(\"Overview\", CodeEditLayoutAreas.Overview))",
                 ShowChildrenInDetails = false,
             }
-        });
+        }).Should().Within(30.Seconds()).Emit();
 
         // 2. V1 source — kickoff watcher compiles it on first NodeType activation.
         //    Stages observed:
@@ -244,16 +235,16 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         //      c. The compile watcher's kickoff flips Pending → compile runs
         //         → CompiledSources stamped → IsDirty=false on the success
         //         write-back. V1 release path emitted.
-        await NodeFactory.CreateNode(new MeshNode("code", $"{TestPartition}/PinType/Source")
+        NodeFactory.CreateNode(new MeshNode("code", $"{TestPartition}/PinType/Source")
         {
             Name = "Code",
             NodeType = "Code",
             Content = new CodeConfiguration { Code = CodeV1, Language = "csharp" }
-        });
-        var v1Release = await WaitForLatestReleaseAsync(pinTypePath, knownRelease: null, ct);
+        }).Should().Within(30.Seconds()).Emit();
+        var v1Release = WaitForLatestRelease(pinTypePath, knownRelease: null);
         Output.WriteLine($"=== Pinned-test V1 release at {v1Release} ===");
         // V1 compile settled → IsDirty must be false on the NodeType view.
-        await WaitForIsDirtyAsync(pinTypePath, expected: false, ct);
+        WaitForIsDirty(pinTypePath, expected: false);
 
         // 3. Modify source to V2 via stream.Update — atomic on the source hub.
         //    Observe the sources watcher flip IsDirty=true once the synced
@@ -266,30 +257,30 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         //    `RequestedReleaseAt` flip. The per-NodeType hub's
         //    `InstallReleaseRequestWatcher` reacts to the timestamp move and
         //    `InstallCompileWatcher` runs Roslyn.
-        await workspace.GetMeshNodeStream(sourceCodePath).Update(curr =>
+        workspace.GetMeshNodeStream(sourceCodePath).Update(curr =>
         {
             if (curr is null) return curr!;
             return curr with { Content = new CodeConfiguration { Code = CodeV2, Language = "csharp" } };
-        }).FirstAsync().ToTask(ct);
+        }).Should().Within(30.Seconds()).Emit();
         // Source edit → sources watcher emits → IsDirty flips to true.
-        await WaitForIsDirtyAsync(pinTypePath, expected: true, ct);
+        WaitForIsDirty(pinTypePath, expected: true);
 
         var v2TriggerAt = DateTimeOffset.UtcNow;
-        await TriggerRecompileAsync(pinTypePath, v2TriggerAt, ct);
-        var v2Release = await WaitForLatestReleaseAsync(pinTypePath, knownRelease: v1Release, ct);
+        TriggerRecompile(pinTypePath, v2TriggerAt);
+        var v2Release = WaitForLatestRelease(pinTypePath, knownRelease: v1Release);
         v2Release.Should().NotBe(v1Release);
         Output.WriteLine($"=== Pinned-test V2 release at {v2Release} ===");
         // V2 compile settled → IsDirty back to false.
-        await WaitForIsDirtyAsync(pinTypePath, expected: false, ct);
+        WaitForIsDirty(pinTypePath, expected: false);
 
         // 4. Pin to V1 release via stream.Update. The handle goes straight to
         //    the owning hub's workspace; no UpdateNodeRequest forwarding
         //    round-trip, no race with the compile pipeline.
-        await workspace.GetMeshNodeStream(pinTypePath).Update(curr =>
+        workspace.GetMeshNodeStream(pinTypePath).Update(curr =>
         {
             if (curr?.Content is not NodeTypeDefinition def) return curr!;
             return curr with { Content = def with { RequestedReleasePath = v1Release } };
-        }).FirstAsync().ToTask(ct);
+        }).Should().Within(30.Seconds()).Emit();
 
         // Wait for the pin write to be observable on the mesh-hub-cached
         // stream BEFORE creating the instance. EnrichWithNodeType reads the
@@ -298,36 +289,34 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         // Without this gate, an instance created in the lag window resolves
         // against the pre-write snapshot and binds to the wrong release for
         // its entire lifetime (HubConfiguration captured once at activation).
-        await WaitForMeshHubViewAsync(pinTypePath,
-            n => n?.Content is NodeTypeDefinition d && d.RequestedReleasePath == v1Release,
-            ct);
+        WaitForMeshHubView(pinTypePath,
+            n => n?.Content is NodeTypeDefinition d && d.RequestedReleasePath == v1Release);
 
         // 5. Fresh instance â€” pinned path means V1 must be served even though V2 is latest.
-        await NodeFactory.CreateNode(new MeshNode("pinnedInstance", $"{TestPartition}/PinType")
+        NodeFactory.CreateNode(new MeshNode("pinnedInstance", $"{TestPartition}/PinType")
         {
             Name = "Pinned Instance",
             NodeType = pinTypePath,
-        });
+        }).Should().Within(30.Seconds()).Emit();
         // Strict predicate: wait specifically for MARKER_V1. Loose
         // (V1||V2) predicates snap the first HtmlControl emission, which
         // can be a stale layout-area tick before the V1 HubConfiguration
         // closure is fully wired into the per-instance hub. The
         // V2-recompile test below uses the same strict-marker pattern.
-        var pinnedHtml = await ReadOverviewMatchingAsync(
+        var pinnedHtml = ReadOverviewMatching(
             $"{TestPartition}/PinType/pinnedInstance",
-            html => html.Contains("MARKER_V1"),
-            ct);
+            html => html.Contains("MARKER_V1"));
         pinnedHtml.Should().Contain("MARKER_V1",
             "RequestedReleasePath pins to V1 â€” instance must serve V1 even though V2 is latest");
         pinnedHtml.Should().NotContain("MARKER_V2",
             "pinned release V1 must not leak V2's body");
 
         // 6. Clear the pin via stream.Update — fresh instance serves V2 (latest) again.
-        await workspace.GetMeshNodeStream(pinTypePath).Update(curr =>
+        workspace.GetMeshNodeStream(pinTypePath).Update(curr =>
         {
             if (curr?.Content is not NodeTypeDefinition def) return curr!;
             return curr with { Content = def with { RequestedReleasePath = null } };
-        }).FirstAsync().ToTask(ct);
+        }).Should().Within(30.Seconds()).Emit();
 
         // Wait for the pin-clear AND V2 latest to be observable on the
         // mesh-hub-cached stream. EnrichWithNodeType reads the NodeType
@@ -337,27 +326,25 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         // hasn't landed on the mesh hub's cache yet), the slow-path
         // resolves the wrong release. Gating on V2 release path +
         // Status=Ok closes that window.
-        await WaitForMeshHubViewAsync(pinTypePath,
+        WaitForMeshHubView(pinTypePath,
             n => n?.Content is NodeTypeDefinition d
                 && d.RequestedReleasePath == null
                 && d.LatestReleasePath == v2Release
                 && d.CompilationStatus == CompilationStatus.Ok
-                && !string.IsNullOrEmpty(d.LatestAssemblyPath),
-            ct);
+                && !string.IsNullOrEmpty(d.LatestAssemblyPath));
 
-        await NodeFactory.CreateNode(new MeshNode("unpinnedInstance", $"{TestPartition}/PinType")
+        NodeFactory.CreateNode(new MeshNode("unpinnedInstance", $"{TestPartition}/PinType")
         {
             Name = "Unpinned Instance",
             NodeType = pinTypePath,
-        });
+        }).Should().Within(30.Seconds()).Emit();
         // Strict predicate: wait specifically for MARKER_V2. See note on
         // the pinned read above (same pattern as
         // CodeEdit_ExplicitRelease_IsUpToDate_RecompilesOnSourceChange
         // step 8).
-        var unpinnedHtml = await ReadOverviewMatchingAsync(
+        var unpinnedHtml = ReadOverviewMatching(
             $"{TestPartition}/PinType/unpinnedInstance",
-            html => html.Contains("MARKER_V2"),
-            ct);
+            html => html.Contains("MARKER_V2"));
         unpinnedHtml.Should().Contain("MARKER_V2",
             "after clearing RequestedReleasePath, fresh instance must serve the latest release (V2)");
         unpinnedHtml.Should().NotContain("MARKER_V1",
@@ -375,14 +362,13 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
     /// state machine, so this is the test that gates the UI.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task IsDirty_FlipsTrueOnSourceEdit_FalseAfterCompile()
+    public void IsDirty_FlipsTrueOnSourceEdit_FalseAfterCompile()
     {
-        var ct = new CancellationTokenSource(45.Seconds()).Token;
         var workspace = Mesh.GetWorkspace();
         var typePath = $"{TestPartition}/DirtyType";
         var sourcePath = $"{TestPartition}/DirtyType/Source/code";
 
-        await NodeFactory.CreateNode(new MeshNode("DirtyType", TestPartition)
+        NodeFactory.CreateNode(new MeshNode("DirtyType", TestPartition)
         {
             Name = "Dirty Type",
             NodeType = MeshNode.NodeTypePath,
@@ -392,51 +378,51 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
                 Configuration = "config => config.AddDefaultLayoutAreas().AddLayout(layout => layout.WithView(\"Overview\", CodeEditLayoutAreas.Overview))",
                 ShowChildrenInDetails = false,
             }
-        });
+        }).Should().Within(30.Seconds()).Emit();
 
-        await NodeFactory.CreateNode(new MeshNode("code", $"{TestPartition}/DirtyType/Source")
+        NodeFactory.CreateNode(new MeshNode("code", $"{TestPartition}/DirtyType/Source")
         {
             Name = "Code",
             NodeType = "Code",
             Content = new CodeConfiguration { Code = CodeV1, Language = "csharp" }
-        });
+        }).Should().Within(30.Seconds()).Emit();
         // V1 compile completes — IsDirty=false on the success write-back.
-        await WaitForLatestReleaseAsync(typePath, knownRelease: null, ct);
-        await WaitForIsDirtyAsync(typePath, expected: false, ct);
+        WaitForLatestRelease(typePath, knownRelease: null);
+        WaitForIsDirty(typePath, expected: false);
 
         // Snapshot CurrentSourceVersions before the edit. After the edit
         // lands and the watcher emits, the snapshot must DIFFER and IsDirty
         // must flip true.
-        var before = await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
-            .Where(n => n?.Content is NodeTypeDefinition d && d.CurrentSourceVersions?.Count > 0)
-            .Take(1).Timeout(TimeSpan.FromSeconds(15)).ToTask(ct);
+        var before = Mesh.GetWorkspace().GetMeshNodeStream(typePath)
+            .Should().Within(TimeSpan.FromSeconds(15))
+            .Match(n => n?.Content is NodeTypeDefinition d && d.CurrentSourceVersions?.Count > 0);
         var beforeVersions = ((NodeTypeDefinition)before.Content!).CurrentSourceVersions!;
         beforeVersions.Should().NotBeEmpty("V1 compile must have populated CurrentSourceVersions");
 
         // Edit the source — this must propagate to CurrentSourceVersions.
-        await workspace.GetMeshNodeStream(sourcePath).Update(curr =>
+        workspace.GetMeshNodeStream(sourcePath).Update(curr =>
             curr with { Content = new CodeConfiguration { Code = CodeV2, Language = "csharp" } })
-            .FirstAsync().ToTask(ct);
+            .Should().Within(30.Seconds()).Emit();
 
         // Sources watcher emits → IsDirty=true.
-        await WaitForIsDirtyAsync(typePath, expected: true, ct);
+        WaitForIsDirty(typePath, expected: true);
 
         // CurrentSourceVersions must reflect the new content (different
         // tick value for the same path).
-        var afterEdit = await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
-            .Where(n => n?.Content is NodeTypeDefinition d
+        var afterEdit = Mesh.GetWorkspace().GetMeshNodeStream(typePath)
+            .Should().Within(TimeSpan.FromSeconds(15))
+            .Match(n => n?.Content is NodeTypeDefinition d
                 && d.IsDirty
-                && d.CurrentSourceVersions?.Count > 0)
-            .Take(1).Timeout(TimeSpan.FromSeconds(15)).ToTask(ct);
+                && d.CurrentSourceVersions?.Count > 0);
         var afterVersions = ((NodeTypeDefinition)afterEdit.Content!).CurrentSourceVersions!;
         afterVersions.Should().HaveSameCount(beforeVersions, "edit modified content, not the path set");
         afterVersions[sourcePath].Should().NotBe(beforeVersions[sourcePath],
             "the source path's version stamp must change when the source content changes");
 
         // Trigger recompile and confirm IsDirty resets to false.
-        await TriggerRecompileAsync(typePath, DateTimeOffset.UtcNow, ct);
-        await WaitForLatestReleaseAsync(typePath, knownRelease: null, ct);
-        await WaitForIsDirtyAsync(typePath, expected: false, ct);
+        TriggerRecompile(typePath, DateTimeOffset.UtcNow);
+        WaitForLatestRelease(typePath, knownRelease: null);
+        WaitForIsDirty(typePath, expected: false);
     }
 
     /// <summary>
@@ -450,14 +436,13 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
     /// the diagnostics without leaving the NodeType view.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task FailedCompile_PreservesErrorLogAndDoesNotCreateRelease()
+    public void FailedCompile_PreservesErrorLogAndDoesNotCreateRelease()
     {
-        var ct = new CancellationTokenSource(45.Seconds()).Token;
         var workspace = Mesh.GetWorkspace();
         var typePath = $"{TestPartition}/BrokenType";
         var sourcePath = $"{TestPartition}/BrokenType/Source/code";
 
-        await NodeFactory.CreateNode(new MeshNode("BrokenType", TestPartition)
+        NodeFactory.CreateNode(new MeshNode("BrokenType", TestPartition)
         {
             Name = "Broken Type",
             NodeType = MeshNode.NodeTypePath,
@@ -467,10 +452,10 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
                 Configuration = "config => config.AddDefaultLayoutAreas().AddLayout(layout => layout.WithView(\"Overview\", CodeEditLayoutAreas.Overview))",
                 ShowChildrenInDetails = false,
             }
-        });
+        }).Should().Within(30.Seconds()).Emit();
 
         // Plant a deliberately uncompilable source so the first compile fails.
-        await NodeFactory.CreateNode(new MeshNode("code", $"{TestPartition}/BrokenType/Source")
+        NodeFactory.CreateNode(new MeshNode("code", $"{TestPartition}/BrokenType/Source")
         {
             Name = "Code",
             NodeType = "Code",
@@ -479,20 +464,20 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
                 Code = "this is not valid C#;",  // Roslyn rejects.
                 Language = "csharp"
             }
-        });
+        }).Should().Within(30.Seconds()).Emit();
 
         // Explicitly trigger the compile via RequestedReleaseAt. Before
         // 2026-05-21 the InstallCompileWatcher kickoff auto-triggered on
         // grain activation; that path was deleted because it spawned
         // recompiles under transient AccessContexts in prod. Recompile is
         // now ALWAYS an explicit action — UI button or test trigger.
-        await TriggerRecompileAsync(typePath, DateTimeOffset.UtcNow, ct);
+        TriggerRecompile(typePath, DateTimeOffset.UtcNow);
 
         // Wait for compile to settle (Status=Error). No release should be created.
-        var failed = await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
-            .Where(n => n?.Content is NodeTypeDefinition d
-                && d.CompilationStatus == CompilationStatus.Error)
-            .Take(1).Timeout(TimeSpan.FromSeconds(40)).ToTask(ct);
+        var failed = Mesh.GetWorkspace().GetMeshNodeStream(typePath)
+            .Should().Within(TimeSpan.FromSeconds(40))
+            .Match(n => n?.Content is NodeTypeDefinition d
+                && d.CompilationStatus == CompilationStatus.Error);
         var failedDef = (NodeTypeDefinition)failed.Content!;
 
         failedDef.CompilationError.Should().NotBeNullOrEmpty(
@@ -505,22 +490,22 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         // Now fix the source. The next compile should succeed AND IsDirty
         // should toggle false. This proves the failed-compile state isn't
         // sticky.
-        await workspace.GetMeshNodeStream(sourcePath).Update(curr =>
+        workspace.GetMeshNodeStream(sourcePath).Update(curr =>
             curr with { Content = new CodeConfiguration { Code = CodeV1, Language = "csharp" } })
-            .FirstAsync().ToTask(ct);
+            .Should().Within(30.Seconds()).Emit();
 
         // Source edit → sources watcher → IsDirty=true (even from Error state).
-        await WaitForIsDirtyAsync(typePath, expected: true, ct);
+        WaitForIsDirty(typePath, expected: true);
 
-        await TriggerRecompileAsync(typePath, DateTimeOffset.UtcNow, ct);
+        TriggerRecompile(typePath, DateTimeOffset.UtcNow);
 
         // After successful recompile: Status=Ok, LatestReleasePath set, IsDirty=false.
-        await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
-            .Where(n => n?.Content is NodeTypeDefinition d
+        Mesh.GetWorkspace().GetMeshNodeStream(typePath)
+            .Should().Within(TimeSpan.FromSeconds(40))
+            .Match(n => n?.Content is NodeTypeDefinition d
                 && d.CompilationStatus == CompilationStatus.Ok
                 && !string.IsNullOrEmpty(d.LatestReleasePath)
-                && !d.IsDirty)
-            .Take(1).Timeout(TimeSpan.FromSeconds(40)).ToTask(ct);
+                && !d.IsDirty);
     }
 
     /// <summary>
@@ -536,13 +521,12 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
     /// flip and the resulting release.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task PressingCompileButton_SetsRequestedReleaseAt_AndProducesNewRelease()
+    public void PressingCompileButton_SetsRequestedReleaseAt_AndProducesNewRelease()
     {
-        var ct = new CancellationTokenSource(45.Seconds()).Token;
         var workspace = Mesh.GetWorkspace();
         var typePath = $"{TestPartition}/ButtonType";
 
-        await NodeFactory.CreateNode(new MeshNode("ButtonType", TestPartition)
+        NodeFactory.CreateNode(new MeshNode("ButtonType", TestPartition)
         {
             Name = "Button Type",
             NodeType = MeshNode.NodeTypePath,
@@ -552,24 +536,23 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
                 Configuration = "config => config.AddDefaultLayoutAreas().AddLayout(layout => layout.WithView(\"Overview\", CodeEditLayoutAreas.Overview))",
                 ShowChildrenInDetails = false,
             }
-        });
-        await NodeFactory.CreateNode(new MeshNode("code", $"{TestPartition}/ButtonType/Source")
+        }).Should().Within(30.Seconds()).Emit();
+        NodeFactory.CreateNode(new MeshNode("code", $"{TestPartition}/ButtonType/Source")
         {
             Name = "Code",
             NodeType = "Code",
             Content = new CodeConfiguration { Code = CodeV1, Language = "csharp" }
-        });
+        }).Should().Within(30.Seconds()).Emit();
 
         // V1 compile settles (Status=Ok, first release present).
-        var v1Release = await WaitForLatestReleaseAsync(typePath, knownRelease: null, ct);
-        await WaitForIsDirtyAsync(typePath, expected: false, ct);
+        var v1Release = WaitForLatestRelease(typePath, knownRelease: null);
+        WaitForIsDirty(typePath, expected: false);
 
         // Snapshot RequestedReleaseAt before — should be null since the kickoff
         // compile fires off the Pending flip directly, not via the release
         // trigger.
-        var beforeNode = await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
-            .Where(n => n?.Content is NodeTypeDefinition).Take(1)
-            .Timeout(TimeSpan.FromSeconds(10)).ToTask(ct);
+        var beforeNode = Mesh.GetWorkspace().GetMeshNodeStream(typePath)
+            .Should().Within(TimeSpan.FromSeconds(10)).Match(n => n?.Content is NodeTypeDefinition);
         ((NodeTypeDefinition)beforeNode.Content!).RequestedReleaseAt
             .Should().BeNull("kickoff compile uses the Pending flip directly, not the release trigger");
 
@@ -577,7 +560,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         // body verbatim. Any drift between the button and this test means
         // the UI affordance broke.
         var triggerAt = DateTimeOffset.UtcNow;
-        await workspace.GetMeshNodeStream(typePath).Update(curr =>
+        workspace.GetMeshNodeStream(typePath).Update(curr =>
         {
             if (curr?.Content is not NodeTypeDefinition cd) return curr!;
             return curr with
@@ -588,28 +571,28 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
                     RequestedReleaseForce = true
                 }
             };
-        }).FirstAsync().ToTask(ct);
+        }).Should().Within(30.Seconds()).Emit();
 
         // 1. The property flip is observable on the mesh-hub view.
-        var afterNode = await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
-            .Where(n => n?.Content is NodeTypeDefinition d
+        var afterNode = Mesh.GetWorkspace().GetMeshNodeStream(typePath)
+            .Should().Within(TimeSpan.FromSeconds(10))
+            .Match(n => n?.Content is NodeTypeDefinition d
                 && d.RequestedReleaseAt == triggerAt
-                && d.RequestedReleaseForce)
-            .Take(1).Timeout(TimeSpan.FromSeconds(10)).ToTask(ct);
+                && d.RequestedReleaseForce);
         ((NodeTypeDefinition)afterNode.Content!).RequestedReleaseAt.Should().Be(triggerAt);
 
         // 2. The trigger drives a fresh compile → a new Release path lands.
-        var v2Release = await WaitForLatestReleaseAsync(typePath, knownRelease: v1Release, ct);
+        var v2Release = WaitForLatestRelease(typePath, knownRelease: v1Release);
         v2Release.Should().NotBe(v1Release, "button click must produce a fresh release distinct from the kickoff one");
 
         // 3. After the recompile settles, LastReleaseRequestHandledAt catches up
         //    to the trigger so a future click with a newer timestamp is again
         //    dispatchable (the watcher uses strict-greater-than as the gate).
-        await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
-            .Where(n => n?.Content is NodeTypeDefinition d
+        Mesh.GetWorkspace().GetMeshNodeStream(typePath)
+            .Should().Within(TimeSpan.FromSeconds(15))
+            .Match(n => n?.Content is NodeTypeDefinition d
                 && d.LastReleaseRequestHandledAt is { } handled
-                && handled >= triggerAt)
-            .Take(1).Timeout(TimeSpan.FromSeconds(15)).ToTask(ct);
+                && handled >= triggerAt);
     }
 
     /// <summary>
@@ -623,10 +606,10 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
     /// Roslyn. This replaces <c>CreateReleaseRequest</c> + a fresh client per
     /// call — the bespoke handler used to race the watcher under CI load.
     /// </summary>
-    private async Task TriggerRecompileAsync(string nodeTypePath, DateTimeOffset triggerAt, CancellationToken ct)
+    private void TriggerRecompile(string nodeTypePath, DateTimeOffset triggerAt)
     {
         var workspace = Mesh.GetWorkspace();
-        await workspace.GetMeshNodeStream(nodeTypePath).Update(curr =>
+        workspace.GetMeshNodeStream(nodeTypePath).Update(curr =>
         {
             if (curr?.Content is not NodeTypeDefinition def) return curr!;
             return curr with
@@ -637,7 +620,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
                     RequestedReleaseForce = true,
                 }
             };
-        }).FirstAsync().ToTask(ct);
+        }).Should().Within(30.Seconds()).Emit();
     }
 
     /// <summary>
@@ -648,31 +631,25 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
     /// whole test, so multiple waits don't pile new <c>SubscribeRequest</c>s
     /// on the per-NodeType hub.
     /// </summary>
-    private async Task<string> WaitForLatestReleaseAsync(
-        string nodeTypePath, string? knownRelease, CancellationToken ct)
+    private string WaitForLatestRelease(string nodeTypePath, string? knownRelease)
     {
         var workspace = Mesh.GetWorkspace();
-        var node = await workspace.GetMeshNodeStream(nodeTypePath)
-            .Where(n => n?.Content is NodeTypeDefinition def
+        var node = workspace.GetMeshNodeStream(nodeTypePath)
+            .Should().Within(50.Seconds())
+            .Match(n => n?.Content is NodeTypeDefinition def
                 && def.CompilationStatus == CompilationStatus.Ok
                 && !string.IsNullOrEmpty(def.LatestReleasePath)
-                && def.LatestReleasePath != knownRelease)
-            .Take(1)
-            .Timeout(50.Seconds())
-            .ToTask(ct);
+                && def.LatestReleasePath != knownRelease);
         return ((NodeTypeDefinition)node.Content!).LatestReleasePath!;
     }
 
-    private async Task<CreateReleaseResponse> SendCreateReleaseAsync(
-        string nodeTypePath, bool force, CancellationToken ct)
+    private CreateReleaseResponse SendCreateRelease(string nodeTypePath, bool force)
     {
         var reader = GetClient(c => c.AddData());
-        var response = await reader
+        var response = reader
             .Observe(new CreateReleaseRequest(Force: force), o => o.WithTarget(new Address(nodeTypePath)))
             .Select(d => d.Message)
-            .Timeout(TimeSpan.FromSeconds(30))
-            .FirstAsync()
-            .ToTask(ct);
+            .Should().Within(TimeSpan.FromSeconds(30)).Emit();
         // Wait for compile to complete (status = Ok or Error) before returning.
         // Live remote stream (GetMeshNodeStream(path)) â€” NOT ObserveQuery, which
         // is index-lagged and can miss the post-compile tick (per the CQRS
@@ -680,19 +657,17 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         // known here, so the live stream is the right primitive.
         if (!response.AlreadyUpToDate && response.Success)
         {
-            await reader.GetWorkspace().GetMeshNodeStream(nodeTypePath)
-                .Where(n => n?.Content is NodeTypeDefinition def
+            reader.GetWorkspace().GetMeshNodeStream(nodeTypePath)
+                .Should().Within(TimeSpan.FromSeconds(45))
+                .Match(n => n?.Content is NodeTypeDefinition def
                     && (def.CompilationStatus == CompilationStatus.Ok
-                        || def.CompilationStatus == CompilationStatus.Error))
-                .Take(1)
-                .Timeout(TimeSpan.FromSeconds(45))
-                .ToTask(ct);
+                        || def.CompilationStatus == CompilationStatus.Error));
         }
         return response;
     }
 
-    private Task<string> ReadOverviewAsync(string path, CancellationToken ct)
-        => ReadOverviewMatchingAsync(path, _ => true, ct);
+    private string ReadOverview(string path)
+        => ReadOverviewMatching(path, _ => true);
 
     /// <summary>
     /// Reads the Overview area and waits for an <see cref="HtmlControl"/> whose
@@ -702,7 +677,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
     /// would race the first stale emission and fail the assertion before the
     /// V2-bound re-render lands.
     /// </summary>
-    private async Task<string> ReadOverviewMatchingAsync(string path, Func<string, bool> matches, CancellationToken ct)
+    private string ReadOverviewMatching(string path, Func<string, bool> matches)
     {
         var client = GetClient(c => c.AddData());
         var workspace = client.GetWorkspace();
@@ -710,12 +685,10 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new Address(path), reference);
 
-        var control = await stream
+        var control = stream
             .GetControlStream(reference.Area!)
-            .Where(x => x is HtmlControl h && matches(h.Data?.ToString() ?? string.Empty))
-            .Take(1)
-            .Timeout(30.Seconds())
-            .ToTask(ct);
+            .Should().Within(30.Seconds())
+            .Match(x => x is HtmlControl h && matches(h.Data?.ToString() ?? string.Empty));
 
         return (control as HtmlControl)?.Data?.ToString() ?? string.Empty;
     }
@@ -728,17 +701,14 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
     /// is already on the NodeType. Avoids the lagged <c>ObserveQuery</c> namespace
     /// scan over <c>Release/*</c>.
     /// </summary>
-    private async Task<string> WaitForNewReleaseAsync(
-        string nodeTypePath, HashSet<string> knownReleases, CancellationToken ct)
+    private string WaitForNewRelease(string nodeTypePath, HashSet<string> knownReleases)
     {
         var reader = GetClient(c => c.AddData());
-        var node = await reader.GetWorkspace().GetMeshNodeStream(nodeTypePath)
-            .Where(n => n?.Content is NodeTypeDefinition def
+        var node = reader.GetWorkspace().GetMeshNodeStream(nodeTypePath)
+            .Should().Within(TimeSpan.FromSeconds(50))
+            .Match(n => n?.Content is NodeTypeDefinition def
                 && !string.IsNullOrEmpty(def.LatestReleasePath)
-                && !knownReleases.Contains(def.LatestReleasePath!))
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(50))
-            .ToTask(ct);
+                && !knownReleases.Contains(def.LatestReleasePath!));
         return ((NodeTypeDefinition)node.Content!).LatestReleasePath!;
     }
 
@@ -758,14 +728,10 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
     /// created before mesh hub catches up is bound to the stale snapshot for
     /// its entire lifetime.
     /// </summary>
-    private async Task WaitForMeshHubViewAsync(
-        string path, Func<MeshNode?, bool> predicate, CancellationToken ct)
+    private void WaitForMeshHubView(string path, Func<MeshNode?, bool> predicate)
     {
-        await Mesh.GetWorkspace().GetMeshNodeStream(path)
-            .Where(predicate)
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(30))
-            .ToTask(ct);
+        Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Should().Within(TimeSpan.FromSeconds(30)).Match(predicate);
     }
 
     /// <summary>
@@ -776,8 +742,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
     /// confirms the watcher has seen the post-update state and the next
     /// compile will read the fresh source set.
     /// </summary>
-    private Task WaitForIsDirtyAsync(string nodeTypePath, bool expected, CancellationToken ct) =>
-        WaitForMeshHubViewAsync(nodeTypePath,
-            n => n?.Content is NodeTypeDefinition d && d.IsDirty == expected,
-            ct);
+    private void WaitForIsDirty(string nodeTypePath, bool expected) =>
+        WaitForMeshHubView(nodeTypePath,
+            n => n?.Content is NodeTypeDefinition d && d.IsDirty == expected);
 }

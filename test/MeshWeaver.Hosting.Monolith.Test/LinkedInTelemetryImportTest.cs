@@ -38,11 +38,10 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
     /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
     protected override bool ShareMeshAcrossTests => true;
 
-    // The reactive `.Should().Within(...)` waits below block synchronously and do
-    // NOT honour the [Fact] cooperative token, so the wall budget is the sum of
-    // the cold-cache compile wait (45 s) + the post-compile render wait (25 s).
-    // Widen the dispose watchdog deadlines past that worst case so a legitimately
-    // slow Roslyn cold start isn't reported as a hung test by DisposeAsync.
+    // The reactive `.Should().Within(...)` waits below add up to the cold-cache
+    // compile wait (45 s) + the post-compile render wait (25 s). Widen the dispose
+    // watchdog deadlines past that worst case so a legitimately slow Roslyn cold
+    // start isn't reported as a hung test by DisposeAsync.
     protected override TimeSpan TestSoftDeadline => TimeSpan.FromSeconds(75);
     protected override TimeSpan TestHardDeadline => TimeSpan.FromSeconds(120);
 
@@ -118,12 +117,10 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
         // beforehand ensures the per-instance hub + LayoutAreaHost are fully
         // initialised when the test's own subscription lands. Framework-level
         // fix needs the SubscribeRequest reply to await init completion.
-        // 45 s matches the pre-conversion `.Timeout(45.Seconds())` budget for the
-        // Roslyn cold-cache compile — the conversion dropped it to 30 s, which
-        // a cold CI agent (or a cold local run) blows past before the NodeType
-        // reaches a terminal CompilationStatus. The blocking assertion ignores
-        // the [Fact] cooperative token, so the class soft/hard deadlines below
-        // are widened to give this legitimately-slow path room.
+        // 45 s budget for the Roslyn cold-cache compile — a cold CI agent (or a
+        // cold local run) can take that long before the NodeType reaches a terminal
+        // CompilationStatus. The class soft/hard deadlines above are widened to give
+        // this legitimately-slow path room.
         Mesh.GetWorkspace().GetMeshNodeStream(NodeTypePath)
             .Should().Within(45.Seconds())
             .Match(n => n.Content is NodeTypeDefinition d

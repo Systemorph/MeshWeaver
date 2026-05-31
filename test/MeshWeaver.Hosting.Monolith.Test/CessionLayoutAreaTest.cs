@@ -1,6 +1,7 @@
 ﻿using System;
 using System.IO;
 using System.Linq;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -19,7 +20,6 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
-using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
@@ -160,13 +160,13 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
     ///      Task — callers don't see a generic timeout.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task NonExistentPath_Failure()
+    public void NonExistentPath_Failure()
     {
         const string missingPath = "Doc/Architecture/BusinessRules/Cession/Nonexistent";
 
         // 1+2: path resolution does NOT find a complete prefix match —
         //      either resolution is null or has a non-empty Remainder.
-        var resolution = await PathResolver.ResolvePath(missingPath).FirstAsync().ToTask();
+        var resolution = PathResolver.ResolvePath(missingPath).Should().Within(20.Seconds()).Emit();
         if (resolution is not null)
             resolution.Remainder.Should().NotBeNullOrEmpty(
                 $"Path '{missingPath}' should not resolve completely; closest ancestor + remainder is expected");
@@ -176,11 +176,10 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
         //      observable's OnError carries the failure as an exception.
         var address = new Address(missingPath);
         var client = GetClient();
-        var act = async () => await client.Observe(new PingRequest(), o => o.WithTarget(address))
-            .FirstAsync()
-            .ToTask();
-
-        var ex = await Assert.ThrowsAnyAsync<Exception>(act);
+        var notification = client.Observe(new PingRequest(), o => o.WithTarget(address))
+            .Materialize()
+            .Should().Within(20.Seconds()).Match(n => n.Kind == NotificationKind.OnError);
+        var ex = notification.Exception!;
         Output.WriteLine($"Got exception: {ex.GetType().Name}: {ex.Message}");
         new[] { "No node found", "NotFound", "does not exist" }
             .Any(s => ex.Message.Contains(s, StringComparison.Ordinal))
