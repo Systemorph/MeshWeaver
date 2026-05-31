@@ -1,5 +1,5 @@
-using System.Threading;
-using System.Threading.Tasks;
+using System.Reactive;
+using System.Reactive.Subjects;
 using MeshWeaver.Fixture;
 using Xunit;
 
@@ -29,7 +29,10 @@ namespace MeshWeaver.Messaging.Hub.Test;
 /// </summary>
 public class InitializationGateBypassTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    private readonly TaskCompletionSource _buildupRan = new();
+    // ReplaySubject(1): WithInitialization runs during GetHost() construction —
+    // i.e. BEFORE the test body subscribes — so a hot Subject would drop the
+    // emission. Replay guarantees the signal is observed regardless of ordering.
+    private readonly ReplaySubject<Unit> _buildupRan = new(1);
 
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
         => configuration
@@ -50,25 +53,23 @@ public class InitializationGateBypassTest(ITestOutputHelper output) : HubTestBas
             // If InitializeHubRequest were queued behind the gates, this never fires.
             .WithInitialization(_ =>
             {
-                _buildupRan.TrySetResult();
+                _buildupRan.OnNext(Unit.Default);
             });
 
     [Fact]
-    public async Task InitializeHubRequest_BypassesNeverOpeningGate()
+    public void InitializeHubRequest_BypassesNeverOpeningGate()
     {
         // GetHost triggers hub construction → posts InitializeHubRequest → runs BuildupActions.
         var host = GetHost();
         host.Should().NotBeNull();
 
         // 5s is generous; with the bypass this completes synchronously after construction.
-        // Without the bypass the gate stays closed forever and this hangs until the timeout.
-        var ct = new CancellationTokenSource(5.Seconds()).Token;
-        var completed = await Task.WhenAny(_buildupRan.Task, Task.Delay(Timeout.Infinite, ct));
-
-        completed.Should().Be(_buildupRan.Task,
-            "InitializeHubRequest must bypass every WithInitializationGate predicate so " +
-            "BuildupActions can run and open user-defined readiness gates. If this hangs, " +
-            "the framework-level bypass list in MessageService.cs has regressed — see " +
-            "Doc/Architecture/InitializationGates.md → 'Framework-bypassed messages'.");
+        // Without the bypass the gate stays closed forever and the wait times out.
+        // The blocking .Should().Emit() asserts BuildupActions ran:
+        // InitializeHubRequest must bypass every WithInitializationGate predicate so
+        // BuildupActions can run and open user-defined readiness gates. If this fails,
+        // the framework-level bypass list in MessageService.cs has regressed — see
+        // Doc/Architecture/InitializationGates.md → 'Framework-bypassed messages'.
+        _buildupRan.Should().Within(5.Seconds()).Emit();
     }
 }
