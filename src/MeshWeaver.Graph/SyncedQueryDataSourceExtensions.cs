@@ -193,7 +193,15 @@ public static class SyncedQueryDataSourceExtensions
         // into the query layer. Per-user RLS filtering wraps at the caller's
         // workspace level via WrapWithPerUserRls below.
         var cache = workspace.Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-        var upstream = cache.GetQuery(id, queries);
+        // 🚨 Deserialize each result node's Content through the CALLER's hub options,
+        // not the cache hub's. The process-wide cache hub (MeshNodeCacheIdentity) knows
+        // ONLY framework types — it cannot deserialize domain Content like
+        // AgentConfiguration ($type from AddAITypes), so the no-options overload silently
+        // hands back JsonElement / drops the typed shape. That is what made the Orleans
+        // agent picker return an empty catalog ("No suitable agent"): the agent nodes WERE
+        // queried, but their Content couldn't be typed at the cache boundary. The caller's
+        // workspace hub (here the thread hub, with AddAITypes) has the right registry.
+        var upstream = cache.GetQuery(id, workspace.Hub.JsonSerializerOptions, queries);
         return WrapWithPerUserRls(workspace, upstream);
     }
 
