@@ -1,0 +1,9 @@
+<Solution>
+  <Configurations>
+    <Platform Name="Any CPU" />
+  </Configurations>
+  <Folder Name="/deploy/">
+    <Project Path="aspire/Memex.Deploy.AppHost/Memex.Deploy.AppHost.csproj" />
+    <Project Path="../memex/aspire/Memex.Aspire.Hosting/Memex.Aspire.Hosting.csproj" />
+  </Folder>
+</Solution>

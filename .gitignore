@@ -31,6 +31,9 @@ bld/
 # Visual Studio "[Dd]eploy/" web-deploy-output rule above.
 !/deploy/
 !/deploy/**
+# ...but keep build outputs (the dedicated deploy AppHost compiles here) ignored.
+/deploy/**/bin/
+/deploy/**/obj/
 
 # Visual Studio 2015/2017 cache/options directory
 .vs/
