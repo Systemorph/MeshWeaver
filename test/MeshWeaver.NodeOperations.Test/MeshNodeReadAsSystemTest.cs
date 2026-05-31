@@ -1,7 +1,7 @@
 using System;
 using System.Linq;
+using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
@@ -52,26 +52,29 @@ public class MeshNodeReadAsSystemTest(ITestOutputHelper output) : MonolithMeshTe
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder).AddRowLevelSecurity();
 
-    protected override async Task SetupAccessRightsAsync()
+    protected override Task SetupAccessRightsAsync()
     {
         // Grant Admin role on the probe namespaces so test setup (CreateNode)
         // succeeds. The tests then SWITCH the ambient identity to an unprivileged
         // user mid-test to assert that READS still work — that's the system-bypass
         // we're proving.
-        var ct = TestContext.Current.CancellationToken;
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        await meshService.CreateNode(
+        meshService.CreateNode(
             AssignmentNodeFactory.UserRole(TestUsers.Admin.ObjectId, "Admin", "SystemReadProbe"))
-            .FirstAsync().ToTask(ct);
-        await meshService.CreateNode(
+            .Should().Within(45.Seconds()).Emit();
+        meshService.CreateNode(
             AssignmentNodeFactory.UserRole(TestUsers.Admin.ObjectId, "Admin", "CacheReadProbe"))
-            .FirstAsync().ToTask(ct);
-        await meshService.CreateNode(
+            .Should().Within(45.Seconds()).Emit();
+        meshService.CreateNode(
             AssignmentNodeFactory.UserRole(TestUsers.Admin.ObjectId, "Admin", "QueryCacheProbe"))
-            .FirstAsync().ToTask(ct);
-        await Mesh.WaitForPermissionAsync("SystemReadProbe", TestUsers.Admin.ObjectId, Permission.Create, ct);
-        await Mesh.WaitForPermissionAsync("CacheReadProbe", TestUsers.Admin.ObjectId, Permission.Create, ct);
-        await Mesh.WaitForPermissionAsync("QueryCacheProbe", TestUsers.Admin.ObjectId, Permission.Create, ct);
+            .Should().Within(45.Seconds()).Emit();
+        Mesh.GetEffectivePermissions("SystemReadProbe", TestUsers.Admin.ObjectId)
+            .Should().Within(90.Seconds()).Match(p => p.HasFlag(Permission.Create));
+        Mesh.GetEffectivePermissions("CacheReadProbe", TestUsers.Admin.ObjectId)
+            .Should().Within(90.Seconds()).Match(p => p.HasFlag(Permission.Create));
+        Mesh.GetEffectivePermissions("QueryCacheProbe", TestUsers.Admin.ObjectId)
+            .Should().Within(90.Seconds()).Match(p => p.HasFlag(Permission.Create));
+        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -87,23 +90,18 @@ public class MeshNodeReadAsSystemTest(ITestOutputHelper output) : MonolithMeshTe
     /// surface <see cref="UnauthorizedAccessException"/> from the cache gate.
     /// The architectural split is "upstream = System / gate = caller".</para>
     /// </summary>
-    // async Task + `await … FirstAsync()` / `await act.Should().ThrowAsync<T>()` (§2a): the
-    // blocking reactive forms (`.Should().Emit()` on the CreateNode, `.Wait()` on the read)
-    // starve the mesh-hub pump on the test thread under RLS and deadlock. The await yields the
-    // thread so the pump runs.
     [Fact(Timeout = 30_000)]
-    public async Task GetMeshNodeStream_UnprivilegedUser_GetsUnauthorized()
+    public void GetMeshNodeStream_UnprivilegedUser_GetsUnauthorized()
     {
-        var ct = TestContext.Current.CancellationToken;
         var nodeId = $"Md_{Guid.NewGuid().AsString()}";
         var nodePath = $"SystemReadProbe/{nodeId}";
 
-        await NodeFactory.CreateNode(
+        NodeFactory.CreateNode(
             new MeshNode(nodeId, "SystemReadProbe")
             {
                 Name = "System-read probe node",
                 NodeType = "Markdown",
-            }).FirstAsync().ToTask(ct);
+            }).Should().Within(20.Seconds()).Emit();
 
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var workspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
@@ -116,17 +114,18 @@ public class MeshNodeReadAsSystemTest(ITestOutputHelper output) : MonolithMeshTe
 
         try
         {
-            var act = async () => await workspace.GetMeshNodeStream(nodePath)
+            // The read must ERROR with UnauthorizedAccessException: the cache's
+            // per-user RLS gate denies the read for an unprivileged ambient identity.
+            // The upstream remote subscription is system-impersonated, but the cache
+            // layer enforces per-user Read via GetPermissionRequest before exposing the
+            // stream. Materialize folds the OnError into a value so we assert it
+            // reactively (no await, no ThrowAsync).
+            var notification = workspace.GetMeshNodeStream(nodePath)
                 .Take(1)
-                .Timeout(10.Seconds())
-                .FirstAsync()
-                .ToTask(ct);
-
-            await act.Should().ThrowAsync<UnauthorizedAccessException>(
-                because: "the cache's per-user RLS gate denies the read for an " +
-                         "unprivileged ambient identity. The upstream remote subscription " +
-                         "is system-impersonated, but the cache layer enforces per-user " +
-                         "Read via GetPermissionRequest before exposing the stream.");
+                .Materialize()
+                .Should().Within(20.Seconds()).Match(n => n.Kind == NotificationKind.OnError);
+            notification.Exception.Should().BeOfType<UnauthorizedAccessException>(
+                "the cache's per-user RLS gate denies the read for an unprivileged ambient identity");
         }
         finally
         {
@@ -146,31 +145,23 @@ public class MeshNodeReadAsSystemTest(ITestOutputHelper output) : MonolithMeshTe
     /// the ambient user has Read permission, the cached stream emits the
     /// node. The upstream system-read is invisible to the consumer.</para>
     /// </summary>
-    // async Task + `await … FirstAsync()` (§2a): the blocking reactive `.Should().Emit()` on
-    // the CreateNode round-trip (and on the cache stream's upstream owner-hub round-trip)
-    // starves the mesh-hub pump on the test thread under RLS and deadlocks. The await yields
-    // the thread so the pump runs.
     [Fact(Timeout = 30_000)]
-    public async Task CacheGetStream_WithReadPermission_EmitsNode()
+    public void CacheGetStream_WithReadPermission_EmitsNode()
     {
-        var ct = TestContext.Current.CancellationToken;
         var nodeId = $"Md_{Guid.NewGuid().AsString()}";
         var nodePath = $"CacheReadProbe/{nodeId}";
 
-        await NodeFactory.CreateNode(
+        NodeFactory.CreateNode(
             new MeshNode(nodeId, "CacheReadProbe")
             {
                 Name = "Cache-read probe",
                 NodeType = "Markdown",
-            }).FirstAsync().ToTask(ct);
+            }).Should().Within(20.Seconds()).Emit();
 
         var cache = Mesh.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
 
-        var node = await cache.GetStream(nodePath)
-            .Where(n => n is not null)
-            .Timeout(28.Seconds())
-            .FirstAsync()
-            .ToTask(ct);
+        var node = cache.GetStream(nodePath)
+            .Should().Within(28.Seconds()).Match(n => n is not null);
 
         node.Should().NotBeNull();
         node.Path.Should().Be(nodePath);
@@ -190,24 +181,21 @@ public class MeshNodeReadAsSystemTest(ITestOutputHelper output) : MonolithMeshTe
     /// unprivileged user sees a filtered (empty) view. This test pins both
     /// halves of that contract.</para>
     /// </summary>
-    // async Task + `await … FirstAsync()` (§2a): the blocking reactive `.Should().Emit()` on
-    // the CreateNode round-trips starves the mesh-hub pump on the test thread under RLS and
-    // deadlocks. The await yields the thread so the pump runs. The GetQuery read is also
-    // awaited (its upstream mirror loads off the test thread) so nothing blocks the pump.
     [Fact(Timeout = 30_000)]
-    public async Task WorkspaceGetQuery_AppliesPerUserRlsFilter()
+    public void WorkspaceGetQuery_AppliesPerUserRlsFilter()
     {
-        var ct = TestContext.Current.CancellationToken;
         var workspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
         var nodeId1 = $"Md_{Guid.NewGuid().AsString()}";
         var nodeId2 = $"Md_{Guid.NewGuid().AsString()}";
 
-        await NodeFactory.CreateNode(
-            new MeshNode(nodeId1, "QueryCacheProbe") { Name = "First", NodeType = "Markdown" }).FirstAsync().ToTask(ct);
-        await NodeFactory.CreateNode(
-            new MeshNode(nodeId2, "QueryCacheProbe") { Name = "Second", NodeType = "Markdown" }).FirstAsync().ToTask(ct);
+        NodeFactory.CreateNode(
+            new MeshNode(nodeId1, "QueryCacheProbe") { Name = "First", NodeType = "Markdown" })
+            .Should().Within(20.Seconds()).Emit();
+        NodeFactory.CreateNode(
+            new MeshNode(nodeId2, "QueryCacheProbe") { Name = "Second", NodeType = "Markdown" })
+            .Should().Within(20.Seconds()).Emit();
 
         var queryId = $"system-read-probe:{Guid.NewGuid()}";
 
@@ -218,11 +206,8 @@ public class MeshNodeReadAsSystemTest(ITestOutputHelper output) : MonolithMeshTe
             var collection = workspace.GetQuery(
                 queryId, "namespace:QueryCacheProbe nodeType:Markdown");
 
-            var snapshot = await collection
-                .Where(items => items.Count() >= 2)
-                .Timeout(28.Seconds())
-                .FirstAsync()
-                .ToTask(ct);
+            var snapshot = collection
+                .Should().Within(28.Seconds()).Match(items => items.Count() >= 2);
 
             snapshot.Should().Contain(n => n.Id == nodeId1);
             snapshot.Should().Contain(n => n.Id == nodeId2);
