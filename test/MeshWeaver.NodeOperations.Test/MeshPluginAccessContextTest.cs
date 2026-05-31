@@ -31,14 +31,12 @@ public class MeshPluginAccessContextTest(ITestOutputHelper output) : MonolithMes
             .AddSampleUsers();
 
     [Fact]
-    public async Task MeshPlugin_Get_RestoresAccessContext()
+    public void MeshPlugin_Get_RestoresAccessContext()
     {
-        var ct = new CancellationTokenSource(10.Seconds()).Token;
-
         // Create a node
-        await NodeFactory.CreateNode(
+        NodeFactory.CreateNode(
             new MeshNode("test-doc", "User/rbuergi") { Name = "Test Doc", NodeType = "Markdown" })
-            .ToTask(ct);
+            .Should().Within(10.Seconds()).Emit();
 
         // Simulate what happens during thread execution:
         // 1. Set user context (normally done by ExecuteMessageAsync)
@@ -60,26 +58,27 @@ public class MeshPluginAccessContextTest(ITestOutputHelper output) : MonolithMes
         // 3. Clear the AsyncLocal (simulates what happens when AI framework calls the tool)
         accessService.SetContext(null);
 
-        // 4. Call Get — should succeed because MeshPlugin restores context
-        var result = await plugin.Get("User/rbuergi/test-doc");
+        // 4. Call Get — should succeed because MeshPlugin restores context.
+        //    plugin.Get is a genuine Task<string> SDK boundary → bridge to an
+        //    observable so the assertion stays blocking-reactive.
+        var result = plugin.Get("User/rbuergi/test-doc").ToObservable()
+            .Should().Within(10.Seconds()).Emit();
         result.Should().Contain("Test Doc", "MeshPlugin.Get should restore user context and return the node");
         Output.WriteLine($"Get result: {result[..System.Math.Min(200, result.Length)]}");
     }
 
     [Fact]
-    public async Task MeshPlugin_Update_RestoresAccessContext()
+    public void MeshPlugin_Update_RestoresAccessContext()
     {
-        var ct = new CancellationTokenSource(10.Seconds()).Token;
-
         // Create a node (under admin context — DevLogin set this up in InitializeAsync)
-        await NodeFactory.CreateNode(
+        NodeFactory.CreateNode(
             new MeshNode("update-test", "User/rbuergi")
             {
                 Name = "Original",
                 NodeType = "Markdown",
                 Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Original" },
             })
-            .ToTask(ct);
+            .Should().Within(10.Seconds()).Emit();
 
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         // Capture the active circuit context from DevLogin so the simulated chat carries
@@ -116,7 +115,10 @@ public class MeshPluginAccessContextTest(ITestOutputHelper output) : MonolithMes
             Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Updated" },
         };
         var updateJson = JsonSerializer.Serialize(new[] { existingNode }, Mesh.JsonSerializerOptions);
-        var result = await plugin.Update(updateJson);
+        // plugin.Update is a genuine Task<string> SDK boundary → bridge to an
+        // observable so the assertion stays blocking-reactive.
+        var result = plugin.Update(updateJson).ToObservable()
+            .Should().Within(10.Seconds()).Emit();
         result.Should().Contain("Updated", "MeshPlugin.Update should restore user context and update");
         Output.WriteLine($"Update result: {result}");
     }
