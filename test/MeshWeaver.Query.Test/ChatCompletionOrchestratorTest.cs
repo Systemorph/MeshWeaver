@@ -1,7 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
-using System.Threading.Tasks;
+using System.Reactive.Linq;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -55,11 +55,11 @@ public class ChatCompletionOrchestratorTest : MonolithMeshTestBase
         => Mesh.ServiceProvider.GetRequiredService<IChatCompletionOrchestrator>();
 
     [Fact(Timeout = 30000)]
-    public async Task AtSlash_ReturnsPartitionList()
+    public void AtSlash_ReturnsPartitionList()
     {
         var orchestrator = GetOrchestrator();
 
-        var batches = await orchestrator.GetCompletionsAsync("@/", null).ToListAsync();
+        var batches = orchestrator.GetCompletions("@/", null).ToList().Should().Within(10.Seconds()).Emit();
 
         batches.Should().NotBeEmpty("@/ should return partition suggestions");
         var allItems = batches.SelectMany(b => b.Items).ToList();
@@ -73,12 +73,12 @@ public class ChatCompletionOrchestratorTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 30000)]
-    public async Task AtSlashPartition_DrillsIntoPartition()
+    public void AtSlashPartition_DrillsIntoPartition()
     {
         var orchestrator = GetOrchestrator();
 
         // ACME is a known partition from sample data
-        var batches = await orchestrator.GetCompletionsAsync("@/ACME/", null).ToListAsync();
+        var batches = orchestrator.GetCompletions("@/ACME/", null).ToList().Should().Within(10.Seconds()).Emit();
 
         batches.Should().NotBeEmpty("@/ACME/ should return children of ACME partition");
         var allItems = batches.SelectMany(b => b.Items).ToList();
@@ -93,12 +93,12 @@ public class ChatCompletionOrchestratorTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 30000)]
-    public async Task AtSlashWithFilter_FiltersPartitions()
+    public void AtSlashWithFilter_FiltersPartitions()
     {
         var orchestrator = GetOrchestrator();
 
         // "Sys" should match "Systemorph" partition
-        var batches = await orchestrator.GetCompletionsAsync("@/Sys", null).ToListAsync();
+        var batches = orchestrator.GetCompletions("@/Sys", null).ToList().Should().Within(10.Seconds()).Emit();
 
         var allItems = batches.SelectMany(b => b.Items).ToList();
         allItems.Should().Contain(i => i.Path != null &&
@@ -107,12 +107,12 @@ public class ChatCompletionOrchestratorTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 30000)]
-    public async Task AtText_StaysWithinPartition()
+    public void AtText_StaysWithinPartition()
     {
         var orchestrator = GetOrchestrator();
 
         // Search for "ACME" with Systemorph as context — should NOT cross into ACME partition
-        var batches = await orchestrator.GetCompletionsAsync("@ACME", "Systemorph").ToListAsync();
+        var batches = orchestrator.GetCompletions("@ACME", "Systemorph").ToList().Should().Within(10.Seconds()).Emit();
 
         batches.Should().NotBeEmpty("@ACME should return results");
         var allItems = batches.SelectMany(b => b.Items).ToList();
@@ -127,12 +127,12 @@ public class ChatCompletionOrchestratorTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 30000)]
-    public async Task AtText_NearbyResultsHaveHigherPriority()
+    public void AtText_NearbyResultsHaveHigherPriority()
     {
         var orchestrator = GetOrchestrator();
 
         // Search with context set to "ACME" — items under ACME should rank higher than partition-level results
-        var batches = await orchestrator.GetCompletionsAsync("@Project", "ACME").ToListAsync();
+        var batches = orchestrator.GetCompletions("@Project", "ACME").ToList().Should().Within(10.Seconds()).Emit();
 
         var nearbyBatch = batches.FirstOrDefault(b => b.Category == "Nearby");
         var partitionBatch = batches.FirstOrDefault(b => b.Category == "Partition");
@@ -145,11 +145,11 @@ public class ChatCompletionOrchestratorTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 30000)]
-    public async Task AcceptItem_HasAbsolutePath()
+    public void AcceptItem_HasAbsolutePath()
     {
         var orchestrator = GetOrchestrator();
 
-        var batches = await orchestrator.GetCompletionsAsync("@/ACME/", null).ToListAsync();
+        var batches = orchestrator.GetCompletions("@/ACME/", null).ToList().Should().Within(10.Seconds()).Emit();
         var allItems = batches.SelectMany(b => b.Items).ToList();
 
         foreach (var item in allItems)
@@ -163,34 +163,37 @@ public class ChatCompletionOrchestratorTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 30000)]
-    public async Task EmptyQuery_ReturnsNothing()
+    public void EmptyQuery_ReturnsNothing()
     {
         var orchestrator = GetOrchestrator();
 
-        var batches = await orchestrator.GetCompletionsAsync("", null).ToListAsync();
+        // Rx ToList() emits a single (empty) list on OnCompleted — the orchestrator
+        // short-circuits a non-@ / empty query to an immediately-completing stream.
+        var batches = orchestrator.GetCompletions("", null).ToList().Should().Within(10.Seconds()).Emit();
         batches.Should().BeEmpty("empty query should return no results");
     }
 
     [Fact(Timeout = 30000)]
-    public async Task NonAtQuery_ReturnsNothing()
+    public void NonAtQuery_ReturnsNothing()
     {
         var orchestrator = GetOrchestrator();
 
-        var batches = await orchestrator.GetCompletionsAsync("hello", null).ToListAsync();
+        var batches = orchestrator.GetCompletions("hello", null).ToList().Should().Within(10.Seconds()).Emit();
         batches.Should().BeEmpty("non-@ query should return no results");
     }
 
     [Fact(Timeout = 30000)]
-    public async Task StreamsNearbyBeforePartition()
+    public void StreamsNearbyBeforePartition()
     {
         var orchestrator = GetOrchestrator();
 
-        // With a current namespace, Nearby (local hub) should arrive before Partition (broadening)
-        var batchCategories = new System.Collections.Generic.List<string>();
-        await foreach (var batch in orchestrator.GetCompletionsAsync("@Project", "ACME"))
-        {
-            batchCategories.Add(batch.Category);
-        }
+        // With a current namespace, Nearby (local hub) should arrive before Partition
+        // (broadening). Rx ToList() preserves OnNext order, so the collected sequence
+        // reflects the order batches streamed in.
+        var batchCategories = orchestrator.GetCompletions("@Project", "ACME")
+            .ToList().Should().Within(10.Seconds()).Emit()
+            .Select(b => b.Category)
+            .ToList();
 
         batchCategories.Should().NotContain("Global",
             "non-/ queries must stay within the current partition");
@@ -202,16 +205,5 @@ public class ChatCompletionOrchestratorTest : MonolithMeshTestBase
             nearbyIndex.Should().BeLessThan(partitionIndex,
                 "Nearby (current node) should stream before Partition (broadening)");
         }
-    }
-}
-
-internal static class AsyncEnumerableExtensions
-{
-    public static async Task<System.Collections.Generic.List<T>> ToListAsync<T>(this System.Collections.Generic.IAsyncEnumerable<T> source)
-    {
-        var list = new System.Collections.Generic.List<T>();
-        await foreach (var item in source)
-            list.Add(item);
-        return list;
     }
 }
