@@ -51,7 +51,7 @@ public class NodeHubContentCollectionTest(ITestOutputHelper output) : HubTestBas
     }
 
     [Fact]
-    public async Task NodeHub_Content_Collection_Is_Discoverable()
+    public void NodeHub_Content_Collection_Is_Discoverable()
     {
         var hub = GetClient();
         var contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
@@ -64,7 +64,7 @@ public class NodeHubContentCollectionTest(ITestOutputHelper output) : HubTestBas
     }
 
     [Fact]
-    public async Task NodeHub_Content_Collection_Appears_In_GetAllCollectionConfigs()
+    public void NodeHub_Content_Collection_Appears_In_GetAllCollectionConfigs()
     {
         var hub = GetClient();
         var contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
@@ -108,7 +108,7 @@ public class NodeHubContentCollectionTest(ITestOutputHelper output) : HubTestBas
     }
 
     [Fact]
-    public async Task Hidden_Storage_Collection_Not_In_GetAllCollectionConfigs()
+    public void Hidden_Storage_Collection_Not_In_GetAllCollectionConfigs()
     {
         // Simulate the scenario where storage is registered but hidden
         var hub = GetClient();

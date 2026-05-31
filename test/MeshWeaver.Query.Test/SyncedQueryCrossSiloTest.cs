@@ -352,9 +352,13 @@ public class SyncedQueryCrossSiloTest(ITestOutputHelper output)
         // (Replaces the previous CompilationStatus=Pending flip — that relied
         // on InstallCompileWatcher, which was removed in commit 86b34707d when
         // compile became explicit-only.)
+        // The response only fires after HandleCreateRelease runs the full Roslyn
+        // compile (~15-20s), so the wait window must cover the compile — the
+        // default 10s .Emit() budget is too short. The original awaited under the
+        // [Fact(Timeout = 60000)] envelope; restore that budget explicitly.
         Mesh.Observe(new CreateReleaseRequest(),
                 o => o.WithTarget(new Address(typePath)))
-            .Should().Emit();
+            .Should().Within(60.Seconds()).Emit();
 
         // Silo B observes the terminal state. 🚨 Read live Content via
         // GetMeshNodeStream — synced query rows carry STALE Content by design

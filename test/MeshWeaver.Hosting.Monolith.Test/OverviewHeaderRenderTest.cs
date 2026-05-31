@@ -32,21 +32,21 @@ public class OverviewHeaderRenderTest(ITestOutputHelper output) : MonolithMeshTe
     /// times out at 20 s instead of hanging forever.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task Overview_Renders_ForMarkdownNode()
+    public void Overview_Renders_ForMarkdownNode()
     {
         var nodePath = $"{TestPartition}/overview-smoke";
-        await NodeFactory.CreateNode(
-            new MeshNode("overview-smoke", TestPartition) { Name = "Overview Smoke", NodeType = "Markdown" });
+        NodeFactory.CreateNode(
+            new MeshNode("overview-smoke", TestPartition) { Name = "Overview Smoke", NodeType = "Markdown" }).Should().Emit();
 
         var client = GetClient(c => c.AddData(data => data));
         var address = new Address(nodePath);
-        await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
 
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             address, new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea));
 
-        var value = await stream.Timeout(20.Seconds()).FirstAsync();
+        var value = stream.Should().Within(20.Seconds()).Emit();
         value.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined,
             "Overview must emit a rendered UI control, not time out");
     }
@@ -57,21 +57,21 @@ public class OverviewHeaderRenderTest(ITestOutputHelper output) : MonolithMeshTe
     /// <c>Address</c> / <c>IMessageDelivery</c> could silently break the page.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task Delete_Renders_ForExistingNode()
+    public void Delete_Renders_ForExistingNode()
     {
         var nodePath = $"{TestPartition}/delete-smoke";
-        await NodeFactory.CreateNode(
-            new MeshNode("delete-smoke", TestPartition) { Name = "Delete Smoke", NodeType = "Markdown" });
+        NodeFactory.CreateNode(
+            new MeshNode("delete-smoke", TestPartition) { Name = "Delete Smoke", NodeType = "Markdown" }).Should().Emit();
 
         var client = GetClient(c => c.AddData(data => data));
         var address = new Address(nodePath);
-        await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask();
+        client.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit();
 
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             address, new LayoutAreaReference(MeshNodeLayoutAreas.DeleteArea));
 
-        var value = await stream.Timeout(20.Seconds()).FirstAsync();
+        var value = stream.Should().Within(20.Seconds()).Emit();
         value.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined,
             "Delete area must render the confirmation page");
     }
@@ -83,13 +83,13 @@ public class OverviewHeaderRenderTest(ITestOutputHelper output) : MonolithMeshTe
     /// for "the create process should hand out" a created timestamp.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task CreateNode_StampsCreatedAndLastModified()
+    public void CreateNode_StampsCreatedAndLastModified()
     {
         var nodePath = $"{TestPartition}/stamp-check";
-        await NodeFactory.CreateNode(
-            new MeshNode("stamp-check", TestPartition) { Name = "Stamp Check", NodeType = "Markdown" });
+        NodeFactory.CreateNode(
+            new MeshNode("stamp-check", TestPartition) { Name = "Stamp Check", NodeType = "Markdown" }).Should().Emit();
 
-        var node = await ReadNodeAsync(nodePath, TestContext.Current.CancellationToken);
+        var node = ReadNode(nodePath).Should().Match(n => n is not null);
 
         node.Should().NotBeNull();
         node!.CreatedDate.Should().NotBe(default, "Created timestamp must be stamped at creation time");

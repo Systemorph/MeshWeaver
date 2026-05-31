@@ -65,7 +65,7 @@ public class AgentSyncedQueryFromHostedHubTest : MonolithMeshTestBase
     }
 
     [Fact]
-    public async Task HostedSubHub_GetQuery_ReturnsAgentsAndModels()
+    public void HostedSubHub_GetQuery_ReturnsAgentsAndModels()
     {
         // Spin up a hosted sub-hub the same way PortalApplication does in
         // production — the chat view uses Hub.ServiceProvider.GetService<IWorkspace>()
@@ -88,11 +88,9 @@ public class AgentSyncedQueryFromHostedHubTest : MonolithMeshTestBase
         // separately below; gating the wait on agent presence keeps the test
         // resilient against a `s.Any()` early-snapshot that grabs the empty
         // initial emission before any provider has contributed.
-        var snapshot = await observable
-            .Where(s => s.Any(n => n.NodeType == AgentNodeType.NodeType))
-            .Take(1)
-            .Timeout(15.Seconds())
-            .ToTask();
+        var snapshot = observable
+            .Should().Within(15.Seconds())
+            .Match(s => s.Any(n => n.NodeType == AgentNodeType.NodeType));
 
         var nodes = snapshot.ToList();
 
@@ -137,7 +135,7 @@ public class AgentSyncedQueryFromHostedHubTest : MonolithMeshTestBase
     }
 
     [Fact]
-    public async Task HostedSubHub_GetQuery_AgentDropdownNamesAreNonEmpty()
+    public void HostedSubHub_GetQuery_AgentDropdownNamesAreNonEmpty()
     {
         // Tighter version of the above focused only on the symptom the user
         // reported: "no entries for agents". Just asserts the agent set is
@@ -148,12 +146,10 @@ public class AgentSyncedQueryFromHostedHubTest : MonolithMeshTestBase
 
         var workspace = portalHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
-        var snapshot = await workspace
+        var snapshot = workspace
             .GetQuery("agent-dropdown", "namespace:Agent nodeType:Agent")
-            .Where(s => s.Any())
-            .Take(1)
-            .Timeout(15.Seconds())
-            .ToTask();
+            .Should().Within(15.Seconds())
+            .Match(s => s.Any());
 
         var agents = snapshot.Where(n => n.NodeType == AgentNodeType.NodeType).ToList();
         agents.Should().NotBeEmpty();

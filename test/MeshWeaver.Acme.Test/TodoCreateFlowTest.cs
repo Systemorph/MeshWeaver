@@ -191,9 +191,13 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             NodeFactory.CreateTransient(transientNode).Should().Emit();
             Output.WriteLine("Transient node created.");
 
-            // Initialize the node's hub
+            // Initialize the node's hub. 30 s Ping budget — activating a brand-new
+            // per-instance NodeType hub kicks off a cold-cache dynamic compile that
+            // blocks the hub's first Ping response well past the default 10 s on slow
+            // CI runners (the same budget the sibling HasEditorStructure test uses).
+            // Outer [Fact(Timeout = 60000)] still bounds the whole test.
             var nodeAddress = new Address(nodePath);
-            client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Emit();
+            client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Within(30.Seconds()).Emit();
             Output.WriteLine("Node hub initialized.");
 
             // Transient nodes are auto-confirmed and redirected to Edit.
@@ -663,9 +667,12 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             NodeFactory.CreateTransient(transientNode).Should().Emit();
             Output.WriteLine("Transient node created.");
 
-            // Step 2: Initialize the node's hub
+            // Step 2: Initialize the node's hub. 30 s Ping budget — activating a
+            // brand-new per-instance NodeType hub triggers a cold-cache dynamic
+            // compile that blocks the hub's first Ping response past the default
+            // 10 s on slow CI runners. Outer [Fact(Timeout = 60000)] still bounds it.
             var nodeAddress = new Address(nodePath);
-            client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Emit();
+            client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Within(30.Seconds()).Emit();
             Output.WriteLine("Node hub initialized.");
 
             // Step 3: Confirm the node (make it Active). Subscribe to drain the

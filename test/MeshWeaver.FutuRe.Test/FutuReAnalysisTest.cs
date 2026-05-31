@@ -273,21 +273,22 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// from both business unit namespaces.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task TransactionMappings_ShouldLoadFromBothBusinessUnits()
+    public void TransactionMappings_ShouldLoadFromBothBusinessUnits()
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         var query = "nodeType:FutuRe/TransactionMapping namespace:FutuRe scope:descendants state:Active";
         Output.WriteLine($"Querying: {query}");
 
-        var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
+        var results = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         Output.WriteLine($"Found {results.Count} TransactionMapping nodes");
         results.Count.Should().BeGreaterThanOrEqualTo(20,
             "Should find TransactionMapping nodes from both EuropeRe and AmericasIns");
 
         // Verify we have nodes from both namespaces
-        var namespaces = results.Cast<MeshNode>().Select(n => n.Namespace).Distinct().ToList();
+        var namespaces = results.Select(n => n.Namespace).Distinct().ToList();
         Output.WriteLine($"Namespaces: {string.Join(", ", namespaces)}");
         namespaces.Should().Contain("FutuRe/EuropeRe/TransactionMapping");
         namespaces.Should().Contain("FutuRe/AmericasIns/TransactionMapping");
@@ -297,19 +298,20 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Verifies that AmountType MeshNodes are loaded via IMeshService.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task AmountTypes_ShouldLoadFromMeshNodes()
+    public void AmountTypes_ShouldLoadFromMeshNodes()
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         var query = "nodeType:FutuRe/AmountType namespace:FutuRe/AmountType state:Active";
         Output.WriteLine($"Querying: {query}");
 
-        var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
+        var results = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         Output.WriteLine($"Found {results.Count} AmountType nodes");
         results.Count.Should().Be(6, "Should find all 6 amount types");
 
-        var names = results.Cast<MeshNode>().Select(n => n.Name).ToList();
+        var names = results.Select(n => n.Name).ToList();
         Output.WriteLine($"Amount types: {string.Join(", ", names)}");
         names.Should().Contain("Premium");
         names.Should().Contain("Claims");
@@ -319,19 +321,20 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Verifies that Currency MeshNodes are loaded via IMeshService.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task Currencies_ShouldLoadFromMeshNodes()
+    public void Currencies_ShouldLoadFromMeshNodes()
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         var query = "nodeType:FutuRe/Currency namespace:FutuRe/Currency state:Active";
         Output.WriteLine($"Querying: {query}");
 
-        var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
+        var results = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         Output.WriteLine($"Found {results.Count} Currency nodes");
         results.Count.Should().Be(3, "Should find USD, EUR, CHF");
 
-        var ids = results.Cast<MeshNode>().Select(n => n.Id).ToList();
+        var ids = results.Select(n => n.Id).ToList();
         ids.Should().Contain("USD");
         ids.Should().Contain("EUR");
         ids.Should().Contain("CHF");
@@ -341,19 +344,20 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Verifies that Country MeshNodes are loaded via IMeshService.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task Countries_ShouldLoadFromMeshNodes()
+    public void Countries_ShouldLoadFromMeshNodes()
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         var query = "nodeType:FutuRe/Country namespace:FutuRe/Country state:Active";
         Output.WriteLine($"Querying: {query}");
 
-        var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
+        var results = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         Output.WriteLine($"Found {results.Count} Country nodes");
         results.Count.Should().Be(3, "Should find US, CH, DE");
 
-        var ids = results.Cast<MeshNode>().Select(n => n.Id).ToList();
+        var ids = results.Select(n => n.Id).ToList();
         ids.Should().Contain("US");
         ids.Should().Contain("CH");
         ids.Should().Contain("DE");
@@ -363,19 +367,20 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Verifies that ExchangeRate MeshNodes are loaded via IMeshService.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task ExchangeRates_ShouldLoadFromMeshNodes()
+    public void ExchangeRates_ShouldLoadFromMeshNodes()
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         var query = "nodeType:FutuRe/ExchangeRate namespace:FutuRe/ExchangeRate state:Active";
         Output.WriteLine($"Querying: {query}");
 
-        var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
+        var results = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         Output.WriteLine($"Found {results.Count} ExchangeRate nodes");
         results.Count.Should().Be(4, "Should find EUR-CHF, USD-CHF, JPY-CHF, CHF-CHF");
 
-        var ids = results.Cast<MeshNode>().Select(n => n.Id).ToList();
+        var ids = results.Select(n => n.Id).ToList();
         Output.WriteLine($"Exchange rates: {string.Join(", ", ids)}");
         ids.Should().Contain("EUR-CHF");
         ids.Should().Contain("JPY-CHF");
@@ -385,14 +390,15 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Verifies that LineOfBusiness MeshNodes are loaded via IMeshService.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task LinesOfBusiness_ShouldLoadFromMeshNodes()
+    public void LinesOfBusiness_ShouldLoadFromMeshNodes()
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         var query = "nodeType:FutuRe/LineOfBusiness namespace:FutuRe/LineOfBusiness state:Active";
         Output.WriteLine($"Querying: {query}");
 
-        var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
+        var results = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         Output.WriteLine($"Found {results.Count} LineOfBusiness nodes");
         results.Count.Should().Be(10, "Should find all 10 group lines of business");
@@ -437,7 +443,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// and that executing its query returns the expected LoB instances.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task LineOfBusiness_Search_ShouldReturnGroupLoBs()
+    public void LineOfBusiness_Search_ShouldReturnGroupLoBs()
     {
         var client = GetClient();
         var address = new Address("FutuRe/LineOfBusiness");
@@ -465,7 +471,8 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         // Execute the query and verify we get the 10 group-level LoBs
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(hiddenQuery)).ToListAsync();
+        var results = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(hiddenQuery))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
         Output.WriteLine($"Group query returned {results.Count} results");
         results.Count.Should().Be(10, "Should find all 10 group lines of business");
     }
@@ -476,7 +483,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// sibling nodes like Analysis or TransactionMapping.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task EuropeRe_LineOfBusiness_Search_ShouldReturn8LoBs()
+    public void EuropeRe_LineOfBusiness_Search_ShouldReturn8LoBs()
     {
         var client = GetClient();
         var address = new Address("FutuRe/EuropeRe/LineOfBusiness");
@@ -508,13 +515,14 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         // Execute the query and verify we get the 8 EuropeRe LoBs
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(hiddenQuery)).ToListAsync();
-        var names = results.Cast<MeshNode>().Select(n => n.Name).ToList();
+        var results = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(hiddenQuery))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var names = results.Select(n => n.Name).ToList();
         Output.WriteLine($"EuropeRe query returned {results.Count} results: {string.Join(", ", names)}");
         results.Count.Should().Be(8, "Should find all 8 EuropeRe lines of business");
 
         // Verify NO sibling nodes are returned (the bug that showed Analysis/TransactionMapping)
-        var ids = results.Cast<MeshNode>().Select(n => n.Id).ToList();
+        var ids = results.Select(n => n.Id).ToList();
         ids.Should().NotContain("Analysis", "Search should not return the Analysis sibling node");
         ids.Should().NotContain("TransactionMapping", "Search should not return the TransactionMapping sibling node");
     }
@@ -819,7 +827,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Verifies that the EuropeRe Search area renders with child nodes.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task EuropeRe_Search_ShouldRenderWithChildren()
+    public void EuropeRe_Search_ShouldRenderWithChildren()
     {
         var client = GetClient();
         var address = new Address("FutuRe/EuropeRe");
@@ -842,7 +850,8 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"EuropeRe Search query: {hiddenQuery}");
 
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(hiddenQuery)).ToListAsync();
+        var results = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(hiddenQuery))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
         Output.WriteLine($"EuropeRe Search returned {results.Count} results");
         results.Count.Should().BeGreaterThanOrEqualTo(2,
             "EuropeRe should have at least LineOfBusiness and TransactionMapping child nodes");
@@ -854,13 +863,14 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Verifies that all FutuRe NodeType definitions exist.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task AllNodeTypes_ShouldExist()
+    public void AllNodeTypes_ShouldExist()
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         var query = "namespace:FutuRe nodeType:NodeType state:Active";
-        var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
-        var ids = results.Cast<MeshNode>().Select(n => n.Id).ToList();
+        var results = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var ids = results.Select(n => n.Id).ToList();
 
         Output.WriteLine($"Found {results.Count} NodeTypes: {string.Join(", ", ids)}");
 
@@ -879,17 +889,18 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Verifies that both BusinessUnit instances exist with correct properties.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task BusinessUnits_ShouldExistWithProperties()
+    public void BusinessUnits_ShouldExistWithProperties()
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         var query = "nodeType:FutuRe/BusinessUnit namespace:FutuRe state:Active";
-        var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
+        var results = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         Output.WriteLine($"Found {results.Count} BusinessUnits");
         results.Count.Should().Be(4, "Should have EuropeRe, AmericasIns, AsiaRe, and Group");
 
-        var ids = results.Cast<MeshNode>().Select(n => n.Id).ToList();
+        var ids = results.Select(n => n.Id).ToList();
         ids.Should().Contain("EuropeRe");
         ids.Should().Contain("AmericasIns");
         ids.Should().Contain("AsiaRe");
@@ -1175,13 +1186,13 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Verifies that activity log nodes can be queried via IMeshService.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task ActivityLogs_ShouldBeQueryableViaMeshQuery()
+    public void ActivityLogs_ShouldBeQueryableViaMeshQuery()
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-        var nodes = new List<MeshNode>();
-        await foreach (var n in meshQuery.QueryAsync<MeshNode>("nodeType:ActivityLog sort:Start-desc limit:30 scope:descendants"))
-            nodes.Add(n);
+        var nodes = meshQuery
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("nodeType:ActivityLog sort:Start-desc limit:30 scope:descendants"))
+            .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         var logs = nodes.Select(n => n.Content).OfType<ActivityLog>().ToList();
 

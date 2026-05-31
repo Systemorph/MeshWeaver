@@ -94,7 +94,14 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
     /// Verifies that a node type correctly loads data from its configured source documents.
     /// This is a parameterized test that can be used for any node type.
     /// </summary>
-    [Theory(Timeout = 10000)]
+    /// <remarks>
+    /// Method timeout must exceed the inner data-load wait below. The Ping + cold-start
+    /// NodeType compilation + source-document load consume real time before the
+    /// <c>.Within(10.Seconds())</c> data wait can even begin observing; a 10 s method
+    /// timeout left zero headroom and aborted the first (cold) test rows mid-load.
+    /// 30 s gives the activation cost room ahead of the bounded data wait.
+    /// </remarks>
+    [Theory(Timeout = 30000)]
     [MemberData(nameof(CornerstonePricingTestCases))]
     public void NodeType_LoadsDataFromSourceDocuments(DataLoadingTestCase testCase)
     {
@@ -109,10 +116,13 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
         var hub = Mesh.GetHostedHub(address);
         var workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
 
-        // Get data for the specified type
+        // Get data for the specified type. Cold-start NodeType compilation + source-document
+        // load can exceed 10 s when this test runs against a freshly-disposed mesh (no warm
+        // type registry), so the inner reactive wait gets a 25 s budget inside the 30 s method
+        // timeout — the load completes, it is just slow on the cold path.
         var data = GetDynamicObservable(workspace, testCase.TypeName)
             .Should()
-            .Within(10.Seconds())
+            .Within(25.Seconds())
             .Match(d => d != null && d.Length > 0)!;
 
         // Verify data was loaded
@@ -139,7 +149,13 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
     /// <summary>
     /// Verifies that a node hub can be initialized and has the expected data types registered.
     /// </summary>
-    [Theory(Timeout = 10000)]
+    /// <remarks>
+    /// The method loops over three types, each polling the registry for up to 8 s, so the
+    /// cumulative inner wait can reach ~24 s when NodeType compilation is cold. A 10 s method
+    /// timeout aborted the loop mid-compile; 40 s covers the cold compile that the first
+    /// type's wait absorbs (the remaining types are already warm).
+    /// </remarks>
+    [Theory(Timeout = 40000)]
     [InlineData("Cornerstone/Microsoft/2026", new[] { "PropertyRisk", "ReinsuranceAcceptance", "ReinsuranceSection" })]
     public void NodeHub_HasExpectedDataTypesRegistered(string nodeAddress, string[] expectedTypes)
     {
@@ -192,7 +208,12 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
     /// Verifies that data loaded from source documents has valid structure.
     /// Checks that key properties are present and have valid values.
     /// </summary>
-    [Theory(Timeout = 10000)]
+    /// <remarks>
+    /// Same timeout headroom rationale as <see cref="NodeType_LoadsDataFromSourceDocuments"/>:
+    /// the inner <c>.Within(10.Seconds())</c> data wait needs room ahead of it for the
+    /// Ping + cold-start activation, so the method timeout is 30 s, not 10 s.
+    /// </remarks>
+    [Theory(Timeout = 30000)]
     [InlineData("Cornerstone/Microsoft/2026", "PropertyRisk", "Id", "LocationName")]
     [InlineData("Cornerstone/Microsoft/2026", "ReinsuranceAcceptance", "Id", "Name")]
     [InlineData("Cornerstone/Microsoft/2026", "ReinsuranceSection", "Id", "Limit")]
@@ -209,9 +230,12 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
         var hub = Mesh.GetHostedHub(address);
         var workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
 
+        // Cold-start headroom — see NodeType_LoadsDataFromSourceDocuments. The inner wait
+        // gets 25 s inside the 30 s method timeout so a cold NodeType compile + source load
+        // can finish before the assertion gives up.
         var data = GetDynamicObservable(workspace, typeName)
             .Should()
-            .Within(10.Seconds())
+            .Within(25.Seconds())
             .Match(d => d != null && d.Length > 0)!;
 
         // Verify each record has the required properties with non-null values

@@ -46,15 +46,16 @@ public class SyncedQueryPerUserIsolationTest(ITestOutputHelper output) : Monolit
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder);
 
-    protected override async Task SetupAccessRightsAsync()
+    protected override Task SetupAccessRightsAsync()
     {
         // Grant the test runner Admin on TestPartition so the setup writes go
         // through; the actual assertions then switch identity to Alice/Bob.
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        await meshService.CreateNode(
+        meshService.CreateNode(
             AssignmentNodeFactory.UserRole(
                 Mesh.Address.ToFullString(), "Admin", TestPartition))
-            .FirstAsync().ToTask(TestTimeout);
+            .Should().Emit();
+        return Task.CompletedTask;
     }
 
     /// <summary>

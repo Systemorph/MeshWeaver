@@ -34,37 +34,37 @@ public class HttpMeshStorageAdapterTests
         };
 
     [Fact]
-    public async Task ReadAsync_calls_GetAsync_with_path_and_returns_node()
+    public void ReadAsync_calls_GetAsync_with_path_and_returns_node()
     {
         var node = SampleNode("rbuergi/Story/KernelTour");
         var stub = new StubRemoteClient { GetResult = node };
         var adapter = new HttpMeshStorageAdapter(stub);
 
-        var actual = await adapter.ReadAsync("rbuergi/Story/KernelTour", JsonOptions, TestContext.Current.CancellationToken);
+        var actual = adapter.Read("rbuergi/Story/KernelTour", JsonOptions).Should().Emit();
 
         actual.Should().BeSameAs(node);
         stub.GetCalls.Should().ContainSingle().Which.Should().Be("rbuergi/Story/KernelTour");
     }
 
     [Fact]
-    public async Task ReadAsync_returns_null_when_remote_returns_null()
+    public void ReadAsync_returns_null_when_remote_returns_null()
     {
         var stub = new StubRemoteClient { GetResult = null };
         var adapter = new HttpMeshStorageAdapter(stub);
 
-        var actual = await adapter.ReadAsync("missing/path", JsonOptions, TestContext.Current.CancellationToken);
+        var actual = adapter.Read("missing/path", JsonOptions).Should().Emit();
 
         actual.Should().BeNull();
     }
 
     [Fact]
-    public async Task WriteAsync_creates_when_node_doesnt_exist_remote()
+    public void WriteAsync_creates_when_node_doesnt_exist_remote()
     {
         var newNode = SampleNode("rbuergi/New");
         var stub = new StubRemoteClient { GetResult = null };  // remote says: missing
         var adapter = new HttpMeshStorageAdapter(stub);
 
-        await adapter.WriteAsync(newNode, JsonOptions, TestContext.Current.CancellationToken);
+        adapter.Write(newNode, JsonOptions).Should().Emit();
 
         stub.CreateCalls.Should().ContainSingle().Which.Should().BeSameAs(newNode);
         stub.UpdateCalls.Should().BeEmpty();
@@ -73,54 +73,54 @@ public class HttpMeshStorageAdapterTests
     }
 
     [Fact]
-    public async Task WriteAsync_updates_when_node_exists_remote()
+    public void WriteAsync_updates_when_node_exists_remote()
     {
         var existingNode = SampleNode("rbuergi/Existing");
         var newVersion = existingNode with { Name = "Updated" };
         var stub = new StubRemoteClient { GetResult = existingNode };  // remote says: present
         var adapter = new HttpMeshStorageAdapter(stub);
 
-        await adapter.WriteAsync(newVersion, JsonOptions, TestContext.Current.CancellationToken);
+        adapter.Write(newVersion, JsonOptions).Should().Emit();
 
         stub.UpdateCalls.Should().ContainSingle().Which.Should().BeSameAs(newVersion);
         stub.CreateCalls.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task DeleteAsync_calls_remote_DeleteAsync_with_path()
+    public void DeleteAsync_calls_remote_DeleteAsync_with_path()
     {
         var stub = new StubRemoteClient();
         var adapter = new HttpMeshStorageAdapter(stub);
 
-        await adapter.DeleteAsync("rbuergi/ToDelete", TestContext.Current.CancellationToken);
+        adapter.Delete("rbuergi/ToDelete").Should().Emit();
 
         stub.DeleteCalls.Should().ContainSingle().Which.Should().Be("rbuergi/ToDelete");
     }
 
     [Fact]
-    public async Task ExistsAsync_returns_true_when_remote_returns_node()
+    public void ExistsAsync_returns_true_when_remote_returns_node()
     {
         var stub = new StubRemoteClient { GetResult = SampleNode("X") };
         var adapter = new HttpMeshStorageAdapter(stub);
 
-        var exists = await adapter.ExistsAsync("X", TestContext.Current.CancellationToken);
+        var exists = adapter.Exists("X").Should().Emit();
 
         exists.Should().BeTrue();
     }
 
     [Fact]
-    public async Task ExistsAsync_returns_false_when_remote_returns_null()
+    public void ExistsAsync_returns_false_when_remote_returns_null()
     {
         var stub = new StubRemoteClient { GetResult = null };
         var adapter = new HttpMeshStorageAdapter(stub);
 
-        var exists = await adapter.ExistsAsync("missing", TestContext.Current.CancellationToken);
+        var exists = adapter.Exists("missing").Should().Emit();
 
         exists.Should().BeFalse();
     }
 
     [Fact]
-    public async Task ListChildPathsAsync_with_parent_searches_immediate_namespace()
+    public void ListChildPathsAsync_with_parent_searches_immediate_namespace()
     {
         var stub = new StubRemoteClient
         {
@@ -128,7 +128,7 @@ public class HttpMeshStorageAdapterTests
         };
         var adapter = new HttpMeshStorageAdapter(stub);
 
-        var (nodes, dirs) = await adapter.ListChildPathsAsync("rbuergi/Story", TestContext.Current.CancellationToken);
+        var (nodes, dirs) = adapter.ListChildPaths("rbuergi/Story").Should().Emit();
 
         nodes.Should().BeEquivalentTo(new[] { "rbuergi/Story/KernelTour", "rbuergi/Story/Other" }, JsonSerializerOptions.Default);
         dirs.Should().BeEmpty(
@@ -139,37 +139,35 @@ public class HttpMeshStorageAdapterTests
     }
 
     [Fact]
-    public async Task ListChildPathsAsync_with_null_parent_searches_root_namespace()
+    public void ListChildPathsAsync_with_null_parent_searches_root_namespace()
     {
         var stub = new StubRemoteClient { SearchResult = ["rbuergi", "Doc"] };
         var adapter = new HttpMeshStorageAdapter(stub);
 
-        var (nodes, _) = await adapter.ListChildPathsAsync(null, TestContext.Current.CancellationToken);
+        var (nodes, _) = adapter.ListChildPaths(null).Should().Emit();
 
         nodes.Should().BeEquivalentTo(new[] { "rbuergi", "Doc" }, JsonSerializerOptions.Default);
         stub.SearchCalls.Should().ContainSingle().Which.Should().Be("namespace:");
     }
 
     [Fact]
-    public async Task GetPartitionObjectsAsync_returns_empty_in_v1()
+    public void GetPartitionObjectsAsync_returns_empty_in_v1()
     {
         var adapter = new HttpMeshStorageAdapter(new StubRemoteClient());
 
-        var collected = new List<object>();
-        await foreach (var item in adapter.GetPartitionObjectsAsync("rbuergi", null, JsonOptions, TestContext.Current.CancellationToken))
-            collected.Add(item);
+        var collected = adapter.GetPartitionObjects("rbuergi", null, JsonOptions).ToList().Should().Emit();
 
         collected.Should().BeEmpty(
             because: "v1 adapter has no partition-object enumeration; inline node content covers the immediate use-cases");
     }
 
     [Fact]
-    public async Task SavePartitionObjectsAsync_is_noop_in_v1()
+    public void SavePartitionObjectsAsync_is_noop_in_v1()
     {
         var stub = new StubRemoteClient();
         var adapter = new HttpMeshStorageAdapter(stub);
 
-        await adapter.SavePartitionObjectsAsync("rbuergi", null, [new object()], JsonOptions, TestContext.Current.CancellationToken);
+        adapter.SavePartitionObjects("rbuergi", null, [new object()], JsonOptions).Should().Emit();
 
         // The stub records every call routed through it â€” partitions are no-op,
         // so nothing should have hit the remote client.

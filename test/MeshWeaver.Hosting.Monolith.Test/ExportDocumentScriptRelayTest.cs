@@ -46,22 +46,22 @@ public class ExportDocumentScriptRelayTest(ITestOutputHelper output) : MonolithM
             .AddMarkdownExport();
 
     [Fact]
-    public async Task ExportRequest_StartsScriptActivity_AndReturnsBytesOnTerminal()
+    public void ExportRequest_StartsScriptActivity_AndReturnsBytesOnTerminal()
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        await meshService.CreateNode(MeshNode.FromPath(ExportNs) with
+        meshService.CreateNode(MeshNode.FromPath(ExportNs) with
         {
             Name = "Test Export Root",
             NodeType = MarkdownNodeType.NodeType
-        });
-        await meshService.CreateNode(MeshNode.FromPath(SourcePath) with
+        }).Should().Emit();
+        meshService.CreateNode(MeshNode.FromPath(SourcePath) with
         {
             Name = "Sample Document",
             NodeType = MarkdownNodeType.NodeType,
             Content = MarkdownContent.Parse(
                 "# Sample\n\nThis is a sample markdown body that should render to a PDF document.",
                 "", SourcePath)
-        });
+        }).Should().Emit();
 
         var request = new ExportDocumentRequest(SourcePath, new DocumentExportOptions
         {
@@ -71,16 +71,12 @@ public class ExportDocumentScriptRelayTest(ITestOutputHelper output) : MonolithM
             TableOfContents = false
         });
 
-        var ct = TestContext.Current.CancellationToken;
-
         // Step 1 — dispatch the request, observe the start-ack. The handler
         // returns immediately with the activity path; it does NOT wait for
         // the script to finish.
-        var dispatch = await Mesh
+        var dispatch = Mesh
             .Observe<ExportDocumentResponse>(request, o => o.WithTarget(new Address(SourcePath)))
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(30))
-            .ToTask(ct);
+            .Should().Within(30.Seconds()).Emit();
 
         dispatch.Message.Error.Should().BeNullOrEmpty(
             "the export handler should return a successful start-ack");
@@ -96,13 +92,11 @@ public class ExportDocumentScriptRelayTest(ITestOutputHelper output) : MonolithM
         // ActivityLog state; GetMeshNodeStream activates that hub and emits
         // every UpdateMeshNode the script writes.
         var workspace = GetClient(c => c.AddData()).GetWorkspace();
-        var terminal = await workspace
+        var terminal = workspace
             .GetMeshNodeStream(dispatch.Message.ActivityPath)
             .Select(node => node?.Content as ActivityLog)
-            .Where(log => log is not null && log.Status != ActivityStatus.Running)
-            .Take(1)
-            .Timeout(TimeSpan.FromMinutes(2))
-            .ToTask(ct);
+            .Should().Within(2.Minutes())
+            .Match(log => log is not null && log.Status != ActivityStatus.Running);
 
         terminal!.Status.Should().Be(ActivityStatus.Succeeded,
             because: "the script should render the PDF without errors. Messages:\n  "

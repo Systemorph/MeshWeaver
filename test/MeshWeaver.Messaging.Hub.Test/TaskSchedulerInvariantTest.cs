@@ -4,6 +4,7 @@ using MeshWeaver.Fixture;
 using Xunit;
 
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Messaging.Hub.Test;
 
@@ -84,14 +85,15 @@ public class TaskSchedulerInvariantTest(ITestOutputHelper output) : HubTestBase(
     /// invariant: each hub is an independent actor.
     /// </summary>
     [Fact]
-    public async Task HostedHub_FromCustomSchedulerHub_DefaultsToTaskSchedulerDefault()
+    public void HostedHub_FromCustomSchedulerHub_DefaultsToTaskSchedulerDefault()
     {
         var pair = new ConcurrentExclusiveSchedulerPair();
         var parentScheduler = pair.ExclusiveScheduler;
 
         var subAddress = new Address("sub", "scheduler-test");
-        WhereAmIResponse? subResponse = null;
-        var subDone = new TaskCompletionSource<WhereAmIResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
+        // ReplaySubject: the sub-hub's handler may fire OnNext before this test's
+        // blocking .Should() subscribes, so a hot Subject would drop the emission.
+        var subDone = new ReplaySubject<WhereAmIResponse>(1);
 
         var parent = Mesh.GetHostedHub(
             CreateHostAddress(),
@@ -105,8 +107,8 @@ public class TaskSchedulerInvariantTest(ITestOutputHelper output) : HubTestBase(
                         subCfg => subCfg.WithHandler<WhereAmIRequest>((sh, subReq) =>
                         {
                             var subCurrent = TaskScheduler.Current;
-                            subResponse = new WhereAmIResponse(subCurrent.Id, subCurrent.GetType().FullName ?? "?");
-                            subDone.TrySetResult(subResponse);
+                            var subResponse = new WhereAmIResponse(subCurrent.Id, subCurrent.GetType().FullName ?? "?");
+                            subDone.OnNext(subResponse);
                             sh.Post(subResponse, o => o.ResponseFor(subReq));
                             return subReq.Processed();
                         }));
@@ -121,7 +123,7 @@ public class TaskSchedulerInvariantTest(ITestOutputHelper output) : HubTestBase(
         // Trigger parent â†’ which creates sub-hub + posts to it.
         parent.Observe(new WhereAmIRequest(), o => o.WithTarget(parent.Address)).Should().Within(10.Seconds()).Emit();
 
-        var observed = await subDone.Task.WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+        var observed = subDone.Should().Within(10.Seconds()).Emit();
 
         observed.TaskSchedulerId.Should().Be(TaskScheduler.Default.Id,
             because: "hosted sub-hubs must default to TaskScheduler.Default even when created from a parent that uses a custom scheduler");

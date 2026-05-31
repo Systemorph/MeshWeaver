@@ -20,11 +20,12 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     protected override bool ShareMeshAcrossTests => true;
 
     [Fact(Timeout = 20000)]
-    public async Task PingPong()
+    public void PingPong()
     {
         var client = GetClient();
-        var response = await client
-            .Observe(new PingRequest(), o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(new CancellationTokenSource(10.Seconds()).Token);
+        var response = client
+            .Observe(new PingRequest(), o => o.WithTarget(Mesh.Address))
+            .Should().Within(10.Seconds()).Emit();
         response.Should().NotBeNull();
         response.Message.Should().BeOfType<PingResponse>();
     }

@@ -71,7 +71,11 @@ public class ApiTokenServiceStaleReadTest(ITestOutputHelper output) : MonolithMe
         // Confirm the revoke actually took effect — ValidateToken must reject the now-revoked token.
         // ApiToken paths don't have a per-node hub, so we can't subscribe to MeshNodeReference;
         // ValidateToken exercises the same authoritative read path used in production auth.
-        var validated = service.ValidateToken(creation.RawToken).Should().Emit();
+        // It reads via the live GetApiTokenByHash synced query, whose snapshot can lag the
+        // just-applied revoke — re-issue on a 50 ms interval until the token reads as null.
+        var validated = Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => service.ValidateToken(creation.RawToken).Take(1))
+            .Should().Match(v => v is null, "revoked tokens must not validate");
         validated.Should().BeNull("revoked tokens must not validate");
     }
 
@@ -141,13 +145,21 @@ public class ApiTokenServiceStaleReadTest(ITestOutputHelper output) : MonolithMe
 
         // Confirm the token validates first (so the test failure mode below is
         // strictly "revoke didn't take effect" not "create never landed").
-        var beforeRevoke = service.ValidateToken(creation.RawToken).Should().Emit();
+        // ValidateToken reads the live GetApiTokenByHash synced query, whose
+        // first snapshot can be empty right after the create — re-issue on a
+        // 50 ms interval until the token becomes visible.
+        var beforeRevoke = Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => service.ValidateToken(creation.RawToken).Take(1))
+            .Should().Match(v => v is not null);
         beforeRevoke.Should().NotBeNull();
 
         var ok = service.RevokeToken(creation.Node.Path).Should().Emit();
         ok.Should().BeTrue();
 
-        var afterRevoke = service.ValidateToken(creation.RawToken).Should().Emit();
+        // Re-issue until the revoke propagates into the synced view (validates as null).
+        var afterRevoke = Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => service.ValidateToken(creation.RawToken).Take(1))
+            .Should().Match(v => v is null, "revoked tokens must not validate");
         afterRevoke.Should().BeNull("revoked tokens must not validate");
     }
 }

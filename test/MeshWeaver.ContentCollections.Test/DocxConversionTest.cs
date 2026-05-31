@@ -103,7 +103,7 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [Fact]
-    public async Task ContentAutocomplete_Filters_And_Scores_By_Query()
+    public void ContentAutocomplete_Filters_And_Scores_By_Query()
     {
         // Arrange
         var hub = GetClient();
@@ -114,11 +114,7 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
         contentProvider.Should().NotBeNull("ContentAutocompleteProvider should be registered");
 
         // Act — query "sample" should match sample.docx but NOT readme.md
-        var items = new List<AutocompleteItem>();
-        await foreach (var item in contentProvider!.GetItems("sample").ToAsyncEnumerableSequence(TestContext.Current.CancellationToken))
-        {
-            items.Add(item);
-        }
+        var items = contentProvider!.GetItems("sample").ToList().Should().Emit();
 
         // Assert — only matching files returned
         Output.WriteLine($"Autocomplete items for 'sample': {items.Count}");
@@ -137,7 +133,7 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [Fact]
-    public async Task ContentAutocomplete_ExactMatch_Gets_Highest_Priority()
+    public void ContentAutocomplete_ExactMatch_Gets_Highest_Priority()
     {
         // Arrange
         var hub = GetClient();
@@ -148,11 +144,7 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
         contentProvider.Should().NotBeNull();
 
         // Act — exact name match
-        var items = new List<AutocompleteItem>();
-        await foreach (var item in contentProvider!.GetItems("sample.docx").ToAsyncEnumerableSequence(TestContext.Current.CancellationToken))
-        {
-            items.Add(item);
-        }
+        var items = contentProvider!.GetItems("sample.docx").ToList().Should().Emit();
 
         // Assert — exact match should score 3000
         var docxItem = items.First(i => i.Label == "sample.docx");
@@ -160,7 +152,7 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [Fact]
-    public async Task ContentAutocomplete_Wraps_Spaces_In_Quotes()
+    public void ContentAutocomplete_Wraps_Spaces_In_Quotes()
     {
         // Arrange — create a file with spaces in the name
         File.WriteAllText(Path.Combine(_contentBasePath, "my document.docx"), "");
@@ -174,11 +166,7 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
             .FirstOrDefault();
 
         // Act
-        var items = new List<AutocompleteItem>();
-        await foreach (var item in contentProvider!.GetItems("my doc").ToAsyncEnumerableSequence(TestContext.Current.CancellationToken))
-        {
-            items.Add(item);
-        }
+        var items = contentProvider!.GetItems("my doc").ToList().Should().Emit();
 
         // Assert
         Output.WriteLine($"Items for 'my doc': {items.Count}");

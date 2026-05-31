@@ -59,7 +59,7 @@ public class CompileFinishAndDisposeTest(ITestOutputHelper output) : MonolithMes
     /// activity <see cref="ActivityLog"/> back so we can assert the terminal
     /// state without a separate subscription.
     /// </summary>
-    private Task<GetCompilationPathResponse> CreateAndCompile(
+    private IObservable<GetCompilationPathResponse> CreateAndCompile(
         string nodeTypeId,
         NodeTypeDefinition definition,
         params (string Name, string Code)[] sources)
@@ -87,17 +87,16 @@ public class CompileFinishAndDisposeTest(ITestOutputHelper output) : MonolithMes
             .SelectMany(_ => Mesh.Observe(
                     new GetCompilationPathRequest(),
                     o => o.WithTarget(new Address(nodeTypePath))))
-            .Select(d => d.Message)
-            .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+            .Select(d => d.Message);
     }
 
     [Fact(Timeout = 60_000)]
-    public async Task TriggeredCompile_FinishesGeneration_AndActivityReachesTerminalDisposedState()
+    public void TriggeredCompile_FinishesGeneration_AndActivityReachesTerminalDisposedState()
     {
-        var response = await CreateAndCompile("FinishStory",
+        var response = CreateAndCompile("FinishStory",
             new NodeTypeDefinition { Configuration = "config => config.WithContentType<FinishStory>()" },
-            ("code", "public record FinishStory { public string Title { get; init; } = string.Empty; }"));
+            ("code", "public record FinishStory { public string Title { get; init; } = string.Empty; }"))
+            .Should().Within(55.Seconds()).Emit();
 
         // Finished generation: the compile produced an assembly. This is the
         // "activity updates the NodeType when it has finished" half of the
@@ -120,15 +119,16 @@ public class CompileFinishAndDisposeTest(ITestOutputHelper output) : MonolithMes
     }
 
     [Fact(Timeout = 60_000)]
-    public async Task FailedCompile_StillReachesTerminalDisposedState_NotStuck()
+    public void FailedCompile_StillReachesTerminalDisposedState_NotStuck()
     {
         // Even a broken source must not wedge the activity: it finishes Failed
         // (with End stamped) rather than hanging Running until a deadline. The
         // consumer then sees a settled Error via stream.Where and renders the
         // diagnostic — not the "did not settle" timeout overlay.
-        var response = await CreateAndCompile("FinishBroken",
+        var response = CreateAndCompile("FinishBroken",
             new NodeTypeDefinition { Configuration = "config => config.WithContentType<FinishBroken>()" },
-            ("code", "public record FinishBroken { this is not valid C# }"));
+            ("code", "public record FinishBroken { this is not valid C# }"))
+            .Should().Within(55.Seconds()).Emit();
 
         response.Success.Should().BeFalse("invalid source must fault the compile");
         response.Log.Should().NotBeNull();

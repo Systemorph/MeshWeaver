@@ -69,14 +69,12 @@ public class AgentPickerProjectionTest : MonolithMeshTestBase
     }
 
     [Fact]
-    public async Task ObserveAgents_FromMeshHub_PopulatesCombobox()
+    public void ObserveAgents_FromMeshHub_PopulatesCombobox()
     {
-        var agents = await AgentPickerProjection
+        var agents = AgentPickerProjection
             .ObserveAgents(Workspace, Hub, currentPath: null)
-            .Where(a => a.Count > 0)
-            .Take(1)
-            .Timeout(15.Seconds())
-            .ToTask();
+            .Should().Within(15.Seconds())
+            .Match(a => a.Count > 0);
 
         agents.Should().NotBeEmpty(
             "ObserveAgents is the EXACT pipe ThreadChatView binds to via "
@@ -91,14 +89,12 @@ public class AgentPickerProjectionTest : MonolithMeshTestBase
     }
 
     [Fact]
-    public async Task ObserveModels_FromMeshHub_PopulatesCombobox()
+    public void ObserveModels_FromMeshHub_PopulatesCombobox()
     {
-        var models = await AgentPickerProjection
+        var models = AgentPickerProjection
             .ObserveModels(Workspace, Hub, currentPath: null)
-            .Where(m => m.Count > 0)
-            .Take(1)
-            .Timeout(15.Seconds())
-            .ToTask();
+            .Should().Within(15.Seconds())
+            .Match(m => m.Count > 0);
 
         models.Should().NotBeEmpty(
             "ObserveModels is the EXACT pipe ThreadChatView binds to via "
@@ -128,19 +124,17 @@ public class AgentPickerProjectionTest : MonolithMeshTestBase
     /// that one query failing doesn't take the other down.
     /// </summary>
     [Fact]
-    public async Task ObserveAgents_FromHostedSubHub_PopulatesCombobox()
+    public void ObserveAgents_FromHostedSubHub_PopulatesCombobox()
     {
         var portalHub = Mesh.GetHostedHub(
             new Address("portal", "test-user"),
             c => c.AddData());
         var workspace = portalHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
-        var agents = await AgentPickerProjection
+        var agents = AgentPickerProjection
             .ObserveAgents(workspace, portalHub, currentPath: null)
-            .Where(a => a.Count > 0)
-            .Take(1)
-            .Timeout(15.Seconds())
-            .ToTask();
+            .Should().Within(15.Seconds())
+            .Match(a => a.Count > 0);
 
         agents.Should().NotBeEmpty(
             "the hosted sub-hub is what PortalApplication.Hub is in production. "
@@ -149,19 +143,17 @@ public class AgentPickerProjectionTest : MonolithMeshTestBase
     }
 
     [Fact]
-    public async Task ObserveModels_FromHostedSubHub_PopulatesCombobox()
+    public void ObserveModels_FromHostedSubHub_PopulatesCombobox()
     {
         var portalHub = Mesh.GetHostedHub(
             new Address("portal", "test-user-2"),
             c => c.AddData());
         var workspace = portalHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
-        var models = await AgentPickerProjection
+        var models = AgentPickerProjection
             .ObserveModels(workspace, portalHub, currentPath: null)
-            .Where(m => m.Count > 0)
-            .Take(1)
-            .Timeout(15.Seconds())
-            .ToTask();
+            .Should().Within(15.Seconds())
+            .Match(m => m.Count > 0);
 
         models.Should().NotBeEmpty(
             "Model combobox lives on the same hosted sub-hub — empty here = "
@@ -220,14 +212,12 @@ public class AgentPickerProjectionPartitionedTest : MonolithMeshTestBase
     }
 
     [Fact]
-    public async Task PartitionedPath_ObserveAgents_PopulatesCombobox()
+    public void PartitionedPath_ObserveAgents_PopulatesCombobox()
     {
-        var agents = await AgentPickerProjection
+        var agents = AgentPickerProjection
             .ObserveAgents(Workspace, Hub, currentPath: null)
-            .Where(a => a.Count > 0)
-            .Take(1)
-            .Timeout(15.Seconds())
-            .ToTask();
+            .Should().Within(15.Seconds())
+            .Match(a => a.Count > 0);
 
         agents.Should().NotBeEmpty(
             "AddPartitionedCoreAndWrapperServices must register MeshQueryEngine "
@@ -237,7 +227,7 @@ public class AgentPickerProjectionPartitionedTest : MonolithMeshTestBase
     }
 
     [Fact]
-    public async Task PartitionedPath_ObserveAgents_FromHostedSubHub_PopulatesCombobox()
+    public void PartitionedPath_ObserveAgents_FromHostedSubHub_PopulatesCombobox()
     {
         // Closer to production: chat hub is a hosted sub-hub of the mesh hub.
         var portalHub = Mesh.GetHostedHub(
@@ -245,26 +235,22 @@ public class AgentPickerProjectionPartitionedTest : MonolithMeshTestBase
             c => c.AddData());
         var workspace = portalHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
-        var agents = await AgentPickerProjection
+        var agents = AgentPickerProjection
             .ObserveAgents(workspace, portalHub, currentPath: null)
-            .Where(a => a.Count > 0)
-            .Take(1)
-            .Timeout(15.Seconds())
-            .ToTask();
+            .Should().Within(15.Seconds())
+            .Match(a => a.Count > 0);
 
         agents.Should().NotBeEmpty();
         agents.Select(a => a.Name).Should().Contain("Assistant");
     }
 
     [Fact]
-    public async Task PartitionedPath_ObserveModels_PopulatesCombobox()
+    public void PartitionedPath_ObserveModels_PopulatesCombobox()
     {
-        var models = await AgentPickerProjection
+        var models = AgentPickerProjection
             .ObserveModels(Workspace, Hub, currentPath: null)
-            .Where(m => m.Count > 0)
-            .Take(1)
-            .Timeout(15.Seconds())
-            .ToTask();
+            .Should().Within(15.Seconds())
+            .Match(m => m.Count > 0);
 
         models.Should().NotBeEmpty();
         models.Select(m => m.Name).Should().Contain("claude-opus-4-6");

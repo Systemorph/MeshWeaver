@@ -191,10 +191,10 @@ public record GraphRoot
     }
 
     [Fact(Timeout = 10000)]
-    public async Task MeshNode_InitialVersion_IsZero()
+    public void MeshNode_InitialVersion_IsZero()
     {
-        // Arrange - check initial version via query before hub starts
-        var initialNode = await ReadNodeAsync("graph");
+        // Arrange - check initial version via the authoritative owner-hub read
+        var initialNode = ReadNode("graph").Should().Emit();
 
         // Assert - Version property exists and is initialized to 0
         initialNode.Should().NotBeNull("graph node should exist in persistence");
@@ -202,7 +202,7 @@ public record GraphRoot
     }
 
     [Fact(Timeout = 10000)]
-    public async Task MeshNode_VersionProperty_CanBeSetAndPersisted()
+    public void MeshNode_VersionProperty_CanBeSetAndPersisted()
     {
         // Arrange - create a node with a specific version. Use a built-in
         // NodeType ("Group") so the per-node hub activates without waiting
@@ -219,10 +219,10 @@ public record GraphRoot
         };
 
         // Act - save the node with version
-        await NodeFactory.CreateNodeAsync(nodeWithVersion, ct: TestContext.Current.CancellationToken);
+        NodeFactory.CreateNode(nodeWithVersion).Should().Emit();
 
         // Assert - version is preserved when reading back
-        var savedNode = await ReadNodeAsync("test/versioned");
+        var savedNode = ReadNode("test/versioned").Should().Emit();
         savedNode.Should().NotBeNull();
         savedNode!.Version.Should().Be(42, "version should be preserved in persistence");
     }

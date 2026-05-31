@@ -534,13 +534,13 @@ public class HubSelfAccessTests(ITestOutputHelper output) : MonolithMeshTestBase
     {
         await base.InitializeAsync();
 
-        await NodeFactory.CreateNode(
+        NodeFactory.CreateNode(
             new MeshNode("TestHub")
             {
                 Name = "Test Hub",
                 NodeType = "Markdown",
                 Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Test Hub" }
-            });
+            }).Should().Emit();
     }
 
     /// <summary>

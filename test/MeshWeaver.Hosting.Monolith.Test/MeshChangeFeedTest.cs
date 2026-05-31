@@ -34,105 +34,105 @@ public class MeshChangeFeedTest(ITestOutputHelper output) : MonolithMeshTestBase
     private new IPathResolver PathResolver => Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
     private CancellationToken Ct => new CancellationTokenSource(10_000).Token;
 
-    private async Task<MeshNode> CreateTestNodeAsync(string id, string? ns = null)
+    private MeshNode CreateTestNode(string id, string? ns = null)
     {
         var node = new MeshNode(id, ns) { Name = $"Test {id}", NodeType = "Markdown" };
-        var response = await Mesh.Observe(new CreateNodeRequest(node), o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(Ct);
+        var response = Mesh.Observe(new CreateNodeRequest(node), o => o.WithTarget(Mesh.Address)).Should().Emit();
         response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         return response.Message.Node!;
     }
 
-    private async Task DeleteTestNodeAsync(string path)
+    private void DeleteTestNode(string path)
     {
-        var response = await Mesh.Observe(new DeleteNodeRequest(path), o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(Ct);
+        var response = Mesh.Observe(new DeleteNodeRequest(path), o => o.WithTarget(Mesh.Address)).Should().Emit();
         response.Message.Error.Should().BeNullOrEmpty();
     }
 
     [Fact]
-    public async Task CreateNode_PublishesCreatedEvent()
+    public void CreateNode_PublishesCreatedEvent()
     {
         var events = new List<MeshChangeEvent>();
         using var sub = ChangeFeed.Subscribe(e => events.Add(e));
 
-        await CreateTestNodeAsync("feed-create-1");
+        CreateTestNode("feed-create-1");
 
         events.Should().Contain(e => e.Kind == MeshChangeKind.Created && e.Id == "feed-create-1");
     }
 
     [Fact]
-    public async Task DeleteNode_PublishesDeletedEvent()
+    public void DeleteNode_PublishesDeletedEvent()
     {
-        var created = await CreateTestNodeAsync("feed-del-1");
+        var created = CreateTestNode("feed-del-1");
 
         var events = new List<MeshChangeEvent>();
         using var sub = ChangeFeed.Subscribe(e => events.Add(e));
 
-        await DeleteTestNodeAsync(created.Path);
+        DeleteTestNode(created.Path);
 
         events.Should().Contain(e => e.Kind == MeshChangeKind.Deleted && e.Path.Contains("feed-del-1"));
     }
 
     [Fact]
-    public async Task FilteredSubscription_OnlyReceivesMatchingEvents()
+    public void FilteredSubscription_OnlyReceivesMatchingEvents()
     {
         var createEvents = new List<MeshChangeEvent>();
         var deleteEvents = new List<MeshChangeEvent>();
         using var createSub = ChangeFeed.Subscribe(e => createEvents.Add(e), MeshChangeKind.Created);
         using var deleteSub = ChangeFeed.Subscribe(e => deleteEvents.Add(e), MeshChangeKind.Deleted);
 
-        var created = await CreateTestNodeAsync("feed-filter-1");
-        await DeleteTestNodeAsync(created.Path);
+        var created = CreateTestNode("feed-filter-1");
+        DeleteTestNode(created.Path);
 
         createEvents.Should().OnlyContain(e => e.Kind == MeshChangeKind.Created);
         deleteEvents.Should().OnlyContain(e => e.Kind == MeshChangeKind.Deleted);
     }
 
     [Fact]
-    public async Task CreateNode_PathResolverFindsIt()
+    public void CreateNode_PathResolverFindsIt()
     {
         // Resolve before create Ã¢â‚¬â€ should not find it
-        var before = await PathResolver.ResolvePath("feed-resolve-1").FirstAsync().ToTask();
+        var before = PathResolver.ResolvePath("feed-resolve-1").Should().Emit();
 
-        await CreateTestNodeAsync("feed-resolve-1");
+        CreateTestNode("feed-resolve-1");
 
         // After create Ã¢â‚¬â€ cache was invalidated/pre-warmed by change event
-        var after = await PathResolver.ResolvePath("feed-resolve-1").FirstAsync().ToTask();
+        var after = PathResolver.ResolvePath("feed-resolve-1").Should().Emit();
         after.Should().NotBeNull();
         after!.Prefix.Should().Contain("feed-resolve-1");
         after.Remainder.Should().BeNullOrEmpty();
     }
 
     [Fact]
-    public async Task DeleteNode_PathResolverNoLongerFindsIt()
+    public void DeleteNode_PathResolverNoLongerFindsIt()
     {
-        var created = await CreateTestNodeAsync("feed-gone-1");
+        var created = CreateTestNode("feed-gone-1");
 
         // Verify resolver finds it
-        var exists = await PathResolver.ResolvePath(created.Path).FirstAsync().ToTask();
+        var exists = PathResolver.ResolvePath(created.Path).Should().Emit();
         exists.Should().NotBeNull();
 
-        await DeleteTestNodeAsync(created.Path);
+        DeleteTestNode(created.Path);
 
         // After delete Ã¢â‚¬â€ cache evicted, resolver should not find it at that exact path
-        var gone = await PathResolver.ResolvePath(created.Path).FirstAsync().ToTask();
+        var gone = PathResolver.ResolvePath(created.Path).Should().Emit();
         (gone == null || gone.Prefix != created.Path).Should().BeTrue(
             "deleted node should not resolve to its exact path");
     }
 
     [Fact]
-    public async Task NestedCreate_EvictsParentPartialMatch()
+    public void NestedCreate_EvictsParentPartialMatch()
     {
         // Create parent
-        var parent = await CreateTestNodeAsync("nest-parent-1");
+        var parent = CreateTestNode("nest-parent-1");
 
         // Resolve nested path Ã¢â‚¬â€ caches partial match (parent with remainder)
-        var partial = await PathResolver.ResolvePath($"{parent.Path}/nest-child-1").FirstAsync().ToTask();
+        var partial = PathResolver.ResolvePath($"{parent.Path}/nest-child-1").Should().Emit();
 
         // Create child
-        await CreateTestNodeAsync("nest-child-1", parent.Path);
+        CreateTestNode("nest-child-1", parent.Path);
 
         // Now nested path should resolve to child (stale cache evicted by Created event)
-        var afterChild = await PathResolver.ResolvePath($"{parent.Path}/nest-child-1").FirstAsync().ToTask();
+        var afterChild = PathResolver.ResolvePath($"{parent.Path}/nest-child-1").Should().Emit();
         afterChild.Should().NotBeNull();
         afterChild!.Prefix.Should().Be($"{parent.Path}/nest-child-1");
         afterChild.Remainder.Should().BeNullOrEmpty();
