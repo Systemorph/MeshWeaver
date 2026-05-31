@@ -138,9 +138,21 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
         // 5. Wait for execution to complete Ã¢â‚¬â€ poll response message
         //    If the delegation chain deadlocks, this times out.
         var responsePath = $"{threadPath}/{msgIds[1]}";
-        // Wait until the response cell has tool calls AND text (execution complete).
+        // Wait until the response cell has tool calls AND text AND the propagated
+        // node change. UpdatedNodes is populated by SEPARATE async writes from the
+        // terminal-text write: the sub-thread's Patch reaches the parent via
+        // client.ForwardNodeChange (ThreadExecution.cs:915), which can fire AFTER
+        // the snapshot that first satisfies ToolCalls+Text (see the
+        // "UpdateDelegationStatus can still fire after the await foreach exits"
+        // note at ThreadExecution.cs:1361). Waiting only on ToolCalls+Text and then
+        // asserting UpdatedNodes on that captured snapshot races the propagation and
+        // intermittently observes an empty list — so wait on the actual asserted
+        // state (the doc change present) instead of a proxy.
         var responseMsg = GetContent<ThreadMessage>(client, responsePath)
-            .Should().Within(45.Seconds()).Match(m => m?.ToolCalls is { Count: >= 2 } && !string.IsNullOrEmpty(m.Text));
+            .Should().Within(45.Seconds()).Match(m =>
+                m?.ToolCalls is { Count: >= 2 }
+                && !string.IsNullOrEmpty(m.Text)
+                && m.UpdatedNodes.Any(e => e.Path.Contains("test-doc-nodechange")));
         Output.WriteLine($"Response: text len={responseMsg!.Text?.Length ?? 0}, toolCalls={responseMsg.ToolCalls.Count}, updatedNodes={responseMsg.UpdatedNodes.Count}");
 
         // 6. Verify response message has tool calls
