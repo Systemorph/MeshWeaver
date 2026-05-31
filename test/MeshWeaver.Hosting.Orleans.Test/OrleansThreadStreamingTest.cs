@@ -441,8 +441,14 @@ internal class ToolCallingFakeChatClientFactory(IMessageHub hub) : ChatClientAge
 
     protected override IChatClient CreateChatClient(AgentConfiguration agentConfig)
     {
-        // Orchestrator emits delegation calls; Worker exercises the test tool then streams text.
-        return agentConfig.Id == "Orchestrator"
+        // The DEFAULT agent (the one the thread submits to — `Assistant`, seeded
+        // with IsDefault=true) plays the orchestrator role: it emits a
+        // delegate_to_agent call. Every other agent — including the delegation
+        // target `Worker` that runs the sub-thread — exercises the test tool then
+        // streams text. Gating on a literal "Orchestrator" id was the bug: no
+        // Orchestrator agent is ever seeded, so the default agent silently fell
+        // through to ToolCallingFakeChatClient and never delegated.
+        return agentConfig.IsDefault || agentConfig.Id == "Orchestrator"
             ? new DelegatingFakeChatClient(agentConfig.Id)
             : new ToolCallingFakeChatClient();
     }
