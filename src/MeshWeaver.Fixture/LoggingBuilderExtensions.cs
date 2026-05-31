@@ -24,15 +24,9 @@ public static class LoggingBuilderExtensions
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<ILoggerProvider, XUnitLoggerProvider>()
         );
-        // Quieten framework startup noise. Orleans dumps its entire configuration at
-        // Information on every silo + client start (SiloOptionsLogger / ClientOptionsLogger);
-        // across the Orleans suite that is megabytes of identical config in the CI log,
-        // burying the actual test output and the real failures. Warnings + errors still
-        // flow through. (This filters the framework categories only — MeshWeaver.* logs,
-        // and any explicit per-test appsettings override, are unaffected.)
-        builder.AddFilter("Orleans", LogLevel.Warning);
-        builder.AddFilter("Microsoft.Orleans", LogLevel.Warning);
-        // Don't set a global minimum level - let configuration handle it
+        // Don't set a global minimum level or any category filters here — log levels
+        // (including quietening Orleans framework noise) are configuration-driven via
+        // appsettings.json (the runtime test config), never hardcoded in the logger.
         if (outputHelperAccessor == null)
             builder.Services.AddSingleton<TestOutputHelperAccessor>();
         else
