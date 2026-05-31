@@ -14,7 +14,7 @@ public static class CopilotExtensions
     /// <summary>
     /// Registers the GitHub Copilot provider's catalog profile so its models
     /// surface in the chat picker + Models settings tab — the MeshBuilder
-    /// counterpart to <see cref="ClaudeCodeExtensions"/>'s catalog source.
+    /// counterpart to <c>ClaudeCodeExtensions</c>'s catalog source.
     /// <c>RequiresApiKey: false</c> because Copilot authenticates via GitHub
     /// device-flow OAuth (the "Log in via browser" flow), not a pasted key.
     /// Pair with <see cref="AddCopilot(IServiceCollection, Action{CopilotConfiguration})"/>
