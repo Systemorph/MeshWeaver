@@ -55,7 +55,7 @@ services:
       ASPNETCORE_HTTP_PORTS: "8080"
       Deployment__Backend: "Filesystem"
       Deployment__DataRoot: "/data"
-      Deployment__Orleans__Clustering: "Localhost"
+      Deployment__Orleans__Clustering: "AdoNet"
       Storage__Name: "content"
       Storage__SourceType: "FileSystem"
       Storage__BasePath: "/data/content"

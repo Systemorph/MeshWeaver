@@ -44,11 +44,25 @@ public static class SchemaInitialization
 
         await PostgreSqlSchemaInitializer.InitializePartitionAccessTableAsync(dataSource);
 
-        // Admin schema for version tracking.
+        // Admin schema for version tracking + global catalogs (agents/models/roles).
+        // The admin partition is an unversioned mesh_nodes table just like any content
+        // partition, and MUST be created in the `admin` schema — MigrationRunner.SaveVersionAsync
+        // (Phase 2) writes db_version into admin.mesh_nodes, so the table has to exist first.
+        //
+        // The table-creation DDL uses an UNQUALIFIED `CREATE TABLE mesh_nodes`, which resolves
+        // against search_path. The default `dataSource` has search_path=public, so passing it
+        // here only ever (no-op) re-touched public.mesh_nodes and never created admin.mesh_nodes
+        // — invisible on a long-lived prod DB where admin.mesh_nodes already exists, but on a
+        // FRESH DB (new self-managed Compose/Helm deploy, brand-new Azure customer) SaveVersionAsync
+        // then hit `42P01: relation "admin.mesh_nodes" does not exist`. Build an admin-scoped data
+        // source (search_path=admin,public) exactly as the per-schema repairs (V02/V07/V13) and the
+        // runtime PostgreSqlPartitionStorageProvider do, so the unqualified DDL lands in admin.
         await using (var ensureAdmin = dataSource.CreateCommand("CREATE SCHEMA IF NOT EXISTS admin"))
             await ensureAdmin.ExecuteNonQueryAsync();
 
-        await PostgreSqlSchemaInitializer.InitializeMeshTablesAsync(dataSource, options);
+        await using var adminDataSource = SchemaHelpers.BuildSchemaDataSource(connectionString, "admin");
+        var adminOptions = SchemaHelpers.BuildSchemaOptions(connectionString, "admin", options.VectorDimensions);
+        await PostgreSqlSchemaInitializer.InitializeMeshTablesAsync(adminDataSource, adminOptions);
 
         // Detect fresh DB: no partition schemas (i.e., no schemas with a mesh_nodes table)
         // existed before this run. The admin schema doesn't count.

@@ -37,7 +37,7 @@ else
     builder.AddDockerComposeEnvironment("self-host");
 }
 
-builder.AddMemex("memex", o =>
+var portal = builder.AddMemex("memex", o =>
 {
     o.ImageRegistry = builder.Configuration["Parameters:image-registry"] ?? "ghcr.io/systemorph";
     o.ImageTag = builder.Configuration["Parameters:image-tag"] ?? "latest";
@@ -47,5 +47,18 @@ builder.AddMemex("memex", o =>
     o.OrleansClustering = ha ? "AdoNet" : "Localhost";
     o.MasterKey = builder.Configuration["Parameters:key-protection-master-key"];
 });
+
+// Self-host filesystem backend: the portal writes DataProtection keys, the NodeType
+// assembly cache, and the NuGet cache under /data. The aspnet base image runs as the
+// non-root `app` user, but a freshly-created Docker named volume is root-owned, so the
+// app cannot create those directories — startup dies with
+// `UnauthorizedAccessException: Access to the path '/data/dataprotection-keys' is denied`.
+// Run the portal as root in the Compose targets so it owns its mounted data volume.
+// (Kubernetes/AKS handles this via the platform overlay — Azure Files CSI mounts 0777 /
+// uid-mapped — and ACA runs containers as root by default, so this is Compose-only.)
+if (!mode.StartsWith("kubernetes", StringComparison.Ordinal) && mode != "azure")
+{
+    portal.PublishAsDockerComposeService((_, service) => service.User = "root");
+}
 
 builder.Build().Run();
