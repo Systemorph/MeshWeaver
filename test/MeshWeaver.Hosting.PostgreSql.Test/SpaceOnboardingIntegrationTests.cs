@@ -1,7 +1,6 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.Authentication;
@@ -38,7 +37,6 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
     : MonolithMeshTestBase(output)
 {
     private readonly PostgreSqlFixture _fixture = fixture;
-    private CancellationToken TestTimeout => new CancellationTokenSource(90.Seconds()).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
@@ -61,41 +59,37 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
     }
 
     [Fact(Timeout = 60000)]
-    public async Task UserOnboarding_CreatesPerUserPartition()
+    public void UserOnboarding_CreatesPerUserPartition()
     {
-        var ct = TestTimeout;
         var username = $"pg9d_user_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
         var onboarding = Mesh.ServiceProvider.GetRequiredService<UserOnboardingService>();
 
-        var partitionRoot = await onboarding.CreateUser(new UserOnboardingRequest(
+        var partitionRoot = onboarding.CreateUser(new UserOnboardingRequest(
                 Username: username,
                 Email: $"{username}@example.com",
                 FullName: "Test User"))
-            .Timeout(45.Seconds())
-            .FirstAsync()
-            .ToTask(ct);
+            .Should().Within(45.Seconds()).Emit();
 
         partitionRoot.Should().NotBeNull("UserOnboardingService.CreateUser must emit the partition-root node");
         partitionRoot.Path.Should().Be(username);
 
         var resolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
-        var resolution = await resolver.ResolvePath(username)
+        var resolution = resolver.ResolvePath(username)
             .Where(r => r is not null).Take(1).Timeout(20.Seconds())
             .Catch<AddressResolution?, TimeoutException>(_ => Observable.Return<AddressResolution?>(null))
-            .FirstAsync().ToTask(ct);
+            .Should().Within(30.Seconds()).Emit();
         resolution.Should().NotBeNull(
             "post-onboarding the per-user partition must be routable");
         resolution!.Node.Should().NotBeNull();
     }
 
     [Fact(Timeout = 60000)]
-    public async Task CreateSpace_RoutableAfterAdminPartitionWrite()
+    public void CreateSpace_RoutableAfterAdminPartitionWrite()
     {
-        var ct = TestTimeout;
         var orgId = $"pg9d_org_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-        await meshService.CreateNode(new MeshNode(orgId, "Admin/Partition")
+        meshService.CreateNode(new MeshNode(orgId, "Admin/Partition")
         {
             NodeType = "Partition",
             Name = orgId,
@@ -109,54 +103,51 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
                 TableMappings = PartitionDefinition.StandardTableMappings,
                 Versioned = true,
             },
-        }).Timeout(30.Seconds()).FirstAsync().ToTask(ct);
+        }).Should().Within(30.Seconds()).Emit();
 
-        var orgRoot = await meshService.CreateNode(new MeshNode(orgId)
+        var orgRoot = meshService.CreateNode(new MeshNode(orgId)
         {
             NodeType = "Space",
             Name = orgId,
             State = MeshNodeState.Active,
-        }).Timeout(30.Seconds()).FirstAsync().ToTask(ct);
+        }).Should().Within(30.Seconds()).Emit();
         orgRoot.Should().NotBeNull();
 
         var resolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
-        var resolution = await resolver.ResolvePath(orgId)
+        var resolution = resolver.ResolvePath(orgId)
             .Where(r => r is not null).Take(1).Timeout(20.Seconds())
             .Catch<AddressResolution?, TimeoutException>(_ => Observable.Return<AddressResolution?>(null))
-            .FirstAsync().ToTask(ct);
+            .Should().Within(30.Seconds()).Emit();
         resolution.Should().NotBeNull(
             "post-create the Space partition must be routable");
     }
 
     [Fact(Timeout = 60000)]
-    public async Task OnboardedUser_CanWriteAndReadInOwnNamespace()
+    public void OnboardedUser_CanWriteAndReadInOwnNamespace()
     {
-        var ct = TestTimeout;
         var username = $"pg9d_owner_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
         var onboarding = Mesh.ServiceProvider.GetRequiredService<UserOnboardingService>();
-        await onboarding.CreateUser(new UserOnboardingRequest(
+        onboarding.CreateUser(new UserOnboardingRequest(
                 Username: username,
                 Email: $"{username}@example.com",
                 FullName: "Owner"))
-            .Timeout(45.Seconds())
-            .FirstAsync()
-            .ToTask(ct);
+            .Should().Within(45.Seconds()).Emit();
 
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var notePath = $"{username}/notebook/note1";
-        var saved = await meshService.CreateNode(new MeshNode("note1", $"{username}/notebook")
+        var saved = meshService.CreateNode(new MeshNode("note1", $"{username}/notebook")
         {
             NodeType = "Markdown",
             Name = "note1",
             State = MeshNodeState.Active,
-        }).Timeout(30.Seconds()).FirstAsync().ToTask(ct);
+        }).Should().Within(30.Seconds()).Emit();
         saved.Path.Should().Be(notePath);
 
         var workspace = Mesh.GetWorkspace();
-        var readBack = await workspace.GetMeshNodeStream(notePath)
+        var readBack = workspace.GetMeshNodeStream(notePath)
             .Where(n => n is not null).Take(1).Timeout(15.Seconds())
             .Catch<MeshNode?, TimeoutException>(_ => Observable.Return<MeshNode?>(null))
-            .FirstAsync().ToTask(ct);
+            .Should().Within(30.Seconds()).Emit();
         readBack.Should().NotBeNull(
             "the newly onboarded user must be able to read back their own writes");
     }

@@ -82,23 +82,31 @@ public class GlobalAdminSpaceSearchTests
         return partitions;
     }
 
+    private Dictionary<string, (NpgsqlDataSource Ds, PostgreSqlStorageAdapter Adapter)> SetupOrganizations(CancellationToken ct)
+        => SetupOrganizationsAsync(ct).Run().Should().Within(90.Seconds()).Emit();
+
+    private List<MeshNode> CallSearchAcrossSchemas(
+        string whereClause, string? userId, string orderBy, int limit, CancellationToken ct)
+        => CallSearchAcrossSchemasAsync(whereClause, userId, orderBy, limit, ct)
+            .Run().Should().Within(30.Seconds()).Emit();
+
     [Fact(Timeout = 60000)]
-    public async Task GlobalAdmin_SeesAllOrganizations_ViaCrossSchemaSearch()
+    public void GlobalAdmin_SeesAllOrganizations_ViaCrossSchemaSearch()
     {
         var ct = TestContext.Current.CancellationToken;
-        var partitions = await SetupOrganizationsAsync(ct);
+        var partitions = SetupOrganizations(ct);
 
         // Global Admin: has partition_access to ALL org partitions
         const string adminUserId = "globaladmin";
-        await using (var cmd = _fixture.DataSource.CreateCommand(
+        _fixture.DataSource.ExecuteNonQuery(
             "DELETE FROM public.partition_access; " +
             "INSERT INTO public.partition_access (user_id, partition) VALUES " +
-            "('globaladmin', 'alphaorg'), ('globaladmin', 'betaorg'), ('globaladmin', 'gammaorg')"))
-            await cmd.ExecuteNonQueryAsync(ct);
+            "('globaladmin', 'alphaorg'), ('globaladmin', 'betaorg'), ('globaladmin', 'gammaorg')", ct)
+            .Should().Within(30.Seconds()).Emit();
 
-        // Query: nodeType:Organization â€” the fixed query for Organization Search
+        // Query: nodeType:Organization — the fixed query for Organization Search
         var nodeTypeFilter = $"LOWER(n.node_type) = '{SpaceNodeType.NodeType.ToLowerInvariant()}'";
-        var results = await CallSearchAcrossSchemasAsync(
+        var results = CallSearchAcrossSchemas(
             nodeTypeFilter, adminUserId, "last_modified DESC", 50, ct);
 
         results.Should().HaveCount(3, "Global Admin should see all 3 organizations");
@@ -109,37 +117,37 @@ public class GlobalAdminSpaceSearchTests
     }
 
     [Fact(Timeout = 60000)]
-    public async Task PublicRead_StillRequiresPartitionAccess()
+    public void PublicRead_StillRequiresPartitionAccess()
     {
         var ct = TestContext.Current.CancellationToken;
-        await SetupOrganizationsAsync(ct);
+        SetupOrganizations(ct);
 
-        // Regular user with NO partition_access â€” even public_read must not bypass partition check
-        await using (var cmd = _fixture.DataSource.CreateCommand("DELETE FROM public.partition_access"))
-            await cmd.ExecuteNonQueryAsync(ct);
+        // Regular user with NO partition_access — even public_read must not bypass partition check
+        _fixture.DataSource.ExecuteNonQuery("DELETE FROM public.partition_access", ct)
+            .Should().Within(30.Seconds()).Emit();
 
         var nodeTypeFilter = $"LOWER(n.node_type) = '{SpaceNodeType.NodeType.ToLowerInvariant()}'";
-        var results = await CallSearchAcrossSchemasAsync(
+        var results = CallSearchAcrossSchemas(
             nodeTypeFilter, "regularuser", "last_modified DESC", 50, ct);
 
         results.Should().BeEmpty(
-            "public_read must NOT bypass partition_access â€” user without partition access sees nothing");
+            "public_read must NOT bypass partition_access — user without partition access sees nothing");
     }
 
     [Fact(Timeout = 60000)]
-    public async Task PublicRead_SkipsNodeLevelChecks_WithinAccessiblePartition()
+    public void PublicRead_SkipsNodeLevelChecks_WithinAccessiblePartition()
     {
         var ct = TestContext.Current.CancellationToken;
-        await SetupOrganizationsAsync(ct);
+        SetupOrganizations(ct);
 
         // Give user partition_access to AlphaOrg only (no node-level permissions)
-        await using (var cmd = _fixture.DataSource.CreateCommand(
+        _fixture.DataSource.ExecuteNonQuery(
             "DELETE FROM public.partition_access; " +
-            "INSERT INTO public.partition_access (user_id, partition) VALUES ('regularuser', 'alphaorg')"))
-            await cmd.ExecuteNonQueryAsync(ct);
+            "INSERT INTO public.partition_access (user_id, partition) VALUES ('regularuser', 'alphaorg')", ct)
+            .Should().Within(30.Seconds()).Emit();
 
-        // Search for all nodes â€” public_read types visible without node-level perms, but only in alphaorg
-        var results = await CallSearchAcrossSchemasAsync(
+        // Search for all nodes — public_read types visible without node-level perms, but only in alphaorg
+        var results = CallSearchAcrossSchemas(
             "", "regularuser", "last_modified DESC", 50, ct);
 
         // Should see Organization nodes from AlphaOrg (public_read + partition_access)
@@ -147,9 +155,9 @@ public class GlobalAdminSpaceSearchTests
             "AlphaOrg Organization should be visible (public_read + partition_access)");
         // Should NOT see BetaOrg or GammaOrg (no partition_access)
         results.Should().NotContain(n => n.Id == "BetaOrg",
-            "BetaOrg should be hidden â€” no partition_access");
+            "BetaOrg should be hidden — no partition_access");
         results.Should().NotContain(n => n.Id == "GammaOrg",
-            "GammaOrg should be hidden â€” no partition_access");
+            "GammaOrg should be hidden — no partition_access");
     }
 
     // â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

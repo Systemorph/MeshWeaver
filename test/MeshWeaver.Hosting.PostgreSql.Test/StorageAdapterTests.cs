@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
+using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Mesh;
@@ -19,9 +20,9 @@ public class StorageAdapterTests
     }
 
     [Fact]
-    public async Task WriteAndReadNode()
+    public void WriteAndReadNode()
     {
-        await _fixture.CleanDataAsync();
+        _fixture.CleanData().Should().Within(60.Seconds()).Emit();
         var adapter = _fixture.StorageAdapter;
 
         var node = new MeshNode("Story1", "ACME/Project")
@@ -30,8 +31,8 @@ public class StorageAdapterTests
             NodeType = "Story"
         };
 
-        await adapter.WriteAsync(node, _options, TestContext.Current.CancellationToken);
-        var result = await adapter.ReadAsync("ACME/Project/Story1", _options, TestContext.Current.CancellationToken);
+        adapter.Write(node, _options).Should().Within(30.Seconds()).Emit();
+        var result = adapter.Read("ACME/Project/Story1", _options).Should().Within(30.Seconds()).Emit();
 
         result.Should().NotBeNull();
         result!.Id.Should().Be("Story1");
@@ -42,80 +43,80 @@ public class StorageAdapterTests
     }
 
     [Fact]
-    public async Task ReadNonExistentNodeReturnsNull()
+    public void ReadNonExistentNodeReturnsNull()
     {
-        await _fixture.CleanDataAsync();
+        _fixture.CleanData().Should().Within(60.Seconds()).Emit();
         var adapter = _fixture.StorageAdapter;
 
-        var result = await adapter.ReadAsync("nonexistent/path", _options, TestContext.Current.CancellationToken);
+        var result = adapter.Read("nonexistent/path", _options).Should().Within(30.Seconds()).Emit();
         result.Should().BeNull();
     }
 
     [Fact]
-    public async Task WriteUpsertUpdatesNode()
+    public void WriteUpsertUpdatesNode()
     {
-        await _fixture.CleanDataAsync();
+        _fixture.CleanData().Should().Within(60.Seconds()).Emit();
         var adapter = _fixture.StorageAdapter;
 
         var node1 = new MeshNode("N1", "ns") { Name = "Original" };
-        await adapter.WriteAsync(node1, _options, TestContext.Current.CancellationToken);
+        adapter.Write(node1, _options).Should().Within(30.Seconds()).Emit();
 
         var node2 = new MeshNode("N1", "ns") { Name = "Updated" };
-        await adapter.WriteAsync(node2, _options, TestContext.Current.CancellationToken);
+        adapter.Write(node2, _options).Should().Within(30.Seconds()).Emit();
 
-        var result = await adapter.ReadAsync("ns/N1", _options, TestContext.Current.CancellationToken);
+        var result = adapter.Read("ns/N1", _options).Should().Within(30.Seconds()).Emit();
         result!.Name.Should().Be("Updated");
     }
 
     [Fact]
-    public async Task DeleteNode()
+    public void DeleteNode()
     {
-        await _fixture.CleanDataAsync();
+        _fixture.CleanData().Should().Within(60.Seconds()).Emit();
         var adapter = _fixture.StorageAdapter;
 
         var node = new MeshNode("ToDelete", "ns");
-        await adapter.WriteAsync(node, _options, TestContext.Current.CancellationToken);
+        adapter.Write(node, _options).Should().Within(30.Seconds()).Emit();
 
-        await adapter.DeleteAsync("ns/ToDelete", TestContext.Current.CancellationToken);
-        var result = await adapter.ReadAsync("ns/ToDelete", _options, TestContext.Current.CancellationToken);
+        adapter.Delete("ns/ToDelete").Should().Within(30.Seconds()).Emit();
+        var result = adapter.Read("ns/ToDelete", _options).Should().Within(30.Seconds()).Emit();
         result.Should().BeNull();
     }
 
     [Fact]
-    public async Task ExistsReturnsTrueForExistingNode()
+    public void ExistsReturnsTrueForExistingNode()
     {
-        await _fixture.CleanDataAsync();
+        _fixture.CleanData().Should().Within(60.Seconds()).Emit();
         var adapter = _fixture.StorageAdapter;
 
         var node = new MeshNode("Exists", "ns");
-        await adapter.WriteAsync(node, _options, TestContext.Current.CancellationToken);
+        adapter.Write(node, _options).Should().Within(30.Seconds()).Emit();
 
-        (await adapter.ExistsAsync("ns/Exists", TestContext.Current.CancellationToken)).Should().BeTrue();
-        (await adapter.ExistsAsync("ns/NotExists", TestContext.Current.CancellationToken)).Should().BeFalse();
+        adapter.Exists("ns/Exists").Should().Within(30.Seconds()).Be(true);
+        adapter.Exists("ns/NotExists").Should().Within(30.Seconds()).Be(false);
     }
 
     [Fact]
-    public async Task ListChildPaths()
+    public void ListChildPaths()
     {
-        await _fixture.CleanDataAsync();
+        _fixture.CleanData().Should().Within(60.Seconds()).Emit();
         var adapter = _fixture.StorageAdapter;
 
-        await adapter.WriteAsync(new MeshNode("A", "parent"), _options, TestContext.Current.CancellationToken);
-        await adapter.WriteAsync(new MeshNode("B", "parent"), _options, TestContext.Current.CancellationToken);
-        await adapter.WriteAsync(new MeshNode("C", "other"), _options, TestContext.Current.CancellationToken);
+        adapter.Write(new MeshNode("A", "parent"), _options).Should().Within(30.Seconds()).Emit();
+        adapter.Write(new MeshNode("B", "parent"), _options).Should().Within(30.Seconds()).Emit();
+        adapter.Write(new MeshNode("C", "other"), _options).Should().Within(30.Seconds()).Emit();
 
-        var (nodePaths, _) = await adapter.ListChildPathsAsync("parent", TestContext.Current.CancellationToken);
+        var (nodePaths, _) = adapter.ListChildPaths("parent").Should().Within(30.Seconds()).Emit();
         nodePaths.Should().BeEquivalentTo(new[] { "parent/A", "parent/B" }, JsonSerializerOptions.Default);
     }
 
     [Fact]
-    public async Task RootLevelNodes()
+    public void RootLevelNodes()
     {
-        await _fixture.CleanDataAsync();
+        _fixture.CleanData().Should().Within(60.Seconds()).Emit();
         var adapter = _fixture.StorageAdapter;
 
-        await adapter.WriteAsync(new MeshNode("Root1") { Name = "Root" }, _options, TestContext.Current.CancellationToken);
-        var result = await adapter.ReadAsync("Root1", _options, TestContext.Current.CancellationToken);
+        adapter.Write(new MeshNode("Root1") { Name = "Root" }, _options).Should().Within(30.Seconds()).Emit();
+        var result = adapter.Read("Root1", _options).Should().Within(30.Seconds()).Emit();
 
         result.Should().NotBeNull();
         result!.Id.Should().Be("Root1");
@@ -124,9 +125,9 @@ public class StorageAdapterTests
     }
 
     [Fact]
-    public async Task WriteNodeWithContent()
+    public void WriteNodeWithContent()
     {
-        await _fixture.CleanDataAsync();
+        _fixture.CleanData().Should().Within(60.Seconds()).Emit();
         var adapter = _fixture.StorageAdapter;
 
         var content = new Dictionary<string, object>
@@ -140,17 +141,17 @@ public class StorageAdapterTests
             Content = content
         };
 
-        await adapter.WriteAsync(node, _options, TestContext.Current.CancellationToken);
-        var result = await adapter.ReadAsync("ns/WithContent", _options, TestContext.Current.CancellationToken);
+        adapter.Write(node, _options).Should().Within(30.Seconds()).Emit();
+        var result = adapter.Read("ns/WithContent", _options).Should().Within(30.Seconds()).Emit();
 
         result.Should().NotBeNull();
         result!.Content.Should().NotBeNull();
     }
 
     [Fact]
-    public async Task PartitionObjectsCrud()
+    public void PartitionObjectsCrud()
     {
-        await _fixture.CleanDataAsync();
+        _fixture.CleanData().Should().Within(60.Seconds()).Emit();
         var adapter = _fixture.StorageAdapter;
 
         var objects = new List<object>
@@ -159,27 +160,21 @@ public class StorageAdapterTests
             new TestPartitionObject("obj2", "value2")
         };
 
-        await adapter.SavePartitionObjectsAsync("node1", "sub1", objects, _options, TestContext.Current.CancellationToken);
+        adapter.SavePartitionObjects("node1", "sub1", objects, _options).Should().Within(30.Seconds()).Emit();
 
-        var loaded = new List<object>();
-        await foreach (var obj in adapter.GetPartitionObjectsAsync("node1", "sub1", _options, TestContext.Current.CancellationToken))
-        {
-            loaded.Add(obj);
-        }
+        var loaded = adapter.GetPartitionObjects("node1", "sub1", _options)
+            .ToList().Should().Within(30.Seconds()).Emit();
 
         loaded.Should().HaveCount(2);
 
         // Check max timestamp
-        var maxTs = await adapter.GetPartitionMaxTimestampAsync("node1", "sub1", TestContext.Current.CancellationToken);
+        var maxTs = adapter.GetPartitionMaxTimestamp("node1", "sub1").Should().Within(30.Seconds()).Emit();
         maxTs.Should().NotBeNull();
 
         // Delete
-        await adapter.DeletePartitionObjectsAsync("node1", "sub1", TestContext.Current.CancellationToken);
-        var afterDelete = new List<object>();
-        await foreach (var obj in adapter.GetPartitionObjectsAsync("node1", "sub1", _options, TestContext.Current.CancellationToken))
-        {
-            afterDelete.Add(obj);
-        }
+        adapter.DeletePartitionObjects("node1", "sub1").Should().Within(30.Seconds()).Emit();
+        var afterDelete = adapter.GetPartitionObjects("node1", "sub1", _options)
+            .ToList().Should().Within(30.Seconds()).Emit();
         afterDelete.Should().BeEmpty();
     }
 

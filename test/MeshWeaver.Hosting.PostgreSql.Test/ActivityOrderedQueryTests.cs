@@ -121,24 +121,22 @@ public class ActivityOrderedQueryTests
         }, _options, TestContext.Current.CancellationToken);
     }
 
-    [Fact]
-    public async Task AccessedQuery_OrdersByLastModifiedDescending()
-    {
-        await SeedNodesAndActivityAsync();
+    private List<MeshNode> Query(MeshQueryRequest request)
+        => new PostgreSqlMeshQuery(_fixture.StorageAdapter)
+            .QueryList(request, _options, TestContext.Current.CancellationToken)
+            .Should().Within(30.Seconds()).Emit()
+            .OfType<MeshNode>().ToList();
 
-        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
-        var request = new MeshQueryRequest
+    [Fact]
+    public void AccessedQuery_OrdersByLastModifiedDescending()
+    {
+        SeedNodesAndActivityAsync().Run().Should().Within(60.Seconds()).Emit();
+
+        var results = Query(new MeshQueryRequest
         {
             Query = "source:accessed nodeType:Thread namespace:org/ACME/Discussions",
             UserId = "alice"
-        };
-
-        var results = new List<MeshNode>();
-        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
-        {
-            if (item is MeshNode node)
-                results.Add(node);
-        }
+        });
 
         results.Should().HaveCount(3);
         // Thread3 most recent UserActivity node, Thread1 second, Thread2 oldest
@@ -148,47 +146,31 @@ public class ActivityOrderedQueryTests
     }
 
     [Fact]
-    public async Task AccessedQuery_RespectsNodeTypeFilter()
+    public void AccessedQuery_RespectsNodeTypeFilter()
     {
-        await SeedNodesAndActivityAsync();
+        SeedNodesAndActivityAsync().Run().Should().Within(60.Seconds()).Emit();
 
-        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
-        var request = new MeshQueryRequest
+        var results = Query(new MeshQueryRequest
         {
-            // Doc1 has no UserActivity record â€” should not appear with INNER JOIN
+            // Doc1 has no UserActivity record — should not appear with INNER JOIN
             Query = "source:accessed nodeType:Document path:org scope:descendants",
             UserId = "alice"
-        };
+        });
 
-        var results = new List<MeshNode>();
-        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
-        {
-            if (item is MeshNode node)
-                results.Add(node);
-        }
-
-        // Doc1 has no UserActivity â€” INNER JOIN excludes it
+        // Doc1 has no UserActivity — INNER JOIN excludes it
         results.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task AccessedQuery_RespectsLimit()
+    public void AccessedQuery_RespectsLimit()
     {
-        await SeedNodesAndActivityAsync();
+        SeedNodesAndActivityAsync().Run().Should().Within(60.Seconds()).Emit();
 
-        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
-        var request = new MeshQueryRequest
+        var results = Query(new MeshQueryRequest
         {
             Query = "source:accessed path:org scope:descendants limit:2",
             UserId = "alice"
-        };
-
-        var results = new List<MeshNode>();
-        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
-        {
-            if (item is MeshNode node)
-                results.Add(node);
-        }
+        });
 
         results.Should().HaveCount(2);
         results[0].Id.Should().Be("Thread3");
@@ -196,47 +178,31 @@ public class ActivityOrderedQueryTests
     }
 
     [Fact]
-    public async Task AccessedQuery_DifferentUser_SeesOwnActivity()
+    public void AccessedQuery_DifferentUser_SeesOwnActivity()
     {
-        await SeedNodesAndActivityAsync();
+        SeedNodesAndActivityAsync().Run().Should().Within(60.Seconds()).Emit();
 
-        // bob has no UserActivity nodes â€” INNER JOIN returns nothing
-        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
-        var request = new MeshQueryRequest
+        // bob has no UserActivity nodes — INNER JOIN returns nothing
+        var results = Query(new MeshQueryRequest
         {
             Query = "source:accessed nodeType:Thread namespace:org/ACME/Discussions",
             UserId = "bob"
-        };
-
-        var results = new List<MeshNode>();
-        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
-        {
-            if (item is MeshNode node)
-                results.Add(node);
-        }
+        });
 
         results.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task NonAccessedQuery_IgnoresActivityOrdering()
+    public void NonAccessedQuery_IgnoresActivityOrdering()
     {
-        await SeedNodesAndActivityAsync();
+        SeedNodesAndActivityAsync().Run().Should().Within(60.Seconds()).Emit();
 
         // Normal query without source:accessed should not join UserActivity
-        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
-        var request = new MeshQueryRequest
+        var results = Query(new MeshQueryRequest
         {
             Query = "nodeType:Thread namespace:org/ACME/Discussions sort:name",
             UserId = "alice"
-        };
-
-        var results = new List<MeshNode>();
-        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
-        {
-            if (item is MeshNode node)
-                results.Add(node);
-        }
+        });
 
         results.Should().HaveCount(3);
         // Should be alphabetical by name: One, Three, Two

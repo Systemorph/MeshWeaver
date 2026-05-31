@@ -38,6 +38,8 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 public class UserPartitionResolutionTests(PostgreSqlFixture fixture, ITestOutputHelper output)
     : MonolithMeshTestBase(output)
 {
+    // Cancellation token for the genuine async fixture/provider calls
+    // (EnsureSchemaForPartitionAsync) that this test bridges via .ToObservable().
     private CancellationToken TestTimeout => new CancellationTokenSource(60.Seconds()).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -68,7 +70,7 @@ public class UserPartitionResolutionTests(PostgreSqlFixture fixture, ITestOutput
     /// contract end-to-end — Postgres-backed.</para>
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task ResolvePath_UserPartitionRoot_ReturnsUserNode()
+    public void ResolvePath_UserPartitionRoot_ReturnsUserNode()
     {
         const string username = "rbuergi_test_resolve";
 
@@ -95,7 +97,8 @@ public class UserPartitionResolutionTests(PostgreSqlFixture fixture, ITestOutput
             TableMappings = PartitionDefinition.StandardTableMappings,
             Versioned = true,
         };
-        await pgProvider.EnsureSchemaForPartitionAsync(partitionDef, TestTimeout);
+        pgProvider.EnsureSchemaForPartitionAsync(partitionDef, TestTimeout)
+            .ToObservable().Should().Within(60.Seconds()).Emit();
         pgProvider.RegisterPartition(partitionDef);
 
         var partitionNode = new MeshNode(username, "Admin/Partition")
@@ -105,9 +108,8 @@ public class UserPartitionResolutionTests(PostgreSqlFixture fixture, ITestOutput
             State = MeshNodeState.Active,
             Content = partitionDef,
         };
-        await meshService.CreateNode(partitionNode)
-            .FirstAsync()
-            .ToTask(TestTimeout);
+        meshService.CreateNode(partitionNode)
+            .Should().Within(60.Seconds()).Emit();
 
         // 2) Write the bare User row directly into the per-user schema at
         //    namespace='' / id=username — the post-V20 layout the onboarding
@@ -118,14 +120,12 @@ public class UserPartitionResolutionTests(PostgreSqlFixture fixture, ITestOutput
             NodeType = "User",
             State = MeshNodeState.Active,
         };
-        await meshService.CreateNode(userNode)
-            .FirstAsync()
-            .ToTask(TestTimeout);
+        meshService.CreateNode(userNode)
+            .Should().Within(60.Seconds()).Emit();
 
         // 3) Resolve.
-        var resolution = await pathResolver.ResolvePath(username)
-            .FirstAsync()
-            .ToTask(TestTimeout);
+        var resolution = pathResolver.ResolvePath(username)
+            .Should().Within(60.Seconds()).Emit();
 
         // 4) Assert.
         resolution.Should().NotBeNull(
@@ -151,7 +151,7 @@ public class UserPartitionResolutionTests(PostgreSqlFixture fixture, ITestOutput
     /// path resolution alone isn't enough if the hub never activates.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task GetMeshNodeStream_UserPartitionRoot_EmitsUserNode()
+    public void GetMeshNodeStream_UserPartitionRoot_EmitsUserNode()
     {
         const string username = "rbuergi_test_stream";
 
@@ -174,31 +174,31 @@ public class UserPartitionResolutionTests(PostgreSqlFixture fixture, ITestOutput
             TableMappings = PartitionDefinition.StandardTableMappings,
             Versioned = true,
         };
-        await pgProvider.EnsureSchemaForPartitionAsync(partitionDef, TestTimeout);
+        pgProvider.EnsureSchemaForPartitionAsync(partitionDef, TestTimeout)
+            .ToObservable().Should().Within(60.Seconds()).Emit();
         pgProvider.RegisterPartition(partitionDef);
 
-        await meshService.CreateNode(new MeshNode(username, "Admin/Partition")
+        meshService.CreateNode(new MeshNode(username, "Admin/Partition")
         {
             NodeType = "Partition",
             Name = username,
             State = MeshNodeState.Active,
             Content = partitionDef,
-        }).FirstAsync().ToTask(TestTimeout);
+        }).Should().Within(60.Seconds()).Emit();
 
-        await meshService.CreateNode(MeshNode.FromPath(username) with
+        meshService.CreateNode(MeshNode.FromPath(username) with
         {
             Name = "Test User",
             NodeType = "User",
             State = MeshNodeState.Active,
-        }).FirstAsync().ToTask(TestTimeout);
+        }).Should().Within(60.Seconds()).Emit();
 
-        var node = await workspace
+        var node = workspace
             .GetMeshNodeStream(username)
             .Where(n => n != null)
             .Take(1)
             .Timeout(30.Seconds())
-            .FirstAsync()
-            .ToTask(TestTimeout);
+            .Should().Within(60.Seconds()).Emit();
 
         node.Should().NotBeNull(
             "workspace.GetMeshNodeStream must emit the User row — the portal's " +

@@ -133,36 +133,36 @@ public class AuthMirrorTriggerTests
     }
 
     [Fact]
-    public async Task ApiTokenInsert_MirrorsIntoAuthSchema()
+    public void ApiTokenInsert_MirrorsIntoAuthSchema()
     {
-        await _fixture.CleanDataAsync();
-        await EnsureMirrorInstalledAsync();
+        _fixture.CleanData().Should().Within(60.Seconds()).Emit();
+        EnsureMirrorInstalledAsync().Run().Should().Within(60.Seconds()).Emit();
 
         var node = new MeshNode("tokenhash123", "rbuergi/ApiToken")
         {
             Name = "Test Token",
             NodeType = "ApiToken"
         };
-        await _fixture.StorageAdapter.WriteAsync(node, new(), TestContext.Current.CancellationToken);
+        _fixture.StorageAdapter.Write(node, new()).Should().Within(30.Seconds()).Emit();
 
-        (await ExistsInAuthAsync("rbuergi/ApiToken", "tokenhash123"))
-            .Should().BeTrue("the trigger mirrors ApiToken inserts into auth.mesh_nodes");
-        (await ReadNameFromAuthAsync("rbuergi/ApiToken", "tokenhash123"))
-            .Should().Be("Test Token", "mirror should reflect the source row's content");
+        ExistsInAuthAsync("rbuergi/ApiToken", "tokenhash123").Run()
+            .Should().Within(30.Seconds()).Be(true);
+        ReadNameFromAuthAsync("rbuergi/ApiToken", "tokenhash123").Run()
+            .Should().Within(30.Seconds()).Be("Test Token");
     }
 
     [Fact]
-    public async Task ApiTokenUpdate_PropagatesToMirror()
+    public void ApiTokenUpdate_PropagatesToMirror()
     {
-        await _fixture.CleanDataAsync();
-        await EnsureMirrorInstalledAsync();
+        _fixture.CleanData().Should().Within(60.Seconds()).Emit();
+        EnsureMirrorInstalledAsync().Run().Should().Within(60.Seconds()).Emit();
 
         var node = new MeshNode("tokenhash456", "rbuergi/ApiToken")
         {
             Name = "Active Token",
             NodeType = "ApiToken"
         };
-        await _fixture.StorageAdapter.WriteAsync(node, new(), TestContext.Current.CancellationToken);
+        _fixture.StorageAdapter.Write(node, new()).Should().Within(30.Seconds()).Emit();
 
         // Same (namespace, id), different name — simulates the RevokeToken
         // flow that updates Content.IsRevoked while leaving the path fixed.
@@ -171,39 +171,37 @@ public class AuthMirrorTriggerTests
             Name = "Revoked Token",
             NodeType = "ApiToken"
         };
-        await _fixture.StorageAdapter.WriteAsync(revoked, new(), TestContext.Current.CancellationToken);
+        _fixture.StorageAdapter.Write(revoked, new()).Should().Within(30.Seconds()).Emit();
 
-        (await ReadNameFromAuthAsync("rbuergi/ApiToken", "tokenhash456"))
-            .Should().Be("Revoked Token",
-                "the trigger's ON CONFLICT DO UPDATE re-applies fields on every source update");
+        ReadNameFromAuthAsync("rbuergi/ApiToken", "tokenhash456").Run()
+            .Should().Within(30.Seconds()).Be("Revoked Token");
     }
 
     [Fact]
-    public async Task ApiTokenDelete_RemovesFromMirror()
+    public void ApiTokenDelete_RemovesFromMirror()
     {
-        await _fixture.CleanDataAsync();
-        await EnsureMirrorInstalledAsync();
+        _fixture.CleanData().Should().Within(60.Seconds()).Emit();
+        EnsureMirrorInstalledAsync().Run().Should().Within(60.Seconds()).Emit();
 
         var node = new MeshNode("tokenhash789", "rbuergi/ApiToken")
         {
             Name = "To Delete",
             NodeType = "ApiToken"
         };
-        await _fixture.StorageAdapter.WriteAsync(node, new(), TestContext.Current.CancellationToken);
-        (await ExistsInAuthAsync("rbuergi/ApiToken", "tokenhash789")).Should().BeTrue();
+        _fixture.StorageAdapter.Write(node, new()).Should().Within(30.Seconds()).Emit();
+        ExistsInAuthAsync("rbuergi/ApiToken", "tokenhash789").Run().Should().Within(30.Seconds()).Be(true);
 
-        await _fixture.StorageAdapter.DeleteAsync(
-            "rbuergi/ApiToken/tokenhash789", TestContext.Current.CancellationToken);
+        _fixture.StorageAdapter.Delete("rbuergi/ApiToken/tokenhash789").Should().Within(30.Seconds()).Emit();
 
-        (await ExistsInAuthAsync("rbuergi/ApiToken", "tokenhash789"))
-            .Should().BeFalse("the trigger removes the mirror row on source DELETE");
+        ExistsInAuthAsync("rbuergi/ApiToken", "tokenhash789").Run()
+            .Should().Within(30.Seconds()).Be(false);
     }
 
     [Fact]
-    public async Task UserInsert_MirrorsIntoAuthSchema()
+    public void UserInsert_MirrorsIntoAuthSchema()
     {
-        await _fixture.CleanDataAsync();
-        await EnsureMirrorInstalledAsync();
+        _fixture.CleanData().Should().Within(60.Seconds()).Emit();
+        EnsureMirrorInstalledAsync().Run().Should().Within(60.Seconds()).Emit();
 
         // Per the partition convention: a user node sits at the root of its
         // partition with namespace="" and id=userId.
@@ -212,26 +210,26 @@ public class AuthMirrorTriggerTests
             Name = "Roland Bürgi",
             NodeType = "User"
         };
-        await _fixture.StorageAdapter.WriteAsync(user, new(), TestContext.Current.CancellationToken);
+        _fixture.StorageAdapter.Write(user, new()).Should().Within(30.Seconds()).Emit();
 
-        (await ExistsInAuthAsync("", "rbuergi"))
-            .Should().BeTrue("the trigger mirrors User inserts into auth.mesh_nodes");
+        ExistsInAuthAsync("", "rbuergi").Run()
+            .Should().Within(30.Seconds()).Be(true);
     }
 
     [Fact]
-    public async Task NonAuthNodeType_IsNotMirrored()
+    public void NonAuthNodeType_IsNotMirrored()
     {
-        await _fixture.CleanDataAsync();
-        await EnsureMirrorInstalledAsync();
+        _fixture.CleanData().Should().Within(60.Seconds()).Emit();
+        EnsureMirrorInstalledAsync().Run().Should().Within(60.Seconds()).Emit();
 
         var story = new MeshNode("story1", "ACME/Project")
         {
             Name = "Story One",
             NodeType = "Story"
         };
-        await _fixture.StorageAdapter.WriteAsync(story, new(), TestContext.Current.CancellationToken);
+        _fixture.StorageAdapter.Write(story, new()).Should().Within(30.Seconds()).Emit();
 
-        (await ExistsInAuthAsync("ACME/Project", "story1"))
-            .Should().BeFalse("only User/Group/Role/VUser/ApiToken are mirrored — non-auth types stay in their source partition");
+        ExistsInAuthAsync("ACME/Project", "story1").Run()
+            .Should().Within(30.Seconds()).Be(false);
     }
 }

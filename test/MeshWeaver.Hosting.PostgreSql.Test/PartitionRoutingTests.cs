@@ -1,6 +1,5 @@
 using System.Collections.Generic;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Mesh;
@@ -51,7 +50,7 @@ public class PartitionRoutingTests
     /// a query-layer mismatch.</para>
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task SatellitePaths_RouteToCorrectTable()
+    public void SatellitePaths_RouteToCorrectTable()
     {
         var ct = TestContext.Current.CancellationToken;
         const string schema = "routingtest_b";
@@ -65,7 +64,8 @@ public class PartitionRoutingTests
             Versioned = true,
         };
 
-        var (schemaDs, adapter) = await _fixture.CreateSchemaAdapterAsync(schema, partitionDef, ct);
+        var (schemaDs, adapter) = _fixture.CreateSchemaAdapter(schema, partitionDef, ct)
+            .Should().Within(60.Seconds()).Emit();
 
         try
         {
@@ -81,7 +81,8 @@ public class PartitionRoutingTests
                 Name = "Grant",
                 NodeType = "AccessAssignment",
             };
-            await adapter.Write(accessNode, JsonSerializerOptions.Default).FirstAsync().ToTask(ct);
+            adapter.Write(accessNode, JsonSerializerOptions.Default)
+                .Should().Within(30.Seconds()).Emit();
 
             // 2. Write a Source-shaped node at {schema}/Source/{id}.
             partitionDef.ResolveTable($"{schema}/Source/file.cs").Should().Be(
@@ -93,7 +94,7 @@ public class PartitionRoutingTests
                 Name = "file.cs",
                 NodeType = "Code",
             };
-            await adapter.Write(sourceNode, JsonSerializerOptions.Default).FirstAsync().ToTask(ct);
+            adapter.Write(sourceNode, JsonSerializerOptions.Default).Should().Within(30.Seconds()).Emit();
 
             // 3. Write a non-satellite content node at {schema}/{id} — this
             //    one lands in the primary mesh_nodes table.
@@ -102,26 +103,21 @@ public class PartitionRoutingTests
                 Name = "doc",
                 NodeType = "Markdown",
             };
-            await adapter.Write(primaryNode, JsonSerializerOptions.Default).FirstAsync().ToTask(ct);
+            adapter.Write(primaryNode, JsonSerializerOptions.Default).Should().Within(30.Seconds()).Emit();
 
             // 4. Verify with raw SQL: counts per table must match expectations.
-            (await CountRowsAsync(schemaDs, "access", ct)).Should().Be(1,
-                "the AccessAssignment write must land in {schema}.access");
-            (await CountRowsAsync(schemaDs, "code", ct)).Should().Be(1,
-                "the Source write must land in {schema}.code");
-            (await CountRowsAsync(schemaDs, "mesh_nodes", ct)).Should().Be(1,
-                "only the non-satellite primary write must land in {schema}.mesh_nodes");
+            //    ScalarLong keeps the low-level PG query async inside; the body
+            //    asserts reactively (§2a).
+            schemaDs.ScalarLong("SELECT COUNT(*) FROM \"access\"", ct)
+                .Should().Within(30.Seconds()).Be(1L);
+            schemaDs.ScalarLong("SELECT COUNT(*) FROM \"code\"", ct)
+                .Should().Within(30.Seconds()).Be(1L);
+            schemaDs.ScalarLong("SELECT COUNT(*) FROM \"mesh_nodes\"", ct)
+                .Should().Within(30.Seconds()).Be(1L);
         }
         finally
         {
-            await schemaDs.DisposeAsync();
+            schemaDs.DisposeReactive().Should().Within(30.Seconds()).Emit();
         }
-    }
-
-    private static async Task<long> CountRowsAsync(NpgsqlDataSource ds, string table, System.Threading.CancellationToken ct)
-    {
-        await using var cmd = ds.CreateCommand($"SELECT COUNT(*) FROM \"{table}\"");
-        var result = await cmd.ExecuteScalarAsync(ct);
-        return (long)result!;
     }
 }

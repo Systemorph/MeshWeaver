@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.AI;
@@ -64,7 +63,6 @@ public class ThreadUrlResolutionTest(PostgreSqlFixture fixture, ITestOutputHelpe
     : MonolithMeshTestBase(output)
 {
     private readonly PostgreSqlFixture _fixture = fixture;
-    private CancellationToken TestTimeout => new CancellationTokenSource(60.Seconds()).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
@@ -139,10 +137,9 @@ public class ThreadUrlResolutionTest(PostgreSqlFixture fixture, ITestOutputHelpe
     /// </summary>
     [Theory(Timeout = 60000)]
     [MemberData(nameof(SatelliteCases))]
-    public async Task ResolvePath_SatelliteByFullPath_ReturnsSatelliteNode(
+    public void ResolvePath_SatelliteByFullPath_ReturnsSatelliteNode(
         string segment, string nodeType, bool contentNeeded)
     {
-        var ct = TestTimeout;
         var user = $"pg9b_sat_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
         var id = $"x{Guid.NewGuid():N}"[..10];
         var ns = $"{user}/{segment}";
@@ -152,12 +149,12 @@ public class ThreadUrlResolutionTest(PostgreSqlFixture fixture, ITestOutputHelpe
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         using var _systemScope = accessService.ImpersonateAsSystem();
 
-        await meshService.CreateNode(new MeshNode(user)
+        meshService.CreateNode(new MeshNode(user)
         {
             NodeType = "User",
             Name = user,
             State = MeshNodeState.Active,
-        }).Timeout(30.Seconds()).FirstAsync().ToTask(ct);
+        }).Should().Within(30.Seconds()).Emit();
 
         var satellite = new MeshNode(id, ns)
         {
@@ -167,16 +164,15 @@ public class ThreadUrlResolutionTest(PostgreSqlFixture fixture, ITestOutputHelpe
             State = MeshNodeState.Active,
             Content = contentNeeded ? new MeshThread { CreatedBy = user } : null,
         };
-        await meshService.CreateNode(satellite)
-            .Timeout(30.Seconds()).FirstAsync().ToTask(ct);
+        meshService.CreateNode(satellite).Should().Within(30.Seconds()).Emit();
 
         var resolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
-        var resolution = await resolver.ResolvePath(fullPath)
+        var resolution = resolver.ResolvePath(fullPath)
             .Where(r => r is not null)
             .Take(1)
             .Timeout(15.Seconds())
             .Catch<AddressResolution?, TimeoutException>(_ => Observable.Return<AddressResolution?>(null))
-            .FirstAsync().ToTask(ct);
+            .Should().Within(30.Seconds()).Emit();
 
         resolution.Should().NotBeNull(
             "Blazor navigation to /{0} must resolve to the {1} MeshNode — the prod " +
@@ -200,10 +196,9 @@ public class ThreadUrlResolutionTest(PostgreSqlFixture fixture, ITestOutputHelpe
     /// </summary>
     [Theory(Timeout = 60000)]
     [MemberData(nameof(SatelliteCases))]
-    public async Task ResolvePath_MissingSatellite_DoesNotFallBackToWrongNodeType(
+    public void ResolvePath_MissingSatellite_DoesNotFallBackToWrongNodeType(
         string segment, string nodeType, bool _)
     {
-        var ct = TestTimeout;
         var user = $"pg9b_miss_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
         var missingPath = $"{user}/{segment}/never-existed";
 
@@ -211,19 +206,19 @@ public class ThreadUrlResolutionTest(PostgreSqlFixture fixture, ITestOutputHelpe
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         using var _systemScope = accessService.ImpersonateAsSystem();
 
-        await meshService.CreateNode(new MeshNode(user)
+        meshService.CreateNode(new MeshNode(user)
         {
             NodeType = "User",
             Name = user,
             State = MeshNodeState.Active,
-        }).Timeout(30.Seconds()).FirstAsync().ToTask(ct);
+        }).Should().Within(30.Seconds()).Emit();
 
         var resolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
-        var resolution = await resolver.ResolvePath(missingPath)
+        var resolution = resolver.ResolvePath(missingPath)
             .Take(1)
             .Timeout(15.Seconds())
             .Catch<AddressResolution?, TimeoutException>(_ => Observable.Return<AddressResolution?>(null))
-            .FirstAsync().ToTask(ct);
+            .Should().Within(30.Seconds()).Emit();
 
         // We accept either null (best — caller renders 404) or a resolution
         // pointing at a non-satellite ancestor with the missing tail in
@@ -250,9 +245,8 @@ public class ThreadUrlResolutionTest(PostgreSqlFixture fixture, ITestOutputHelpe
     /// is searchable by URL.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task ResolvePath_ProdShape_UserSlashUnderscoreThreadSlashId_Resolves()
+    public void ResolvePath_ProdShape_UserSlashUnderscoreThreadSlashId_Resolves()
     {
-        var ct = TestTimeout;
         var user = $"pg9b_prod_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
         var threadId = "hello-2a76";
         var threadPath = $"{user}/_Thread/{threadId}";
@@ -261,27 +255,27 @@ public class ThreadUrlResolutionTest(PostgreSqlFixture fixture, ITestOutputHelpe
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         using var _systemScope = accessService.ImpersonateAsSystem();
 
-        await meshService.CreateNode(new MeshNode(user)
+        meshService.CreateNode(new MeshNode(user)
         {
             NodeType = "User",
             Name = user,
             State = MeshNodeState.Active,
-        }).Timeout(30.Seconds()).FirstAsync().ToTask(ct);
+        }).Should().Within(30.Seconds()).Emit();
 
-        await meshService.CreateNode(new MeshNode(threadId, $"{user}/_Thread")
+        meshService.CreateNode(new MeshNode(threadId, $"{user}/_Thread")
         {
             NodeType = ThreadNodeType.NodeType,
             Name = "hello?",
             MainNode = user,
             State = MeshNodeState.Active,
             Content = new MeshThread { CreatedBy = user },
-        }).Timeout(30.Seconds()).FirstAsync().ToTask(ct);
+        }).Should().Within(30.Seconds()).Emit();
 
         var resolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
-        var resolution = await resolver.ResolvePath(threadPath)
+        var resolution = resolver.ResolvePath(threadPath)
             .Where(r => r is not null).Take(1).Timeout(15.Seconds())
             .Catch<AddressResolution?, TimeoutException>(_ => Observable.Return<AddressResolution?>(null))
-            .FirstAsync().ToTask(ct);
+            .Should().Within(30.Seconds()).Emit();
 
         resolution.Should().NotBeNull(
             "this is the exact URL prod fails on: https://memex.meshweaver.cloud/{0}",
@@ -300,9 +294,8 @@ public class ThreadUrlResolutionTest(PostgreSqlFixture fixture, ITestOutputHelpe
     /// explicitly demonstrates the contract still holds after the fix.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task ResolvePath_NestedThreadMessage_FourSegmentUrl_ReturnsMessageNode()
+    public void ResolvePath_NestedThreadMessage_FourSegmentUrl_ReturnsMessageNode()
     {
-        var ct = TestTimeout;
         var user = $"pg9b_msg_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
         var threadId = $"t{Guid.NewGuid():N}"[..10];
         var msgId = $"m{Guid.NewGuid():N}"[..10];
@@ -313,36 +306,36 @@ public class ThreadUrlResolutionTest(PostgreSqlFixture fixture, ITestOutputHelpe
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         using var _systemScope = accessService.ImpersonateAsSystem();
 
-        await meshService.CreateNode(new MeshNode(user)
+        meshService.CreateNode(new MeshNode(user)
         {
             NodeType = "User",
             Name = user,
             State = MeshNodeState.Active,
-        }).Timeout(30.Seconds()).FirstAsync().ToTask(ct);
+        }).Should().Within(30.Seconds()).Emit();
 
-        await meshService.CreateNode(new MeshNode(threadId, $"{user}/_Thread")
+        meshService.CreateNode(new MeshNode(threadId, $"{user}/_Thread")
         {
             NodeType = ThreadNodeType.NodeType,
             Name = "parent",
             MainNode = user,
             State = MeshNodeState.Active,
             Content = new MeshThread { CreatedBy = user },
-        }).Timeout(30.Seconds()).FirstAsync().ToTask(ct);
+        }).Should().Within(30.Seconds()).Emit();
 
-        await meshService.CreateNode(new MeshNode(msgId, threadPath)
+        meshService.CreateNode(new MeshNode(msgId, threadPath)
         {
             NodeType = "ThreadMessage",
             Name = "hello msg",
             MainNode = user,
             State = MeshNodeState.Active,
             Content = new ThreadMessage { Role = "user", Text = "hello" },
-        }).Timeout(30.Seconds()).FirstAsync().ToTask(ct);
+        }).Should().Within(30.Seconds()).Emit();
 
         var resolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
-        var resolution = await resolver.ResolvePath(msgPath)
+        var resolution = resolver.ResolvePath(msgPath)
             .Where(r => r is not null).Take(1).Timeout(15.Seconds())
             .Catch<AddressResolution?, TimeoutException>(_ => Observable.Return<AddressResolution?>(null))
-            .FirstAsync().ToTask(ct);
+            .Should().Within(30.Seconds()).Emit();
 
         resolution.Should().NotBeNull(
             "navigation to a 4-segment thread-message URL must resolve to the message node — " +

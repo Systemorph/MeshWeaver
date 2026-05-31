@@ -36,7 +36,6 @@ public class NotificationServiceIntegrationTests(PostgreSqlFixture fixture, ITes
     : MonolithMeshTestBase(output)
 {
     private readonly PostgreSqlFixture _fixture = fixture;
-    private CancellationToken TestTimeout => new CancellationTokenSource(60.Seconds()).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
@@ -53,9 +52,9 @@ public class NotificationServiceIntegrationTests(PostgreSqlFixture fixture, ITes
     }
 
     [Fact(Timeout = 60000)]
-    public async Task CreateNotification_EndToEnd_LandsInNotificationsTable()
+    public void CreateNotification_EndToEnd_LandsInNotificationsTable()
     {
-        var ct = TestTimeout;
+        var ct = TestContext.Current.CancellationToken;
         var ns = $"notif_test_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
@@ -63,15 +62,15 @@ public class NotificationServiceIntegrationTests(PostgreSqlFixture fixture, ITes
         // schema gets created (first-touch init runs CreateSatelliteTablesAsync
         // which includes `notifications` after the StandardTableMappings change).
         var mainPath = $"{ns}/doc";
-        await meshService.CreateNode(new MeshNode("doc", ns)
+        meshService.CreateNode(new MeshNode("doc", ns)
         {
             NodeType = "Markdown",
             Name = "doc",
             State = MeshNodeState.Active,
-        }).Timeout(30.Seconds()).FirstAsync().ToTask(ct);
+        }).Should().Within(30.Seconds()).Emit();
 
         // Act: call the public NotificationService API the bell + thread hook use.
-        var notif = await NotificationService.CreateNotification(
+        var notif = NotificationService.CreateNotification(
                 meshService,
                 mainNodePath: mainPath,
                 title: "Doc ready",
@@ -80,9 +79,7 @@ public class NotificationServiceIntegrationTests(PostgreSqlFixture fixture, ITes
                 targetNodePath: mainPath,
                 createdBy: "agent",
                 icon: "/static/NodeTypeIcons/bell.svg")
-            .Timeout(30.Seconds())
-            .FirstAsync()
-            .ToTask(ct);
+            .Should().Within(30.Seconds()).Emit();
 
         notif.Should().NotBeNull();
         notif.Path.Should().StartWith($"{mainPath}/{NotificationService.SatelliteSegment}/");
@@ -90,41 +87,39 @@ public class NotificationServiceIntegrationTests(PostgreSqlFixture fixture, ITes
 
         // Verify the row landed in the dedicated `notifications` table inside
         // the partition schema, NOT in mesh_nodes or annotations.
-        await using var ds = NpgsqlDataSource.Create(_fixture.ConnectionString);
-        await using var notifCmd = ds.CreateCommand(
-            $"SELECT COUNT(*) FROM \"{ns}\".notifications WHERE id = $1");
-        notifCmd.Parameters.AddWithValue(notif.Id!);
-        ((long)(await notifCmd.ExecuteScalarAsync(ct))!).Should().Be(1,
-            "the satellite must land in the dedicated notifications table");
+        using var ds = NpgsqlDataSource.Create(_fixture.ConnectionString);
+        ds.ScalarLong($"SELECT COUNT(*) FROM \"{ns}\".notifications WHERE id = @id",
+                new[] { ("id", (object)notif.Id!) }, ct)
+            .Should().Within(30.Seconds()).Be(1L,
+                "the satellite must land in the dedicated notifications table");
 
-        await using var meshCmd = ds.CreateCommand(
-            $"SELECT COUNT(*) FROM \"{ns}\".mesh_nodes WHERE id = $1");
-        meshCmd.Parameters.AddWithValue(notif.Id!);
-        ((long)(await meshCmd.ExecuteScalarAsync(ct))!).Should().Be(0,
-            "the satellite must NOT land in mesh_nodes (regression would mean routing broke)");
+        ds.ScalarLong($"SELECT COUNT(*) FROM \"{ns}\".mesh_nodes WHERE id = @id",
+                new[] { ("id", (object)notif.Id!) }, ct)
+            .Should().Within(30.Seconds()).Be(0L,
+                "the satellite must NOT land in mesh_nodes (regression would mean routing broke)");
     }
 
     [Fact(Timeout = 60000)]
-    public async Task MultipleNotifications_AccumulateAndAreQueryable_ViaNodeTypeFilter()
+    public void MultipleNotifications_AccumulateAndAreQueryable_ViaNodeTypeFilter()
     {
-        var ct = TestTimeout;
+        var ct = TestContext.Current.CancellationToken;
         var ns = $"notif_test2_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         // Seed a main entity (any node type works; notifications are satellites
         // of arbitrary entities — Markdown is already registered via AddGraph).
         var docPath = $"{ns}/doc-1";
-        await meshService.CreateNode(new MeshNode("doc-1", ns)
+        meshService.CreateNode(new MeshNode("doc-1", ns)
         {
             NodeType = "Markdown",
             Name = "doc-1",
             State = MeshNodeState.Active,
-        }).Timeout(30.Seconds()).FirstAsync().ToTask(ct);
+        }).Should().Within(30.Seconds()).Emit();
 
         // Emit three notifications (simulating three round completions).
         for (var i = 0; i < 3; i++)
         {
-            await NotificationService.CreateNotification(
+            NotificationService.CreateNotification(
                     meshService,
                     mainNodePath: docPath,
                     title: $"Round {i} ready",
@@ -132,16 +127,13 @@ public class NotificationServiceIntegrationTests(PostgreSqlFixture fixture, ITes
                     type: NotificationType.General,
                     targetNodePath: docPath,
                     createdBy: "agent")
-                .Timeout(30.Seconds())
-                .FirstAsync()
-                .ToTask(ct);
+                .Should().Within(30.Seconds()).Emit();
         }
 
         // Direct PG count — all three sit in the partition's notifications table.
-        await using var ds = NpgsqlDataSource.Create(_fixture.ConnectionString);
-        await using var cmd = ds.CreateCommand(
-            $"SELECT COUNT(*) FROM \"{ns}\".notifications WHERE main_node = $1");
-        cmd.Parameters.AddWithValue(docPath);
-        ((long)(await cmd.ExecuteScalarAsync(ct))!).Should().Be(3);
+        using var ds = NpgsqlDataSource.Create(_fixture.ConnectionString);
+        ds.ScalarLong($"SELECT COUNT(*) FROM \"{ns}\".notifications WHERE main_node = @mn",
+                new[] { ("mn", (object)docPath) }, ct)
+            .Should().Within(30.Seconds()).Be(3L);
     }
 }

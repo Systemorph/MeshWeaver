@@ -39,31 +39,31 @@ public class VectorSearchTests
     }
 
     [Fact]
-    public async Task IVectorSearchProvider_SearchAsync_FindsExactBucketMatch()
+    public void IVectorSearchProvider_SearchAsync_FindsExactBucketMatch()
     {
-        await _fixture.CleanDataAsync();
+        _fixture.CleanData().Should().Within(60.Seconds()).Emit();
         var ct = TestContext.Current.CancellationToken;
         var stub = new StubEmbeddingProvider();
         var adapter = new PostgreSqlStorageAdapter(_fixture.DataSource, stub);
         var query = new PostgreSqlMeshQuery(
             adapter,
-            
+
             accessService: null,
             meshConfiguration: null,
             excludedNamespaces: null,
             embeddingProvider: stub);
 
-        await adapter.WriteAsync(new MeshNode("alpha", "VecTest")
-            { Name = "alpha", NodeType = "Story" }, _options, ct);
-        await adapter.WriteAsync(new MeshNode("bravo", "VecTest")
-            { Name = "bravo", NodeType = "Story" }, _options, ct);
+        adapter.Write(new MeshNode("alpha", "VecTest")
+            { Name = "alpha", NodeType = "Story" }, _options).Should().Within(30.Seconds()).Emit();
+        adapter.Write(new MeshNode("bravo", "VecTest")
+            { Name = "bravo", NodeType = "Story" }, _options).Should().Within(30.Seconds()).Emit();
 
-        await _fixture.AccessControl.GrantAsync("VecTest", "Anonymous", "Read", isAllow: true, ct);
+        _fixture.AccessControl.Grant("VecTest", "Anonymous", "Read", isAllow: true, ct)
+            .Should().Within(30.Seconds()).Emit();
 
-        var results = new System.Collections.Generic.List<MeshNode>();
-        await foreach (var node in ((IVectorSearchProvider)query).SearchAsync("alpha", _options,
-            namespacePath: "VecTest", userId: null, topK: 5, ct))
-            results.Add(node);
+        var results = ((IVectorSearchProvider)query).SearchAsync("alpha", _options,
+                namespacePath: "VecTest", userId: null, topK: 5, ct)
+            .Collect(ct).Should().Within(30.Seconds()).Emit();
 
         // The stub maps "alpha" embedding to the same bucket as node "alpha"
         // (writer stored embedding of "alpha Story"; query embeds "alpha"). They
@@ -75,26 +75,27 @@ public class VectorSearchTests
     }
 
     [Fact]
-    public async Task QueryAsync_TextSearch_WithEmbeddingProvider_RoutesThroughVector()
+    public void QueryAsync_TextSearch_WithEmbeddingProvider_RoutesThroughVector()
     {
-        await _fixture.CleanDataAsync();
+        _fixture.CleanData().Should().Within(60.Seconds()).Emit();
         var ct = TestContext.Current.CancellationToken;
         var stub = new StubEmbeddingProvider();
         var adapter = new PostgreSqlStorageAdapter(_fixture.DataSource, stub);
         var query = new PostgreSqlMeshQuery(
             adapter,
-            
+
             accessService: null,
             meshConfiguration: null,
             excludedNamespaces: null,
             embeddingProvider: stub);
 
-        await adapter.WriteAsync(new MeshNode("doc-foo", "VecQuery")
-            { Name = "doc-foo", NodeType = "Markdown" }, _options, ct);
-        await adapter.WriteAsync(new MeshNode("doc-bar", "VecQuery")
-            { Name = "doc-bar", NodeType = "Markdown" }, _options, ct);
+        adapter.Write(new MeshNode("doc-foo", "VecQuery")
+            { Name = "doc-foo", NodeType = "Markdown" }, _options).Should().Within(30.Seconds()).Emit();
+        adapter.Write(new MeshNode("doc-bar", "VecQuery")
+            { Name = "doc-bar", NodeType = "Markdown" }, _options).Should().Within(30.Seconds()).Emit();
 
-        await _fixture.AccessControl.GrantAsync("VecQuery", "Anonymous", "Read", isAllow: true, ct);
+        _fixture.AccessControl.Grant("VecQuery", "Anonymous", "Read", isAllow: true, ct)
+            .Should().Within(30.Seconds()).Emit();
 
         // Free-floating text ("doc-foo") + structured namespace filter. The
         // intercept in QueryAsync should: (a) detect TextSearch is non-empty,
@@ -103,9 +104,7 @@ public class VectorSearchTests
         // are ranked. The structured part survives via the structuralFilter
         // (TextSearch stripped).
         var request = new MeshQueryRequest { Query = "doc-foo namespace:VecQuery", Limit = 5 };
-        var hits = new System.Collections.Generic.List<object>();
-        await foreach (var item in query.QueryAsync(request, _options, ct))
-            hits.Add(item);
+        var hits = query.QueryList(request, _options, ct).Should().Within(30.Seconds()).Emit();
 
         hits.Should().NotBeEmpty("vector-search intercept must produce results for bare-text queries");
         var meshHits = hits.Cast<MeshNode>().ToList();
@@ -114,23 +113,24 @@ public class VectorSearchTests
     }
 
     [Fact]
-    public async Task QueryAsync_StructuredOnly_DoesNotInvokeEmbeddingProvider()
+    public void QueryAsync_StructuredOnly_DoesNotInvokeEmbeddingProvider()
     {
-        await _fixture.CleanDataAsync();
+        _fixture.CleanData().Should().Within(60.Seconds()).Emit();
         var ct = TestContext.Current.CancellationToken;
         var stub = new StubEmbeddingProvider();
         var adapter = new PostgreSqlStorageAdapter(_fixture.DataSource, stub);
         var query = new PostgreSqlMeshQuery(
             adapter,
-            
+
             accessService: null,
             meshConfiguration: null,
             excludedNamespaces: null,
             embeddingProvider: stub);
 
-        await adapter.WriteAsync(new MeshNode("only-structured", "VecStruct")
-            { Name = "node", NodeType = "Story" }, _options, ct);
-        await _fixture.AccessControl.GrantAsync("VecStruct", "Anonymous", "Read", isAllow: true, ct);
+        adapter.Write(new MeshNode("only-structured", "VecStruct")
+            { Name = "node", NodeType = "Story" }, _options).Should().Within(30.Seconds()).Emit();
+        _fixture.AccessControl.Grant("VecStruct", "Anonymous", "Read", isAllow: true, ct)
+            .Should().Within(30.Seconds()).Emit();
 
         var writesBefore = stub.QueryCallCount;
 
@@ -138,9 +138,7 @@ public class VectorSearchTests
         // intercept must NOT fire (the regular SQL path handles it). Stub's
         // call counter tracks GenerateEmbeddingAsync invocations.
         var request = new MeshQueryRequest { Query = "namespace:VecStruct nodeType:Story", Limit = 5 };
-        var hits = new System.Collections.Generic.List<object>();
-        await foreach (var item in query.QueryAsync(request, _options, ct))
-            hits.Add(item);
+        var hits = query.QueryList(request, _options, ct).Should().Within(30.Seconds()).Emit();
 
         hits.Should().NotBeEmpty();
         // The stub's QueryCallCount tracks GenerateEmbeddingAsync calls EXCLUDING

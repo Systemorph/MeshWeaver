@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -29,7 +29,7 @@ public class AccessAssignmentRoutingTests
     }
 
     [Fact(Timeout = 60000)]
-    public async Task AccessAssignment_DirectChild_RoutesToAccessTable()
+    public void AccessAssignment_DirectChild_RoutesToAccessTable()
     {
         var ct = TestContext.Current.CancellationToken;
 
@@ -40,12 +40,13 @@ public class AccessAssignmentRoutingTests
             Schema = "testorg_access",
             TableMappings = PartitionDefinition.StandardTableMappings
         };
-        var (ds, adapter) = await _fixture.CreateSchemaAdapterAsync("testorg_access", partitionDef, ct);
+        var (ds, adapter) = _fixture.CreateSchemaAdapter("testorg_access", partitionDef, ct)
+            .Should().Within(60.Seconds()).Emit();
 
         try
         {
             // Write an AccessAssignment as a direct child (path: TestOrg/rbuergi_Access)
-            // This is the pattern used in production â€” NOT under a _Access segment
+            // This is the pattern used in production — NOT under a _Access segment
             var accessNode = new MeshNode("rbuergi_Access", "TestOrg")
             {
                 Name = "rbuergi Access",
@@ -63,16 +64,15 @@ public class AccessAssignmentRoutingTests
                 }
             };
 
-            await adapter.WriteAsync(accessNode, _options, ct);
+            adapter.Write(accessNode, _options).Should().Within(60.Seconds()).Emit();
 
             // Verify: node should be in the `access` table, NOT in `mesh_nodes`
-            await using var checkAccess = ds.CreateCommand(
-                "SELECT count(*) FROM access WHERE id = 'rbuergi_Access' AND namespace = 'TestOrg'");
-            var accessCount = (long)(await checkAccess.ExecuteScalarAsync(ct))!;
-
-            await using var checkMeshNodes = ds.CreateCommand(
-                "SELECT count(*) FROM mesh_nodes WHERE id = 'rbuergi_Access' AND namespace = 'TestOrg'");
-            var meshNodesCount = (long)(await checkMeshNodes.ExecuteScalarAsync(ct))!;
+            var accessCount = ds.ScalarLong(
+                "SELECT count(*) FROM access WHERE id = 'rbuergi_Access' AND namespace = 'TestOrg'", ct)
+                .Should().Within(30.Seconds()).Emit();
+            var meshNodesCount = ds.ScalarLong(
+                "SELECT count(*) FROM mesh_nodes WHERE id = 'rbuergi_Access' AND namespace = 'TestOrg'", ct)
+                .Should().Within(30.Seconds()).Emit();
 
             accessCount.Should().Be(1,
                 "AccessAssignment should be in the `access` satellite table");
@@ -86,12 +86,12 @@ public class AccessAssignmentRoutingTests
         }
         finally
         {
-            await ds.DisposeAsync();
+            ds.DisposeReactive().Should().Within(30.Seconds()).Emit();
         }
     }
 
     [Fact(Timeout = 60000)]
-    public async Task AccessAssignment_ViaAccessSegment_RoutesToAccessTable()
+    public void AccessAssignment_ViaAccessSegment_RoutesToAccessTable()
     {
         var ct = TestContext.Current.CancellationToken;
 
@@ -102,7 +102,8 @@ public class AccessAssignmentRoutingTests
             Schema = "orgaccseg",
             TableMappings = PartitionDefinition.StandardTableMappings
         };
-        var (ds, adapter) = await _fixture.CreateSchemaAdapterAsync("orgaccseg", partitionDef, ct);
+        var (ds, adapter) = _fixture.CreateSchemaAdapter("orgaccseg", partitionDef, ct)
+            .Should().Within(60.Seconds()).Emit();
 
         try
         {
@@ -123,28 +124,27 @@ public class AccessAssignmentRoutingTests
                 }
             };
 
-            await adapter.WriteAsync(accessNode, _options, ct);
+            adapter.Write(accessNode, _options).Should().Within(60.Seconds()).Emit();
 
             // Verify: node in `access` table (path-based routing matches _Access segment)
-            await using var checkAccess = ds.CreateCommand(
-                "SELECT count(*) FROM access WHERE id = 'rbuergi_Access' AND namespace = 'OrgAccSeg/_Access'");
-            var accessCount = (long)(await checkAccess.ExecuteScalarAsync(ct))!;
-
-            await using var checkMeshNodes = ds.CreateCommand(
-                "SELECT count(*) FROM mesh_nodes WHERE id = 'rbuergi_Access'");
-            var meshNodesCount = (long)(await checkMeshNodes.ExecuteScalarAsync(ct))!;
+            var accessCount = ds.ScalarLong(
+                "SELECT count(*) FROM access WHERE id = 'rbuergi_Access' AND namespace = 'OrgAccSeg/_Access'", ct)
+                .Should().Within(30.Seconds()).Emit();
+            var meshNodesCount = ds.ScalarLong(
+                "SELECT count(*) FROM mesh_nodes WHERE id = 'rbuergi_Access'", ct)
+                .Should().Within(30.Seconds()).Emit();
 
             accessCount.Should().Be(1, "AccessAssignment under _Access segment should be in `access` table");
             meshNodesCount.Should().Be(0, "AccessAssignment should NOT be in `mesh_nodes`");
         }
         finally
         {
-            await ds.DisposeAsync();
+            ds.DisposeReactive().Should().Within(30.Seconds()).Emit();
         }
     }
 
     [Fact(Timeout = 60000)]
-    public async Task AccessAssignment_UnderAccessSegment_AlsoRoutesToAccessTable()
+    public void AccessAssignment_UnderAccessSegment_AlsoRoutesToAccessTable()
     {
         var ct = TestContext.Current.CancellationToken;
 
@@ -155,7 +155,8 @@ public class AccessAssignmentRoutingTests
             Schema = "testorg2_access",
             TableMappings = PartitionDefinition.StandardTableMappings
         };
-        var (ds, adapter) = await _fixture.CreateSchemaAdapterAsync("testorg2_access", partitionDef, ct);
+        var (ds, adapter) = _fixture.CreateSchemaAdapter("testorg2_access", partitionDef, ct)
+            .Should().Within(60.Seconds()).Emit();
 
         try
         {
@@ -177,19 +178,19 @@ public class AccessAssignmentRoutingTests
                 }
             };
 
-            await adapter.WriteAsync(accessNode, _options, ct);
+            adapter.Write(accessNode, _options).Should().Within(60.Seconds()).Emit();
 
             // Verify: also in `access` table (path-based routing works for _Access segment)
-            await using var checkAccess = ds.CreateCommand(
-                "SELECT count(*) FROM access WHERE id = 'rbuergi_Access'");
-            var accessCount = (long)(await checkAccess.ExecuteScalarAsync(ct))!;
+            var accessCount = ds.ScalarLong(
+                "SELECT count(*) FROM access WHERE id = 'rbuergi_Access'", ct)
+                .Should().Within(30.Seconds()).Emit();
 
             accessCount.Should().Be(1,
                 "AccessAssignment under _Access segment should be in `access` table");
         }
         finally
         {
-            await ds.DisposeAsync();
+            ds.DisposeReactive().Should().Within(30.Seconds()).Emit();
         }
     }
 }

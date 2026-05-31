@@ -1,4 +1,6 @@
 using System.Collections.Generic;
+using System.Reactive;
+using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.PostgreSql;
@@ -116,6 +118,16 @@ public class PostgreSqlFixture : IAsyncLifetime
     }
 
     /// <summary>
+    /// <see cref="IObservable{T}"/> projection of <see cref="CreateSchemaAdapterAsync"/>
+    /// so test bodies stay void + blocking-reactive (§2a). The low-level schema
+    /// DDL stays async inside; this only wraps it via
+    /// <see cref="Observable.FromAsync{TResult}(System.Func{System.Threading.CancellationToken, System.Threading.Tasks.Task{TResult}})"/>.
+    /// </summary>
+    public IObservable<(NpgsqlDataSource SchemaDataSource, PostgreSqlStorageAdapter Adapter)>
+        CreateSchemaAdapter(string schemaName, PartitionDefinition? partitionDef = null, CancellationToken ct = default)
+        => Observable.FromAsync(token => CreateSchemaAdapterAsync(schemaName, partitionDef, token));
+
+    /// <summary>
     /// Disposes every per-schema NpgsqlDataSource ever returned by
     /// <see cref="CreateSchemaAdapterAsync"/>. Call between tests so the
     /// container doesn't run out of connections (max_connections=100).
@@ -129,6 +141,14 @@ public class PostgreSqlFixture : IAsyncLifetime
             try { ds.Dispose(); } catch { }
         }
     }
+
+    /// <summary>
+    /// <see cref="IObservable{T}"/> projection of <see cref="CleanDataAsync"/>
+    /// so test bodies stay void + blocking-reactive (§2a). The DELETE statements
+    /// (low-level PG ops) stay async inside.
+    /// </summary>
+    public IObservable<Unit> CleanData()
+        => Observable.FromAsync(async () => { await CleanDataAsync(); return Unit.Default; });
 
     /// <summary>
     /// Cleans all data tables for test isolation.

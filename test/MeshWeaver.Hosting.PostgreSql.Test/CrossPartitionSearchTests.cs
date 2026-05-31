@@ -128,19 +128,34 @@ public class CrossPartitionSearchTests
         return (adminAdapter, partitions);
     }
 
+    private (PostgreSqlStorageAdapter AdminAdapter,
+        Dictionary<string, (NpgsqlDataSource Ds, PostgreSqlStorageAdapter Adapter)> Partitions)
+        SetupMultiOrgEnvironment(CancellationToken ct)
+        => SetupMultiOrgEnvironmentAsync(ct).Run().Should().Within(120.Seconds()).Emit();
+
+    private List<MeshNode> QueryAdapter(PostgreSqlStorageAdapter adapter, ParsedQuery query, CancellationToken ct)
+        => adapter.QueryNodesAsync(query, _options, ct: ct)
+            .Collect(ct).Should().Within(30.Seconds()).Emit();
+
+    private List<MeshNode> CallSearchAcrossSchemas(
+        string whereClause, string? userId, string orderBy, int limit, CancellationToken ct)
+        => CallSearchAcrossSchemasAsync(whereClause, userId, orderBy, limit, ct)
+            .Run().Should().Within(30.Seconds()).Emit();
+
+    private void PopulateSearchableSchemas(IEnumerable<string> schemas, CancellationToken ct)
+        => PopulateSearchableSchemasAsync(schemas, ct).Run().Should().Within(30.Seconds()).Emit();
+
     [Fact(Timeout = 60000)]
-    public async Task CrossPartition_FindsOrgsAcrossAllSchemas()
+    public void CrossPartition_FindsOrgsAcrossAllSchemas()
     {
         var ct = TestContext.Current.CancellationToken;
-        var (adminAdapter, partitions) = await SetupMultiOrgEnvironmentAsync(ct);
+        var (adminAdapter, partitions) = SetupMultiOrgEnvironment(ct);
 
-        // Query each partition individually â€” verify data is there
+        // Query each partition individually — verify data is there
         foreach (var (org, (_, adapter)) in partitions)
         {
-            var nodes = new List<MeshNode>();
             var query = new QueryParser().Parse("scope:subtree is:main");
-            await foreach (var node in adapter.QueryNodesAsync(query, _options, ct: ct))
-                nodes.Add(node);
+            var nodes = QueryAdapter(adapter, query, ct);
 
             nodes.Should().NotBeEmpty($"{org} partition should have nodes");
             nodes.Select(n => n.Name).Should().Contain($"{org} Organization",
@@ -150,18 +165,16 @@ public class CrossPartitionSearchTests
     }
 
     [Fact(Timeout = 60000)]
-    public async Task CrossPartition_ThreadsFoundByNodeType()
+    public void CrossPartition_ThreadsFoundByNodeType()
     {
         var ct = TestContext.Current.CancellationToken;
-        var (_, partitions) = await SetupMultiOrgEnvironmentAsync(ct);
+        var (_, partitions) = SetupMultiOrgEnvironment(ct);
 
         // Query threads in each partition
         foreach (var (org, (_, adapter)) in partitions)
         {
-            var threads = new List<MeshNode>();
             var query = new QueryParser().Parse("nodeType:Thread scope:subtree");
-            await foreach (var node in adapter.QueryNodesAsync(query, _options, ct: ct))
-                threads.Add(node);
+            var threads = QueryAdapter(adapter, query, ct);
 
             threads.Should().NotBeEmpty($"{org} should have a thread");
             threads[0].Name.Should().Contain(org);
@@ -170,18 +183,16 @@ public class CrossPartitionSearchTests
     }
 
     [Fact(Timeout = 60000)]
-    public async Task CrossPartition_ActivityQueryFindsNodesWithActivity()
+    public void CrossPartition_ActivityQueryFindsNodesWithActivity()
     {
         var ct = TestContext.Current.CancellationToken;
-        var (_, partitions) = await SetupMultiOrgEnvironmentAsync(ct);
+        var (_, partitions) = SetupMultiOrgEnvironment(ct);
 
         // source:activity query in each partition
         foreach (var (org, (_, adapter)) in partitions)
         {
-            var results = new List<MeshNode>();
             var query = new QueryParser().Parse("source:activity scope:subtree is:main sort:LastModified-desc");
-            await foreach (var node in adapter.QueryNodesAsync(query, _options, ct: ct))
-                results.Add(node);
+            var results = QueryAdapter(adapter, query, ct);
 
             results.Should().NotBeEmpty($"{org} should have nodes with activity");
             results.Should().AllSatisfy(n =>
@@ -193,18 +204,17 @@ public class CrossPartitionSearchTests
     }
 
     [Fact(Timeout = 60000)]
-    public async Task CrossPartition_SortedLimitedQueryMergesCorrectly()
+    public void CrossPartition_SortedLimitedQueryMergesCorrectly()
     {
         var ct = TestContext.Current.CancellationToken;
-        var (_, partitions) = await SetupMultiOrgEnvironmentAsync(ct);
+        var (_, partitions) = SetupMultiOrgEnvironment(ct);
 
         // Collect all nodes across partitions, sorted by LastModified desc
         var allNodes = new List<MeshNode>();
         foreach (var (org, (_, adapter)) in partitions)
         {
             var query = new QueryParser().Parse("scope:subtree is:main sort:LastModified-desc");
-            await foreach (var node in adapter.QueryNodesAsync(query, _options, ct: ct))
-                allNodes.Add(node);
+            allNodes.AddRange(QueryAdapter(adapter, query, ct));
         }
 
         // Re-sort globally (simulating correct merge behavior)
@@ -227,18 +237,17 @@ public class CrossPartitionSearchTests
     }
 
     [Fact(Timeout = 60000)]
-    public async Task CrossPartition_TextSearchFindsAcrossPartitions()
+    public void CrossPartition_TextSearchFindsAcrossPartitions()
     {
         var ct = TestContext.Current.CancellationToken;
-        var (_, partitions) = await SetupMultiOrgEnvironmentAsync(ct);
+        var (_, partitions) = SetupMultiOrgEnvironment(ct);
 
         // Search for "Annual Report" in each partition
         var allMatches = new List<MeshNode>();
         foreach (var (org, (_, adapter)) in partitions)
         {
             var query = new QueryParser().Parse("Annual scope:subtree is:main");
-            await foreach (var node in adapter.QueryNodesAsync(query, _options, ct: ct))
-                allMatches.Add(node);
+            allMatches.AddRange(QueryAdapter(adapter, query, ct));
         }
 
         // All 3 orgs should have a matching "Annual Report"
@@ -249,24 +258,20 @@ public class CrossPartitionSearchTests
     }
 
     [Fact(Timeout = 60000)]
-    public async Task CrossPartition_ContextSearchExcludesSatelliteTypes()
+    public void CrossPartition_ContextSearchExcludesSatelliteTypes()
     {
         var ct = TestContext.Current.CancellationToken;
-        var (_, partitions) = await SetupMultiOrgEnvironmentAsync(ct);
+        var (_, partitions) = SetupMultiOrgEnvironment(ct);
 
         // Query with context:search should exclude Thread and Activity
         foreach (var (org, (_, adapter)) in partitions)
         {
-            var results = new List<MeshNode>();
             // Simulate context:search exclusion
             var query = new QueryParser().Parse("scope:subtree is:main");
-            await foreach (var node in adapter.QueryNodesAsync(query, _options, ct: ct))
-            {
+            var results = QueryAdapter(adapter, query, ct)
                 // Simulate the context filtering done by PostgreSqlMeshQuery
-                if (node.NodeType is "Thread" or "Activity" or "ThreadMessage")
-                    continue;
-                results.Add(node);
-            }
+                .Where(node => node.NodeType is not ("Thread" or "Activity" or "ThreadMessage"))
+                .ToList();
 
             results.Should().NotBeEmpty($"{org} should have main content nodes");
             results.Should().AllSatisfy(n =>
@@ -280,17 +285,17 @@ public class CrossPartitionSearchTests
     // â”€â”€ Stored Procedure: search_across_schemas â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 60000)]
-    public async Task StoredProc_SearchAcrossSchemas_ReturnsAllOrgs()
+    public void StoredProc_SearchAcrossSchemas_ReturnsAllOrgs()
     {
         var ct = TestContext.Current.CancellationToken;
-        var (_, partitions) = await SetupMultiOrgEnvironmentAsync(ct);
+        var (_, partitions) = SetupMultiOrgEnvironment(ct);
 
         // Populate searchable_schemas
         var schemas = partitions.Keys.Select(k => k.ToLowerInvariant()).ToList();
-        await PopulateSearchableSchemasAsync(schemas, ct);
+        PopulateSearchableSchemas(schemas, ct);
 
         // Call the stored proc
-        var results = await CallSearchAcrossSchemasAsync("", null, "last_modified DESC", 50, ct);
+        var results = CallSearchAcrossSchemas("", null, "last_modified DESC", 50, ct);
 
         results.Should().NotBeEmpty("stored proc should return nodes from all schemas");
         results.Select(n => n.Id).Should().Contain("ACME");
@@ -299,17 +304,17 @@ public class CrossPartitionSearchTests
     }
 
     [Fact(Timeout = 60000)]
-    public async Task StoredProc_SearchAcrossSchemas_TextSearch()
+    public void StoredProc_SearchAcrossSchemas_TextSearch()
     {
         var ct = TestContext.Current.CancellationToken;
-        var (_, partitions) = await SetupMultiOrgEnvironmentAsync(ct);
+        var (_, partitions) = SetupMultiOrgEnvironment(ct);
 
         var schemas = partitions.Keys.Select(k => k.ToLowerInvariant()).ToList();
-        await PopulateSearchableSchemasAsync(schemas, ct);
+        PopulateSearchableSchemas(schemas, ct);
 
         // Text search for "FutuRe"
         var textFilter = "COALESCE(n.name,'') || ' ' || COALESCE(n.namespace || '/' || n.id,'') || ' ' || COALESCE(n.node_type,'') ILIKE '%future%'";
-        var results = await CallSearchAcrossSchemasAsync(textFilter, null, "last_modified DESC", 50, ct);
+        var results = CallSearchAcrossSchemas(textFilter, null, "last_modified DESC", 50, ct);
 
         results.Should().NotBeEmpty("should find FutuRe by text search");
         results.Select(n => n.Id).Should().Contain("FutuRe");
@@ -317,29 +322,29 @@ public class CrossPartitionSearchTests
     }
 
     [Fact(Timeout = 60000)]
-    public async Task StoredProc_SearchAcrossSchemas_WithLimit()
+    public void StoredProc_SearchAcrossSchemas_WithLimit()
     {
         var ct = TestContext.Current.CancellationToken;
-        var (_, partitions) = await SetupMultiOrgEnvironmentAsync(ct);
+        var (_, partitions) = SetupMultiOrgEnvironment(ct);
 
         var schemas = partitions.Keys.Select(k => k.ToLowerInvariant()).ToList();
-        await PopulateSearchableSchemasAsync(schemas, ct);
+        PopulateSearchableSchemas(schemas, ct);
 
-        var results = await CallSearchAcrossSchemasAsync("", null, "last_modified DESC", 2, ct);
+        var results = CallSearchAcrossSchemas("", null, "last_modified DESC", 2, ct);
 
         results.Should().HaveCount(2, "limit:2 should return exactly 2 results");
     }
 
     [Fact(Timeout = 60000)]
-    public async Task StoredProc_SearchAcrossSchemas_ExcludesUnsearchableSchemas()
+    public void StoredProc_SearchAcrossSchemas_ExcludesUnsearchableSchemas()
     {
         var ct = TestContext.Current.CancellationToken;
-        var (adminAdapter, partitions) = await SetupMultiOrgEnvironmentAsync(ct);
+        var (adminAdapter, partitions) = SetupMultiOrgEnvironment(ct);
 
         // Only include ACME and FutuRe (exclude Contoso)
-        await PopulateSearchableSchemasAsync(["acme", "future"], ct);
+        PopulateSearchableSchemas(["acme", "future"], ct);
 
-        var results = await CallSearchAcrossSchemasAsync("", null, "last_modified DESC", 50, ct);
+        var results = CallSearchAcrossSchemas("", null, "last_modified DESC", 50, ct);
 
         results.Select(n => n.Id).Should().Contain("ACME");
         results.Select(n => n.Id).Should().Contain("FutuRe");
@@ -348,35 +353,35 @@ public class CrossPartitionSearchTests
     }
 
     [Fact(Timeout = 60000)]
-    public async Task StoredProc_SearchAcrossSchemas_AccessControlFilters()
+    public void StoredProc_SearchAcrossSchemas_AccessControlFilters()
     {
         var ct = TestContext.Current.CancellationToken;
-        var (_, partitions) = await SetupMultiOrgEnvironmentAsync(ct);
+        var (_, partitions) = SetupMultiOrgEnvironment(ct);
 
         var schemas = partitions.Keys.Select(k => k.ToLowerInvariant()).ToList();
-        await PopulateSearchableSchemasAsync(schemas, ct);
+        PopulateSearchableSchemas(schemas, ct);
 
         // Give testuser access only to ACME via partition_access
-        await using (var cmd = _fixture.DataSource.CreateCommand(
-            "DELETE FROM public.partition_access; INSERT INTO public.partition_access VALUES ('testuser', 'acme')"))
-            await cmd.ExecuteNonQueryAsync(ct);
+        _fixture.DataSource.ExecuteNonQuery(
+            "DELETE FROM public.partition_access; INSERT INTO public.partition_access VALUES ('testuser', 'acme')", ct)
+            .Should().Within(30.Seconds()).Emit();
 
         // Also set up effective permissions for testuser in ACME schema
-        await using (var cmd = _fixture.DataSource.CreateCommand(
+        _fixture.DataSource.ExecuteNonQuery(
             "INSERT INTO acme.user_effective_permissions (user_id, node_path_prefix, permission, is_allow) " +
-            "VALUES ('testuser', 'ACME', 'Read', true) ON CONFLICT DO NOTHING"))
-            await cmd.ExecuteNonQueryAsync(ct);
+            "VALUES ('testuser', 'ACME', 'Read', true) ON CONFLICT DO NOTHING", ct)
+            .Should().Within(30.Seconds()).Emit();
 
         // Also register Markdown as public_read in all schemas
         foreach (var schema in schemas)
         {
-            await using var cmd = _fixture.DataSource.CreateCommand(
+            _fixture.DataSource.ExecuteNonQuery(
                 $"INSERT INTO \"{schema}\".node_type_permissions (node_type, public_read) " +
-                "VALUES ('Markdown', true) ON CONFLICT (node_type) DO UPDATE SET public_read = true");
-            await cmd.ExecuteNonQueryAsync(ct);
+                "VALUES ('Markdown', true) ON CONFLICT (node_type) DO UPDATE SET public_read = true", ct)
+                .Should().Within(30.Seconds()).Emit();
         }
 
-        var results = await CallSearchAcrossSchemasAsync("", "testuser", "last_modified DESC", 50, ct);
+        var results = CallSearchAcrossSchemas("", "testuser", "last_modified DESC", 50, ct);
 
         // testuser has partition_access only to ACME â€” should only see ACME nodes
         results.Should().NotBeEmpty();
@@ -396,15 +401,15 @@ public class CrossPartitionSearchTests
     }
 
     [Fact(Timeout = 60000)]
-    public async Task StoredProc_NodeTypeFilter()
+    public void StoredProc_NodeTypeFilter()
     {
         var ct = TestContext.Current.CancellationToken;
-        var (_, partitions) = await SetupMultiOrgEnvironmentAsync(ct);
+        var (_, partitions) = SetupMultiOrgEnvironment(ct);
 
         var schemas = partitions.Keys.Select(k => k.ToLowerInvariant()).ToList();
-        await PopulateSearchableSchemasAsync(schemas, ct);
+        PopulateSearchableSchemas(schemas, ct);
 
-        var results = await CallSearchAcrossSchemasAsync(
+        var results = CallSearchAcrossSchemas(
             "LOWER(n.node_type) = 'markdown'", null, "last_modified DESC", 50, ct);
 
         results.Should().NotBeEmpty();
@@ -412,21 +417,17 @@ public class CrossPartitionSearchTests
     }
 
     [Fact(Timeout = 60000)]
-    public async Task CrossSchema_QueryNodesAcrossSchemas_ReturnsResults()
+    public void CrossSchema_QueryNodesAcrossSchemas_ReturnsResults()
     {
         var ct = TestContext.Current.CancellationToken;
-        var (_, partitions) = await SetupMultiOrgEnvironmentAsync(ct);
+        var (_, partitions) = SetupMultiOrgEnvironment(ct);
 
         var schemas = partitions.Keys.Select(k => k.ToLowerInvariant()).ToList();
         var adapter = new PostgreSqlStorageAdapter(_fixture.DataSource);
         var query = new QueryParser().Parse("is:main");
 
-        var results = new List<MeshNode>();
-        await foreach (var node in adapter.QueryNodesAcrossSchemasAsync(
-            query, _options, schemas, ct: ct))
-        {
-            results.Add(node);
-        }
+        var results = adapter.QueryNodesAcrossSchemasAsync(query, _options, schemas, ct: ct)
+            .Collect(ct).Should().Within(30.Seconds()).Emit();
 
         results.Should().NotBeEmpty("cross-schema query should return nodes");
         results.Select(n => n.Id).Should().Contain("ACME");

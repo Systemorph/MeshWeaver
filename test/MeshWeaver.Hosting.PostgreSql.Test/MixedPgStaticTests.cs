@@ -1,7 +1,6 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -31,7 +30,6 @@ public class MixedPgStaticTests(PostgreSqlFixture fixture, ITestOutputHelper out
     : MonolithMeshTestBase(output)
 {
     private readonly PostgreSqlFixture _fixture = fixture;
-    private CancellationToken TestTimeout => new CancellationTokenSource(60.Seconds()).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
@@ -49,22 +47,20 @@ public class MixedPgStaticTests(PostgreSqlFixture fixture, ITestOutputHelper out
     }
 
     [Fact(Timeout = 60000)]
-    public async Task Read_Doc_FromEmbedded_Not_PG()
+    public void Read_Doc_FromEmbedded_Not_PG()
     {
-        var ct = TestTimeout;
         var resolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
-        var resolution = await resolver.ResolvePath("Doc")
+        var resolution = resolver.ResolvePath("Doc")
             .Where(r => r is not null).Take(1).Timeout(15.Seconds())
             .Catch<AddressResolution?, TimeoutException>(_ => Observable.Return<AddressResolution?>(null))
-            .FirstAsync().ToTask(ct);
+            .Should().Within(30.Seconds()).Emit();
         resolution.Should().NotBeNull("EmbeddedResourcePartitionStorageProvider owns /Doc");
         resolution!.Prefix.Should().Be("Doc");
     }
 
     [Fact(Timeout = 60000)]
-    public async Task Write_FreshPartition_RoutesToPg()
+    public void Write_FreshPartition_RoutesToPg()
     {
-        var ct = TestTimeout;
         var ns = $"pg9b_{Guid.NewGuid():N}".ToLowerInvariant()[..16];
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var node = new MeshNode("note", ns)
@@ -73,16 +69,16 @@ public class MixedPgStaticTests(PostgreSqlFixture fixture, ITestOutputHelper out
             Name = "note",
             State = MeshNodeState.Active,
         };
-        var saved = await meshService.CreateNode(node).Timeout(15.Seconds()).FirstAsync().ToTask(ct);
+        var saved = meshService.CreateNode(node).Should().Within(30.Seconds()).Emit();
         saved.Should().NotBeNull(
             "writable PG catch-all must accept a fresh namespace; static read-only providers must decline");
         saved.Path.Should().Be($"{ns}/note");
 
         var workspace = Mesh.GetWorkspace();
-        var readBack = await workspace.GetMeshNodeStream($"{ns}/note")
+        var readBack = workspace.GetMeshNodeStream($"{ns}/note")
             .Where(n => n is not null).Take(1).Timeout(10.Seconds())
             .Catch<MeshNode?, TimeoutException>(_ => Observable.Return<MeshNode?>(null))
-            .FirstAsync().ToTask(ct);
+            .Should().Within(30.Seconds()).Emit();
         readBack.Should().NotBeNull("read-back from PG must see the new node");
     }
 }

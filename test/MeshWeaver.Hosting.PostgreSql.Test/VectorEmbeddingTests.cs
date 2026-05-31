@@ -51,7 +51,7 @@ public class VectorEmbeddingTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task WriteNodeWithEmbedding_OnFreshDatabase_Succeeds()
+    public void WriteNodeWithEmbedding_OnFreshDatabase_Succeeds()
     {
         var node = new MeshNode("vec1", "test")
         {
@@ -59,17 +59,17 @@ public class VectorEmbeddingTests : IAsyncLifetime
             NodeType = "Document"
         };
 
-        var act = () => _adapter.WriteAsync(node, new JsonSerializerOptions(), TestContext.Current.CancellationToken);
+        // Emit() blocks for the write and rethrows any upstream error, so a
+        // clean emission IS the must-not-throw assertion.
+        _adapter.Write(node, new JsonSerializerOptions()).Should().Within(30.Seconds()).Emit();
 
-        await act.Should().NotThrowAsync();
-
-        var result = await _adapter.ReadAsync("test/vec1", new JsonSerializerOptions(), TestContext.Current.CancellationToken);
+        var result = _adapter.Read("test/vec1", new JsonSerializerOptions()).Should().Within(30.Seconds()).Emit();
         result.Should().NotBeNull();
         result!.Name.Should().Be("Vector Node");
     }
 
     [Fact]
-    public async Task WriteNodeWithNullEmbedding_OnFreshDatabase_Succeeds()
+    public void WriteNodeWithNullEmbedding_OnFreshDatabase_Succeeds()
     {
         // Use adapter without embedding provider (null embeddings)
         var adapterNoEmbed = new PostgreSqlStorageAdapter(_dataSource);
@@ -80,9 +80,8 @@ public class VectorEmbeddingTests : IAsyncLifetime
             NodeType = "Note"
         };
 
-        var act = () => adapterNoEmbed.WriteAsync(node, new JsonSerializerOptions(), TestContext.Current.CancellationToken);
-
-        await act.Should().NotThrowAsync();
+        // Clean emission == must-not-throw.
+        adapterNoEmbed.Write(node, new JsonSerializerOptions()).Should().Within(30.Seconds()).Emit();
     }
 
     private class FakeEmbeddingProvider(int dimensions) : IEmbeddingProvider

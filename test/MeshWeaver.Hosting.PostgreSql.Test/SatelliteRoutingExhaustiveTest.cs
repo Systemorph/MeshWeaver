@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -10,6 +9,7 @@ using MeshWeaver.Fixture;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using Npgsql;
 using Xunit;
 using MeshThread = MeshWeaver.AI.Thread;
 
@@ -70,7 +70,7 @@ public class SatelliteRoutingExhaustiveTest
 
     [Theory(Timeout = 60000)]
     [MemberData(nameof(SatelliteSuffixes))]
-    public async Task SatelliteNode_RoundTripsThroughEverySurface(
+    public void SatelliteNode_RoundTripsThroughEverySurface(
         string suffix, string expectedTable, string nodeType, string contentTypeName)
     {
         // _Access is intentionally skipped at this layer: writing an
@@ -84,7 +84,7 @@ public class SatelliteRoutingExhaustiveTest
             return;
 
         var ct = TestContext.Current.CancellationToken;
-        await _fixture.CleanDataAsync();
+        CleanData(ct);
 
         var partitionDef = new PartitionDefinition
         {
@@ -92,12 +92,12 @@ public class SatelliteRoutingExhaustiveTest
             Schema = "testorg",
             TableMappings = PartitionDefinition.StandardTableMappings
         };
-        var (ds, adapter) = await _fixture.CreateSchemaAdapterAsync("testorg", partitionDef, ct);
+        var (ds, adapter) = CreateSchema("testorg", partitionDef, ct);
 
         // Seed partition root in mesh_nodes
-        await adapter.WriteAsync(
+        adapter.Write(
             new MeshNode("TestOrg") { Name = "Test Org", NodeType = "Markdown" },
-            _options, ct);
+            _options).Should().Within(30.Seconds()).Emit();
 
         // Grant Anonymous full access on TestOrg by directly populating
         // testorg.user_effective_permissions + public.partition_access. We
@@ -107,17 +107,14 @@ public class SatelliteRoutingExhaustiveTest
         // queries to the right satellite table. The UEP row format is
         // identical to what the rebuild would produce for an Admin
         // AccessAssignment on TestOrg.
-        await using (var seed = ds.CreateCommand("""
+        ExecuteNonQuery(ds, """
             INSERT INTO testorg.user_effective_permissions (user_id, node_path_prefix, permission, is_allow)
             VALUES ('Anonymous', 'TestOrg', 'Read', true)
             ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE SET is_allow = true;
             INSERT INTO public.partition_access (user_id, partition)
             VALUES ('Anonymous', 'testorg')
             ON CONFLICT (user_id, partition) DO NOTHING;
-            """))
-        {
-            await seed.ExecuteNonQueryAsync(ct);
-        }
+            """, ct);
 
         // Seed satellite node — node lives at TestOrg/{suffix}/{id}, MainNode
         // is the partition root so the access clause's
@@ -125,9 +122,9 @@ public class SatelliteRoutingExhaustiveTest
         // entry our GrantAsync seeded against the partition root.
         var satNodeId = $"sat-{suffix.TrimStart('_').ToLowerInvariant()}-c1";
         var satPath = $"TestOrg/{suffix}/{satNodeId}";
-        await adapter.WriteAsync(BuildSatelliteNode(satNodeId, $"TestOrg/{suffix}", nodeType,
+        adapter.Write(BuildSatelliteNode(satNodeId, $"TestOrg/{suffix}", nodeType,
                 contentTypeName),
-            _options, ct);
+            _options).Should().Within(30.Seconds()).Emit();
 
         // 🚨 `_Access` writes fire the `trg_access_changed` trigger on the
         // access satellite table, which calls `rebuild_user_permissions_for`
@@ -138,56 +135,47 @@ public class SatelliteRoutingExhaustiveTest
         // side-effects.
         if (suffix == "_Access")
         {
-            await using var reseed = ds.CreateCommand("""
+            ExecuteNonQuery(ds, """
                 INSERT INTO testorg.user_effective_permissions (user_id, node_path_prefix, permission, is_allow)
                 VALUES ('Anonymous', 'TestOrg', 'Read', true)
                 ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE SET is_allow = true;
-                """);
-            await reseed.ExecuteNonQueryAsync(ct);
+                """, ct);
         }
 
         // (1) Adapter direct read — proves the write landed in the right table.
-        var direct = await adapter.ReadAsync(satPath, _options, ct);
+        var direct = adapter.Read(satPath, _options).Should().Within(30.Seconds()).Emit();
         direct.Should().NotBeNull(
             $"adapter direct read MUST find a {nodeType} node at {satPath} in the {expectedTable} table");
 
         // (2) Confirm the row is in the SATELLITE table, not mesh_nodes —
         // wrong-table routing would still pass the ReadAsync check (which
         // falls back across both) but would break the query layer below.
-        await using (var probe = ds.CreateCommand($@"
+        var (satRows, mnRows) = ProbeTwoCounts(ds, $@"
             SELECT
                 (SELECT count(*) FROM testorg.{expectedTable} WHERE path = @p) AS sat_rows,
-                (SELECT count(*) FROM testorg.mesh_nodes WHERE path = @p) AS mn_rows"))
-        {
-            probe.Parameters.AddWithValue("p", satPath);
-            await using var rdr = await probe.ExecuteReaderAsync(ct);
-            await rdr.ReadAsync(ct);
-            var satRows = rdr.GetInt64(0);
-            var mnRows = rdr.GetInt64(1);
-            satRows.Should().Be(1,
-                $"{nodeType} satellite node MUST be stored in testorg.{expectedTable}");
-            mnRows.Should().Be(0,
-                $"{nodeType} satellite node MUST NOT be duplicated in testorg.mesh_nodes");
-        }
+                (SELECT count(*) FROM testorg.mesh_nodes WHERE path = @p) AS mn_rows",
+            ("p", satPath), ct);
+        satRows.Should().Be(1,
+            $"{nodeType} satellite node MUST be stored in testorg.{expectedTable}");
+        mnRows.Should().Be(0,
+            $"{nodeType} satellite node MUST NOT be duplicated in testorg.mesh_nodes");
 
         // (3) Single-value `path:X` query through PostgreSqlMeshQuery — same
         // entry point PathResolutionService consumes through MeshQuery.
         var query = new PostgreSqlMeshQuery(adapter);
         var singleRequest = MeshQueryRequest.FromQuery($"path:{satPath}");
-        var singleSnap = await query
+        var singleSnap = query
             .ObserveQuery<MeshNode>(singleRequest, _options)
-            .FirstAsync()
-            .ToTask(ct);
+            .Should().Within(30.Seconds()).Emit();
         singleSnap.Items.Select(n => n.Path).Should().Contain(satPath,
             $"single-value path query against {nodeType} satellite MUST find the row in testorg.{expectedTable}");
 
         // (4) Multi-value `path:A|B|C` — the PathResolutionService idiom.
         var multiRequest = MeshQueryRequest.FromQuery(
             $"path:{satPath}|TestOrg/{suffix}|TestOrg");
-        var multiSnap = await query
+        var multiSnap = query
             .ObserveQuery<MeshNode>(multiRequest, _options)
-            .FirstAsync()
-            .ToTask(ct);
+            .Should().Within(30.Seconds()).Emit();
         multiSnap.Items.Select(n => n.Path).Should().Contain(satPath,
             $"multi-value `path:A|B|C` MUST find the {nodeType} node — this is the exact " +
             "shape PathResolutionService.ResolveOnce builds for URL resolution.");
@@ -215,11 +203,11 @@ public class SatelliteRoutingExhaustiveTest
     [InlineData("AccessAssignment")]
     [InlineData("Comment")]
     [InlineData("Approval")]
-    public async Task PathWithNodeTypeAsFirstSegment_DoesNotCreateOrQuerySchemaWithNodeTypeName(
+    public void PathWithNodeTypeAsFirstSegment_DoesNotCreateOrQuerySchemaWithNodeTypeName(
         string nodeTypeName)
     {
         var ct = TestContext.Current.CancellationToken;
-        await _fixture.CleanDataAsync();
+        CleanData(ct);
 
         // Seed one real partition so the fan-out has something to iterate.
         var partitionDef = new PartitionDefinition
@@ -228,12 +216,12 @@ public class SatelliteRoutingExhaustiveTest
             Schema = "testorg",
             TableMappings = PartitionDefinition.StandardTableMappings
         };
-        var (ds, adapter) = await _fixture.CreateSchemaAdapterAsync("testorg", partitionDef, ct);
-        await _fixture.AccessControl.GrantAsync("TestOrg", "Anonymous", "Read",
-            isAllow: true, ct);
-        await adapter.WriteAsync(
+        var (ds, adapter) = CreateSchema("testorg", partitionDef, ct);
+        _fixture.AccessControl.Grant("TestOrg", "Anonymous", "Read", isAllow: true, ct)
+            .Should().Within(30.Seconds()).Emit();
+        adapter.Write(
             new MeshNode("TestOrg") { Name = "Test Org", NodeType = "Markdown" },
-            _options, ct);
+            _options).Should().Within(30.Seconds()).Emit();
 
         // Try a path whose first segment is a NodeType name. With the prod
         // bug, this caused PostgreSqlPathRoutingAdapter to materialise a
@@ -248,49 +236,41 @@ public class SatelliteRoutingExhaustiveTest
         // We exercise both the storage-adapter path and the mesh-query path.
 
         // (a) Storage adapter read — should return null (no row at that path).
-        Func<Task> directRead = async () =>
-        {
-            var n = await adapter.ReadAsync(bogusPath, _options, ct);
-            n.Should().BeNull("no row exists at this path");
-        };
-        await directRead.Should().NotThrowAsync(
-            "storage adapter read for a NodeType-named-first-segment path " +
-            "MUST NOT throw — it should resolve cleanly (returning null) " +
-            "without attempting a `nodetype.mesh_nodes` query.");
+        // Emit() blocks for the first emission and rethrows any upstream error,
+        // so a clean emission IS the must-not-throw invariant: storage adapter
+        // read for a NodeType-named-first-segment path MUST NOT throw — it
+        // should resolve cleanly (returning null) without attempting a
+        // `nodetype.mesh_nodes` query.
+        var directNode = adapter.Read(bogusPath, _options).Should().Within(30.Seconds()).Emit();
+        directNode.Should().BeNull("no row exists at this path");
 
         // (b) Mesh query — single-value `path:X` with NodeType first segment.
+        // Emit() rethrows any upstream error, so the clean emission below IS
+        // the must-not-throw invariant: schema `{lowerSchema}` must NEVER be
+        // auto-created or auto-queried just because a NodeType has that name.
+        // User directive (2026-05-21): "there should be no schema thread".
+        // Routing must distinguish NodeType names from real partition first
+        // segments.
         var query = new PostgreSqlMeshQuery(adapter);
-        Func<Task> meshQuery = async () =>
-        {
-            var snap = await query
-                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{bogusPath}"), _options)
-                .FirstAsync()
-                .ToTask(ct);
-            snap.Items.Should().BeEmpty("no row exists at this path");
-        };
-        await meshQuery.Should().NotThrowAsync(
-            $"mesh query for `path:{bogusPath}` MUST NOT throw — schema `{lowerSchema}` " +
-            "must NEVER be auto-created or auto-queried just because a NodeType has that name. " +
-            "User directive (2026-05-21): \"there should be no schema thread\". " +
-            "Routing must distinguish NodeType names from real partition first segments.");
+        var snap = query
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{bogusPath}"), _options)
+            .Should().Within(30.Seconds()).Emit();
+        snap.Items.Should().BeEmpty("no row exists at this path");
 
         // (c) Confirm the bogus schema was NOT created on the database — the
         // strongest invariant. If PostgreSqlPathRoutingAdapter's
         // EnsureSchemaForPartitionSync ran on the NodeType-name path, the
         // schema would exist as an artifact. We assert it does not.
-        await using (var probe = ds.CreateCommand(
-            $"SELECT count(*) FROM information_schema.schemata WHERE schema_name = @s"))
-        {
-            probe.Parameters.AddWithValue("s", lowerSchema);
-            var count = (long)(await probe.ExecuteScalarAsync(ct) ?? 0L);
-            count.Should().Be(0,
-                $"schema `{lowerSchema}` MUST NOT exist — routing must never auto-create " +
-                "a schema named after a NodeType. The fix lives in " +
-                "PostgreSqlPathRoutingAdapter.AdapterForWriteState / " +
-                "PostgreSqlPartitionedMeshQuery.ResolvePinnedPartition: check the " +
-                "first segment against the NodeType registry / partition cache before " +
-                "treating it as a partition name.");
-        }
+        var count = ProbeScalar(ds,
+            "SELECT count(*) FROM information_schema.schemata WHERE schema_name = @s",
+            ("s", lowerSchema), ct);
+        count.Should().Be(0,
+            $"schema `{lowerSchema}` MUST NOT exist — routing must never auto-create " +
+            "a schema named after a NodeType. The fix lives in " +
+            "PostgreSqlPathRoutingAdapter.AdapterForWriteState / " +
+            "PostgreSqlPartitionedMeshQuery.ResolvePinnedPartition: check the " +
+            "first segment against the NodeType registry / partition cache before " +
+            "treating it as a partition name.");
     }
 
     /// <summary>
@@ -303,11 +283,11 @@ public class SatelliteRoutingExhaustiveTest
     [InlineData("AccessAssignment", "access")]
     [InlineData("Comment", "annotations")]
     [InlineData("Activity", "activities")]
-    public async Task NodeTypeOnlyQuery_RoutesToSatelliteTableNotNodeTypeSchema(
+    public void NodeTypeOnlyQuery_RoutesToSatelliteTableNotNodeTypeSchema(
         string nodeTypeName, string expectedTable)
     {
         var ct = TestContext.Current.CancellationToken;
-        await _fixture.CleanDataAsync();
+        CleanData(ct);
 
         var partitionDef = new PartitionDefinition
         {
@@ -315,33 +295,30 @@ public class SatelliteRoutingExhaustiveTest
             Schema = "testorg",
             TableMappings = PartitionDefinition.StandardTableMappings
         };
-        var (ds, adapter) = await _fixture.CreateSchemaAdapterAsync("testorg", partitionDef, ct);
-        await _fixture.AccessControl.GrantAsync("TestOrg", "Anonymous", "Read",
-            isAllow: true, ct);
-        await adapter.WriteAsync(
+        var (ds, adapter) = CreateSchema("testorg", partitionDef, ct);
+        _fixture.AccessControl.Grant("TestOrg", "Anonymous", "Read", isAllow: true, ct)
+            .Should().Within(30.Seconds()).Emit();
+        adapter.Write(
             new MeshNode("TestOrg") { Name = "Test Org", NodeType = "Markdown" },
-            _options, ct);
+            _options).Should().Within(30.Seconds()).Emit();
 
         // Seed a satellite node so the nodeType-only query has something to find.
         var satSuffix = PartitionDefinition.NodeTypeToSuffix[nodeTypeName];
         var satNodeId = $"sat-{nodeTypeName.ToLowerInvariant()}-only";
         var satPath = $"TestOrg/{satSuffix}/{satNodeId}";
-        await adapter.WriteAsync(
+        adapter.Write(
             BuildSatelliteNode(satNodeId, $"TestOrg/{satSuffix}", nodeTypeName, nodeTypeName),
-            _options, ct);
+            _options).Should().Within(30.Seconds()).Emit();
 
         // Pin the routing target: the seeded node MUST live in the satellite
         // table `testorg.{expectedTable}` — never in a schema named after the
         // NodeType (the prod-2026-05-21 regression) and never in mesh_nodes.
-        await using (var probe = ds.CreateCommand($@"
-            SELECT count(*) FROM testorg.{expectedTable} WHERE path = @p"))
-        {
-            probe.Parameters.AddWithValue("p", satPath);
-            var satRows = (long)(await probe.ExecuteScalarAsync(ct) ?? 0L);
-            satRows.Should().Be(1,
-                $"{nodeTypeName} satellite node MUST be stored in testorg.{expectedTable}, " +
-                $"not in a schema named `{nodeTypeName.ToLowerInvariant()}`");
-        }
+        var satRows = ProbeScalar(ds,
+            $"SELECT count(*) FROM testorg.{expectedTable} WHERE path = @p",
+            ("p", satPath), ct);
+        satRows.Should().Be(1,
+            $"{nodeTypeName} satellite node MUST be stored in testorg.{expectedTable}, " +
+            $"not in a schema named `{nodeTypeName.ToLowerInvariant()}`");
 
         // `nodeType:X` (no path) — this is the canonical type-only query.
         // The PG provider's resolution chain must:
@@ -358,7 +335,7 @@ public class SatelliteRoutingExhaustiveTest
         // referencing `{nodeType}.{expectedTable}` or `{nodeType}.mesh_nodes` —
         // the schema name must come from the partition, not the NodeType.
         query.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:{nodeTypeName}"), _options)
-            .Should().Emit();
+            .Should().Within(30.Seconds()).Emit();
         // (Result row presence is fan-out-dependent and not always testable
         // against a single per-schema adapter; the must-not-throw assertion
         // is the load-bearing invariant.)
@@ -389,4 +366,30 @@ public class SatelliteRoutingExhaustiveTest
             Content = content
         };
     }
+
+    // -------------------------------------------------------------------
+    // Helpers — the fixture/PG IObservable wrappers keep low-level container
+    // DDL + raw SQL async inside; test bodies assert reactively (§2a). The
+    // fixture's container lifecycle stays async.
+    // -------------------------------------------------------------------
+
+    private void CleanData(CancellationToken ct)
+        => _fixture.CleanData().Should().Within(60.Seconds()).Emit();
+
+    private (NpgsqlDataSource Ds, PostgreSqlStorageAdapter Adapter) CreateSchema(
+        string schema, PartitionDefinition partitionDef, CancellationToken ct)
+        => _fixture.CreateSchemaAdapter(schema, partitionDef, ct)
+            .Should().Within(60.Seconds()).Emit();
+
+    private static void ExecuteNonQuery(NpgsqlDataSource ds, string sql, CancellationToken ct)
+        => ds.ExecuteNonQuery(sql, ct).Should().Within(30.Seconds()).Emit();
+
+    private static long ProbeScalar(
+        NpgsqlDataSource ds, string sql, (string Name, object Value) param, CancellationToken ct)
+        => ds.ScalarLong(sql, new[] { param }, ct).Should().Within(30.Seconds()).Emit();
+
+    private static (long First, long Second) ProbeTwoCounts(
+        NpgsqlDataSource ds, string sql, (string Name, object Value) param, CancellationToken ct)
+        => ds.Probe(sql, new[] { param }, rdr => (rdr.GetInt64(0), rdr.GetInt64(1)), ct)
+            .Should().Within(30.Seconds()).Emit();
 }
