@@ -296,9 +296,8 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var docPath = "Doc/DataMesh/CollaborativeEditing";
         var docAddress = new Address(docPath);
 
-        // Initialize and wait for Read view
-        client.Observe(new PingRequest(), o => o.WithTarget(docAddress)).Should().Emit();
-
+        // No ping: the layout-area GetRemoteStream subscription below activates the
+        // hub + triggers the cold NodeType compile itself. The generous span covers it.
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MarkdownLayoutAreas.OverviewArea);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(docAddress, reference);
@@ -306,7 +305,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var initialControl = stream
             .GetControlStream(MarkdownLayoutAreas.OverviewArea)
             .Should()
-            .Within(20.Seconds())
+            .Within(60.Seconds())
             .Match(x => x is StackControl);
         initialControl.Should().NotBeNull("Initial Read view should render");
         Output.WriteLine("Read view rendered initially");
