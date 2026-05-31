@@ -288,8 +288,9 @@ var portal = builder
 //   • learns the mount root via ClaudeCode__ConfigDirRoot.
 //
 // 🚨 DEPLOY CHOICES gated by this flag (not compile-checkable here):
-//   1. PORTAL IMAGE must include node + the claude CLI. The portal is AddProject,
-//      so select the CLI-enabled image at deploy via the portal's
+//   1. PORTAL IMAGE must bundle node + BOTH co-hosted CLIs: the Claude Code CLI
+//      (@anthropic-ai/claude-code) AND the GitHub Copilot CLI. The portal is
+//      AddProject, so select the CLI-enabled image at deploy via the portal's
 //      <ContainerBaseImage> (or a portal Dockerfile variant) — toggled by the
 //      same flag in the deploy pipeline.
 //   2. STORAGE for /mnt/users must be durable + cross-replica. `WithVolume` below

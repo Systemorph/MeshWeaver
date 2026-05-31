@@ -348,6 +348,7 @@ public static class MemexConfiguration
                 .AddAzureOpenAI()
                 .AddOpenAI()
                 .AddClaudeCode()   // catalog source (factory + config via services.AddClaudeCode below)
+                .AddCopilot()      // catalog source (factory + config via services.AddCopilot below)
                 .AddSelfRegistry()
                 .AddDocumentation()
                 .AddMarkdownExport()
