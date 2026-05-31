@@ -79,12 +79,15 @@ public class OrleansAutoExecuteTest(ITestOutputHelper output) : OrleansSharedTes
         {
             var client = GetClient();
 
-            // Build thread with pre-populated messages (auto-execute on activation)
-            var (threadNode, userMsgId, responseMsgId) = ThreadNodeType.BuildThreadWithMessages(
+            // Build thread with pre-populated messages (auto-execute on activation).
+            // responseMsgId is allocated by DispatchAfterClaim (BuildThreadWithMessages
+            // returns ""), so we read the real id from Thread.Messages after the
+            // submission watcher claims — see ThreadNodeType.BuildThreadWithMessages.
+            var (threadNode, userMsgId, _) = ThreadNodeType.BuildThreadWithMessages(
                 "TestUser", "Hello Orleans auto-execute!",
                 createdBy: "TestUser", agentName: "Orchestrator");
             var threadPath = threadNode.Path!;
-            Output.WriteLine($"Thread: {threadPath}, user={userMsgId}, response={responseMsgId}");
+            Output.WriteLine($"Thread: {threadPath}, user={userMsgId}");
 
             // Create the thread — AutoExecutePendingMessage should fire on grain activation
             var createResponse = client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("TestUser")))
@@ -96,10 +99,13 @@ public class OrleansAutoExecuteTest(ITestOutputHelper output) : OrleansSharedTes
             // (WatchForExecution → auto-execute dispatch). Wait for execution to settle.
             var thread = GetHubContent<MeshThread>(client, threadPath)
                 .Should().Within(30.Seconds())
-                .Match(t => t is { IsExecuting: false, PendingUserMessage: null });
+                .Match(t => t is { IsExecuting: false, PendingUserMessage: null }
+                    && t.Messages.Count >= 2);
             Output.WriteLine("Thread execution complete");
 
-            // Verify response cell has final text.
+            // Response cell id is Messages[1] (user is [0], response is [1]) — the id
+            // DispatchAfterClaim allocated for this round.
+            var responseMsgId = thread!.Messages[1];
             var responsePath = $"{threadPath}/{responseMsgId}";
             var response = GetHubContent<ThreadMessage>(client, responsePath)
                 .Should().Within(30.Seconds())
@@ -134,11 +140,10 @@ public class OrleansAutoExecuteTest(ITestOutputHelper output) : OrleansSharedTes
         {
             var client = GetClient();
 
-            var (threadNode, _, responseMsgId) = ThreadNodeType.BuildThreadWithMessages(
+            var (threadNode, _, _) = ThreadNodeType.BuildThreadWithMessages(
                 "TestUser", "Test routing to response grain",
                 createdBy: "TestUser", agentName: "Orchestrator");
             var threadPath = threadNode.Path!;
-            var responsePath = $"{threadPath}/{responseMsgId}";
 
             client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("TestUser")))
                 .Should().Within(30.Seconds()).Emit();
@@ -148,8 +153,12 @@ public class OrleansAutoExecuteTest(ITestOutputHelper output) : OrleansSharedTes
             // is created lazily on its first inbound message. Without this the hub's
             // WithInitialization callbacks (WatchForExecution that fires the auto-execute
             // dispatch) never run and the response cell is never created.
-            GetHubContent<MeshThread>(client, threadPath)
-                .Should().Within(30.Seconds()).Match(t => t is not null);
+            // Wait for the watcher to claim and allocate the response cell — its id is
+            // Messages[1] (BuildThreadWithMessages returns "" for responseMsgId now;
+            // DispatchAfterClaim allocates the real id).
+            var claimed = GetHubContent<MeshThread>(client, threadPath)
+                .Should().Within(30.Seconds()).Match(t => t is { Messages.Count: >= 2 });
+            var responsePath = $"{threadPath}/{claimed!.Messages[1]}";
 
             // Wait for the response cell to have final text (not empty, not a placeholder).
             var msg = GetHubContent<ThreadMessage>(client, responsePath)
