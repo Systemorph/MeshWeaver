@@ -1,0 +1,11 @@
+apiVersion: "v2"
+name: "memex"
+version: "0.1.0"
+kubeVersion: ">= 1.18.0-0"
+description: "MeshWeaver Memex portal — Azure-free Kubernetes self-host."
+type: "application"
+keywords:
+  - "aspire"
+  - "kubernetes"
+appVersion: "0.1.0"
+deprecated: false

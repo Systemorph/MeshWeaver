@@ -1,0 +1,39 @@
+parameters: {}
+secrets:
+  memex_postgres:
+    memex_postgres_password: ""
+  memex_migration:
+    ConnectionStrings__memex: ""
+    memex_postgres_password: ""
+    MEMEX_URI: ""
+  memex_portal:
+    ConnectionStrings__memex: ""
+    memex_postgres_password: ""
+    MEMEX_URI: ""
+config:
+  memex_postgres:
+    POSTGRES_HOST_AUTH_METHOD: "scram-sha-256"
+    POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
+    POSTGRES_USER: "postgres"
+  memex_migration:
+    MEMEX_HOST: "memex-postgres-service"
+    MEMEX_PORT: "5432"
+    MEMEX_USERNAME: "postgres"
+    MEMEX_JDBCCONNECTIONSTRING: "jdbc:postgresql://memex-postgres-service:5432/memex"
+    MEMEX_DATABASENAME: "memex"
+  memex_portal:
+    MEMEX_HOST: "memex-postgres-service"
+    MEMEX_PORT: "5432"
+    MEMEX_USERNAME: "postgres"
+    MEMEX_JDBCCONNECTIONSTRING: "jdbc:postgresql://memex-postgres-service:5432/memex"
+    MEMEX_DATABASENAME: "memex"
+    ASPNETCORE_HTTP_PORTS: "8080"
+    Deployment__Backend: "Filesystem"
+    Deployment__DataRoot: "/data"
+    Deployment__Orleans__Clustering: "Localhost"
+    Storage__Name: "content"
+    Storage__SourceType: "FileSystem"
+    Storage__BasePath: "/data/content"
+    Graph__Storage__Type: "PostgreSql"
+    Graph__Storage__BasePath: "/data/graph"
+    Mcp__BaseUrl: "http://memex-portal-service:8080"
