@@ -9,7 +9,13 @@
     <Authors>Systemorph</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/Systemorph/MeshWeaver</RepositoryUrl>
-    <NoWarn>649;CA2255;NU5104;$(NoWarn)</NoWarn>
+    <NoWarn>649;CA2255;NU5104;CS1591;CS1573;CS1574;CS1570;CS1712;$(NoWarn)</NoWarn>
+    <!-- Generate XML doc files for all assemblies (IntelliSense + NuGet). The doc-completeness
+         warning family (CS1591 missing member doc, CS1573 missing param, CS1574 unresolved cref,
+         CS1570 malformed XML, CS1712 missing typeparam) is suppressed centrally so enabling
+         doc-gen does NOT cascade thousands of warnings — docs are filled opportunistically, not
+         enforced wholesale. There is no TreatWarningsAsErrors, so this never breaks the build. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <DefineConstants Condition=" '$(CIRun)' == 'true' ">$(DefineConstants);CIRun</DefineConstants>
     <!-- Suppress FluentAssertions license warning for open source project -->
     <FLUENTASSERTIONS_SUPPRESS_WARNING>true</FLUENTASSERTIONS_SUPPRESS_WARNING>
