@@ -1,0 +1,29 @@
+# Non-root-writable Azure Files StorageClass + RWX PVCs for the portal's /data
+# (framework caches) and /mnt/content (content collection). dir/file_mode=0777 lets the
+# non-root `app` user write the SMB mount regardless of its uid (SMB ignores fsGroup).
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: azurefile-memex
+provisioner: file.csi.azure.com
+allowVolumeExpansion: true
+parameters:
+  skuName: Standard_LRS
+mountOptions: [dir_mode=0777, file_mode=0777, uid=1654, gid=1654, mfsymlinks, cache=strict, actimeo=30, nobrl]
+reclaimPolicy: Retain
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: memex-data, namespace: memex }
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: azurefile-memex
+  resources: { requests: { storage: 16Gi } }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: memex-content, namespace: memex }
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: azurefile-memex
+  resources: { requests: { storage: 64Gi } }
