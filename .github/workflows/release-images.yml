@@ -1,0 +1,80 @@
+name: Publish Container Images
+
+# Prod release path for the Memex deployment images. Fires on the SAME v*.*.* tag as
+# release-packages.yml (NuGet) so one tag ships the Aspire.Hosting.Memex package AND the
+# images the generated compose/Helm/ACA artifacts reference. Local testing uses the local
+# registry instead (see deploy/ + the repo's local-publish flow) — never this workflow.
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.x'
+
+      - name: Extract version from tag
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_ENV"
+
+      - name: Lowercase image namespace (GHCR requires lowercase)
+        run: echo "IMAGE_NS=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Restore workloads
+        run: dotnet workload restore
+
+      # 1. portal-ai BASE image (the one hand-authored Dockerfile: aspnet + node20 +
+      #    @anthropic-ai/claude-code + @github/copilot). On this Linux runner the host RID is
+      #    linux-x64, so the SDK-built portal layers below also get the linux copilot binary.
+      - name: Build + push portal-ai base image
+        run: |
+          BASE=ghcr.io/$IMAGE_NS/memex-portal-ai-base
+          docker build -t "$BASE:$VERSION" -t "$BASE:latest" deploy/base-images/portal-ai
+          docker push "$BASE:$VERSION"
+          docker push "$BASE:latest"
+
+      # 2. portal-ai app image (SDK container build, layered on the base; CLIs baked in).
+      - name: Build + push portal-ai
+        run: >
+          dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj
+          -c Release -r linux-x64 --no-self-contained -t:PublishContainer -p:PublishProfile=
+          -p:ContainerRegistry=ghcr.io
+          -p:ContainerRepository=$IMAGE_NS/memex-portal-ai
+          -p:ContainerImageTags="$VERSION;latest"
+          -p:ContainerBaseImage=ghcr.io/$IMAGE_NS/memex-portal-ai-base:$VERSION
+
+      # 3. lean portal app image (default SDK base, no co-hosted CLIs).
+      - name: Build + push portal (lean)
+        run: >
+          dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj
+          -c Release -r linux-x64 --no-self-contained -t:PublishContainer -p:PublishProfile=
+          -p:ContainerRegistry=ghcr.io
+          -p:ContainerRepository=$IMAGE_NS/memex-portal
+          -p:ContainerImageTags="$VERSION;latest"
+
+      # 4. db-migration image (SDK container build, default base).
+      - name: Build + push migration
+        run: >
+          dotnet publish memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj
+          -c Release -r linux-x64 --no-self-contained -t:PublishContainer -p:PublishProfile=
+          -p:ContainerRegistry=ghcr.io
+          -p:ContainerRepository=$IMAGE_NS/memex-migration
+          -p:ContainerImageTags="$VERSION;latest"
