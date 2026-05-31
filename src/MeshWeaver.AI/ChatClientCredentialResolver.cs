@@ -1,8 +1,10 @@
 using System.Collections.Concurrent;
+using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -58,6 +60,7 @@ public sealed class ChatClientCredentialResolver : IDisposable
 {
     private readonly IMessageHub hub;
     private readonly ILogger<ChatClientCredentialResolver>? logger;
+    private readonly IProviderKeyProtector? keyProtector;
 
     // Both populated from the same synced query (type alternation
     // LanguageModel|ModelProvider), so a single Subscribe drives both
@@ -71,6 +74,21 @@ public sealed class ChatClientCredentialResolver : IDisposable
     private readonly ConcurrentDictionary<string, IDisposable> partitionSubscriptions =
         new(StringComparer.OrdinalIgnoreCase);
 
+    // Use-without-see (shared/org providers). A provider path enters
+    // sharedProviderPaths when WatchSharedProvider ingests it under SYSTEM
+    // identity (so its Api-gated key is visible to the resolver process).
+    // Resolve then refuses to hand that key out unless the CURRENT user has
+    // Permission.Read on the subtree — cached per "{userId}|{path}" in
+    // sharedReadAllowed, kept live by a CheckPermission subscription.
+    private readonly ConcurrentDictionary<string, byte> sharedProviderPaths =
+        new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, bool> sharedReadAllowed =
+        new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, IDisposable> sharedSubscriptions =
+        new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, IDisposable> gateSubscriptions =
+        new(StringComparer.Ordinal);
+
     private readonly object initLock = new();
     private IDisposable? rootSubscription;
     private bool disposed;
@@ -80,6 +98,10 @@ public sealed class ChatClientCredentialResolver : IDisposable
         this.hub = hub;
         logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger<ChatClientCredentialResolver>();
+        // ModelProvider.ApiKey is encrypted at rest — decrypt at the moment we
+        // hand the credential to a factory. Null when the protector isn't
+        // registered (then values are plaintext anyway → Decrypt passthrough).
+        keyProtector = hub.ServiceProvider.GetService<IProviderKeyProtector>();
     }
 
     /// <summary>
@@ -131,6 +153,65 @@ public sealed class ChatClientCredentialResolver : IDisposable
     }
 
     /// <summary>
+    /// Make a shared / organisation <c>ModelProvider</c> subtree usable by
+    /// <paramref name="userId"/> under <b>use-without-see</b>: the provider node
+    /// is ingested under a SYSTEM identity (so its <see cref="MeshWeaver.Mesh.Security.Permission.Api"/>-gated
+    /// key reaches the resolver process), but <see cref="Resolve"/> only hands
+    /// the key to a user who holds <see cref="MeshWeaver.Mesh.Security.Permission.Read"/>
+    /// on the subtree. The raw key never leaves the server. Idempotent per
+    /// path (system ingest) and per (user, path) (read gate).
+    /// </summary>
+    public IDisposable WatchSharedProvider(string providerPath, string userId)
+    {
+        if (string.IsNullOrEmpty(providerPath) || string.IsNullOrEmpty(userId))
+            return Disposable.Empty;
+        EnsureSubscription();
+        sharedProviderPaths.TryAdd(providerPath, 0);
+
+        // (1) Visibility — system-identity synced subscription so the Api-gated
+        //     provider node + its LanguageModel children enter the snapshot.
+        //     Shared across users (keyed by path); ingest only, never a gate.
+        sharedSubscriptions.GetOrAdd(providerPath, p =>
+        {
+            var workspace = hub.GetWorkspace();
+            var accessService = hub.ServiceProvider.GetService<AccessService>();
+            var query = $"namespace:{p} nodeType:{LanguageModelNodeType.NodeType}|{ModelProviderNodeType.NodeType} scope:selfAndDescendants";
+            var snapshot = AgentPickerProjection.ObserveSnapshot(
+                workspace, hub, $"ChatClientCredentialResolver.Shared/{p}", query);
+            // Stamp the subscription as system so RLS doesn't filter the
+            // Api-gated provider node (mirrors ApiTokenNodeType's pattern).
+            var asSystem = accessService is null
+                ? snapshot
+                : Observable.Using(accessService.ImpersonateAsSystem, _ => snapshot);
+            return asSystem.Subscribe(IngestSnapshot);
+        });
+
+        // (2) Read gate — cache whether THIS user may use the shared provider.
+        var gateKey = $"{userId}|{providerPath}";
+        gateSubscriptions.GetOrAdd(gateKey, gk =>
+            hub.CheckPermission(providerPath, userId, Permission.Read)
+                .Subscribe(
+                    allowed => sharedReadAllowed[gk] = allowed,
+                    ex => logger?.LogWarning(ex, "Read-gate check failed for {GateKey}", gk)));
+
+        return Disposable.Empty;
+    }
+
+    /// <summary>
+    /// Gate for shared-provider keys. Non-shared providers (root catalog, the
+    /// resolving user's own partition via <see cref="WatchPartition"/>) are not
+    /// gated here — RLS already governed their visibility at subscribe time.
+    /// Shared providers fail closed: no Read ⇒ no key.
+    /// </summary>
+    private bool IsAllowedSharedAccess(string providerPath)
+    {
+        if (!sharedProviderPaths.ContainsKey(providerPath)) return true;
+        var userId = hub.ServiceProvider.GetService<AccessService>()?.Context?.ObjectId;
+        if (string.IsNullOrEmpty(userId)) return false;
+        return sharedReadAllowed.TryGetValue($"{userId}|{providerPath}", out var ok) && ok;
+    }
+
+    /// <summary>
     /// Resolve credentials for a model. <paramref name="modelId"/> is the
     /// LanguageModel id the chat selected (e.g. <c>claude-opus-4-7</c>).
     /// Walks the precedence chain documented on the class.
@@ -146,9 +227,10 @@ public sealed class ChatClientCredentialResolver : IDisposable
         // 1. Explicit ProviderRef — the normal path.
         if (!string.IsNullOrEmpty(def.ProviderRef)
             && providersByPath.TryGetValue(def.ProviderRef, out var byRef)
-            && HasAnyCredential(byRef))
+            && HasAnyCredential(byRef)
+            && IsAllowedSharedAccess(def.ProviderRef))
         {
-            return new CredentialResolution(byRef.Endpoint, byRef.ApiKey, $"providerRef:{def.ProviderRef}");
+            return new CredentialResolution(byRef.Endpoint, Decrypt(byRef.ApiKey), $"providerRef:{def.ProviderRef}");
         }
 
         // 2. Conventional fallback: Model/{Provider} in the root namespace.
@@ -156,20 +238,28 @@ public sealed class ChatClientCredentialResolver : IDisposable
         {
             var conventional = $"{ModelProviderNodeType.RootNamespace}/{def.Provider}";
             if (providersByPath.TryGetValue(conventional, out var byConvention)
-                && HasAnyCredential(byConvention))
+                && HasAnyCredential(byConvention)
+                && IsAllowedSharedAccess(conventional))
             {
-                return new CredentialResolution(byConvention.Endpoint, byConvention.ApiKey, $"convention:{conventional}");
+                return new CredentialResolution(byConvention.Endpoint, Decrypt(byConvention.ApiKey), $"convention:{conventional}");
             }
         }
 
         // 3. Legacy fields stamped directly on the ModelDefinition.
         if (!string.IsNullOrEmpty(def.ApiKeySecretRef) || !string.IsNullOrEmpty(def.Endpoint))
         {
-            return new CredentialResolution(def.Endpoint, def.ApiKeySecretRef, "model-node");
+            return new CredentialResolution(def.Endpoint, Decrypt(def.ApiKeySecretRef), "model-node");
         }
 
         return CredentialResolution.Missing;
     }
+
+    /// <summary>
+    /// Decrypts a stored credential. Passthrough when no protector is registered
+    /// or the value is legacy plaintext (see <see cref="IProviderKeyProtector"/>).
+    /// </summary>
+    private string? Decrypt(string? stored) =>
+        keyProtector is null ? stored : keyProtector.Unprotect(stored);
 
     /// <summary>
     /// Returns the <see cref="ModelDefinition.Provider"/> string for a
@@ -193,6 +283,10 @@ public sealed class ChatClientCredentialResolver : IDisposable
         rootSubscription?.Dispose();
         foreach (var s in partitionSubscriptions.Values) s.Dispose();
         partitionSubscriptions.Clear();
+        foreach (var s in sharedSubscriptions.Values) s.Dispose();
+        sharedSubscriptions.Clear();
+        foreach (var s in gateSubscriptions.Values) s.Dispose();
+        gateSubscriptions.Clear();
     }
 
     private void IngestSnapshot(IEnumerable<MeshNode> snapshot)

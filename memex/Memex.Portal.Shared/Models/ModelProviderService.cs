@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Security.Cryptography;
@@ -102,7 +103,7 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
         var providerConfig = new ModelProviderConfiguration
         {
             Provider = provider,
-            ApiKey = apiKey,
+            ApiKey = Protect(apiKey),
             Endpoint = endpoint,
             Label = label ?? source?.EffectiveLabel ?? provider,
             CreatedAt = DateTimeOffset.UtcNow,
@@ -193,7 +194,7 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
                 var cfg = current.Content as ModelProviderConfiguration
                     ?? ExtractContent<ModelProviderConfiguration>(current);
                 if (cfg == null) return current;
-                return current with { Content = cfg with { ApiKey = newApiKey } };
+                return current with { Content = cfg with { ApiKey = Protect(newApiKey) } };
             })
             .Do(updatedNode =>
             {
@@ -301,7 +302,7 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
                         CreatedAt = cfg.CreatedAt,
                         LastUsedAt = cfg.LastUsedAt,
                         ModelIds = cfg.Models.ToArray(),
-                        ApiKeyFingerprint = Fingerprint(cfg.ApiKey),
+                        ApiKeyFingerprint = Fingerprint(Unprotect(cfg.ApiKey)),
                     });
                 }
                 return (IReadOnlyList<ProviderInfo>)providers;
@@ -317,6 +318,61 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
         return stream;
     }
 
+    /// <summary>
+    /// Live list of the owner's selected provider paths (the provider-selection
+    /// picker). Empty when no selection node exists yet. Single-node read via
+    /// <c>GetMeshNodeStream</c> per CqrsAndContentAccess.
+    /// </summary>
+    public IObservable<ImmutableArray<string>> GetSelection(string ownerPath)
+    {
+        if (string.IsNullOrEmpty(ownerPath))
+            return Observable.Return(ImmutableArray<string>.Empty);
+        return hub.GetWorkspace()
+            .GetMeshNodeStream(ModelProviderNodeType.SelectionPath(ownerPath))
+            .Select(node =>
+            {
+                var sel = node?.Content as ModelProviderSelection
+                    ?? ExtractContent<ModelProviderSelection>(node);
+                if (sel is null) return ImmutableArray<string>.Empty;
+                return sel.SelectedProviderPaths.IsDefault
+                    ? ImmutableArray<string>.Empty
+                    : sel.SelectedProviderPaths;
+            });
+    }
+
+    /// <summary>
+    /// Persist the owner's selected provider paths. Create-or-update via
+    /// <c>stream.Update</c> — when the node doesn't exist yet the handshake
+    /// delivers <c>null</c> and we substitute the full new node (own-node
+    /// writes upsert through the local data source).
+    /// </summary>
+    public IObservable<bool> SetSelection(string ownerPath, ImmutableArray<string> providerPaths)
+    {
+        if (string.IsNullOrEmpty(ownerPath))
+            return Observable.Return(false);
+
+        var ns = $"{ownerPath}/{ModelProviderNodeType.RootNamespace}";
+        var content = new ModelProviderSelection { SelectedProviderPaths = providerPaths };
+        var newNode = new MeshNode(ModelProviderNodeType.SelectionNodeId, ns)
+        {
+            NodeType = ModelProviderNodeType.SelectionNodeType,
+            Name = "Model Provider Selection",
+            State = MeshNodeState.Active,
+            MainNode = ownerPath,
+            Content = content,
+        };
+
+        return hub.GetWorkspace()
+            .GetMeshNodeStream(newNode.Path)
+            .Update(current => current is null ? newNode : current with { Content = content })
+            .Select(_ => true)
+            .Catch<bool, Exception>(ex =>
+            {
+                logger.LogWarning(ex, "SetSelection failed for {Owner}", ownerPath);
+                return Observable.Return(false);
+            });
+    }
+
     private T? ExtractContent<T>(MeshNode? node) where T : class
     {
         if (node?.Content is null) return null;
@@ -327,6 +383,21 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
             catch { return null; }
         }
         return null;
+    }
+
+    // Encryption-at-rest for the literal ApiKey. Resolved lazily from the hub's
+    // service provider (same place the ChatClientCredentialResolver reads it);
+    // passthrough when not registered or no master key is configured.
+    private string? Protect(string? plaintext)
+    {
+        var protector = hub.ServiceProvider.GetService<IProviderKeyProtector>();
+        return protector is null ? plaintext : protector.Protect(plaintext);
+    }
+
+    private string? Unprotect(string? stored)
+    {
+        var protector = hub.ServiceProvider.GetService<IProviderKeyProtector>();
+        return protector is null ? stored : protector.Unprotect(stored);
     }
 
     /// <summary>

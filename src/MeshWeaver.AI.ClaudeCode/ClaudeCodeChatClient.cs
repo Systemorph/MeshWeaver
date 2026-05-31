@@ -14,16 +14,26 @@ public class ClaudeCodeChatClient : IChatClient
 {
     private readonly ClaudeCodeConfiguration configuration;
     private readonly string? modelName;
+    private readonly string? configDir;
+    private readonly string? oauthToken;
     private readonly ILogger? logger;
 
     public ClaudeCodeChatClient(
         ClaudeCodeConfiguration configuration,
         string? modelName = null,
-        ILogger<ClaudeCodeChatClient>? logger = null)
+        ILogger<ClaudeCodeChatClient>? logger = null,
+        string? configDir = null,
+        string? oauthToken = null)
     {
         this.configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         this.modelName = modelName;
         this.logger = logger;
+        // Per-user isolation for co-hosted multi-user (Phase 5b): each spawn
+        // gets the calling user's own .claude (CLAUDE_CONFIG_DIR) + subscription
+        // token (CLAUDE_CODE_OAUTH_TOKEN), so concurrent users on one portal
+        // replica never share credentials or session state.
+        this.configDir = configDir;
+        this.oauthToken = oauthToken;
     }
 
     /// <inheritdoc />
@@ -92,18 +102,25 @@ public class ClaudeCodeChatClient : IChatClient
         }
 
         // Build options
-        var claudeOptions = new ClaudeAgentOptions
+        var env = new Dictionary<string, string>
         {
-            // Set UTF-8 encoding environment variables for proper character handling on Windows
-            Env = new Dictionary<string, string>
-            {
-                ["PYTHONUTF8"] = "1",                    // Python UTF-8 mode
-                ["PYTHONIOENCODING"] = "utf-8",          // Python I/O encoding
-                ["LANG"] = "en_US.UTF-8",                // Unix locale
-                ["LC_ALL"] = "en_US.UTF-8",              // Unix locale override
-                ["CHCP"] = "65001"                       // Windows code page hint
-            }
+            ["PYTHONUTF8"] = "1",                    // Python UTF-8 mode
+            ["PYTHONIOENCODING"] = "utf-8",          // Python I/O encoding
+            ["LANG"] = "en_US.UTF-8",                // Unix locale
+            ["LC_ALL"] = "en_US.UTF-8",              // Unix locale override
+            ["CHCP"] = "65001"                       // Windows code page hint
         };
+        // Per-user isolation: run the CLI under this user's own .claude + token.
+        if (!string.IsNullOrEmpty(configDir))
+        {
+            env["CLAUDE_CONFIG_DIR"] = configDir;
+            try { Directory.CreateDirectory(configDir); }
+            catch (Exception ex) { logger?.LogWarning(ex, "Could not create CLAUDE_CONFIG_DIR {Dir}", configDir); }
+        }
+        if (!string.IsNullOrEmpty(oauthToken))
+            env["CLAUDE_CODE_OAUTH_TOKEN"] = oauthToken;
+
+        var claudeOptions = new ClaudeAgentOptions { Env = env };
 
         if (!string.IsNullOrEmpty(modelName))
         {
@@ -143,62 +160,95 @@ public class ClaudeCodeChatClient : IChatClient
         using var timeoutCts = new CancellationTokenSource(configuration.SessionTimeoutMs);
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
 
-        // Use the static QueryAsync method for streaming
-        await foreach (var message in ClaudeAgent.QueryAsync(userPrompt, claudeOptions).WithCancellation(linkedCts.Token))
+        // Manually enumerate so we survive the Claude Agent SDK 0.2.1 bug where
+        // MessageParser throws ArgumentException("Unknown message type: …") on the
+        // newer CLI's informational events (e.g. rate_limit_event) — which would
+        // otherwise crash the whole chat. 0.2.1 is the LATEST SDK, so this wrapper
+        // is the only fix until Anthropic ships one (claude-agent-sdk #583/#599/
+        // #601/#603, claude-code #26498). The inner try/catch wraps MoveNextAsync
+        // only (no yield inside it); the outer try/finally allows yield.
+        var enumerator = ClaudeAgent.QueryAsync(userPrompt, claudeOptions)
+            .GetAsyncEnumerator(linkedCts.Token);
+        var yieldedAny = false;
+        var swallowedUnknown = false;
+        try
         {
-            // Process different message types
-            switch (message)
+            while (true)
             {
-                case AssistantMessage assistantMessage:
-                    foreach (var block in assistantMessage.Content)
-                    {
-                        switch (block)
+                bool moved;
+                try
+                {
+                    moved = await enumerator.MoveNextAsync();
+                }
+                catch (ArgumentException ex) when (
+                    ex.Message.Contains("Unknown message type", StringComparison.OrdinalIgnoreCase))
+                {
+                    logger?.LogWarning(ex,
+                        "Claude Agent SDK could not parse a CLI message — ending stream gracefully (SDK 0.2.1 bug, e.g. rate_limit_event).");
+                    swallowedUnknown = true;
+                    break;
+                }
+                if (!moved) break;
+
+                var message = enumerator.Current;
+                switch (message)
+                {
+                    case AssistantMessage assistantMessage:
+                        foreach (var block in assistantMessage.Content)
                         {
-                            case TextBlock textBlock:
-                                if (!string.IsNullOrEmpty(textBlock.Text))
-                                {
-                                    yield return new ChatResponseUpdate(ChatRole.Assistant, textBlock.Text);
-                                }
-                                break;
+                            switch (block)
+                            {
+                                case TextBlock textBlock:
+                                    if (!string.IsNullOrEmpty(textBlock.Text))
+                                    {
+                                        yieldedAny = true;
+                                        yield return new ChatResponseUpdate(ChatRole.Assistant, textBlock.Text);
+                                    }
+                                    break;
 
-                            case ToolUseBlock toolUseBlock:
-                                // Convert tool use to FunctionCallContent
-                                var toolId = toolUseBlock.Id ?? Guid.NewGuid().ToString();
-                                IDictionary<string, object?>? arguments = null;
+                                case ToolUseBlock toolUseBlock:
+                                    var toolId = toolUseBlock.Id ?? Guid.NewGuid().ToString();
+                                    IDictionary<string, object?>? arguments = null;
+                                    if (toolUseBlock.Input != null && toolUseBlock.Input.Count > 0)
+                                    {
+                                        arguments = toolUseBlock.Input.ToDictionary(
+                                            kvp => kvp.Key, kvp => (object?)kvp.Value);
+                                    }
+                                    yieldedAny = true;
+                                    yield return new ChatResponseUpdate(ChatRole.Assistant,
+                                        [new FunctionCallContent(toolId, toolUseBlock.Name ?? "unknown", arguments)]);
+                                    break;
 
-                                if (toolUseBlock.Input != null && toolUseBlock.Input.Count > 0)
-                                {
-                                    // Input is already a Dictionary<string, object>, convert to nullable version
-                                    arguments = toolUseBlock.Input.ToDictionary(
-                                        kvp => kvp.Key,
-                                        kvp => (object?)kvp.Value);
-                                }
-
-                                var functionCall = new FunctionCallContent(toolId, toolUseBlock.Name ?? "unknown", arguments);
-                                yield return new ChatResponseUpdate(ChatRole.Assistant, [functionCall]);
-                                break;
-
-                            case ThinkingBlock thinkingBlock:
-                                // Optionally expose thinking as a special content type or log it
-                                logger?.LogDebug("Claude thinking: {Thinking}", thinkingBlock.Thinking);
-                                break;
+                                case ThinkingBlock thinkingBlock:
+                                    logger?.LogDebug("Claude thinking: {Thinking}", thinkingBlock.Thinking);
+                                    break;
+                            }
                         }
-                    }
-                    break;
+                        break;
 
-                case SystemMessage systemMessage:
-                    // System messages from the SDK (not the LLM)
-                    logger?.LogDebug("Claude system message: {Subtype}", systemMessage.Subtype);
-                    break;
+                    case SystemMessage systemMessage:
+                        logger?.LogDebug("Claude system message: {Subtype}", systemMessage.Subtype);
+                        break;
 
-                case ResultMessage resultMessage:
-                    // Query completed - log cost/duration info
-                    logger?.LogInformation(
-                        "Claude query completed. Duration: {Duration}ms, Cost: ${Cost:F4}",
-                        resultMessage.DurationMs,
-                        resultMessage.TotalCostUsd ?? 0.0);
-                    break;
+                    case ResultMessage resultMessage:
+                        logger?.LogInformation(
+                            "Claude query completed. Duration: {Duration}ms, Cost: ${Cost:F4}",
+                            resultMessage.DurationMs, resultMessage.TotalCostUsd ?? 0.0);
+                        break;
+                }
             }
+        }
+        finally
+        {
+            await enumerator.DisposeAsync();
+        }
+
+        // If the only thing that stopped us was the unparseable event and we never
+        // produced output, surface a graceful note instead of a silent empty reply.
+        if (swallowedUnknown && !yieldedAny)
+        {
+            yield return new ChatResponseUpdate(ChatRole.Assistant,
+                "Claude Code produced no output before the session ended (often a transient rate limit). Please retry shortly.");
         }
     }
 

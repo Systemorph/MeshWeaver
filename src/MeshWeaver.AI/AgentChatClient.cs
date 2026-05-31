@@ -1052,6 +1052,7 @@ public class AgentChatClient : IAgentChat
         var workspace = hub.GetWorkspace();
         agentsSubscription?.Dispose();
         modelsSubscription?.Dispose();
+        selectionSubscription?.Dispose();
 
         // 🚨 Subscribe to agents and models INDEPENDENTLY. Models are not
         // required for agent selection — only for the picker UI's model
@@ -1111,22 +1112,89 @@ public class AgentChatClient : IAgentChat
         // ThreadSubmission cancel button — manual cancellation is preferable
         // to an arbitrary deadline.
 
-        // Same shape: live subscription with no Timeout fallback —
-        // the synced query emits Initial then quiesces, so a Timeout(8s,
-        // empty) wrapper would wipe loadedModels 8s after the real Initial.
-        modelsSubscription = AgentPickerProjection.ObserveModels(workspace, hub, contextPath, nodeTypePath)
-            .Subscribe(
-                models =>
-                {
-                    logger.LogDebug("[AgentChatClient] Model emission: {Count}", models.Count);
-                    loadedModels = models.ToImmutableList();
-                },
-                ex => logger.LogDebug(ex, "[AgentChatClient] Model subscription faulted — picker dropdown will be empty"));
+        // Provider selection drives BOTH the model picker and the resolver's
+        // use-without-see watches. Subscribe to the user's selection node; each
+        // change rebuilds the model subscription + resolver watches.
+        // StartWith(empty) means the picker loads immediately with the default
+        // set (root + context + nodeType) — byte-for-byte the previous behaviour
+        // for users who never touched the selection picker, so no regression.
+        // .Catch keeps a selection-read failure from breaking the picker.
+        // (Same "no Timeout fallback" rule as agents: the synced query emits
+        // Initial then quiesces; a Timeout wrapper would wipe loadedModels.)
+        var accessService = hub.ServiceProvider.GetService<MeshWeaver.Messaging.AccessService>();
+        var selectionUserId = accessService?.Context?.ObjectId;
+        var credentialResolver = hub.ServiceProvider.GetService<ChatClientCredentialResolver>();
+        if (!string.IsNullOrEmpty(selectionUserId))
+            credentialResolver?.WatchPartition(selectionUserId);
+
+        selectionSubscription?.Dispose();
+        var selectionStream = string.IsNullOrEmpty(selectionUserId)
+            ? Observable.Return(ImmutableArray<string>.Empty)
+            : workspace.GetMeshNodeStream(ModelProviderNodeType.SelectionPath(selectionUserId))
+                .Select(ExtractSelectedProviderPaths)
+                .Catch<ImmutableArray<string>, Exception>(_ => Observable.Return(ImmutableArray<string>.Empty))
+                .StartWith(ImmutableArray<string>.Empty)
+                .DistinctUntilChanged(SelectedPathsComparer.Instance);
+
+        selectionSubscription = selectionStream.Subscribe(selectedPaths =>
+        {
+            // Resolver: make each selected (org/shared) provider usable under
+            // use-without-see — system-identity ingest + per-user Read gate.
+            if (!string.IsNullOrEmpty(selectionUserId) && credentialResolver != null)
+                foreach (var p in selectedPaths)
+                    credentialResolver.WatchSharedProvider(p, selectionUserId);
+
+            // Picker: (re)subscribe models to include the selected subtrees.
+            modelsSubscription?.Dispose();
+            modelsSubscription = AgentPickerProjection
+                .ObserveModels(workspace, hub, contextPath, nodeTypePath, selectedPaths)
+                .Subscribe(
+                    models =>
+                    {
+                        logger.LogDebug("[AgentChatClient] Model emission: {Count} (selected={Sel})",
+                            models.Count, selectedPaths.Length);
+                        loadedModels = models.ToImmutableList();
+                    },
+                    ex => logger.LogDebug(ex, "[AgentChatClient] Model subscription faulted — picker dropdown will be empty"));
+        });
 
         return this;
     }
 
     private IDisposable? modelsSubscription;
+    private IDisposable? selectionSubscription;
+
+    /// <summary>Extracts the user's selected provider paths from the selection node (tolerates JsonElement content + absent node).</summary>
+    private ImmutableArray<string> ExtractSelectedProviderPaths(MeshNode? node)
+    {
+        var sel = node?.Content switch
+        {
+            ModelProviderSelection s => s,
+            System.Text.Json.JsonElement je => TryDeserializeSelection(je),
+            _ => null,
+        };
+        if (sel is null) return ImmutableArray<string>.Empty;
+        var arr = sel.SelectedProviderPaths;
+        return arr.IsDefault ? ImmutableArray<string>.Empty : arr;
+    }
+
+    private ModelProviderSelection? TryDeserializeSelection(System.Text.Json.JsonElement je)
+    {
+        try { return System.Text.Json.JsonSerializer.Deserialize<ModelProviderSelection>(je.GetRawText(), hub.JsonSerializerOptions); }
+        catch { return null; }
+    }
+
+    private sealed class SelectedPathsComparer : IEqualityComparer<ImmutableArray<string>>
+    {
+        public static readonly SelectedPathsComparer Instance = new();
+        public bool Equals(ImmutableArray<string> x, ImmutableArray<string> y) => x.SequenceEqual(y);
+        public int GetHashCode(ImmutableArray<string> obj)
+        {
+            var hc = new HashCode();
+            foreach (var s in obj) hc.Add(s);
+            return hc.ToHashCode();
+        }
+    }
 
     /// <summary>
     /// Stash agents from <see cref="AgentPickerProjection.ObserveAgents"/>

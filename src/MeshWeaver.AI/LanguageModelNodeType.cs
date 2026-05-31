@@ -57,6 +57,13 @@ public static class LanguageModelNodeType
         {
             services.TryAddSingleton<LanguageModelCatalogOptions>();
             services.TryAddSingleton<BuiltInLanguageModelProvider>();
+            // Encryption-at-rest for ModelProvider.ApiKey. Default master key
+            // comes from config (Ai:KeyProtection:MasterKey); swap in a
+            // KMS/Key Vault IMasterKeyProvider for hardened deployments. With
+            // no key configured both are pure passthrough (plaintext), so this
+            // is safe to register unconditionally.
+            services.TryAddSingleton<IMasterKeyProvider, ConfigMasterKeyProvider>();
+            services.TryAddSingleton<IProviderKeyProtector, ProviderKeyProtector>();
             services.TryAddSingleton<ChatClientCredentialResolver>();
             // ModelDiscoveryService MUST be a top-level singleton on the
             // mesh hub — never on a per-thread / exec hub where its

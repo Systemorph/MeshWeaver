@@ -79,7 +79,10 @@ public static class AgentPickerProjection
     ///   <item>Per-NodeType: <c>{nodeTypePath}/_Provider</c> subtree.</item>
     /// </list>
     /// </remarks>
-    public static string[] BuildModelQueries(string? currentPath = null, string? nodeTypePath = null)
+    public static string[] BuildModelQueries(
+        string? currentPath = null,
+        string? nodeTypePath = null,
+        IEnumerable<string>? selectedProviderPaths = null)
     {
         var typeFilter = $"{LanguageModelNodeType.NodeType}|{ModelProviderNodeType.NodeType}";
         var queries = new List<string>
@@ -90,6 +93,19 @@ public static class AgentPickerProjection
             queries.Add($"namespace:{currentPath}/{ModelProviderNodeType.RootNamespace} nodeType:{typeFilter} scope:descendants");
         if (!string.IsNullOrEmpty(nodeTypePath))
             queries.Add($"namespace:{nodeTypePath}/{ModelProviderNodeType.RootNamespace} nodeType:{typeFilter} scope:descendants");
+        // User-selected provider subtrees (the provider-selection picker). Each
+        // selected path IS a ModelProvider node (e.g. acme/_Provider/Anthropic);
+        // scope:selfAndDescendants pulls the provider node AND its child
+        // LanguageModel nodes in one query. Same single nodeType filter as the
+        // rest, so the synced collection's all-Initial gating still holds.
+        if (selectedProviderPaths != null)
+        {
+            foreach (var path in selectedProviderPaths)
+            {
+                if (!string.IsNullOrEmpty(path))
+                    queries.Add($"namespace:{path} nodeType:{typeFilter} scope:selfAndDescendants");
+            }
+        }
         return queries.ToArray();
     }
 
@@ -154,22 +170,31 @@ public static class AgentPickerProjection
     /// </summary>
     public static IObservable<IReadOnlyList<ModelInfo>> ObserveModels(
         IWorkspace workspace, IMessageHub hub,
-        string? currentPath = null, string? nodeTypePath = null)
+        string? currentPath = null, string? nodeTypePath = null,
+        IReadOnlyList<string>? selectedProviderPaths = null)
         => ObserveSnapshot(workspace, hub,
-                BuildQueryId(ModelsQueryId, currentPath, nodeTypePath),
-                BuildModelQueries(currentPath, nodeTypePath))
+                BuildQueryId(ModelsQueryId, currentPath, nodeTypePath, selectedProviderPaths),
+                BuildModelQueries(currentPath, nodeTypePath, selectedProviderPaths))
             .Select(snapshot => ProjectModels(snapshot, hub.JsonSerializerOptions));
 
     /// <summary>
     /// The workspace.GetQuery registry caches by id — first call wins, every
     /// subsequent call with the same id but different queries returns the cached
     /// observable. So agent / model queries that vary by context (currentPath +
-    /// nodeTypePath) MUST use a context-scoped id; otherwise re-init after
-    /// SetContext returns the stale snapshot from the first subscribe and
-    /// NodeType-defined agents stay invisible.
+    /// nodeTypePath + selected provider paths) MUST use a context-scoped id;
+    /// otherwise re-init after SetContext / a selection change returns the stale
+    /// snapshot from the first subscribe and NodeType-defined agents (or the
+    /// newly-selected providers' models) stay invisible.
     /// </summary>
-    private static string BuildQueryId(string baseId, string? currentPath, string? nodeTypePath) =>
-        $"{baseId}|p={currentPath ?? ""}|t={nodeTypePath ?? ""}";
+    private static string BuildQueryId(
+        string baseId, string? currentPath, string? nodeTypePath,
+        IReadOnlyList<string>? selectedProviderPaths = null)
+    {
+        var selected = selectedProviderPaths is { Count: > 0 }
+            ? string.Join(",", selectedProviderPaths.OrderBy(x => x, StringComparer.Ordinal))
+            : "";
+        return $"{baseId}|p={currentPath ?? ""}|t={nodeTypePath ?? ""}|s={selected}";
+    }
 
     /// <summary>
     /// Live MeshNode snapshot for one of the named picker queries — single

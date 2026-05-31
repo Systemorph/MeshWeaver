@@ -49,6 +49,28 @@ public static class ModelProviderNodeType
     public const string RootNamespace = "_Provider";
 
     /// <summary>
+    /// Node id for the per-user provider-selection node — the single node, at
+    /// <c>{userPath}/_Provider/_Selection</c>, whose content is a
+    /// <see cref="ModelProviderSelection"/>. See <see cref="SelectionPath"/>.
+    /// </summary>
+    public const string SelectionNodeId = "_Selection";
+
+    /// <summary>
+    /// NodeType discriminator for the selection node — distinct from
+    /// <see cref="NodeType"/> so a <c>nodeType:ModelProvider</c> listing (e.g.
+    /// <c>ModelProviderService.GetProvidersForOwner</c>) never mistakes the
+    /// owner's selection node for an actual provider.
+    /// </summary>
+    public const string SelectionNodeType = "ModelProviderSelection";
+
+    /// <summary>
+    /// Path of the provider-selection node for an owner (user) path:
+    /// <c>{ownerPath}/_Provider/_Selection</c>.
+    /// </summary>
+    public static string SelectionPath(string ownerPath) =>
+        $"{ownerPath}/{RootNamespace}/{SelectionNodeId}";
+
+    /// <summary>
     /// Registers the <c>ModelProvider</c> MeshNode definition + content type.
     /// Wires the same hub-level content registration the
     /// <see cref="LanguageModelNodeType"/> uses so reads through
@@ -61,7 +83,8 @@ public static class ModelProviderNodeType
         builder.AddMeshNodes(CreateMeshNode());
         builder.AddAutocompleteExcludedTypes(NodeType);
         builder.ConfigureHub(config => config
-            .WithType<ModelProviderConfiguration>(nameof(ModelProviderConfiguration)));
+            .WithType<ModelProviderConfiguration>(nameof(ModelProviderConfiguration))
+            .WithType<ModelProviderSelection>(nameof(ModelProviderSelection)));
         // Mirror LanguageModelNodeType: the root <c>_Provider</c> namespace
         // gets a partition-storage provider so the routing core knows where
         // to find static ModelProvider nodes (the ones BuiltInLanguageModelProvider
