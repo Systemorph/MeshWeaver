@@ -54,7 +54,7 @@ public class OrleansDelegationFlowTest(ITestOutputHelper output) : OrleansTestBa
 
     // Synchronous client acquisition — await-free test bodies resolve the client
     // hub once up front on the plain xUnit thread (no async SynchronizationContext
-    // to starve the in-process hub scheduler). See FluentAssertionsToReactive.md §2a.
+    // to starve the in-process hub scheduler). See ReactiveTestAssertions.md §2.
     private IMessageHub GetClient()
         => base.GetClient($"flow-{Guid.NewGuid():N}", "TestUser");
 
