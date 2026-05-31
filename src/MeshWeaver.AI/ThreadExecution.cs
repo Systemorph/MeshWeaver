@@ -1108,7 +1108,7 @@ internal static class ThreadExecution
                 // implementation; tool invocations + cell pushes inside this
                 // task run as observable composition, and the grain scheduler
                 // is available to handle their cross-hub Subscribe callbacks.
-                _ = Task.Run(async () =>
+                Task.Run(async () =>
                 {
                     // Re-seed user AccessContext at the task-launch boundary. Inside this lambda we
                     // run the streaming loop + tool calls + responseStream.Update, all of which
@@ -1558,7 +1558,31 @@ internal static class ThreadExecution
                         // IMeshNodeStreamCache.Update, whose upstream handle is owned
                         // by the cache and outlives this round.
                     }
-                });
+                })
+                .ContinueWith(t =>
+                {
+                    // 🚨 Observe the fire-and-forget streaming task's exceptions. The
+                    // GetService at the top of the lambda (and the catch/error handlers
+                    // inside, which themselves resolve services + post) can throw
+                    // ObjectDisposedException when the hub's DI scope is torn down
+                    // mid-round (test-class dispose / Orleans grain deactivation). Left
+                    // UNOBSERVED on a Task.Run that's `_ =`-discarded, that surfaces as
+                    // an xUnit "Catastrophic failure: ObjectDisposedException
+                    // (LifetimeScope already disposed)" which aborts the whole test
+                    // collection. Disposal-race exceptions are expected during teardown
+                    // and swallowed here; anything else is logged so real faults stay
+                    // visible.
+                    if (t.Exception is { } agg)
+                    {
+                        var real = agg.Flatten().InnerExceptions.FirstOrDefault(e =>
+                            e is not ObjectDisposedException
+                            && !(e is InvalidOperationException ioe
+                                 && ioe.Message.Contains("disposed", StringComparison.OrdinalIgnoreCase)));
+                        if (real != null)
+                            logger.LogError(real,
+                                "[ThreadExec] streaming task faulted for {ThreadPath}", threadPath);
+                    }
+                }, TaskScheduler.Default);
                     }); // end of LoadFullConversationHistory.Subscribe
                 }); // end of contextNodeObs.Subscribe
                 }, // end of WhenInitialized.Subscribe onNext
