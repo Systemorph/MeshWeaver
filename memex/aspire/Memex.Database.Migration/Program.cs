@@ -52,6 +52,51 @@ var dataSource = host.Services.GetRequiredService<NpgsqlDataSource>();
 var options = host.Services.GetRequiredService<IOptions<PostgreSqlStorageOptions>>().Value;
 logger.LogInformation("Running database migration...");
 
+// Wait for Postgres to accept connections AND ensure the target database exists before
+// migrating. Two orchestration realities this handles:
+//   1. The DB container may report "started" before it is listening (Compose
+//      depends_on:service_started, Kubernetes, ACA) — retry with backoff.
+//   2. A self-managed Postgres (the pgvector container in Compose/Helm) does NOT pre-create
+//      the app database the way managed Azure Postgres does — connect to the maintenance
+//      'postgres' database and CREATE it if missing.
+// Managed Azure Postgres pre-creates the database and uses a credential provider on the
+// data source, so for that path we just probe the data source directly.
+var isAzurePg = connectionString.Contains("database.azure.com");
+var pgReadyDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(120);
+while (true)
+{
+    try
+    {
+        if (isAzurePg)
+        {
+            await using var probe = await dataSource.OpenConnectionAsync();
+        }
+        else
+        {
+            var targetDb = new NpgsqlConnectionStringBuilder(connectionString).Database ?? "memex";
+            var maintenanceCs = new NpgsqlConnectionStringBuilder(connectionString) { Database = "postgres" }.ConnectionString;
+            await using var admin = new NpgsqlConnection(maintenanceCs);
+            await admin.OpenAsync();
+            await using var check = new NpgsqlCommand("SELECT 1 FROM pg_database WHERE datname = @db", admin);
+            check.Parameters.AddWithValue("db", targetDb);
+            if (await check.ExecuteScalarAsync() is null)
+            {
+                logger.LogInformation("Database '{Db}' does not exist — creating it.", targetDb);
+                // targetDb is our own configured database name, not user input. Quote-escape defensively.
+                await using var create = new NpgsqlCommand($"CREATE DATABASE \"{targetDb.Replace("\"", "\"\"")}\"", admin);
+                await create.ExecuteNonQueryAsync();
+            }
+        }
+        break;
+    }
+    catch (Exception ex) when (DateTime.UtcNow < pgReadyDeadline)
+    {
+        logger.LogInformation("Waiting for Postgres / ensuring database ({Error})", ex.Message);
+        await Task.Delay(TimeSpan.FromSeconds(2));
+    }
+}
+logger.LogInformation("Postgres ready; target database present.");
+
 // ── Phase 1: Schema initialization (always runs)
 var initResult = await SchemaInitialization.RunAsync(dataSource, options, connectionString, logger);
 
