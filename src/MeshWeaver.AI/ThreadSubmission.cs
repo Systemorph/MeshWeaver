@@ -439,13 +439,30 @@ internal static class ThreadSubmissionServer
             // hub). Write through THIS hub's own node stream so
             // sender = thread hub, AccessContext flows from the
             // caller's identity.
+            // 🚨 Single-fire guard for the side effect, NOT just the state mutation.
+            // The Status check below makes the UpdateMeshNode lambda a no-op on every
+            // watcher re-emission after the first — but no-op Updates still call
+            // OnNext (see feedback_setcurrent_skips_noops: UpdateRemote completes
+            // inline with OnNext(current)). So without this flag the Subscribe(onNext)
+            // body re-runs ExecuteMessageAsync on EVERY thread-node change during the
+            // round (response-cell alloc, heartbeat stamp, streaming writes) → the
+            // 6×-duplicate-execution bug (OrleansNodeChangePropagation: the Create
+            // node-change lands in a later duplicate round's nodeChangeLog while an
+            // earlier round's completion writes the cell → UpdatedNodes=[]; also the
+            // AutoExecute text-empty + delegation-timeout reds). Only the emission
+            // that actually performed StartingExecution→Executing launches execution.
+            var didCommitThisEmission = false;
             hub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
             {
                 var t = node.Content as MeshThread ?? new MeshThread();
                 // We expect Status==StartingExecution (post-claim from InstallServerWatcher
                 // or InitializeThreadLifecycle's resume re-entry).
                 // Anything else is an out-of-band state change — drop the commit.
-                if (t.Status != ThreadExecutionStatus.StartingExecution) return node;
+                // Reset-then-set so an optimistic-concurrency retry of this lambda
+                // reflects the FINAL decision: only a genuine StartingExecution→Executing
+                // transition leaves the flag true.
+                if (t.Status != ThreadExecutionStatus.StartingExecution) { didCommitThisEmission = false; return node; }
+                didCommitThisEmission = true;
 
                 // User ids in dispatch order, then the response id last.
                 // Contains check covers the resubmit case where u1 was already in
@@ -490,6 +507,11 @@ internal static class ThreadSubmissionServer
             }).Subscribe(
                 _ =>
                 {
+                    // Only the emission that flipped StartingExecution→Executing
+                    // launches the round. Every other (no-op) emission's OnNext is a
+                    // duplicate and must not re-enter ExecuteMessageAsync.
+                    if (!didCommitThisEmission) return;
+
                     var allocCache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
                     ThreadExecution.UpdateResponseCell(
                         allocCache, responsePath, threadPath, responseMsgId, mainEntity,

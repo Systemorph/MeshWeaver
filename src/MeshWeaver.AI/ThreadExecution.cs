@@ -653,11 +653,23 @@ internal static class ThreadExecution
                                && text.Length < current.Text.Length
                     ? current.Text
                     : text;
+                // 🚨 UpdatedNodes accumulate — never replace. Like ToolCalls (merged
+                // above) and Text (monotonic), node changes must not regress: the
+                // trailing Sample(100ms) emission fires AFTER the terminal completion
+                // push (snapshots.OnCompleted flushes the last buffered snapshot), and
+                // an earlier/empty snapshot would otherwise CLOBBER the aggregated
+                // changes back to []. Union by path (min VersionBefore / max
+                // VersionAfter, last Operation wins) so an empty incoming push is a
+                // no-op and re-pushes of the same node coalesce to one entry — exactly
+                // what OrleansNodeChangePropagationTest's ContainSingle assertion wants.
+                var mergedNodes = updatedNodes.IsEmpty
+                    ? current.UpdatedNodes
+                    : AggregateNodeChanges(current.UpdatedNodes.AddRange(updatedNodes));
                 var updatedContent = current with
                 {
                     Text = nextText,
                     ToolCalls = mergedToolCalls,
-                    UpdatedNodes = updatedNodes,
+                    UpdatedNodes = mergedNodes,
                     AgentName = agentName ?? current.AgentName,
                     ModelName = modelName ?? current.ModelName,
                     InputTokens = inputTokens ?? current.InputTokens,

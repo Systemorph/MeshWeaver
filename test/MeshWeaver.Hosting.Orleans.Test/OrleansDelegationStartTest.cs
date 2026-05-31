@@ -90,53 +90,31 @@ public class OrleansDelegationStartTest(ITestOutputHelper output) : OrleansShare
             }, parentPath);
             var parentMsgPath = $"{parentPath}/{parentResponseId}";
 
-            // Now simulate delegation: create cells, then thread (exact ChatClientAgentFactory flow)
-            var (subThreadNode, userMsgId, responseMsgId) = ThreadNodeType.BuildThreadWithMessages(
+            // Now simulate delegation: create the sub-thread (exact ChatClientAgentFactory
+            // flow). BuildThreadWithMessages seeds PendingUserMessages at Status=Idle;
+            // the submission watcher claims, drains the pending message into Messages,
+            // allocates the response cell, and dispatches execution — the test no longer
+            // pre-creates the user/response cells (that was the old contract, before
+            // DispatchAfterClaim owned cell allocation; responseMsgId is "" now).
+            var (subThreadNode, userMsgId, _) = ThreadNodeType.BuildThreadWithMessages(
                 parentMsgPath, "Delegation task: do something", createdBy: "TestUser", agentName: "Worker");
             subThreadNode = subThreadNode with { MainNode = "TestUser" };
             var subThreadPath = subThreadNode.Path!;
-            var responsePath = $"{subThreadPath}/{responseMsgId}";
-            Output.WriteLine($"Sub-thread: {subThreadPath}, user={userMsgId}, response={responseMsgId}");
+            Output.WriteLine($"Sub-thread: {subThreadPath}, user={userMsgId}");
 
-            // Step 1: Create the sub-thread FIRST so its per-node hub exists. Routing
-            // for subsequent cell creates needs the sub-thread node to be on the routing
-            // path; without it, RouteMessage returns NotFound and the cell create fails.
-            // Production flow (ChatClientAgentFactory.delegate_to_agent at line 367-394)
-            // also creates all three nodes via meshService.CreateNode but does so
-            // concurrently / fire-and-forget so the routing race is hidden.
+            // Create the sub-thread — WatchForExecution claims + dispatches the round.
             var threadResp = CreateNode(client, subThreadNode, parentMsgPath);
             threadResp.Message.Success.Should().BeTrue(threadResp.Message.Error ?? "");
             Output.WriteLine("Sub-thread created — WatchForExecution should trigger");
 
-            // Step 2: Create user cell (now that sub-thread exists routing succeeds)
-            var userCellResp = CreateNode(client, new MeshNode(userMsgId, subThreadPath)
-            {
-                NodeType = ThreadMessageNodeType.NodeType, MainNode = "TestUser",
-                Content = new ThreadMessage
-                {
-                    Role = "user", Text = "Delegation task: do something", Timestamp = DateTime.UtcNow,
-                    Type = ThreadMessageType.ExecutedInput, CreatedBy = "TestUser"
-                }
-            }, subThreadPath);
-            Output.WriteLine($"User cell created: success={userCellResp.Message.Success}");
-
-            // Step 3: Create response cell
-            var responseCellResp = CreateNode(client, new MeshNode(responseMsgId, subThreadPath)
-            {
-                NodeType = ThreadMessageNodeType.NodeType, MainNode = "TestUser",
-                Content = new ThreadMessage
-                {
-                    Role = "assistant", Text = "", Timestamp = DateTime.UtcNow,
-                    Type = ThreadMessageType.AgentResponse, AgentName = "Worker"
-                }
-            }, subThreadPath);
-            Output.WriteLine($"Response cell created: success={responseCellResp.Message.Success}");
-
-            // Step 4: Wait for execution to complete, then read the response cell text.
-            GetHubContent<MeshThread>(client, subThreadPath)
-                .Should().Within(30.Seconds()).Match(t => t is { IsExecuting: false });
+            // Wait for execution to complete; the response cell id is Messages[1]
+            // (allocated by DispatchAfterClaim).
+            var settled = GetHubContent<MeshThread>(client, subThreadPath)
+                .Should().Within(30.Seconds())
+                .Match(t => t is { IsExecuting: false } && t.Messages.Count >= 2);
             Output.WriteLine("Execution complete");
 
+            var responsePath = $"{subThreadPath}/{settled!.Messages[1]}";
             var responseMsg = GetHubContent<ThreadMessage>(client, responsePath)
                 .Should().Within(30.Seconds()).Match(m => !string.IsNullOrEmpty(m?.Text));
             responseMsg!.Text.Should().NotBeNullOrEmpty("agent must have written response");
