@@ -1,0 +1,30 @@
+# ---------------------------------------------------------------------------
+# otel-pvc.yaml — RWX Azure Files PVC for the OpenTelemetry Collector log archive.
+#
+# The collector's `file` exporter writes rotated JSON here (/mnt/otel-logs). It is
+# ReadWriteMany because the collector runs as a DaemonSet (one pod per node) and
+# every pod writes to the same share — each namespaces its file by node name
+# (logs-<node>.json) so they don't collide. Uses the custom `azurefile-memex`
+# StorageClass (uid/gid 1654, nobrl) — apply storageclass-azurefile.yaml first.
+#
+#   kubectl apply -n memex -f ../storageclass-azurefile.yaml   # if not already applied
+#   kubectl apply -n memex -f otel-pvc.yaml
+#
+# For STATIC binding to the pre-created `otel-logs` share in files.bicep, replace
+# this with a PV referencing volumeAttributes { storageAccount, shareName: otel-logs }
+# + a matching PVC (same pattern as README "Static PV binding").
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: otel-logs
+  namespace: memex
+  labels:
+    app.kubernetes.io/component: otel-collector
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: azurefile-memex
+  resources:
+    requests:
+      storage: 64Gi

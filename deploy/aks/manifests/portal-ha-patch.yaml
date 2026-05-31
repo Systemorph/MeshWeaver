@@ -1,0 +1,104 @@
+# ---------------------------------------------------------------------------
+# portal-ha-patch.yaml — Strategic-merge patches to turn the single-replica
+#                        chart Deployment/StatefulSet into an HA, persistent
+#                        AKS workload.
+#
+# The ../helm chart ships replicas: 1 with emptyDir volumes. Rather than fork the
+# chart, apply these patches AFTER `helm install`:
+#
+#   kubectl patch deployment memex-portal-deployment -n memex \
+#     --type strategic --patch-file portal-ha-patch.yaml
+#   kubectl patch statefulset memex-postgres-statefulset -n memex \
+#     --type strategic --patch-file postgres-pvc-patch.yaml
+#
+# This document is the PORTAL patch. (Postgres patch is the next file.)
+#
+# Changes:
+#   - replicas 1 -> 2  (launch 2 by default; bump to 3 for full 3-zone spread)
+#   - emptyDir  -> the RWX PVCs from portal-pvcs.yaml
+#       /data            -> memex-data        (framework caches)
+#       /mnt/users       -> memex-users       (CLI configs)
+#       /mnt/content     -> memex-content     (content collection — NEW)
+#       /mnt/attachments -> memex-attachments (attachments drive — NEW)
+#   - zone-spread topologySpreadConstraints so the 3 replicas land in 3 AZs
+#   - readiness/liveness probes on the portal HTTP port
+#
+# STRATEGIC-MERGE MERGE-KEY BEHAVIOUR (why this is safe / additive):
+#   * `spec.template.spec.containers`            merges by key `name`
+#   * containers[].volumeMounts                  merges by key `mountPath`
+#   * spec.template.spec.volumes                 merges by key `name`
+#   The chart template already defines volumeMounts for /data and /mnt/users
+#   (volume names memex-data / memex-users) and declares those volumes as
+#   emptyDir. This patch:
+#     - re-declares the memex-data / memex-users volumeMounts (no-op merge on the
+#       same mountPath) and ADDS the two new ones (/mnt/content, /mnt/attachments);
+#     - re-declares the memex-data / memex-users volumes with a PVC source — same
+#       `name`, so the merge OVERRIDES the emptyDir source with the PVC (intended);
+#     - ADDS the memex-content / memex-attachments volumes.
+#   No list is wholesale-replaced: strategic merge augments by merge key. (A plain
+#   JSON merge / `--type merge` WOULD replace the whole list — use --type strategic.)
+# ---------------------------------------------------------------------------
+spec:
+  replicas: 2
+  template:
+    spec:
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/component: memex-portal
+      containers:
+        - name: memex-portal
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            failureThreshold: 6
+          # Sizable AI image with GENEROUS limits per replica (kept in sync with
+          # resources.portal in values.aks.yaml). The AI image is memory-hungry
+          # (NodeType compile cache, agent runtimes); on the 32 GiB Standard_D8s_v5
+          # nodes these generous limits avoid OOMKills with room to spare.
+          resources:
+            requests:
+              cpu: "4"
+              memory: "8Gi"
+            limits:
+              cpu: "6"
+              memory: "16Gi"
+          # volumeMounts merge by `mountPath`. The first two mirror the chart's
+          # existing mounts (no-op); the last two are the NEW /mnt drives.
+          volumeMounts:
+            - name: memex-data
+              mountPath: /data
+            - name: memex-users
+              mountPath: /mnt/users
+            - name: memex-content
+              mountPath: /mnt/content
+            - name: memex-attachments
+              mountPath: /mnt/attachments
+      # volumes merge by `name`. memex-data / memex-users override the chart's
+      # emptyDir with the real RWX PVCs; memex-content / memex-attachments are new.
+      volumes:
+        - name: memex-data
+          persistentVolumeClaim:
+            claimName: memex-data
+        - name: memex-users
+          persistentVolumeClaim:
+            claimName: memex-users
+        - name: memex-content
+          persistentVolumeClaim:
+            claimName: memex-content
+        - name: memex-attachments
+          persistentVolumeClaim:
+            claimName: memex-attachments

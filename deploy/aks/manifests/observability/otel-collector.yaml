@@ -1,0 +1,162 @@
+# ---------------------------------------------------------------------------
+# otel-collector.yaml — OpenTelemetry Collector as a DaemonSet (one pod per node)
+#                       + ServiceAccount/RBAC + a ClusterIP Service.
+#
+# DaemonSet (not Deployment) because the `filelog` receiver tails the node-local
+# /var/log/pods hostPath — every node needs a collector to read its own pods'
+# stdout/stderr. The Service (otel-collector:4317/4318) front-ends the OTLP
+# receivers so the portal can push to a stable name; OTLP traffic load-balances
+# across the per-node collector pods (any of them can receive + archive).
+#
+# Apply (after the PVC + ConfigMap + StorageClass):
+#   kubectl apply -n memex -f ../storageclass-azurefile.yaml
+#   kubectl apply -n memex -f otel-pvc.yaml
+#   kubectl apply -n memex -f otel-collector-config.yaml
+#   kubectl apply -n memex -f otel-collector.yaml
+#
+# Image pinned to a recent contrib release (filelog + k8sattributes + file exporter
+# live in -contrib, not the core distro). Bump deliberately; don't float :latest.
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: otel-collector
+  namespace: memex
+  labels:
+    app.kubernetes.io/component: otel-collector
+---
+# k8sattributes needs to read pod/namespace/node metadata cluster-wide.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: otel-collector
+  labels:
+    app.kubernetes.io/component: otel-collector
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "namespaces", "nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets", "deployments"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: otel-collector
+  labels:
+    app.kubernetes.io/component: otel-collector
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: otel-collector
+subjects:
+  - kind: ServiceAccount
+    name: otel-collector
+    namespace: memex
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: memex
+  labels:
+    app.kubernetes.io/component: otel-collector
+spec:
+  # Headless not required; a normal ClusterIP load-balances OTLP across node pods.
+  selector:
+    app.kubernetes.io/component: otel-collector
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: 4317
+      protocol: TCP
+    - name: otlp-http
+      port: 4318
+      targetPort: 4318
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: otel-collector
+  namespace: memex
+  labels:
+    app.kubernetes.io/component: otel-collector
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: otel-collector
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: otel-collector
+    spec:
+      serviceAccountName: otel-collector
+      # Tolerate control-plane / tainted nodes so logs are captured everywhere.
+      tolerations:
+        - operator: Exists
+      securityContext:
+        # Container logs under /var/log/pods are root-owned; run the collector as
+        # root so filelog can read them. (The Azure Files archive share is mounted
+        # 0777 uid/gid 1654 via the StorageClass, so root can write it too.)
+        runAsUser: 0
+      containers:
+        - name: otel-collector
+          image: otel/opentelemetry-collector-contrib:0.116.1
+          args:
+            - --config=/conf/collector.yaml
+          env:
+            # Namespaces the archive file per node so DaemonSet replicas don't
+            # clobber each other on the shared Files share (see config exporters).
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          ports:
+            - name: otlp-grpc
+              containerPort: 4317
+              protocol: TCP
+            - name: otlp-http
+              containerPort: 4318
+              protocol: TCP
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              memory: "512Mi"
+          volumeMounts:
+            - name: config
+              mountPath: /conf
+              readOnly: true
+            # Node-local container logs (read-only): the actual log files + the
+            # symlinked /var/log/containers and the /var/lib/docker|containerd
+            # backing dirs the symlinks point into.
+            - name: varlogpods
+              mountPath: /var/log/pods
+              readOnly: true
+            - name: varlogcontainers
+              mountPath: /var/log/containers
+              readOnly: true
+            # The Azure Files archive sink.
+            - name: otel-logs
+              mountPath: /mnt/otel-logs
+      volumes:
+        - name: config
+          configMap:
+            name: otel-collector-config
+            items:
+              - key: collector.yaml
+                path: collector.yaml
+        - name: varlogpods
+          hostPath:
+            path: /var/log/pods
+            type: Directory
+        - name: varlogcontainers
+          hostPath:
+            path: /var/log/containers
+            type: Directory
+        - name: otel-logs
+          persistentVolumeClaim:
+            claimName: otel-logs

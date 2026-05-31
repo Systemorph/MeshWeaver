@@ -1,0 +1,66 @@
+# ---------------------------------------------------------------------------
+# configmap.yaml — pgBackRest configuration for an Azure Blob repository.
+#
+# Defines a single stanza "memex" whose repo1 is the Azure blob container. With
+# repo1-azure-key-type=auto and a Workload-Identity service account, pgBackRest
+# uses the projected federated token — NO account key on disk. If you prefer a
+# key, set repo1-azure-key (and repo1-azure-key-type=shared) from the
+# pgbackrest secret instead, and drop the workload-identity annotation.
+#
+# WAL archiving (archive-async + the postgres archive_command) is what enables
+# Point-In-Time Recovery: every completed WAL segment is pushed to blob, so a
+# restore can replay to any timestamp.
+#
+#   kubectl apply -n memex -f configmap.yaml
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pgbackrest-config
+  namespace: memex
+  labels:
+    app.kubernetes.io/component: pgbackrest
+data:
+  pgbackrest.conf: |
+    [global]
+    # ---- Azure Blob repository ----
+    repo1-type=azure
+    repo1-path=/memex
+    repo1-azure-account=__AZURE_ACCOUNT__
+    repo1-azure-container=__AZURE_CONTAINER__
+    # auto = use the AKS Workload Identity federated token (keyless). For a
+    # shared-key setup instead, set: repo1-azure-key-type=shared
+    #                                repo1-azure-key=<account-key>
+    repo1-azure-key-type=auto
+    repo1-storage-verify-tls=y
+
+    # ---- Retention ----
+    repo1-retention-full=4
+    repo1-retention-diff=6
+
+    # ---- Performance / safety ----
+    process-max=4
+    compress-type=zst
+    compress-level=3
+    start-fast=y
+    delta=y
+    archive-async=y
+    spool-path=/var/spool/pgbackrest
+    log-level-console=info
+    log-level-file=detail
+    log-path=/var/log/pgbackrest
+
+    [memex]
+    pg1-path=/var/lib/postgresql/data
+    pg1-port=5432
+    pg1-user=postgres
+
+  # Postgres parameters that must be appended for WAL archiving. The chart's
+  # pgvector image reads /var/lib/postgresql/data/postgresql.conf; the
+  # sidecar-patch initContainer appends these on first boot (idempotent).
+  postgres-archive.conf: |
+    archive_mode = on
+    archive_command = 'pgbackrest --config=/etc/pgbackrest/pgbackrest.conf --stanza=memex archive-push %p'
+    archive_timeout = 60
+    wal_level = replica
+    max_wal_senders = 3

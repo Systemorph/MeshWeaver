@@ -48,6 +48,48 @@ public sealed class MemexOptions
     public bool? ClaudeCode { get; set; }
     public bool? Copilot { get; set; }
 
+    // --- External sign-in (OAuth) providers ---------------------------------
+    // Set the ClientId to OFFER a provider on the login page; each provider self-skips when
+    // its ClientId is empty (so leaving these unset = that provider simply isn't shown). Register
+    // the matching redirect URI on the provider app: {BaseUrl}/signin-{microsoft|google|linkedin}.
+
+    /// <summary>Entra/Microsoft app registration Application (client) id. Empty = Microsoft sign-in off.</summary>
+    public string? MicrosoftClientId { get; set; }
+    /// <summary>Microsoft client secret.</summary>
+    public string? MicrosoftClientSecret { get; set; }
+    /// <summary>Microsoft/Entra tenant GUID for the HOME directory. Empty/omitted = "common" (any Microsoft account).</summary>
+    public string? MicrosoftTenantId { get; set; }
+
+    /// <summary>Google OAuth client id. Empty = Google sign-in off.</summary>
+    public string? GoogleClientId { get; set; }
+    /// <summary>Google OAuth client secret.</summary>
+    public string? GoogleClientSecret { get; set; }
+
+    /// <summary>LinkedIn OAuth client id (powers both sign-in AND post publishing). Empty = LinkedIn off.</summary>
+    public string? LinkedInClientId { get; set; }
+    /// <summary>LinkedIn OAuth client secret.</summary>
+    public string? LinkedInClientSecret { get; set; }
+
+    internal IEnumerable<KeyValuePair<string, string>> AuthEnvironment()
+    {
+        if (!string.IsNullOrEmpty(MicrosoftClientId)) yield return new("Authentication__Microsoft__ClientId", MicrosoftClientId);
+        if (!string.IsNullOrEmpty(MicrosoftClientSecret)) yield return new("Authentication__Microsoft__ClientSecret", MicrosoftClientSecret);
+        if (!string.IsNullOrEmpty(MicrosoftTenantId)) yield return new("Authentication__Microsoft__TenantId", MicrosoftTenantId);
+        if (!string.IsNullOrEmpty(GoogleClientId)) yield return new("Authentication__Google__ClientId", GoogleClientId);
+        if (!string.IsNullOrEmpty(GoogleClientSecret)) yield return new("Authentication__Google__ClientSecret", GoogleClientSecret);
+        if (!string.IsNullOrEmpty(LinkedInClientId))
+        {
+            // The same LinkedIn app id powers sign-in (Authentication) AND post publishing (Social).
+            yield return new("Authentication__LinkedIn__ClientId", LinkedInClientId);
+            yield return new("Social__LinkedIn__ClientId", LinkedInClientId);
+        }
+        if (!string.IsNullOrEmpty(LinkedInClientSecret))
+        {
+            yield return new("Authentication__LinkedIn__ClientSecret", LinkedInClientSecret);
+            yield return new("Social__LinkedIn__ClientSecret", LinkedInClientSecret);
+        }
+    }
+
     internal IEnumerable<KeyValuePair<string, string>> FeatureEnvironment()
     {
         if (Anthropic is { } an) yield return new("Features__Ai__Providers__Anthropic", an ? "true" : "false");
