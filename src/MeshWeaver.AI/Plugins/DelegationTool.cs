@@ -226,10 +226,20 @@ public static class DelegationTool
                                     if (t!.Status is ThreadExecutionStatus.Executing
                                                   or ThreadExecutionStatus.StartingExecution)
                                         return (true, null);
-                                    if (state.sawRunning && t.Status is ThreadExecutionStatus.Idle
+                                    // Terminal when we either observed the Running phase OR
+                                    // the node already carries a completed-round Summary. A
+                                    // fast sub-agent can flip Running→Idle inside a single
+                                    // coalesced stream emission, so sawRunning is never set;
+                                    // a non-empty Summary (written atomically with Status→Idle
+                                    // by ExecuteMessageAsync) is the authoritative "this round
+                                    // finished" signal that distinguishes the post-execution
+                                    // Idle from the initial creation Idle (which has none).
+                                    var completed = state.sawRunning
+                                                    || !string.IsNullOrEmpty(t.Summary);
+                                    if (completed && t.Status is ThreadExecutionStatus.Idle
                                                   or ThreadExecutionStatus.Cancelled
                                                   or ThreadExecutionStatus.Done)
-                                        return (state.sawRunning, t);
+                                        return (true, t);
                                     return state;
                                 })
                             .Where(s => s.terminal is not null)
@@ -248,9 +258,16 @@ public static class DelegationTool
                                         subThreadPath, summary.Length);
                                     tcs.TrySetResult(summary);
                                 },
-                                ex => logger?.LogWarning(ex,
-                                    "Sub-thread {SubPath} Running→Idle wait failed; falling back to chunk aggregate",
-                                    subThreadPath));
+                                ex =>
+                                {
+                                    // Primary path failed/timed out — NOW fall back to the
+                                    // chunk aggregate (empty for the reactive path, but at
+                                    // least the parent tool call resolves instead of hanging).
+                                    logger?.LogWarning(ex,
+                                        "Sub-thread {SubPath} Running→Idle wait failed; falling back to chunk aggregate",
+                                        subThreadPath);
+                                    tcs.TrySetResult(sb.ToString());
+                                });
                     });
             }
 
@@ -280,8 +297,19 @@ public static class DelegationTool
                 },
                 () =>
                 {
-                    // TrySetResult is idempotent — if the reactive Idle path
-                    // already resolved with the dedicated summary, this is a no-op.
+                    // 🚨 When the primary reactive path is wired (delegationEvents +
+                    // workspace), IT owns TCS resolution — it reads the sub-thread's
+                    // dedicated Summary on the genuine post-execution Idle.
+                    // ExecuteDelegationAsync completes THIS observable IMMEDIATELY after
+                    // creating the sub-thread (it does not await sub-thread completion —
+                    // see ChatClientAgentFactory: observer.OnCompleted() right after
+                    // CreateNode), so resolving here would race the primary and win with
+                    // an EMPTY chunk aggregate (no chunks are emitted on this path) —
+                    // delegate_to_agent's tool result would always be "" and the parent
+                    // tool-call Result would stay null. Only the legacy path (no
+                    // delegationEvents/workspace) resolves from chunks here.
+                    if (delegationEvents is not null && workspace is not null)
+                        return;
                     if (tcs.TrySetResult(sb.ToString()))
                     {
                         logger?.LogInformation(
