@@ -1,5 +1,4 @@
-using System.Threading;
-using System.Threading.Tasks;
+using System.Reactive.Subjects;
 using MeshWeaver.Fixture;
 using Xunit;
 
@@ -27,7 +26,10 @@ namespace MeshWeaver.Messaging.Hub.Test;
 /// </summary>
 public class HeartBeatEventGateBypassTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    private readonly TaskCompletionSource _heartBeatHandled = new();
+    // ReplaySubject(1): the host's HeartBeatEvent handler may fire OnNext before
+    // the test's blocking .Should() subscribes, so a hot Subject would drop the
+    // emission. Replay guarantees the signal is observed regardless of ordering.
+    private readonly ReplaySubject<HeartBeatEvent> _heartBeatHandled = new(1);
 
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
         => configuration
@@ -45,31 +47,29 @@ public class HeartBeatEventGateBypassTest(ITestOutputHelper output) : HubTestBas
             // pipeline. If HeartBeatEvent were queued behind the gates, this never fires.
             .WithHandler<HeartBeatEvent>((hub, request) =>
             {
-                _heartBeatHandled.TrySetResult();
+                _heartBeatHandled.OnNext(request.Message);
                 return request.Processed();
             });
 
     [Fact]
-    public async Task HeartBeatEvent_BypassesNeverOpeningGate()
+    public void HeartBeatEvent_BypassesNeverOpeningGate()
     {
         var host = GetHost();
         host.Should().NotBeNull();
 
         // Post a heartbeat to the host. With the bypass, the host's HeartBeatEvent
-        // handler runs and completes the TCS. Without the bypass, the message is
-        // queued behind the never-opening gates and this hangs until the timeout.
+        // handler runs and pushes the signal. Without the bypass, the message is
+        // queued behind the never-opening gates and the wait times out.
         host.Post(new HeartBeatEvent(), o => o.WithTarget(host.Address));
 
         // 5s is generous; with the bypass this completes promptly after delivery.
-        // Without the bypass the gate stays closed forever and this hangs until the timeout.
-        var ct = new CancellationTokenSource(5.Seconds()).Token;
-        var completed = await Task.WhenAny(_heartBeatHandled.Task, Task.Delay(Timeout.Infinite, ct));
-
-        completed.Should().Be(_heartBeatHandled.Task,
-            "HeartBeatEvent must bypass every WithInitializationGate predicate so " +
-            "liveness signals reach hubs even while initialization gates are closed. " +
-            "If this hangs, the framework-level bypass list in MessageService.cs has " +
-            "regressed — see Doc/Architecture/InitializationGates.md → " +
-            "'Framework-bypassed messages'.");
+        // Without the bypass the gate stays closed forever and this fails on timeout.
+        // The blocking .Should().Emit() asserts the handler observed the heartbeat:
+        // HeartBeatEvent must bypass every WithInitializationGate predicate so
+        // liveness signals reach hubs even while initialization gates are closed.
+        // If this fails, the framework-level bypass list in MessageService.cs has
+        // regressed — see Doc/Architecture/InitializationGates.md →
+        // 'Framework-bypassed messages'.
+        _heartBeatHandled.Should().Within(5.Seconds()).Emit();
     }
 }
