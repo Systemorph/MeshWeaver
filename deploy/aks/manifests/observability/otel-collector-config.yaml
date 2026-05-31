@@ -1,0 +1,131 @@
+# ---------------------------------------------------------------------------
+# otel-collector-config.yaml — ConfigMap with the OpenTelemetry Collector
+#                              pipeline for the WHOLE cluster.
+#
+# Two log sources feed one logs pipeline:
+#   1. filelog  — tails /var/log/pods/**/*.log on every node (DaemonSet + hostPath),
+#                 so ALL pod stdout/stderr across the cluster is captured ("otel for
+#                 the entire AKS"), not just the portal.
+#   2. otlp     — the portal pushes its structured logs/traces/metrics here via
+#                 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317 (gRPC).
+#
+# Sink: the `file` exporter writes rotated JSON to /mnt/otel-logs (a mounted
+# Azure Files share — the otel-logs PVC). Operators download the archive from the
+# Files share (see README "Observability"). A `debug` exporter mirrors a basic
+# view to the collector's own stdout so `kubectl logs ds/otel-collector` works.
+#
+# Azure TABLE storage has NO native OTel Collector exporter — Azure FILES (the
+# `file` exporter over a mounted SMB share) is the chosen archive sink. See README
+# for scale-up alternatives (Loki/Blob, azuremonitor exporter).
+#
+# Pinned image: otel/opentelemetry-collector-contrib (contrib has filelog +
+# k8sattributes + resourcedetection). Version pinned in otel-collector.yaml.
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: memex
+  labels:
+    app.kubernetes.io/component: otel-collector
+data:
+  collector.yaml: |
+    receivers:
+      # Portal (and any OTLP client) push endpoint.
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+      # Node-local container logs. The container runtime writes one file per
+      # container under /var/log/pods/<ns>_<pod>_<uid>/<container>/N.log.
+      filelog:
+        include:
+          - /var/log/pods/*/*/*.log
+        # Don't re-ingest our own collector output (it would loop).
+        exclude:
+          - /var/log/pods/*otel-collector*/*/*.log
+        start_at: end
+        include_file_path: true
+        include_file_name: false
+        # Standard containerd/CRI-O parsing: CRI log line -> timestamp/stream/log,
+        # then attach k8s metadata parsed from the file path.
+        operators:
+          - type: container
+            id: container-parser
+      # k8sattributes also enriches; container parser handles the CRI format and
+      # extracts namespace/pod/container from the path.
+
+    processors:
+      batch:
+        timeout: 5s
+        send_batch_size: 1024
+      # Detect node/cloud resource attributes (region, node, k8s.* from env).
+      resourcedetection:
+        detectors: [env, system]
+        timeout: 5s
+        override: false
+      # Enrich every record with pod/namespace/node/deployment metadata by
+      # correlating the source IP / pod UID against the k8s API.
+      k8sattributes:
+        auth_type: serviceAccount
+        passthrough: false
+        extract:
+          metadata:
+            - k8s.namespace.name
+            - k8s.pod.name
+            - k8s.pod.uid
+            - k8s.node.name
+            - k8s.deployment.name
+            - k8s.replicaset.name
+        pod_association:
+          - sources:
+              - from: resource_attribute
+                name: k8s.pod.uid
+          - sources:
+              - from: connection
+
+    exporters:
+      # Primary archive sink: rotated JSON on the mounted Azure Files share.
+      # ${env:NODE_NAME} namespaces the file per node so DaemonSet replicas don't
+      # clobber one another's output on the shared share (downward API in the
+      # DaemonSet sets NODE_NAME from spec.nodeName).
+      file/logs:
+        path: /mnt/otel-logs/logs-${env:NODE_NAME}.json
+        rotation:
+          max_megabytes: 100
+          max_backups: 10
+      file/traces:
+        path: /mnt/otel-logs/traces-${env:NODE_NAME}.json
+        rotation:
+          max_megabytes: 100
+          max_backups: 10
+      file/metrics:
+        path: /mnt/otel-logs/metrics-${env:NODE_NAME}.json
+        rotation:
+          max_megabytes: 100
+          max_backups: 10
+      # Mirror to stdout for `kubectl logs` visibility (basic = one summary line
+      # per batch, NOT full payloads — keeps the collector's own log cheap).
+      debug:
+        verbosity: basic
+
+    service:
+      extensions: []
+      pipelines:
+        logs:
+          receivers: [filelog, otlp]
+          processors: [k8sattributes, resourcedetection, batch]
+          exporters: [file/logs, debug]
+        traces:
+          receivers: [otlp]
+          processors: [k8sattributes, resourcedetection, batch]
+          exporters: [file/traces, debug]
+        metrics:
+          receivers: [otlp]
+          processors: [resourcedetection, batch]
+          exporters: [file/metrics]
+      telemetry:
+        logs:
+          level: info

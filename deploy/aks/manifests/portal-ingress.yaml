@@ -1,0 +1,59 @@
+# ---------------------------------------------------------------------------
+# portal-ingress.yaml — Ingress for the Memex portal with COOKIE SESSION
+#                       AFFINITY (mandatory for Blazor Server).
+#
+# Blazor Server keeps a stateful SignalR circuit per browser tab. If a reconnect
+# is routed to a different replica the circuit is lost and the user sees "Attempting
+# to reconnect..." then a full reload. Cookie-based affinity pins each client to
+# the replica that owns its circuit.
+#
+# This file shows the AKS application-routing (managed ingress-nginx) variant.
+# For AGIC, swap the annotations for the appgw.* set (commented below) and set
+# ingressClassName: azure-application-gateway.
+#
+#   kubectl apply -n memex -f portal-ingress.yaml
+#
+# Prereq: enable an ingress controller. Either
+#   az aks approuting enable -g <rg> -n <cluster>        # managed nginx (used here)
+# or install AGIC / ingress-nginx yourself (see README).
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: memex-portal
+  namespace: memex
+  annotations:
+    # ---- ingress-nginx / AKS app-routing: cookie affinity ----
+    nginx.ingress.kubernetes.io/affinity: "cookie"
+    nginx.ingress.kubernetes.io/affinity-mode: "persistent"
+    nginx.ingress.kubernetes.io/session-cookie-name: "MEMEX_AFFINITY"
+    nginx.ingress.kubernetes.io/session-cookie-max-age: "172800"
+    nginx.ingress.kubernetes.io/session-cookie-samesite: "Lax"
+    # Long-lived SignalR / WebSocket connections — bump the proxy timeouts.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # Allow large markdown/asset uploads.
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    # ---- AGIC alternative (uncomment, and set ingressClassName below) ----
+    # appgw.ingress.kubernetes.io/cookie-based-affinity: "true"
+    # appgw.ingress.kubernetes.io/request-timeout: "3600"
+    # appgw.ingress.kubernetes.io/connection-draining: "true"
+    # appgw.ingress.kubernetes.io/connection-draining-timeout: "60"
+spec:
+  ingressClassName: webapprouting.kubernetes.azure.com
+  # For AGIC use: ingressClassName: azure-application-gateway
+  tls:
+    - hosts:
+        - memex.systemorph.com
+      secretName: memex-tls
+  rules:
+    - host: memex.systemorph.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: memex-portal-service
+                port:
+                  number: 8080

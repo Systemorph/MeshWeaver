@@ -46,6 +46,19 @@ var portal = builder.AddMemex("memex", o =>
     o.Backend = "Filesystem";
     o.OrleansClustering = ha ? "AdoNet" : "Localhost";
     o.MasterKey = builder.Configuration["Parameters:key-protection-master-key"];
+
+    // External sign-in (OAuth) providers — deploy parameters. Provide via
+    // `dotnet user-secrets` / env / GitHub secrets locally, or the Marketplace
+    // createUiDefinition wizard for an Azure Application install. Each provider is
+    // offered only when its ClientId is set. Register the redirect URI on each app:
+    // {BaseUrl}/signin-{microsoft|google|linkedin}.
+    o.MicrosoftClientId = builder.Configuration["Parameters:microsoft-client-id"];
+    o.MicrosoftClientSecret = builder.Configuration["Parameters:microsoft-client-secret"];
+    o.MicrosoftTenantId = builder.Configuration["Parameters:microsoft-tenant-id"];
+    o.GoogleClientId = builder.Configuration["Parameters:google-client-id"];
+    o.GoogleClientSecret = builder.Configuration["Parameters:google-client-secret"];
+    o.LinkedInClientId = builder.Configuration["Parameters:linkedin-client-id"];
+    o.LinkedInClientSecret = builder.Configuration["Parameters:linkedin-client-secret"];
 });
 
 // Self-host filesystem backend: the portal writes DataProtection keys, the NodeType

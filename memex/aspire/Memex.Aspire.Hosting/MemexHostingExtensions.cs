@@ -80,6 +80,10 @@ public static class MemexHostingExtensions
         foreach (var kv in options.FeatureEnvironment())
             portal.WithEnvironment(kv.Key, kv.Value);
 
+        // External sign-in (OAuth) providers — only the ones whose ClientId is set.
+        foreach (var kv in options.AuthEnvironment())
+            portal.WithEnvironment(kv.Key, kv.Value);
+
         // MCP back-connection base URL for the co-hosted CLIs ({BaseUrl}/mcp). Defaults to the
         // portal's own allocated external endpoint (Aspire substitutes the real URL at publish).
         if (!string.IsNullOrEmpty(options.BaseUrl))
