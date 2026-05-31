@@ -87,7 +87,19 @@ internal static class ThreadSubmission
         var ids = idsBuilder.ToImmutable();
         if (ids.IsEmpty) return null;
 
-        var responseMessageId = Guid.NewGuid().ToString("N")[..8];
+        // 🚨 Deterministic per-claim response cell id — NOT a fresh Guid.
+        // The submission claim Status oscillates (StartingExecution → rollback →
+        // Idle → re-claim, and Executing → StartingExecution resume bounce), so the
+        // _Exec round watcher fires DispatchAfterClaim several times for ONE logical
+        // round. A fresh Guid each call minted a NEW response cell per fire →
+        // duplicate cells (Thread.Messages[1] flip-flop) + abandoned execution
+        // subscriptions that outlived the per-class fixture (the catastrophic
+        // LifetimeScope ObjectDisposedException cascade). Deriving the id from the
+        // round's drained user ids + current Messages.Count makes every re-dispatch
+        // of the SAME claim resolve to the SAME cell (idempotent create/commit),
+        // while a genuinely new round (next turn / resubmit, Messages.Count advanced)
+        // gets a distinct cell.
+        var responseMessageId = DeriveDeterministicResponseId(ids, thread.Messages.Count);
         return new RoundDispatch(
             ids,
             responseMessageId,
@@ -107,6 +119,19 @@ internal static class ThreadSubmission
     /// </summary>
     public static IDisposable InstallServerWatcher(IMessageHub threadHub)
         => ThreadSubmissionServer.InstallServerWatcher(threadHub);
+
+    /// <summary>
+    /// Stable 8-hex-char response cell id for a round, derived from the drained
+    /// user-message ids and the thread's current message count. Deterministic so
+    /// repeated dispatches of the same claim (status oscillation) reuse one cell;
+    /// distinct across rounds because either the user ids or Messages.Count differ.
+    /// </summary>
+    internal static string DeriveDeterministicResponseId(IReadOnlyList<string> ids, int messageCount)
+    {
+        var key = string.Join(",", ids) + "|" + messageCount;
+        var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(key));
+        return Convert.ToHexString(hash, 0, 4).ToLowerInvariant();
+    }
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
