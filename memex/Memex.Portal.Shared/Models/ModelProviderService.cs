@@ -362,10 +362,14 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
             Content = content,
         };
 
-        return hub.GetWorkspace()
-            .GetMeshNodeStream(newNode.Path)
-            .Update(current => current is null ? newNode : current with { Content = content })
+        // Create on first write; fall back to update when the node already
+        // exists (stream.Update alone does not create a missing own-node).
+        return meshService.CreateNode(newNode)
             .Select(_ => true)
+            .Catch<bool, Exception>(_ => hub.GetWorkspace()
+                .GetMeshNodeStream(newNode.Path)
+                .Update(current => current is null ? newNode : current with { Content = content })
+                .Select(_ => true))
             .Catch<bool, Exception>(ex =>
             {
                 logger.LogWarning(ex, "SetSelection failed for {Owner}", ownerPath);

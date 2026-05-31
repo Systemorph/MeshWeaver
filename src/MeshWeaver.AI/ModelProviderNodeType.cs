@@ -81,7 +81,9 @@ public static class ModelProviderNodeType
         where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
+        builder.AddMeshNodes(CreateSelectionMeshNode());
         builder.AddAutocompleteExcludedTypes(NodeType);
+        builder.AddAutocompleteExcludedTypes(SelectionNodeType);
         builder.ConfigureHub(config => config
             .WithType<ModelProviderConfiguration>(nameof(ModelProviderConfiguration))
             .WithType<ModelProviderSelection>(nameof(ModelProviderSelection)));
@@ -120,5 +122,21 @@ public static class ModelProviderNodeType
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<ModelProviderConfiguration>())
+    };
+
+    /// <summary>
+    /// MeshNode definition for the per-user provider-selection node
+    /// (<see cref="SelectionNodeType"/>). Distinct type so it's creatable via
+    /// <c>CreateNode</c> + deserialises its <see cref="ModelProviderSelection"/>
+    /// content, yet never shows up in <c>nodeType:ModelProvider</c> listings.
+    /// </summary>
+    public static MeshNode CreateSelectionMeshNode() => new(SelectionNodeType)
+    {
+        Name = "Model Provider Selection",
+        IsSatelliteType = false,
+        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        HubConfiguration = config => config
+            .AddMeshDataSource(source => source
+                .WithContentType<ModelProviderSelection>())
     };
 }

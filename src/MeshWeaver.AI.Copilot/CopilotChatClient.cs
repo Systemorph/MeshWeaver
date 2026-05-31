@@ -14,6 +14,7 @@ public class CopilotChatClient : IChatClient, IAsyncDisposable
 {
     private readonly CopilotConfiguration configuration;
     private readonly string? modelName;
+    private readonly string? githubToken;
     private readonly ILogger? logger;
     private CopilotClient? copilotClient;
     private bool disposed;
@@ -22,11 +23,16 @@ public class CopilotChatClient : IChatClient, IAsyncDisposable
     public CopilotChatClient(
         CopilotConfiguration configuration,
         string? modelName = null,
-        ILogger<CopilotChatClient>? logger = null)
+        ILogger<CopilotChatClient>? logger = null,
+        string? githubToken = null)
     {
         this.configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         this.modelName = modelName;
         this.logger = logger;
+        // Per-user auth pass-through (co-hosted multi-user): the calling user's
+        // GitHub token. When null, the CLI uses the machine's logged-in user
+        // (single-user dev / ambient auth).
+        this.githubToken = githubToken;
     }
 
     /// <inheritdoc />
@@ -270,6 +276,13 @@ public class CopilotChatClient : IChatClient, IAsyncDisposable
             {
                 clientOptions.Port = configuration.Port.Value;
             }
+
+            // Auth: a per-user GitHub token wins (co-hosted multi-user); otherwise
+            // fall back to the machine's logged-in user (dev / ambient auth).
+            if (!string.IsNullOrEmpty(githubToken))
+                clientOptions.GitHubToken = githubToken;
+            else
+                clientOptions.UseLoggedInUser = true;
 
             copilotClient = new CopilotClient(clientOptions);
             await copilotClient.StartAsync(cancellationToken);

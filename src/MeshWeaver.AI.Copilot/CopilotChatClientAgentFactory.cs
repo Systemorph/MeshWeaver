@@ -71,8 +71,14 @@ public class CopilotChatClientAgentFactory(
 
         try
         {
+            // Per-user auth pass-through: the calling user's GitHub token from
+            // their ModelProvider (decrypted by the resolver). Null -> the CLI
+            // uses the machine's logged-in user (dev / ambient).
+            var resolver = Hub.ServiceProvider.GetService<ChatClientCredentialResolver>();
+            var githubToken = !string.IsNullOrEmpty(modelName) ? resolver?.Resolve(modelName).ApiKey : null;
+
             var clientLogger = Hub.ServiceProvider.GetService(typeof(ILogger<CopilotChatClient>)) as ILogger<CopilotChatClient>;
-            var chatClient = new CopilotChatClient(configuration, modelName, clientLogger);
+            var chatClient = new CopilotChatClient(configuration, modelName, clientLogger, githubToken);
 
             logger.LogInformation(
                 "Successfully configured GitHub Copilot chat client for agent {AgentName}",
