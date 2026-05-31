@@ -47,6 +47,15 @@ public record ModelProviderConfiguration
     public string? ApiKey { get; init; }
 
     /// <summary>
+    /// Encrypted (<c>enc:</c>-tagged) raw MeshWeaver ApiToken (<c>mw_…</c>) auto-minted at Connect
+    /// time for the co-hosted CLI's MCP back-connection. Re-read + decrypted at spawn and injected
+    /// as a <c>Authorization: Bearer</c> header on the per-spawn HTTP MCP server, so the CLI calls
+    /// <c>/mcp</c> AS THE USER. Stored here (never on the Azure Files share) so it survives across
+    /// portal replicas via Postgres. Null until the user connects a co-hosted CLI provider.
+    /// </summary>
+    public string? McpApiKey { get; init; }
+
+    /// <summary>
     /// Optional endpoint override. Null means "use the
     /// <c>KnownProviderProfile.DefaultEndpoint</c> from
     /// <c>ProviderRegistry</c>". A non-null value flows through to

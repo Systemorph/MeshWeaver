@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>true</IsPackable>
+    <PackageId>Aspire.Hosting.Memex</PackageId>
+    <Description>Aspire hosting integration for the MeshWeaver Memex portal. builder.AddMemex() wires Postgres (pgvector) + a one-shot DB migration + the portal from published GHCR images; publish to Docker Compose, Kubernetes/Helm, or Azure Container Apps with the standard Aspire publishers.</Description>
+    <Authors>Systemorph</Authors>
+    <PackageTags>aspire;hosting;meshweaver;memex;mesh</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting" />
+    <PackageReference Include="Aspire.Hosting.PostgreSQL" />
+  </ItemGroup>
+
+</Project>

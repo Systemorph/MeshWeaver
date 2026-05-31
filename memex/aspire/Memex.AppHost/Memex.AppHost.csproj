@@ -1,5 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <Sdk Name="Aspire.AppHost.Sdk" Version="13.2.2" />
+  <Sdk Name="Aspire.AppHost.Sdk" Version="13.3.5" />
   <PropertyGroup>
     <ProjectGuid>{e5f6a7b8-c9d0-1234-ef56-789012345678}</ProjectGuid>
     <OutputType>Exe</OutputType>
@@ -13,10 +13,15 @@
     <ProjectReference Include="..\Memex.Database.Migration\Memex.Database.Migration.csproj" />
     <ProjectReference Include="..\Memex.Portal.Distributed\Memex.Portal.Distributed.csproj" />
     <ProjectReference Include="..\..\Memex.Portal.Monolith\Memex.Portal.Monolith.csproj" />
+    <!-- The Memex Aspire integration (builder.AddMemex). A plain library, NOT an Aspire
+         resource project, so suppress the Projects.* generation for it. -->
+    <ProjectReference Include="..\Memex.Aspire.Hosting\Memex.Aspire.Hosting.csproj" IsAspireProjectResource="false" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Aspire.Hosting.AppHost" />
+    <PackageReference Include="Aspire.Hosting.Docker" />
+    <PackageReference Include="Aspire.Hosting.Kubernetes" />
     <PackageReference Include="Aspire.Hosting.Azure.AppContainers" />
     <PackageReference Include="Aspire.Hosting.Azure.ApplicationInsights" />
     <PackageReference Include="Aspire.Hosting.Azure.KeyVault" />
