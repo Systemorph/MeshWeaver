@@ -36,8 +36,8 @@ public class OrleansMeshChangeFeedTest(ITestOutputHelper output) : OrleansShared
 {
     private IMessageHub ClientMesh => Fixture.ClientMesh;
 
-    private async Task<IMessageHub> GetClientAsync(string id)
-        => await base.GetClientAsync(id);
+    private IMessageHub GetClient(string id)
+        => base.GetClient(id);
 
     private async Task<string> CreateNodeAsync(IMessageHub client, MeshNode node, string targetAddress, CancellationToken ct)
     {
@@ -58,7 +58,7 @@ public class OrleansMeshChangeFeedTest(ITestOutputHelper output) : OrleansShared
     {
         var ct = new CancellationTokenSource(25.Seconds()).Token;
         var suffix = Guid.NewGuid().ToString("N")[..6];
-        var client = await GetClientAsync($"cfeed-{suffix}");
+        var client = GetClient($"cfeed-{suffix}");
 
         // Create parent
         var parentNode = new MeshNode($"cfeed-parent-{suffix}", "TestUser")
@@ -98,7 +98,7 @@ public class OrleansMeshChangeFeedTest(ITestOutputHelper output) : OrleansShared
     {
         var ct = new CancellationTokenSource(25.Seconds()).Token;
         var suffix = Guid.NewGuid().ToString("N")[..6];
-        var client = await GetClientAsync($"cfeed-del-{suffix}");
+        var client = GetClient($"cfeed-del-{suffix}");
 
         // Create thread
         var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "ChangeFeed routing test", "TestUser");

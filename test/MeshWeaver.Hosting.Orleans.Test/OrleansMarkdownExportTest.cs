@@ -66,7 +66,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
     /// the markdown-export message types via <see cref="MarkdownExportExtensions.AddMarkdownExportTypes"/>.
     /// Without those type registrations the response comes back as <c>JsonElement</c>.
     /// </summary>
-    private async Task<IMessageHub> GetClientAsync(string id = "export")
+    private IMessageHub GetClient(string id = "export")
     {
         var client = ClientMesh.ServiceProvider.CreateMessageHub(
             new Address("client", id),
@@ -108,7 +108,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
     public async Task ExportPdf_RoundTrips_AsTypedResponse()
     {
         using var cts = new CancellationTokenSource(60.Seconds());
-        var client = await GetClientAsync();
+        var client = GetClient();
 
         var nodePath = await CreateMarkdownNodeAsync(
             client, "pdf-round-trip",
@@ -165,7 +165,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
     public async Task ExportPdfArea_RendersExportDocumentControl_ClientDeserializes()
     {
         using var cts = new CancellationTokenSource(60.Seconds());
-        var client = await GetClientAsync("layout-stream");
+        var client = GetClient("layout-stream");
 
         var nodePath = await CreateMarkdownNodeAsync(
             client, "pdf-layout-stream",
@@ -215,7 +215,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
     public async Task SubHub_WithExportTypesRegistered_DeserializesPolymorphicExportDocumentControl()
     {
         using var cts = new CancellationTokenSource(60.Seconds());
-        var parent = await GetClientAsync("portal-parent");
+        var parent = GetClient("portal-parent");
 
         var nodePath = await CreateMarkdownNodeAsync(
             parent, "subhub-with-types",
@@ -259,7 +259,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
     public async Task SubHub_WithoutExportTypesRegistered_DegradesGracefullyToNull()
     {
         using var cts = new CancellationTokenSource(60.Seconds());
-        var parent = await GetClientAsync("portal-parent-bare");
+        var parent = GetClient("portal-parent-bare");
 
         var nodePath = await CreateMarkdownNodeAsync(
             parent, "subhub-bare",
@@ -294,7 +294,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
     public async Task ExportDocx_RoundTrips_AsTypedResponse()
     {
         using var cts = new CancellationTokenSource(60.Seconds());
-        var client = await GetClientAsync();
+        var client = GetClient();
 
         var nodePath = await CreateMarkdownNodeAsync(
             client, "docx-round-trip",

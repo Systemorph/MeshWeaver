@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
@@ -39,7 +39,7 @@ public class OrleansGetDataRequestPropagationTest(ITestOutputHelper output) : Or
         var aId = $"poll-a-{Guid.NewGuid():N}";
         var pathA = $"TestUser/{aId}";
 
-        var creator = await GetClientAsync($"creator-{Guid.NewGuid():N}", "TestUser");
+        var creator = GetClient($"creator-{Guid.NewGuid():N}", "TestUser");
         var createResp = await creator.Observe(
                 new CreateNodeRequest(new MeshNode(aId, "TestUser")
                 {
@@ -53,7 +53,7 @@ public class OrleansGetDataRequestPropagationTest(ITestOutputHelper output) : Or
 
         // 2. Read via polled GetDataRequest from a SEPARATE client. Retry the
         //    initial read â€” grain activation + MeshDataSource init runs lazily.
-        var reader = await GetClientAsync($"reader-{Guid.NewGuid():N}", "TestUser");
+        var reader = GetClient($"reader-{Guid.NewGuid():N}", "TestUser");
         MeshNode? initial = null;
         for (var i = 0; i < 50; i++)
         {

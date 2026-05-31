@@ -78,7 +78,7 @@ public class OrleansDynamicCompilationTest(ITestOutputHelper output)
     public async Task ColdStart_CompileViaGetCompilationPathRequest_Succeeds()
     {
         var ct = new CancellationTokenSource(50.Seconds()).Token;
-        var client = await GetClientAsync($"compile-{Guid.NewGuid():N}");
+        var client = GetClient($"compile-{Guid.NewGuid():N}");
 
         // Use a unique NodeType id per run so the disk-cache hash never matches a
         // previous run's artifact — this is genuinely a cold start.
@@ -142,7 +142,7 @@ public class OrleansDynamicCompilationTest(ITestOutputHelper output)
     public async Task ColdStart_InvalidSource_ReturnsErrorWithoutDeadlock()
     {
         var ct = new CancellationTokenSource(50.Seconds()).Token;
-        var client = await GetClientAsync($"compile-fail-{Guid.NewGuid():N}");
+        var client = GetClient($"compile-fail-{Guid.NewGuid():N}");
 
         var typeId = $"OrleansCompileBroken{Guid.NewGuid():N}";
         var typePath = $"type/{typeId}";
@@ -203,7 +203,7 @@ public class OrleansDynamicCompilationTest(ITestOutputHelper output)
     public async Task Instance_OfDynamicNodeType_ActivatesAndAnswers()
     {
         var ct = new CancellationTokenSource(80.Seconds()).Token;
-        var client = await GetClientAsync($"instance-{Guid.NewGuid():N}");
+        var client = GetClient($"instance-{Guid.NewGuid():N}");
 
         var typeId = $"OrleansInstanceType{Guid.NewGuid():N}";
         var typePath = $"type/{typeId}";
@@ -300,7 +300,7 @@ public class OrleansCrossSiloCompilationTest(ITestOutputHelper output)
     public async Task CompiledArtifact_IsVisibleFromBothSilos()
     {
         var ct = new CancellationTokenSource(80.Seconds()).Token;
-        var client = await GetClientAsync($"xsilo-{Guid.NewGuid():N}");
+        var client = GetClient($"xsilo-{Guid.NewGuid():N}");
 
         Cluster.Silos.Count.Should().BeGreaterThanOrEqualTo(2,
             "this test exercises silo-to-silo assembly store sharing");

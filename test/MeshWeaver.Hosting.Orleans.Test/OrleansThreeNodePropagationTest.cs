@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Reactive.Linq;
 using System.Threading;
@@ -73,7 +73,7 @@ public class OrleansThreeNodePropagationTest(ITestOutputHelper output) : Orleans
         //    (AddMeshDataSource + AddDefaultLayoutAreas via ConfigureDefaultNodeHub)
         //    so the per-grain hub has the complete data layer wired up â€” same
         //    as production.
-        var creator = await GetClientAsync($"creator-{Guid.NewGuid():N}", "TestUser");
+        var creator = GetClient($"creator-{Guid.NewGuid():N}", "TestUser");
         var createResp = await creator.Observe(
                 new CreateNodeRequest(new MeshNode(aId, "TestUser")
                 {
@@ -88,8 +88,8 @@ public class OrleansThreeNodePropagationTest(ITestOutputHelper output) : Orleans
         // 3. Two distinct test clients (b, c). Each gets its own routing-
         //    registered address; the silo-side IRoutingService is wired to
         //    stream messages back.
-        var hubB = await GetClientAsync($"three-b-{Guid.NewGuid():N}", "TestUser");
-        var hubC = await GetClientAsync($"three-c-{Guid.NewGuid():N}", "TestUser");
+        var hubB = GetClient($"three-b-{Guid.NewGuid():N}", "TestUser");
+        var hubC = GetClient($"three-c-{Guid.NewGuid():N}", "TestUser");
 
         // 4. Both b and c open a remote MeshNodeReference stream to a's grain.
         var streamFromB = hubB.GetWorkspace().GetRemoteStream<MeshNode, MeshNodeReference>(

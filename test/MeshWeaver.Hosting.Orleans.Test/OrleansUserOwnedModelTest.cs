@@ -1,4 +1,4 @@
-﻿#pragma warning disable CS1591
+#pragma warning disable CS1591
 
 using System;
 using System.Collections.Immutable;
@@ -35,9 +35,9 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// </summary>
 public class OrleansUserOwnedModelTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
-    private async Task<IMessageHub> GetClientAsync(string userId)
+    private IMessageHub GetClient(string userId)
     {
-        var client = await base.GetClientAsync($"models-{Guid.NewGuid():N}", userId);
+        var client = base.GetClient($"models-{Guid.NewGuid():N}", userId);
         return client;
     }
 
@@ -51,7 +51,7 @@ public class OrleansUserOwnedModelTest(ITestOutputHelper output) : OrleansShared
         var modelPath = $"{providerPath}/{modelId}";
         var rawKey = "sk-ant-USER-orleans-key";
 
-        var client = await GetClientAsync(userId);
+        var client = GetClient(userId);
         var meshAddress = Fixture.ClientMesh.Address;
 
         // 1. Create ModelProvider node in the user's namespace.
@@ -134,7 +134,7 @@ public class OrleansUserOwnedModelTest(ITestOutputHelper output) : OrleansShared
         var modelId = "gpt-4o-mini";
         var modelPath = $"{providerPath}/{modelId}";
 
-        var client = await GetClientAsync(userId);
+        var client = GetClient(userId);
         var meshAddress = Fixture.ClientMesh.Address;
 
         var providerNode = new MeshNode("OpenAI", $"{userId}/_Provider")

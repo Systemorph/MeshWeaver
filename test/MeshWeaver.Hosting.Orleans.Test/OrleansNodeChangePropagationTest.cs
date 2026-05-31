@@ -54,13 +54,14 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// </summary>
 public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
-    private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
-        => await base.GetClientAsync($"nodechange-{name}-{Guid.NewGuid():N}", "TestUser");
+    private IMessageHub GetClient([CallerMemberName] string? name = null)
+        => base.GetClient($"nodechange-{name}-{Guid.NewGuid():N}", "TestUser");
 
-    private async Task<string> CreateNodeAsync(IMessageHub client, MeshNode node, string targetAddress, CancellationToken ct)
+    private string CreateNode(IMessageHub client, MeshNode node, string targetAddress)
     {
         Output.WriteLine($"CreateNodeRequest: id={node.Id}, path={node.Path}, target={targetAddress}");
-        var response = await client.Observe(new CreateNodeRequest(node), o => o.WithTarget(new Address(targetAddress))).FirstAsync().ToTask(ct);
+        var response = client.Observe(new CreateNodeRequest(node), o => o.WithTarget(new Address(targetAddress)))
+            .Should().Within(45.Seconds()).Emit();
         Output.WriteLine($"CreateNodeResponse: success={response.Message.Success}, error={response.Message.Error ?? "(none)"}, path={response.Message.Node?.Path ?? "(null)"}, nodeType={response.Message.Node?.NodeType ?? "(null)"}");
         response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         return response.Message.Node!.Path!;
@@ -80,18 +81,18 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
             });
     }
 
-    private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
-    {
-        // Canonical CQRS-correct read via per-node MeshNodeReference reducer.
-        var response = await client.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path))).FirstAsync().ToTask(ct);
-        var node = response.Message.Data as MeshNode;
-        if (node == null && response.Message.Data is JsonElement je)
-            node = je.Deserialize<MeshNode>(Fixture.ClientMesh.JsonSerializerOptions);
-        if (node?.Content is T typed) return typed;
-        if (node?.Content is JsonElement contentJe)
-            return contentJe.Deserialize<T>(Fixture.ClientMesh.JsonSerializerOptions);
-        return null;
-    }
+    // Canonical CQRS-correct LIVE read via the per-node MeshNode stream. Returns an
+    // IObservable<T?> the caller asserts on with .Should().Within(...).Match(...) —
+    // no one-shot GetDataRequest, no await, no poll loop.
+    private IObservable<T?> GetContent<T>(IMessageHub client, string path) where T : class
+        => client.GetWorkspace().GetMeshNodeStream(path)
+            .Select(node =>
+            {
+                if (node?.Content is T typed) return typed;
+                if (node?.Content is JsonElement contentJe)
+                    return contentJe.Deserialize<T>(Fixture.ClientMesh.JsonSerializerOptions);
+                return null;
+            });
 
     /// <summary>
     /// Full chain: top agent calls Create Ã¢â€ â€™ delegates Ã¢â€ â€™ sub-agent calls Patch Ã¢â€ â€™ NodeChangeEntry propagates.
@@ -99,7 +100,7 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
     /// delegation TCS resolution must not require the blocked scheduler.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task Delegation_NodeChanges_PropagateFromSubThread()
+    public void Delegation_NodeChanges_PropagateFromSubThread()
     {
         // Pull IMessageHub from the silo's container â€” ChatClientAgentFactory needs it
         // so MeshPlugin tools (Create/Patch/delegate_to_agent) get wired into every test agent.
@@ -108,19 +109,14 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
         SharedOrleansFixture.SwappableFactory.SetInner(new NodeChangeTestChatClientFactory(siloHub));
         try
         {
-        var ct = new CancellationTokenSource(50.Seconds()).Token;
-        var client = await GetClientAsync();
+        var client = GetClient();
 
         // 1. Create thread Ã¢â‚¬â€ exactly like ThreadChatView.SendMessageAsync does
         var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "NodeChange propagation test", "TestUser");
-        var threadPath = await CreateNodeAsync(client, threadNode, "TestUser", ct);
+        var threadPath = CreateNode(client, threadNode, "TestUser");
         Output.WriteLine($"Thread created: {threadPath}");
 
-        // 2. Subscribe to messages (like ThreadChatView data-binding)
-        var twoMessages = ObserveThreadMessages(client, threadPath)
-            .Where(ids => ids.Count >= 2)
-            .FirstAsync()
-            .ToTask(ct);
+        // 2. Messages observed reactively after submit (live replaying stream).
 
         // 3. Submit message Ã¢â‚¬â€ triggers the ToolCallDelegatingChatClient which:
         //    Turn 1: calls Create (creates a Markdown node)
@@ -133,27 +129,19 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
             contextPath: "TestUser");
             Output.WriteLine("ThreadInput.AppendUserInput succeeded Ã¢â‚¬â€ submission queued");
 
-        // 4. Wait for message IDs
-        var msgIds = await twoMessages;
+        // 4. Wait for message IDs (live replaying stream — observe after submit)
+        var msgIds = ObserveThreadMessages(client, threadPath)
+            .Should().Within(45.Seconds()).Match(ids => ids.Count >= 2);
         msgIds.Should().HaveCount(2);
         Output.WriteLine($"Message IDs: [{string.Join(", ", msgIds)}]");
 
         // 5. Wait for execution to complete Ã¢â‚¬â€ poll response message
         //    If the delegation chain deadlocks, this times out.
         var responsePath = $"{threadPath}/{msgIds[1]}";
-        ThreadMessage? responseMsg = null;
-        for (var i = 0; i < 60; i++)
-        {
-            responseMsg = await GetHubContentAsync<ThreadMessage>(client, responsePath, ct);
-            // Wait until we have tool calls AND text (execution complete)
-            if (responseMsg?.ToolCalls is { Count: >= 2 } && !string.IsNullOrEmpty(responseMsg.Text))
-            {
-                Output.WriteLine($"  Poll {i}: text='{responseMsg.Text?[..Math.Min(80, responseMsg.Text.Length)]}', toolCalls={responseMsg.ToolCalls.Count}, updatedNodes={responseMsg.UpdatedNodes.Count}");
-                break;
-            }
-            Output.WriteLine($"  Poll {i}: text len={responseMsg?.Text?.Length ?? 0}, toolCalls={responseMsg?.ToolCalls?.Count ?? 0}");
-            await Task.Delay(500, ct);
-        }
+        // Wait until the response cell has tool calls AND text (execution complete).
+        var responseMsg = GetContent<ThreadMessage>(client, responsePath)
+            .Should().Within(45.Seconds()).Match(m => m?.ToolCalls is { Count: >= 2 } && !string.IsNullOrEmpty(m.Text));
+        Output.WriteLine($"Response: text len={responseMsg!.Text?.Length ?? 0}, toolCalls={responseMsg.ToolCalls.Count}, updatedNodes={responseMsg.UpdatedNodes.Count}");
 
         // 6. Verify response message has tool calls
         responseMsg.Should().NotBeNull("response message should exist after execution");
@@ -179,32 +167,24 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
         // is already there but the query stream hasn't emitted Added yet.
         // GetMeshNodeStream reads the authoritative per-node stream directly.
         var siloWorkspace = siloHub.GetWorkspace();
-        var createdNode = await siloWorkspace
+        var createdNode = siloWorkspace
             .GetMeshNodeStream("TestUser/test-doc-nodechange")
-            .Where(n => n is not null)
-            .Take(1)
-            .Timeout(10.Seconds())
-            .FirstAsync()
-            .ToTask(ct);
+            .Should().Within(10.Seconds()).Match(n => n is not null);
         createdNode.Should().NotBeNull("Create tool should have created the Markdown node");
         Output.WriteLine($"Created node: {createdNode.Path}, name={createdNode.Name}");
 
         // 8. Verify sub-thread exists and completed
         var subThreadPath = delegateCall.DelegationPath!;
-        var subThread = await GetHubContentAsync<MeshThread>(client, subThreadPath, ct);
+        var subThread = GetContent<MeshThread>(client, subThreadPath)
+            .Should().Within(45.Seconds()).Match(t => (t?.Messages.Count ?? 0) >= 2);
         subThread.Should().NotBeNull("sub-thread should exist");
         subThread!.Messages.Should().HaveCount(2, "sub-thread should have user + response messages");
         Output.WriteLine($"Sub-thread: {subThreadPath}, messages={subThread.Messages.Count}");
 
         // 9. Verify sub-thread response has Patch tool call
         var subResponsePath = $"{subThreadPath}/{subThread.Messages[1]}";
-        ThreadMessage? subResponseMsg = null;
-        for (var i = 0; i < 30; i++)
-        {
-            subResponseMsg = await GetHubContentAsync<ThreadMessage>(client, subResponsePath, ct);
-            if (subResponseMsg?.ToolCalls is { Count: > 0 }) break;
-            await Task.Delay(200, ct);
-        }
+        var subResponseMsg = GetContent<ThreadMessage>(client, subResponsePath)
+            .Should().Within(45.Seconds()).Match(m => m?.ToolCalls is { Count: > 0 });
         subResponseMsg.Should().NotBeNull("sub-thread response should exist");
         var patchCall = subResponseMsg!.ToolCalls.FirstOrDefault(t => t.Name == "Patch");
         patchCall.Should().NotBeNull("sub-agent should have called Patch tool");
@@ -239,34 +219,25 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
     /// meshService.CreateNode (Observable) + workspace.UpdateMeshNode (non-blocking).
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task Resubmit_AfterExecution_DoesNotDeadlock()
+    public void Resubmit_AfterExecution_DoesNotDeadlock()
     {
-        var ct = new CancellationTokenSource(50.Seconds()).Token;
-        var client = await GetClientAsync();
+        var client = GetClient();
 
         // 1. Create and execute a thread
         var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Resubmit deadlock test", "TestUser");
-        var threadPath = await CreateNodeAsync(client, threadNode, "TestUser", ct);
-
-        var twoMessages = ObserveThreadMessages(client, threadPath)
-            .Where(ids => ids.Count >= 2)
-            .FirstAsync()
-            .ToTask(ct);
+        var threadPath = CreateNode(client, threadNode, "TestUser");
 
         client.SubmitMessage(
             threadPath,
             "First message",
             contextPath: "TestUser");
-        var msgIds = await twoMessages;
+        var msgIds = ObserveThreadMessages(client, threadPath)
+            .Should().Within(45.Seconds()).Match(ids => ids.Count >= 2);
         Output.WriteLine($"Initial messages: [{string.Join(", ", msgIds)}]");
 
         // Wait for execution to complete
-        for (var i = 0; i < 30; i++)
-        {
-            var thread = await GetHubContentAsync<MeshThread>(client, threadPath, ct);
-            if (thread?.IsExecuting == false) break;
-            await Task.Delay(500, ct);
-        }
+        GetContent<MeshThread>(client, threadPath)
+            .Should().Within(45.Seconds()).Match(t => t?.IsExecuting == false);
         Output.WriteLine("Initial execution complete");
 
         // 2. Resubmit Ã¢â‚¬â€ sends ThreadSubmission.ApplyResubmit to the thread grain.
@@ -279,22 +250,24 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
         // predicate matched the intermediate state and the [1]-not-old assertion
         // failed because msgIds[1] (old response) was still visible.
         var workspace = client.GetWorkspace();
-        var resubmittedMessages = workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Select(nodes => nodes?.FirstOrDefault(n => n.Path == threadPath)?.Content as MeshThread)
-            .Where(t => t is { IsExecuting: false }
-                && t.Messages.Count >= 2
-                && !t.Messages.SequenceEqual(msgIds))
-            .Select(t => (IReadOnlyList<string>)t!.Messages)
-            .FirstAsync()
-            .ToTask(ct);
 
         Output.WriteLine("Resubmitting via workspace.ResubmitMessage...");
         client.ResubmitMessage(
             threadPath, msgIds[0],
             newUserText: "Resubmitted message");
 
+        // Observe the SETTLED resubmitted state on the live replaying stream:
+        // IsExecuting=false AND messages changed from the original set. Mid-resubmit
+        // transitions briefly show 3 messages before the truncate-then-re-add settles
+        // to 2 — the IsExecuting:false guard filters those intermediate emissions.
+        var newThread = workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
+            .Select(nodes => nodes?.FirstOrDefault(n => n.Path == threadPath)?.Content as MeshThread)
+            .Should().Within(45.Seconds()).Match(t => t is { IsExecuting: false }
+                && t.Messages.Count >= 2
+                && !t.Messages.SequenceEqual(msgIds));
+
         // 3. Wait for message IDs to change Ã¢â‚¬â€ if deadlocked, this times out
-        var newMsgIds = await resubmittedMessages;
+        var newMsgIds = (IReadOnlyList<string>)newThread!.Messages;
         newMsgIds.Should().HaveCount(2,
             "resubmit should keep user message and replace response");
         newMsgIds[0].Should().Be(msgIds[0], "user message should be preserved");

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Threading;
@@ -56,7 +56,7 @@ public class PartitionRootActivationTest(ITestOutputHelper output)
     public async Task BarePartitionPath_NoMeshNode_RespondsToPing()
     {
         var ct = new CancellationTokenSource(FastBudget).Token;
-        var client = await GetClientAsync($"prtest-{Guid.NewGuid():N}");
+        var client = GetClient($"prtest-{Guid.NewGuid():N}");
 
         // A bare partition-root path. With InMemoryPartitionStorageProvider
         // (the silo's partition provider, registered via

@@ -1,7 +1,8 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Reactive.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
@@ -19,8 +20,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using MeshThread = MeshWeaver.AI.Thread;
 
-using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
@@ -29,25 +28,38 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// 1. Create user cell
 /// 2. Create response cell
 /// 3. Create thread with Messages + IsExecuting=true + PendingUserMessage
-/// 4. WatchForExecution triggers Ã¢â€ â€™ starts streaming Ã¢â€ â€™ response cell gets text
+/// 4. WatchForExecution triggers -> starts streaming -> response cell gets text
+///
+/// 🚨 Test is <c>void</c> + reactive assertions (no <c>async</c>/<c>await</c>):
+/// blocking inside an async test deadlocks the in-process hub scheduler — the
+/// agent's streaming execution shares the process and its continuations are
+/// starved by the captured async SynchronizationContext. See
+/// FluentAssertionsToReactive.md §2a + ObservableAssertions remarks.
 /// </summary>
 public class OrleansDelegationStartTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
-    private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
-        => await base.GetClientAsync($"deleg-{name}-{Guid.NewGuid():N}", "TestUser");
+    private IMessageHub GetClient([CallerMemberName] string? name = null)
+        => base.GetClient($"deleg-{name}-{Guid.NewGuid():N}", "TestUser");
 
-    private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
-    {
-        // Canonical CQRS-correct read via per-node MeshNodeReference reducer.
-        var response = await client.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path))).FirstAsync().ToTask(ct);
-        var node = response.Message.Data as MeshNode;
-        if (node == null && response.Message.Data is JsonElement je)
-            node = je.Deserialize<MeshNode>(Fixture.ClientMesh.JsonSerializerOptions);
-        if (node?.Content is T typed) return typed;
-        if (node?.Content is JsonElement contentJe)
-            return contentJe.Deserialize<T>(Fixture.ClientMesh.JsonSerializerOptions);
-        return null;
-    }
+    private IMessageDelivery<CreateNodeResponse> CreateNode(IMessageHub client, MeshNode node, string targetAddress)
+        => client.Observe(new CreateNodeRequest(node), o => o.WithTarget(new Address(targetAddress)))
+            .Should().Within(30.Seconds()).Emit();
+
+    /// <summary>
+    /// Reactive single-node content read via the canonical
+    /// <see cref="MeshNodeStreamExtensions.GetMeshNodeStream(IWorkspace, string)"/>
+    /// path. Returns an <see cref="IObservable{T}"/> the caller asserts on with
+    /// <c>.Should().Match(...)</c>.
+    /// </summary>
+    private IObservable<T?> GetHubContent<T>(IMessageHub client, string path) where T : class
+        => client.GetWorkspace().GetMeshNodeStream(path)
+            .Select(node =>
+            {
+                if (node?.Content is T typed) return typed;
+                if (node?.Content is JsonElement contentJe)
+                    return contentJe.Deserialize<T>(client.JsonSerializerOptions);
+                return null;
+            });
 
     /// <summary>
     /// Simulates delegation: create cells first, then thread with IsExecuting=true.
@@ -55,28 +67,27 @@ public class OrleansDelegationStartTest(ITestOutputHelper output) : OrleansShare
     /// Response cell should have agent text when execution completes.
     /// </summary>
     [Fact]
-    public async Task Delegation_CreateCellsThenThread_ExecutionStartsAndCompletes()
+    public void Delegation_CreateCellsThenThread_ExecutionStartsAndCompletes()
     {
         SharedOrleansFixture.SwappableFactory.SetInner(new DelegationEchoChatClientFactory());
         try
         {
-            var ct = new CancellationTokenSource(30.Seconds()).Token;
-            var client = await GetClientAsync();
+            var client = GetClient();
 
             // Create a parent thread first (delegations live under a response message)
             var parentNode = ThreadNodeType.BuildThreadNode("TestUser", "Parent for delegation test", "TestUser");
-            var parentResp = await client.Observe(new CreateNodeRequest(parentNode), o => o.WithTarget(new Address("TestUser"))).FirstAsync().ToTask(ct);
+            var parentResp = CreateNode(client, parentNode, "TestUser");
             parentResp.Message.Success.Should().BeTrue(parentResp.Message.Error ?? "");
             var parentPath = parentResp.Message.Node!.Path!;
             Output.WriteLine($"Parent thread: {parentPath}");
 
             // Simulate a response message on the parent (delegation lives under it)
             var parentResponseId = Guid.NewGuid().ToString("N")[..8];
-            await client.Observe(new CreateNodeRequest(new MeshNode(parentResponseId, parentPath)
+            CreateNode(client, new MeshNode(parentResponseId, parentPath)
             {
                 NodeType = ThreadMessageNodeType.NodeType, MainNode = "TestUser",
                 Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-            }), o => o.WithTarget(new Address(parentPath))).FirstAsync().ToTask(ct);
+            }, parentPath);
             var parentMsgPath = $"{parentPath}/{parentResponseId}";
 
             // Now simulate delegation: create cells, then thread (exact ChatClientAgentFactory flow)
@@ -93,12 +104,12 @@ public class OrleansDelegationStartTest(ITestOutputHelper output) : OrleansShare
             // Production flow (ChatClientAgentFactory.delegate_to_agent at line 367-394)
             // also creates all three nodes via meshService.CreateNode but does so
             // concurrently / fire-and-forget so the routing race is hidden.
-            var threadResp = await client.Observe(new CreateNodeRequest(subThreadNode), o => o.WithTarget(new Address(parentMsgPath))).FirstAsync().ToTask(ct);
+            var threadResp = CreateNode(client, subThreadNode, parentMsgPath);
             threadResp.Message.Success.Should().BeTrue(threadResp.Message.Error ?? "");
-            Output.WriteLine("Sub-thread created Ã¢â‚¬â€ WatchForExecution should trigger");
+            Output.WriteLine("Sub-thread created — WatchForExecution should trigger");
 
             // Step 2: Create user cell (now that sub-thread exists routing succeeds)
-            var userCellResp = await client.Observe(new CreateNodeRequest(new MeshNode(userMsgId, subThreadPath)
+            var userCellResp = CreateNode(client, new MeshNode(userMsgId, subThreadPath)
             {
                 NodeType = ThreadMessageNodeType.NodeType, MainNode = "TestUser",
                 Content = new ThreadMessage
@@ -106,11 +117,11 @@ public class OrleansDelegationStartTest(ITestOutputHelper output) : OrleansShare
                     Role = "user", Text = "Delegation task: do something", Timestamp = DateTime.UtcNow,
                     Type = ThreadMessageType.ExecutedInput, CreatedBy = "TestUser"
                 }
-            }), o => o.WithTarget(new Address(subThreadPath))).FirstAsync().ToTask(ct);
+            }, subThreadPath);
             Output.WriteLine($"User cell created: success={userCellResp.Message.Success}");
 
             // Step 3: Create response cell
-            var responseCellResp = await client.Observe(new CreateNodeRequest(new MeshNode(responseMsgId, subThreadPath)
+            var responseCellResp = CreateNode(client, new MeshNode(responseMsgId, subThreadPath)
             {
                 NodeType = ThreadMessageNodeType.NodeType, MainNode = "TestUser",
                 Content = new ThreadMessage
@@ -118,27 +129,19 @@ public class OrleansDelegationStartTest(ITestOutputHelper output) : OrleansShare
                     Role = "assistant", Text = "", Timestamp = DateTime.UtcNow,
                     Type = ThreadMessageType.AgentResponse, AgentName = "Worker"
                 }
-            }), o => o.WithTarget(new Address(subThreadPath))).FirstAsync().ToTask(ct);
+            }, subThreadPath);
             Output.WriteLine($"Response cell created: success={responseCellResp.Message.Success}");
 
-            // Step 4: Poll for execution to complete
-            for (var i = 0; i < 60; i++)
-            {
-                var thread = await GetHubContentAsync<MeshThread>(client, subThreadPath, ct);
-                if (thread is { IsExecuting: false })
-                {
-                    Output.WriteLine($"Execution complete after {i * 500}ms");
+            // Step 4: Wait for execution to complete, then read the response cell text.
+            GetHubContent<MeshThread>(client, subThreadPath)
+                .Should().Within(30.Seconds()).Match(t => t is { IsExecuting: false });
+            Output.WriteLine("Execution complete");
 
-                    var responseMsg = await GetHubContentAsync<ThreadMessage>(client, responsePath, ct);
-                    responseMsg.Should().NotBeNull("response cell must exist");
-                    responseMsg!.Text.Should().NotBeNullOrEmpty("agent must have written response");
-                    Output.WriteLine($"Response: {responseMsg.Text[..Math.Min(100, responseMsg.Text.Length)]}");
-                    Output.WriteLine("PASSED");
-                    return;
-                }
-                await Task.Delay(500, ct);
-            }
-            throw new TimeoutException("Delegation execution did not complete");
+            var responseMsg = GetHubContent<ThreadMessage>(client, responsePath)
+                .Should().Within(30.Seconds()).Match(m => !string.IsNullOrEmpty(m?.Text));
+            responseMsg!.Text.Should().NotBeNullOrEmpty("agent must have written response");
+            Output.WriteLine($"Response: {responseMsg.Text![..Math.Min(100, responseMsg.Text.Length)]}");
+            Output.WriteLine("PASSED");
         }
         finally
         {

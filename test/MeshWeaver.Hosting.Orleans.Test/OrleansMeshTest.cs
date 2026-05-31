@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using MeshWeaver.Mesh;
@@ -14,13 +14,13 @@ using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Orleans.Test;
 public class OrleansMeshTests(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
-    private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
-        => await base.GetClientAsync($"mesh-{name}-{Guid.NewGuid():N}", "TestUser");
+    private IMessageHub GetClient([CallerMemberName] string? name = null)
+        => base.GetClient($"mesh-{name}-{Guid.NewGuid():N}", "TestUser");
 
     [Fact(Timeout = 30000)]
     public async Task PingPong()
     {
-        var client = await GetClientAsync();
+        var client = GetClient();
         var response = await client
             .Observe(new PingRequest(), o => o.WithTarget(OrleansTestMeshNodeAttribute.Address)).FirstAsync().ToTask(new CancellationTokenSource(20.Seconds()).Token);
         response.Should().NotBeNull();
@@ -32,7 +32,7 @@ public class OrleansMeshTests(ITestOutputHelper output) : OrleansSharedTestBase(
     [InlineData("Kernel")]
     public async Task HubWorksAfterDisposal(string id)
     {
-        var client = await GetClientAsync();
+        var client = GetClient();
         var address = AddressExtensions.CreateAppAddress(id);
 
         var response = await client

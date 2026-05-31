@@ -54,7 +54,7 @@ public class OrleansCommentTest(ITestOutputHelper output) : TestBase(output)
         await Cluster.DeployAsync();
     }
 
-    private async Task<IMessageHub> GetClientAsync()
+    private IMessageHub GetClient()
     {
         var client = ClientMesh.ServiceProvider.CreateMessageHub(
             new Address("client", "comment-test"),
@@ -107,7 +107,7 @@ public class OrleansCommentTest(ITestOutputHelper output) : TestBase(output)
     public async Task CreateComment_ThroughOrleans()
     {
         var ct = new CancellationTokenSource(45.Seconds()).Token;
-        var client = await GetClientAsync();
+        var client = GetClient();
         var docAddress = new Address(DocPath);
 
         // Activate the grain
@@ -157,7 +157,7 @@ public class OrleansCommentTest(ITestOutputHelper output) : TestBase(output)
     public async Task CreatePageLevelComment_ThroughOrleans()
     {
         var ct = new CancellationTokenSource(45.Seconds()).Token;
-        var client = await GetClientAsync();
+        var client = GetClient();
         var docAddress = new Address(DocPath);
 
         // Activate the grain

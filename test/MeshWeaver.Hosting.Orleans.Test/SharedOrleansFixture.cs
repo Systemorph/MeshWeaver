@@ -67,7 +67,7 @@ public class SharedOrleansFixture : IAsyncLifetime
     internal static SwappableChatClientFactory SwappableFactory { get; } = new();
 
     /// <summary>
-    /// Per-client tracker: every hub returned by <see cref="GetClientAsync"/>
+    /// Per-client tracker: every hub returned by <see cref="GetClient"/>
     /// gets recorded along with its routing-stream subscriptions on both the
     /// client mesh and the silo mesh. Tests dispose these in
     /// <c>OrleansSharedTestBase.DisposeAsync</c> so the shared cluster's
@@ -120,7 +120,7 @@ public class SharedOrleansFixture : IAsyncLifetime
     /// at test teardown so its routing registrations on the shared cluster
     /// (client + silo mesh) and the hub itself are released.
     /// </summary>
-    public async Task<IMessageHub> GetClientAsync(string clientId, string userId = "TestUser")
+    public IMessageHub GetClient(string clientId, string userId = "TestUser")
     {
         var client = ClientMesh.ServiceProvider.CreateMessageHub(
             new Address("client", clientId),
@@ -165,7 +165,7 @@ public class SharedOrleansFixture : IAsyncLifetime
 
     /// <summary>
     /// Releases the routing-stream registrations and disposes the client hub
-    /// returned by <see cref="GetClientAsync"/>. Idempotent: safe to call
+    /// returned by <see cref="GetClient"/>. Idempotent: safe to call
     /// twice and safe to call on an unknown client (e.g., after the fixture
     /// itself disposed). Tests should call this from <c>DisposeAsync</c> for
     /// every client they created so the shared cluster's stream maps and

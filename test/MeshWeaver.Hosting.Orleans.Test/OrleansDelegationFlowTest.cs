@@ -47,17 +47,33 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// </summary>
 public class OrleansDelegationFlowTest(ITestOutputHelper output) : OrleansTestBase<DelegationSiloConfigurator>(output)
 {
-    // Cluster lifecycle, ClientMesh accessor, GetClientAsync, ConfigureClient, and the
+    // Cluster lifecycle, ClientMesh accessor, GetClient, ConfigureClient, and the
     // standard mesh-node handler chain (AddMeshDataSource + AddAITypes + AddLayoutClient)
     // are all inherited from OrleansTestBase<TSiloConfigurator>. To override e.g.
     // type registrations, override ConfigureClient and chain through base.
 
-    private async Task<string> CreateNodeAsync(IMessageHub client, MeshNode node, string targetAddress, CancellationToken ct)
+    // Synchronous client acquisition — await-free test bodies resolve the client
+    // hub once up front on the plain xUnit thread (no async SynchronizationContext
+    // to starve the in-process hub scheduler). See FluentAssertionsToReactive.md §2a.
+    private IMessageHub GetClient()
+        => base.GetClient($"flow-{Guid.NewGuid():N}", "TestUser");
+
+    private string CreateNode(IMessageHub client, MeshNode node, string targetAddress)
     {
-        var response = await client.Observe(new CreateNodeRequest(node), o => o.WithTarget(new Address(targetAddress))).FirstAsync().ToTask(ct);
+        var response = client.Observe(new CreateNodeRequest(node), o => o.WithTarget(new Address(targetAddress)))
+            .Should().Within(30.Seconds()).Emit();
         response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         return response.Message.Node!.Path!;
     }
+
+    private IObservable<ThreadMessage?> ObserveResponseCell(IMessageHub client, string path)
+        => client.GetWorkspace().GetMeshNodeStream(path)
+            .Select(node =>
+            {
+                if (node?.Content is ThreadMessage tm) return tm;
+                if (node?.Content is JsonElement cje) return cje.Deserialize<ThreadMessage>(client.JsonSerializerOptions);
+                return null;
+            });
 
     /// <summary>
     /// Full delegation flow: submit a message to a thread that triggers delegation.
@@ -66,66 +82,47 @@ public class OrleansDelegationFlowTest(ITestOutputHelper output) : OrleansTestBa
     /// Verifies that access context flows through the entire chain.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task Delegation_CreatesSubThread_WithCorrectIdentity()
+    public void Delegation_CreatesSubThread_WithCorrectIdentity()
     {
-        var ct = new CancellationTokenSource(50.Seconds()).Token;
-        var client = await GetClientAsync();
+        var client = GetClient();
 
         // Create a thread
         var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Delegation flow test", "TestUser");
-        var threadPath = await CreateNodeAsync(client, threadNode, "TestUser", ct);
+        var threadPath = CreateNode(client, threadNode, "TestUser");
         Output.WriteLine($"Thread: {threadPath}");
 
-        // Subscribe to thread messages
+        // Project the thread's message-id list off the live stream.
         var workspace = client.GetWorkspace();
-        var twoMessages = workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
+        var messageIds = workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
             .Select(nodes =>
             {
                 var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
-                var content = node?.Content as MeshThread;
-                return content?.Messages ?? [];
-            })
-            .Where(ids => ids.Count >= 2)
-            .FirstAsync()
-            .ToTask(ct);
+                return (node?.Content as MeshThread)?.Messages
+                       ?? (IReadOnlyList<string>)ImmutableList<string>.Empty;
+            });
 
-        // Submit message â€” this triggers the DelegationToolFakeChatClient which calls delegate_to_agent
-        Output.WriteLine("Posting ThreadInput.AppendUserInput (should trigger delegation)...");
+        // Submit message — this triggers the DelegationToolFakeChatClient which calls delegate_to_agent
+        Output.WriteLine("Submitting user input (should trigger delegation)...");
         client.SubmitMessage(
             threadPath,
             "Please delegate this task",
             contextPath: "TestUser");
-            Output.WriteLine("ThreadInput.AppendUserInput succeeded");
+        Output.WriteLine("SubmitMessage succeeded");
 
-        // Wait for message IDs
-        var msgIds = await twoMessages;
-        msgIds.Should().HaveCount(2);
+        // Wait for message IDs (user + response).
+        var msgIds = messageIds.Should().Within(45.Seconds()).Match(ids => ids.Count >= 2);
         Output.WriteLine($"Message IDs: [{string.Join(", ", msgIds)}]");
 
-        // Wait for execution to complete (agent streams + delegation + sub-thread)
-        ThreadMessage? responseMsg = null;
-        for (var i = 0; i < 60; i++)
-        {
-            var nodeId = msgIds[1];
-            // Canonical CQRS read via per-node MeshNodeReference reducer.
-            var resp = await client.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address($"{threadPath}/{nodeId}"))).FirstAsync().ToTask(ct);
-            var node = resp.Message.Data as MeshNode;
-            if (node == null && resp.Message.Data is JsonElement je)
-                node = je.Deserialize<MeshNode>(ClientMesh.JsonSerializerOptions);
-            if (node?.Content is ThreadMessage tm) responseMsg = tm;
-            else if (node?.Content is JsonElement cje)
-                responseMsg = cje.Deserialize<ThreadMessage>(ClientMesh.JsonSerializerOptions);
+        // Wait for execution to complete (agent streams + delegation + sub-thread):
+        // the response cell either gains a delegation tool call or its text mentions it.
+        var responseMsg = ObserveResponseCell(client, $"{threadPath}/{msgIds[1]}")
+            .Should().Within(40.Seconds())
+            .Match(m => m?.ToolCalls?.Any(tc => tc.Name?.Contains("delegate") == true) == true
+                || m?.Text?.Contains("delegat", StringComparison.OrdinalIgnoreCase) == true);
 
-            if (responseMsg?.Text?.Contains("delegation", StringComparison.OrdinalIgnoreCase) == true
-                || responseMsg?.ToolCalls?.Count > 0)
-                break;
-            await Task.Delay(500, ct);
-        }
-
-        responseMsg.Should().NotBeNull("response message should exist");
         Output.WriteLine($"Response: text='{responseMsg!.Text?[..Math.Min(100, responseMsg.Text?.Length ?? 0)]}', toolCalls={responseMsg.ToolCalls?.Count ?? 0}");
 
-        // The DelegationToolFakeChatClient triggers a delegation â€” verify it completed
+        // The DelegationToolFakeChatClient triggers a delegation — verify it completed
         // (either the tool call log has an entry, or the text mentions it)
         var hasDelegation = responseMsg.ToolCalls?.Any(tc => tc.Name?.Contains("delegate") == true) == true
             || responseMsg.Text?.Contains("delegat", StringComparison.OrdinalIgnoreCase) == true;

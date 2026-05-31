@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -54,7 +54,7 @@ public class OrleansSubscribeRequestNotFoundSurfaceTest(ITestOutputHelper output
     [Fact]
     public async Task GetRemoteStream_on_nonexistent_address_surfaces_OnError_with_NotFound_message()
     {
-        var client = await GetClientAsync("notfound-" + Guid.NewGuid().ToString("N")[..8]);
+        var client = GetClient("notfound-" + Guid.NewGuid().ToString("N")[..8]);
 
         // Address with NO node at all and no ancestor â€” catalog resolves to null.
         var address = new Address("doesnotexist", "missing-instance-" + Guid.NewGuid().ToString("N")[..8]);
@@ -104,7 +104,7 @@ public class OrleansSubscribeRequestNotFoundSurfaceTest(ITestOutputHelper output
     [Fact]
     public async Task GetRemoteStream_on_existing_address_receives_layout_area_data()
     {
-        var client = await GetClientAsync("found-" + Guid.NewGuid().ToString("N")[..8]);
+        var client = GetClient("found-" + Guid.NewGuid().ToString("N")[..8]);
 
         // "TestUser" is seeded in SharedSiloConfigurator + OrleansTestSeedProvider
         // and has AddDefaultLayoutAreas registered on the silo.

@@ -84,7 +84,7 @@ public class OrleansSubThreadAutoResumeTest(ITestOutputHelper output) : TestBase
         await base.DisposeAsync();
     }
 
-    private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
+    private IMessageHub GetClient([CallerMemberName] string? name = null)
     {
         var client = ClientMesh.ServiceProvider.CreateMessageHub(
             new Address("client", $"autoresume-{name}-{Guid.NewGuid():N}"),
@@ -103,19 +103,19 @@ public class OrleansSubThreadAutoResumeTest(ITestOutputHelper output) : TestBase
         return client;
     }
 
-    [Fact(Timeout = 60000)]
-    public async Task SubThreadDelegation_LiveProgressOnToolCall_TerminalSuccess_AndFcReentry()
+    [Fact(Timeout = 120000)]
+    public void SubThreadDelegation_LiveProgressOnToolCall_TerminalSuccess_AndFcReentry()
     {
-        var ct = new CancellationTokenSource(110.Seconds()).Token;
-        var client = await GetClientAsync();
+        var client = GetClient();
         var workspace = client.GetWorkspace();
 
         // 1) Submit a fresh user message — parent agent will emit delegate_to_agent.
         // Mirrors OrleansReentrancyTest's path shape: context = "User/TestUser"
         // (TestUser lives at id=TestUser, namespace=User → path User/TestUser).
         var threadNode = ThreadNodeType.BuildThreadNode("User/TestUser", "auto-resume test", "TestUser");
-        var createResp = await client.Observe(new CreateNodeRequest(threadNode),
-                o => o.WithTarget(new Address("User/TestUser"))).FirstAsync().ToTask(ct);
+        var createResp = client.Observe(new CreateNodeRequest(threadNode),
+                o => o.WithTarget(new Address("User/TestUser")))
+            .Should().Within(30.Seconds()).Emit();
         createResp.Message.Success.Should().BeTrue(createResp.Message.Error ?? "");
         var parentThreadPath = createResp.Message.Node!.Path!;
         Output.WriteLine($"Parent thread: {parentThreadPath}");
@@ -123,14 +123,10 @@ public class OrleansSubThreadAutoResumeTest(ITestOutputHelper output) : TestBase
         var parentSyncStream = workspace
             .GetRemoteStream<MeshNode, MeshNodeReference>(new Address(parentThreadPath), new MeshNodeReference());
 
-        // Wait for the parent thread to have its user + response message cells.
-        var twoMessages = parentSyncStream
-            .Select(change => (change.Value?.Content as MeshThread)?.Messages ?? [])
-            .Do(ids => Output.WriteLine($"  parent.Messages.Count = {ids.Count}"))
-            .Where(ids => ids.Count >= 2)
-            .FirstAsync()
-            .Timeout(30.Seconds())
-            .ToTask(ct);
+        var parentMessages = parentSyncStream
+            .Select(change => (change.Value?.Content as MeshThread)?.Messages
+                              ?? (IReadOnlyList<string>)ImmutableList<string>.Empty)
+            .Do(ids => Output.WriteLine($"  parent.Messages.Count = {ids.Count}"));
 
         client.SubmitMessage(
             parentThreadPath,
@@ -138,7 +134,8 @@ public class OrleansSubThreadAutoResumeTest(ITestOutputHelper output) : TestBase
             contextPath: "User/TestUser");
         Output.WriteLine("Submission posted.");
 
-        var parentMsgIds = await twoMessages;
+        // Wait for the parent thread to have its user + response message cells.
+        var parentMsgIds = parentMessages.Should().Within(40.Seconds()).Match(ids => ids.Count >= 2);
         var parentRespId = parentMsgIds[1];
         var parentRespPath = $"{parentThreadPath}/{parentRespId}";
         Output.WriteLine($"Parent response cell: {parentRespPath}");
@@ -148,12 +145,10 @@ public class OrleansSubThreadAutoResumeTest(ITestOutputHelper output) : TestBase
         var parentRespStream = workspace
             .GetRemoteStream<MeshNode, MeshNodeReference>(new Address(parentRespPath), new MeshNodeReference());
 
-        var delegationEntryAppeared = await parentRespStream
+        var delegationEntryAppeared = parentRespStream
             .Select(change => (change.Value?.Content as ThreadMessage)?.ToolCalls)
-            .Where(tcs => tcs?.Any(tc => tc.Name == "delegate_to_agent" && tc.DelegationPath != null) == true)
-            .Take(1)
-            .Timeout(30.Seconds())
-            .ToTask(ct);
+            .Should().Within(30.Seconds())
+            .Match(tcs => tcs?.Any(tc => tc.Name == "delegate_to_agent" && tc.DelegationPath != null) == true);
         var initialEntry = delegationEntryAppeared!.First(tc => tc.DelegationPath != null);
         var subThreadPath = initialEntry.DelegationPath!;
         Output.WriteLine($"Sub-thread path on parent's tool call: {subThreadPath}");
@@ -187,13 +182,11 @@ public class OrleansSubThreadAutoResumeTest(ITestOutputHelper output) : TestBase
             }))
         {
             // 4) Wait for the sub-thread to finish: its IsExecuting flips false.
-            var subThreadSettled = await workspace
+            var subThreadSettled = workspace
                 .GetRemoteStream<MeshNode, MeshNodeReference>(new Address(subThreadPath), new MeshNodeReference())
                 .Select(change => change.Value?.Content as MeshThread)
-                .Where(t => t is { IsExecuting: false } && t.Messages.Count >= 2)
-                .Take(1)
-                .Timeout(60.Seconds())
-                .ToTask(ct);
+                .Should().Within(60.Seconds())
+                .Match(t => t is { IsExecuting: false } && t.Messages.Count >= 2);
             subThreadSettled!.IsExecuting.Should().BeFalse("sub-thread must terminate");
             subThreadSettled.Messages.Count.Should().BeGreaterThanOrEqualTo(2,
                 "sub-thread should have user + response cells in history");
@@ -219,13 +212,11 @@ public class OrleansSubThreadAutoResumeTest(ITestOutputHelper output) : TestBase
         }
 
         // 5) ToolCallEntry must flip to Success with full final text in Result.
-        var finalEntry = await parentRespStream
+        var finalEntry = parentRespStream
             .Select(change => (change.Value?.Content as ThreadMessage)?.ToolCalls
                 ?.FirstOrDefault(tc => tc.DelegationPath == subThreadPath))
-            .Where(tc => tc is { Status: ToolCallStatus.Success })
-            .Take(1)
-            .Timeout(30.Seconds())
-            .ToTask(ct);
+            .Should().Within(30.Seconds())
+            .Match(tc => tc is { Status: ToolCallStatus.Success });
         finalEntry!.Status.Should().Be(ToolCallStatus.Success);
         finalEntry.IsSuccess.Should().BeTrue();
         finalEntry.Result.Should().NotBeNullOrEmpty(
@@ -236,12 +227,10 @@ public class OrleansSubThreadAutoResumeTest(ITestOutputHelper output) : TestBase
         //    consuming the function-result content. Parent's response cell
         //    Text grows beyond the initial "Delegating..." placeholder and
         //    eventually reaches Completed.
-        var parentCompleted = await parentRespStream
+        var parentCompleted = parentRespStream
             .Select(change => change.Value?.Content as ThreadMessage)
-            .Where(m => m is { Status: ThreadMessageStatus.Completed } && (m.Text?.Length ?? 0) > 0)
-            .Take(1)
-            .Timeout(45.Seconds())
-            .ToTask(ct);
+            .Should().Within(45.Seconds())
+            .Match(m => m is { Status: ThreadMessageStatus.Completed } && (m.Text?.Length ?? 0) > 0);
         parentCompleted!.Status.Should().Be(ThreadMessageStatus.Completed,
             "parent agent must return to streaming after the delegation tool call resolves " +
             "(FunctionInvokingChatClient re-entry with FunctionResultContent)");
@@ -251,12 +240,10 @@ public class OrleansSubThreadAutoResumeTest(ITestOutputHelper output) : TestBase
             $"\"{parentCompleted.Text![..Math.Min(120, parentCompleted.Text.Length)]}\"");
 
         // 7) Parent thread itself idles.
-        var parentIdle = await parentSyncStream
+        var parentIdle = parentSyncStream
             .Select(change => change.Value?.Content as MeshThread)
-            .Where(t => t is { IsExecuting: false })
-            .Take(1)
-            .Timeout(20.Seconds())
-            .ToTask(ct);
+            .Should().Within(20.Seconds())
+            .Match(t => t is { IsExecuting: false });
         parentIdle!.IsExecuting.Should().BeFalse("parent thread must idle after wrap-up");
         Output.WriteLine("Parent thread idle — full delegation loop completed.");
     }

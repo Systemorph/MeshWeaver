@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Threading;
@@ -23,9 +23,9 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// </summary>
 public class OrleansApiTokenTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
-    private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
+    private IMessageHub GetClient([CallerMemberName] string? name = null)
     {
-        var client = await base.GetClientAsync($"apitoken-{name}-{Guid.NewGuid():N}", "TestUser");
+        var client = base.GetClient($"apitoken-{name}-{Guid.NewGuid():N}", "TestUser");
         client.TypeRegistry
             .WithType(typeof(ValidateTokenRequest), nameof(ValidateTokenRequest))
             .WithType(typeof(ValidateTokenResponse), nameof(ValidateTokenResponse));
@@ -36,7 +36,7 @@ public class OrleansApiTokenTest(ITestOutputHelper output) : OrleansSharedTestBa
     public async Task CreateApiToken_ViaStandardCreateNodeRequest()
     {
         var ct = new CancellationTokenSource(30.Seconds()).Token;
-        var client = await GetClientAsync();
+        var client = GetClient();
         var meshAddress = Fixture.ClientMesh.Address;
 
         // Generate token hash
@@ -76,7 +76,7 @@ public class OrleansApiTokenTest(ITestOutputHelper output) : OrleansSharedTestBa
     public async Task ValidateInvalidToken_Fails()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
-        var client = await GetClientAsync();
+        var client = GetClient();
 
         var fakeToken = "mw_0000000000000000000000000000000000000000000000000000000000000000";
         var hash = ValidateTokenRequest.HashToken(fakeToken);
