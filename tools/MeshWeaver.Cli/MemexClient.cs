@@ -10,7 +10,7 @@ namespace MeshWeaver.Cli;
 /// mirrors one REST endpoint (which in turn mirrors one MCP tool).
 ///
 /// <para>All endpoints accept JSON bodies and return JSON strings — the server
-/// preserves the <see cref="MeshWeaver.AI.MeshOperations"/> output verbatim
+/// preserves the <c>MeshWeaver.AI.MeshOperations</c> output verbatim
 /// (either a JSON document or an <c>"Error: …"</c> sentinel).</para>
 /// </summary>
 public sealed class MemexClient : IDisposable
