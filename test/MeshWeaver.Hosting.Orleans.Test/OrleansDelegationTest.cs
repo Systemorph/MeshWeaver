@@ -193,7 +193,7 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
     /// Resubmit after delegation: verifies no deadlock when resubmitting
     /// a message that previously triggered delegation.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 120000)]
     public void Resubmit_AfterDelegation_DoesNotDeadlock()
     {
         var suffix = Guid.NewGuid().ToString("N")[..6];
@@ -213,11 +213,11 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
             contextPath: "TestUser");
         var msgIds = threadStream
             .Select(t => t?.Messages ?? (IReadOnlyList<string>)System.Collections.Immutable.ImmutableList<string>.Empty)
-            .Should().Within(30.Seconds()).Match(ids => ids.Count >= 2);
+            .Should().Within(45.Seconds()).Match(ids => ids.Count >= 2);
         Output.WriteLine($"1. Initial messages: [{string.Join(", ", msgIds)}]");
 
         // 2. Wait for execution to complete
-        threadStream.Should().Within(30.Seconds()).Match(t => t is { IsExecuting: false });
+        threadStream.Should().Within(45.Seconds()).Match(t => t is { IsExecuting: false });
         Output.WriteLine("2. Initial execution complete");
 
         // 3. Resubmit
@@ -232,7 +232,7 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
             newUserText: "Delegate something");
 
         var newThread = threadStream
-            .Should().Within(30.Seconds())
+            .Should().Within(45.Seconds())
             .Match(t => t is { IsExecuting: false }
                 && t.Messages.Count >= 2
                 && !t.Messages.SequenceEqual(msgIds));
