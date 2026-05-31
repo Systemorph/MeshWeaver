@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -138,7 +139,7 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     #region Cross-Prefix Search — typing @<name> finds matches across all providers
 
     [Fact(Timeout = 30000)]
-    public async Task CrossPrefix_AtFilename_DirectContentProviderSearch()
+    public void CrossPrefix_AtFilename_DirectContentProviderSearch()
     {
         // Verify ContentAutocompleteProvider returns matches for plain queries (no content/ prefix).
         var providers = Mesh.ServiceProvider.GetServices<IAutocompleteProvider>();
@@ -151,31 +152,42 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
         }
 
         // Bound the collection enumeration — in the test harness the BasePath may not resolve,
-        // which either throws (.NET 10: "The value cannot be an empty string. (Parameter 'path')")
-        // or hangs the enumeration. Either outcome is acceptable here — the production flow
-        // under Aspire/portal always has a real BasePath.
-        using var opCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        opCts.CancelAfter(TimeSpan.FromSeconds(5));
-        try
-        {
-            var items = await contentProvider
-                .GetItems("@Annual", "ACME/ProductLaunch")
-                .ToAsyncEnumerableSequence(opCts.Token)
-                .ToListAsync(opCts.Token);
+        // which either errors (.NET 10: "The value cannot be an empty string. (Parameter 'path')")
+        // or never completes. Either outcome is acceptable here — the production flow under
+        // Aspire/portal always has a real BasePath. Materialize folds the terminal signal
+        // (OnNext-list, OnError, or a 5s Timeout's OnError) into a value we inspect reactively,
+        // so the body stays void/await-free.
+        var notification = contentProvider
+            .GetItems("@Annual", "ACME/ProductLaunch")
+            .ToList()
+            .Timeout(TimeSpan.FromSeconds(5))
+            .Materialize()
+            .Where(n => n.Kind != NotificationKind.OnCompleted)
+            .Should().Within(10.Seconds()).Emit();
 
+        if (notification.Kind == NotificationKind.OnNext)
+        {
+            var items = notification.Value;
             Output.WriteLine($"Direct content provider items for '@Annual':");
             foreach (var item in items.Take(10))
                 Output.WriteLine($"  '{item.Label}' => '{item.InsertText}' (pri={item.Priority})");
 
             items.Should().NotBeNull();
         }
-        catch (ArgumentException ex) when (ex.ParamName == "path" || ex.Message.Contains("empty"))
-        {
-            Output.WriteLine($"Content collection BasePath not resolvable in test harness: {ex.Message}");
-        }
-        catch (OperationCanceledException)
+        else if (notification.Exception is TimeoutException)
         {
             Output.WriteLine("Content provider enumeration did not complete within 5s — acceptable in test harness.");
+        }
+        else if (notification.Exception is ArgumentException argEx &&
+                 (argEx.ParamName == "path" || argEx.Message.Contains("empty")))
+        {
+            Output.WriteLine($"Content collection BasePath not resolvable in test harness: {argEx.Message}");
+        }
+        else
+        {
+            // Any other error is a genuine failure — surface it.
+            notification.Exception.Should().BeNull(
+                $"unexpected error from content provider enumeration: {notification.Exception}");
         }
     }
 
@@ -258,11 +270,11 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     /// (BasePath resolution issue with mesh-hub registration).
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task TypingFirstChars_OfDocumentWithSpaces_AppearsInResults_RankedHigh()
+    public void TypingFirstChars_OfDocumentWithSpaces_AppearsInResults_RankedHigh()
     {
-        var batches = await Orchestrator
-            .GetCompletionsAsync("@Round", "ACME/ProductLaunch")
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var batches = Orchestrator
+            .GetCompletions("@Round", "ACME/ProductLaunch")
+            .ToList().Should().Within(30.Seconds()).Emit();
 
         var merged = batches
             .SelectMany(b => b.Items.Select(i => (Item: i, b.CategoryPriority)))
@@ -294,14 +306,14 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 30000)]
-    public async Task ContentAutocomplete_FromOrchestrator_PreservesRelativePathInQuotes()
+    public void ContentAutocomplete_FromOrchestrator_PreservesRelativePathInQuotes()
     {
         // When typing @content/ in chat, files with spaces should produce
         // a clean quoted RELATIVE insert text — not nested or absolute-prepended.
         // E.g., "@content/My Annual Report.md" — NOT @/User/rbuergi/"@content/My Annual Report.md"
-        var batches = await Orchestrator
-            .GetCompletionsAsync("@content/", "ACME/ProductLaunch")
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var batches = Orchestrator
+            .GetCompletions("@content/", "ACME/ProductLaunch")
+            .ToList().Should().Within(30.Seconds()).Emit();
 
         var allItems = batches.SelectMany(b => b.Items).ToList();
 
@@ -355,12 +367,12 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     #region 1. Progressive Typing
 
     [Fact(Timeout = 30000)]
-    public async Task ProgressiveTyping_AtSymbol_ReturnsNearbyItems()
+    public void ProgressiveTyping_AtSymbol_ReturnsNearbyItems()
     {
         // Typing "@" from ACME/ProductLaunch context
-        var batches = await Orchestrator
-            .GetCompletionsAsync("@", "ACME/ProductLaunch")
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var batches = Orchestrator
+            .GetCompletions("@", "ACME/ProductLaunch")
+            .ToList().Should().Within(30.Seconds()).Emit();
 
         var allItems = batches.SelectMany(b => b.Items).ToList();
 
@@ -376,12 +388,12 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 30000)]
-    public async Task ProgressiveTyping_AtConte_ShowsContentKeyword()
+    public void ProgressiveTyping_AtConte_ShowsContentKeyword()
     {
         // Typing "@conte" from ACME/ProductLaunch context
-        var batches = await Orchestrator
-            .GetCompletionsAsync("@conte", "ACME/ProductLaunch")
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var batches = Orchestrator
+            .GetCompletions("@conte", "ACME/ProductLaunch")
+            .ToList().Should().Within(30.Seconds()).Emit();
 
         var allItems = batches.SelectMany(b => b.Items).ToList();
 
@@ -397,14 +409,14 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 30000)]
-    public async Task ProgressiveTyping_AtContentSlash_DoesNotShowChildrenCategory()
+    public void ProgressiveTyping_AtContentSlash_DoesNotShowChildrenCategory()
     {
         // When typing @content/, we should NOT see "Children" or node-type categories
         // (those come from UnifiedReferenceAutocompleteProvider/MeshNodeAutocompleteProvider
         // which should skip UCR prefix queries).
-        var batches = await Orchestrator
-            .GetCompletionsAsync("@content/", "ACME/ProductLaunch")
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var batches = Orchestrator
+            .GetCompletions("@content/", "ACME/ProductLaunch")
+            .ToList().Should().Within(30.Seconds()).Emit();
 
         var allItems = batches.SelectMany(b => b.Items).ToList();
 
@@ -421,15 +433,15 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 30000)]
-    public async Task ProgressiveTyping_AtContentSlash_RoutesToTagQuery()
+    public void ProgressiveTyping_AtContentSlash_RoutesToTagQuery()
     {
         // Typing "@content/" should route to TagQuery mode (not CurrentNodeAndGlobal)
         // and attempt to resolve content from the current context's hub.
         // The orchestrator sends AutocompleteRequest — even if the hub doesn't
         // return content items, the batch should be "Content" category.
-        var batches = await Orchestrator
-            .GetCompletionsAsync("@content/", "ACME/ProductLaunch")
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var batches = Orchestrator
+            .GetCompletions("@content/", "ACME/ProductLaunch")
+            .ToList().Should().Within(30.Seconds()).Emit();
 
         Output.WriteLine($"'@content/' from ACME/ProductLaunch: {batches.Count} batches");
         foreach (var batch in batches)
@@ -451,11 +463,11 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     #region 2. Local First
 
     [Fact(Timeout = 30000)]
-    public async Task LocalFirst_NearbyBatchHigherPriorityThanGlobal()
+    public void LocalFirst_NearbyBatchHigherPriorityThanGlobal()
     {
-        var batches = await Orchestrator
-            .GetCompletionsAsync("@", "ACME/ProductLaunch")
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var batches = Orchestrator
+            .GetCompletions("@", "ACME/ProductLaunch")
+            .ToList().Should().Within(30.Seconds()).Emit();
 
         Output.WriteLine($"Batches by priority:");
         foreach (var batch in batches.OrderByDescending(b => b.CategoryPriority))
@@ -471,12 +483,12 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 30000)]
-    public async Task LocalFirst_ChildrenOfContextScoreHigherThanDistant()
+    public void LocalFirst_ChildrenOfContextScoreHigherThanDistant()
     {
         // AutocompleteAsync with context should boost nearby items
-        var suggestions = await MeshQuery
-            .AutocompleteAsync("ACME", "", AutocompleteMode.RelevanceFirst, 30, "ACME/ProductLaunch", ct: TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+        var suggestions = MeshQuery
+            .AutocompleteAsync("ACME", "", AutocompleteMode.RelevanceFirst, 30, "ACME/ProductLaunch")
+            .ToObservableSequence().ToList().Should().Within(30.Seconds()).Emit().ToArray();
 
         Output.WriteLine($"ACME autocomplete with context ACME/ProductLaunch:");
         foreach (var s in suggestions.Take(10))
@@ -504,11 +516,11 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     #region 3. Shorter Paths Win
 
     [Fact(Timeout = 30000)]
-    public async Task ShorterPathsWin_WithinSameScoreTier()
+    public void ShorterPathsWin_WithinSameScoreTier()
     {
-        var suggestions = await MeshQuery
-            .AutocompleteAsync("ACME", "", 30, TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+        var suggestions = MeshQuery
+            .AutocompleteAsync("ACME", "", 30)
+            .ToObservableSequence().ToList().Should().Within(30.Seconds()).Emit().ToArray();
 
         Output.WriteLine($"ACME children by score then length:");
         foreach (var s in suggestions)
@@ -528,11 +540,11 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 30000)]
-    public async Task ShorterPathsWin_ParentBeforeGrandchild()
+    public void ShorterPathsWin_ParentBeforeGrandchild()
     {
-        var suggestions = await MeshQuery
-            .AutocompleteAsync("ACME", "", AutocompleteMode.RelevanceFirst, 30, ct: TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+        var suggestions = MeshQuery
+            .AutocompleteAsync("ACME", "", AutocompleteMode.RelevanceFirst, 30)
+            .ToObservableSequence().ToList().Should().Within(30.Seconds()).Emit().ToArray();
 
         var productLaunch = suggestions.FirstOrDefault(s => s.Path == "ACME/ProductLaunch");
         var todo = suggestions.FirstOrDefault(s => s.Path.StartsWith("ACME/ProductLaunch/Todo/"));
@@ -551,12 +563,12 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     #region 4. Cross-Partition Broadening
 
     [Fact(Timeout = 30000)]
-    public async Task CrossPartition_AbsolutePathToOtherPartition_Works()
+    public void CrossPartition_AbsolutePathToOtherPartition_Works()
     {
         // Use absolute path @/Systemorph/ to drill into another partition
-        var batches = await Orchestrator
-            .GetCompletionsAsync("@/Systemorph/", null)
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var batches = Orchestrator
+            .GetCompletions("@/Systemorph/", null)
+            .ToList().Should().Within(30.Seconds()).Emit();
 
         var allItems = batches.SelectMany(b => b.Items).ToList();
 
@@ -576,11 +588,11 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 30000)]
-    public async Task CrossPartition_GlobalAutocomplete_ReturnsMultiplePartitions()
+    public void CrossPartition_GlobalAutocomplete_ReturnsMultiplePartitions()
     {
-        var suggestions = await MeshQuery
-            .AutocompleteAsync("", "", 30, TestContext.Current.CancellationToken)
-            .ToArrayAsync(TestContext.Current.CancellationToken);
+        var suggestions = MeshQuery
+            .AutocompleteAsync("", "", 30)
+            .ToObservableSequence().ToList().Should().Within(30.Seconds()).Emit().ToArray();
 
         var partitions = suggestions
             .Select(s => s.Path.Split('/')[0])
@@ -598,11 +610,11 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     #region 5. Insert Text Format
 
     [Fact(Timeout = 30000)]
-    public async Task InsertTextFormat_KeywordsUseSlash()
+    public void InsertTextFormat_KeywordsUseSlash()
     {
-        var batches = await Orchestrator
-            .GetCompletionsAsync("@/ACME/ProductLaunch/", null)
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var batches = Orchestrator
+            .GetCompletions("@/ACME/ProductLaunch/", null)
+            .ToList().Should().Within(30.Seconds()).Emit();
 
         var allItems = batches.SelectMany(b => b.Items).ToList();
         var keywords = allItems.Where(i => i.Category == "Keywords").ToList();
@@ -619,12 +631,12 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 30000)]
-    public async Task InsertTextFormat_PartitionItemsEndWithSlash()
+    public void InsertTextFormat_PartitionItemsEndWithSlash()
     {
         // Partition list items should have trailing / for drill-down
-        var batches = await Orchestrator
-            .GetCompletionsAsync("@/", null)
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var batches = Orchestrator
+            .GetCompletions("@/", null)
+            .ToList().Should().Within(30.Seconds()).Emit();
 
         var partitionItems = batches.SelectMany(b => b.Items)
             .Where(i => !string.IsNullOrEmpty(i.Path))
@@ -646,11 +658,11 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     #region 6. Score Ordering & No Degradation
 
     [Fact(Timeout = 30000)]
-    public async Task ScoreOrdering_MergedResults_SortableByPriority()
+    public void ScoreOrdering_MergedResults_SortableByPriority()
     {
-        var batches = await Orchestrator
-            .GetCompletionsAsync("@", "ACME/ProductLaunch")
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var batches = Orchestrator
+            .GetCompletions("@", "ACME/ProductLaunch")
+            .ToList().Should().Within(30.Seconds()).Emit();
 
         // The client merges all batches and sorts by CategoryPriority then item Priority
         var merged = batches
@@ -679,11 +691,11 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 30000)]
-    public async Task ScoreOrdering_BatchesOrderedByPriority()
+    public void ScoreOrdering_BatchesOrderedByPriority()
     {
-        var batches = await Orchestrator
-            .GetCompletionsAsync("@", "ACME/ProductLaunch")
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var batches = Orchestrator
+            .GetCompletions("@", "ACME/ProductLaunch")
+            .ToList().Should().Within(30.Seconds()).Emit();
 
         if (batches.Count >= 2)
         {
@@ -703,12 +715,12 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     #region 7. Relative Path Resolution
 
     [Fact(Timeout = 30000)]
-    public async Task RelativePath_ContentSlash_ResolvedAsUnifiedPath()
+    public void RelativePath_ContentSlash_ResolvedAsUnifiedPath()
     {
         // MeshOperations.Get with "ACME/ProductLaunch/content/report.md"
         // should recognize content/ as UCR prefix, not treat it as a node path
         var ops = new AI.MeshOperations(Mesh);
-        var result = await ops.Get("@ACME/ProductLaunch/content/report.md").FirstAsync();
+        var result = ops.Get("@ACME/ProductLaunch/content/report.md").Should().Within(30.Seconds()).Emit();
         Output.WriteLine($"Get('@ACME/ProductLaunch/content/report.md'): {result[..Math.Min(200, result.Length)]}");
 
         // Should NOT be "Not found: ACME/ProductLaunch/content/report.md" (node lookup)
@@ -718,11 +730,11 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 30000)]
-    public async Task RelativePath_ContentColon_ResolvedAsUnifiedPath()
+    public void RelativePath_ContentColon_ResolvedAsUnifiedPath()
     {
         // Legacy colon format should also work
         var ops = new AI.MeshOperations(Mesh);
-        var result = await ops.Get("@ACME/ProductLaunch/content:report.md").FirstAsync();
+        var result = ops.Get("@ACME/ProductLaunch/content:report.md").Should().Within(30.Seconds()).Emit();
         Output.WriteLine($"Get('@ACME/ProductLaunch/content:report.md'): {result[..Math.Min(200, result.Length)]}");
 
         result.Should().NotStartWith("Not found:",
@@ -777,11 +789,14 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     #region 9. Streaming — Results Come In Progressively
 
     [Fact(Timeout = 30000)]
-    public async Task Streaming_ResultsArriveProgressively()
+    public void Streaming_ResultsArriveProgressively()
     {
-        var batchOrder = new List<(string Category, int Priority, int Count)>();
+        var batches = Orchestrator
+            .GetCompletions("@", "ACME/ProductLaunch")
+            .ToList().Should().Within(30.Seconds()).Emit();
 
-        await foreach (var batch in Orchestrator.GetCompletionsAsync("@", "ACME/ProductLaunch"))
+        var batchOrder = new List<(string Category, int Priority, int Count)>();
+        foreach (var batch in batches)
         {
             batchOrder.Add((batch.Category, batch.CategoryPriority, batch.Items.Count));
             Output.WriteLine($"Received batch: [{batch.CategoryPriority}] {batch.Category} ({batch.Items.Count} items)");
