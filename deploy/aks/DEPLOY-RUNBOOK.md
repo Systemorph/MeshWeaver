@@ -104,6 +104,36 @@ curl -sS -o /dev/null -w "%{http_code} verify=%{ssl_verify_result}\n" \
 
 ---
 
+## 6. Observability (Grafana + Loki + Prometheus) + admin access via VPN
+Everything except the portal stays private, so admin tools (Grafana, kubectl) go through the
+**P2S VPN**, not a public endpoint.
+
+**Install the stack** (`scripts/install-observability.sh` — grafana/loki-stack: Loki + Promtail +
+Grafana + Prometheus, datasources auto-wired, Promtail ships every pod's logs to Loki):
+```bash
+export GRAFANA_PW='<strong-password>'
+cd deploy/aks/scripts
+az aks command invoke -g memex-aks-rg -n memexaks-cluster \
+  --command "GRAFANA_PW=$GRAFANA_PW bash install-observability.sh" --file install-observability.sh
+```
+
+**Set up the P2S VPN client** (the gateway + a root cert are provisioned by the Bicep + step 2):
+```bash
+# 1. Generate a P2S root+client cert (Windows) and upload the ROOT public cert to the gateway:
+#    $root   = New-SelfSignedCertificate -Type Custom -KeySpec Signature -Subject "CN=MemexP2SRootCert" -KeyUsage CertSign -KeyExportPolicy Exportable -CertStoreLocation Cert:\CurrentUser\My -HashAlgorithm sha256 -KeyLength 2048
+#    $client = New-SelfSignedCertificate -Type Custom -DnsName MemexP2SChild -KeySpec Signature -Subject "CN=MemexP2SChildCert" -Signer $root -KeyExportPolicy Exportable -CertStoreLocation Cert:\CurrentUser\My -HashAlgorithm sha256 -KeyLength 2048 -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.2")
+#    [IO.File]::WriteAllText("root.txt",[Convert]::ToBase64String($root.RawData))
+#    NOTE: this az version reads --public-cert-data as a FILE PATH, so pass the path (NOT the inline string, NOT @file):
+#    az network vnet-gateway root-cert create -g memex-aks-rg --gateway-name memexaks-vpngw --name MemexP2SRootCert --public-cert-data root.txt
+# 2. Download + install the VPN client, then connect:
+az network vnet-gateway vpn-client generate -g memex-aks-rg -n memexaks-vpngw -o tsv   # -> download URL (zip)
+# 3. With the VPN connected:
+az aks get-credentials -g memex-aks-rg -n memexaks-cluster
+kubectl -n monitoring port-forward svc/loki-grafana 3000:80    # http://localhost:3000  (admin / $GRAFANA_PW)
+```
+In Grafana → Explore → Loki, the portal logs are `{namespace="memex"}` (e.g. add
+`|= "error"` or `|~ "signin-microsoft"`).
+
 ## Known gaps / follow-ups
 - **Multi-replica HA**: needs Orleans `AzureTables` clustering wired on the Filesystem backend
   (the portal currently registers the clustering table client only in the Azure-backend branch).
