@@ -41,7 +41,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// blocking inside an async test deadlocks the in-process hub scheduler — the
 /// agent's streaming execution shares the process and its continuations are
 /// starved by the captured async SynchronizationContext. See
-/// FluentAssertionsToReactive.md §2a + ObservableAssertions remarks.
+/// ReactiveTestAssertions.md §2 + ObservableAssertions remarks.
 /// </summary>
 public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {

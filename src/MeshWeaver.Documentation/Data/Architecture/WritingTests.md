@@ -1,28 +1,32 @@
 ---
 Name: Writing Tests in MeshWeaver
 Category: Architecture
-Description: How to write correct, non-flaky tests against a reactive distributed mesh. Covers the CQRS-correct read pattern, deadlock-safe assertions, and the canonical test-base setup.
+Description: How to write correct, non-flaky tests against a reactive distributed mesh. Test bodies are synchronous and assert on observables directly; covers the CQRS-correct read pattern, the deadlock-safe reactive assertion surface, and the canonical test-base setup.
 Icon: Beaker
 ---
 
 # Writing Tests in MeshWeaver
 
-Tests are the one place `await` on hub work is allowed — but that privilege is narrow. A test that reads the mesh the wrong way doesn't fail honestly: it returns stale content (CQRS lag), deadlocks on a hub pump, or hangs until the inactivity timer aborts the whole CI run. The rules below come out of chasing actual incidents in this repo.
+The platform is reactive end-to-end, and its tests are too. A MeshWeaver test method is **`void`**, has **no `async` / `await` / `.ToTask()` / `.FirstAsync()`**, and asserts on `IObservable<T>` **directly** through the `MeshWeaver.Reactive.Assertions` surface (`.Should().Within(t).Emit()`, `.Match(...)`, `.Be(...)`). The blocking wait that turns "a stream emitted X" into a pass/fail lives *inside* the assertion, never in the test body.
 
-Before you write a test, read these architecture docs — they define the invariants tests have to preserve, not just the ones production code has to follow:
+This is not a style preference. A test that reads the mesh the wrong way doesn't fail honestly: it returns stale content (CQRS lag), or it mixes a blocking assertion with an `await` and **deadlocks** the hub pump until the inactivity guard aborts the CI run. The rules below come out of chasing real incidents in this repo.
 
-- [Asynchronous Calls](AsynchronousCalls) — what you can and can't `await`
-- [CQRS — Queries vs. Content Access](CqrsAndContentAccess) — why `QueryAsync` is the wrong read after a write
+Before you write a test, read the invariants tests must preserve:
+
+- [Asynchronous Calls](AsynchronousCalls) — why hub-reachable code is `IObservable<T>`, never `Task<T>`
+- [Reactive Test Assertions](ReactiveTestAssertions) — the full assertion API, the §2a deadlock rule, and the catalogue of legitimately-async cases
+- [CQRS — Queries vs. Content Access](CqrsAndContentAccess) — why a query is the wrong read after a write
 - [Data Binding](xref:GUI/DataBinding) — layout areas declare, views subscribe, tests assert against the subscription path
-- [Test State Isolation](TestStateIsolation) — required reading if your tests share a cluster fixture (Orleans, any `ICollectionFixture<>` that builds the mesh once)
+- [Test State Isolation](TestStateIsolation) — required if your tests share a cluster fixture (Orleans, any `ICollectionFixture<>` that builds the mesh once)
 
 ## The golden rules
 
-1. **Test code MAY `await`. Everything it calls into MAY NOT.** Your test is allowed to `await myService.DoWork(...).FirstAsync()` at the xunit boundary. But the service you're testing must still return `IObservable<T>` — you're just converting at the test edge, not at the service edge. Never add an `async`/`Task` return type to production code "just to make the test work".
-2. **Reads after writes use a stream, never a query.** `await MeshQuery.QueryAsync<MeshNode>($"path:{X}").FirstOrDefaultAsync()` is lagged — it goes through the read-side index and returns stale content right after a write. Use `ReadNodeAsync(path)` (below) or `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReference())`.
-3. **Queries are only for sets and existence.** Listing children, counting matches, asserting "namespace is empty" — those are legitimate `QueryAsync` / `ObserveQuery` uses. Reading a specific node's content is not.
-4. **No mocking of `IMessageHub`, `IMeshService`, `IMeshStorage`.** Tests that need infrastructure inherit from `MonolithMeshTestBase` or `OrleansTestBase`. If a service mocks wrong, the real behaviour is different in CI — the mock passes, production fails.
-5. **Propagate exceptions.** Timeouts, cancellations, and delivery failures are real test failures. Don't wrap them in `try { ... } catch { return null; }` to make a red test green — you'll make a flaky test green instead.
+1. **Test bodies are `void` and reactive.** Assert on the observable: `obs.Should().Within(10.Seconds()).Match(x => predicate)`. The assertion subscribes, blocks up to the timeout for the emission you describe, and returns it. No `async Task`, no `await`, no `.FirstAsync().ToTask()` anywhere in the body.
+2. **A blocking `.Should()` and an `await` cannot coexist in the same method.** xUnit runs an `async Task` test under a SynchronizationContext; a blocking reactive assertion holds that thread while the hub tries to deliver the emission on it → deadlock. So: the instant a method uses `.Should().Emit()/.Match()/.Be()`, it must be `void` with every `await` removed. (See [Reactive Test Assertions §2](ReactiveTestAssertions) for the few methods that legitimately stay `async` — and why they then must *not* use a blocking assertion.)
+3. **Reads after writes use a stream, never a query.** A query goes through the lagged read-side index and returns stale content right after a write. Read a known node with `ReadNode(path).Should().Emit()` (test base) or `workspace.GetMeshNodeStream(path)` / `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReference())`.
+4. **Queries are only for sets and existence.** Listing children, counting matches, "namespace is empty" — legitimate `ObserveQuery`. Reading a specific node's content is not.
+5. **No mocking of `IMessageHub`, `IMeshService`, `IMeshStorage`.** Inherit `MonolithMeshTestBase` or `OrleansTestBase` and let the real services run. A mock that passes while production fails is worse than no test.
+6. **Let failures propagate.** Timeouts, cancellations, and delivery failures are real test failures — the reactive assertions surface them for you. Never wrap a read in `try { … } catch { return null; }`; you'd turn a flaky bug into a green-but-lying test. To assert an *expected* error, use `.Materialize()` (rule below), not a swallowing catch.
 
 ## The canonical test base
 
@@ -36,337 +40,206 @@ public class MyFeatureTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
             .ConfigureHub(hub => hub.AddMyFeature());
 
     [Fact]
-    public async Task UpdateNode_SurfacesNewName()
+    public void UpdateNode_SurfacesNewName()                       // ← void, not async Task
     {
         var orgId = $"Org_{Guid.NewGuid():N}"[..12];
-        await NodeFactory.CreateNode(new MeshNode(orgId) { Name = "Original", NodeType = "Markdown" });
+        NodeFactory.CreateNode(new MeshNode(orgId)
+            { Name = "Original", NodeType = "Markdown" }).Should().Emit();   // ← subscribe = do the write
 
         var updated = MeshNode.FromPath(orgId) with { Name = "Renamed", NodeType = "Markdown" };
-        await NodeFactory.UpdateNode(updated);
+        NodeFactory.UpdateNode(updated).Should().Emit();
 
-        // ✅ Stream read — authoritative, never lagged.
-        var node = await ReadNodeAsync(orgId);
+        // ✅ Authoritative owner-hub read — never lagged.
+        var node = ReadNode(orgId).Should().Emit();
         node!.Name.Should().Be("Renamed");
     }
 }
 ```
 
 `MonolithMeshTestBase`:
-- Logs in an admin user (`TestUsers.DevLogin`) in `InitializeAsync` — your tests start authenticated.
+- Logs in an admin user (`TestUsers.DevLogin`) — your tests start authenticated.
 - Exposes `NodeFactory` / `MeshQuery` (both → `IMeshService`) and `PathResolver`.
-- Exposes `ReadNodeAsync(path)` — the canonical CQRS-correct single-node read.
+- Exposes `ReadNode(path)` — the canonical CQRS-correct single-node read, returning `IObservable<MeshNode?>`.
 - Disposes the mesh cleanly on teardown.
 
-`OrleansTestBase` gives you the same shape for distributed tests using an Orleans TestCluster. Same `ReadNodeAsync` shape via `MeshNodeTestReadExtensions` on `IMessageHub`.
+`OrleansTestBase` gives the same shape for distributed tests on an Orleans TestCluster.
 
-## `ReadNodeAsync` — the one you want
+> **Cold observables: `Should()` is the subscribe.** `NodeFactory.CreateNode(...)`, `UpdateNode`, `DeleteNode`, and `hub.Observe(...)` are **cold** — the side effect (the write, the request) runs on subscribe, not on call. The blocking `.Should().Emit()` subscribes and so performs the work *and* waits for it to land. A bare `NodeFactory.CreateNode(node);` with no `.Should()` / `.Subscribe()` does nothing.
+
+## `ReadNode` — the authoritative single-node read
 
 ```csharp
-// Shared helper in MeshWeaver.Mesh.Testing (extension on IMessageHub)
-var node = await hub.ReadNodeAsync(path, ct);
-
-// Same thing, delegating from MonolithMeshTestBase
-var node = await ReadNodeAsync(path, ct);
+// On the test base (delegates to the IMeshService-backed owner-hub read):
+var node = ReadNode(path).Should().Within(ReadNodeTimeout).Emit();
 ```
 
-Under the hood it posts `GetDataRequest(new MeshNodeReference())` to the per-node hub. The owning hub's reducer is authoritative — no catalog / index lag, no stale content right after a write.
-
-**Return semantics:**
-- Node exists → returns the `MeshNode`.
-- Node does not exist (routing says `ErrorType.NotFound`) → returns `null`.
-- Anything else (timeout, cancellation, delivery failure with a different error) → propagates the exception.
-
-Use the `null` branch only for "node was deleted / never existed" assertions. Don't catch timeouts yourself — a timeout means something is hung, which is a real test bug.
+Under the hood it reads the owning per-node hub's reducer — no catalog/index lag, no stale content right after a write. Emission semantics:
+- Node exists → emits the `MeshNode`.
+- Node does not exist (routing says `NotFound`) → emits `null`.
+- Anything else (timeout, delivery failure) → the stream errors, and `.Should().Emit()` fails the test with the underlying message.
 
 ```csharp
-// ✅ "expect found" after create/update — bare stream read
-var created = await ReadNodeAsync(orgId);
-created.Should().NotBeNull();
+// ✅ "expect found" after create/update
+ReadNode(orgId).Should().Match(n => n is { Name: "Renamed" });
 
 // ✅ "expect not found" after delete — the NotFound null surfaces naturally
-await NodeFactory.DeleteNode(orgId);
-var deleted = await ReadNodeAsync(orgId);
-deleted.Should().BeNull();
+NodeFactory.DeleteNode(orgId).Should().Emit();
+ReadNode(orgId).Should().Match(n => n is null);
 ```
+
+## The reactive assertion surface
+
+From `MeshWeaver.Reactive.Assertions` (global `using` in every test project). Full reference: [Reactive Test Assertions](ReactiveTestAssertions).
+
+| Call | Meaning |
+|---|---|
+| `obs.Should().Emit()` | block ≤ timeout for the first emission; **return it** |
+| `obs.Should().Match(x => pred)` | block for the first emission satisfying `pred`; return it |
+| `obs.Should().Be(expected)` | first emission equals `expected` |
+| `obs.Should().Complete()` | stream completes within the timeout |
+| `obs.Should().NotEmit(within: 200.Milliseconds())` | nothing arrives — the **one** place a fixed wait is correct |
+| `obs.Should().Within(t)....` | override the default 10 s timeout for this chain |
+
+`.Emit()` / `.Match()` **return** the matched value, so they replace `var x = await obs....ToTask()` one-for-one: `var x = obs.Should().Within(t).Match(...)`.
+
+**Fold the wait into the predicate.** Don't take the first emission and hope it's the right one — describe the state you're waiting for:
+
+```csharp
+// ❌ grabs whatever lands first — stale/partial on cold-start CI
+var msgs = stream.Should().Emit();
+msgs.Count.Should().Be(2);
+
+// ✅ waits for the emission where the invariant actually holds
+var msgs = stream.Should().Within(45.Seconds()).Match(m => m.Count == 2);
+```
+
+## Asserting an expected error — `.Materialize()`, not `ThrowAsync`
+
+A reactive `.Should().Emit()/.Match()` wraps an OnError in an assertion exception (it does **not** rethrow the original type), so you can't catch the original with an `Action.Should().Throw<T>()`. To assert a stream *errors with a specific type*, materialize OnError into a value:
+
+```csharp
+var error = cache.GetStream(missingPath)
+    .Where(n => n?.Content is not null)
+    .Take(1)
+    .Materialize()
+    .Should().Within(5.Seconds()).Match(n => n.Kind == NotificationKind.OnError);
+error.Exception.Should().BeOfType<DeliveryFailureException>();
+```
+
+`using System.Reactive;` provides `NotificationKind`. This replaces the old `await act.Should().ThrowAsync<T>()` shape.
+
+## Waiting for a state to change over time
+
+`GetMeshNodeStream` / `GetRemoteStream` are **live** — they replay current state and keep emitting. Submit first, then assert on the live stream; the assertion catches the settled state whenever it lands:
+
+```csharp
+client.SubmitMessage(threadPath, "Hi", contextPath: "TestUser");
+
+var idle = workspace.GetMeshNodeStream(threadPath)
+    .Select(node => node?.Content as MeshThread)
+    .Should().Within(45.Seconds()).Match(t => t is { Status: ThreadExecutionStatus.Idle });
+```
+
+When the source is **request/response with no stream surface** (a `GetDataRequest`, a query snapshot), poll reactively — the interval is the cadence, the `.Match` is the condition, `.Within` is the deadline:
+
+```csharp
+var match = Observable.Interval(50.Milliseconds()).StartWith(0L)
+    .SelectMany(_ => meshService.QueryAsync<MeshNode>("nodeType:Story").ToObservable().ToList())
+    .Should().Within(15.Seconds()).Match(list => list.Count >= 3);
+```
+
+…or, for a synced query, prefer `MeshService.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(q))` and match on `c.ChangeType == QueryChangeType.Initial` (its first emission is the full snapshot the old `QueryAsync().ToListAsync()` returned).
+
+## What NOT to do
+
+### ❌ A query to read a just-written node
+```csharp
+NodeFactory.UpdateNode(updated).Should().Emit();
+var found = meshService.QueryAsync<MeshNode>($"path:{orgId}").ToObservable()
+    .Should().Emit();                       // flaky: index may still hold "Original"
+```
+The read-side index is eventually consistent. Use `ReadNode(orgId)`.
+
+### ❌ Asserting "exactly N change events"
+A change feed (pg_notify, any synced query) can deliver follow-ups for a write the subscription wired up *after* the row existed. Filter on the emission **shape**, not the count:
+```csharp
+var initial = meshService.ObserveQuery<MeshNode>(req)
+    .Should().Within(10.Seconds()).Match(c => c.ChangeType == QueryChangeType.Initial);
+initial.Items.Should().HaveCount(1);
+```
+
+### ❌ `Task.Delay` / `Thread.Sleep` to "wait for propagation"
+Fold the wait into `.Should().Match(...)` on the real stream. The only sanctioned fixed waits are `.Should().NotEmit(within)` ("confirm nothing happens") and forcing distinct sort timestamps.
+
+### ❌ Mocking core services
+```csharp
+var mock = new Mock<IMeshService>();          // mock says writes succeed; prod is broken
+```
+Use the real service via the test base. If it's "too slow", the contract is wrong — fix the contract.
+
+### ❌ Redundant init pings before a layout-area read
+A `client.Observe(new PingRequest()).Should().Within(<big>).Emit()` placed right before a `GetRemoteStream(addr)` read is usually pure redundancy — the **stream subscription self-activates the hub** and triggers the same cold compile. Drop the ping; give the follow-up read a cold-compile-tolerant `.Within(60.Seconds())`.
+
+**But some pings are load-bearing — keep these:** pings before a `GetDataRequest` (content-collection data source), pings that trigger a transient-node auto-confirm (e.g. a `TransientTodo` Edit flow), and pings that *are* the test (PingPong, a `GetHostedHub(..., Never)` existence check). Todo-*instance* hubs do **not** self-activate from a layout-area subscription the way project-level hubs do, so their pings stay. When unsure: remove it, run the test; if it times out, restore it and note why.
+
+## Hot vs. replayed signals — `ReplaySubject` when the producer can fire first
+
+A plain `Subject<T>` is **hot**: emissions made before a subscriber attaches are lost. If a handler can `OnNext` before the test's blocking assertion subscribes, use a `ReplaySubject<T>(1)` so the later subscribe still sees it:
+
+```csharp
+var seen = new ReplaySubject<string?>(1);
+stream.Update(_ => { seen.OnNext(accessService.Context?.ObjectId); return null; }, _ => { });
+seen.Should().Within(5.Seconds()).Match(id => id == "alice");
+```
+
+Or invert: subscribe (start the blocking assertion on another thread) first, fire the producer second. Either reads fine; pick the clearer one.
 
 ## Orleans tests — clients must be mesh nodes
 
-> **A client that posts mesh requests must itself be a registered MeshNode.** Otherwise it is not a participant in mesh routing — responses targeted back at the client address can't be routed cleanly, type-registry lookups for the client's deliveries are missing, and the test's polling loops time out with `responseMsg=null` and no clear cause.
+> **A client that posts mesh requests must itself be a registered MeshNode**, or routing won't recognise it as a participant — responses targeted back at the client address can't route, type-registry lookups for its deliveries are missing, and assertions time out with no clear cause.
 
-When you build an Orleans test client via `ClientMesh.ServiceProvider.CreateMessageHub(new Address("client", "..."), config => ...)`, also register that address as a MeshNode on the silo, and register the data-layer types the client will post:
+When you build an Orleans test client, register its address as a MeshNode on the silo and register the data-layer types it sends/receives:
 
 ```csharp
-// Silo configurator — make the client address a known MeshNode so routing
-// recognises it as a participant. Without this, the silo's response cell creation,
-// stream updates, and GetDataRequest replies targeting the client address may
-// silently fall through.
-hostBuilder
-    .AddMeshNodes(new MeshNode("client", "delegation") { Name = "Test Client", NodeType = "User" })
-    ...
+hostBuilder.AddMeshNodes(new MeshNode("client", "delegation")
+    { Name = "Test Client", NodeType = "User" });
 
-// Client config — register every type the client will SEND to or RECEIVE from
-// the silo. AddAITypes covers AI message types; you must also register the data
-// surface that maps to the workspace stream protocol:
 config.TypeRegistry.AddAITypes();
 config.TypeRegistry.WithType(typeof(MeshNodeReference), nameof(MeshNodeReference));
-return config.AddLayoutClient();   // covers GetDataRequest/Response + sub/unsub
+return config.AddLayoutClient();   // GetDataRequest/Response + sub/unsub
 ```
 
-The symptom of getting this wrong: `client.Observe(GetDataRequest(new MeshNodeReference()), o => o.WithTarget(addr)).FirstAsync().ToTask()` returns observable that never emits — the request fails type-registry resolution at the client (or at the silo if the client's `MeshNodeReference` field can't deserialize back), gets dropped silently, and your polling loop spins for the full timeout window.
+The shared `OrleansTestBase` exposes a synchronous `GetClient(...)` that wires this up — there is **no** async client-acquisition; the test calls `GetClient()` directly. Symptom of getting the registration wrong: `client.Observe(GetDataRequest(...)).Should().Emit()` never emits and the assertion times out.
 
-Standalone Monolith tests don't hit this because `MonolithMeshTestBase` registers `MeshNodeReference` and the test's "client" is in-process — no serialization round-trip, no need to declare a separate participant. The Orleans serialization boundary makes the participant-registration explicit.
+## CI-only failure ≠ flake — it's a real timing or shared-state bug
 
-## What NOT to do in tests
+When a test fails on CI but passes locally, **don't label it a flake and skip it.** Every CI-only failure investigated in this repo has been a real bug: an eventually-consistent index read too eagerly; a hot `Subject` that should have been a `ReplaySubject`; an `AccessContext` lost across the post-pipeline boundary; an init ping removed from a hub that doesn't self-activate. Skipping hides the bug; running it on CI surfaced it. Fix the bug. (Re-running a hung test "to see" hides the race — see [Debugging Message Flow](DebuggingMessageFlow) for the trace tags to grep instead.)
 
-### ❌ `QueryAsync` to read a just-written node
+## Comprehensive coverage
 
-```csharp
-// WRONG — read-side index is eventually consistent. Returns stale content.
-await NodeFactory.UpdateNode(updated);
-var found = await MeshQuery
-    .QueryAsync<MeshNode>($"path:{orgId}")
-    .FirstOrDefaultAsync();
-found!.Name.Should().Be("Renamed");  // flaky: index may still have "Original"
-```
-
-The failure mode is the worst kind: the assertion *sometimes* passes under low load and *sometimes* fails in CI. Switch to `ReadNodeAsync(orgId)`.
-
-### ❌ Swallowing timeouts and cancellations
-
-```csharp
-// WRONG — a hung read is a real bug. Silently mapping it to null hides the hang
-// and turns "deadlock in handler X" into "test says node was null".
-try { return await stream.Take(1).Timeout(TimeSpan.FromSeconds(10)).ToTask(ct); }
-catch (TimeoutException) { return null; }
-catch (OperationCanceledException) { return null; }
-```
-
-Let exceptions propagate. If a test method times out, xunit's `[Fact(Timeout = ...)]` or the overall inactivity guard surfaces the failure with a stack trace — that's what lets you find the deadlock.
-
-### ❌ Mocking core services
-
-```csharp
-// WRONG — mock says writes succeed; production migration is broken.
-var mock = new Mock<IMeshService>();
-mock.Setup(s => s.CreateNode(It.IsAny<MeshNode>())).Returns(Observable.Return(mockNode));
-```
-
-The test passes. The migration ships. Prod breaks. Use `MonolithMeshTestBase` and let the real service do the work; if that's too slow, the service's contract is wrong — fix the contract, not the test.
-
-### ❌ Polling loops around `QueryAsync` (or any read)
-
-```csharp
-// WRONG — even with a sleep, the index may still lag. Wastes time, still flaky.
-for (var i = 0; i < 20; i++)
-{
-    var n = await MeshQuery.QueryAsync<MeshNode>($"path:{p}").FirstOrDefaultAsync();
-    if (n is { State: MeshNodeState.Active }) break;
-    await Task.Delay(100);
-}
-
-// WRONG — sleep-then-assert. 200 ms races propagation under CI load. Even when
-// it doesn't fail, the lower bound is dead time on every run.
-await client.Observe(DataChangeRequest.Update([newOrder]), o => o.WithTarget(host)).FirstAsync().ToTask();
-await Task.Delay(200);
-var result = await client.Observe(new GetDataRequest(new DataPathReference("OrderSummary")), o => o.WithTarget(host)).FirstAsync().ToTask();
-result.Should().Contain(s => s.OrderId == "O4");
-```
-
-The fix has two shapes depending on whether the source is already an observable.
-
-**(a) Source IS an observable (`GetRemoteStream`, `workspace.GetQuery`, a hub stream)** — subscribe and filter:
-
-```csharp
-var workspace = Mesh.GetWorkspace();
-await workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-        new Address(p), new MeshNodeReference())
-    .Where(c => c.Value is { State: MeshNodeState.Active })
-    .Take(1)
-    .Timeout(TimeSpan.FromSeconds(10))
-    .ToTask(ct);
-```
-
-**(b) Source is a request/response with no stream surface (`GetDataRequest`, a `MeshQuery.QueryAsync<>().ToListAsync()` snapshot)** — wrap the re-query in `Observable.Interval(...).SelectMany(...)`, then `.Where(predicate).FirstAsync().Timeout(...)`. The interval IS the polling cadence; the `.Where` IS the condition; the `.Timeout` IS the deadline:
-
-```csharp
-var result = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
-    .SelectMany(_ => Observable.FromAsync(() => client
-        .Observe(new GetDataRequest(new DataPathReference("OrderSummary")),
-                 o => o.WithTarget(host))
-        .FirstAsync().ToTask()))
-    .Select(r => (r.Message.Data as InstanceCollection)?.Instances.Values
-        .Cast<OrderSummary>().ToList() ?? new List<OrderSummary>())
-    .Where(list => list.Any(s => s.OrderId == "O4"))
-    .FirstAsync().Timeout(TimeSpan.FromSeconds(15)).ToTask(ct);
-```
-
-`.StartWith(0L)` fires the first request immediately (without waiting one interval). The whole expression evaluates to the FIRST result-set that matches the predicate — no hand-rolled `while` loop, no separate "extra delay for processing to settle".
-
-**Same shape for `MeshQuery.QueryAsync<>` polling**:
-
-```csharp
-// Wait until the synced query reflects a write that just happened.
-var match = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
-    .SelectMany(_ => Observable.FromAsync(async () =>
-        await MeshQuery.QueryAsync<MeshNode>("nodeType:Story").ToListAsync()))
-    .Where(list => list.Count >= 3)
-    .FirstAsync().Timeout(TimeSpan.FromSeconds(15)).ToTask(ct);
-```
-
-### ❌ Asserting "exactly N change events"
-
-```csharp
-// WRONG — pg_notify and similar change feeds can deliver follow-up events for a
-// write that the Subscribe wired up AFTER the row already existed (initial-snapshot
-// race). Count-exact assertions flake whenever the listener is warm.
-var changes = new List<QueryResultChange<MeshNode>>();
-using var sub = _query.ObserveQuery<MeshNode>(req, _options).Subscribe(changes.Add);
-await WaitForChanges(changes, 1);
-changes.Should().HaveCount(1);                      // ← flaky
-changes[0].ChangeType.Should().Be(QueryChangeType.Initial);
-```
-
-Filter on the specific emission shape you care about, not the count:
-
-```csharp
-// RIGHT — assert the SHAPE of the Initial emission, not the absence of follow-ups.
-var initial = await _query.ObserveQuery<MeshNode>(req, _options)
-    .Where(c => c.ChangeType == QueryChangeType.Initial)
-    .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).ToTask();
-initial.Items.Should().HaveCount(1);
-initial.Items[0].Id.Should().Be("Story1");
-```
-
-### ❌ `async ctx =>` click actions in test-only setup code
-
-Even in test fixtures, stay consistent with the production rule: click actions are sync, use `Subscribe` + `RegisterCallback`. A fixture that spawns a browser session to click a real UI button is the one exception, and it should be clearly labelled.
-
-## Stream assertions: filter, then take
-
-When a test waits on an emission from a hot stream — a `Subject`, the workspace's `GetRemoteStream`, a hub change-feed, a synced query — never take the first emission unconditionally. Emit ordering is non-deterministic on cold-start CI, the first value often arrives with stale or partial state, and the assertion captures the wrong snapshot.
-
-```csharp
-// ❌ WRONG — takes whatever arrives first; flakes on CI when an unrelated
-//    upstream emission lands before the one the test cares about.
-var seen = await stream.FirstAsync().Timeout(5.Seconds()).ToTask(ct);
-seen.Should().Be("alice");
-
-// ❌ WRONG — TaskCompletionSource captures the first invocation and
-//    TrySetResult ignores subsequent ones, so a stale first value pins the
-//    assertion.
-var tcs = new TaskCompletionSource<string?>();
-stream.Subscribe(value => tcs.TrySetResult(value));
-var seen = await tcs.Task.WaitAsync(5.Seconds());
-
-// ✅ RIGHT — filter for the value that proves the invariant holds, time
-//    out if it never arrives.
-var aliceSeen = await stream
-    .Where(id => id == "alice")
-    .FirstAsync()
-    .Timeout(5.Seconds())
-    .ToTask(ct);
-```
-
-Same pattern for query result-set assertions:
-
-```csharp
-// ❌ WRONG — first emission of a multi-query SyncedQuery may contain only
-//    one upstream's Initial result.
-var firstResults = await observable.FirstAsync().ToTask(ct);
-
-// ✅ RIGHT — wait for the assertion to actually hold (every expected node
-//    is present), with a timeout that surfaces a real failure instead of
-//    a stale partial state.
-var results = await observable
-    .Where(arr => expected.All(p => arr.Any(n => n.Path == p)))
-    .FirstAsync()
-    .Timeout(15.Seconds())
-    .ToTask(ct);
-```
-
-### `Subject` vs. `ReplaySubject` — choose by who emits when
-
-A plain `Subject<T>` is **hot**: emissions made before a subscriber attaches are dropped on the floor. The pattern below looks right but is broken:
-
-```csharp
-// ❌ WRONG — `seen` is hot. The handler may invoke OnNext BEFORE the
-//    test's await subscribes, so the .Where(id => id == "alice") never
-//    sees the value and the test times out.
-var seen = new Subject<string?>();
-stream.Update(_ =>
-{
-    seen.OnNext(accessService.Context?.ObjectId);
-    return null;
-}, _ => { });
-
-var aliceSeen = await seen
-    .Where(id => id == "alice")
-    .FirstAsync()
-    .Timeout(5.Seconds())
-    .ToTask(ct);
-```
-
-Use `ReplaySubject<T>` when the producer can fire before the consumer subscribes — late subscribers replay every prior emission and the `.Where(...).FirstAsync()` finds the value:
-
-```csharp
-// ✅ RIGHT — every OnNext is buffered; the test's later subscribe still
-//    sees the "alice" emission produced earlier by the handler.
-var seen = new ReplaySubject<string?>();
-stream.Update(_ =>
-{
-    seen.OnNext(accessService.Context?.ObjectId);
-    return null;
-}, _ => { });
-
-var aliceSeen = await seen
-    .Where(id => id == "alice")
-    .FirstAsync()
-    .Timeout(5.Seconds())
-    .ToTask(ct);
-```
-
-Or invert: subscribe first, fire the producer second. Either pattern works; pick whichever reads more naturally for the test.
-
-### CI-only failure ≠ flake — it's a real timing or shared-state bug
-
-When a test fails on CI but passes locally, the temptation is to label it a flake and skip it. **Don't.** In every case investigated in this repo so far, a CI-only failure has been a real bug:
-
-- An eventually-consistent index hadn't propagated the just-written node — the production code reads the index too eagerly.
-- A `Subject` was hot when it should have been a `ReplaySubject` — the assertion missed the emission on faster CI hardware (or slower, depending).
-- A `TaskCompletionSource.TrySetResult` captured a stale first value — the production callback fires multiple times under load.
-- An `AccessContext` was lost across the post-pipeline → handler boundary — the production code reads `AsyncLocal.Value` on the wrong thread.
-
-Skipping the test hides the bug; running it once on CI surfaced it. Fix the bug, don't skip the test. Search this doc for "Stream assertions" and "ReadNodeAsync" first — those two patterns have caught most of the CI-only failures already.
-
-## Comprehensive coverage per the Coder agent rules
-
-[`Coder.md`](xref:Agent/Coder) sets the testing bar for new NodeTypes and data models: **comprehensive unit tests per invariant + branch + boundary + degenerate-input**, not "at least one test per feature". Applies equally to hand-written code. A NodeType with a single happy-path test is demoed, not tested. Bring the suite up before you merge.
+[`Coder.md`](xref:Agent/Coder) sets the bar for NodeTypes and data models: **a test per invariant, per branch, per boundary, per degenerate input** — plus a serialization round-trip — not "at least one test per feature". A NodeType with a single happy-path test is demoed, not tested.
 
 ## Running tests
 
-Always run in the background with `run_in_background: true` — tests can take minutes and you don't want to block the conversation. Run from the repo root with sub-paths:
+Always `run_in_background: true` — tests take minutes.
 
 ```bash
 dotnet test test/MeshWeaver.NodeOperations.Test --no-build --no-restore
 dotnet test test/MeshWeaver.Acme.Test --no-build --no-restore --filter "FullyQualifiedName~TodoDataChangeWorkflowTest"
 ```
 
-Don't use `--verbosity minimal` when a failure is expected — minimal hides stack traces and forces a rerun with higher verbosity. Default verbosity surfaces errors the first time.
-
-**Run → read → fix → run once more.** Do not rerun a hung or failing test 2-3 times "to see" — the framework already emits a structured `MESSAGE_FLOW:` trace at Trace level (see [DebuggingMessageFlow](DebuggingMessageFlow)). Run once, grep the trace, fix the root cause.
+The xUnit v3 adapter matches `FullyQualifiedName~`, **not** `ClassName~`. Don't use `--verbosity minimal` when a failure is possible — it hides stack traces. **Run → read → fix → run once more**; don't rerun a hung test 2–3 times "to see" — grep the `MESSAGE_FLOW:` trace instead.
 
 ## Test-project layout
 
-- Framework code in `src/`, tests in `test/`.
-- One `*.Test` project per production project where it makes sense.
-- Shared fixtures go in `src/MeshWeaver.Hosting.Monolith.TestBase` / `src/MeshWeaver.Hosting.Orleans.Test.Base`.
-- NodeType-specific tests live inside the NodeType's folder (`Namespace/Type/Test/TypeTest.cs`) — see the SocialMedia canonical example.
+- Framework code in `src/`, tests in `test/`, one `*.Test` project per production project where it makes sense.
+- Shared fixtures in `src/MeshWeaver.Hosting.Monolith.TestBase` / the Orleans test base.
+- NodeType tests live in the NodeType's `Test/` folder (`Namespace/Type/Test/TypeTest.cs`).
 
 ## References
 
-- [Asynchronous Calls](AsynchronousCalls) — hub handler rules (no `await` in production; tests are the exception)
-- [CQRS — Queries vs. Content Access](CqrsAndContentAccess) — why `ReadNodeAsync` is the right read
-- [Data Binding](xref:GUI/DataBinding) — the GUI pattern tests assert against
-- [Debugging Message Flow](DebuggingMessageFlow) — how to read the framework's own trace when a test hangs
-- `src/MeshWeaver.Mesh.Contract/Testing/MeshNodeTestReadExtensions.cs` — source of `ReadNodeAsync`
-- `src/MeshWeaver.Hosting.Monolith.TestBase/MonolithMeshTestBase.cs` — the test base every monolith test inherits
+- [Reactive Test Assertions](ReactiveTestAssertions) — assertion API, §2a deadlock rule, the legitimately-async catalogue
+- [Asynchronous Calls](AsynchronousCalls) — why hub-reachable code is `IObservable<T>`, never `Task<T>`
+- [CQRS — Queries vs. Content Access](CqrsAndContentAccess) — why `ReadNode` is the right read
+- [Debugging Message Flow](DebuggingMessageFlow) — reading the framework's own trace when a test hangs
+- `src/MeshWeaver.Hosting.Monolith.TestBase/MonolithMeshTestBase.cs` — the base every monolith test inherits
