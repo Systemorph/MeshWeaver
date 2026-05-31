@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Reactive;
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Reflection;
 using System.Runtime.Loader;
@@ -91,7 +92,23 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         var cts = new CancellationTokenSource();
         lock (cancellationLock) { activeCancellation = cts; }
 
+        // 🚨 Run the execution pipeline OFF the action block. The first stage,
+        // Observable.FromAsync(_ => executionLock.WaitAsync(ct)), completes
+        // SYNCHRONOUSLY whenever the semaphore is uncontended (the common case:
+        // one submission at a time), which makes the entire downstream chain —
+        // including EnsureInitialized's AppDomain reference scan and the cold
+        // Roslyn CSharpScript.RunAsync compile — run inline on the subscribing
+        // thread. Without SubscribeOn that thread is the executor's action
+        // block, so the SubmitCodeRequest delivery stays "Executing" for the
+        // whole multi-second compile: the public hub's response callback never
+        // resolves until the script finishes, and a caller that returns as soon
+        // as it sees its side effect (e.g. the Code node's Last* stamp) leaves
+        // the SubmitCodeRequest callback leaked at dispose (Quiescing-budget
+        // failure in ScriptExecutionInUserHomeTest). Scheduling the subscription
+        // on the TaskPool frees the action block immediately; the semaphore
+        // still serialises concurrent submissions on pool threads.
         Execute(msg.Code, msg.Id, msg.Inputs, activityLogger, cts.Token)
+            .SubscribeOn(TaskPoolScheduler.Default)
             .Subscribe(
                 returnValue =>
                 {

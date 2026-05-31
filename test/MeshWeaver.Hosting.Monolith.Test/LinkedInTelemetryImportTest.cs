@@ -39,11 +39,19 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
     protected override bool ShareMeshAcrossTests => true;
 
     // The reactive `.Should().Within(...)` waits below add up to the cold-cache
-    // compile wait (45 s) + the post-compile render wait (25 s). Widen the dispose
-    // watchdog deadlines past that worst case so a legitimately slow Roslyn cold
-    // start isn't reported as a hung test by DisposeAsync.
-    protected override TimeSpan TestSoftDeadline => TimeSpan.FromSeconds(75);
-    protected override TimeSpan TestHardDeadline => TimeSpan.FromSeconds(120);
+    // compile wait (45 s) + the post-compile render wait (45 s) — the instance
+    // hub's cold activation (assembly load from the FileSystemAssemblyStore +
+    // applying the compiled NodeType Configuration that registers the
+    // ImportTelemetry view) is the slow leg on a cold CI agent, so the render
+    // wait must be as generous as the compile wait. Widen the dispose watchdog
+    // deadlines past that worst case (90 s of waits) so a legitimately slow
+    // Roslyn/activation cold start isn't reported as a hung test by DisposeAsync.
+    // 🚨 The [Fact(Timeout=…)] below MUST exceed the SUM of the internal waits
+    // (and sit at/under TestHardDeadline) — a 60 s cap fired BEFORE the render
+    // wait could complete on CI, killing the test mid-activation (the prior
+    // 26721963847 failure at the render wait). Keep these three in lockstep.
+    protected override TimeSpan TestSoftDeadline => TimeSpan.FromSeconds(110);
+    protected override TimeSpan TestHardDeadline => TimeSpan.FromSeconds(140);
 
     private const string NodeTypePath = "Systemorph/LinkedInProfile";
     private const string SourceNamespace = "Systemorph/LinkedInProfile/Source";
@@ -73,7 +81,7 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
                 return services;
             });
 
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 130000)]
     public void LinkedInTelemetryImport_CompilesAndRendersImportArea()
     {
         NodeFactory.CreateNode(new MeshNode("LinkedInProfile", "Systemorph")
@@ -166,7 +174,13 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
         var control = stream
             .GetControlStream(reference.Area!)
             .Do(c => Output.WriteLine($"[{DateTime.UtcNow:O}] GetControlStream emission: {c?.GetType().Name ?? "null"}"))
-            .Should().Within(25.Seconds())
+            // 45 s (was 25 s): the cold instance-hub activation — assembly load
+            // from the FileSystemAssemblyStore plus applying the compiled NodeType
+            // Configuration that registers ImportTelemetry — is the slow leg on a
+            // cold CI agent and overran 25 s (CI 26721963847 failed exactly here).
+            // The [Fact] timeout + class deadlines above are widened to keep this
+            // generous render budget inside the test's hard cap.
+            .Should().Within(45.Seconds())
             .Match(x => x is StackControl or HtmlControl or MarkdownControl);
 
         Output.WriteLine($"[{DateTime.UtcNow:O}] RenderArea resolved control: {control?.GetType().Name}");
