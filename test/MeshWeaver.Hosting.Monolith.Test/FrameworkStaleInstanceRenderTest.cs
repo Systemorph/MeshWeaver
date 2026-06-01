@@ -65,9 +65,8 @@ public class FrameworkStaleInstanceRenderTest(ITestOutputHelper output) : Monoli
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
     [Fact(Timeout = 180_000)]
-    public async Task FrameworkStaleInstance_RendersCompiledArea_NotOverlay()
+    public void FrameworkStaleInstance_RendersCompiledArea_NotOverlay()
     {
-        var ct = TestContext.Current.CancellationToken;
         var typeId = $"StaleArea{Guid.NewGuid():N}";
         var nodeTypePath = $"type/{typeId}";
         var marker = $"FRESH_COMPILED_MARKER_{typeId}";
@@ -106,25 +105,25 @@ public class FrameworkStaleInstanceRenderTest(ITestOutputHelper output) : Monoli
                     + ".AddLayout(layout => layout.WithDefaultArea(\"Overview\").AddMarkerArea())"
             }
         };
-        await MeshService.CreateNode(typeNode).FirstAsync().ToTask(ct);
-        await MeshService.CreateNode(new MeshNode("code", $"{nodeTypePath}/Source")
+        MeshService.CreateNode(typeNode).Should().Emit();
+        MeshService.CreateNode(new MeshNode("code", $"{nodeTypePath}/Source")
         {
             NodeType = "Code",
             Name = "code",
             State = MeshNodeState.Active,
             Content = new CodeConfiguration { Code = source, Language = "csharp" }
-        }).FirstAsync().ToTask(ct);
+        }).Should().Emit();
 
-        await Mesh.Observe(new GetCompilationPathRequest(), o => o.WithTarget(new Address(nodeTypePath)))
-            .FirstAsync().ToTask(ct);
+        Mesh.Observe(new GetCompilationPathRequest(), o => o.WithTarget(new Address(nodeTypePath)))
+            .Should().Within(90.Seconds()).Emit();
 
         var workspace = Mesh.GetWorkspace();
-        await workspace.GetMeshNodeStream(nodeTypePath)
-            .Where(n => n.Content is NodeTypeDefinition d
+        workspace.GetMeshNodeStream(nodeTypePath)
+            .Should().Within(60.Seconds())
+            .Match(n => n.Content is NodeTypeDefinition d
                 && d.CompilationStatus == CompilationStatus.Ok
                 && !string.IsNullOrEmpty(d.LatestAssemblyPath)
-                && !string.IsNullOrEmpty(d.CompiledFrameworkVersion))
-            .FirstAsync().Timeout(60.Seconds()).ToTask(ct);
+                && !string.IsNullOrEmpty(d.CompiledFrameworkVersion));
         Output.WriteLine("Baseline compile Ok with a usable build.");
 
         // 2. Force the framework-stale shape: stamp a bogus CompiledFrameworkVersion
@@ -132,26 +131,26 @@ public class FrameworkStaleInstanceRenderTest(ITestOutputHelper output) : Monoli
         //    a binary redeploy leaves behind. Status stays Ok, so nothing
         //    auto-recompiles until an instance activation triggers the self-heal.
         var bogusFv = $"STALE-{Guid.NewGuid():N}";
-        await workspace.GetMeshNodeStream(nodeTypePath)
+        workspace.GetMeshNodeStream(nodeTypePath)
             .Update(curr => curr.Content is NodeTypeDefinition d
                 ? curr with { Content = d with { CompiledFrameworkVersion = bogusFv } }
                 : curr)
-            .FirstAsync().ToTask(ct);
-        await workspace.GetMeshNodeStream(nodeTypePath)
-            .Where(n => n.Content is NodeTypeDefinition d && d.CompiledFrameworkVersion == bogusFv)
-            .FirstAsync().Timeout(20.Seconds()).ToTask(ct);
+            .Should().Emit();
+        workspace.GetMeshNodeStream(nodeTypePath)
+            .Should().Within(20.Seconds())
+            .Match(n => n.Content is NodeTypeDefinition d && d.CompiledFrameworkVersion == bogusFv);
         Output.WriteLine($"Forced framework-stale (bogus framework version {bogusFv}).");
 
         // 3. Activate an instance and render its Overview through the layout
         //    client — the exact path the GUI drives.
         var instancePath = $"{nodeTypePath}/Inst";
-        await MeshService.CreateNode(MeshNode.FromPath(instancePath) with
+        MeshService.CreateNode(MeshNode.FromPath(instancePath) with
         {
             Name = "Inst",
             NodeType = nodeTypePath,
             State = MeshNodeState.Active,
             Content = JsonSerializer.SerializeToElement(new { Title = "instance" })
-        }).FirstAsync().ToTask(ct);
+        }).Should().Emit();
 
         var client = GetClient();
         var reference = new LayoutAreaReference("Overview");
@@ -166,12 +165,10 @@ public class FrameworkStaleInstanceRenderTest(ITestOutputHelper output) : Monoli
         // round-tripped), capped at MaxRecompileAttempts ~5ms later, and froze the
         // instance on the overlay — so this wait for the marker timed out (the
         // rbuergi/CatBond/AtlanticBond "not building type" symptom).
-        var control = await stream
+        var control = stream
             .GetControlStream(reference.Area!)
-            .Where(c => c is HtmlControl h && h.Data?.ToString()?.Contains(marker) == true)
-            .Timeout(90.Seconds())
-            .FirstAsync()
-            .ToTask(ct);
+            .Should().Within(90.Seconds())
+            .Match(c => c is HtmlControl h && h.Data?.ToString()?.Contains(marker) == true);
 
         var html = control.Should().BeOfType<HtmlControl>(
             "the instance must bind the compiled Overview after the framework-stale "

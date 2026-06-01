@@ -4,23 +4,21 @@ MeshWeaver is a modular framework for building data-driven applications with rea
 
 ## Getting Started
 
-You can run MeshWeaver in two modes:
+You can run the Memex portal in two modes:
 
 ### Monolithic Setup
 ```bash
-cd portal/MeshWeaver.Portal
-dotnet run
+dotnet run --project memex/Memex.Portal.Monolith
 ```
 
-This setup is useful for smaller projects which are deployed as monoliths. If you are unsure which approach to pick, pick this one.
+Runs at `https://localhost:7122` (HTTP fallback `http://localhost:5022`). This setup is useful for smaller projects deployed as monoliths. If you are unsure which approach to pick, pick this one.
 
 ### Microservices Setup (with .NET Aspire)
 ```bash
-cd portal/aspire/MeshWeaver.Portal.AppHost
-dotnet run
+dotnet run --project memex/aspire/Memex.AppHost
 ```
 
-Please note that this approach requires running docker. Microservices are generally more complex to handle, but they provide big flexibility running in productive setups. 
+Runs the portal at `https://localhost:7202` (HTTP fallback `http://localhost:5202`). This approach requires Docker. Microservices are more complex to operate but provide the flexibility needed for production setups.
 
 ## Creating New Projects
 
@@ -173,9 +171,9 @@ The backbone of MeshWeaver is its message hub system (`MeshWeaver.Messaging.Hub`
 - Built-in dependency injection
 
 ### Data Processing
-- **Messaging**: Send and received messages between addresses. Route them inside the mesh.
+- **Messaging**: Send and receive messages between addresses. Route them inside the mesh.
 - **Concurrency**: Fully asynchronous concurrency using the actor model.
-- **Data Synchronization**: Full-fledged data replication for Create Read Update Delete.
+- **Data Synchronization**: Full-fledged data replication for Create, Read, Update, Delete.
 - **Business Rules**: Rule engine with scope-based state management
 - **Import**: Flexible data import system with activity tracking
 
@@ -185,11 +183,11 @@ The backbone of MeshWeaver is its message hub system (`MeshWeaver.Messaging.Hub`
 
 ### UI and Visualization
 - **Layout**: Framework-agnostic UI control abstractions
-- **Reporting**: Fexible and interactive reporting
+- **Reporting**: Flexible and interactive reporting
 
 ### Flexible deployment options
 - **Elasticity**: Create a fully elastic setup using Orleans
-- **Integration**: Integrate with almost any available technology through Aspire. 
+- **Integration**: Integrate with almost any available technology through Aspire.
 
 ## Resources
 
@@ -197,22 +195,25 @@ The backbone of MeshWeaver is its message hub system (`MeshWeaver.Messaging.Hub`
 - [Website](https://meshweaver.cloud) - Learn more about MeshWeaver
 - [Discord](https://discord.gg/ACSYBWPy) - Join our community
 
-## Architecture
+## Deployment Options
 
-
-### Deployment Options
-
-1. **Monolithic** (`portal/MeshWeaver.Portal`)
-   - Single process deployment
+1. **Monolithic** (`memex/Memex.Portal.Monolith`)
+   - Single-process deployment
    - Simplified setup
    - Suitable for development and smaller deployments
 
-2. **Microservices** (`portal/aspire/MeshWeaver.Portal.AppHost`)
+2. **Microservices** (`memex/aspire/Memex.AppHost`)
    - .NET Aspire-based orchestration
    - Service discovery
-   - Azure integration
    - PostgreSQL for persistence
-   - Azure Blob Storage for articles
+   - Filesystem or Azure Blob Storage backends
+
+Production deployment recipes live under [`deploy/`](deploy/):
+
+- [`deploy/helm`](deploy/helm) — generic Kubernetes/Helm chart (Azure-free self-host)
+- [`deploy/aks`](deploy/aks) — production-grade AKS sample (private cluster, P2S VPN, ACR, pgBackRest PITR)
+- [`deploy/aca`](deploy/aca) — Azure Container Apps (Bicep)
+- [`deploy/compose`](deploy/compose) · [`deploy/compose-ha`](deploy/compose-ha) — Docker Compose (single-node / HA)
 
 ## Contributing
 
