@@ -521,14 +521,18 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 // Init-time pass-through: messages that contribute to Current
                 // being populated (initial frame from owner, error responses).
                 d.Message is SetCurrentRequest or DeliveryFailure or GetDataResponse
-                || d.Message is DataChangedEvent { ChangeType: ChangeType.Full }
-                // UpdateStreamRequest must also pass: deferring it loses the
-                // request entirely (TPL Dataflow LinkTo from deferred → main
-                // doesn't re-flush the queued items in this codebase). The
-                // handler reads Current synchronously at process time — if
-                // Current is null (raced before SubscribeResponse), the
-                // transform receives null and returns null (no-op) without
-                // any harm; once Current is populated, the transform fires.
+                // 🚨 Pass BOTH Full AND Patch DataChangedEvents through during init.
+                // Gated (deferred) messages are LOST — TPL Dataflow's LinkTo from the
+                // deferred block to main doesn't re-flush queued items in this codebase
+                // (the same reason UpdateStreamRequest must pass, below). A producer
+                // that updates its state in the window between the client's
+                // SubscribeRequest and init completion ships that update as a PATCH;
+                // deferring it drops it permanently and the client hangs forever on the
+                // stale initial Full — the LinkedIn / ColdStart / Resubmit / HungSubThread
+                // "observable never emits" CI races. A Patch that races ahead of the base
+                // Full (Current still null) is handled by UpdateStream: it requests a
+                // fresh Full instead of applying onto a missing snapshot.
+                || d.Message is DataChangedEvent
                 || d.Message is UpdateStreamRequest);
 
         // Apply deferred initialization if configured
@@ -590,6 +594,19 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         else
         {
             logger.LogDebug("[SYNC_STREAM] Processing Patch change for {StreamId}", StreamId);
+            // A Patch can race ahead of the initial Full during the subscribe
+            // handshake — the producer updated its state in the window between our
+            // SubscribeRequest and init completing (the init gate now passes Patches
+            // through, see Configure). With no base snapshot to apply onto, ask the
+            // owner for a fresh Full instead of dereferencing the null Current. This
+            // is the fix for the "observable never emits" CI races (LinkedIn,
+            // ColdStart, Resubmit, HungSubThread).
+            if (Current is null || currentJson is null)
+            {
+                logger.LogDebug("[SYNC_STREAM] Patch arrived before base Full for {StreamId}; requesting fresh snapshot", StreamId);
+                RequestFreshSnapshot();
+                return;
+            }
             try
             {
                 (currentJson, var patch) = delivery.Message.UpdateJsonElement(currentJson, hub.JsonSerializerOptions);
@@ -612,27 +629,13 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             }
             catch (StaleStreamStateException stale)
             {
-                // Local JSON cache drifted from the owner's view. Drop our cached snapshot
-                // and request a fresh Full from the owner via a new SubscribeRequest.
-                // The resubscribe is INFRASTRUCTURE (cache refresh) — stamp it as
-                // System so the owner's RLS doesn't deny on whatever ambient identity
-                // happens to be set on the emission thread (often a `sync/<id>` hub
-                // address). User-level access enforcement happens at the consumer
-                // layer, not at the sync-stream cache-refresh seam.
+                // Local JSON cache drifted from the owner's view (concurrent updates
+                // whose Updates were computed against an older snapshot). Drop our
+                // snapshot and request a fresh Full from the owner.
                 logger.LogWarning(stale,
                     "[SYNC_STREAM] Stale patch for {StreamId}; requesting fresh snapshot from {Owner}.",
                     StreamId, StreamIdentity.Owner);
-                Set<JsonElement?>(null);
-                if (Reference is WorkspaceReference wsRef)
-                {
-                    var accessService = Host.ServiceProvider
-                        .GetService(typeof(AccessService)) as AccessService;
-                    using (accessService?.ImpersonateAsSystem())
-                    {
-                        Host.Post(new SubscribeRequest(StreamId, wsRef) { Subscriber = Configuration.Subscriber! },
-                            o => o.WithTarget(StreamIdentity.Owner));
-                    }
-                }
+                RequestFreshSnapshot();
             }
             catch (Exception ex)
             {
@@ -648,6 +651,32 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     private void SyncFailed(IMessageDelivery delivery, Exception exception)
     {
         Host.Post(new DeliveryFailure(delivery, exception.Message), o => o.ResponseFor(delivery));
+    }
+
+    /// <summary>
+    /// Drop the (absent or stale) cached JSON snapshot and ask the owner for a
+    /// fresh <see cref="ChangeType.Full"/> via a new <see cref="SubscribeRequest"/>.
+    /// Called both when a Patch can't be applied onto the current snapshot
+    /// (<see cref="StaleStreamStateException"/>) and when a Patch races ahead of
+    /// the initial Full during the subscribe handshake (Current still null).
+    /// The resubscribe is INFRASTRUCTURE (cache refresh) — stamped System so the
+    /// owner's RLS doesn't deny on whatever ambient identity is set on the
+    /// emission thread (often a <c>sync/&lt;id&gt;</c> hub address); user-level
+    /// access enforcement happens at the consumer layer, not this seam.
+    /// </summary>
+    private void RequestFreshSnapshot()
+    {
+        Set<JsonElement?>(null);
+        if (Reference is WorkspaceReference wsRef)
+        {
+            var accessService = Host.ServiceProvider
+                .GetService(typeof(AccessService)) as AccessService;
+            using (accessService?.ImpersonateAsSystem())
+            {
+                Host.Post(new SubscribeRequest(StreamId, wsRef) { Subscriber = Configuration.Subscriber! },
+                    o => o.WithTarget(StreamIdentity.Owner));
+            }
+        }
     }
 
 
