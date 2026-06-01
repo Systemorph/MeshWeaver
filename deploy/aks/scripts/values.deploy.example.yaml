@@ -26,3 +26,7 @@ config:
     # Leave a provider's ClientId empty to NOT offer it on the login page
     Authentication__Google__ClientId: "<GOOGLE_CLIENT_ID>"
     Authentication__LinkedIn__ClientId: "<LINKEDIN_CLIENT_ID>"
+    # Observability: logs ship to Loki via Promtail (the cluster log agent) with NO portal config —
+    # run deploy.sh with GRAFANA_PW set to fold Grafana + Loki + Prometheus into the deploy.
+    # Only set the OTLP endpoint below if you run an OpenTelemetry collector (traces/metrics):
+    # OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.monitoring:4317"

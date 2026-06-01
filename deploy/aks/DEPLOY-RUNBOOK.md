@@ -86,7 +86,10 @@ az aks command invoke -g memex-aks-rg -n memexaks-cluster --command "bash deploy
 `values.deploy.yaml`) → scale the chart's in-cluster pg to 0 (we use the Flexible Server) →
 `kubectl set image` to the shared ACR → patch the portal to 1 replica + the Azure Files mounts →
 **patch the connection-string secret** (the generated chart hardcodes the in-cluster pg — known
-chart-gen gap).
+chart-gen gap). **Observability is folded in:** export `GRAFANA_PW=...` alongside `MEMEX_PG_CONN`
+and `deploy.sh` also brings up Grafana + Loki + Prometheus (see §6); omit it to skip monitoring.
+At the model level, `AddMemex`'s `OtlpEndpoint` option wires `OTEL_EXPORTER_OTLP_ENDPOINT` for
+OTLP traces/metrics (not needed for log shipping — Promtail scrapes stdout).
 
 ## 5. Public ingress + TLS + DNS
 ```bash

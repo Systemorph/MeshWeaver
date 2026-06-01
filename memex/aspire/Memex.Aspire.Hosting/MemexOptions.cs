@@ -40,6 +40,16 @@ public sealed class MemexOptions
     /// <summary>The portal's externally reachable base URL; the co-hosted CLIs connect back to <c>{BaseUrl}/mcp</c>. Defaults to the portal's own endpoint.</summary>
     public string? BaseUrl { get; set; }
 
+    /// <summary>
+    /// OTLP collector endpoint for telemetry export (sets <c>OTEL_EXPORTER_OTLP_ENDPOINT</c> on the portal).
+    /// Empty = telemetry no-ops (<c>ServiceDefaults</c> skips the exporter when unset). Point this at an
+    /// in-cluster OpenTelemetry collector / Grafana Alloy (e.g. <c>http://otel-collector:4317</c>) to ship
+    /// traces + metrics. NOTE: container <b>logs</b> are collected out-of-band by the cluster log agent
+    /// (Promtail in the grafana/loki-stack — see <c>deploy/aks/scripts/install-observability.sh</c>), so this
+    /// endpoint is only needed for OTLP traces/metrics, not for log shipping.
+    /// </summary>
+    public string? OtlpEndpoint { get; set; }
+
     // Deploy-time capability flags. null = leave the portal default (on); set false to disable explicitly.
     public bool? Anthropic { get; set; }
     public bool? AzureFoundry { get; set; }
