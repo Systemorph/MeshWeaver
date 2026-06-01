@@ -6,6 +6,7 @@ using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 
 namespace MeshWeaver.Hosting.Persistence;
 
@@ -27,16 +28,25 @@ public class CachingStorageAdapter : IStorageAdapter
     // (No cross-mesh static cache: that bled stale file state across test classes — see NoStaticState.md.)
     private readonly DirectorySnapshot _snapshot;
 
+    // Controlled I/O pool (FileSystem resource class). Only the leaves that touch
+    // disk — Read and GetPartitionObjects (Lazy<byte[]>.Value → File.ReadAllBytes)
+    // — go through it; the snapshot-dictionary reads stay synchronous (in-memory).
+    // The same pool is threaded into the inner FileSystemStorageAdapter used for
+    // writes/deletes so all disk I/O shares one bound.
+    private readonly IIoPool _pool;
+
     private static readonly string[] SupportedExtensions = [".md", ".cs", ".json"];
 
     public string BaseDirectory => _baseDirectory;
 
     public CachingStorageAdapter(
         string baseDirectory,
-        Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null)
+        Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null,
+        IIoPool? pool = null)
     {
         _baseDirectory = Path.GetFullPath(baseDirectory);
         _writeOptionsModifier = writeOptionsModifier;
+        _pool = pool ?? IoPool.Unbounded;
         Directory.CreateDirectory(_baseDirectory);
         _snapshot = new DirectorySnapshot(_baseDirectory);
     }
@@ -123,7 +133,7 @@ public class CachingStorageAdapter : IStorageAdapter
     }
 
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
-        => Observable.FromAsync(ct => ReadAsyncCore(path, options, ct));
+        => _pool.Invoke(ct => ReadAsyncCore(path, options, ct));
 
     private async Task<MeshNode?> ReadAsyncCore(string path, JsonSerializerOptions options, CancellationToken ct)
     {
@@ -200,7 +210,7 @@ public class CachingStorageAdapter : IStorageAdapter
 
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
     {
-        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier);
+        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _pool);
         return innerAdapter.Write(node, options)
             .Do(written =>
             {
@@ -210,7 +220,7 @@ public class CachingStorageAdapter : IStorageAdapter
 
     public IObservable<string> Delete(string path)
     {
-        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier);
+        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _pool);
         return innerAdapter.Delete(path)
             .Do(deletedPath =>
             {
@@ -326,12 +336,7 @@ public class CachingStorageAdapter : IStorageAdapter
 
     public IObservable<object> GetPartitionObjects(
         string nodePath, string? subPath, JsonSerializerOptions options)
-        => Observable.Create<object>(async (observer, ct) =>
-        {
-            await foreach (var obj in GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct))
-                observer.OnNext(obj);
-            observer.OnCompleted();
-        });
+        => _pool.InvokeStream(ct => GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct));
 
     private async IAsyncEnumerable<object> GetPartitionObjectsAsyncCore(
         string nodePath,
@@ -399,14 +404,14 @@ public class CachingStorageAdapter : IStorageAdapter
     public IObservable<Unit> SavePartitionObjects(
         string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options)
     {
-        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier);
+        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _pool);
         return innerAdapter.SavePartitionObjects(nodePath, subPath, objects, options)
             .Do(_ => RefreshCacheForPartition(nodePath, subPath));
     }
 
     public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
     {
-        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier);
+        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _pool);
         return innerAdapter.DeletePartitionObjects(nodePath, subPath);
     }
 

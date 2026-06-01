@@ -51,9 +51,11 @@ allowed to be async at all.
 - **Only the leaf that performs the I/O crosses into async**, and it bridges back to the observable
   contract at exactly one sealed point (`Observable.Create` + `await foreach`, or the shared
   `FromAsyncEnumerable` helper). The Postgres / file-system / network adapters live here — e.g.
-  `PostgreSqlMeshQuery.AutocompleteAsync`. **Pool at this edge:** a connection pool for the DB, a
-  bounded `Channel` to buffer the async enumerator into the observable — so the wait is amortized and
-  back-pressured, not a fresh allocation per call.
+  `PostgreSqlMeshQuery.AutocompleteAsync`. **Pool at this edge:** a connection pool for the DB; for
+  resources with no pool of their own (file system, blob, HTTP, compile, process) the shared
+  mesh-scoped `IIoPool` governor caps concurrency and pushes the work onto the ThreadPool — so the
+  wait is amortized and back-pressured, not a fresh allocation per call, and never runs on the hub
+  scheduler. See [Controlled I/O Pooling](ControlledIoPooling).
 - **Push the boundary as deep as it will go.** If a query fans out across adapters and only one of
   them hits Postgres, only *that* adapter is async; the in-memory adapters in the same fan-out stay
   synchronous and the merge above them is pure Rx. The caller never sees async — it sees

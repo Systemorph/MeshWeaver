@@ -5,6 +5,7 @@ using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 
 namespace MeshWeaver.Hosting.Persistence;
 
@@ -18,6 +19,12 @@ public class FileSystemStorageAdapter : IStorageAdapter
     private readonly string _baseDirectory;
     private readonly Func<JsonSerializerOptions, JsonSerializerOptions>? _writeOptionsModifier;
     private readonly FileFormatParserRegistry _parserRegistry = new();
+
+    // Controlled I/O pool (FileSystem resource class). Genuinely-async leaves go
+    // through _pool.Invoke / _pool.InvokeStream; sync-blocking leaves (directory
+    // walks, File.Delete) go through _pool.InvokeBlocking. Falls back to the
+    // stateless unbounded pool when constructed outside DI (tests).
+    private readonly IIoPool _pool;
 
     /// <summary>
     /// The base directory for file storage.
@@ -34,15 +41,17 @@ public class FileSystemStorageAdapter : IStorageAdapter
     /// </summary>
     /// <param name="baseDirectory">Base directory for file storage</param>
     /// <param name="writeOptionsModifier">Optional modifier for JsonSerializerOptions when writing (e.g., to enable WriteIndented)</param>
-    public FileSystemStorageAdapter(string baseDirectory, Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null)
+    /// <param name="pool">Controlled I/O pool for the FileSystem resource class. Null falls back to the unbounded pool (tests).</param>
+    public FileSystemStorageAdapter(string baseDirectory, Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null, IIoPool? pool = null)
     {
         _baseDirectory = baseDirectory;
         _writeOptionsModifier = writeOptionsModifier;
+        _pool = pool ?? IoPool.Unbounded;
         Directory.CreateDirectory(baseDirectory);
     }
 
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
-        => Observable.FromAsync(ct => ReadAsyncCore(path, options, ct));
+        => _pool.Invoke(ct => ReadAsyncCore(path, options, ct));
 
     /// <summary>
     /// Walks segments deepest-first, calling <see cref="Read"/> per depth and
@@ -60,7 +69,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
     /// </summary>
     public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
         string fullPath, JsonSerializerOptions options)
-        => Observable.FromAsync(ct => FindBestPrefixMatchAsyncCore(fullPath, options, ct));
+        => _pool.Invoke(ct => FindBestPrefixMatchAsyncCore(fullPath, options, ct));
 
     private async Task<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatchAsyncCore(
         string fullPath, JsonSerializerOptions options, CancellationToken ct)
@@ -161,7 +170,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
     }
 
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
-        => Observable.FromAsync<MeshNode?>(async ct => { await WriteAsyncCore(node, options, ct); return node; });
+        => _pool.Invoke<MeshNode?>(async ct => { await WriteAsyncCore(node, options, ct); return node; });
 
     private async Task WriteAsyncCore(MeshNode node, JsonSerializerOptions options, CancellationToken ct)
     {
@@ -410,12 +419,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
 
     public IObservable<object> GetPartitionObjects(
         string nodePath, string? subPath, JsonSerializerOptions options)
-        => Observable.Create<object>(async (observer, ct) =>
-        {
-            await foreach (var obj in GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct))
-                observer.OnNext(obj);
-            observer.OnCompleted();
-        });
+        => _pool.InvokeStream(ct => GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct));
 
     private async IAsyncEnumerable<object> GetPartitionObjectsAsyncCore(
         string nodePath,
@@ -529,7 +533,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
     public IObservable<Unit> SavePartitionObjects(
         string nodePath, string? subPath,
         IReadOnlyCollection<object> objects, JsonSerializerOptions options)
-        => Observable.FromAsync(async ct =>
+        => _pool.Invoke(async ct =>
         {
             await SavePartitionObjectsAsyncCore(nodePath, subPath, objects, options, ct);
             return Unit.Default;

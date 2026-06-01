@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -192,6 +193,11 @@ public record MeshBuilder
             })
             .AddSingleton(BuildHub)
             .AddSingleton<AccessService>()
+            // Controlled I/O pools — mesh-scoped governor over the shared
+            // ThreadPool for genuinely-async / sync-blocking leaves (file system,
+            // blob, …). Resolved by leaf adapters via IoPoolRegistry; dies with
+            // the mesh. See Doc/Architecture/ControlledIoPooling.md.
+            .AddIoPools()
             );
 
         IReadOnlyCollection<Func<MeshConfiguration, MeshConfiguration>> meshConfig = MeshConfiguration;

@@ -2,6 +2,7 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 
 namespace MeshWeaver.Hosting.Persistence;
 
@@ -21,12 +22,20 @@ public class FileSystemVersionStore : IVersionQuery
     private readonly string _versionsDirectory;
     private readonly Func<JsonSerializerOptions, JsonSerializerOptions>? _writeOptionsModifier;
 
+    // Controlled I/O pool (FileSystem resource class). The genuinely-async file
+    // leaves (WriteVersion / GetVersion) go through _pool.Invoke so each await
+    // runs OFF the hub scheduler and bounded. Falls back to the stateless
+    // unbounded pool when constructed outside DI (tests).
+    private readonly IIoPool _pool;
+
     public FileSystemVersionStore(
         string baseDirectory,
-        Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null)
+        Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null,
+        IIoPool? pool = null)
     {
         _versionsDirectory = Path.Combine(baseDirectory, ".versions");
         _writeOptionsModifier = writeOptionsModifier;
+        _pool = pool ?? IoPool.Unbounded;
     }
 
     /// <summary>
@@ -40,7 +49,7 @@ public class FileSystemVersionStore : IVersionQuery
     /// the snapshot history that <c>VersionQuery_GetVersionBefore</c> caught.
     /// </summary>
     public IObservable<MeshNode> WriteVersion(MeshNode node, JsonSerializerOptions options)
-        => Observable.FromAsync(async ct =>
+        => _pool.Invoke(async ct =>
         {
             if (node.Version <= 0) return node;
 
@@ -91,7 +100,7 @@ public class FileSystemVersionStore : IVersionQuery
         });
 
     public IObservable<MeshNode?> GetVersion(string path, long version, JsonSerializerOptions options)
-        => Observable.FromAsync(async ct =>
+        => _pool.Invoke(async ct =>
         {
             var filePath = GetVersionFilePath(path, version);
             if (filePath == null || !File.Exists(filePath))

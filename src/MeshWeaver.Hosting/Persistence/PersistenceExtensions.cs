@@ -8,6 +8,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -350,7 +351,9 @@ public static class PersistenceExtensions
         string baseDirectory,
         Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null)
     {
-        services.AddSingleton<IStorageAdapter>(new FileSystemStorageAdapter(baseDirectory, writeOptionsModifier));
+        services.AddSingleton<IStorageAdapter>(sp =>
+            new FileSystemStorageAdapter(baseDirectory, writeOptionsModifier,
+                sp.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)));
 
         // Register common services and wrapper services
         return services.AddCoreAndWrapperServices();
@@ -369,7 +372,9 @@ public static class PersistenceExtensions
     {
         builder.ConfigureServices(services =>
         {
-            services.AddSingleton<IStorageAdapter>(new CachingStorageAdapter(baseDirectory, writeOptionsModifier));
+            services.AddSingleton<IStorageAdapter>(sp =>
+                new CachingStorageAdapter(baseDirectory, writeOptionsModifier,
+                    sp.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)));
             return services.AddCoreAndWrapperServices();
         });
         return builder.RegisterMeshQueryCoreOnMeshHub();
@@ -388,6 +393,22 @@ public static class PersistenceExtensions
     public static IServiceCollection AddPersistence(this IServiceCollection services, IStorageAdapter storageAdapter)
     {
         services.AddSingleton(storageAdapter);
+
+        // Register common services and wrapper services
+        return services.AddCoreAndWrapperServices();
+    }
+
+    /// <summary>
+    /// Adds a custom storage adapter built lazily from the service provider, so it
+    /// can resolve mesh-scoped services (e.g. <see cref="IoPoolRegistry"/> for the
+    /// controlled I/O pool) that aren't available at registration time.
+    /// </summary>
+    /// <param name="services">The service collection</param>
+    /// <param name="adapterFactory">Factory that builds the adapter from the provider</param>
+    /// <returns>The service collection for chaining</returns>
+    public static IServiceCollection AddPersistence(this IServiceCollection services, Func<IServiceProvider, IStorageAdapter> adapterFactory)
+    {
+        services.AddSingleton<IStorageAdapter>(adapterFactory);
 
         // Register common services and wrapper services
         return services.AddCoreAndWrapperServices();
@@ -447,10 +468,13 @@ public static class PersistenceExtensions
 
         // One shared FileSystemStorageAdapter + wildcard provider — handles every
         // first-segment partition rooted at baseDirectory. No factory, no per-segment
-        // store provisioning.
-        var fsAdapter = new FileSystemStorageAdapter(baseDirectory, writeOptionsModifier);
-        services.AddSingleton(fsAdapter);
-        services.AddSingleton<IPartitionStorageProvider>(new FileSystemPartitionStorageProvider(fsAdapter));
+        // store provisioning. Registered via sp => so the adapter can resolve the
+        // mesh-scoped FileSystem IoPool; the provider shares the same instance.
+        services.AddSingleton(sp =>
+            new FileSystemStorageAdapter(baseDirectory, writeOptionsModifier,
+                sp.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)));
+        services.AddSingleton<IPartitionStorageProvider>(sp =>
+            new FileSystemPartitionStorageProvider(sp.GetRequiredService<FileSystemStorageAdapter>()));
 
         // Default IAssemblyStore so dynamic NodeType compiles can persist their
         // bytes cross-silo; see RegisterDefaultAssemblyStore for the rationale.
@@ -634,7 +658,8 @@ public static class PersistenceExtensions
             var inner = sp.GetKeyedService<IStorageAdapter>(InnerStorageAdapterKey)
                         ?? sp.GetService<IStorageAdapter>();
             if (inner is FileSystemStorageAdapter fsAdapter)
-                return new FileSystemVersionStore(fsAdapter.BaseDirectory);
+                return new FileSystemVersionStore(fsAdapter.BaseDirectory,
+                    pool: sp.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem));
             return new NoOpVersionQuery();
         });
 
