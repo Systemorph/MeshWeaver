@@ -1,3 +1,8 @@
+---
+Name: Static Node Providers
+Description: "IStaticNodeProvider pattern for non-persisted built-in MeshNodes and the rationale for removing the old MeshConfiguration.Nodes dictionary."
+---
+
 # Static Node Providers
 
 The mesh exposes a stable set of "built-in" `MeshNode`s — NodeType definitions

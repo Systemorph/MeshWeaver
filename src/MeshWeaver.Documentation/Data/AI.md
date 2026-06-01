@@ -1,60 +1,35 @@
 ---
 Name: AI Integration
 Category: Documentation
-Description: AI agents, MeshPlugin tools, and natural language interfaces for MeshWeaver applications
+Description: AI agents, MeshPlugin tools, and natural-language interfaces that let agents work alongside your data mesh
 Icon: /static/DocContent/AI/icon.svg
 ---
 
-MeshWeaver provides comprehensive AI capabilities through agents, tools, and natural language interfaces.
+<div style="background: linear-gradient(135deg, #4527a0 0%, #7b1fa2 100%); border-radius: 18px; padding: 40px 34px; margin: 4px 0 30px 0; color: #fff;">
+  <div style="font-size: 2.1rem; font-weight: 800; letter-spacing: -0.02em; line-height: 1.15;">AI Integration</div>
+  <div style="font-size: 1.05rem; opacity: 0.92; margin-top: 10px; max-width: 720px; line-height: 1.55;">
+    Agents, tools, and natural-language interfaces. AI <em>remote-controls</em> the mesh through the same message-based APIs as users — business logic stays independent of AI code.
+  </div>
+</div>
 
----
+# MeshPlugin tools
 
-# Featured Articles
-
-| Article | Description |
-|---------|-------------|
-| [Agentic AI](AgenticAI) | Understand the paradigm shift to proactive, goal-oriented AI agents |
-| [Vibe Coding](VibeCoding) | Can AI build complex business apps? Watch the Mesh Bros put it to the test |
-
----
-
-# What do you want to do?
-
-| I want to... | Go here |
-|--------------|---------|
-| Use mesh tools in agents | [MeshPlugin Tools](Tools/MeshPlugin) - Get, Search, Create, Update, Delete, NavigateTo |
-| Understand agent architecture | [Agentic AI](../Architecture/AgenticAI) - Multi-agent patterns |
-| Connect external AI via MCP | [MCP Integration](../Architecture/AgenticAI#exposing-meshweaver-as-mcp-server) - Claude Code, Copilot, Snowflake |
-
----
-
-# Core Concepts
-
-## MeshPlugin
-
-The MeshPlugin provides AI agents with tools to interact with the mesh:
+The MeshPlugin gives AI agents a small, composable toolset to work with the mesh:
 
 | Tool | Purpose |
 |------|---------|
 | **Get** | Retrieve nodes by path (`@path`, `@path/*` for children, `@path/schema:` for schemas) |
 | **Search** | Query nodes using GitHub-style syntax |
 | **Create** | Create new nodes with validated MeshNode JSON |
-| **Update** | Update existing nodes (Get → modify → Update workflow) |
+| **Update** | Update existing nodes (Get → modify → Update) |
 | **Delete** | Delete nodes by path |
-| **NavigateTo** | Display a node's visual representation |
+| **NavigateTo** | Display a node's visual representation instead of raw JSON |
 
-Get supports **Unified Path prefixes** for accessing schemas and data models:
-- `Get('@path/schema:')` — JSON Schema for the node's content type
-- `Get('@path/schema:TypeName')` — Schema for a specific type (nodes with multiple data types)
-- `Get('@path/model:')` — Full data model
+`Get` understands Unified Path prefixes — `@path/schema:` for the content's JSON Schema, `@path/model:` for the full data model. See [MeshPlugin Tools](Tools/MeshPlugin) for the full reference.
 
-[Read more: MeshPlugin Tools](Tools/MeshPlugin)
+# Agents are data
 
----
-
-## Agent Definition
-
-Agents are defined as markdown MeshNodes with `nodeType: Agent`:
+Agents are markdown MeshNodes with `nodeType: Agent`, so they are versioned alongside your data and updated without code changes:
 
 ```yaml
 ---
@@ -68,116 +43,20 @@ isDefault: true
 Instructions for the agent...
 ```
 
-This declarative approach allows agents to be:
-- Versioned alongside application data
-- Updated without code changes
-- Context-aware through mesh queries
+Because agents go through the standard message interfaces, they are **context-aware** (they query the mesh for the current namespace, team, and schemas) and **subject to the same access control** as any user.
+
+# Selecting agents and models in chat
+
+Use unified reference syntax to steer a conversation:
+
+```
+@agent/Documentation          select an agent
+@model/claude-haiku-4-5        select a model
+@agent/RiskImportAgent import Microsoft.xlsx   combine selection with a prompt
+```
+
+Slash commands work too: `/agent <name>`, `/model <name>`, `/help`.
 
 ---
 
-## Remote Control Philosophy
-
-AI agents **remote control** applications rather than being embedded:
-
-1. **Separation of Concerns**: Business logic stays independent of AI code
-2. **Flexibility**: Agents can be updated without modifying core application
-3. **Consistency**: Agents use the same message-based interfaces as users
-4. **Security**: Agents are subject to standard access controls
-
----
-
-# Key Patterns
-
-## Prefer Visual Display
-
-When users ask to "show" or "display" data:
-
-```
-User: "Show me the ProductLaunch project"
-Agent: [Calls NavigateTo('@ACME/ProductLaunch')]
-       "Here's the ProductLaunch project."
-```
-
-Use `NavigateTo` instead of returning raw JSON.
-
-## Query Before Action
-
-Before creating or modifying data:
-
-1. Use `Search` to find existing items
-2. Use `Get('@path/schema:')` to discover content schemas
-3. Use `Create` for new nodes, or `Get` → modify → `Update` for existing ones
-
-## Context-Aware Responses
-
-Agents maintain awareness of:
-- Current namespace/project context
-- Available team members and categories
-- Data schemas through GetSchema queries
-
----
-
-# Agent and Model References
-
-In chat interfaces, you can use unified reference syntax to select agents and models.
-
-## Agent References
-
-Agent references allow you to select a specific AI agent for chat interactions:
-
-```
-@agent/AgentName
-```
-
-Agents are specialized AI assistants configured for specific tasks or domains. When you mention an agent reference in your message, that agent will handle the conversation.
-
-**Examples:**
-
-```
-@agent/Documentation
-```
-
-You can combine agent selection with a prompt in the same message:
-
-```
-@agent/RiskImportAgent import Microsoft.xlsx
-```
-
-Agents can also be selected automatically based on the current navigation context.
-
----
-
-## Model References
-
-Model references allow you to select a specific AI model for chat interactions:
-
-```
-@model/ModelName
-```
-
-**Examples:**
-
-```
-@model/claude-3-5-sonnet
-```
-
-Model names can contain letters, numbers, hyphens, and dots (e.g., `claude-3-5-sonnet`, `gpt-4.0`).
-
----
-
-## Slash Commands
-
-In addition to @ references, you can use slash commands for agent and model selection:
-
-| Command | Description |
-|---------|-------------|
-| `/agent AgentName` | Switch to the specified agent |
-| `/model ModelName` | Switch to the specified model |
-| `/help` | Show available commands |
-
-**Examples:**
-
-```
-/agent @agent/RiskImportAgent
-/model @model/claude-haiku-4-5
-```
+Explore agent architecture, script execution, MCP authentication, and provider configuration below.

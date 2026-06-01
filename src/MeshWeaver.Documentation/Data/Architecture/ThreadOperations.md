@@ -1,3 +1,8 @@
+---
+Name: Thread Operations
+Description: "Canonical IMessageHub extension surface for creating, submitting, resubmitting, and managing AI thread messages via reactive stream.Update writes."
+---
+
 # Thread Operations — the canonical `IWorkspace` surface
 
 Every thread mutation in MeshWeaver — creating a thread, submitting a message, resubmitting, deleting from a message, marking done, recording a failure — goes through extension methods on `IMessageHub` defined in `src/MeshWeaver.AI/HubThreadExtensions.cs`. **Tests, GUI, and agents all call these.** There is no other public entry point.

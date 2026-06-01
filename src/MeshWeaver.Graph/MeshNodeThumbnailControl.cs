@@ -25,8 +25,9 @@ public record MeshNodeThumbnailControl(
         var title = node?.Name ?? fallbackPath;
         var imageUrl = GetImageUrlForNode(node);
         var nodeType = node?.NodeType;
+        var description = node?.Description ?? (node?.Content as MarkdownContent)?.Abstract;
 
-        return new MeshNodeThumbnailControl(nodePath, title, null, imageUrl, nodeType);
+        return new MeshNodeThumbnailControl(nodePath, title, description, imageUrl, nodeType);
     }
 
     /// <summary>

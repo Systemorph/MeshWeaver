@@ -1,3 +1,8 @@
+---
+Name: Aggregating Providers
+Description: "Canonical patterns for merging items from multiple independent providers using reactive observables — covering streaming-item and reactive-snapshot-set shapes, DI registration, and the async I/O boundary rule."
+---
+
 # Aggregating Provider Pattern
 
 Many subsystems in MeshWeaver need to merge items contributed by many independent providers

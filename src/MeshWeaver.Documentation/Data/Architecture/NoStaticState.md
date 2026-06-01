@@ -1,3 +1,8 @@
+---
+Name: No Static State
+Description: "Explains why static collection/cache fields are forbidden and how every cache must be a mesh-scoped instance singleton to prevent cross-test and cross-partition bleed."
+---
+
 # 🚨 No Static Collections — Ever
 
 > **The rule, in one line:** a `static` field that holds a collection or cache is forbidden. Every cache and every repository is an **instance owned by the mesh** (or by a hub, component, request, or app), so its lifetime is bounded and it never bleeds across tests, users, or partitions.

@@ -1,6 +1,7 @@
 ---
 title: Granting Access via AccessAssignments
 order: 25
+Description: "How to grant user permissions in MeshWeaver by creating AccessAssignment MeshNodes in _Access satellite namespaces, with field anatomy and recipes."
 ---
 
 # Granting Access via AccessAssignments

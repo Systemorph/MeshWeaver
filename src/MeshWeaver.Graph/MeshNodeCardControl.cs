@@ -1,4 +1,5 @@
 using MeshWeaver.Layout;
+using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 
 namespace MeshWeaver.Graph;
@@ -28,7 +29,13 @@ public record MeshNodeCardControl(
         var nodePath = node?.Path ?? fallbackPath;
         var title = node?.Name ?? fallbackPath;
         var imageUrl = MeshNodeThumbnailControl.GetImageUrlForNode(node);
+        // Show a real one-line summary (the node's Description, or the markdown
+        // Abstract when content is still typed). Falls back to the NodeType so
+        // non-described nodes keep a meaningful label rather than a blank line.
+        var description = node?.Description
+            ?? (node?.Content as MarkdownContent)?.Abstract
+            ?? node?.NodeType;
 
-        return new MeshNodeCardControl(nodePath, title, node?.NodeType, imageUrl, itemArea, disableNavigation ? true : null);
+        return new MeshNodeCardControl(nodePath, title, description, imageUrl, itemArea, disableNavigation ? true : null);
     }
 }

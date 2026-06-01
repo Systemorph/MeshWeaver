@@ -66,7 +66,9 @@ public sealed class UserOnboardingService(
             Email = request.Email.Trim(),
             Bio = string.IsNullOrWhiteSpace(request.Bio) ? null : request.Bio!.Trim(),
             Role = string.IsNullOrWhiteSpace(request.Role) ? null : request.Role!.Trim(),
-            PinnedPaths = ["Doc"],
+            // Pin the four documentation sections so a new user's Pinned tab opens
+            // onto a clean grid of doc landing pages (each with its own TOC).
+            PinnedPaths = ["Doc/Architecture", "Doc/DataMesh", "Doc/GUI", "Doc/AI"],
         };
 
         var partitionRootNode = new MeshNode(username)

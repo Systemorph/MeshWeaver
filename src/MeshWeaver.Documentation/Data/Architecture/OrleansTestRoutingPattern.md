@@ -1,3 +1,8 @@
+---
+Name: Orleans Test Routing Pattern
+Description: "How Orleans tests must use dedicated registered hubs (portal/client addresses + RegisterStream) to avoid response-routing deadlocks caused by unresolvable mesh-type guid addresses."
+---
+
 # Orleans Test Routing — Dedicated Registered Hubs
 
 When a test sends a message through Orleans, the silo's `RoutingGrain`

@@ -42,6 +42,10 @@ builder.Services.Configure<PostgreSqlStorageOptions>(o =>
     o.ConnectionString = connectionString;
     o.VectorDimensions = embeddingOptions.Dimensions;
 });
+// Register the embedding provider so the documentation backfill can vector-index docs.
+// No-ops (registers nothing) when Endpoint/ApiKey are absent — backfill then writes
+// NULL embeddings and docs are still full-text searchable.
+builder.Services.AddAzureFoundryEmbeddings(embeddingOptions);
 
 Console.WriteLine("[Migration] Building host...");
 var host = builder.Build();
@@ -136,6 +140,12 @@ var migrations = new IMigration[]
 var ctx = new MigrationContext(dataSource, connectionString, options, logger, initResult.IsFreshDb);
 var runner = new MigrationRunner(migrations);
 var finalVersion = await runner.RunAsync(ctx);
+
+// ── Doc search index (always runs): mirror the embedded documentation into the `doc`
+// schema so it surfaces in the main search bar (full-text + vector). Runs BEFORE Phase 3
+// so the searchable-schemas refresh picks up `doc`. Full replace + incremental embedding.
+var embeddingProvider = host.Services.GetService<IEmbeddingProvider>();
+await DocumentationBackfill.RunAsync(dataSource, options, connectionString, embeddingProvider, logger);
 
 // ── Phase 3: Searchable-schemas refresh (always runs)
 await SearchableSchemasUpdater.RunAsync(dataSource, logger);

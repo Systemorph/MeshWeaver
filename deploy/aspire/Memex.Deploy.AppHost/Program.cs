@@ -47,6 +47,15 @@ var portal = builder.AddMemex("memex", o =>
     o.OrleansClustering = ha ? "AdoNet" : "Localhost";
     o.MasterKey = builder.Configuration["Parameters:key-protection-master-key"];
 
+    // Embeddings (vector search). With the endpoint + key set, the one-shot migration
+    // vector-indexes the built-in documentation and the portal embeds search-bar queries.
+    // Leave unset to ship docs as full-text-searchable only (no external AI dependency).
+    o.EmbeddingEndpoint = builder.Configuration["Parameters:embedding-endpoint"];
+    o.EmbeddingApiKey = builder.Configuration["Parameters:embedding-key"];
+    var embeddingModel = builder.Configuration["Parameters:embedding-model"];
+    if (!string.IsNullOrEmpty(embeddingModel))
+        o.EmbeddingModel = embeddingModel;
+
     // External sign-in (OAuth) providers — deploy parameters. Provide via
     // `dotnet user-secrets` / env / GitHub secrets locally, or the Marketplace
     // createUiDefinition wizard for an Azure Application install. Each provider is

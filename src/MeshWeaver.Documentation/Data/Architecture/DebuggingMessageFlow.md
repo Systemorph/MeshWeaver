@@ -1,3 +1,8 @@
+---
+Name: Debugging Message Flow
+Description: "Step-by-step guide to diagnosing hub-handler hangs using structured MESSAGE_FLOW and SYNC_STREAM trace tags, with log-level and grep recipes."
+---
+
 # Debugging Message Flow & Hangs
 
 When a hub-handler "looks like a deadlock" (test times out, response never comes back), don't bisect blindly and **don't rerun the test 2-3 times to see if it sticks**. The framework already emits a structured trace at `Trace` level — turn it on, run **once**, grep, fix.

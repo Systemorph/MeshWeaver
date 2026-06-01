@@ -37,6 +37,20 @@ public sealed class MemexOptions
     /// <summary>Encryption master key for provider credentials (<c>Ai:KeyProtection:MasterKey</c>). Required for production.</summary>
     public string? MasterKey { get; set; }
 
+    // --- Embeddings (vector search) -----------------------------------------
+    // When the endpoint + key are set, the one-shot migration vector-indexes the built-in
+    // documentation and the portal embeds search-bar queries → semantic search. Without them,
+    // docs are still copied to Postgres and searchable, just full-text only (no vector ranking).
+
+    /// <summary>Azure AI Foundry embeddings endpoint (Cohere embed-v4). Empty = vector search off (FTS still works).</summary>
+    public string? EmbeddingEndpoint { get; set; }
+
+    /// <summary>Embeddings API key (secret). Only emitted to containers when set.</summary>
+    public string? EmbeddingApiKey { get; set; }
+
+    /// <summary>Embeddings model / deployment name. Default <c>cohere-embed-v-4-0</c>.</summary>
+    public string EmbeddingModel { get; set; } = "cohere-embed-v-4-0";
+
     /// <summary>The portal's externally reachable base URL; the co-hosted CLIs connect back to <c>{BaseUrl}/mcp</c>. Defaults to the portal's own endpoint.</summary>
     public string? BaseUrl { get; set; }
 
@@ -98,6 +112,18 @@ public sealed class MemexOptions
             yield return new("Authentication__LinkedIn__ClientSecret", LinkedInClientSecret);
             yield return new("Social__LinkedIn__ClientSecret", LinkedInClientSecret);
         }
+    }
+
+    /// <summary>
+    /// Embedding config shared by the migration (vector-indexes docs) and the portal (embeds
+    /// search-bar queries). Model is always emitted so both sides size the vector column the same
+    /// way; endpoint + key are emitted only when configured (ACA rejects empty secrets).
+    /// </summary>
+    internal IEnumerable<KeyValuePair<string, string>> EmbeddingEnvironment()
+    {
+        yield return new("Embedding__Model", EmbeddingModel);
+        if (!string.IsNullOrEmpty(EmbeddingEndpoint)) yield return new("Embedding__Endpoint", EmbeddingEndpoint);
+        if (!string.IsNullOrEmpty(EmbeddingApiKey)) yield return new("Embedding__ApiKey", EmbeddingApiKey);
     }
 
     internal IEnumerable<KeyValuePair<string, string>> FeatureEnvironment()

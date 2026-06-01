@@ -1,3 +1,7 @@
+---
+Name: Blazor Async
+Description: "Practical playbook for using IObservable<T> with Subscribe in Blazor components instead of await, covering lifecycle hooks, click handlers, and forbidden patterns."
+---
 # Blazor Async — `Subscribe`, not `await`
 
 > **TL;DR:** In MeshWeaver Blazor code, *every* mesh / hub call is `IObservable<T>`,

@@ -1,97 +1,46 @@
 ---
 Name: Graphical User Interface
 Category: Documentation
-Description: Build reactive UIs with controls, layout areas, and data binding
+Description: Build reactive UIs entirely from C# — controls, layout areas, data binding, and observables, with no frontend framework
 Icon: /static/DocContent/GUI/icon.svg
 ---
 
-MeshWeaver provides a control-based GUI system that renders reactive user interfaces from C# code.
-
----
-
-# What do you want to do?
-
-| I want to... | Go here |
-|--------------|---------|
-| Arrange controls on screen | [Container Controls](ContainerControl) - Stack, Tabs, Toolbar |
-| Build responsive layouts | [Layout Grid](LayoutGrid) - Adapt to phones, tablets, desktops |
-| Display data in a table | [DataGrid](DataGrid) - Sortable columns, pagination |
-| Create an editable form | [Editor](Editor) - Auto-generate forms from records |
-| Make content update automatically | [Static vs Dynamic Views](Observables) - Observables, reactivity |
-| Control how data flows | [Data Binding](DataBinding) - DataContext, UpdatePointer |
-| Customize field behavior | [Attributes](Attributes) - Validation, display options |
-| Build complex interactive dialogs | [Reactive Dialogs](ReactiveDialogs) - Subjects, streaming computation |
-
----
+<div style="background: linear-gradient(135deg, #00695c 0%, #00897b 100%); border-radius: 18px; padding: 40px 34px; margin: 4px 0 30px 0; color: #fff;">
+  <div style="font-size: 2.1rem; font-weight: 800; letter-spacing: -0.02em; line-height: 1.15;">Graphical User Interface</div>
+  <div style="font-size: 1.05rem; opacity: 0.92; margin-top: 10px; max-width: 720px; line-height: 1.55;">
+    Build reactive user interfaces from C# code. Controls are immutable records, rendered server-side and streamed to the browser — no JavaScript framework required.
+  </div>
+</div>
 
 # How it works
 
-## Immutable Controls
+## Immutable controls
 
-Every control is a C# record. When you call a `With*` method, you get a **new instance** - the original is unchanged:
+Every control is a C# record. Calling a `With*` method returns a **new instance** — the original is unchanged:
 
 ```csharp
 var button1 = Controls.Button("Click me");
 var button2 = button1.WithId("myButton");  // button1 is unchanged
-
-// button1 and button2 are different objects
 ```
 
-**Why this matters:** You can safely reuse and compose controls without side effects. A control definition is just data - it doesn't "do" anything until rendered.
+You can safely reuse and compose controls without side effects. A control definition is just data — it doesn't *do* anything until rendered.
 
----
+## Declarative, area-based rendering
 
-## Fluent API
-
-Chain methods for readable configuration:
+Define *what* to show, not *how* to update it. The UI is divided into named areas, and only the affected area re-renders:
 
 ```csharp
 Controls.Stack
-    .WithOrientation(Orientation.Horizontal)
-    .WithHorizontalGap("8px")
-    .WithView(Controls.Button("Save"))
-    .WithView(Controls.Button("Cancel"))
+    .WithView(Controls.Html("<h1>Dashboard</h1>"))     // Static — never re-renders
+    .WithView(liveDataStream.Select(d => ShowData(d))) // Dynamic — updates when the stream emits
+    .WithView(Controls.Button("Refresh"))              // Static — never re-renders
 ```
 
-**Why this matters:** Order of `With*` calls doesn't matter (each is independent). Every chain produces a complete control definition ready to render.
+Container structure is static; only area content is dynamic. Changing one area never disturbs its siblings.
 
----
+## Observable-driven reactivity
 
-## Declarative Rendering
-
-Define *what* to show, not *how* to update it:
-
-```csharp
-// You declare the UI structure
-Controls.Stack
-    .WithView(Controls.Label($"Hello, {user.Name}"))
-    .WithView(Controls.Button("Logout"))
-
-// The framework handles rendering to the DOM
-```
-
-**Why this matters:** No manual DOM manipulation. You describe the desired state, MeshWeaver figures out how to make it happen.
-
----
-
-## Area-based Updates
-
-The UI is divided into named areas. Only the affected area re-renders, not the whole UI:
-
-```csharp
-Controls.Stack
-    .WithView(Controls.Html("<h1>Dashboard</h1>"))     // Static - never re-renders
-    .WithView(liveDataStream.Select(d => ShowData(d))) // Dynamic - updates when stream emits
-    .WithView(Controls.Button("Refresh"))              // Static - never re-renders
-```
-
-**Why this matters:** Efficient updates. Changing one area doesn't affect siblings. Container structure is static; only area content can be dynamic.
-
----
-
-## Observable-driven Reactivity
-
-Pass an `IObservable<T>` to make content update automatically:
+Pass an `IObservable<T>` and the content updates automatically — each emission replaces the area, and subscriptions are disposed for you when the area is removed:
 
 ```csharp
 var counter = Observable.Interval(TimeSpan.FromSeconds(1));
@@ -100,4 +49,6 @@ Controls.Stack
     .WithView(counter.Select(n => Controls.Label($"Count: {n}")))
 ```
 
-**Why this matters:** Each emission replaces the area content. Subscriptions are managed automatically - disposed when the area is removed. No manual subscription handling needed.
+---
+
+Browse the full set of controls, layout primitives, and data-binding guides below.

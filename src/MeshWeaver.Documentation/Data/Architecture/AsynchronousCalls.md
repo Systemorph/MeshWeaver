@@ -1,3 +1,8 @@
+---
+Name: Asynchronous Calls
+Description: "Rules and patterns for composing async work safely in hub handlers using IObservable<T>, avoiding await/Task deadlocks, and the subscribe-all-upfront cell-loading pattern."
+---
+
 # Asynchronous Calls in MeshWeaver
 
 > **For GUI rendering, see [Data Binding](xref:GUI/DataBinding) — that is the authoritative pattern.** Layout areas should not load data at all; they declare bindings, and the Blazor view subscribes via `GetRemoteStream<MeshNode, MeshNodeReference>`. The rules below cover hub-handler / service code, where you still need to compose async work safely.

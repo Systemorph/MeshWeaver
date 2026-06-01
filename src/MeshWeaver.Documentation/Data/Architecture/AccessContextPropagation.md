@@ -1,3 +1,8 @@
+---
+Name: Access Context Propagation
+Description: "How a user's AccessContext (identity baton) flows through async hops, message hand-offs, handlers, and hub grain activations without leaking or losing the principal."
+---
+
 # AccessContext propagation — the identity baton
 
 How a user's identity (`AccessContext`) flows from the authentication boundary through every async hop, every message hand-off, every handler, every downstream post — and how the framework makes this look like a **single-threaded execution under one principal**, even though it crosses thread pools, schedulers, hubs, and grain activations.
