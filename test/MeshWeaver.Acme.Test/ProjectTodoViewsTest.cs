@@ -37,6 +37,15 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
         "MeshWeaverProjectViewTests",
         ".mesh-cache");
 
+    /// <summary>
+    /// Read-only aggregate-view tests (no node mutations — they read the shared
+    /// SamplesGraph directly). Share the Mesh/SP across [Fact]s so we build ONE
+    /// Autofac root container for the class instead of one per method — each
+    /// root build is the ~190 MiB Reflection.Emit factory cost that never frees
+    /// on dispose. See MonolithMeshTestBase.ShareMeshAcrossTests.
+    /// </summary>
+    protected override bool ShareMeshAcrossTests => true;
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         var graphPath = TestPaths.SamplesGraph;
