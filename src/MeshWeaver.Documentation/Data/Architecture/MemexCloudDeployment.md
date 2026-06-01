@@ -1,0 +1,180 @@
+# Deploying the Memex Portal to a Private AKS Cluster
+
+A configuration manual for standing up the Memex portal on a **private** Azure Kubernetes Service
+cluster, with everything but the portal kept off the public internet. It explains *what* runs
+where, *how* it's provisioned, and *how* to operate it.
+
+> **Conventions.** The running example uses placeholder **names** — domain `memex.systemorph.com`,
+> registry `meshweaver`, resource group `memex-aks-rg` — substitute your own. **Sensitive values**
+> (IP addresses, tenant/app GUIDs, passwords, client secrets) are shown as `<placeholders>`; never
+> commit real ones — keep them in Key Vault. The exact, ordered command sequence lives in
+> [`deploy/aks/DEPLOY-RUNBOOK.md`](../../../../deploy/aks/DEPLOY-RUNBOOK.md); this doc is the
+> architecture + operations layer around it.
+
+> **Model:** one Aspire AppHost (`deploy/aspire/Memex.Deploy.AppHost`) describes the workload from
+> published images; the Aspire **Kubernetes publisher** generates the Helm chart (`deploy/helm`);
+> the AKS *platform* (cluster, Postgres, VPN, TLS) is Bicep + a thin overlay.
+
+---
+
+## 1. Architecture at a glance
+
+| Concern | Choice |
+|---|---|
+| Region | a single region close to your users (the example uses a prod region) |
+| Cluster | **Private** AKS (private API server), e.g. 2× `Standard_D4s_v3` sized to your vCPU quota |
+| Public surface | **Only the portal on `:443`.** Everything else (API server, Postgres, Grafana) is private. |
+| Mesh data | **Postgres Flexible Server**, VNet-injected (private IP only), admin user + password + SSL |
+| Object/cache/keys | **Filesystem backend** on RWX **Azure Files** (`/data`, `/mnt/content`) |
+| Container registry | **One shared ACR** (e.g. `meshweaver.azurecr.io`) across all your solutions |
+| Secrets | **one shared Key Vault** via the CSI Secrets Store add-on |
+| Ingress / TLS | AKS **app routing** (managed nginx) + **cert-manager** + Let's Encrypt (HTTP-01) |
+| Admin access | **P2S VPN** → `kubectl` / Grafana; nothing admin is public |
+| Auth | external OIDC (Microsoft/Entra, Google, LinkedIn) — each provider opt-in |
+| Orleans | single replica → `Localhost` clustering (multi-replica needs `AzureTables`/`AdoNet`) |
+
+The ingress's public IP is assigned by Azure (`kubectl get svc -n app-routing-system`); point your
+domain's A-record at it (§5).
+
+## 2. Images (shared ACR)
+
+Three images, pushed to the shared ACR (grant the AKS kubelet `AcrPull` on it, cross-RG if needed):
+- `<registry>/memex-portal-ai-base:latest` — `aspnet:10.0` + node20 + the co-hosted CLIs (Claude
+  Code + Copilot). This is the **one** hand-authored Dockerfile (`deploy/base-images/portal-ai`),
+  built with `az acr build`.
+- `<registry>/memex-portal-ai:<tag>` — the portal app, an SDK container build on the base image.
+  **Must pass `-r linux-x64`** (the Copilot SDK keys its binary off the RID).
+- `<registry>/memex-migration:<tag>` — the one-shot DB migration.
+
+Build/push the portal (no Dockerfile — the SDK's `PublishContainer` pushes straight to the registry):
+```bash
+az acr login --name <registry>
+dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj \
+  -c Release -r linux-x64 --no-self-contained -t:PublishContainer \
+  -p:ContainerRegistry=<registry>.azurecr.io -p:ContainerRepository=memex-portal-ai \
+  -p:ContainerImageTag=<tag> -p:ContainerBaseImage=<registry>.azurecr.io/memex-portal-ai-base:latest
+kubectl -n memex set image deployment/memex-portal-deployment memex-portal=<registry>.azurecr.io/memex-portal-ai:<tag>
+```
+Use a **distinct tag** per build (not `:latest`) so the rollout is guaranteed to pull the new image.
+
+## 3. Platform (Bicep)
+
+`deploy/aks/infra/main.bicep` provisions the cluster, the VNet-injected Postgres Flexible Server,
+the VPN gateway, RWX storage, and (optionally) a per-deployment ACR — set `useSharedAcr=true` to
+point at your shared registry instead. Parameters in `deploy/aks/infra/main.parameters.json` (region,
+node size/count within your vCPU quota, `postgresHighAvailability`, `gatewaySku` — use an AZ SKU such
+as `VpnGw1AZ`). The **Postgres connection uses the private IP + password + SSL**
+(`SslMode=Require;Trust Server Certificate=true`) — the public FQDN form would trip the portal's
+`database.azure.com` → managed-identity-token branch, which doesn't match a password server.
+
+## 4. Workload (Helm + overlay)
+
+`deploy/aks/scripts/deploy.sh` (run via `az aks command invoke` against the private cluster):
+namespace + RWX PVCs → `helm upgrade --install` (`deploy/helm` + `values.aks.yaml` +
+`values.deploy.yaml`) → scale the chart's in-cluster pg to 0 (you use the Flexible Server) →
+`kubectl set image` to the shared ACR → patch the portal to 1 replica + the Azure Files mounts →
+**patch the connection-string secret** to the external Postgres.
+
+> **Known chart-gen gaps** (fix at the AddMemex generator):
+> - The chart's `secrets.yaml` hardcodes the in-cluster pg connection string → `deploy.sh` patches it post-install.
+> - The migration is rendered as a **Deployment**, not a Job, so K8s reruns it after each clean exit → it can show `CrashLoopBackOff` even though every run **succeeds**. Harmless, but should be a `Job`.
+
+## 5. TLS + ingress + DNS
+
+`deploy/aks/scripts/tls.sh`: cert-manager + a Let's Encrypt `ClusterIssuer` (HTTP-01) + the portal
+ingress. HTTP→HTTPS redirect is automatic once TLS is on. Add a DNS A-record in your DNS zone →
+the nginx LB public IP. **Blazor Server** needs sticky sessions: the ingress sets cookie affinity
+(a session-affinity cookie); confirm the SignalR `/_blazor` WebSocket upgrade returns **HTTP 101**
+through the managed nginx.
+
+To add another private tool publicly (e.g. Grafana), create a second `Ingress` (same
+`ingressClassName` + `cert-manager.io/cluster-issuer` annotation) for its host + service, and an
+A-record at the same ingress IP. It is then gated only by that tool's own login — weigh that against
+the "only the portal is public" stance.
+
+## 6. External sign-in (OAuth)
+
+Deploy parameters flow through `AddMemex` → `MemexOptions` → portal env
+(`Authentication__<Provider>__ClientId/Secret/TenantId`, `Social__LinkedIn__*`). A provider is
+offered only when its `ClientId` is set.
+- **Microsoft/Entra:** register an app (`<entra-app-client-id>`) in your tenant
+  (`<tenant-guid>`); single-tenant (`AzureADMyOrg`) for an internal portal; redirect URI
+  `https://<your-domain>/signin-microsoft`. Set `Authentication__Provider=Custom`,
+  `Authentication__EnableDevLogin=false`.
+- **Google / LinkedIn:** create the OAuth apps (redirects `/signin-google`, `/signin-linkedin`) and
+  supply ClientId/Secret to enable.
+
+Sign-in flow: `/auth/login?provider=Microsoft` → the provider → `/signin-microsoft` (OIDC middleware
+signs the cookie) → `/auth/callback/Microsoft` (`ExternalAuthController` normalises claims;
+**ObjectId = email**) → `/`.
+
+## 7. Onboarding + first admin
+
+`OnboardingMiddleware` (after `UserContextMiddleware`): an authenticated request whose email has no
+backing **User node** is redirected to `/onboarding`; `UserOnboardingService` writes the partition-
+root User node + a User-catalog mirror, then self-Admin and (first user only) **platform-Admin** at
+`Admin/_Access`. All onboarding writes self-impersonate as **System** (infrastructure writes for a
+not-yet-existent identity — `PostPipeline` fails closed without a context).
+
+**First-admin bootstrap (operator tool):** `BootstrapController` (`POST/GET /bootstrap/first-admin`)
+seeds the first admin server-side via the same `UserOnboardingService` write path, gated by the
+`Bootstrap:Secret` config value (disabled when unset). Use it when the interactive `/onboarding`
+flow can't be driven, then unset the secret:
+```bash
+curl -sS "https://<your-domain>/bootstrap/first-admin?secret=<bootstrap-secret>&email=<admin-email>&username=<admin>"
+```
+
+## 8. Observability
+
+`deploy/aks/scripts/install-observability.sh` installs the `grafana/loki-stack` chart (Grafana +
+Loki + Promtail + Prometheus) into the `monitoring` namespace. **Promtail scrapes every pod's stdout
+into Loki** — no portal-side config needed. Folded into the standard deploy: export `GRAFANA_PW`
+alongside `MEMEX_PG_CONN` and `deploy.sh` brings the stack up too. At the model level, `AddMemex`'s
+`OtlpEndpoint` option wires `OTEL_EXPORTER_OTLP_ENDPOINT` for OTLP traces/metrics (not needed for
+logs). Grafana defaults to **ClusterIP (private)** — reach it via the VPN (§9) + port-forward, or
+expose it publicly behind its own login (§5).
+
+## 9. Admin access — the P2S VPN
+
+Everything but the portal is private, so `kubectl` (private API server) and Grafana go through the
+**point-to-site VPN** (an AZ gateway SKU, OpenVPN + IKEv2, with a client address pool of your choice):
+```bash
+# A P2S root cert is uploaded to the gateway; the matching client cert lives in the operator's cert store.
+az network vnet-gateway vpn-client generate -g <rg> -n <gateway> -o tsv   # download URL
+# install + connect, then:
+az aks get-credentials -g <rg> -n <cluster>
+kubectl -n monitoring port-forward svc/loki-grafana 3000:80   # http://localhost:3000
+```
+> **`az` gotcha:** recent CLI versions read `--public-cert-data` as a **file path** — pass the path
+> to a base64 file, not the inline string and not `@file`.
+
+## 10. Operations
+
+| Task | Command |
+|---|---|
+| **Logs (no VPN)** | `az aks command invoke -g <rg> -n <cluster> --command "kubectl -n memex logs deployment/memex-portal-deployment --tail=200"` |
+| **Logs (Grafana)** | VPN → port-forward (§9) → `{namespace="memex"}` in Explore |
+| Restart portal | `kubectl -n memex rollout restart deployment/memex-portal-deployment` (clears in-memory caches + any wedged hub) |
+| Pod status | `kubectl -n memex get pods` |
+| Run SQL | one-off `kubectl run … --image=postgres:17 … psql -h <pg-private-ip> -U <admin> -d memex` (password from Key Vault) |
+| Reach Postgres | private IP only (from inside the VNet / over the VPN) |
+
+> **Windows `az` gotcha:** the CLI's console writer can't encode non-ASCII characters in cp1252 and
+> crashes a raw log dump. Pipe the cluster-side command through `tr -cd '\11\12\15\40-\176'` to strip
+> non-ASCII before `az` prints it.
+
+## 11. Known issues / follow-ups
+
+- **Route-derived spurious partitions** — visiting an auth-flow route (`/onboarding`, `/login`,
+  `/welcome`) can create a same-named partition *schema*; the router then tries to activate that
+  empty partition and its hub deadlocks (messages time out at 30s and retry). Drop the spurious
+  schemas and trace the code path that maps a route to a partition address.
+- **Static/seed user shadowing onboarding** — if a static node provider seeds a User for the admin
+  email, a fresh `CreateUser` refuses with `Node already exists`, and the interactive form shows
+  "user exists" even with 0 DB users. Remove the seed so real onboarding can persist the partition root.
+- **Secrets → Key Vault** — move the PG password, master key, OAuth client secrets, Grafana password,
+  and `Bootstrap:Secret` into the shared Key Vault via the CSI Secrets Store add-on.
+- **Multi-replica HA** — needs Orleans `AzureTables`/`AdoNet` clustering wired on the Filesystem backend.
+- **Migration as a Job** — see §4.
+- **Release image** — replace any temporary debug image tag with a clean `latest`/release tag before
+  treating the deployment as final.
