@@ -516,7 +516,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 }
                 return request.Processed();
             })
-            .WithInitialization(hub => Observable.FromAsync(ct => InitializeAsync(hub, ct)).Select(_ => System.Reactive.Unit.Default))
+            .WithInitialization(hub => Initialize(hub).Select(_ => System.Reactive.Unit.Default))
             .WithInitializationGate(SynchronizationGate, d =>
                 // Init-time pass-through: messages that contribute to Current
                 // being populated (initial frame from owner, error responses).
@@ -546,16 +546,63 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         return config;
     }
 
-    private async Task InitializeAsync(IMessageHub hub, CancellationToken ct)
+    /// <summary>
+    /// Drives initialization as a single reactive pipeline (no <c>await</c> on the
+    /// hub-init path). Three cases:
+    /// <list type="bullet">
+    /// <item>Observable init configured — subscribe to it; EACH emission becomes a
+    /// <c>SetCurrent</c> (a Full). This is the layout-area render path: a generator
+    /// that emits its content over time flows through these emissions and is never
+    /// dropped by the init window.</item>
+    /// <item>Task init configured — bridge the Task at the boundary via
+    /// <see cref="Observable.FromAsync{TResult}(Func{CancellationToken, Task{TResult}})"/>
+    /// and set the single result as current (preserves every existing
+    /// Task-based caller).</item>
+    /// <item>Neither — complete immediately with no current value set.</item>
+    /// </list>
+    /// The returned observable signals (via its first <c>OnNext</c>) that the initial
+    /// value has been produced so the hub-init gate opens; the underlying subscription
+    /// stays alive (owned by the stream) for any later emissions.
+    /// </summary>
+    private IObservable<System.Reactive.Unit> Initialize(IMessageHub hub)
     {
-        if (Configuration.Initialization is null)
+        if (Configuration.ObservableInitialization is not null)
         {
-            // No custom initialization
-            return;
+            return Observable.Create<System.Reactive.Unit>(observer =>
+            {
+                // The init gate opens on the FIRST emission (the hub-init consumer is
+                // FirstAsync), then disposes ITS subscription to this Create. The inner
+                // generator subscription must outlive that — a layout area whose function
+                // is a long-lived IObservable re-emits over the area's whole lifetime —
+                // so we own it via RegisterForDisposal (dies with the stream) and hand
+                // FirstAsync a no-op disposable. Disposing the Create subscription must
+                // NOT tear down the live generator.
+                var subscription = Configuration.ObservableInitialization(this).Subscribe(
+                    value =>
+                    {
+                        SetCurrent(hub, new ChangeItem<TStream>(value, StreamId, Host.Version));
+                        observer.OnNext(System.Reactive.Unit.Default);
+                    },
+                    observer.OnError,
+                    observer.OnCompleted);
+                RegisterForDisposal(subscription);
+                return System.Reactive.Disposables.Disposable.Empty;
+            });
         }
 
-        var init = await Configuration.Initialization(this, ct);
-        SetCurrent(hub, new ChangeItem<TStream>(init, StreamId, Host.Version));
+        if (Configuration.Initialization is not null)
+        {
+            return Observable
+                .FromAsync(ct => Configuration.Initialization(this, ct))
+                .Select(init =>
+                {
+                    SetCurrent(hub, new ChangeItem<TStream>(init, StreamId, Host.Version));
+                    return System.Reactive.Unit.Default;
+                });
+        }
+
+        // No custom initialization.
+        return Observable.Return(System.Reactive.Unit.Default);
     }
 
 
@@ -777,6 +824,23 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
 
     internal Func<ISynchronizationStream<TStream>, CancellationToken, Task<TStream>>? Initialization { get; init; }
 
+    /// <summary>
+    /// Observable initialization. Each emitted value is set as the stream's current
+    /// value (<c>SetCurrent</c>, as a <c>Full</c>), so a renderer/generator that emits
+    /// its content over time (e.g. a layout area whose function returns an
+    /// <see cref="IObservable{T}"/>) flows through the init subscription's own
+    /// emissions — those are never dropped by the init window the way a
+    /// <c>Stream.Update</c> issued during init would be. Each emission is a complete
+    /// snapshot (the same shape as the Task-based init's single <c>SetCurrent</c>),
+    /// which reliably delivers a freshly-built control tree — including a container's
+    /// nested sub-areas whose keys contain <c>/</c> — to the client's per-area control
+    /// streams (a Full carries no per-area Updates, so consumers re-evaluate against
+    /// it; see <c>LayoutExtensions.GetStream</c>). Mutually exclusive with
+    /// <see cref="Initialization"/> (the Task-based path); when set, the stream
+    /// subscribes to it synchronously (no <c>await</c>).
+    /// </summary>
+    internal Func<ISynchronizationStream<TStream>, IObservable<TStream>>? ObservableInitialization { get; init; }
+
 
     internal Action<Exception> ExceptionCallback { get; init; } = _ => { };
 
@@ -791,6 +855,17 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
 
     public StreamConfiguration<TStream> WithInitialization(Func<ISynchronizationStream<TStream>, CancellationToken, Task<TStream>> init)
         => this with { Initialization = init };
+
+    /// <summary>
+    /// Observable initialization. Each emitted value is set as the stream's current
+    /// value (<c>SetCurrent</c>, as a <c>Full</c>). Use this when the stream's content
+    /// arrives over time (the layout-area render path) so the emissions are delivered
+    /// as the init subscription's own <c>SetCurrent</c> calls instead of being issued
+    /// as <c>Stream.Update</c> requests that the init window drops. Each emission is a
+    /// complete snapshot. The subscription is registered for disposal with the stream.
+    /// </summary>
+    public StreamConfiguration<TStream> WithInitialization(Func<ISynchronizationStream<TStream>, IObservable<TStream>> init)
+        => this with { ObservableInitialization = init };
 
     public StreamConfiguration<TStream> WithExceptionCallback(Action<Exception> exceptionCallback)
         => this with { ExceptionCallback = exceptionCallback };

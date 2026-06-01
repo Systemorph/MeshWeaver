@@ -79,58 +79,8 @@ public record LayoutAreaHost : IDisposable
             reference,
             workspace.ReduceManager.ReduceTo<EntityStore>(),
             c => configuration.Invoke(c.WithDeferredInitialization())
-                .WithInitialization(async (_, _) =>
-                {
-                    ctorLogger?.LogDebug(
-                        "[LayoutAreaHost.WithInitialization] hub={Hub} area={Area} restoring AccessContext: {ObjectId} (was-captured={HadCapture})",
-                        workspace.Hub.Address, reference.Area ?? "(default)",
-                        capturedAccessContext?.ObjectId ?? "(null)",
-                        capturedAccessContext != null);
-                    // Restore captured AccessContext for the rendering scope
-                    if (capturedAccessContext != null)
-                        accessService?.SetContext(capturedAccessContext);
-
-                    try
-                    {
-                        var store = new EntityStore()
-                            .Update(LayoutAreaReference.Areas, x => x)
-                            .Update(LayoutAreaReference.Data, x => x);
-
-                        // Push progress data before rendering begins
-                        store = store.Update(LayoutAreaReference.Data,
-                            coll => coll.SetItem("progress", new { message = "Building layout...", progress = 0 }));
-
-                        var result = await LayoutDefinition.RenderAsync(this, context, store);
-
-                        // Clear progress after render
-                        result = result with
-                        {
-                            Store = result.Store.Update(LayoutAreaReference.Data,
-                                coll => coll.SetItem("progress", new { message = "", progress = 100 }))
-                        };
-
-                        // When Area was null/empty, store a NamedAreaControl at "" pointing to the resolved area
-                        if (isDefaultArea && !string.IsNullOrEmpty(resolvedArea))
-                        {
-                            var namedArea = new NamedAreaControl(resolvedArea);
-                            result = result with
-                            {
-                                Store = result.Store.Update(LayoutAreaReference.Areas,
-                                    coll => coll.SetItem(string.Empty, namedArea)),
-                                Updates = result.Updates.Append(
-                                    new EntityUpdate(LayoutAreaReference.Areas, string.Empty, namedArea))
-                            };
-                        }
-
-                        return result.Store;
-                    }
-                    finally
-                    {
-                        // Clear restored AccessContext to avoid leaking into unrelated async work
-                        if (capturedAccessContext != null)
-                            accessService?.SetContext(null);
-                    }
-                })
+                .WithInitialization(_ => BuildInitialization(
+                    context, isDefaultArea, resolvedArea, accessService, capturedAccessContext, ctorLogger))
                 .WithExceptionCallback(FailRendering));
         Reference = reference;
         logger = Stream.Hub.ServiceProvider.GetRequiredService<ILogger<LayoutAreaHost>>();
@@ -158,6 +108,123 @@ public record LayoutAreaHost : IDisposable
             )
         );
     }
+
+    /// <summary>
+    /// The observable layout-area initialization, fed to the stream's observable
+    /// <c>WithInitialization</c>. It emits exactly one value — the base store (an empty
+    /// Areas/Data shell plus the "Building layout…" progress marker) — which the init
+    /// subscription sets as the stream's Current (a Full). That base frame establishes
+    /// Current and opens the init gate; it is the ONLY init <c>SetCurrent</c>, so it can
+    /// never overwrite content the renderers deliver afterwards (the old async
+    /// <c>RenderAsync</c> issued a SECOND, final SetCurrent that clobbered any control a
+    /// generator had already pushed during the init turn — the LinkedIn "area never
+    /// renders" bug the <c>InvokeAsync</c> patch worked around).
+    /// <para>
+    /// On the same subscribe it wires <see cref="LayoutDefinition.Render"/> to deliver
+    /// each accumulated render via <see cref="Stream"/>'s update queue (same serialized
+    /// action block as <see cref="UpdateData"/> and the live-area <see cref="UpdateArea"/>
+    /// path). Routing content through that single queue — rather than a synchronous
+    /// SetCurrent — is what preserves <b>data-before-control</b> ordering: a generator
+    /// that seeds its DataContext via <c>host.UpdateData(...)</c> (a queued update)
+    /// before returning its control has that data update land first, then the control,
+    /// so a client <c>UpdatePointer</c> that follows finds its data path reachable.
+    /// </para>
+    /// <para>The restored <see cref="AccessContext"/> is cleared on teardown.</para>
+    /// </summary>
+    private IObservable<EntityStore> BuildInitialization(
+        RenderingContext context,
+        bool isDefaultArea,
+        string resolvedArea,
+        AccessService? accessService,
+        AccessContext? capturedAccessContext,
+        ILogger? ctorLogger)
+        => Observable.Create<EntityStore>(observer =>
+        {
+            ctorLogger?.LogDebug(
+                "[LayoutAreaHost.WithInitialization] hub={Hub} area={Area} restoring AccessContext: {ObjectId} (was-captured={HadCapture})",
+                Hub.Address, context.Area,
+                capturedAccessContext?.ObjectId ?? "(null)",
+                capturedAccessContext != null);
+
+            // Restore captured AccessContext for the rendering scope.
+            if (capturedAccessContext != null)
+                accessService?.SetContext(capturedAccessContext);
+
+            // Base store — empty Areas/Data shell plus the "Building layout…" progress
+            // marker. Emitted as the single init SetCurrent (a Full) to establish
+            // Current and open the gate.
+            var baseStore = new EntityStore()
+                .Update(LayoutAreaReference.Areas, x => x)
+                .Update(LayoutAreaReference.Data, x => x)
+                .Update(LayoutAreaReference.Data,
+                    coll => coll.SetItem("progress", new { message = "Building layout...", progress = 0 }));
+
+            // When the requested area was null/empty, the default-area indirection
+            // (a NamedAreaControl at "" pointing to the resolved area) is a STATIC
+            // resolution known at construction — not rendered content — so put it in the
+            // base frame. This means the client's very first frame already carries the
+            // resolved default area (consumers that read only the first emission, e.g.
+            // the Markdown "default area is content not catalog" assertion, depend on it),
+            // and it is rendered before any slow area content arrives.
+            if (isDefaultArea && !string.IsNullOrEmpty(resolvedArea))
+                baseStore = baseStore.Update(LayoutAreaReference.Areas,
+                    coll => coll.SetItem(string.Empty, new NamedAreaControl(resolvedArea)));
+
+            observer.OnNext(baseStore);
+
+            // Wire the renderers to deliver content through the stream's serialized
+            // update queue (Stream.Update), AFTER the base Full above. Each emission
+            // merges its area content + clears progress; the queue ordering keeps any
+            // generator-side UpdateData write (also a Stream.Update) ahead of its
+            // control. A late/observable generator re-emitting keeps flowing through
+            // the same path for the area's whole lifetime.
+            var renderSubscription = LayoutDefinition.Render(this, context, baseStore)
+                .Subscribe(PushRenderResult, FailRendering);
+
+            // Tear down: dispose the render subscription and clear the restored context
+            // so it never leaks into unrelated work on this thread.
+            return System.Reactive.Disposables.Disposable.Create(() =>
+            {
+                renderSubscription.Dispose();
+                if (capturedAccessContext != null)
+                    accessService?.SetContext(null);
+            });
+        });
+
+    /// <summary>
+    /// Applies one <see cref="LayoutDefinition.Render"/> emission to the stream through
+    /// its serialized update queue, emitting the merged result as a <c>Full</c>.
+    /// <para>
+    /// Running on the stream's single action block — the SAME queue the generators' own
+    /// <c>host.UpdateData(...)</c> writes and a container's nested-sub-area renders use —
+    /// is what preserves <b>data-before-control</b> ordering: a write issued earlier in
+    /// the generator body is queued (and therefore applied) before this render result.
+    /// We MERGE onto the live store (never clobber) so those concurrent writes — the
+    /// seeded DataContext and any sub-area controls a container delivered via its own
+    /// subscriptions — survive. Emitting a <c>Full</c> (rather than a Patch) means the
+    /// client's per-area control streams re-evaluate the complete snapshot, which is how
+    /// a freshly-built container's nested sub-areas (keys containing '/') reach their
+    /// streams regardless of subscription timing (see <c>LayoutExtensions.GetStream</c>).
+    /// </para>
+    /// </summary>
+    private void PushRenderResult(EntityStoreAndUpdates result)
+        => Stream.Update(current =>
+        {
+            var store = current ?? new EntityStore();
+
+            // Merge the render onto the live store (union — preserves concurrent
+            // UpdateData writes, the default-area NamedAreaControl seeded in the base
+            // frame, and any sub-area controls delivered separately).
+            var resultStore = store.Merge(result.Store);
+
+            // Clear progress now content has been rendered.
+            resultStore = resultStore.Update(LayoutAreaReference.Data,
+                coll => coll.SetItem("progress", new { message = "", progress = 100 }));
+
+            // Emit as a Full: a complete snapshot the client's control streams
+            // re-evaluate wholesale, delivering nested sub-areas reliably.
+            return new ChangeItem<EntityStore>(resultStore, Stream.StreamId, Stream.Hub.Version);
+        }, ex => logger.LogWarning(ex, "Cannot apply render for {Area}", Reference.Area));
 
 
 
@@ -279,42 +346,106 @@ public record LayoutAreaHost : IDisposable
 
         return ret;
     }
-    internal EntityStoreAndUpdates RenderArea<T>(RenderingContext context, Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<IObservable<T?>>> asyncGenerator, EntityStore store)
+    /// <summary>
+    /// Reactive render of a top-level area whose generator is produced asynchronously
+    /// (<c>Func&lt;…, Task&lt;IObservable&lt;T?&gt;&gt;&gt;</c>). The Task is bridged at the
+    /// boundary via <see cref="Observable.FromAsync{TResult}(Func{CancellationToken, Task{TResult}})"/>
+    /// (the only sanctioned Task→observable seam) and the resulting view stream is
+    /// rendered through <see cref="RenderObservable"/>, so every emission flows through
+    /// the layout-area init subscription's <c>SetCurrent</c> rather than a
+    /// dropped-during-init <c>Stream.Update</c>.
+    /// </summary>
+    internal IObservable<EntityStoreAndUpdates> RenderArea<T>(
+        RenderingContext context,
+        Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<IObservable<T?>>> asyncGenerator,
+        EntityStore store)
+        => RenderObservable(
+            context,
+            Observable.FromAsync(ct => asyncGenerator.Invoke(this, context, ct))
+                .SelectMany(observable => observable.Select(c => (object?)c)),
+            store);
+
+    /// <summary>
+    /// Core reactive render for a TOP-LEVEL area generator (used by the renderers
+    /// registered via <c>WithView</c>/<c>WithRenderer</c>). On each generator emission it
+    /// re-renders the control tree onto the store and emits the accumulated
+    /// <see cref="EntityStoreAndUpdates"/>; the init subscription sets each as Current
+    /// (a Full) — never via <c>Stream.Update</c> on the init turn, so a synchronous
+    /// <c>Observable.Return(control)</c> emission is not dropped. Child-area
+    /// subscriptions are disposed and re-created on each emission, mirroring
+    /// <see cref="UpdateArea"/>'s <c>DisposeChildAreas</c>.
+    /// </summary>
+    internal IObservable<EntityStoreAndUpdates> RenderObservable(
+        RenderingContext context,
+        IObservable<object?> generator,
+        EntityStore store)
     {
-        var ret = DisposeExistingAreas(store, context);
-        InvokeAsync(async ct =>
-        {
-            logger?.LogInformation("[LAH-RENDER] Start rendering area={area} hub={hub}",
-                context.Area, Stream.Hub.Address);
-            var observable = await asyncGenerator.Invoke(this, context, ct);
-            RegisterForDisposal(context.Parent?.Area ?? context.Area,
-                observable
-                    .Subscribe(
-                        c =>
-                        {
-                            logger?.LogInformation("[LAH-RENDER] emit area={area} type={type}",
-                                context.Area, c?.GetType().Name ?? "null");
-                            UpdateArea(context, c);
-                        },
-                        ex =>
-                        {
-                            logger?.LogWarning(ex, "[LAH-RENDER] FailRendering area={area}", context.Area);
-                            FailRendering(ex);
-                        })
-            );
-
-            logger?.LogInformation("[LAH-RENDER] End rendering setup area={area}", context.Area);
-
-        }, ex =>
-        {
-            logger?.LogWarning(ex, "[LAH-RENDER] generator exception area={area}", context.Area);
-            FailRendering(ex);
-            return Task.CompletedTask;
-        });
-
-
-        return ret;
+        var cleared = DisposeExistingAreas(store, context);
+        return generator
+            .DistinctUntilChanged()
+            .Scan(cleared, (acc, view) =>
+            {
+                // Dispose child-area subscriptions from the previous emission before
+                // re-rendering (the feeding subscription itself is owned by the init
+                // pipeline, not by this area key, so it is left intact).
+                var disposed = DisposeChildAreas(acc.Store, context);
+                var rendered = RenderArea(context, view, disposed.Store);
+                return new EntityStoreAndUpdates(
+                    rendered.Store,
+                    disposed.Updates.Concat(rendered.Updates),
+                    Stream.StreamId);
+            })
+            .Catch<EntityStoreAndUpdates, Exception>(ex =>
+            {
+                FailRendering(ex);
+                return Observable.Empty<EntityStoreAndUpdates>();
+            });
     }
+
+    /// <summary>
+    /// Reactive render of a top-level area whose generator is an observable of
+    /// controls. Used by the layout renderers registered via <c>WithView</c>, so the
+    /// synchronous first emission (the <c>Observable.Return(control)</c> common case)
+    /// flows through the init subscription's <c>SetCurrent</c> instead of being dropped
+    /// by the init window.
+    /// </summary>
+    internal IObservable<EntityStoreAndUpdates> RenderAreaObservable(
+        RenderingContext context, IObservable<object?> generator, EntityStore store)
+        => RenderObservable(context, generator, store);
+
+    /// <summary>
+    /// Reactive render of a top-level area whose generator is an observable of
+    /// <see cref="ViewDefinition"/>s. Each ViewDefinition is invoked (bridged via
+    /// <see cref="Observable.FromAsync{TResult}(Func{CancellationToken, Task{TResult}})"/>)
+    /// and the resulting control rendered through <see cref="RenderObservable"/>.
+    /// </summary>
+    internal IObservable<EntityStoreAndUpdates> RenderAreaObservable(
+        RenderingContext context, IObservable<ViewDefinition> generator, EntityStore store)
+        => RenderObservable(
+            context,
+            generator.Select(vd => Observable.FromAsync(ct => vd.Invoke(this, context, ct)))
+                .Switch()
+                .Select(c => (object?)c),
+            store);
+
+    /// <summary>
+    /// Reactive render of a top-level area that is a single <see cref="ViewDefinition"/>
+    /// (a <c>Func&lt;…, Task&lt;UiControl?&gt;&gt;</c>).
+    /// </summary>
+    internal IObservable<EntityStoreAndUpdates> RenderAreaObservable(
+        RenderingContext context, ViewDefinition generator, EntityStore store)
+        => RenderObservable(
+            context,
+            Observable.FromAsync(ct => generator.Invoke(this, context, ct)).Select(c => (object?)c),
+            store);
+
+    /// <summary>
+    /// Reactive render of a top-level area that is a plain control (already known
+    /// synchronously). Emits once.
+    /// </summary>
+    internal IObservable<EntityStoreAndUpdates> RenderAreaObservable(
+        RenderingContext context, object? view, EntityStore store)
+        => Observable.Return(RenderArea(context, view, store));
 
 
     public void UpdateArea(RenderingContext context, object? view)
@@ -566,22 +697,13 @@ public record LayoutAreaHost : IDisposable
     {
         var ret = DisposeExistingAreas(store, context);
 
-        logger.LogDebug("Schedule rendering of {area}", context.Area);
-        InvokeAsync(async ct =>
-        {
-            logger.LogDebug("Start rendering of {area}", context.Area);
-            var observable = await asyncGenerator.Invoke(this, context, store, ct);
-            RegisterForDisposal(context.Parent?.Area ?? context.Area,
-                observable
-                    .Subscribe(c => UpdateArea(context, c), FailRendering)
-            );
-
-            logger.LogDebug("End rendering of {area}", context.Area);
-        }, ex =>
-        {
-            FailRendering(ex);
-            return Task.CompletedTask;
-        });
+        // Reactive: bridge the Task-producing generator at the boundary via
+        // Observable.FromAsync (no await in hub-reachable code), flatten to the inner
+        // control stream, and feed UpdateArea on each emission.
+        RegisterForDisposal(context.Parent?.Area ?? context.Area,
+            Observable.FromAsync(ct => asyncGenerator.Invoke(this, context, store, ct))
+                .Switch()
+                .Subscribe(c => UpdateArea(context, c), FailRendering));
         return ret;
     }
 
@@ -598,19 +720,11 @@ public record LayoutAreaHost : IDisposable
     internal EntityStoreAndUpdates RenderArea(RenderingContext context, ViewDefinition generator, EntityStore store)
     {
         var ret = DisposeExistingAreas(store, context);
-        logger.LogDebug("Schedule rendering of {area}", context.Area);
-        InvokeAsync(async ct =>
-        {
-            logger.LogDebug("Start rendering of {area}", context.Area);
-            var view = await generator.Invoke(this, context, ct);
-
-            UpdateArea(context, view!);
-            logger.LogDebug("End rendering of {area}", context.Area);
-        }, ex =>
-        {
-            FailRendering(ex);
-            return Task.CompletedTask;
-        });
+        // Reactive: bridge the Task-producing ViewDefinition via Observable.FromAsync
+        // (no await in hub-reachable code) and feed UpdateArea once it resolves.
+        RegisterForDisposal(context.Parent?.Area ?? context.Area,
+            Observable.FromAsync(ct => generator.Invoke(this, context, ct))
+                .Subscribe(view => UpdateArea(context, view!), FailRendering));
         return ret;
     }
     internal EntityStoreAndUpdates RenderArea(
@@ -618,23 +732,30 @@ public record LayoutAreaHost : IDisposable
         IObservable<ViewDefinition> generator,
         EntityStore store)
     {
-        RegisterForDisposal(context.Area, generator.Subscribe(vd =>
-                InvokeAsync(async ct =>
-                {
-                    var view = await vd.Invoke(this, context, ct);
-                    UpdateArea(context, view!);
-                }, ex =>
-                {
-                    FailRendering(ex);
-                    return Task.CompletedTask;
-                })
-            )
-        );
+        // Reactive: for each emitted ViewDefinition, bridge its Task via
+        // Observable.FromAsync (no await in hub-reachable code) and feed UpdateArea.
+        // Switch() keeps only the latest definition's resolution in flight.
+        RegisterForDisposal(context.Area,
+            generator
+                .Select(vd => Observable.FromAsync(ct => vd.Invoke(this, context, ct)))
+                .Switch()
+                .Subscribe(view => UpdateArea(context, view!), FailRendering));
 
         return DisposeExistingAreas(store, context);
     }
 
 
+    /// <summary>
+    /// Nested-area render of an observable control generator (container/dialog
+    /// sub-areas). The synchronous part — clearing the area — is returned to the
+    /// caller's <c>Render</c>; the live emissions feed <see cref="UpdateArea"/> on a
+    /// subscription tied to the area's lifecycle. This path runs POST-init (the
+    /// container control itself reached the client through the init subscription), so
+    /// subscribing inline is safe — there is no init window to drop into. The TOP-LEVEL
+    /// render path uses
+    /// <see cref="RenderAreaObservable(RenderingContext, IObservable{object}, EntityStore)"/>
+    /// instead, which routes emissions through the init subscription's SetCurrent.
+    /// </summary>
     internal EntityStoreAndUpdates RenderArea(RenderingContext context, IObservable<object?> generator, EntityStore store)
     {
         // 🚨 Important: do NOT collapse the first emission into ret here — see
@@ -644,27 +765,14 @@ public record LayoutAreaHost : IDisposable
         // see the control before the data Patch arrives, breaking any
         // UpdatePointer call that follows. The original queued-Patch flow
         // preserves data-before-control ordering.
-        logger?.LogInformation("[LAH-RENDER-OBS] Start subscribing area={area} hub={hub} generatorType={genType}",
-            context.Area, Stream.Hub.Address, generator.GetType().Name);
         var ret = DisposeExistingAreas(store, context);
-
         RegisterForDisposal(
             context.Area,
             generator
                 .DistinctUntilChanged()
                 .Subscribe(
-                    view =>
-                    {
-                        logger?.LogInformation("[LAH-RENDER-OBS] emit area={area} type={type}",
-                            context.Area, view?.GetType().Name ?? "null");
-                        UpdateArea(context, view);
-                    },
-                    ex =>
-                    {
-                        logger?.LogWarning(ex, "[LAH-RENDER-OBS] subscribe ERROR area={area}", context.Area);
-                        FailRendering(ex);
-                    },
-                    () => logger?.LogInformation("[LAH-RENDER-OBS] completed area={area}", context.Area))
+                    view => UpdateArea(context, view),
+                    FailRendering)
         );
         return ret;
     }

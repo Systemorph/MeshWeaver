@@ -255,7 +255,7 @@ public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TType
     /// is what deadlocks the hub action block when a type source touches a hub —
     /// see <c>Doc/Architecture/InitializationGates.md</c>). The single
     /// <c>.FirstAsync().ToTask(ct)</c> at the bottom is the framework-edge bridge
-    /// because <see cref="StreamConfiguration{T}.WithInitialization"/> consumes a
+    /// because <see cref="StreamConfiguration{T}.WithInitialization(System.Func{ISynchronizationStream{T}, System.Threading.CancellationToken, System.Threading.Tasks.Task{T}})"/> consumes a
     /// <c>Func&lt;…, Task&lt;TStream&gt;&gt;</c>; that bridge is sanctioned per
     /// <c>Doc/Architecture/AsynchronousCalls.md</c>.
     /// </para>

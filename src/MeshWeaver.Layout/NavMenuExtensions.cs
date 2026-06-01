@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Domain;
+﻿using System.Reactive.Linq;
+using MeshWeaver.Domain;
 
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
@@ -23,13 +24,13 @@ public static class NavMenuExtensions
     public static LayoutDefinition WithNavMenu(this LayoutDefinition layout,
         Func<NavMenuControl, LayoutAreaHost, RenderingContext, Task<NavMenuControl>> config)
         => layout.WithRenderer(a => a.Area == NavMenu,
-            async (h, c, store) =>
-                await h.ConfigBasedRenderer(
+            (ObservableRenderer)((h, c, store) =>
+                Observable.FromAsync(() => h.ConfigBasedRenderer(
                     c,
                     store,
                     NavMenu,
                     () => new(),
-                    config)
+                    config)))
         );
     public static LayoutDefinition WithNavMenu(this LayoutDefinition layout,
         object title, string href, Icon? icon = null)
