@@ -274,30 +274,66 @@ public static class MeshNodeExtensions
                 // have a CreateNodeRequest handler → "No handler found for ... in
                 // portal/anonymous". Resolving from the mesh root makes MeshService
                 // capture the mesh hub as its target.
-                var meshService = hub.GetMeshHub().ServiceProvider.GetService<IMeshService>();
-                if (meshService != null)
-                {
-                    logger?.LogDebug(
-                        "TrackActivity CREATE: {Path}",
-                        activityPath);
-                    return meshService.CreateNode(saveNode)
-                        // Race coalesce: a concurrent track for the same path
-                        // beat us to CreateNode — fold our increment in via
-                        // Update on the now-warm stream instead of throwing.
-                        .Catch<MeshNode, InvalidOperationException>(ex =>
-                        {
-                            if (!IsAlreadyExistsRace(ex))
-                                return Observable.Throw<MeshNode>(ex);
-                            logger?.LogDebug(
-                                "TrackActivity CREATE→UPDATE race for {Path}: another concurrent track won; folding via Update.",
-                                activityPath);
-                            return stream.Update(_ => saveNode);
-                        });
-                }
-
+                // ONBOARD-FIRST GATE: activity tracking must NEVER be the thing that
+                // creates a user's partition — partition creation is onboarding's job
+                // (UserOnboardingService.CreateUser). Writing this activity node first
+                // would lazily create the {userId} schema via the path-routing
+                // PendingCreate branch, so a login/navigation BEFORE onboarding would
+                // materialise the partition ahead of the User node (the "partition
+                // created before onboarding" bug). Probe the user's partition ROOT with
+                // a read-only storage read (a read never creates a schema) and skip the
+                // write when it's absent — the identity isn't onboarded yet.
                 var storage = hub.ServiceProvider.GetService<IStorageAdapter>();
-                return storage?.Write(saveNode, hub.JsonSerializerOptions)
-                       ?? Observable.Empty<MeshNode>();
+                var meshService = hub.GetMeshHub().ServiceProvider.GetService<IMeshService>();
+                var rootProbe = (storage != null
+                        ? storage.Read(req.UserId, hub.JsonSerializerOptions).Take(1)
+                        : Observable.Return<MeshNode?>(null))
+                    .Catch<MeshNode?, Exception>(probeEx =>
+                    {
+                        logger?.LogDebug(probeEx,
+                            "TrackActivity root probe failed for {UserId} — treating as not onboarded.",
+                            req.UserId);
+                        return Observable.Return<MeshNode?>(null);
+                    });
+
+                return rootProbe.SelectMany(userRoot =>
+                {
+                    if (userRoot is null)
+                    {
+                        logger?.LogDebug(
+                            "TrackActivity SKIP create for {Path}: user '{UserId}' has no partition root yet " +
+                            "(not onboarded). Activity tracking must not create a partition ahead of onboarding.",
+                            activityPath, req.UserId);
+                        return Observable.Empty<MeshNode>();
+                    }
+
+                    // First-time creation: per-node hub isn't activated yet, RemoteStream
+                    // can't write. Fall through to IMeshService.CreateNode which routes via
+                    // CreateNodeRequest and activates the hub. Subsequent tracks land in the
+                    // Update branch above and reuse the now-warm cached stream. Resolve
+                    // IMeshService from the MESH ROOT so MeshService captures the mesh hub as
+                    // its target (a local-scope resolve would target portal/anonymous which
+                    // has no CreateNodeRequest handler).
+                    if (meshService != null)
+                    {
+                        logger?.LogDebug("TrackActivity CREATE: {Path}", activityPath);
+                        return meshService.CreateNode(saveNode)
+                            // Race coalesce: a concurrent track for the same path beat us to
+                            // CreateNode — fold our increment in via Update instead of throwing.
+                            .Catch<MeshNode, InvalidOperationException>(ex =>
+                            {
+                                if (!IsAlreadyExistsRace(ex))
+                                    return Observable.Throw<MeshNode>(ex);
+                                logger?.LogDebug(
+                                    "TrackActivity CREATE to UPDATE race for {Path}: another concurrent track won; folding via Update.",
+                                    activityPath);
+                                return stream.Update(_ => saveNode);
+                            });
+                    }
+
+                    return storage?.Write(saveNode, hub.JsonSerializerOptions)
+                           ?? Observable.Empty<MeshNode>();
+                });
             })
             .Subscribe(
                 _ => logger?.LogDebug(
