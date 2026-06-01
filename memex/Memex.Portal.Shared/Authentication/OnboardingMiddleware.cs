@@ -75,6 +75,7 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
         "/favicon.ico",
         "/mcp",
         "/signin-",
+        "/bootstrap",
     };
 
     public async Task InvokeAsync(HttpContext context)
@@ -130,16 +131,22 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
             return Observable.Return(OnboardingOutcome.PassThrough);
 
         var email = userContext.Email ?? userContext.ObjectId;
-
-        // ObjectId already resolved to a username (different from the email)?
-        // This session has been onboarded — skip the query (which would race
-        // routing/caching in the mesh query layer for newly created nodes).
-        if (!string.IsNullOrEmpty(email)
-            && !string.IsNullOrEmpty(userContext.ObjectId)
-            && userContext.ObjectId != email)
-            return Observable.Return(OnboardingOutcome.PassThrough);
-
         var workspace = portalApp.Hub.GetWorkspace();
+
+        // Correctness fix + diagnostic (2026-06): we previously short-circuited to
+        // PassThrough whenever ObjectId != email, ASSUMING such a session was already
+        // onboarded. That stranded any session carrying a username-shaped identity with
+        // NO backing User node (a leftover DevLogin cookie, a deleted user, …): the
+        // middleware never redirected to /onboarding and Index.razor rendered an empty
+        // Activity area (the "blank screen, never onboards" bug). We now ALWAYS resolve
+        // the user by email; a missing node ⇒ redirect to onboarding. A genuinely
+        // onboarded external-auth session carries ObjectId == email here (the cookie's
+        // NameIdentifier is the email), so its FindUserByEmail lookup finds the node and
+        // passes through — the only sessions this newly redirects are the stale/unknown
+        // ones that SHOULD onboard.
+        logger.LogDebug(
+            "OnboardingMiddleware: resolving session - ObjectId='{ObjectId}' email='{Email}' isVirtual={IsVirtual} path={Path}",
+            userContext.ObjectId, email, userContext.IsVirtual, context.Request.Path);
 
         // Reactive composition: FindUser → SelectMany → either Redirect (no
         // node / Transient) or LoadRoles → set context → PassThrough.

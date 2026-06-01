@@ -135,9 +135,16 @@ public sealed class UserOnboardingService(
                 Roles = [new RoleAssignment { Role = Role.Admin.Id, Denied = false }]
             }
         };
-        return meshService.CreateNode(assignment)
-            .Do(_ => logger?.LogInformation(
-                "Onboarding: granted self-Admin to '{Username}' at {Path}", username, assignment.Path));
+        // Self-impersonate as System: granting a brand-new user access to their own (possibly
+        // just-created) partition is an infrastructure write — the caller may have no usable
+        // identity (server-side bootstrap) or only hub identity (interactive onboarding). Same
+        // justification + pattern as CreateUser above. PostPipeline fails closed without a
+        // context, so this MUST set one explicitly rather than rely on the caller.
+        return Observable.Using(
+            () => accessService.ImpersonateAsSystem(),
+            _ => meshService.CreateNode(assignment)
+                .Do(__ => logger?.LogInformation(
+                    "Onboarding: granted self-Admin to '{Username}' at {Path}", username, assignment.Path)));
     }
 
     /// <summary>
@@ -160,9 +167,14 @@ public sealed class UserOnboardingService(
                 Roles = [new RoleAssignment { Role = Role.Admin.Id, Denied = false }]
             }
         };
-        return meshService.CreateNode(assignment)
-            .Do(_ => logger?.LogInformation(
-                "Onboarding: granted platform Admin (first user) to '{Username}' at Admin/_Access", username));
+        // Self-impersonate as System (see GrantSelfAdmin) — the first-user platform-Admin grant
+        // is an infrastructure write that must succeed even when no user identity is on the
+        // caller (server-side bootstrap) or only a hub identity (interactive onboarding).
+        return Observable.Using(
+            () => accessService.ImpersonateAsSystem(),
+            _ => meshService.CreateNode(assignment)
+                .Do(__ => logger?.LogInformation(
+                    "Onboarding: granted platform Admin (first user) to '{Username}' at Admin/_Access", username)));
     }
 }
 
