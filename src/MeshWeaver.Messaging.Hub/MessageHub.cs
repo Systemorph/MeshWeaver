@@ -1,7 +1,9 @@
 ﻿using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Linq.Expressions;
+using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Reflection;
 using System.Text.Json;
 using MeshWeaver.Domain;
@@ -258,7 +260,11 @@ public sealed class MessageHub : IMessageHub
         Register<DisposeRequest>(HandleDispose);
         Register<ShutdownRequest>(HandleShutdown);
         Register<PingRequest>(HandlePingRequest);
-        Register<InitializeHubRequest>(HandleInitialize);
+        // Observable-shaped init handler bridged to the Task-based rule chain at this actor-loop edge
+        // (the sanctioned Observable->Task boundary). HandleInitialize + the buildup composition contain
+        // no await; the gate opens reactively on completion. The execution ct flows into ToTask so a
+        // cancelled execution unsubscribes (cancelling the in-flight buildup), matching the old await loop.
+        Register<InitializeHubRequest>((request, ct) => HandleInitialize(request).ToTask(ct));
         lock (messageHandlerRegistrationLock)
         {
             foreach (var messageHandler in configuration.MessageHandlers)
@@ -281,25 +287,34 @@ public sealed class MessageHub : IMessageHub
         return request.Processed();
     }
 
-    private async Task<IMessageDelivery> HandleInitialize(IMessageDelivery<InitializeHubRequest> request, CancellationToken cancellationToken)
+    /// <summary>
+    /// Reactive hub initialization: composes the configured buildup observables in order
+    /// (<see cref="Observable.Concat{TSource}(System.Collections.Generic.IEnumerable{IObservable{TSource}})"/>)
+    /// and opens the Initialize gate when the composed sequence completes — no <c>await</c>/<c>for</c>-await.
+    /// Each action advances on its first emission (or <c>DefaultIfEmpty</c>) via <c>Take(1)</c>, matching the
+    /// previous FirstAsync-per-action semantics; the gate opens exactly once after every action has signalled.
+    /// An action that faults propagates the error (the gate never opens, the hub never reaches Started) — as the
+    /// old await loop did. Bridged to the Task-based rule chain at the <c>Register</c> edge.
+    /// </summary>
+    private IObservable<IMessageDelivery> HandleInitialize(IMessageDelivery<InitializeHubRequest> request)
     {
         logger.LogDebug("Message hub {address} initializing via InitializeHubRequest", Address);
 
         var actions = Configuration.BuildupActions;
         logger.LogDebug("Message hub {address} has {count} BuildupActions to run", Address, actions.Count);
-        for (var i = 0; i < actions.Count; i++)
-        {
-            logger.LogDebug("Message hub {address} starting BuildupAction {i}/{count}", Address, i + 1, actions.Count);
-            await actions[i](this, cancellationToken);
-            logger.LogDebug("Message hub {address} completed BuildupAction {i}/{count}", Address, i + 1, actions.Count);
-        }
 
-        logger.LogDebug("Message hub {address} BuildupActions complete, opening Initialize gate", Address);
+        return Observable
+            .Concat(actions.Select(a => a(this).DefaultIfEmpty(Unit.Default).Take(1)))
+            .ToList()
+            .Select(_ =>
+            {
+                logger.LogDebug("Message hub {address} BuildupActions complete, opening Initialize gate", Address);
 
-        // Open the Initialize gate - this will set RunLevel to Started if all other gates are also open
-        OpenGate(MessageHubConfiguration.InitializeGateName);
+                // Open the Initialize gate - this will set RunLevel to Started if all other gates are also open
+                OpenGate(MessageHubConfiguration.InitializeGateName);
 
-        return request.Processed();
+                return request.Processed();
+            });
     }
 
     #region Message Types

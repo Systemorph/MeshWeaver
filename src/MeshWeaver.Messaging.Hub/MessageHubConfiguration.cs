@@ -93,7 +93,10 @@ public record MessageHubConfiguration
 
     internal ImmutableList<MessageHandlerItem> MessageHandlers { get; init; } = ImmutableList<MessageHandlerItem>.Empty;
 
-    protected internal ImmutableList<Func<IMessageHub, CancellationToken, Task>> BuildupActions { get; init; } = ImmutableList<Func<IMessageHub, CancellationToken, Task>>.Empty;
+    // Observable buildup actions: each is a factory returning IObservable<Unit>. The hub composes them
+    // reactively (Observable.Concat) when it handles InitializeHubRequest and opens the Initialize gate on
+    // completion — the init path is observable end-to-end, no await. See MessageHub.HandleInitialize.
+    protected internal ImmutableList<Func<IMessageHub, IObservable<Unit>>> BuildupActions { get; init; } = ImmutableList<Func<IMessageHub, IObservable<Unit>>>.Empty;
     protected internal ImmutableList<Action<IMessageHub>> SyncBuildupActions { get; init; } = [];
 
     internal IMessageHub HubInstance { get; set; } = null!;
@@ -210,12 +213,12 @@ public record MessageHubConfiguration
     {
         if (RegisteredObservableInits.Contains(action))
             return this;
-        Func<IMessageHub, CancellationToken, Task> wrapped = (hub, ct) =>
-            action(hub).DefaultIfEmpty(Unit.Default).FirstAsync().ToTask(ct);
+        // Store the observable directly — no Task bridge. HandleInitialize composes the BuildupActions
+        // reactively and opens the gate on completion.
         return this with
         {
             RegisteredObservableInits = RegisteredObservableInits.Add(action),
-            BuildupActions = BuildupActions.Add(wrapped),
+            BuildupActions = BuildupActions.Add(action),
         };
     }
 
