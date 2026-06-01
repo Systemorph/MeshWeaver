@@ -24,7 +24,7 @@ public class VirtualUserMiddleware(RequestDelegate next, ILogger<VirtualUserMidd
     private const string CookieName = "meshweaver_virtual_user";
 
     private static readonly string[] ExcludedPrefixes =
-        ["/_framework", "/_content", "/_blazor", "/static/", "/favicon.ico", "/mcp"];
+        ["/_framework", "/_content", "/_blazor", "/static/", "/favicon.ico", "/mcp", "/bootstrap"];
 
     public async Task InvokeAsync(HttpContext context)
     {
