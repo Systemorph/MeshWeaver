@@ -147,6 +147,13 @@ var finalVersion = await runner.RunAsync(ctx);
 var embeddingProvider = host.Services.GetService<IEmbeddingProvider>();
 await DocumentationBackfill.RunAsync(dataSource, options, connectionString, embeddingProvider, logger);
 
+// ── Orleans clustering (always runs): create the membership tables in the dedicated `orleans`
+// database (same server, separate DB) so the portal silo can use Postgres-backed AdoNet
+// clustering instead of Localhost. Skipped when no `orleans` connection string is injected
+// (Azure-Tables / Localhost deployments don't use Postgres clustering).
+var orleansConnectionString = builder.Configuration.GetConnectionString("orleans");
+await OrleansClusteringSetup.RunAsync(orleansConnectionString ?? "", logger);
+
 // ── Phase 3: Searchable-schemas refresh (always runs)
 await SearchableSchemasUpdater.RunAsync(dataSource, logger);
 

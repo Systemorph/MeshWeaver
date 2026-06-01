@@ -136,7 +136,11 @@ builder.Services.AddAzureFoundryEmbeddings(embeddingOptions);
 //  - "Localhost": single-silo in-process membership for single-node self-host (compose
 //    without an Aspire orchestrator to inject clustering config).
 //  - "AdoNet" (Postgres): HA self-host — wired in Track A / compose-ha.
-var orleansClustering = builder.Configuration["Deployment:Orleans:Clustering"] ?? "AzureTables";
+// Clustering provider is a deploy-time feature flag (Features:Orleans:Clustering); the
+// legacy Deployment:Orleans:Clustering key is still honoured for back-compat.
+var orleansClustering = builder.Configuration["Features:Orleans:Clustering"]
+    ?? builder.Configuration["Deployment:Orleans:Clustering"]
+    ?? "AzureTables";
 var address = AddressExtensions.CreateMeshAddress();
 builder.UseOrleansMeshServer(address, silo =>
     {
@@ -146,7 +150,28 @@ builder.UseOrleansMeshServer(address, silo =>
             opts.ServiceId = MemexDistributedConstants.ServiceId;
         });
         if (string.Equals(orleansClustering, "Localhost", StringComparison.OrdinalIgnoreCase))
+        {
             silo.UseLocalhostClustering();
+        }
+        else if (string.Equals(orleansClustering, "AdoNet", StringComparison.OrdinalIgnoreCase))
+        {
+            // Real, Postgres-backed cluster membership (self-host / HA). The `orleans`
+            // database and its connection string are declared in the Aspire AppHost and
+            // injected as ConnectionStrings:orleans; the db-migration creates the Orleans
+            // membership tables. (AzureTables — the ACA path — is configured by the Aspire
+            // Orleans integration via WithReference(orleans), so it needs no explicit call.)
+            var orleansConnectionString = builder.Configuration.GetConnectionString("orleans")
+                ?? throw new InvalidOperationException(
+                    "Features:Orleans:Clustering=AdoNet but ConnectionStrings:orleans is not set. " +
+                    "The Aspire AppHost must add an 'orleans' database and WithReference it on the portal.");
+            if (!System.Data.Common.DbProviderFactories.GetProviderInvariantNames().Contains("Npgsql"))
+                System.Data.Common.DbProviderFactories.RegisterFactory("Npgsql", Npgsql.NpgsqlFactory.Instance);
+            silo.UseAdoNetClustering(o =>
+            {
+                o.Invariant = "Npgsql";
+                o.ConnectionString = orleansConnectionString;
+            });
+        }
         return silo;
     }
     )

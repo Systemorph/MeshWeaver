@@ -44,7 +44,9 @@ var portal = builder.AddMemex("memex", o =>
     o.IncludeAiClis = !string.Equals(builder.Configuration["Parameters:include-ai-clis"], "false",
         StringComparison.OrdinalIgnoreCase);
     o.Backend = "Filesystem";
-    o.OrleansClustering = ha ? "AdoNet" : "Localhost";
+    // Real, Postgres-backed cluster membership in every deployment (never Localhost in prod).
+    // Works for a single silo or an HA replica set; the `ha` flag only drives replica count.
+    o.OrleansClustering = "AdoNet";
     o.MasterKey = builder.Configuration["Parameters:key-protection-master-key"];
 
     // Embeddings (vector search). With the endpoint + key set, the one-shot migration
