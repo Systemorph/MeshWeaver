@@ -1,17 +1,19 @@
 ---
 Name: Controlling Form Fields Through Attributes
 Category: Documentation
-Description: Attributes that control how properties are rendered and validated in editors
+Description: Standard .NET attributes that control how properties are rendered, labelled, validated, and hidden in the Editor control
 Icon: /static/DocContent/GUI/Attributes/icon.svg
 ---
 
-Property attributes control how the Editor control renders and validates form fields. They provide metadata that influences field appearance, behavior, and validation.
+The Editor control reads standard .NET attributes on your record properties and automatically adjusts how each field is labelled, validated, hidden, or rendered. You annotate the data model once and every form that binds to it picks up the behaviour — no per-field UI code required.
 
-# Display Attributes
+---
 
-## [Description]
+## Display Attributes
 
-Adds help text below the field:
+### `[Description]`
+
+Adds explanatory help text directly below the field, giving users the context they need without cluttering the label.
 
 ```csharp
 public record Person
@@ -21,11 +23,13 @@ public record Person
 }
 ```
 
-**Result:** Help text appears below the input field.
+The description appears as a subtle hint beneath the input.
 
-## [DisplayName]
+---
 
-Overrides the label derived from property name:
+### `[DisplayName]`
+
+Overrides the label that would otherwise be derived from the property name. Useful when the code name is abbreviated, technical, or ambiguous.
 
 ```csharp
 public record Settings
@@ -35,11 +39,13 @@ public record Settings
 }
 ```
 
-**Result:** Field label shows "Enable Email Notifications" instead of "Notifications Enabled".
+The field label shows **"Enable Email Notifications"** instead of the auto-generated *"Notifications Enabled"*.
 
-## [Browsable(false)]
+---
 
-Hides the property from the editor:
+### `[Browsable(false)]`
+
+Completely hides a property from the rendered form. Internal IDs, computed fields, and implementation details that have no place in a user-facing editor belong here.
 
 ```csharp
 public record Entity
@@ -51,13 +57,15 @@ public record Entity
 }
 ```
 
-**Result:** Only the Name field appears in the form.
+Only `Name` appears in the form; `InternalId` is invisible.
 
-# Validation Attributes
+---
 
-## [Required]
+## Validation Attributes
 
-Makes the field mandatory:
+### `[Required]`
+
+Marks a field as mandatory. The Editor will show a validation error and prevent submission until the field has a value.
 
 ```csharp
 public record User
@@ -67,11 +75,11 @@ public record User
 }
 ```
 
-**Result:** Field shows validation error if empty.
+---
 
-## [Range]
+### `[Range]`
 
-Restricts numeric range:
+Constrains a numeric field to a minimum and maximum. Works for integers, decimals, and doubles.
 
 ```csharp
 public record Product
@@ -84,11 +92,13 @@ public record Product
 }
 ```
 
-**Result:** Values outside the range show validation errors.
+Values outside the declared range surface inline validation errors immediately.
 
-## [Editable(false)]
+---
 
-Makes the field read-only:
+### `[Editable(false)]`
+
+Renders a field as read-only — the value is visible but cannot be changed. Perfect for system-assigned fields like order numbers or record IDs that you still want users to see.
 
 ```csharp
 public record Order
@@ -100,13 +110,15 @@ public record Order
 }
 ```
 
-**Result:** OrderNumber is displayed but cannot be edited.
+`OrderNumber` is displayed but locked; `Notes` remains editable.
 
-# Control Override Attributes
+---
 
-## [UiControl<T>]
+## Control Override Attributes
 
-Overrides the default control type:
+### `[UiControl<T>]`
+
+Replaces the default control chosen by type inference with a specific control type. Pass options as named parameters when the target control accepts configuration.
 
 ```csharp
 public record Preferences
@@ -119,11 +131,13 @@ public record Preferences
 }
 ```
 
-**Result:** Bio renders as a multi-line text area; Theme renders as radio buttons.
+`Bio` renders as a multi-line text area; `Theme` renders as a radio button group.
 
-## [Dimension<T>]
+---
 
-Renders a dropdown populated from a data source:
+### `[Dimension<T>]`
+
+Populates a dropdown from a typed data source. Decorate the foreign-key property with the entity type that holds the valid values. The Editor queries all records of that type and presents them as selectable options.
 
 ```csharp
 public record Country
@@ -142,22 +156,26 @@ public record Address
 }
 ```
 
-**Result:** CountryCode renders as a dropdown populated with all Country records.
+`CountryCode` renders as a dropdown pre-populated with every `Country` record in the mesh.
 
-# Property Type to Control Mapping
+---
 
-Without attributes, the Editor maps types automatically:
+## Default Type-to-Control Mapping
+
+When no override attribute is present, the Editor picks the most appropriate control for each property type:
 
 | Property Type | Default Control |
-|--------------|-----------------|
+|---|---|
 | `string` | `TextFieldControl` |
 | `int`, `double`, `decimal` | `NumberFieldControl` |
 | `bool` | `CheckBoxControl` |
 | `DateTime` | `DateTimeControl` |
 
-# Combining Attributes
+---
 
-Attributes can be combined for complex validation:
+## Combining Attributes
+
+Attributes compose freely. Stack display, validation, and control-override attributes on the same property to express exactly the behaviour you need.
 
 ```csharp
 public record Employee
@@ -179,7 +197,32 @@ public record Employee
 }
 ```
 
-# See Also
+---
 
-- [Editor Control](../Editor) - How attributes are used in forms
-- [DataBinding](../DataBinding) - How data flows through forms
+## Live Example
+
+The snippet below renders a quick reference card summarising which attribute controls which aspect of a field. It runs directly in the kernel so you can experiment by modifying the markup.
+
+```csharp --render AttributeSummaryCard --show-code
+MeshWeaver.Layout.Controls.Stack
+    .WithView(MeshWeaver.Layout.Controls.Markdown("### Attribute Quick Reference"))
+    .WithView(MeshWeaver.Layout.Controls.Markdown(
+        "| Attribute | Effect |\n" +
+        "|---|---|\n" +
+        "| `[Description(\"...\")]` | Help text below the field |\n" +
+        "| `[DisplayName(\"...\")]` | Custom field label |\n" +
+        "| `[Browsable(false)]` | Hides the field entirely |\n" +
+        "| `[Required]` | Field must have a value |\n" +
+        "| `[Range(min, max)]` | Numeric bounds validation |\n" +
+        "| `[Editable(false)]` | Read-only display |\n" +
+        "| `[UiControl<T>]` | Override rendered control type |\n" +
+        "| `[Dimension<T>]` | Dropdown from data source |"
+    ))
+```
+
+---
+
+## See Also
+
+- [Editor Control](../Editor) — how these attributes are consumed when rendering forms
+- [DataBinding](../DataBinding) — how data flows into and out of the Editor

@@ -6,32 +6,22 @@ order: 30
 
 # Cross-Instance Mirror
 
-Move a subtree of MeshNodes from one running MeshWeaver instance to another.
-The most common use is **push from local dev to prod** so the content you
-authored in `memex-local` shows up at `https://memex.meshweaver.cloud` without
-ZIP exports / file uploads.
+Move a subtree of MeshNodes from one running MeshWeaver instance to another — no ZIP exports, no file uploads, no per-node back-and-forth. The most common use is **pushing from local dev to prod** so content you authored in `memex-local` appears at `https://memex.meshweaver.cloud` in a single command.
 
 ## What it does
 
-`MirrorToRemote` and `PullFromRemote` are MCP tools on every MeshWeaver
-instance. Each runs server-side in a single round-trip — a 10000-node migration
-is one MCP tool call from Claude Code's perspective, not 10000.
+`MirrorToRemote` and `PullFromRemote` are MCP tools available on every MeshWeaver instance. Both execute entirely server-side: a 10 000-node migration is one MCP tool call from Claude Code's perspective, not 10 000.
 
 Under the hood:
 
 1. Reads every node under `sourcePath` from the source side.
-2. Calls `mcp.create` (or `mcp.update` for upserts) on the destination side
-   for each one, authenticating with the **destination's** ApiToken.
-3. Reuses [`StorageImporter`](../../../MeshWeaver.Hosting/Persistence/StorageImporter.cs)
-   as the recursive copy engine — same logic the local file/ZIP import uses.
-4. Returns a JSON summary: `{status, direction, sourcePath, targetPath,
-   nodesImported, nodesSkipped, nodesRemoved, partitionsImported, elapsedMs}`.
+2. Calls `mcp.create` (or `mcp.update` for upserts) on the destination for each node, authenticating with the **destination's** ApiToken.
+3. Delegates the recursive copy to [`StorageImporter`](../../../MeshWeaver.Hosting/Persistence/StorageImporter.cs) — the same engine the local file/ZIP import uses.
+4. Returns a JSON summary with the fields `status`, `direction`, `sourcePath`, `targetPath`, `nodesImported`, `nodesSkipped`, `nodesRemoved`, `partitionsImported`, and `elapsedMs`.
 
 ## Network direction matrix
 
-`MirrorToRemote` and `PullFromRemote` BOTH initiate outbound HTTPS from the
-side they run on. So whichever side has reach to the other is the one that
-hosts the call.
+Both tools initiate outbound HTTPS from the side they run on. The rule of thumb: **run the tool on whichever side has network reach to the other**.
 
 | You want to … | Run the tool on | Initiates outbound to | Works without a tunnel? |
 |---|---|---|---|
@@ -40,22 +30,21 @@ hosts the call.
 | Push prod → local | (run on prod) `mirror_to_remote` | localhost | ❌ prod can't reach localhost |
 | Pull local → prod | (run on prod) `pull_from_remote` | localhost | ❌ same |
 
-For the third and fourth cases, expose local with a Cloudflare tunnel or
-ngrok and pass the public URL.
+For the third and fourth cases, expose your local instance with a Cloudflare tunnel or ngrok and pass the public URL as `remoteBaseUrl`.
 
-## Step-by-step recipe — push your local content to prod
+## Step-by-step recipe — push local content to prod
 
 ### 1. Issue an ApiToken on the **destination** portal
 
-Open the destination portal (e.g. `https://memex.meshweaver.cloud`), log in
-as the user the import should run as, and:
+Open the destination portal (e.g. `https://memex.meshweaver.cloud`), log in as the user the import should run as, and:
 
 - Navigate to **Settings → API Tokens** (or `/me/Settings/ApiTokens`).
-- Click **Create token**, name it (e.g. `mirror-from-local-2026-05`),
-  scope it to the user, and **copy** the `mw_…` value.
+- Click **Create token**, name it (e.g. `mirror-from-local-2026-05`), scope it to the user, and **copy** the `mw_…` value.
 - Tokens are revocable from the same page; rotate after one-shot mirrors.
 
-### 2. Dry-run from the **source**
+### 2. Dry-run from the source
+
+Always preview before writing. Pass `dryRun=true` to enumerate the subtree without touching the destination:
 
 ```text
 mcp__memex-local__mirror_to_remote
@@ -66,7 +55,7 @@ mcp__memex-local__mirror_to_remote
     dryRun=true
 ```
 
-Returns:
+Example response:
 
 ```json
 {
@@ -84,11 +73,11 @@ Returns:
 }
 ```
 
-Read the list. Confirm the count + paths match expectations.
+Read the list. Confirm the count and paths match your expectations before proceeding.
 
 ### 3. Execute for real
 
-Same call, `dryRun=false` (default):
+Same call, `dryRun=false` (the default):
 
 ```text
 mcp__memex-local__mirror_to_remote
@@ -97,7 +86,7 @@ mcp__memex-local__mirror_to_remote
     sourcePath="rbuergi/Story"
 ```
 
-Returns:
+Example response:
 
 ```json
 {
@@ -119,12 +108,11 @@ Returns:
 mcp__memex-prod__search query="namespace:rbuergi/Story scope:subtree"
 ```
 
-Should return the four nodes. Or open
-`https://memex.meshweaver.cloud/rbuergi/Story/KernelTour` in a browser.
+This should return the four nodes. You can also open `https://memex.meshweaver.cloud/rbuergi/Story/KernelTour` directly in a browser.
 
 ## Pulling from a remote into local
 
-Same shape, different tool name:
+`PullFromRemote` uses the same shape as `MirrorToRemote` — just a different tool name. Here local makes outbound calls to prod, fetches the subtree, and writes it under the target path:
 
 ```text
 mcp__memex-local__pull_from_remote
@@ -135,77 +123,61 @@ mcp__memex-local__pull_from_remote
     dryRun=true
 ```
 
-Local makes outbound calls to prod, fetches the subtree, writes locally under
-the target path.
-
 ## Flags
 
 | Flag | Default | Effect |
 |------|---------|--------|
-| `dryRun` | `false` | Enumerate without writing. Preview; safe. |
-| `removeMissing` | `false` | **Destructive.** Delete destination nodes that don't exist on the source. Use only when you really want the destination to mirror the source exactly. |
-| `targetPath` | `sourcePath` | Write under a different path on the destination — useful for sandbox copies (`rbuergi/Story` → `rbuergi/Story-staging`). |
+| `dryRun` | `false` | Enumerate without writing. Safe to run any time. |
+| `removeMissing` | `false` | **Destructive.** Delete destination nodes that don't exist on the source. Use only when you want the destination to mirror the source exactly. |
+| `targetPath` | `sourcePath` | Write under a different path on the destination — useful for sandbox copies (e.g. `rbuergi/Story` → `rbuergi/Story-staging`). |
 
-## Authentication & access scope
+## Authentication and access scope
 
-The destination's `ApiTokenAuthenticationHandler` validates the token and
-stamps the user's ObjectId onto every per-node write. **The mirror runs as
-the user who issued the token.** That user must have:
+The destination's `ApiTokenAuthenticationHandler` validates the token and stamps the user's ObjectId onto every per-node write. **The mirror runs as the user who issued the token.** That user must have:
 
-- `Permission.Read` on the source paths (on the source portal — usually
-  trivially true; you're operating on your own partition).
+- `Permission.Read` on the source paths (on the source portal — usually trivially satisfied when operating on your own partition).
 - `Permission.Create` / `Update` on the destination paths.
 
-If the destination user lacks Create on `rbuergi/Story`, the import will
-silently skip the offending nodes (logged via `_logger?.LogWarning`). Run
-with the destination's Admin role to avoid surprises during dev.
+> **Note:** If the destination user lacks Create on a path, the import silently skips the offending nodes (logged via `_logger?.LogWarning`). Run with the destination's Admin role during development to avoid surprises.
 
 ## What does NOT cross instances (v1)
 
-- **Partition objects** — Activity messages, Comment trees, satellite-table
-  data living outside `node.Content`. The MCP tool surface doesn't yet
-  expose a generic enumerate-partition-objects call. Inline `node.Content`
-  payloads (Markdown, Code, NodeTypeDefinition, etc.) survive cleanly; satellite
-  data does not.
-- **Compiled assemblies** — destination NodeTypes recompile from source on
-  first access. Trigger with `mcp__memex-prod__compile @rbuergi/MyType` to
-  warm the cache before any UI hits the type.
-- **API tokens themselves** — tokens are partition-scoped; you can't mirror
-  them across portals. Issue a fresh one on the destination.
+Not everything survives a mirror. Content that lives outside `node.Content` is out of scope for v1:
+
+- **Partition objects** — Activity messages, Comment trees, and satellite-table data are not included. The MCP tool surface doesn't yet expose a generic enumerate-partition-objects call. Inline `node.Content` payloads (Markdown, Code, NodeTypeDefinition, etc.) survive cleanly; satellite data does not.
+- **Compiled assemblies** — destination NodeTypes recompile from source on first access. Trigger early with `mcp__memex-prod__compile @rbuergi/MyType` to warm the cache before any UI hits the type.
+- **API tokens themselves** — tokens are partition-scoped and cannot be mirrored across portals. Issue a fresh token on the destination.
 
 ## Token economy
 
-If you drive the mirror from Claude Code, each `mirror_to_remote` /
-`pull_from_remote` invocation is **one** MCP tool call: ~1k input tokens
-(args) + a small text summary back. The actual recursive copy runs
-server-side via `HttpClient` — Claude isn't reasoning per node.
+Each `mirror_to_remote` / `pull_from_remote` invocation from Claude Code is **one** MCP tool call: approximately 1 k input tokens (args) plus a short text summary back. The actual recursive copy runs server-side via `HttpClient` — Claude isn't reasoning node by node.
 
-If you want strictly zero LLM tokens, the same `MirrorOperations` is
-exposed via the import dialog UI (Blazor); future work also includes a
-CLI that drives it without an LLM in the loop.
+If you want strictly zero LLM tokens, the same `MirrorOperations` logic is also exposed via the import dialog UI (Blazor). Future work includes a CLI that drives it without an LLM in the loop.
 
 ## Source links
 
-- Adapter: `src/MeshWeaver.Hosting/Persistence/Http/HttpMeshStorageAdapter.cs`
-- MCP transport: `src/MeshWeaver.Hosting/Persistence/Http/McpRemoteMeshClient.cs`
-- Operations: `src/MeshWeaver.Hosting/Persistence/Http/MirrorOperations.cs`
-- MCP tools: `src/MeshWeaver.Blazor.AI/McpMeshPlugin.cs` (`MirrorToRemote`, `PullFromRemote`)
-- Recursive copy engine: `src/MeshWeaver.Hosting/Persistence/StorageImporter.cs`
-- Tests: `test/MeshWeaver.Hosting.Test/HttpMeshStorageAdapterTests.cs` + `MirrorOperationsTests.cs`
-- Auth: `memex/Memex.Portal.Shared/Authentication/ApiTokenAuthenticationHandler.cs`
+| Component | Path |
+|-----------|------|
+| HTTP storage adapter | `src/MeshWeaver.Hosting/Persistence/Http/HttpMeshStorageAdapter.cs` |
+| MCP transport | `src/MeshWeaver.Hosting/Persistence/Http/McpRemoteMeshClient.cs` |
+| Mirror operations | `src/MeshWeaver.Hosting/Persistence/Http/MirrorOperations.cs` |
+| MCP tools (`MirrorToRemote`, `PullFromRemote`) | `src/MeshWeaver.Blazor.AI/McpMeshPlugin.cs` |
+| Recursive copy engine | `src/MeshWeaver.Hosting/Persistence/StorageImporter.cs` |
+| Tests | `test/MeshWeaver.Hosting.Test/HttpMeshStorageAdapterTests.cs` · `MirrorOperationsTests.cs` |
+| Auth handler | `memex/Memex.Portal.Shared/Authentication/ApiTokenAuthenticationHandler.cs` |
 
 ## Troubleshooting
 
 | Symptom | Likely cause |
 |---------|--------------|
-| `401 Unauthorized` on every call | ApiToken expired/revoked, or the user the token belongs to has been disabled. Re-issue. |
+| `401 Unauthorized` on every call | ApiToken expired or revoked, or the owning user has been disabled. Re-issue. |
 | `nodesSkipped` is non-zero | Destination user lacks Create/Update on the failing paths. Check AccessAssignments on the destination ([GrantingAccess.md](GrantingAccess.md)). |
 | Empty `nodesImported` for a non-empty path | `sourcePath` doesn't match anything. Verify with `mcp.search namespace:{sourcePath} scope:subtree` on the source side first. |
 | Partition data missing on destination | Expected in v1 — only inline `node.Content` is mirrored. Use the local ZIP export/import for satellite-table data. |
-| Hung or 30 s+ for a small subtree | Remote is in a bad state (recently restarted; cold-grain activation). Retry. |
+| Hung or 30 s+ for a small subtree | Remote is in a bad state (recently restarted; cold-grain activation). Retry once. |
 
 ## Related
 
 - [GrantingAccess.md](GrantingAccess.md) — how to issue and audit AccessAssignments.
 - [PostgresSchemaArchitecture.md](PostgresSchemaArchitecture.md) — partition-scope model.
-- [PostmortemDavDemo.md](Postmortems/PostmortemDavDemo.md) — why partition-scope matters.
+- [PostmortemDavDemo.md](Postmortems/PostmortemDavDemo.md) — why partition scope matters.

@@ -1,38 +1,38 @@
 ---
 Name: Adapting to Different Screens With Layout Grid
 Category: Documentation
-Description: Build responsive layouts that adapt beautifully to any screen size
+Description: Build responsive layouts that adapt gracefully to any screen size using a 12-column breakpoint system
 Icon: /static/DocContent/GUI/LayoutGrid/icon.svg
 ---
 
-The LayoutGrid control creates responsive layouts that automatically adapt to different screen sizes - from smartphones to large desktop monitors.
+`LayoutGrid` gives you a responsive layout system built on a **12-column grid**. Define how many columns each item spans at each screen size, and the layout shifts automatically — no media queries, no CSS wrestling.
 
 ---
 
 # Why Responsive Design Matters
 
-Users access your application on many different devices:
+Every application reaches users across a wide range of devices. A single layout rarely serves them all well:
 
 | Device | Screen Width | User Context |
 |--------|--------------|--------------|
-| **Smartphone** | < 600px | On the go, touch input, limited space |
-| **Tablet** | 600px - 1024px | Mixed use, touch or keyboard, moderate space |
-| **Desktop** | > 1024px | Focused work, mouse/keyboard, plenty of space |
+| **Smartphone** | < 600 px | On the go, touch input, limited space |
+| **Tablet** | 600 – 1024 px | Mixed use, touch or keyboard, moderate space |
+| **Desktop** | > 1024 px | Focused work, mouse and keyboard, plenty of space |
 
-A responsive layout ensures your UI looks good and works well on all of them - without writing separate code for each device.
+Responsive design lets you write **one layout** that adapts to all of them.
 
 ---
 
 # The 12-Column System
 
-LayoutGrid divides the screen into **12 equal columns**. Each item specifies how many columns it spans:
+`LayoutGrid` divides the available width into **12 equal columns**. Each item declares how many columns it occupies. The columns always add up to 12 per row; items that overflow wrap to the next row automatically.
 
-| Columns | Width | Use for |
-|---------|-------|---------|
-| 12 | 100% | Full-width content, mobile layouts |
-| 6 | 50% | Two equal columns |
-| 4 | 33% | Three equal columns |
-| 3 | 25% | Four equal columns, sidebars |
+| Columns | Proportional Width | Typical Use |
+|---------|--------------------|-------------|
+| 12 | 100 % | Full-width content, mobile layouts |
+| 6 | 50 % | Two equal side-by-side columns |
+| 4 | 33 % | Three equal columns |
+| 3 | 25 % | Four-column grids, narrow sidebars |
 
 ```csharp --render ColumnDemo --show-code
 Controls.LayoutGrid
@@ -49,27 +49,28 @@ Controls.LayoutGrid
 
 # Breakpoints: Adapting to Screen Size
 
-The key to responsive design is **breakpoints** - screen widths where your layout changes. LayoutGrid provides five breakpoints:
+A **breakpoint** is a screen-width threshold where the layout can change. `LayoutGrid` provides five, matching standard Material Design conventions:
 
-| Method | Breakpoint | Screen Type | Example Devices |
-|--------|------------|-------------|-----------------|
-| `.WithXs()` | < 600px | Extra small | iPhone, Android phones |
-| `.WithSm()` | >= 600px | Small | Large phones, small tablets |
-| `.WithMd()` | >= 960px | Medium | iPad, tablets |
-| `.WithLg()` | >= 1280px | Large | Laptops, small monitors |
-| `.WithXl()` | >= 1920px | Extra large | Large monitors, 4K displays |
+| Method | Activates at | Screen type | Example devices |
+|--------|-------------|-------------|-----------------|
+| `.WithXs()` | < 600 px | Extra small | iPhones, Android phones |
+| `.WithSm()` | ≥ 600 px | Small | Large phones, small tablets |
+| `.WithMd()` | ≥ 960 px | Medium | iPads, tablets |
+| `.WithLg()` | ≥ 1280 px | Large | Laptops, small monitors |
+| `.WithXl()` | ≥ 1920 px | Extra large | Large monitors, 4 K displays |
 
-**How it works:** Settings cascade upward. If you set `.WithMd(4)`, that applies to medium screens *and all larger screens* unless you override with `.WithLg()` or `.WithXl()`.
+> **Cascading upward.** Settings inherit toward larger breakpoints. Setting `.WithMd(4)` applies to medium screens *and every larger size* unless you explicitly override it with `.WithLg()` or `.WithXl()`.
 
 ---
 
 # Designing for Small Screens (Smartphones)
 
-On smartphones, screen space is precious. Best practices:
+Mobile screens are narrow. The guiding principle is **stack first**: make every item full-width on extra-small screens with `WithXs(12)`, then introduce side-by-side columns as the screen grows.
 
-- **Stack vertically**: Use `WithXs(12)` to make items full-width
-- **Prioritize content**: Show the most important information first
-- **Touch-friendly**: Ensure buttons and links are easy to tap
+Key guidelines:
+- **Stack vertically** — `WithXs(12)` ensures nothing squeezes awkwardly.
+- **Prioritize content** — the most important information should appear at the top.
+- **Touch-friendly targets** — buttons and links need enough tap area.
 
 ```csharp --render MobileFirst --show-code
 Controls.LayoutGrid
@@ -86,11 +87,12 @@ Controls.LayoutGrid
 
 # Designing for Medium Screens (Tablets)
 
-Tablets offer more space but are often used in both portrait and landscape orientations:
+Tablets offer enough room for two-column layouts and are often used in both portrait and landscape orientations. A `3 + 9` or `4 + 8` split works well for navigation-plus-content patterns.
 
-- **Two-column layouts**: Work well for master-detail views
-- **Flexible widths**: Use 6+6 or 4+8 splits
-- **Consider orientation**: Portrait is narrower than landscape
+Key guidelines:
+- **Two-column layouts** — ideal for master-detail or nav-plus-content views.
+- **Flexible splits** — `6 + 6`, `4 + 8`, `3 + 9` all fit naturally.
+- **Consider orientation** — portrait is meaningfully narrower than landscape.
 
 ```csharp --render TabletLayout --show-code
 Controls.LayoutGrid
@@ -107,11 +109,12 @@ Controls.LayoutGrid
 
 # Designing for Large Screens (Desktops)
 
-Desktop users have plenty of space - use it wisely:
+Desktop users have space to spare — use it to show more information at once without overwhelming them. Card grids and multi-column panels shine here, but be mindful that very wide text lines are harder to read.
 
-- **Multi-column layouts**: Show more information side-by-side
-- **Card grids**: Display collections in 3 or 4 column grids
-- **Don't stretch too wide**: Very wide text is hard to read
+Key guidelines:
+- **Multi-column layouts** — show collections in 3 or 4 column grids.
+- **Card grids** — a classic `1 → 2 → 4` progression scales cleanly across sizes.
+- **Don't overstretch** — constrain maximum reading width for text-heavy sections.
 
 ```csharp --render DesktopLayout --show-code
 Controls.LayoutGrid
@@ -130,7 +133,11 @@ Controls.LayoutGrid
 
 # Common Responsive Patterns
 
+These three patterns cover the majority of real-world layouts.
+
 ## Dashboard Cards
+
+Items flow from a single column on phones to a four-column grid on wide monitors:
 
 ```csharp
 Controls.LayoutGrid
@@ -143,6 +150,8 @@ Controls.LayoutGrid
 
 ## Sidebar + Content
 
+A narrow navigation sidebar that stacks below the content on mobile:
+
 ```csharp
 Controls.LayoutGrid
     .WithView(sidebar, s => s.WithXs(12).WithMd(3))   // Full width then sidebar
@@ -150,6 +159,8 @@ Controls.LayoutGrid
 ```
 
 ## Equal Thirds
+
+Three equal columns that stack vertically on mobile and spread out on tablet and above:
 
 ```csharp
 Controls.LayoutGrid
@@ -162,31 +173,32 @@ Controls.LayoutGrid
 
 # Grid Configuration
 
-Configure the grid container via `.WithSkin()`:
+Control the container itself via `.WithSkin()`:
 
 | Method | Purpose | Values |
 |--------|---------|--------|
-| `.WithSpacing(n)` | Gap between items | `1`, `2`, `3` (multiplied by base unit) |
-| `.WithJustify(j)` | Horizontal alignment | `"start"`, `"center"`, `"end"` |
+| `.WithSpacing(n)` | Gap between items | `1`, `2`, `3` (multiples of the base spacing unit) |
+| `.WithJustify(j)` | Horizontal alignment of the row | `"start"`, `"center"`, `"end"` |
 
 ---
 
 # Item Configuration
 
-Configure individual items via the skin function parameter:
+Each item added with `.WithView(content, skin => ...)` accepts these sizing methods:
 
-| Method | Purpose |
-|--------|---------|
-| `.WithXs(cols)` | Columns on extra small screens (< 600px) |
-| `.WithSm(cols)` | Columns on small screens (>= 600px) |
-| `.WithMd(cols)` | Columns on medium screens (>= 960px) |
-| `.WithLg(cols)` | Columns on large screens (>= 1280px) |
-| `.WithXl(cols)` | Columns on extra large screens (>= 1920px) |
+| Method | Screen size | Activates at |
+|--------|-------------|-------------|
+| `.WithXs(cols)` | Extra small | < 600 px |
+| `.WithSm(cols)` | Small | ≥ 600 px |
+| `.WithMd(cols)` | Medium | ≥ 960 px |
+| `.WithLg(cols)` | Large | ≥ 1280 px |
+| `.WithXl(cols)` | Extra large | ≥ 1920 px |
+
+`cols` is an integer from 1 to 12. Items with no explicit size for a breakpoint inherit from the next smaller breakpoint that is set.
 
 ---
 
 # See Also
 
-- [Container Control](../ContainerControl) - Stack, Tabs, Toolbar
-- [DataGrid](../DataGrid) - Tabular data display
-
+- [Container Control](../ContainerControl) — Stack, Tabs, Toolbar
+- [DataGrid](../DataGrid) — Tabular data display

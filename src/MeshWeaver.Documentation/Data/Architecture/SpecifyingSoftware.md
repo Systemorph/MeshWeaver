@@ -17,42 +17,53 @@ Tags:
   - "Specification"
 ---
 
-Writing software specifications is a complex task, and finding effective tools to support this process can be challenging.
-Traditional methods often involve creating mockups that lack real functionality,
-which can lead to misunderstandings and misalignments between stakeholders and developers.
-This article explores the importance of creating detailed specifications that are closely aligned with the actual
-implementation, ensuring that the final product meets the intended requirements.
+Software specifications are hard to get right. Traditional approaches produce static mockups — polished documents that describe intent but offer no way to validate it. When the gap between specification and implementation widens, costly rework follows.
 
-We advocate an iterative approach and very practical approach, where the specification is
-continuously refined and updated throughout the development process.
-This method allows for the incorporation of feedback and changes, which are inevitable
-in any software project. By keeping the specification relevant and accurate, teams can
-reduce the gap between design and development.
+This article lays out a more effective approach: specifications that are **iterative, practical, and tightly coupled to the actual implementation**.
 
-Specifications should not only describe what the software should do but also provide
-detailed guidance on how it should be built. This includes code snippets,
-architectural diagrams, and other technical details that help bridge the gap between design
-and development. By providing this level of detail, the specification becomes
-a practical tool that developers can use to guide their work.
+## The Problem with Static Specs
 
-Modern tools and technologies play a crucial role in improving the specification process.
-Tools that support executable specifications allow teams to write specifications that can
-be directly tested and validated. This ensures that the specifications are accurate and
-helps identify issues early in the development process. By integrating these tools into the
-team's existing workflow and development environment, efficiency is maintained, and the
-specification process does not become a bottleneck.
+Most spec processes share the same failure mode: a document is written once, reviewed in isolation, and then slowly diverges from reality as development proceeds. Mockups convey layout but not behavior. Written descriptions convey intent but not structure. Neither gives developers something they can act on directly.
 
-Choosing the right tools and methodologies is essential for creating effective
-specifications. The integration of these tools with the team's workflow is crucial
-for maintaining efficiency and ensuring that the specification process is seamless.
-By leveraging modern tools and methodologies, teams can create specifications that are
-not only detailed and accurate but also actionable and testable.
+The result is a translation tax paid on every feature — from spec to ticket, from ticket to code, and back again through rounds of review and correction.
 
-In conclusion, writing practical and iterative specifications that are closely
-aligned with the implementation is essential for successful software development.
-By using modern tools and methodologies, teams can ensure that their specifications
-are detailed, accurate, and actionable. This approach helps reduce the risk of costly
-rework and delays, ensuring that the final product meets the intended requirements.
+## Specifications as Living Artefacts
 
-Stay tuned to the Mesh Bros channel for more insights and tutorials on software
-development, specifications, and best practices.
+A specification that stays useful throughout development has three properties:
+
+| Property | What it means |
+|---|---|
+| **Iterative** | Updated continuously as feedback arrives and decisions evolve |
+| **Practical** | Contains code snippets, architectural diagrams, and technical detail developers can act on |
+| **Validated** | Close enough to the implementation that discrepancies surface early, not at release |
+
+The goal is not a perfect document written once. It is a shared source of truth that grows alongside the codebase.
+
+## Closing the Gap Between Design and Development
+
+Useful specifications do more than describe *what* software should do — they explain *how* it should be built. That means including:
+
+- **Code snippets** that illustrate patterns and API shapes
+- **Architectural diagrams** that show how components relate
+- **Executable examples** that can be tested and validated directly
+
+When a specification includes runnable examples, it stops being a description and starts being a contract. Issues that would otherwise surface during integration review can be caught the moment the spec is written.
+
+## Integrating Tooling Without Creating Bottlenecks
+
+The right tooling makes the iterative loop cheap. Tools that support executable specifications allow teams to write specs that are continuously tested — so the specification and the implementation cannot silently diverge.
+
+> The specification process should feel like part of development, not a separate tax on it. If maintaining the spec takes more effort than writing the code, the tooling is wrong.
+
+Choosing tools that integrate naturally with the existing development workflow is essential. Friction in the spec process compounds across every feature and every sprint.
+
+## Putting It Together
+
+The practical upshot is straightforward:
+
+1. Treat the specification as a first-class artefact in the repository — versioned alongside the code it describes.
+2. Write specifications iteratively. Refine them as you learn.
+3. Include technical detail: code, diagrams, executable examples.
+4. Use tooling that validates the spec continuously so drift is detected early.
+
+This approach reduces the risk of costly rework, keeps stakeholders aligned throughout development, and produces a final product that genuinely matches the original intent.

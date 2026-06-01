@@ -7,21 +7,21 @@ Icon: Code
 
 # SocialMedia — A Model Node Type, End to End
 
-This is the **canonical reference example** for a custom model node type. When you
-(or the Coder agent) are asked to build "X as code" — a typed model with its own data
-and views — this is the shape to mirror.
+This page is the **canonical reference example** for a custom model node type. When you — or the Coder agent — are asked to build something "as code" (a typed model with its own data and views), this is the shape to mirror.
 
-> See also [Creating Node Types](@@Doc/DataMesh/CreatingNodeTypes) for the step-by-step
-> theory, and [Business Rules](@@Doc/Architecture/BusinessRules) for a
-> calculation-heavy example with charts.
+> **See also:** [Creating Node Types](@@Doc/DataMesh/CreatingNodeTypes) for step-by-step theory, and [Business Rules](@@Doc/Architecture/BusinessRules) for a calculation-heavy example with charts.
 
-## The Layout
+---
+
+## Folder Layout
+
+Every file in this tree has a specific job. The sections below walk through each one.
 
 ```
 Doc/DataMesh/SocialMedia/
   Post.json                              # NodeType definition (nodeType: "NodeType")
   Post/
-    Source/                             # C# compiled at startup
+    Source/                              # C# compiled at startup
       Platform.cs                        # Reference-data record
       SocialMediaPost.cs                 # Content record
       SocialMediaPostLayoutAreas.cs      # List + Detail layout areas
@@ -34,12 +34,11 @@ Doc/DataMesh/SocialMedia/
     Roland-LinkedIn.json                 # Instance
 ```
 
-Every part of this folder has a specific job. The next sections walk them one at a time.
+---
 
 ## 1. Reference Data — `Platform.cs`
 
-Reference data is a small closed set of lookups (platforms, statuses, categories).
-It's a plain record with a `[Key]`, static instances, and an `All[]` array.
+Reference data is a small, closed set of lookups — platforms, statuses, categories. The pattern is always the same: a plain `record` with a `[Key]`, typed static instances, and a static `All[]` array that seeds the in-memory data source.
 
 ```csharp
 // <meshweaver>
@@ -63,10 +62,11 @@ public record Platform
 }
 ```
 
+---
+
 ## 2. Content Record — `SocialMediaPost.cs`
 
-The content record is the shape of a single instance's `content` payload. It uses
-domain attributes to describe the fields to the editor and to wire reference data.
+The content record defines the shape of a single instance's `content` payload. Domain attributes drive the editor UI and wire reference-data lookups automatically.
 
 ```csharp
 // <meshweaver>
@@ -96,17 +96,19 @@ public record SocialMediaPost
 }
 ```
 
-Key attributes to memorise:
-- `[Required]` — validation
-- `[MeshNodeProperty(nameof(MeshNode.Name))]` — mirrors the property into `MeshNode.Name`
-- `[Dimension<T>]` — typed lookup against reference data
-- `[Markdown(...)]` — rich-text editor
-- `[DisplayName(...)]` — UI label
+| Attribute | Purpose |
+|---|---|
+| `[Required]` | Validation |
+| `[MeshNodeProperty(nameof(MeshNode.Name))]` | Mirrors the property value into `MeshNode.Name` |
+| `[Dimension<T>]` | Typed lookup rendered as a dropdown against reference data |
+| `[Markdown(...)]` | Rich-text editor with configurable height |
+| `[DisplayName(...)]` | UI label override |
+
+---
 
 ## 3. Layout Areas — `SocialMediaPostLayoutAreas.cs`
 
-Layout areas are the **views** for instances of the type. They return
-`IObservable<UiControl?>` — never `Task<…>`, never `async`. Compose with Rx:
+Layout areas are the **views** for instances of the type. They return `IObservable<UiControl?>` — never `Task<…>`, never `async`. Compose with Rx operators:
 
 ```csharp
 public static IObservable<UiControl?> List(LayoutAreaHost host, RenderingContext _)
@@ -119,17 +121,18 @@ public static IObservable<UiControl?> List(LayoutAreaHost host, RenderingContext
 }
 ```
 
-The companion extension method is how the layout area gets wired into the NodeType:
+The extension method below is how the layout areas get wired into the NodeType configuration:
 
 ```csharp
 public static LayoutDefinition AddSocialMediaPostLayoutAreas(this LayoutDefinition layout) =>
     layout.WithView("List", List).WithView("Detail", Detail);
 ```
 
-## 4. The NodeType JSON — `Post.json`
+---
 
-The JSON is the binding glue. It registers the type, points at its content record,
-seeds reference data, and wires custom layout areas.
+## 4. NodeType JSON — `Post.json`
+
+The JSON is the binding glue. It registers the type, points at its content record, seeds reference data, and wires custom layout areas.
 
 ```json
 {
@@ -151,7 +154,8 @@ seeds reference data, and wires custom layout areas.
 }
 ```
 
-Configuration-lambda cheat sheet:
+**Configuration-lambda quick reference:**
+
 | Call | Purpose |
 |---|---|
 | `WithContentType<T>()` | The record type for new instances |
@@ -160,12 +164,13 @@ Configuration-lambda cheat sheet:
 | `AddLayout(layout => layout.AddXxxLayoutAreas())` | Custom views |
 | `WithDefaultArea("List")` | Which view opens by default |
 
+---
+
 ## 5. Instances — `Post/Post-001.json`
 
-An instance sets `nodeType` to the **namespace-qualified path** of the NodeType
-(`Doc/DataMesh/SocialMedia/Post`), and its `content` matches the record (`$type` =
-class name). Instance IDs should be **meaningful** — e.g. `Roland-LinkedIn`, `Post-001` —
-not generic like `SamplePost`.
+An instance sets `nodeType` to the **namespace-qualified path** of the NodeType (`Doc/DataMesh/SocialMedia/Post`), and its `content` matches the record (`$type` = class name).
+
+> **Naming convention:** Instance IDs should be meaningful — e.g. `Roland-LinkedIn`, `Post-001` — not generic like `SamplePost`.
 
 ```json
 {
@@ -186,15 +191,19 @@ not generic like `SamplePost`.
 }
 ```
 
+---
+
 ## Live Profile Instance
 
 The embedded view below is the `Roland-LinkedIn` profile instance, rendered by its `Detail` layout area:
 
 @@Doc/DataMesh/SocialMedia/Profile/Roland-LinkedIn
 
+---
+
 ## Copy-This Checklist
 
-When asked to build a new model node type "as code":
+When building a new model node type "as code", work through this list in order:
 
 1. ☐ Create a namespace folder under your target location.
 2. ☐ Add one `.cs` per content record in `Source/`, each with the `<meshweaver>` frontmatter.
@@ -202,4 +211,4 @@ When asked to build a new model node type "as code":
 4. ☐ Add a `XxxLayoutAreas.cs` with `List`/`Detail` views returning `IObservable<UiControl?>`.
 5. ☐ Write the `Type.json` with `nodeType: "NodeType"` and a configuration lambda.
 6. ☐ Write **at least one** instance JSON with `nodeType` set to the namespace-qualified path.
-7. ☐ **Do not** substitute a Markdown node for a typed view. Markdown is for documents.
+7. ☐ **Do not** substitute a Markdown node for a typed view — Markdown is for documents, not structured data.

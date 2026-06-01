@@ -1,33 +1,45 @@
 ---
 Name: MeshPlugin Tools
 Category: Documentation
-Description: Complete reference for MeshPlugin tools used by AI agents
+Description: Complete reference for the MeshPlugin tools available to AI agents
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
 ---
 
-MeshPlugin provides tools for interacting with the mesh data graph. All paths support the `@` prefix shorthand: `@graph/org1` resolves to `graph/org1`.
+MeshPlugin gives AI agents a clean, consistent API for navigating and modifying the mesh data graph. Every path argument supports the `@` shorthand prefix — `@graph/org1` resolves to `graph/org1`.
+
+---
 
 ## Get
 
-Retrieves a node from the mesh. Returns JSON.
+Reads a node from the mesh and returns its JSON representation.
 
-### Single Node
+### Single node
 
-`Get('@path')` — Returns the full MeshNode JSON including all properties and Content.
+```
+Get('@path')
+```
 
-### Children
+Returns the full `MeshNode` JSON, including all properties and the typed `content` object.
 
-`Get('@path/*')` — Returns a JSON array of direct children with `{path, name, nodeType, icon}`.
+### Children list
 
-### Unified Path Prefixes
+```
+Get('@path/*')
+```
 
-Get supports Unified Path syntax with reserved prefixes for accessing specific resource types:
+Returns a JSON array of direct children, each with `{ path, name, nodeType, icon }`. Useful for browsing a namespace before diving deeper.
+
+### Unified Path prefixes
+
+`Get` understands reserved path prefixes that expose type metadata alongside node data:
 
 | Syntax | Returns |
-|--------|---------|
+|---|---|
 | `Get('@path/schema/')` | JSON Schema for the node's content type |
 | `Get('@path/schema/TypeName')` | JSON Schema for a specific named type |
 | `Get('@path/model/')` | Full data model with all registered types |
+
+These schema prefixes work on **any** address — not just `NodeType` paths. Use them before creating or updating a node to discover the exact fields expected.
 
 For the complete Unified Path reference:
 
@@ -35,61 +47,82 @@ For the complete Unified Path reference:
 
 ### Examples
 
-- `Get('@graph/org1')` — Get a specific organization node
-- `Get('@NodeType/*')` — List all available node types
-- `Get('@ACME/ProductLaunch/schema/')` — Get content type schema for ProductLaunch
-- `Get('@ACME/ProductLaunch/model/')` — Get the full data model
+```
+Get('@graph/org1')                      // Read a specific organisation node
+Get('@NodeType/*')                      // List all available node types
+Get('@ACME/ProductLaunch/schema/')      // Content schema for ProductLaunch
+Get('@ACME/ProductLaunch/model/')       // Full data model
+```
+
+---
 
 ## Search
 
-Searches the mesh using a GitHub-style query syntax. Returns a JSON array of matching nodes (limited to 50).
+Searches the mesh using a GitHub-style query syntax. Returns a JSON array of up to 50 matching nodes.
 
 ### Parameters
 
-- `query` (string, required) — Query string with field filters, wildcards, scoping, sorting
-- `basePath` (string, optional) — Base path to narrow the search scope
+| Parameter | Required | Description |
+|---|---|---|
+| `query` | Yes | Filter string with field filters, wildcards, scoping, and sorting |
+| `basePath` | No | Limits the search to a specific subtree |
 
-### Common Patterns
+### Common patterns
 
-- `Search('nodeType:Agent')` — Find all agents
-- `Search('namespace:ACME')` — List direct children of ACME
-- `Search('path:ACME scope:descendants')` — All descendants under ACME recursively
-- `Search('namespace:Doc scope:descendants')` — Browse all documentation
-- `Search('name:*sales* nodeType:Organization sort:name')` — Complex filtered query
-- `Search('laptop', '@graph')` — Free-text search under graph
+```
+Search('nodeType:Agent')                                         // All agents
+Search('namespace:ACME')                                         // Direct children of ACME
+Search('path:ACME scope:descendants')                            // Everything under ACME recursively
+Search('namespace:Doc scope:descendants')                        // Browse all documentation
+Search('name:*sales* nodeType:Organization sort:name')           // Complex filtered query
+Search('laptop', '@graph')                                       // Free-text search within graph
+```
 
-### Full Query Syntax Reference
+### Full query syntax
 
 @@../../../DataMesh/QuerySyntax
 
+---
+
 ## NavigateTo
 
-Displays a node's visual layout area in the chat UI.
+Opens a node's visual layout area inside the chat UI — the mesh's equivalent of "Show me this page."
 
-**CRITICAL:** When users ask to "show", "display", or "view" something:
-1. Use `NavigateTo('@path')` to render the visual representation
-2. Keep your text response minimal — just confirm what was displayed
-3. Do NOT dump raw JSON when a visual display is available
+> **CRITICAL:** When a user asks to "show", "display", or "view" something, always prefer `NavigateTo` over dumping raw JSON. Call it, then keep your text response short — just confirm what was displayed.
+
+### Workflow
+
+1. Call `NavigateTo('@path')`.
+2. Respond with one sentence — e.g., *"Here's the organisation chart."*
 
 ### Example
 
-User asks: "Show me the organization chart"
-Action: Call `NavigateTo('@ACME/Organization')`, respond: "Here's the organization chart."
+User: *"Show me the organisation chart."*
+Action: `NavigateTo('@ACME/Organization')`
+Response: *"Here's the organisation chart."*
+
+---
 
 ## RenderArea
 
-Returns an interactive rendering of a layout area as an MCP-UI embedded resource. Hosts that support MCP-UI (Claude.ai web/desktop, ChatGPT Apps) render this inline as an iframe widget; text-only hosts (Claude Code CLI) see the URL as a fallback.
+Returns a live, interactive layout area as an MCP-UI embedded resource.
+
+Hosts that support MCP-UI (Claude.ai web/desktop, ChatGPT Apps) render it inline as an iframe widget. Text-only hosts (such as the Claude Code CLI) receive a fallback URL instead.
 
 ### Parameters
 
-- `path` (string, required) — Path to the node hosting the area (e.g., `@Systemorph/FutuRe/EuropeRe/AcmeSubmission2025`)
-- `areaName` (string, required) — Layout area name on that node (e.g., `Triangle`)
+| Parameter | Required | Description |
+|---|---|---|
+| `path` | Yes | Path to the node hosting the area (e.g., `@Systemorph/FutuRe/EuropeRe/AcmeSubmission2025`) |
+| `areaName` | Yes | Name of the layout area on that node (e.g., `Triangle`) |
 
-### When to use RenderArea vs NavigateTo vs Get
+### Choosing the right display tool
 
-- `RenderArea` — the user will benefit from seeing the **live interactive view** embedded in the conversation (charts, grids, dashboards, triangles). Best for hosts that support MCP-UI.
-- `NavigateTo` — return a clickable URL to open in a new browser tab.
-- `Get(.../area/Name)` — structured JSON of the rendered payload for downstream programmatic use.
+| Tool | Use when … |
+|---|---|
+| `RenderArea` | The user benefits from a **live interactive view** embedded in the conversation — charts, grids, dashboards, triangles. Best for MCP-UI hosts. |
+| `NavigateTo` | You want to give the user a **clickable link** to open in a new browser tab. |
+| `Get('.../area/Name')` | You need **structured JSON** of the rendered payload for programmatic use. |
 
 ### Example
 
@@ -97,55 +130,57 @@ Returns an interactive rendering of a layout area as an MCP-UI embedded resource
 RenderArea('@Systemorph/FutuRe/EuropeRe/AcmeSubmission2025', 'Triangle')
 ```
 
+---
+
 ## Create
 
-Creates a new node in the mesh. The node is validated before being persisted.
+Creates and persists a new node in the mesh. The node is validated before it is saved.
 
 ### Parameter
 
-`node` (string, required) — A JSON string representing a MeshNode object.
+`node` (string, required) — A JSON string representing a `MeshNode` object.
 
-### MeshNode Schema
-
-A MeshNode has these key properties:
+### MeshNode schema
 
 | Property | Type | Required | Description |
-|----------|------|----------|-------------|
-| `id` | string | Yes | Simple identifier — **no slashes** (e.g., "NewOrg", "Task1") |
-| `namespace` | string | For nested nodes | Full parent path (e.g., "ACME", "ACME/Projects"). Omit for root-level nodes. |
-| `name` | string | Yes | Descriptive human-readable title. Make it clear and meaningful. |
-| `nodeType` | string | Yes | Type category (must match an existing NodeType, e.g., "Organization", "Markdown") |
-| `category` | string | No | Grouping category (overrides NodeType for display) |
-| `icon` | string | No | Inline SVG icon (start with `<svg`) — always create a unique, visually appealing SVG icon for the node |
-| `order` | int | No | Sort order (lower values appear first) |
-| `content` | object | Depends on type | Type-specific data model content. Schema depends on NodeType. |
+|---|---|---|---|
+| `id` | string | Yes | Simple slug — **no slashes** (e.g., `"NewOrg"`, `"Task1"`) |
+| `namespace` | string | For nested nodes | Full parent path (e.g., `"ACME"`, `"ACME/Projects"`). Omit for root-level nodes. |
+| `name` | string | Yes | Clear, human-readable title. Think of it as a document heading. |
+| `nodeType` | string | Yes | Must match an existing `NodeType` (e.g., `"Organization"`, `"Markdown"`) |
+| `category` | string | No | Grouping category; overrides `NodeType` for display purposes |
+| `icon` | string | No | Inline SVG starting with `<svg` — create a unique, visually appealing icon that matches the node's purpose |
+| `order` | int | No | Sort order; lower values appear first |
+| `content` | object | Depends on type | Type-specific data. Schema varies by `NodeType`. |
 
-The `path` of a node is derived as `{namespace}/{id}` (or just `{id}` for root-level nodes).
+The node's `path` is derived as `{namespace}/{id}`, or simply `{id}` for root-level nodes.
 
-### Critical Rules
+### Critical rules
 
-- **`id` must be a simple slug — NO slashes.** Use only letters, numbers, and hyphens.
-  - Correct: `"id": "PricingTool", "namespace": "User/rbuergi"`
-  - **Wrong**: `"id": "User/rbuergi/PricingTool", "namespace": ""`
-- **`name` must be a clear, descriptive title** — not just the first few words of content. Think of it as a document title.
-- **`icon` should be an inline SVG** — create a small, clean SVG icon that visually represents the node's purpose. Start with `<svg` and it renders directly. Use a simple 24x24 viewBox with clean shapes and colors that match the content theme.
+> **`id` must be a simple slug — no slashes.** Use only letters, numbers, and hyphens.
+>
+> Correct: `"id": "PricingTool", "namespace": "User/rbuergi"`
+> Wrong: `"id": "User/rbuergi/PricingTool", "namespace": ""`
 
-### Discovering Content Schemas
+- **`name` must be a clear, descriptive title** — not just the first few words of the content body.
+- **`icon` should be an inline SVG** — a small, clean 24×24 image that visually represents the node's purpose. Use simple shapes and colours that match the content theme.
 
-Before creating a node, discover what content fields are expected by looking at an existing node of the same type, or at the target namespace:
+### Discovering the content schema
 
-- `Get('@path/schema/')` — Returns the JSON Schema for the node's content type (e.g., `Get('@Cornerstone/schema/')`)
-- `Get('@path/schema/TypeName')` — Returns the JSON Schema for a specific named type
-- `Get('@path/model/')` — Returns the full data model with all registered types
+Before creating a node, check what `content` fields the target type expects:
 
-The `path` is any node path — the schema/model prefixes work on any address, not just NodeType paths.
+```
+Get('@Cornerstone/schema/')             // Schema for nodes in the Cornerstone namespace
+Get('@path/schema/TypeName')            // Schema for a specific named type
+Get('@path/model/')                     // Full data model with all registered types
+```
 
 ### Workflow
 
-1. Find an existing node of the type you want to create, or the namespace where you want to create
-2. Retrieve its content schema: `Get('@path/schema/')`
-3. Construct the MeshNode JSON with all required fields
-4. Call Create with the JSON
+1. Find an existing node of the same type, or navigate to the target namespace.
+2. Retrieve its content schema: `Get('@path/schema/')`.
+3. Build the `MeshNode` JSON with all required fields.
+4. Call `Create` with the JSON string.
 
 ### Example
 
@@ -153,37 +188,41 @@ The `path` is any node path — the schema/model prefixes work on any address, n
 Create('{"id": "NewProject", "namespace": "ACME", "name": "New Project", "nodeType": "Project", "content": {"status": "Active"}}')
 ```
 
+---
+
 ## Update
 
-Updates one or more existing nodes in the mesh. The entire MeshNode is replaced, not merged.
+Replaces one or more existing nodes with new data. The **entire node** is replaced — this is not a merge/patch operation.
 
 ### Parameter
 
-`nodes` (string, required) — A JSON array of MeshNode objects with updated fields.
-
-### Workflow
-
-1. Retrieve existing nodes via `Get('@path')` or `Search('...')`
-2. Modify the returned MeshNode JSON (change name, content fields, etc.)
-3. Pass the modified node(s) to Update as a JSON array
+`nodes` (string, required) — A JSON array of `MeshNode` objects with updated fields.
 
 ### Important
 
-- **Always Get before Update** to preserve fields you don't want to change
-- The node at the given path is completely replaced with the provided data
-- Path is derived from `namespace` + `id`
+> **Always `Get` before `Update`** to avoid accidentally erasing fields you did not intend to change. The node at the given path is completely replaced by what you provide.
+
+Path is derived from `namespace` + `id`, same as for `Create`.
+
+### Workflow
+
+1. Retrieve the current node with `Get('@path')` or `Search('...')`.
+2. Modify the returned JSON (change `name`, `content` fields, etc.).
+3. Pass the modified node(s) to `Update` as a JSON array.
 
 ### Example
 
 ```
 // First: result = Get('@ACME/ExistingProject')
-// Then modify the JSON and update:
+// Modify the JSON, then:
 Update('[{"id": "ExistingProject", "namespace": "ACME", "name": "Renamed Project", "nodeType": "Project", "content": {"status": "Completed"}}]')
 ```
 
+---
+
 ## Delete
 
-Deletes one or more nodes by their paths.
+Removes one or more nodes from the mesh by their paths.
 
 ### Parameter
 
@@ -195,10 +234,13 @@ Deletes one or more nodes by their paths.
 Delete('["ACME/OldProject", "ACME/ArchivedTask"]')
 ```
 
+---
+
 ## Reading Documentation
 
-To browse all available documentation:
+To explore all available documentation, browse the `Doc` namespace and read any article with `Get`:
+
 ```
 Search('namespace:Doc scope:descendants')
+Get('@Doc/Architecture/SomeArticle')
 ```
-Then read any article with `Get('@Doc/...')`.

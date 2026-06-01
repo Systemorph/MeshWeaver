@@ -1,15 +1,24 @@
 ---
 Name: Node Operations
 Category: Documentation
-Description: Export, Import, Copy, and Move operations for mesh nodes
+Description: Export, import, copy, and move node subtrees — round-trip file formats and programmatic APIs
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="5 9 2 12 5 15"/><polyline points="9 5 12 2 15 5"/><polyline points="15 19 12 22 9 19"/><polyline points="19 9 22 12 19 15"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/></svg>
 ---
 
-MeshWeaver provides built-in operations for transferring node subtrees between locations, exporting to files, and importing from external sources. These are accessible from the **Actions** sub-menu on any node.
+MeshWeaver provides four built-in operations for transferring node subtrees between locations, exporting to files, and importing from external sources. They are all accessible from the **Actions** sub-menu on any node.
+
+| Operation | What it does |
+|-----------|-------------|
+| **Export** | Produces a ZIP archive of a node and its entire subtree in human-readable file formats |
+| **Import** | Reads files or a ZIP and creates nodes in the mesh |
+| **Copy** | Duplicates a node and all its descendants to a new namespace |
+| **Move** | Relocates a node and its entire subtree to a new path |
+
+---
 
 # Export
 
-Export produces a ZIP archive of a node and its entire subtree using **native file formats** that preserve human readability:
+Export serialises a node and its entire subtree into a ZIP archive using **native file formats** chosen for human readability. The result can be version-controlled, edited in a text editor, and re-imported without loss.
 
 | Content Type | File Format | Example |
 |-------------|-------------|---------|
@@ -34,9 +43,9 @@ var result = await exportService.ExportToDirectoryAsync("org/acme/project", outp
 
 `IMeshExportService` uses `FileFormatParserRegistry` to select the appropriate serializer for each node based on its content type. Partition data (sub-paths like `Source`, `layoutAreas`) is exported as JSON.
 
-## Export-Import Round Trip
+## Export–Import Round Trip
 
-Exporting a subtree and re-importing the ZIP restores the original state:
+Exporting a subtree and re-importing the ZIP restores the original state exactly:
 
 ```
 Export org/acme → ZIP (contains .md, .cs, .json files)
@@ -44,14 +53,17 @@ Export org/acme → ZIP (contains .md, .cs, .json files)
   → Original node names, types, and content are preserved
 ```
 
+---
+
 # Import
 
-Import reads files from a directory (uploaded as file, folder, or ZIP) and creates nodes in the mesh.
+Import reads files from a directory or ZIP and creates nodes in the mesh. Three sources are supported:
 
-**Supported sources:**
-- **Copy from Mesh Node** -- duplicate an existing node tree
-- **Upload File** -- single `.md`, `.json`, `.yaml`, `.csv`, or `.html` file
-- **Upload Folder (ZIP)** -- directory structure or ZIP archive
+| Source | Description |
+|--------|-------------|
+| **Copy from Mesh Node** | Duplicate an existing node tree within the mesh |
+| **Upload File** | Single `.md`, `.json`, `.yaml`, `.csv`, or `.html` file |
+| **Upload Folder (ZIP)** | Directory structure or ZIP archive |
 
 The import service (`IMeshImportService`) uses `FileFormatParserRegistry` to parse each file into a `MeshNode` based on its extension.
 
@@ -66,6 +78,8 @@ var result = await importService.ImportNodesAsync(
     removeMissing: false); // don't delete nodes absent from source
 ```
 
+---
+
 # Copy
 
 Copy duplicates a node and all its descendants to a new namespace. The source node's ID is preserved under the target.
@@ -74,10 +88,11 @@ Copy duplicates a node and all its descendants to a new namespace. The source no
 - `org/backup/acme` (root)
 - `org/backup/acme/child1`
 - `org/backup/acme/child2`
-- etc.
+- … and so on for the full subtree
 
 ## Options
-- **Force**: overwrite existing nodes at the destination (default: skip existing)
+
+- **Force** — overwrite existing nodes at the destination (default: skip existing)
 
 ## Programmatic Copy
 
@@ -88,6 +103,8 @@ var nodesCopied = await NodeCopyHelper.CopyNodeTreeAsync(
     targetNamespace: "org/backup",
     force: false);
 ```
+
+---
 
 # Move
 
@@ -106,7 +123,11 @@ if (response.Message.Success)
     Console.WriteLine($"Moved to: {response.Message.Node.Path}");
 ```
 
+---
+
 # File Format Details
+
+Each content type serialises to a distinct, human-readable format. The sections below show the canonical shape for each.
 
 ## Markdown (.md)
 
@@ -163,9 +184,26 @@ The `<meshweaver>` metadata block is optional. The primary type name is extracte
 
 JSON is the fallback format for nodes that don't match markdown, agent, or code patterns.
 
+---
+
+```csharp --render NodeOpsOverview --show-code
+MeshWeaver.Layout.Controls.Stack
+    .WithView(MeshWeaver.Layout.Controls.Markdown("### Node Operations at a Glance"))
+    .WithView(MeshWeaver.Layout.Controls.Markdown(
+        "| Operation | Requires | Scope |\n" +
+        "|-----------|----------|-------|\n" +
+        "| **Export** | `Permission.Export` (Editor+) | Node + full subtree → ZIP |\n" +
+        "| **Import** | Create permission on target | File, folder, or ZIP → nodes |\n" +
+        "| **Copy** | Read on source, Create on target | Node + full subtree → new namespace |\n" +
+        "| **Move** | Delete on source, Create on target | Node + full subtree → new path |"
+    ))
+```
+
+---
+
 # See Also
 
-- [Node Menu Items](../../GUI/NodeMenu) -- Menu system and Actions sub-menu
-- [Query Syntax](../QuerySyntax) -- Search and filter nodes
-- [Node Type Configuration](../NodeTypeConfiguration) -- Define custom node types
-- [CRUD Operations](../CRUD) -- Low-level data operations
+- [Node Menu Items](../../GUI/NodeMenu) — Menu system and Actions sub-menu
+- [Query Syntax](../QuerySyntax) — Search and filter nodes
+- [Node Type Configuration](../NodeTypeConfiguration) — Define custom node types
+- [CRUD Operations](../CRUD) — Low-level data operations

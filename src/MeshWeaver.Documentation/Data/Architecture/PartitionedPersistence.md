@@ -1,21 +1,23 @@
 ---
 Name: Partitioned Persistence
 Category: Documentation
-Description: How persistence is partitioned by the first path segment to isolate domains across PostgreSQL schemas, Cosmos containers, and file system directories
+Description: How persistence is partitioned by the first path segment to isolate domains across PostgreSQL schemas, Cosmos containers, and file-system directories
 Icon: /static/DocContent/Architecture/icon.svg
 ---
 
-Partitioned persistence routes storage operations by the first segment of a node's path, giving each top-level domain strict isolation in its own PostgreSQL schema, Cosmos DB container, or file system partition.
+Partitioned persistence routes every storage operation by the first segment of a node's path, giving each top-level domain strict isolation in its own PostgreSQL schema, Cosmos DB container, or file-system partition — while keeping the `IMeshStorage` and `IMeshQuery` interfaces completely unchanged for callers.
 
-# Motivation
+# Why Partitioning Exists
 
-In a multi-tenant or multi-domain mesh, data from different organizations or business domains must be isolated. When `Cornerstone/Policy` and `Contoso/HR/Employee` coexist in the same mesh, their data should live in separate storage partitions:
+In a multi-tenant or multi-domain mesh, data from different organizations must not bleed into one another. When `Cornerstone/Policy` and `Contoso/HR/Employee` coexist in the same mesh, their data needs to live in separate storage partitions:
 
-- **PostgreSQL**: separate schemas (`acme`, `contoso`)
-- **Cosmos DB**: separate container pairs (`acme-nodes`, `contoso-nodes`)
-- **File System**: same directory tree with logical routing and isolated caches
+| Backend | Isolation mechanism |
+|---|---|
+| PostgreSQL | Separate schemas (`acme`, `contoso`) |
+| Cosmos DB | Separate container pairs (`acme-nodes`, `acme-partitions`) |
+| File System | Logical routing with isolated per-partition caches |
 
-This isolation is transparent to callers. The `IMeshStorage` and `IMeshQuery` interfaces remain unchanged.
+The routing layer sits between the existing scoped wrappers (`PersistenceService`, `MeshQuery`) and the backend stores. From a caller's perspective, nothing changes.
 
 # Architecture
 
@@ -23,40 +25,38 @@ This isolation is transparent to callers. The `IMeshStorage` and `IMeshQuery` in
 
 ```
 PersistenceService (scoped, unchanged)
-  +-> RoutingPersistenceServiceCore (singleton)
-        +-> "ACME" -> per-partition IStorageService
-        +-> "Contoso" -> per-partition IStorageService
-        +-> ... (auto-provisioned on first access)
+  └─> RoutingPersistenceServiceCore (singleton)
+        ├─> "ACME"    → per-partition IStorageService
+        ├─> "Contoso" → per-partition IStorageService
+        └─> ...        (auto-provisioned on first access)
 
 MeshQuery (scoped, unchanged)
-  +-> RoutingMeshQueryProvider (singleton)
-        +-> "ACME" -> per-partition IMeshQueryProvider
-        +-> "Contoso" -> per-partition IMeshQueryProvider
+  └─> RoutingMeshQueryProvider (singleton)
+        ├─> "ACME"    → per-partition IMeshQueryProvider
+        └─> "Contoso" → per-partition IMeshQueryProvider
 ```
-
-The routing layer sits between the scoped wrappers and the backend-specific stores. All existing interfaces are preserved.
 
 ## Path Segment Extraction
 
-The `PathPartition.GetFirstSegment` utility extracts the routing key:
+The `PathPartition.GetFirstSegment` utility extracts the routing key from any node path:
 
-| Input | Result |
+| Input | Routing key |
 |---|---|
-| `"Cornerstone/Article"` | `"ACME"` |
+| `"Cornerstone/Article"` | `"Cornerstone"` |
 | `"ACME"` | `"ACME"` |
 | `""` or `null` | `null` (root level) |
 
 ## Operation Routing
 
-| Operation | Routing Strategy |
+| Operation | Routing strategy |
 |---|---|
 | `SaveNodeAsync(node)` | Extract first segment, auto-provision if new, route to partition |
 | `GetNodeAsync(path)` | Route to partition by first segment |
 | `DeleteNodeAsync(path)` | Route to partition |
-| `GetChildrenAsync(null)` | Fan out: each partition returns its root node |
+| `GetChildrenAsync(null)` | Fan out — each partition returns its root node |
 | `GetChildrenAsync("ACME")` | Route to ACME partition |
 | `GetDescendantsAsync(null)` | Fan out to all partitions |
-| `SearchAsync(null, query)` | Fan out: each partition searches within its own scope |
+| `SearchAsync(null, query)` | Fan out — each partition searches within its own scope |
 | `SearchAsync("ACME", query)` | Route to ACME partition |
 | `MoveNodeAsync(src, tgt)` | Same partition: delegate. Cross-partition: copy + delete |
 | `ExistsAsync(path)` | Route to partition |
@@ -65,7 +65,7 @@ The `PathPartition.GetFirstSegment` utility extracts the routing key:
 
 ## Auto-Provisioning
 
-When a node is saved with a new first segment, the factory automatically creates the backing store:
+When a node is saved whose first segment matches no registered partition, the factory provisions the backend automatically:
 
 ```csharp
 // First save to "NewOrg/..." triggers provisioning
@@ -78,15 +78,15 @@ await persistence.SaveNodeAsync(
 // - FileSystem: Directory.CreateDirectory("baseDir/NewOrg")
 ```
 
-On startup, `InitializeAsync` discovers existing partitions and restores routing tables.
+On startup, `InitializeAsync` discovers existing partitions and restores the routing table.
 
 # Where Partitions Come From
 
-A partition has to be **registered with the routing layer** before any path under it can be read. Sources contribute partitions, and the rules differ:
+A partition must be **registered with the routing layer** before any path under it can be read. Four complementary sources contribute partitions; within each source, rules are evaluated in registration order (first match wins).
 
-## 0. IPartitionStorageProvider rules (sequential, first-match-wins)
+## 1. IPartitionStorageProvider rules (config-time, explicit)
 
-The supported wire-up: each partition declares its own backend at registration time via fluent `MeshBuilder` extensions. Rules are evaluated in registration order; the first whose `Matches(firstSegment)` returns true owns the partition. There is no `DataSource` string discrimination inside the routing core — adding a new backend means registering a new rule, not editing the routing core.
+Each partition declares its own backend at registration time via fluent `MeshBuilder` extensions. There is no `DataSource` string discrimination inside the routing core — adding a new backend means registering a new provider rule, not editing the routing core.
 
 ```csharp
 mesh
@@ -105,11 +105,11 @@ mesh
     // .AddPostgresPartitionPattern("*");
 ```
 
-Providers are constructed from the parent service collection only. They MUST NOT depend on `IMessageHub` or `IMeshQueryCore` — they run during persistence init, before / during the singleton `IMessageHub` factory. Re-entering that factory was the cyclic-DI cause of the Documentation stack overflow this redesign retired.
+> **Dependency rule:** Providers are constructed from the parent service collection only. They **MUST NOT** depend on `IMessageHub` or `IMeshQueryCore` — they run during persistence init, before (or during) the singleton `IMessageHub` factory. Re-entering that factory was the cyclic-DI root cause of the Documentation stack overflow that this redesign retired.
 
-Each provider also declares which **query contexts** it participates in (`search`, `create`, `autocomplete`, `browse` — see `Doc/DataMesh/QuerySyntax.md` for the existing `context:` qualifier vocabulary). Consumers running with `context:search` skip every partition whose context set doesn't include `search`. This is a partition-level participation gate that complements the per-node `ExcludeFromContext` flag.
+Each provider also declares which **query contexts** it participates in (`search`, `create`, `autocomplete`, `browse` — see [QuerySyntax](Doc/DataMesh/QuerySyntax.md) for the `context:` qualifier vocabulary). Consumers running with `context:search` skip every partition whose context set does not include `search`. This is a partition-level participation gate that complements the per-node `ExcludeFromContext` flag.
 
-## 1. PartitionDefinition (config-time, declared)
+## 2. PartitionDefinition nodes (config-time, declared)
 
 Nodes whose `Content` is a `PartitionDefinition` declare a partition explicitly. `RoutingPersistenceServiceCore.InitializeAsync` collects every `PartitionDefinition` from `IStaticNodeProvider`s and `MeshConfiguration.Nodes`, then calls `IPartitionedStoreFactory.InitializeDefaultPartitionsAsync(...)` so each backend can pre-create its store (PostgreSQL `CREATE SCHEMA`, Cosmos container, etc.).
 
@@ -128,24 +128,21 @@ new MeshNode("ACME", "")
 
 Use this when a domain has its own backing store (PostgreSQL schema, Cosmos container, dedicated FS subtree). Triggered at startup.
 
-## 2. Backend discovery (runtime, automatic)
+## 3. Backend discovery (runtime, automatic)
 
 `IPartitionedStoreFactory.DiscoverPartitionsAsync` scans the backing store for partitions that already exist:
-- File system: top-level directories.
-- PostgreSQL: schemas containing a `mesh_nodes` table.
-- Cosmos: containers ending in `-nodes`.
+
+- **File system** — top-level directories
+- **PostgreSQL** — schemas containing a `mesh_nodes` table
+- **Cosmos** — containers ending in `-nodes`
 
 Discovered partitions are auto-registered without an explicit `PartitionDefinition`. Use this when the storage layout already encodes partition boundaries (deployed environments, restored backups).
 
-## 3. Auto-provisioning on first save (lazy)
-
-`SaveNodeAsync(node)` whose first segment matches no registered partition calls `IPartitionedStoreFactory.CreateStoreAsync(firstSegment, ct)` to provision a new partition on the fly. Cheap for FS (`mkdir`), heavier for PostgreSQL (`CREATE SCHEMA` + tables). The store is added to the routing table for the rest of the process's lifetime.
-
 ## 4. Static-provider seed nodes (read-only fallback)
 
-`IStaticNodeProvider`s also publish nodes that aren't `PartitionDefinition`s — NodeType definitions (`new MeshNode("Markdown") { HubConfiguration = c => c.AddMeshDataSource() }`), seed users, doc namespaces, test fixtures. The routing layer registers a **read-only static partition store** for the first segment of each such node so that `GetNodeAsync(path)` resolves them without a writable backend behind them.
+`IStaticNodeProvider`s also publish nodes that are not `PartitionDefinition`s — NodeType definitions, seed users, doc namespaces, test fixtures. The routing layer registers a **read-only static partition store** for the first segment of each such node, so that `GetNodeAsync(path)` resolves them without a writable backend.
 
-If the same first segment also has a writable partition (declared, discovered, or auto-provisioned), the routing layer **layers** them: writes go to the writable store; reads check the writable store first, then fall through to the static store. This keeps "an immutable seed plus runtime mutations under the same partition" working without each writable store having to know about static seeds.
+If the same first segment also has a writable partition (declared, discovered, or auto-provisioned), the routing layer **layers** them: writes go to the writable store; reads check the writable store first, then fall through to the static store. This keeps "an immutable seed plus runtime mutations under the same partition" working transparently.
 
 ```csharp
 public sealed class MyNodeTypeProvider : IStaticNodeProvider
@@ -179,21 +176,21 @@ Each partition is defined by a `PartitionDefinition` that specifies its namespac
 
 Satellite entities are stored in dedicated sub-namespaces within the node hierarchy. Each satellite type has a reserved prefix:
 
-| Sub-Namespace | PostgreSQL Table | Node Types | Description |
-|---------------|-----------------|------------|-------------|
+| Sub-namespace | PostgreSQL table | Node types | Description |
+|---|---|---|---|
 | `_Activity` | `activities` | Activity | Node lifecycle events |
 | `_UserActivity` | `user_activities` | UserActivity | Per-user access tracking |
-| `_Thread` | `threads` | Thread, ThreadMessage | Chat/discussion threads |
+| `_Thread` | `threads` | Thread, ThreadMessage | Chat / discussion threads |
 | `_Tracking` | `tracking` | TrackedChange | Suggested edits (track changes) |
 | `_Approval` | `approvals` | Approval | Approval workflow records |
-| `_Access` | `access` | AccessAssignment | Permission grants/denials |
+| `_Access` | `access` | AccessAssignment | Permission grants / denials |
 | `_Comment` | `comments` | Comment | Document comments |
-| `Source` | `code` | Code | Source code files (.cs) — **primary content, not a satellite**. Routed to the `code` table as a storage optimization. |
-| `Test` | `code` | Code | Test code files (.cs) — **primary content, not a satellite**. Routed to the `code` table as a storage optimization. |
+| `Source` | `code` | Code | Source code files (.cs) — **primary content, not a satellite**. Routed to `code` as a storage optimization. |
+| `Test` | `code` | Code | Test code files (.cs) — **primary content, not a satellite**. Routed to `code` as a storage optimization. |
 
-## File System Layout
+## File-System Layout
 
-On disk, satellite nodes live in `_SubNamespace/` directories within their parent:
+Satellite nodes live in `_SubNamespace/` directories within their parent:
 
 ```
 ACME/
@@ -221,7 +218,7 @@ ACME/
 
 ## PostgreSQL Table Routing
 
-In PostgreSQL, `PartitionDefinition.ResolveTable(path)` determines the target table by matching the path against `TableMappings`:
+`PartitionDefinition.ResolveTable(path)` determines the target table by matching the path against `TableMappings`:
 
 ```csharp
 var def = new PartitionDefinition
@@ -231,13 +228,13 @@ var def = new PartitionDefinition
     TableMappings = PartitionDefinition.StandardTableMappings
 };
 
-def.ResolveTable("ACME/Projects/Alpha")                 // → "mesh_nodes"
-def.ResolveTable("ACME/Projects/Alpha/_Comment/c1")      // → "comments"
-def.ResolveTable("ACME/Projects/Alpha/_Access/Bob")       // → "access"
-def.ResolveTable("ACME/Projects/Alpha/_Thread/abc123")    // → "threads"
+def.ResolveTable("ACME/Projects/Alpha")               // → "mesh_nodes"
+def.ResolveTable("ACME/Projects/Alpha/_Comment/c1")   // → "comments"
+def.ResolveTable("ACME/Projects/Alpha/_Access/Bob")   // → "access"
+def.ResolveTable("ACME/Projects/Alpha/_Thread/abc123")// → "threads"
 ```
 
-Satellite tables have the same schema as `mesh_nodes` (including `main_node` for back-reference to the parent entity) and are indexed on `main_node` for efficient queries.
+Satellite tables share the same schema as `mesh_nodes` (including a `main_node` column for back-reference to the parent entity) and are indexed on `main_node` for efficient per-entity queries.
 
 ## StandardTableMappings
 
@@ -246,13 +243,13 @@ Satellite tables have the same schema as `mesh_nodes` (including `main_node` for
 ```csharp
 public static Dictionary<string, string> StandardTableMappings => new()
 {
-    ["_Activity"] = "activities",
+    ["_Activity"]     = "activities",
     ["_UserActivity"] = "user_activities",
-    ["_Thread"] = "threads",
-    ["_Tracking"] = "tracking",
-    ["_Approval"] = "approvals",
-    ["_Access"] = "access",
-    ["_Comment"] = "comments",
+    ["_Thread"]       = "threads",
+    ["_Tracking"]     = "tracking",
+    ["_Approval"]     = "approvals",
+    ["_Access"]       = "access",
+    ["_Comment"]      = "comments",
 };
 ```
 
@@ -280,50 +277,50 @@ public record PartitionedStore(
 
 ## File System
 
-All partitions share the same `FileSystemStorageAdapter`. Isolation is logical: each partition gets its own `FileSystemPersistenceService` instance with a separate in-memory cache. The file layout remains unchanged (`baseDir/Cornerstone/Article.json`).
+All partitions share the same `FileSystemStorageAdapter`. Isolation is logical: each partition gets its own `FileSystemPersistenceService` instance with a separate in-memory cache. The file layout is unchanged (`baseDir/Cornerstone/Article.json`).
 
 Discovery scans top-level directories for `.json` files.
 
 ## PostgreSQL
 
-Each partition gets its own PostgreSQL schema. A per-schema `NpgsqlDataSource` is created with `SearchPath` set, so all unqualified table references resolve within the partition's schema. No SQL modifications are needed.
+Each partition gets its own PostgreSQL schema. A per-schema `NpgsqlDataSource` is created with `SearchPath` set, so all unqualified table references resolve within the partition's schema — no SQL modifications required.
 
 ```
 Database
-+-- schema "acme"                    ← Space partition (with satellite tables)
-|   +-- mesh_nodes                   ← Primary entities
-|   +-- activities                   ← _Activity satellite nodes
-|   +-- user_activities              ← _UserActivity satellite nodes
-|   +-- threads                      ← _Thread satellite nodes
-|   +-- tracking                     ← _Tracking satellite nodes (track changes)
-|   +-- approvals                    ← _Approval satellite nodes
-|   +-- access                       ← _Access satellite nodes (permissions)
-|   +-- comments                     ← _Comment satellite nodes
-|   +-- node_type_permissions        ← Public-read node type flags
-+-- schema "acme_versions"           ← History tracking
-|   +-- mesh_nodes
-|   +-- activities
-|   +-- ...
-+-- schema "admin"                   ← System partition (no satellite tables)
-|   +-- mesh_nodes
-|   +-- node_type_permissions
-+-- schema "user"                    ← User partition (with satellite tables)
-|   +-- mesh_nodes
-|   +-- activities
-|   +-- user_activities
-|   +-- threads
-|   +-- tracking
-|   +-- approvals
-|   +-- access
-|   +-- comments
-|   +-- node_type_permissions
-+-- schema "portal"                  ← Portal sessions (no satellite tables)
-|   +-- mesh_nodes
-+-- schema "kernel"                  ← Kernel sessions (no satellite tables)
-    +-- mesh_nodes
+├── schema "acme"                    ← Space partition (with satellite tables)
+│   ├── mesh_nodes                   ← Primary entities
+│   ├── activities                   ← _Activity satellite nodes
+│   ├── user_activities              ← _UserActivity satellite nodes
+│   ├── threads                      ← _Thread satellite nodes
+│   ├── tracking                     ← _Tracking satellite nodes (track changes)
+│   ├── approvals                    ← _Approval satellite nodes
+│   ├── access                       ← _Access satellite nodes (permissions)
+│   ├── comments                     ← _Comment satellite nodes
+│   └── node_type_permissions        ← Public-read node type flags
+├── schema "acme_versions"           ← History tracking
+│   ├── mesh_nodes
+│   ├── activities
+│   └── ...
+├── schema "admin"                   ← System partition (no satellite tables)
+│   ├── mesh_nodes
+│   └── node_type_permissions
+├── schema "user"                    ← User partition (with satellite tables)
+│   ├── mesh_nodes
+│   ├── activities
+│   ├── user_activities
+│   ├── threads
+│   ├── tracking
+│   ├── approvals
+│   ├── access
+│   ├── comments
+│   └── node_type_permissions
+├── schema "portal"                  ← Portal sessions (no satellite tables)
+│   └── mesh_nodes
+└── schema "kernel"                  ← Kernel sessions (no satellite tables)
+    └── mesh_nodes
 ```
 
-Schema names are sanitized: lowercased, non-alphanumeric replaced with underscore, digit-leading names prefixed with underscore.
+Schema names are sanitized: lowercased, non-alphanumeric characters replaced with underscore, digit-leading names prefixed with underscore.
 
 Discovery queries `information_schema.schemata` for schemas containing a `mesh_nodes` table.
 
@@ -331,11 +328,13 @@ Discovery queries `information_schema.schemata` for schemas containing a `mesh_n
 
 Each partition gets a container pair: `{segment}-nodes` and `{segment}-partitions`. Containers are created with `CreateContainerIfNotExistsAsync` (idempotent).
 
-Container names are sanitized: lowercased, non-alphanumeric replaced with hyphen, padded to minimum 3 characters, truncated to fit suffix constraints.
+Container names are sanitized: lowercased, non-alphanumeric characters replaced with hyphen, padded to a minimum of 3 characters, and truncated to satisfy suffix constraints.
 
 Discovery lists all containers and identifies partitions by the `-nodes` suffix convention.
 
 # Registration
+
+Register the backend once in `ConfigureServices`; the routing wrappers are wired automatically:
 
 ## File System
 
@@ -355,7 +354,8 @@ services.AddPartitionedPostgreSqlPersistence(connectionString);
 services.AddPartitionedCosmosPersistence(cosmosClient, databaseName);
 ```
 
-Each registration method calls `AddPartitionedCoreAndWrapperServices()` which registers:
+Each registration method calls `AddPartitionedCoreAndWrapperServices()`, which registers:
+
 - `RoutingPersistenceServiceCore` as `IStorageService`
 - `RoutingMeshQueryProvider` as `IMeshQueryProvider`
 - `StaticNodeQueryProvider` for static node providers
@@ -363,27 +363,29 @@ Each registration method calls `AddPartitionedCoreAndWrapperServices()` which re
 
 # Key Design Decisions
 
-**Full paths preserved everywhere.** No path stripping occurs. `Cornerstone/Article` is stored with that full path inside the ACME partition. This simplifies the implementation and avoids path translation bugs.
+**Full paths preserved everywhere.** No path stripping occurs. `Cornerstone/Article` is stored with that full path inside the Cornerstone partition. This simplifies the implementation and eliminates path-translation bugs.
 
 **Thread-safe provisioning.** `RoutingPersistenceServiceCore` uses `ConcurrentDictionary` with a `SemaphoreSlim` to ensure each partition is provisioned exactly once, even under concurrent access.
 
-**Scoped fan-out for search.** When searching across all partitions (`parentPath == null`), each partition's search is scoped to its own segment to avoid duplicate results from shared storage adapters.
+**Scoped fan-out for search.** When searching across all partitions (`parentPath == null`), each partition's search is scoped to its own first segment to avoid duplicate results from shared storage adapters.
 
-**Cross-partition moves.** Moving a node between partitions (e.g., `ACME/Doc` to `Contoso/Doc`) performs a read-write-delete sequence: read from source, write to target, delete from source.
+**Cross-partition moves.** Moving a node between partitions (e.g., `ACME/Doc` → `Contoso/Doc`) performs a read-write-delete sequence: read from source, write to target, delete from source.
 
 # Source Files
 
-- `src/MeshWeaver.Hosting/Persistence/PathPartition.cs`
-- `src/MeshWeaver.Hosting/Persistence/IPartitionStorageProvider.cs` — sequential rule contract + `PartitionContexts`
-- `src/MeshWeaver.Hosting/Persistence/EmbeddedResourceStorageAdapter.cs`
-- `src/MeshWeaver.Hosting/Persistence/EmbeddedResourcePartitionStorageProvider.cs`
-- `src/MeshWeaver.Hosting/Persistence/PartitionConfigurationExtensions.cs` — fluent `MeshBuilder.Add*Partition` extensions
-- `src/MeshWeaver.Hosting/Persistence/IPartitionedStoreFactory.cs`
-- `src/MeshWeaver.Hosting/Persistence/RoutingPersistenceServiceCore.cs`
-- `src/MeshWeaver.Hosting/Persistence/Query/RoutingMeshQueryProvider.cs`
-- `src/MeshWeaver.Hosting/Persistence/FileSystemPartitionedStoreFactory.cs`
-- `src/MeshWeaver.Hosting/Persistence/PersistenceExtensions.cs`
-- `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlPartitionedStoreFactory.cs`
-- `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlExtensions.cs`
-- `src/MeshWeaver.Hosting.Cosmos/CosmosPartitionedStoreFactory.cs`
-- `src/MeshWeaver.Hosting.Cosmos/PersistenceExtensions.cs`
+| File | Purpose |
+|---|---|
+| `src/MeshWeaver.Hosting/Persistence/PathPartition.cs` | `GetFirstSegment` utility |
+| `src/MeshWeaver.Hosting/Persistence/IPartitionStorageProvider.cs` | Sequential rule contract + `PartitionContexts` |
+| `src/MeshWeaver.Hosting/Persistence/EmbeddedResourceStorageAdapter.cs` | Embedded-resource adapter |
+| `src/MeshWeaver.Hosting/Persistence/EmbeddedResourcePartitionStorageProvider.cs` | Embedded-resource provider |
+| `src/MeshWeaver.Hosting/Persistence/PartitionConfigurationExtensions.cs` | Fluent `MeshBuilder.Add*Partition` extensions |
+| `src/MeshWeaver.Hosting/Persistence/IPartitionedStoreFactory.cs` | Backend factory contract |
+| `src/MeshWeaver.Hosting/Persistence/RoutingPersistenceServiceCore.cs` | Routing singleton |
+| `src/MeshWeaver.Hosting/Persistence/Query/RoutingMeshQueryProvider.cs` | Query routing |
+| `src/MeshWeaver.Hosting/Persistence/FileSystemPartitionedStoreFactory.cs` | File-system factory |
+| `src/MeshWeaver.Hosting/Persistence/PersistenceExtensions.cs` | DI helpers |
+| `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlPartitionedStoreFactory.cs` | PostgreSQL factory |
+| `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlExtensions.cs` | PostgreSQL DI helpers |
+| `src/MeshWeaver.Hosting.Cosmos/CosmosPartitionedStoreFactory.cs` | Cosmos DB factory |
+| `src/MeshWeaver.Hosting.Cosmos/PersistenceExtensions.cs` | Cosmos DB DI helpers |

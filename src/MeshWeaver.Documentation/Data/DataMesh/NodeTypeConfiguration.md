@@ -1,24 +1,34 @@
 ---
 Name: NodeType Configuration Guide
 Category: Documentation
-Description: How to create and configure NodeTypes
+Description: How to define, configure, and extend NodeTypes — the schema and behavior templates for all mesh nodes.
 Icon: /static/DocContent/DataMesh/NodeTypeConfiguration/icon.svg
 ---
 
-NodeTypes define the schema and behavior for nodes in MeshWeaver. This guide explains how to create and configure NodeTypes.
+NodeTypes are the blueprints of the mesh. Every node you create — an Organization, a Story, a Project — is an *instance* of a NodeType that defines its content schema, hub behaviour, and how it renders in the UI. This guide walks through every aspect of creating and configuring them.
 
-# What is a NodeType?
+---
 
-A NodeType is a template that defines:
-- **Content schema**: The data structure for instances
-- **Hub configuration**: How instances behave and render
-- **Display properties**: Icon, description, display order
+## What is a NodeType?
 
-# NodeType Structure
+A NodeType is itself a mesh node (with `nodeType: "NodeType"`). It acts as a reusable template that combines three concerns:
 
-A NodeType is itself a node with `nodeType: "NodeType"`. It consists of:
+| Concern | What it controls |
+|---|---|
+| **Content schema** | The C# record type that models instance data |
+| **Hub configuration** | How instance hubs are wired (layout areas, content collections, …) |
+| **Display properties** | Icon, description, sort order shown in the UI |
 
-## Node Properties
+When a user navigates to a node whose `nodeType` points at your definition, the framework compiles the content record, applies the configuration expression, and mounts the resulting layout areas — all dynamically, without a deploy.
+
+---
+
+## NodeType Structure
+
+A NodeType has two parts: its **node properties** (the metadata stored in the mesh) and a **`NodeTypeDefinition` content block** (the rich configuration payload).
+
+### Node properties
+
 ```json
 {
   "id": "Organization",
@@ -32,7 +42,8 @@ A NodeType is itself a node with `nodeType: "NodeType"`. It consists of:
 }
 ```
 
-## NodeTypeDefinition Content
+### NodeTypeDefinition content
+
 ```json
 {
   "$type": "NodeTypeDefinition",
@@ -46,39 +57,57 @@ A NodeType is itself a node with `nodeType: "NodeType"`. It consists of:
 }
 ```
 
-# Configuration String
+The `configuration` field is the heart of the definition — a C# lambda expression evaluated at runtime that wires up the hub for every instance of this type.
 
-The `configuration` property is a C# expression that configures the hub for instances:
+---
 
-## WithContentType<T>()
-Specifies the content record type:
+## The Configuration Expression
+
+The `configuration` string is a C# lambda (`config => …`) that receives an `IHubConfiguration` and returns it, fully wired. The framework compiles and caches this expression the first time an instance hub is activated.
+
+### `WithContentType<T>()`
+
+Binds the named C# record as the authoritative content type for all instances:
+
 ```csharp
 config.WithContentType<Organization>()
 ```
 
-## AddDefaultLayoutAreas()
-Adds standard views (Details, Catalog, Thumbnail, Metadata, Settings):
+### `AddDefaultLayoutAreas()`
+
+Registers the five standard views — **Details**, **Catalog**, **Thumbnail**, **Metadata**, and **Settings** — in one call:
+
 ```csharp
 config.WithContentType<Organization>().AddDefaultLayoutAreas()
 ```
 
-## AddDefaultLayoutAreas()
-Same as AddMeshNodeViews but chainable:
+### `AddLayout(…)`
+
+Adds custom views on top of the defaults. The view name appears in the navigation bar:
+
 ```csharp
-config.WithContentType<Organization>().AddDefaultLayoutAreas()
+config
+  .WithContentType<Story>()
+  .AddDefaultLayoutAreas()
+  .AddLayout(layout => layout
+    .WithView("Timeline", StoryViews.Timeline))
 ```
 
-## MapContentCollection()
-Maps a property to a content collection (files, images):
+### `MapContentCollection(…)`
+
+Maps a named property to a blob-storage collection (files, images, …):
+
 ```csharp
 config.WithContentType<Organization>()
   .AddDefaultLayoutAreas()
   .MapContentCollection("logos", "storage", $"logos/{config.Address.Segments.Last()}")
 ```
 
-# Content Record
+---
 
-Define the content type in a `Source/dataModel.json` file:
+## Defining the Content Record
+
+Each NodeType references a C# record that models its instance data. Place the source in a `Source/dataModel.json` file alongside the NodeType definition:
 
 ```csharp
 using System.ComponentModel.DataAnnotations;
@@ -96,48 +125,63 @@ public record Organization
 }
 ```
 
-# Catalog Behavior
+The `[Key]` attribute marks the identifier property. MeshWeaver compiles this record dynamically — no manual build step required. The compiled assembly is cached and invalidated automatically when the source node changes.
 
-The catalog for a NodeType automatically displays instances of that type within the current namespace. The query is built dynamically using:
-- `namespace:{current}` - searches within the current namespace
-- `nodeType:{nodeTypePath}` - filters to instances of this NodeType
+---
 
-No manual `childrenQuery` configuration is needed.
+## Namespace Hierarchy
 
-# Namespace Hierarchy
+NodeTypes participate in the same namespace hierarchy as all other nodes.
 
-## Root Namespace
-NodeTypes in the root namespace (empty namespace) define global types:
-- `Organization` at path `Organization` with `namespace: ""`
-- Instances like `Systemorph` also have `namespace: ""`
+### Root-namespace types (global)
 
-## Nested Namespace
-NodeTypes can be scoped to a namespace:
-- `Systemorph/Project` at path `Systemorph/Project` with `namespace: "Systemorph"`
-- Instances like `Systemorph/Marketing` have `namespace: "Systemorph"`
+A NodeType with an empty namespace defines a global type available everywhere:
 
-# Views
+- `Organization` lives at path `Organization` with `namespace: ""`
+- Instances such as `Systemorph` also carry `namespace: ""`
 
-## Default Views
-- **Details**: Main content view
-- **Catalog**: List of children/instances
-- **Thumbnail**: Card view for grids
-- **Metadata**: Technical properties
-- **Settings**: NodeType definitions in this namespace
+### Scoped types
 
-## Custom Views
-Add custom views in the configuration:
-```csharp
-config
-  .WithContentType<Story>()
-  .AddDefaultLayoutAreas()
-  .AddLayout(layout => layout
-    .WithView("Timeline", StoryViews.Timeline))
-```
+NodeTypes can be restricted to a namespace, so they only appear and are creatable within that context:
 
-# Example: Creating a Story NodeType
+- `Systemorph/Project` lives at path `Systemorph/Project` with `namespace: "Systemorph"`
+- Instances like `Systemorph/Marketing` carry `namespace: "Systemorph"`
 
-## 1. Create Story.json
+This scoping lets you model domain-specific types (a `Story` inside `Systemorph/Marketing`) without polluting the global namespace.
+
+---
+
+## Catalog Behaviour
+
+The **Catalog** view for a NodeType automatically queries for all instances within the current namespace. The framework builds the query dynamically:
+
+- `namespace:{current}` — scopes the search to the active namespace
+- `nodeType:{nodeTypePath}` — filters to instances of this specific type
+
+No manual `childrenQuery` configuration is needed. Adding a new instance immediately appears in the catalog.
+
+---
+
+## Default Views Reference
+
+`AddDefaultLayoutAreas()` registers five views that cover the most common UI needs:
+
+| View | Purpose |
+|---|---|
+| **Details** | Full content editor / reader for a single instance |
+| **Catalog** | Paginated list of all instances of this type |
+| **Thumbnail** | Compact card for use in grid / gallery layouts |
+| **Metadata** | Technical properties (path, version, timestamps) |
+| **Settings** | NodeType definitions scoped to this namespace |
+
+---
+
+## End-to-End Example: a `Story` NodeType
+
+The following three files create a fully working `Story` type inside the `Systemorph/Marketing` namespace.
+
+### 1. Story.json — the NodeType definition
+
 ```json
 {
   "id": "Story",
@@ -154,14 +198,16 @@ config
 }
 ```
 
-## 2. Create Story/Source/dataModel.json
+### 2. Story/Source/dataModel.json — the content record
+
 ```json
 {
   "code": "public record Story { [Key] public string Id { get; init; } public string Title { get; init; } public string? Markdown { get; init; } }"
 }
 ```
 
-## 3. Create Instances
+### 3. An instance — ClaimsProcessing.json
+
 ```json
 {
   "id": "ClaimsProcessing",
@@ -177,9 +223,38 @@ config
 }
 ```
 
-# Best Practices
+Once these files are saved, MeshWeaver compiles the record, wires the hub, and the instance is immediately navigable — no restart required.
 
-1. **Use meaningful namespaces**: Group related types together
-2. **Set order**: Control catalog sorting with order
-3. **Choose appropriate icons**: Use Fluent UI icons
-4. **Write clear descriptions**: Help users understand the type's purpose
+---
+
+## Live Preview
+
+The cell below renders a summary card showing how a NodeType's display properties map to the UI. Adapt the values to match your own type.
+
+```csharp --render NodeTypePreview --show-code
+var props = new[]
+{
+    ("Name",        "Story"),
+    ("Namespace",   "Systemorph/Marketing"),
+    ("Icon",        "BookOpen"),
+    ("Description", "A narrative story within a marketing campaign"),
+    ("Order",       "20"),
+    ("Views",       "Details · Catalog · Thumbnail · Metadata · Settings"),
+};
+
+var rows = string.Join("\n", props.Select(p =>
+    $"| **{p.Item1}** | `{p.Item2}` |"));
+
+MeshWeaver.Layout.Controls.Markdown(
+    $"### NodeType summary card\n\n| Property | Value |\n|---|---|\n{rows}");
+```
+
+---
+
+## Best Practices
+
+1. **Use meaningful namespaces.** Group related types together so scoped queries and catalog views stay focused.
+2. **Set `order` explicitly.** Controls sorting in catalog and type-picker UI; lower numbers appear first.
+3. **Choose Fluent UI icons.** Browse available names at the Fluent UI icon gallery — they render consistently across themes.
+4. **Write clear descriptions.** The description surfaces in the Catalog header and the type-picker tooltip; a single sentence is enough.
+5. **Keep content records small.** Large records with many optional fields slow schema compilation. Prefer composition (satellite nodes) over monolithic records.

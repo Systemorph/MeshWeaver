@@ -1,85 +1,82 @@
 ---
 Name: AI Model Provider Settings
-Description: "Design for the Settings → Models UX: per-provider-type layout, model lists for API providers, and delegating Claude Code / GitHub Copilot to their CLI login."
+Description: "Settings → Models UX: per-provider-type layout, model lists for API providers, and delegating Claude Code / GitHub Copilot to their CLI login."
 ---
 
-# AI Model Provider Settings — design
+# AI Model Provider Settings
 
-The build plan for the **Settings → Models** experience. Two provider *kinds* with deliberately
-**different** layouts, plus a missing icon to fix. This doc is the actionable spec; it names the
-files to touch and the seams, so the implementation can proceed as a focused, testable pass.
+The **Settings → Models** page is the user's single destination for wiring AI into Memex — adding API keys, enabling specific models, and connecting CLI-based providers like Claude Code and GitHub Copilot. This document is the actionable implementation spec: it identifies the exact files to touch, the behavioral seams to introduce, and the testing approach.
 
-## Goal (the spec)
+---
 
-| Provider kind | Examples | Settings layout |
+## Two provider kinds, two different UIs
+
+The fundamental insight driving this design: API providers and CLI providers need **completely different layouts**. Rendering both as a key/endpoint form is wrong.
+
+| Provider kind | Examples | What the card shows |
 |---|---|---|
-| **API** (bring-your-own-key) | Azure AI Foundry, Azure OpenAI, Anthropic, OpenAI | endpoint/key form **+ a fetched list of models** to enable/select |
-| **CLI** (co-hosted, subscription) | Claude Code, GitHub Copilot | **no model list** — show **login status**; if not logged in, a button that **delegates to the CLI's native login** |
+| **API** (bring-your-own-key) | Azure AI Foundry, Azure OpenAI, Anthropic, OpenAI | Endpoint / key form **+ a fetched list of models** to enable |
+| **CLI** (co-hosted, subscription) | Claude Code, GitHub Copilot | **Login status** — no key form, no model list; a button that delegates to the CLI's own auth flow |
 
-Plus: the **AI settings tab is missing its icon**, and today **every provider renders the same**
-form regardless of kind.
+Additionally: the AI settings tab is currently **missing its icon**, which this spec fixes.
+
+---
 
 ## Current state
 
-- The catalog chain registers all providers (`MemexConfiguration` →
-  `.AddAnthropic().AddAzureFoundry().AddAzureOpenAI().AddOpenAI().AddClaudeCode().AddCopilot()`),
-  gated by the `Features:Ai:Providers:*` / `Features:Ai:Clis:*` flags.
-- The Models tab (`memex/Memex.Portal.Shared/Settings/ModelsSettingsTab.cs`,
-  `BuildModelsContent`) renders a single BYO-key form per provider. **Keyless CLI providers are
-  currently filtered out** of that form — so Claude Code / Copilot have no UI at all.
-- Per-user credentials are `ModelProvider` nodes (`ModelProviderService`,
-  `ModelProviderNodeType`), keys encrypted with `Ai:KeyProtection:MasterKey` (now in Key Vault).
-- The CLI binaries ship in the `memex-portal-ai` image; the per-user **Connect** flow is only
-  scaffolded (`src/MeshWeaver.AI/Connect/ConnectModels.cs`) — no session manager, no
-  login-status check, no UI.
+Before building, understand what is already wired:
+
+- The catalog chain registers all providers in `MemexConfiguration` via `.AddAnthropic().AddAzureFoundry().AddAzureOpenAI().AddOpenAI().AddClaudeCode().AddCopilot()`, each gated by its `Features:Ai:Providers:*` / `Features:Ai:Clis:*` flag.
+- `memex/Memex.Portal.Shared/Settings/ModelsSettingsTab.cs` (`BuildModelsContent`) renders a **single BYO-key form** for every provider. CLI providers (Claude Code, Copilot) are currently **filtered out** — they show no UI at all.
+- Per-user credentials live in `ModelProvider` mesh nodes (`ModelProviderService`, `ModelProviderNodeType`), with keys encrypted via `Ai:KeyProtection:MasterKey` (sourced from Key Vault).
+- The CLI connect flow is scaffolded in `src/MeshWeaver.AI/Connect/ConnectModels.cs` but is not yet implemented — no session manager, no login-status check, no UI.
+
+---
 
 ## Design
 
-### 1. A provider *kind* seam
-Expose, on the provider catalog entry, an explicit `ProviderKind` (`Api` | `Cli`) instead of the
-implicit "has a key form" test. CLI providers (`AddClaudeCode`, `AddCopilot`) report `Cli`; the
-rest `Api`. `ModelsSettingsTab` switches the rendered card on `ProviderKind` — this is the one
-branch that drives the whole different-layout requirement.
+### 1  Introduce a `ProviderKind` seam
 
-### 2. API providers — key/endpoint form + model list
-- Render the existing endpoint/key form (Azure providers also take an **endpoint**; Anthropic/OpenAI
-  just a key).
-- After a key is saved + validated, **fetch the provider's model list** (the provider's
-  `IChatClientCatalog`/list-models call) and show them as selectable rows so the user enables the
-  models they want. Persist the selection on the `ModelProvider` node.
-- This is the only kind that produces a model list (per the spec, CC/GH do **not**).
+Add an explicit `ProviderKind` enum (`Api` | `Cli`) to the provider catalog entry instead of relying on the implicit "has a key form" test. CLI providers (`AddClaudeCode`, `AddCopilot`) report `Cli`; everything else reports `Api`. `ModelsSettingsTab` then switches the rendered card on `ProviderKind` — this single branch drives the entire different-layout requirement.
 
-### 3. CLI providers — login status + delegate to the CLI
-No key form, **no model list**. The card shows:
-- **Logged in** → a green "Connected as …" state + a "Re-connect / Log out" affordance.
-- **Not logged in** → a **"Connect / Log in"** button that drives the CLI's native login.
+### 2  API providers — key/endpoint form + model list
 
-Mechanism (Phase 1, to build under `src/MeshWeaver.AI/Connect/`):
-- **`IConnectStrategy`** per CLI. `ClaudeConnectStrategy`: spawn `claude` under the user's
-  `CLAUDE_CONFIG_DIR`, **check login status** (probe the CLI / its `.credentials.json`), and if
-  absent run `claude setup-token` (or `/login`), scrape the auth URL → surface it → capture the
-  pasted code/token. `CopilotConnectStrategy`: the Copilot SDK device-flow (surface the device URL +
-  code, poll `GetAuthStatusAsync`). Reuse the subprocess shape from `MeshPlugin`/`KernelExecutor`
-  (`RedirectStandardInput`); `Observable.FromAsync` only at the process boundary.
-- **`ConnectSessionManager`** — a mesh-scoped singleton holding the live `Process` between
-  "show URL" and "paste code", per user (instance `ConcurrentDictionary`, **never static**), 5-min
-  timeout + `Kill(entireProcessTree:true)`.
-- **Login-status check** is the cheap, always-run part the spec asks for: each card calls
-  `strategy.IsLoggedIn(userConfigDir)` on render; only the not-logged-in branch shows the login button.
-- Captured token → `ModelProviderService.CreateProvider(ownerPath, "ClaudeCode"|"Copilot", token)`
-  (already `Protect()`s the key); re-connect = `RotateKey`. The CLI agent factory already injects it.
+- Render the existing endpoint/key form. Azure providers also take an **endpoint**; Anthropic and OpenAI take only a key.
+- After a key is saved and validated, **fetch the provider's model list** (via its `IChatClientCatalog` list-models call) and show the models as selectable rows so the user enables the ones they want. Persist the selection on the `ModelProvider` node.
+- API providers are the **only** kind that produce a model list — CLI providers deliberately do not.
 
-### 4. The missing icon
-The AI settings tab is registered without an `Icon`. Add one where the Settings tabs are declared
-(the AI/Models tab registration in the portal settings) — e.g. a FluentUI `Sparkle`/`Bot` icon —
-consistent with the other tabs' icon usage.
+### 3  CLI providers — login status + delegate to the CLI
 
-## UI — inline login (chosen)
+No key form. No model list. The card shows exactly two states:
 
-The CLI login expands **inside the provider card** (no modal, no panel) — lightest weight, stays in
-context. The card is a small state machine.
+- **Logged in** → green "Connected as …" indicator + a "Re-connect / Log out" affordance.
+- **Not logged in** → a **"Connect / Log in"** button that drives the CLI's native auth flow.
 
-### Models tab
+The backend lives in `src/MeshWeaver.AI/Connect/`:
+
+**`IConnectStrategy`** — one implementation per CLI.
+- `ClaudeConnectStrategy`: spawns `claude` under the user's `CLAUDE_CONFIG_DIR`, probes the CLI (or its `.credentials.json`) for login status, and if absent runs `claude setup-token` (or `/login`), scrapes the auth URL, surfaces it, and captures the pasted code/token.
+- `CopilotConnectStrategy`: runs the Copilot SDK device-flow — surfaces the device URL + code, polls `GetAuthStatusAsync`.
+- Both reuse the subprocess shape from `MeshPlugin`/`KernelExecutor` (`RedirectStandardInput`); `Observable.FromAsync` is used only at the process boundary.
+
+**`ConnectSessionManager`** — a mesh-scoped singleton that holds the live `Process` between "show URL" and "paste code", keyed per user (instance `ConcurrentDictionary`, **never static**), with a 5-minute timeout that calls `Kill(entireProcessTree:true)`.
+
+**Login-status check** is the cheap, always-on part: each card calls `strategy.IsLoggedIn(userConfigDir)` on render. Only the not-logged-in branch shows the login button.
+
+**On token capture** → `ModelProviderService.CreateProvider(ownerPath, "ClaudeCode"|"Copilot", token)` (already calls `Protect()` on the key); re-connect uses `RotateKey`. The CLI agent factory already injects this.
+
+### 4  Fix the missing icon
+
+The AI settings tab is registered without an `Icon`. Add one where the Settings tabs are declared (the AI/Models tab registration in the portal settings) — a FluentUI `Sparkle` or `Bot` icon, consistent with other tabs.
+
+---
+
+## UI — inline login
+
+The CLI login expands **inside the provider card** — no modal, no side panel. This is the lightest-weight option and keeps the user in context. The card is a small state machine.
+
+### Models tab layout
+
 ```
 Settings ▸ ✦ AI / Models
 
@@ -103,8 +100,9 @@ CLI providers — log in with your subscription (no key, no model list)
 └────────────────────────────────────────────────────────────┘
 ```
 
-### CLI card states
-**Connecting — Claude (paste-a-code):**
+### CLI card — connecting states
+
+**Claude Code (paste-a-code flow):**
 ```
 ┌─ Claude Code ──────────────── [CLI] ┐
 │ ● Connecting…                       │
@@ -115,7 +113,8 @@ CLI providers — log in with your subscription (no key, no model list)
 │    ⏳ waiting for code… (4:58)       │
 └──────────────────────────────────────┘
 ```
-**Connecting — Copilot (device code, auto-poll, nothing to paste):**
+
+**GitHub Copilot (device code, auto-poll — nothing to paste):**
 ```
 ┌─ GitHub Copilot ───────────── [CLI] ┐
 │ ● Connecting…  enter code at         │
@@ -126,45 +125,88 @@ CLI providers — log in with your subscription (no key, no model list)
 │   ⏳ auto-checking…                   │
 └──────────────────────────────────────┘
 ```
-**Connected:** `✓ Connected as <name>   [ Disconnect ]`  ·  **Error/Expired:** red line + `[ Retry ]`.
+
+**Connected:** `✓ Connected as <name>   [ Disconnect ]` · **Error/Expired:** red status line + `[ Retry ]`
 
 ### Inline state machine
+
 ```
 NotConnected ──[Connect]──▶ Connecting ──(code submitted / device poll OK)──▶ Connected
      ▲                          │  ▲                                              │
      └──────[Disconnect]────────┘  └──(5-min timeout · Cancel · auth error)──▶ Error/Expired
                                             └──────────────[Retry]──────────────────┘
 ```
-- **Connecting** is driven by `ConnectSessionManager` + the provider's `IConnectStrategy`: it holds
-  the live CLI `Process`, exposes the auth URL (+ device code for Copilot), and either accepts a
-  pasted code (Claude, `RequiresPastedCode`) or polls auth status (Copilot). 5-min timeout disposes
-  the process (`Kill(entireProcessTree:true)`).
-- **On success** the strategy hands back the token → `ModelProviderService.CreateProvider/RotateKey`
-  (encrypted via the Key-Vault-sourced master key) → the card flips to **Connected** reactively.
-- The card renders the right inline body off `strategy.RequiresPastedCode` (paste field vs device
-  code) and `IsLoggedIn(userConfigDir)` (Connected vs NotConnected on first render).
+
+- **Connecting** is driven by `ConnectSessionManager` + the provider's `IConnectStrategy`. It holds the live CLI `Process`, exposes the auth URL (and, for Copilot, the device code), and either accepts a pasted code (`RequiresPastedCode = true`) or polls auth status. A 5-minute timeout disposes the process via `Kill(entireProcessTree:true)`.
+- **On success** the strategy returns the token → `ModelProviderService.CreateProvider/RotateKey` (encrypted with the Key-Vault master key) → the card flips to **Connected** reactively.
+- The card body is chosen off `strategy.RequiresPastedCode` (paste field vs. device code) and `IsLoggedIn(userConfigDir)` (Connected vs. NotConnected on first render).
+
+---
 
 ## Files to touch
-- `memex/Memex.Portal.Shared/Settings/ModelsSettingsTab.cs` — switch on `ProviderKind`; API card
-  (form + model list), CLI card (login status + connect button); fix the tab icon.
-- AI catalog entries / `src/MeshWeaver.AI.ClaudeCode/ClaudeCodeExtensions.cs` +
-  `src/MeshWeaver.AI.Copilot/*` — expose `ProviderKind = Cli` + an `IConnectStrategy`.
-- `src/MeshWeaver.AI/Connect/` (new) — `ConnectSessionManager`, `IConnectStrategy`,
-  `ClaudeConnectStrategy`; `src/MeshWeaver.AI.Copilot/CopilotConnectStrategy.cs`.
-- `Models/ModelProviderService.cs` — already supports create/rotate; add an `IsCli` projection if
-  needed for the list-vs-connect filter.
-- `MemexConfiguration.cs` — register `ConnectSessionManager` + the strategies.
 
-## Testing (no mocks; `MonolithMeshTestBase` / `AITestBase`)
-- `ModelsSettingsTab` renders a **model list** for an API provider and a **connect button** (no list)
-  for a CLI provider (assert on the control tree).
-- A committed **fake CLI** (prints an auth URL, reads stdin, prints a token) drives
-  `IConnectStrategy`: `IsLoggedIn` false → connect → captures the token → `ModelProvider` written with
-  an `enc:`-tagged key that round-trips through `ChatClientCredentialResolver`.
-- Login-status: with the fake CLI "logged in", the card renders the connected state and **no** login
-  button. Real-CLI E2E gated by `CLAUDE_CONNECT_E2E=1` (developer-run only).
+| File | Change |
+|---|---|
+| `memex/Memex.Portal.Shared/Settings/ModelsSettingsTab.cs` | Switch on `ProviderKind`; render API card (form + model list) or CLI card (login status + connect button); fix the tab icon |
+| `src/MeshWeaver.AI.ClaudeCode/ClaudeCodeExtensions.cs` | Expose `ProviderKind = Cli` + `IConnectStrategy` |
+| `src/MeshWeaver.AI.Copilot/*` | Same — `ProviderKind = Cli` + `CopilotConnectStrategy` |
+| `src/MeshWeaver.AI/Connect/` (new) | `ConnectSessionManager`, `IConnectStrategy`, `ClaudeConnectStrategy` |
+| `memex/Memex.Portal.Shared/Models/` | `IConnectTokenSink` and related connect models |
+| `memex/Memex.Portal.Shared/MemexConfiguration.cs` | Register `ConnectSessionManager` + the strategies |
+
+---
+
+## Testing
+
+> No mocks. Use `MonolithMeshTestBase` / `AITestBase`.
+
+Three test scenarios:
+
+1. **Rendering** — `ModelsSettingsTab` renders a model list for an API provider and a connect button (no list) for a CLI provider. Assert on the control tree.
+
+2. **Connect flow** — a committed **fake CLI** (prints an auth URL, reads stdin, prints a token) drives `IConnectStrategy`: `IsLoggedIn` returns false → connect → strategy captures the token → a `ModelProvider` node is written with an `enc:`-tagged key that round-trips through `ChatClientCredentialResolver`.
+
+3. **Login status** — with the fake CLI reporting "logged in", the card renders the connected state and shows **no** login button. Real-CLI end-to-end is gated by `CLAUDE_CONNECT_E2E=1` (developer-run only).
+
+---
 
 ## Scope note
-This is **Phase 1 (per-user CLI Connect) + the Models-tab rework** — a focused build (UI + the CLI
-login backend), then a clean image rebuild + redeploy. The icon + the `ProviderKind` layout split are
-the quick visible wins; the CLI login backend is the substantive part.
+
+This is **Phase 1** (per-user CLI Connect + Models-tab rework) — a focused build covering the UI and the CLI login backend, followed by a clean image rebuild and redeploy. The icon fix and `ProviderKind` layout split are the quick visible wins; the CLI login backend (`ConnectSessionManager` + strategies) is the substantive part.
+
+---
+
+## Model picker: provider-first selection and empty state
+
+Providers and models are mesh nodes discovered via a `nodeType:` fan-out query — not a flat config list. The picker lists providers first; selecting one loads only that provider's models. When nothing is configured it routes the user directly to Settings.
+
+### Providers and models are nodes
+
+- A provider is a `ModelProvider` node; its models are child `LanguageModel` nodes.
+- Canonical path: `{space|user}/_Provider/{Provider}/{modelId}` — for example, `Systemorph/_Provider/AzureFoundry/gpt-5` or `rbuergi/_Provider/ClaudeCode`. `_Provider` is the satellite segment used consistently across code and tests.
+- The built-in system catalog at `_Provider/{provider}/{model}` is served as real, queryable `MeshNode`s by `StaticNodePartitionStorageProvider` (`BuiltInLanguageModelProvider`), so configuration values (`AzureFoundry:Models`) materialise as nodes — there is no parallel, non-mesh path.
+
+### Provider-first, lazy model load
+
+The picker does not eager-load every model from every space. It operates in two steps:
+
+1. **List providers** — fan-out `nodeType:ModelProvider scope:descendants` over root `_Provider` and every space the user can read. Listing providers (not models) is cheap, making it safe to broaden across spaces without loading the full model universe.
+
+2. **Select a provider → load its models** — the provider's path is appended to `{user}/_Provider/_Selection.SelectedProviderPaths`; the selected-path query `namespace:{providerPath} nodeType:LanguageModel scope:selfAndDescendants` (`AgentPickerProjection`) loads just that provider's models.
+
+`_Selection` is the per-user selection store. It is seeded empty at onboarding, so the `RoutingGrain NotFound: {user}/_Provider/_Selection` read no longer occurs against a missing node.
+
+### Empty state → Settings
+
+When the provider fan-out returns nothing (no provider configured), the model picker does not render an empty dropdown. Instead it shows an actionable empty state: **"No model provider configured"** with a link that navigates to **Settings → Models** (`action://settings/models` / the `OnActionLink` hook) where the user can add an API key, connect a CLI, or select an org provider.
+
+### Org-default provider
+
+An admin may pre-create an org provider node — `Systemorph/_Provider/AzureFoundry` with model children sourced from the `s-meshweaver` Foundry resource (endpoint `https://s-meshweaver.services.ai.azure.com/models`, key in Key Vault) — that every user with read access can select. This complements per-user BYO-key and Connect flows; it does not replace the empty-state link. `ModelProvider` is a **creatable** node type (search-hidden), so it can be authored in the UI by anyone with `Permission.Api`, not only through configuration.
+
+### Managing a provider's models
+
+Selecting a provider in Settings → Models lists its child `LanguageModel` nodes, where the user can add, remove, or enable individual models (CRUD on `{provider}/{modelId}` nodes).
+
+- **Fetch from provider** — where the provider exposes a list API (Azure Foundry / Azure OpenAI deployment list, OpenAI / Anthropic list-models), a "Fetch models" action queries it and offers the returned IDs for import as child `LanguageModel` nodes, so the catalog does not need to be hand-typed.
+- **Refresh** — re-runs the fetch and reconciles against the current children (adds newly-deployed models, flags dropped ones). Manual button now; can become periodic later.

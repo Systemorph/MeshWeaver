@@ -1,42 +1,50 @@
 ---
 Name: Organizing Buttons in a Toolbar
 Category: Documentation
-Description: Group action buttons horizontally or vertically
+Description: Group action buttons in a horizontal or vertical strip for page headers, action bars, and form footers
 Icon: /static/DocContent/GUI/ContainerControl/Toolbar/icon.svg
 ---
 
-The Toolbar control groups action buttons in a horizontal (default) or vertical layout, typically used for page headers and action bars.
+The **Toolbar** control arranges action buttons into a compact horizontal (default) or vertical strip. It is the standard building block for page headers, action bars, and form footers — anywhere you need a tight, consistent row of buttons without writing layout code by hand.
+
+---
 
 # Basic Usage
 
+The simplest toolbar wraps a few buttons and renders them side by side:
+
 ```csharp --render ToolbarBasic --show-code
-Controls.Toolbar                            // Create a toolbar
-    .WithView(Controls.Button("New"))       // First action
-    .WithView(Controls.Button("Edit"))      // Second action
-    .WithView(Controls.Button("Delete"))    // Third action
+Controls.Toolbar
+    .WithView(Controls.Button("New"))
+    .WithView(Controls.Button("Edit"))
+    .WithView(Controls.Button("Delete"))
 ```
 
 ---
 
 # Vertical Toolbar
 
+Pass `Orientation.Vertical` to stack buttons top-to-bottom instead — useful for side-panels and narrow column layouts:
+
 ```csharp --render ToolbarVertical --show-code
-Controls.Toolbar                                    // Create a toolbar
-    .WithOrientation(Orientation.Vertical)          // Stack buttons vertically
-    .WithView(Controls.Button("New"))               // Top button
-    .WithView(Controls.Button("Edit"))              // Middle button
-    .WithView(Controls.Button("Delete"))            // Bottom button
+Controls.Toolbar
+    .WithOrientation(Orientation.Vertical)
+    .WithView(Controls.Button("New"))
+    .WithView(Controls.Button("Edit"))
+    .WithView(Controls.Button("Delete"))
 ```
 
 ---
 
 # Toolbar with Icons
 
+Icon-only buttons keep toolbars compact. Combine an empty label with `WithIconStart` to replace text with a symbol:
+
 ```csharp --render ToolbarIcons --show-code
-Controls.Toolbar                                                    // Create a toolbar
-    .WithView(Controls.Button("").WithIconStart(FluentIcons.Add())) // Icon-only button
-    .WithView(Controls.Button("").WithIconStart(FluentIcons.Edit()))// Icon-only button
-    .WithView(Controls.Button("").WithIconStart(FluentIcons.Delete()))// Icon-only button
+Controls.Toolbar
+    .WithView(Controls.Button("").WithIconStart(FluentIcons.Add()))
+    .WithView(Controls.Button("").WithIconStart(FluentIcons.Edit()))
+    .WithView(Controls.Button("").WithIconStart(FluentIcons.Delete()))
 ```
 
 ---
@@ -45,54 +53,56 @@ Controls.Toolbar                                                    // Create a 
 
 ## Page Header Toolbar
 
+Place a toolbar on the right side of a page title by combining it with a horizontal `Stack` that distributes space between the two sides:
+
 ```csharp --render ToolbarPageHeader --show-code
-Controls.Stack                                          // Outer container
-    .WithOrientation(Orientation.Horizontal)            // Horizontal layout
-    .WithHorizontalAlignment("space-between")           // Space between title and toolbar
-    .WithView(Controls.Html("<h2>Users</h2>"))          // Page title
+Controls.Stack
+    .WithOrientation(Orientation.Horizontal)
+    .WithHorizontalAlignment("space-between")
+    .WithView(Controls.Html("<h2>Users</h2>"))
     .WithView(
-        Controls.Toolbar                                // Action buttons
-            .WithView(Controls.Button("Add User"))      // Primary action
-            .WithView(Controls.Button("Export"))        // Secondary action
+        Controls.Toolbar
+            .WithView(Controls.Button("Add User"))
+            .WithView(Controls.Button("Export"))
     )
 ```
-
----
 
 ## Form Action Bar
 
+Anchor the Save / Cancel buttons to the bottom of a form by nesting a toolbar inside a vertical stack:
+
 ```csharp --render ToolbarFormActions --show-code
-Controls.Stack                                          // Form container
-    .WithVerticalGap("16px")                            // Space between form and buttons
-    .WithView(Controls.Label("Form content goes here")) // Placeholder for form
+Controls.Stack
+    .WithVerticalGap("16px")
+    .WithView(Controls.Label("Form content goes here"))
     .WithView(
-        Controls.Toolbar                                // Action buttons at bottom
-            .WithView(Controls.Button("Cancel"))        // Cancel action
-            .WithView(Controls.Button("Save"))          // Save action
+        Controls.Toolbar
+            .WithView(Controls.Button("Cancel"))
+            .WithView(Controls.Button("Save"))
     )
 ```
 
 ---
 
-# Configuration Methods
+# Configuration Reference
 
-| Method | Purpose | Example |
-|--------|---------|---------|
-| `.WithOrientation(orientation)` | Button layout direction | `Orientation.Horizontal`, `Orientation.Vertical` |
+| Method | Purpose | Values |
+|---|---|---|
+| `.WithOrientation(orientation)` | Control the button layout direction | `Orientation.Horizontal` (default), `Orientation.Vertical` |
 
 ---
 
 # Skin Properties
 
-The `ToolbarSkin` defines:
+`ToolbarSkin` exposes one layout property:
 
 | Property | Type | Default |
-|----------|------|---------|
+|---|---|---|
 | `Orientation` | `object?` | `Orientation.Horizontal` |
 
 ---
 
 # See Also
 
-- [Container Control](../../ContainerControl) - Overview of all containers
-- [Stack Control](../Stack) - General-purpose layout container
+- [Container Control](../../ContainerControl) — Overview of all container controls
+- [Stack Control](../Stack) — General-purpose layout container for custom arrangements

@@ -1,62 +1,64 @@
 ---
 Name: Activity Control Plane
 Category: Documentation
-Description: The default pattern — every operation on an activity (start, cancel, retry, transition) is a property update on the activity's content, observed by the owning hub.
+Description: The default pattern for every operation on an activity — start, cancel, retry, transition — is a property update on the activity's content, observed by the owning hub.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
 ---
 
-# The default pattern: drive activities through their content
+# Activity Control Plane
 
-> ## 🚨 Absolute rule
+In MeshWeaver, **every operation on an activity is a patch on the activity's content** — not a separate message type. The owning hub watches its own `MeshNodeReference` stream and reacts to property changes. This is the canonical pattern for any node type that has state-machine semantics: `Activity`, and any custom `NodeType` you build.
+
+If you find yourself reaching for `Cancel<X>Request`, `Pause<X>Request`, `Retry<X>Request`, or any verb-shaped message, **stop and use a property instead**.
+
+> ## 🚨 Absolute rule — long-running work belongs on its own hub
 >
-> **Every long-running operation runs on an Activity hub.**
-> Not on the mesh hub, not on the per-NodeType hub, not on a singleton service's
-> captured `IMessageHub`. The mesh hub must stay responsive — if it spends
-> seconds running Roslyn, scoring queries, or waiting for an HTTP call, it
-> blocks routing for every other delivery in the silo.
+> **Every long-running operation runs on an Activity hub.** Not on the mesh hub, not on the per-NodeType hub, not on a singleton service's captured `IMessageHub`.
 >
-> The activity hub is the **execution sandbox**: created by the owner when it
-> needs to launch work, holding the work's state in its own MeshNode
-> (`ActivityLog`), and writing back to the owner via the synchronization
-> protocol when done. The owner stays responsive throughout — it watches its
-> own MeshNode for updates and otherwise serves traffic.
+> The mesh hub must stay responsive. If it spends seconds running Roslyn, scoring queries, or waiting for HTTP, it blocks routing for every other delivery in the silo.
+>
+> The activity hub is the **execution sandbox**: created by the owner when work starts, holding the work's state in its own `ActivityLog` MeshNode, and writing results back to the owner via the synchronization protocol when done. The owner stays responsive throughout — watching its own MeshNode for updates while serving all other traffic.
 
-In MeshWeaver, **every operation on an activity is a patch on the activity's content**, not a separate message type. The owning hub watches its own `MeshNodeReference` stream and reacts to property changes. This is the canonical pattern for any node type that has a state machine — Activity, but also any custom NodeType you build.
-
-If you find yourself reaching for `Cancel<ThingHappening>Request`, `Pause<ThingHappening>Request`, `Retry<ThingHappening>Request`, or any verb-based message type, **stop and use a property instead**.
+---
 
 ## Why this is the default
 
-- **Single API surface.** Callers (UI, MCP agents, hub handlers) don't memorise message types — they patch content. The same code that renders the activity reads the same properties that drive it.
-- **State and intent are explicit and inspectable.** Anyone watching the stream can see "the user wants this cancelled" before the cancellation has actually happened (and observe the gap if cancellation is slow or stuck).
-- **Idempotent and replayable.** Patching `RequestedStatus = Cancelled` twice is a no-op. The owning hub watches `DistinctUntilChanged` and only reacts on transitions.
-- **Race-free.** The owning hub is the only writer for `Status` and the only consumer of `RequestedStatus`. The user-side and the worker-side never collide.
-- **No type-registry sprawl.** Each new "verb" doesn't need a new `[Serializable]` record + handler + type registration.
+| Benefit | Explanation |
+|---|---|
+| **Single API surface** | Callers (UI, MCP agents, hub handlers) don't memorise message types — they patch content. The same code that renders an activity reads the same properties that drive it. |
+| **Explicit, inspectable intent** | Anyone watching the stream can see "the user wants this cancelled" before cancellation has actually happened, and observe the gap if it's slow or stuck. |
+| **Idempotent and replayable** | Patching `RequestedStatus = Cancelled` twice is a no-op. The owning hub watches `DistinctUntilChanged` and only reacts on real transitions. |
+| **Race-free** | The owning hub is the sole writer for `Status` and the sole consumer of `RequestedStatus`. User-side and worker-side never collide. |
+| **No type-registry sprawl** | Each new "verb" doesn't need a new `[Serializable]` record, handler registration, and type registration. |
 
-## Properties on `ActivityLog`
+---
+
+## The `ActivityLog` content record
 
 ```csharp
 public record ActivityLog(string Category)
 {
-    public ActivityStatus Status { get; init; }            // What's happening
+    public ActivityStatus Status { get; init; }            // What's actually happening
     public ActivityStatus? RequestedStatus { get; init; }  // What the user wants
     public ImmutableList<LogMessage> Messages { get; init; } = [];
     // ... other fields
 }
 ```
 
-- `Status` is **read-only from the user's perspective**. The owning hub writes it as the activity's actual state changes (Running → Succeeded / Failed / Cancelled).
-- `RequestedStatus` is the **control input**. The user (or another hub, or an MCP agent) patches this to drive the activity into a different state.
+- `Status` is **read-only from the user's perspective**. Only the owning hub writes it, as the activity transitions through `Running → Succeeded / Failed / Cancelled`.
+- `RequestedStatus` is the **control input**. Users, other hubs, and MCP agents patch this to drive the activity into a new state.
 
-## Cancelling a script (the canonical example)
+---
 
-The kernel-hosted activity is the working example shipped today. The user clicks "Cancel" → the click handler does:
+## Cancelling a script — the canonical example
+
+When a user clicks "Cancel", the click handler does exactly one thing:
 
 ```csharp
 ctx.Host.Hub.CancelActivity(ctx.Host.Hub.Address.ToString());
 ```
 
-The activity hub's initialization subscribes to its own `MeshNodeReference` and watches `RequestedStatus`. On the transition to `Cancelled`, it triggers the underlying cancellation (in the kernel case: dispatches `CancelScriptRequest` to the executor child hub — an internal message, not part of the public API). The script's `CancellationToken` trips, `OperationCanceledException` flows back through the executor's normal completion path, and `Status` flips to `Cancelled`.
+The activity hub's initialization subscribes to its own `MeshNodeReference` stream and watches `RequestedStatus`. On a transition to `Cancelled`, it triggers the underlying cancellation — in the kernel case, dispatching `CancelScriptRequest` to the executor child hub (an internal message, not part of the public API). The script's `CancellationToken` trips, `OperationCanceledException` flows through the executor's normal completion path, and `Status` flips to `Cancelled`.
 
 ```mermaid
 sequenceDiagram
@@ -72,24 +74,24 @@ sequenceDiagram
     Activity-->>User: stream ticks with terminal state
 ```
 
-Notice that **the user never posts a "cancel" message**. They just patch the content.
+Notice that **the user never posts a "cancel" message** — they just patch the content.
 
-## Apply this pattern to your own NodeTypes
+---
 
-When you build a custom NodeType that has any state-machine semantics (a long-running job, a transitional resource, anything with start / pause / resume / retry / cancel), follow the same shape:
+## Applying the pattern to your own NodeTypes
 
-1. **Define your content record with two paired fields**: `Status` (current actual state) and `RequestedStatus` (or `RequestedAction`, `RequestedTransition`, etc. — the control surface).
-2. **In your hub configuration's `WithInitialization`**, subscribe to the hub's own `MeshNodeReference` stream and react to changes in the requested fields. Use `.DistinctUntilChanged()` so you only fire on real transitions.
-3. **Your hub is the only writer for `Status`.** Users never patch it — they only patch `RequestedStatus`. The hub reads `RequestedStatus`, does the work, and writes the resulting `Status`.
-4. **No new request/response message types.** Don't add `Cancel<X>Request`, `Pause<X>Request`, etc. The control plane is the content.
+When you build a custom NodeType with state-machine semantics — a long-running job, a transitional resource, anything with start / pause / resume / retry / cancel — follow this shape:
 
-Skeleton:
+1. **Define your content record with two paired fields**: `Status` (current actual state) and `RequestedStatus` (or `RequestedAction`, `RequestedTransition` — your control surface).
+2. **In `WithInitialization`**, subscribe to the hub's own `MeshNodeReference` stream and react to changes in the requested field. Use `.DistinctUntilChanged()` so you only fire on real transitions.
+3. **Your hub is the sole writer for `Status`**. Users never patch it directly — they patch `RequestedStatus`. The hub reads the request, does the work, and writes the resulting `Status`.
+4. **No new request/response message types.** Don't add `Cancel<X>Request`, `Pause<X>Request`, etc. The control plane *is* the content.
 
 ```csharp
 public record JobContent(string Category) : ActivityLog(Category)
 {
     // ActivityLog already has Status + RequestedStatus + Messages.
-    // Add domain fields here.
+    // Add your domain fields here.
     public string? InputPath { get; init; }
     public string? OutputPath { get; init; }
 }
@@ -113,21 +115,13 @@ public static class JobNodeType
 }
 ```
 
-The shared `IMessageHub.WatchControlPlane(...)` extension lives in
-`MeshWeaver.Mesh.Contract` (`ActivityControlPlaneExtensions.cs`) — it
-projects the hub's own `MeshNodeReference` stream down to the
-`ActivityLog.RequestedStatus` field, applies `DistinctUntilChanged`,
-and forwards each transition to your handler. Faulted subscriptions
-log to the optional `ILogger` argument (or to the
-`MeshWeaver.ActivityControlPlane` category resolved from the hub's
-service provider) so a broken control plane doesn't disappear silently.
+`hub.WatchControlPlane(...)` lives in `MeshWeaver.Mesh.Contract` (`ActivityControlPlaneExtensions.cs`). It projects the hub's own `MeshNodeReference` stream down to `ActivityLog.RequestedStatus`, applies `DistinctUntilChanged`, and forwards each transition to your handler. Faulted subscriptions log to the optional `ILogger` argument (or the `MeshWeaver.ActivityControlPlane` log category) so a broken control plane never disappears silently.
 
-## Generalising: `WatchSubmission` for arbitrary "needs work" triggers
+---
 
-`WatchControlPlane` is the right helper when the trigger is a single status field
-(`RequestedStatus`). Many job-orchestration cases need a more general predicate
-— e.g. a thread hub dispatches a new agent round whenever it has unprocessed
-user messages and isn't already executing. Same shape, broader trigger:
+## `WatchSubmission` — for arbitrary "needs work" triggers
+
+`WatchControlPlane` is right when the trigger is a single status field (`RequestedStatus`). Many orchestration cases need a broader predicate — for example, a thread hub that dispatches a new agent round whenever it has unprocessed user messages and isn't already executing:
 
 ```csharp
 hub.WatchSubmission(
@@ -139,8 +133,7 @@ hub.WatchSubmission(
                           .SelectMany(_ => DispatchToExec(hub, n)));
 ```
 
-Lives next to `WatchControlPlane` in `MeshWeaver.Mesh.Contract`
-(`ActivityControlPlaneExtensions.cs`). Internally:
+`WatchSubmission` lives next to `WatchControlPlane` in `MeshWeaver.Mesh.Contract`. Internally it is:
 
 ```csharp
 hub.GetWorkspace().GetMeshNodeStream()
@@ -150,54 +143,32 @@ hub.GetWorkspace().GetMeshNodeStream()
     .Subscribe(_ => { }, ex => logger?.LogError(...));
 ```
 
-### What this replaces
+### What `WatchSubmission` replaces
 
-If you find yourself writing **any** of these in a watcher:
+If you find yourself writing any of these patterns inside a watcher, reach for `WatchSubmission` instead:
 
-- An `Interlocked.CompareExchange` "dispatching" flag held across a reentrant
-  emission (`our own write re-emits and we mustn't re-fire`).
-- `Throttle(50ms)` to coalesce rapid patches into one round.
-- `AsyncLocal` / `CircuitContext` / hub-as-user fallbacks because the watcher
-  fires on a Throttle scheduler hop.
-- Manual ordering of "create satellite cell then update the parent's collection"
-  inside `Subscribe` callbacks.
+- An `Interlocked.CompareExchange` "dispatching" flag held across a reentrant emission.
+- `.Throttle(50ms)` to coalesce rapid patches into one round.
+- `AsyncLocal` / `CircuitContext` / hub-as-user fallbacks because the watcher fires on a throttle scheduler hop.
+- Manual ordering of "create satellite cell then update the parent's collection" inside `Subscribe` callbacks.
 
-— **none of that is needed**. `DistinctUntilChanged` on a fingerprint replaces
-the dispatching flag (the same state can't fire twice). The chain runs in the
-hub's natural scheduler so AsyncLocal flows. Multi-step orchestration is an
-`IObservable<Unit>` chain (`Concat` / `Zip` / `SelectMany`), no mutable flags.
+`DistinctUntilChanged` on a fingerprint replaces the dispatching flag — the same state can't fire twice. The chain runs in the hub's natural scheduler so `AsyncLocal` flows. Multi-step orchestration is an `IObservable<Unit>` chain (`Concat` / `Zip` / `SelectMany`), with no mutable flags.
 
-### Idempotent triggers — `Requested<X>` lives ON THE NODE, not in memory
+---
+
+## Idempotent triggers — state lives on the node, never in memory
 
 > ## 🚨 Absolute rule
 >
-> **Single-flight an action via a paired `Requested<X>` field on the owning
-> node, never via an in-memory `Interlocked` gate.** Each hub owns its OWN
-> state, on its OWN node. The watcher writes the request through
-> `stream.Update`; the claim clears it in the same atomic update that
-> transitions `Status`. No external state coordinates the dispatch.
+> **Single-flight an action via a paired `Requested<X>` field on the owning node, never via an in-memory `Interlocked` gate.** Each hub owns its OWN state, on its OWN node. The watcher writes the request through `stream.Update`; the claim clears it in the same atomic update that transitions `Status`. No external state coordinates the dispatch.
 
-Watchers that fire a one-shot trigger from an observable stream must single-flight.
-The wrong way is an in-memory `Interlocked.CompareExchange(ref dispatching, 1, 0)`
-gate. That gate races on CI when the workspace stream's `ReplaySubject(1)`
-emits a stale snapshot after the gate has been released — a flicker
-`Idle → Executing → Idle` in the same hub tick can dispatch twice. The
-production failure mode this caused was `Submit_DuringExecution_QueuedUntilRoundCompletes`:
-u2 ingested twice into `IngestedMessageIds`, two response cells, six
-messages in `thread.Messages` instead of four.
+Watchers that fire a one-shot trigger from an observable stream must single-flight. The wrong approach is an in-memory `Interlocked.CompareExchange(ref dispatching, 1, 0)` gate. That gate races on CI when the workspace stream's `ReplaySubject(1)` emits a stale snapshot after the gate has been released — a flicker `Idle → Executing → Idle` in the same hub tick can dispatch twice. The production failure mode this caused was `Submit_DuringExecution_QueuedUntilRoundCompletes`: u2 ingested twice into `IngestedMessageIds`, two response cells, six messages in `thread.Messages` instead of four.
 
-The right way: the state-field check INSIDE the `stream.Update` lambda IS
-the single-flight gate. The hub's action block serialises the lambdas;
-the first lambda flips `Status`, every concurrent lambda re-reads
-`Status != Idle` and bails. No paired intent field is required when the
-state transition itself is atomic.
+**The correct approach:** the state-field check INSIDE the `stream.Update` lambda IS the single-flight gate. The hub's action block serialises the lambdas; the first lambda flips `Status`, every concurrent lambda re-reads `Status != Idle` and bails. No paired intent field is required when the state transition itself is atomic.
 
-For cross-process triggers (a non-owner hub wanting to drive a mutation
-on the owner), use a paired intent field — single-field RFC-7396 patches
-are merge-safe under `UpdateRemote`. The watcher consumes the intent and
-clears it in the same atomic Update.
+For **cross-process triggers** (a non-owner hub wanting to drive a mutation on the owner), use a paired intent field — single-field RFC-7396 patches are merge-safe under `UpdateRemote`. The watcher consumes the intent and clears it in the same atomic `Update`.
 
-Existing pairs in the codebase:
+### Existing intent/state pairs in the codebase
 
 | Owning node            | Intent field                     | Current-state field           | Cleared by                       |
 |------------------------|----------------------------------|-------------------------------|----------------------------------|
@@ -206,17 +177,11 @@ Existing pairs in the codebase:
 | `NodeTypeDefinition`   | `RequestedReleasePath`           | `LatestReleasePath`           | `NodeTypeCompileActivityHandler` |
 | `ActivityLog`          | `RequestedStatus`                | `Status`                      | Activity hub on transition       |
 
-`MeshThread.RequestedStatus` is a `ThreadExecutionStatus?` — the request half of
-the same Status/RequestedStatus pair (today only `Cancelled` is ever requested).
-The GUI Stop button and a parent cancelling a sub-thread set it; the cancel
-watcher cancels the CTS, and the streaming loop's terminal write flips
-`Status → Cancelled` and clears `RequestedStatus`. `Cancelled` is a distinct,
-visible terminal status that re-dispatches like `Idle` when `PendingUserMessages`
-still holds input. (There is **no** transient `Completing` status — terminal
-writes are atomic.)
+`MeshThread.RequestedStatus` is a `ThreadExecutionStatus?` — the request half of the same Status/RequestedStatus pair (today only `Cancelled` is ever requested). The GUI Stop button and a parent cancelling a sub-thread set it; the cancel watcher cancels the CTS, and the streaming loop's terminal write flips `Status → Cancelled` and clears `RequestedStatus`. `Cancelled` is a distinct, visible terminal status that re-dispatches like `Idle` when `PendingUserMessages` still holds input. (There is **no** transient `Completing` status — terminal writes are atomic.)
 
-Submission-watcher implementation pattern (the SOLE entry point for
-dispatching a new round on the thread hub):
+### Submission-watcher implementation pattern
+
+This is the SOLE entry point for dispatching a new round on the thread hub:
 
 ```csharp
 threadHub.GetWorkspace().GetMeshNodeStream()
@@ -243,59 +208,41 @@ threadHub.GetWorkspace().GetMeshNodeStream()
     });
 ```
 
-The `_Exec` hosted hub subscribes to the parent thread's stream via
-`IMeshNodeStreamCache.GetStream(threadPath)` and fires
-`DispatchAfterClaim` on each `Idle → StartingExecution` transition
-(`DistinctUntilChanged` on `ExecutionStartedAt`). No internal trigger
-event; the state transition IS the dispatch signal.
+The `_Exec` hosted hub subscribes to the parent thread's stream via `IMeshNodeStreamCache.GetStream(threadPath)` and fires `DispatchAfterClaim` on each `Idle → StartingExecution` transition (`DistinctUntilChanged` on `ExecutionStartedAt`). No internal trigger event — the state transition IS the dispatch signal.
 
-## Wake-up recovery — drive any non-terminal state to valid, once
+---
 
-**Core invariant: a freshly-activated hub has no in-process work.** So on
-activation a hub must reconcile any persisted *non-terminal* state left by an
-interrupted previous activation. The rule is the same for threads and
-activities: **read the OWN node stream's FIRST emission** (the loaded persisted
-state, correctly ordered on the hub's action block vs subsequent writes) and
-drive the state to a valid one **exactly once** — never a late `GetMeshNode`
-round-trip whose response can land *after* later writes and clobber them (that
-late-read race was the root of the `check_inbox` phantom-drain flake).
+## Wake-up recovery — drive any non-terminal state to valid, exactly once
 
-**Threads** — `InitializeThreadLifecycle` (`ThreadExecution.cs`):
+**Core invariant: a freshly-activated hub has no in-process work.** On activation, a hub must reconcile any persisted non-terminal state left by an interrupted previous activation. The rule is identical for threads and activities: **read the own node stream's FIRST emission** (the loaded persisted state, correctly ordered on the hub's action block vs subsequent writes) and drive the state to a valid one **exactly once**.
 
-- pending `RequestedStatus == Cancelled` → honor it: stamp the response cell
-  `Cancelled`, write terminal `Status = Cancelled`, clear the request;
-- `Executing` (with a response cell) → **resume** the same cell by re-entering
-  `StartingExecution`; `DispatchAfterClaim` reuses `ActiveMessageId` (resume mode);
-- `StartingExecution` → no write (the `_Exec` round watcher fires on its own
-  first emission);
-- `Idle` / `Cancelled` (+ pending) → no write (the submission watcher claims);
-- `Done` → terminal, untouched.
+Never use a late `GetMeshNode` round-trip — its response can land *after* later writes and clobber them (that late-read race was the root of the `check_inbox` phantom-drain flake).
 
-**Activities** recover from the **owner's own state**, where the owner hub is
-DISTINCT from the executor. NodeType compile is the canonical case: the compile
-runs on a separate activity hub, so the NodeType hub coming up with
-`CompilationStatus == Compiling` on its first own-stream emission means the
-compile was interrupted. It re-requests by flipping its own
-`CompilationStatus = Compiling → Pending` so the compile watcher dispatches a
-fresh build — reading the owner's OWN state, never probing the activity hub
-cross-hub (that read lags, and a false "still running" leaves the operation
-stranded — the rbuergi/CatBond "renders nothing" symptom).
+### Threads — `InitializeThreadLifecycle` (`ThreadExecution.cs`)
 
-> 🚨 **Do NOT add a "first emission: Running ⇒ Failed/interrupted" recovery to a
-> hub that IS the executor.** Such a hub activates in order to run the work, so
-> its own activity is legitimately `Running` the instant it comes up — a
-> first-emission recovery would kill every freshly-started run. The kernel/script
-> hub is exactly this case and deliberately has no such recovery. Restart-recovery
-> for a hub-that-runs-its-own-work needs a separate supervisor, or the
-> owner-state re-request pattern above.
+| Persisted state | Recovery action |
+|---|---|
+| `RequestedStatus == Cancelled` | Honor it: stamp the response cell `Cancelled`, write terminal `Status = Cancelled`, clear the request |
+| `Executing` (with a response cell) | Resume the same cell by re-entering `StartingExecution`; `DispatchAfterClaim` reuses `ActiveMessageId` (resume mode) |
+| `StartingExecution` | No write — the `_Exec` round watcher fires on its own first emission |
+| `Idle` / `Cancelled` (+ pending) | No write — the submission watcher claims |
+| `Done` | Terminal, untouched |
 
-Claim-handler pattern (clears the intent in the same atomic transition):
+### Activities — recover from the owner's own state
+
+Activities recover from the **owner's state**, where the owner hub is DISTINCT from the executor. NodeType compilation is the canonical case: the compile runs on a separate activity hub, so the NodeType hub coming up with `CompilationStatus == Compiling` on its first own-stream emission means the compile was interrupted. It re-requests by flipping `CompilationStatus = Compiling → Pending` so the compile watcher dispatches a fresh build.
+
+Read the owner's OWN state — never probe the activity hub cross-hub. That read lags, and a false "still running" leaves the operation stranded (the `rbuergi/CatBond` "renders nothing" symptom).
+
+> 🚨 **Do NOT add a "first emission: Running ⇒ Failed/interrupted" recovery to a hub that IS the executor.** Such a hub activates in order to run the work, so its own activity is legitimately `Running` the instant it comes up — a first-emission recovery would kill every freshly-started run. The kernel/script hub is exactly this case and deliberately has no such recovery. Restart-recovery for a hub-that-runs-its-own-work needs a separate supervisor, or the owner-state re-request pattern above.
+
+### Claim-handler pattern (clears intent in the same atomic transition)
 
 ```csharp
 hub.GetWorkspace().GetMeshNodeStream().Update(node =>
 {
     var t = node.Content as MeshThread;
-    if (t.Status != Idle) return node;            // already running
+    if (t.Status != Idle) return node;              // already running
     if (t.PendingUserMessages.IsEmpty) return node; // nothing to do
     return node with { Content = t with {
         Status = StartingExecution,
@@ -304,61 +251,35 @@ hub.GetWorkspace().GetMeshNodeStream().Update(node =>
 });
 ```
 
-**Why "each hub owns its own state":** the intent field lives on the same
-node as the state field. The owning hub is the only writer; cross-hub
-coordination is impossible because no other hub knows about the field.
-Read-only views (UI, MCP) can show "request pending" by checking
-`Requested<X> is not null && Status == Idle`.
+**Why "each hub owns its own state":** the intent field lives on the same node as the state field. The owning hub is the only writer; cross-hub coordination is impossible because no other hub knows about the field. Read-only views (UI, MCP) can show "request pending" by checking `Requested<X> is not null && Status == Idle`.
 
-Ship the round-orchestration steps as small `IObservable<Unit>` builders
-(`CreateUserCells`, `CommitRound`, `DispatchToExec`). Each step is one
-`Hub.Observe(..., target)` or `workspace.UpdateMeshNode(...)` followed by
-`.Select(_ => Unit.Default)`.
+Ship the round-orchestration steps as small `IObservable<Unit>` builders (`CreateUserCells`, `CommitRound`, `DispatchToExec`). Each step is one `Hub.Observe(..., target)` or `workspace.UpdateMeshNode(...)` followed by `.Select(_ => Unit.Default)`.
+
+---
 
 ## Anti-patterns to remove on sight
 
-A. **Imperative Subject + flag + Throttle watcher.** Symptoms: a `_ = 0`
-   `dispatching` field; manual `Interlocked.CompareExchange`; a
-   `.Throttle(TimeSpan.FromMilliseconds(50))` op; identity-fallback bookkeeping
-   reading both AsyncLocal and circuit. **Replace with `WatchSubmission`.**
-B. **Verb-shaped per-operation request types** (`StartXRequest`, `RetryXRequest`,
-   `CancelXRequest`) for things that already have content. **Replace with a
-   property patch + `WatchControlPlane`.**
-C. **Synchronization that lives in the caller** (the click handler creates the
-   satellite cell, updates the parent collection, posts to `_Exec`). **Move to
-   the owning hub's `WatchSubmission` so every chat / job / pipeline variant
-   reuses the same orchestration.**
-D. **`async Task` init hooks** on hubs whose body subscribes to streams.
-   `WithInitialization` has a sync `Action<IMessageHub>` overload — Subscribe
-   registers the callback synchronously, the observable does the work later.
-   The async overload's `await` adds a deadlock surface for nothing.
+| Pattern | What to use instead |
+|---|---|
+| **A.** `int dispatching = 0` field + `Interlocked.CompareExchange` + `.Throttle(50ms)` + identity-fallback bookkeeping | `WatchSubmission` |
+| **B.** Verb-shaped per-operation request types (`StartXRequest`, `RetryXRequest`, `CancelXRequest`) for things that already have content | A property patch + `WatchControlPlane` |
+| **C.** Synchronization that lives in the caller (click handler creates the satellite cell, updates the parent collection, posts to `_Exec`) | Move to the owning hub's `WatchSubmission` so every chat / job / pipeline variant reuses the same orchestration |
+| **D.** `async Task` init hooks on hubs whose body subscribes to streams | `WithInitialization` has a sync `Action<IMessageHub>` overload — `Subscribe` registers the callback synchronously, the observable does the work later. The async overload's `await` adds a deadlock surface for nothing. |
+
+---
 
 ## Finishing an activity — `ActivityLog.Finish` on every terminal write
 
-A fresh `ActivityLog` starts at `Status = Running` (the enum default). Until
-something calls `.Finish(version, status)` on it, *every* consumer that reads
-the log — the response carrying it, the activity MeshNode's content stream,
-the UI overlay — sees `Running`. Long after the work is done, the activity
-looks live.
+A fresh `ActivityLog` starts at `Status = Running` (the enum default). Until something calls `.Finish(version, status)` on it, *every* consumer that reads the log — the response carrying it, the activity MeshNode's content stream, the UI overlay — sees `Running`. Long after the work is done, the activity looks live.
 
-### The contract
+> **Every code path that owns the activity's terminal write — success OR failure — MUST call `.Finish(version, status)` on the log before the log escapes its caller.** This includes:
+> - the success branch: `.Finish(version, ActivityStatus.Succeeded)`
+> - every catch / failure branch: `.Finish(version, ActivityStatus.Failed)`
+> - every early-return short-circuit (cache hit, "no work to do", validation reject) — the log is still escaping, and still needs a terminal state
 
-> **Every code path that owns the activity's terminal write — success OR
-> failure — MUST call `.Finish(version, status)` on the log before the log
-> escapes its caller.** This includes:
-> - the success branch (`.Finish(version, ActivityStatus.Succeeded)`)
-> - every catch / failure branch (`.Finish(version, ActivityStatus.Failed)`)
-> - every early-return short-circuit (cache hit, "no work to do", validation
->   reject) — the log is still escaping, still wants a terminal state
+`Finish` reads `Messages` and computes `GetFinalStatus()`: an `Error` message → `Failed`, a `Warning` → `Warning`, otherwise → `Succeeded`. The `overrideStatus` argument is a floor — the function returns `MAX(overrideStatus, GetFinalStatus())`. So `Finish(v, Succeeded)` after an `AppendError` correctly returns `Failed`. **Pass the natural success status as the override; trust `GetFinalStatus()` to bump it on errors.**
 
-`Finish` reads `Messages` and computes `GetFinalStatus()`:
-`Error` message → `Failed`, `Warning` → `Warning`, otherwise → `Succeeded`.
-The `overrideStatus` argument is a floor — the function returns
-`MAX(overrideStatus, GetFinalStatus())`. So `Finish(v, Succeeded)` after an
-`AppendError` correctly returns `Failed`. **Pass the natural success status
-as the override; trust `GetFinalStatus()` to bump it on errors.**
-
-### Anti-pattern: appending an error after `Finish` and assuming status flips
+### Anti-pattern: appending an error after `Finish`
 
 ```csharp
 // ❌ WRONG — log says Succeeded, has an Error message
@@ -387,23 +308,15 @@ return Observable.Return(result with
 });
 ```
 
-The same applies to *every* exception branch you can swallow: the log was
-born `Running`; the only correct end state is `Finish(…)` with the right
-status. A `try { … } catch (Exception ex) { return Fail(ex.Message); }` that
-forgets to Finish leaves consumers polling forever.
+The same applies to every exception branch you can swallow. A `try { … } catch (Exception ex) { return Fail(ex.Message); }` that forgets to `Finish` leaves consumers polling forever.
 
 ### Writing the terminal state back through `GetMeshNodeStream`
 
-When the activity *is* a MeshNode (the canonical shape — `_Activity/{id}`
-nodes), the terminal write must land via the activity hub's own
-`workspace.GetMeshNodeStream(activityPath).Update(...)`. Reasons:
+When the activity is a MeshNode (the canonical shape — `_Activity/{id}` nodes), the terminal write must land via the activity hub's own `workspace.GetMeshNodeStream(activityPath).Update(...)`:
 
-- It rides the data-sync protocol — every subscriber (UI overlay, agent,
-  Activity Details panel) sees the transition as one tick of the stream.
-- It debounces through `MeshNodeTypeSource.Sample(200ms)` like any other
-  content edit — no extra `SaveMeshNodeRequest` hand-rolled.
-- It can't bypass the per-node hub's reducer; no "wrote to persistence, hub
-  still serving stale content" race.
+- It rides the data-sync protocol — every subscriber (UI overlay, agent, Activity Details panel) sees the transition as one tick of the stream.
+- It debounces through `MeshNodeTypeSource.Sample(200ms)` like any other content edit — no extra `SaveMeshNodeRequest` hand-rolled.
+- It cannot bypass the per-node hub's reducer, so there's no "wrote to persistence, hub still serving stale content" race.
 
 ```csharp
 hub.GetWorkspace().GetMeshNodeStream(activityPath!)
@@ -422,38 +335,26 @@ hub.GetWorkspace().GetMeshNodeStream(activityPath!)
         "Activity terminal write failed for {Path}", activityPath));
 ```
 
-**Do NOT** post `UpdateNodeRequest(activityNode with { Content = … })` —
-that bypasses the activity hub's reducer and races the per-node hub's own
-view of its content.
+> **Do NOT** post `UpdateNodeRequest(activityNode with { Content = … })` — that bypasses the activity hub's reducer and races the per-node hub's own view of its content.
+>
+> **Do NOT** call `IStorageAdapter.Write` directly — same race, and worse because persistence is invisible to the per-node hub's `MeshNodeReference` cache. The next `GetDataRequest` returns the pre-patch content.
 
-**Do NOT** call `IStorageAdapter.Write` directly — same race, worse
-because persistence is invisible to the per-node hub's MeshNodeReference
-cache. The next `GetDataRequest` returns the pre-patch content.
-
-`NodeTypeCompilationActivity.MarkSucceeded` / `MarkFailed` in
-`MeshWeaver.Graph.Configuration` is the canonical implementation —
-copy its shape (Update through GetMeshNodeStream + best-effort try/catch
-that *logs and swallows* so observability never breaks the work).
+`NodeTypeCompilationActivity.MarkSucceeded` / `MarkFailed` in `MeshWeaver.Graph.Configuration` is the canonical implementation — copy its shape (`Update` through `GetMeshNodeStream`, with a best-effort `try/catch` that logs and swallows so observability never breaks the work).
 
 ### When the activity is just a response field
 
-Some handlers return an `ActivityLog` inline on a response (e.g.
-`GetCompilationPathResponse.Log`) instead of (or alongside) a `_Activity`
-MeshNode. The same rule applies: **Finish before the response is posted**.
-The handler chain that produces the response is the activity's owner for
-that emission; if multiple compile paths produce the response (fresh
-compile, cached hydration, pinned release), each must Finish at the end
-of its branch. A shortcut path that hands the log straight to
-`BuildResponse` without a Finish is a "Running forever" bug.
+Some handlers return an `ActivityLog` inline on a response (e.g. `GetCompilationPathResponse.Log`) instead of, or alongside, a `_Activity` MeshNode. The same rule applies: **`Finish` before the response is posted**. If multiple compile paths produce the response (fresh compile, cached hydration, pinned release), each must `Finish` at the end of its own branch. A shortcut path that hands the log straight to `BuildResponse` without a `Finish` is a "Running forever" bug.
+
+---
 
 ## Reporting status back to the UI
 
-Status flows the other direction the same way: through the same content the user is patching. The owning hub writes `Status` (and `Messages`, and any other observable progress fields) on the activity's content, and every UI / agent / monitor subscribed to the node's `MeshNodeReference` stream gets the snapshot pushed within milliseconds.
+Status flows the other direction the same way — through the same content the user is patching. The owning hub writes `Status` (and `Messages`, and any other observable progress fields) on the activity's content, and every UI / agent / monitor subscribed to the node's `MeshNodeReference` stream gets the snapshot pushed within milliseconds.
 
 The pattern inside scripts (and inside any worker hub doing long-running work):
 
-- Use `Log.LogInformation(...)` (or your domain equivalent) at every coarse-grained step. Each call appends to `Messages` and ticks the workspace.
-- For waits, **subscribe reactively** to whatever you're waiting on instead of looping or sleeping. The wait is naturally cancellable when paired with the script's `Ct` global:
+- Use `Log.LogInformation(...)` at every coarse-grained step. Each call appends to `Messages` and ticks the workspace.
+- For waits, **subscribe reactively** to whatever you're waiting on instead of looping or sleeping. The wait is naturally cancellable via the script's `Ct` global:
 
   ```csharp
   await Mesh.GetWorkspace()
@@ -463,7 +364,7 @@ The pattern inside scripts (and inside any worker hub doing long-running work):
       .ToTask(Ct);                          // ← cancels via Activity Control Plane
   ```
 
-- For long compute-heavy steps with no natural log lines, an `Observable.Interval` heartbeat keeps the user in the loop:
+- For compute-heavy steps with no natural log lines, an `Observable.Interval` heartbeat keeps the user informed:
 
   ```csharp
   using var heartbeat = System.Reactive.Linq.Observable
@@ -472,21 +373,25 @@ The pattern inside scripts (and inside any worker hub doing long-running work):
   try { await DoLongWork(Ct); } finally { heartbeat.Dispose(); }
   ```
 
-- **Never `Thread.Sleep` and never `Task.Delay(ms)` without `Ct`.** Both ignore cancellation and look identical to a hung script while they wait.
+- **Never `Thread.Sleep` and never `Task.Delay(ms)` without `Ct`.** Both ignore cancellation and are indistinguishable from a hung script while they wait.
 
-Subscribers (UI stripes, activity-details views, agents that watch their job) read the same content via `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReference())` and project whichever field they care about (`Messages.Count`, `Status`, `RequestedStatus`, your own progress field). One source of truth, one observation pattern, no parallel "events" channel.
+Subscribers (UI stripes, activity-details views, agents watching their job) read the same content via `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReference())` and project whatever field they care about (`Messages.Count`, `Status`, `RequestedStatus`, your own progress field). One source of truth, one observation pattern, no parallel "events" channel.
+
+---
 
 ## Operations as scripts — the canonical shape for export, import, compile, …
 
-Once you've internalised the property-driven control plane above, the next step is **don't write a bespoke handler at all** when the work is an *operation* with inputs, multiple steps, progress to report, or a meaningful output. Express the operation as a **Code MeshNode template** that the kernel runs as an Activity. This is how export, import, compilation, and any "user kicks off a job" surface should be modelled going forward.
+Once you've internalised the property-driven control plane, the next step is: **don't write a bespoke handler at all** when the work is an *operation* with inputs, multiple steps, progress to report, or a meaningful output. Express the operation as a **Code MeshNode template** that the kernel runs as an Activity. This is how export, import, compilation, and any "user kicks off a job" surface should be modelled going forward.
 
 ### Why "operation = script"
 
-- **One control plane.** Cancel = `RequestedStatus = Cancelled` patched onto the activity. Same for retry / pause / resume. No new `Cancel<X>Request` per operation.
-- **Persisted progress for free.** Every run lands on `{partition}/_Activity/{guid}` — same place as every other run the user ever triggered. The activity log is the post-mortem, the progress feed, *and* the audit trail.
-- **One result-rendering surface.** A layout area subscribes to one Activity stream and projects `Messages` + the final output (a download link, a content-collection path, a UiControl). Every operation reuses the same shape.
-- **Editable / templated / shareable.** The script *is* content. Power users clone, tweak, pin custom variants. New flavours of an existing operation (export PDF vs DOCX, import NodeCopy vs Mirror) cost zero new C# code — they're new Code MeshNodes seeded next to the originals.
-- **No type-registry sprawl.** One `ExecuteScriptRequest` and one generic result control instead of `ExportDocumentRequest` / `ExportDocumentResponse` / `CancelExportRequest` / `ExportDocumentControl` × N formats.
+| Benefit | Explanation |
+|---|---|
+| **One control plane** | Cancel = `RequestedStatus = Cancelled` on the activity. Same for retry / pause / resume. No new `Cancel<X>Request` per operation. |
+| **Persisted progress for free** | Every run lands on `{partition}/_Activity/{guid}` — same place as every other run the user ever triggered. The activity log is the post-mortem, the progress feed, and the audit trail. |
+| **One result-rendering surface** | A layout area subscribes to one Activity stream and projects `Messages` plus the terminal output (a download link, a content-collection path, a `UiControl`). Every operation reuses the same shape. |
+| **Editable / templated / shareable** | The script *is* content. Power users clone, tweak, and pin custom variants. New flavours of an existing operation cost zero new C# code — they're new Code MeshNodes seeded next to the originals. |
+| **No type-registry sprawl** | One `ExecuteScriptRequest` and one generic result control instead of `ExportDocumentRequest` / `ExportDocumentResponse` / `CancelExportRequest` / `ExportDocumentControl` × N formats. |
 
 ### The shape end-to-end
 
@@ -510,13 +415,13 @@ sequenceDiagram
     Activity-->>Result: terminal snapshot → render output
 ```
 
-Five pieces, all of which already exist in the framework — no new infrastructure:
+Five pieces, all of which already exist in the framework — no new infrastructure required:
 
-1. **The script template** (a `Code` MeshNode, e.g. `Doc/Templates/Code/ExportPdf`).
-2. **The form** (a layout area whose fields bind to the inputs via `JsonPointerReference`; the form auto-saves to the activity content via `workspace.UpdateMeshNode` debounced — see *[Asynchronous Calls](AsynchronousCalls)* "Reactive in click actions").
-3. **The trigger** (a click handler that posts `ExecuteScriptRequest` against the Code template — sync, fire-and-forget, no `await`).
-4. **The activity** (created automatically by the script-execution path; see *[Script Execution](ScriptExecution)*).
-5. **The result panel** (subscribes to the activity via `GetRemoteStream<MeshNode, MeshNodeReference>` and projects `Messages` + the terminal output).
+1. **The script template** — a `Code` MeshNode, e.g. `Doc/Templates/Code/ExportPdf`.
+2. **The form** — a layout area whose fields bind to inputs via `JsonPointerReference`; the form auto-saves to the activity content via `workspace.UpdateMeshNode` debounced (see *[Asynchronous Calls](AsynchronousCalls)* — "Reactive in click actions").
+3. **The trigger** — a click handler that posts `ExecuteScriptRequest` against the Code template. Sync, fire-and-forget, no `await`.
+4. **The activity** — created automatically by the script-execution path; see *[Script Execution](ScriptExecution)*.
+5. **The result panel** — subscribes to the activity via `GetRemoteStream<MeshNode, MeshNodeReference>` and projects `Messages` plus the terminal output.
 
 ### Worked example: export-as-script
 
@@ -553,7 +458,7 @@ var outputPath = $"{inputs.TargetCollection}/{Sanitize(src.Name)}.pdf";
 return new ExportOutput(outputPath, "application/pdf", bytes.Length);
 ```
 
-The script uses **the public renderer types directly** (`PdfDocumentRenderer`, `DocumentBuilder`) — no service layer in the middle. The kernel exposes `Mesh`, `Log`, `Ct` globals; that plus the public types is enough.
+The script uses the public renderer types directly (`PdfDocumentRenderer`, `DocumentBuilder`) — no service layer in the middle. The kernel exposes `Mesh`, `Log`, `Ct` globals; that plus the public types is enough.
 
 #### 2. The form layout area — bind inputs via `JsonPointerReference`
 
@@ -573,7 +478,7 @@ return Controls.Stack
         .WithClickAction(ctx => Trigger(ctx, activityPath)));
 ```
 
-The form **never reads its own state inside the click action** — `JsonPointerReference` + auto-save handle that. The click is O(1) (see *[Asynchronous Calls](AsynchronousCalls)* "Reactive in click actions: use `stream.Update`, not `Take(1) + Subscribe + UpdateMeshNode`").
+The form **never reads its own state inside the click action** — `JsonPointerReference` and auto-save handle that. The click is O(1) (see *[Asynchronous Calls](AsynchronousCalls)* — "Reactive in click actions: use `stream.Update`, not `Take(1) + Subscribe + UpdateMeshNode`").
 
 #### 3. The click handler — patch `RequestedStatus = Running` and submit
 
@@ -588,7 +493,7 @@ private static Task Trigger(ClickAction ctx, string activityPath)
 }
 ```
 
-`WatchControlPlane(...)` (the helper from Step 1) wires the activity hub to react to `RequestedStatus = Running` by posting `SubmitCodeRequest` to its own kernel — exactly the same plumbing that powers Cancel, just for Start.
+`WatchControlPlane(...)` wires the activity hub to react to `RequestedStatus = Running` by posting `SubmitCodeRequest` to its own kernel — exactly the same plumbing that powers Cancel, just for Start.
 
 #### 4. The result panel — subscribe to the activity stream
 
@@ -605,47 +510,47 @@ return host.Hub.GetWorkspace()
 
 ### Cancel, retry, status — all free
 
-Because the operation runs as an Activity, all the standard control-plane operations are inherited:
+Because the operation runs as an Activity, all standard control-plane operations are inherited with no extra code:
 
 - **Cancel** = `workspace.UpdateMeshNode(... with RequestedStatus = Cancelled)` on the activity. The kernel-hosted run sees `Ct` flip and exits.
 - **Retry** = create a new run by patching `RequestedStatus = Running` again on a fresh activity. The form panel does this by posting another `ExecuteScriptRequest`.
 - **Status / live progress** = `Status` + `Messages` on the same content the form already binds to.
 
-No new message types per operation. No new control surface per operation.
-
 ### When to keep a static request handler instead
 
-`Operations-as-scripts` is the right shape **whenever the work is observable**. It's *not* the right shape for everything:
+"Operations as scripts" is the right shape whenever the work is observable. It's not the right shape for everything:
 
 | Situation | Use script-as-Activity? |
 |---|---|
 | Multi-step operation with inputs, progress, output | **Yes** — export, import, compile, mirror, generate |
 | Single one-shot lookup (`Get` / `QueryAsync`) | No — plain request/response |
-| Internal hub-to-hub plumbing (e.g. kernel's internal `CancelScriptRequest`) | No — not a public surface |
+| Internal hub-to-hub plumbing (e.g. kernel's `CancelScriptRequest`) | No — not a public surface |
 | Tiny synchronous calculation, no progress to report | No — static handler |
 | Event-style notification (one-way fan-out) | No — `hub.Post` fire-and-forget |
 
-If the operation has any of: form inputs to collect, multiple steps, progress users want to watch, a meaningful output worth keeping in the activity history, or a "what's the status?" question — script execution is the canonical shape. **Default to it.**
+If the operation has any of these: form inputs to collect, multiple steps, progress users want to watch, a meaningful output worth keeping in the activity history, or a "what's the status?" question — script execution is the canonical shape. **Default to it.**
 
-### Migration checklist (turning a request handler into a script-driven Activity)
+### Migration checklist — turning a request handler into a script-driven Activity
 
-1. **Identify the inputs.** Whatever the request type used to carry, becomes the activity's content record (`ExportInputs`, `ImportInputs`, …) — the same shape, just at rest on a MeshNode instead of in flight on a message.
-2. **Write the template script.** Move the handler body into a `.csx`-shaped string on a Code MeshNode, swap the request fields for `(Mesh.GetMeshNode(Mesh.NodePath).Content as XxxInputs)`. Replace `hub.Post(response)` with `return result;`.
+1. **Identify the inputs.** Whatever the request type carried becomes the activity's content record (`ExportInputs`, `ImportInputs`, …) — the same shape, at rest on a MeshNode instead of in flight on a message.
+2. **Write the template script.** Move the handler body into a `.csx`-shaped string on a Code MeshNode; swap the request fields for `(Mesh.GetMeshNode(Mesh.NodePath).Content as XxxInputs)`; replace `hub.Post(response)` with `return result;`.
 3. **Bind the form.** Every input the handler used to read off the request becomes a `JsonPointerReference` field on the form, written to the activity content via auto-save (debounced `UpdateMeshNode`).
-4. **Click submits.** The click patches `RequestedStatus = Running` (or posts `ExecuteScriptRequest` against the template Code node, depending on which surface owns the lifecycle). No `await`, no synchronous reads of form state.
-5. **Result panel subscribes.** The bottom half of the layout area subscribes to the activity stream via `GetRemoteStream<MeshNode, MeshNodeReference>`, switches on `Status`, projects progress + terminal output.
-6. **Delete the request type and handler.** Or keep them as a transitional shim and mark `[Obsolete]` if external callers still depend on them — but the new path is the script.
+4. **Click submits.** The click patches `RequestedStatus = Running` (or posts `ExecuteScriptRequest` against the template Code node). No `await`, no synchronous reads of form state.
+5. **Result panel subscribes.** The bottom half of the layout area subscribes to the activity stream via `GetRemoteStream<MeshNode, MeshNodeReference>`, switches on `Status`, projects progress and terminal output.
+6. **Delete the request type and handler.** Or keep it as a transitional shim marked `[Obsolete]` if external callers still depend on it — but the new path is the script.
 
 If a step in the migration feels awkward, that's a sign the operation isn't a good fit — re-check the table above.
 
+---
+
 ## Routing activities to a different partition
 
-By default a script's activity lands at `{partitionRoot}/_Activity/{guid}` — the partition the Code node lives in. For shared / read-only partitions (the docs partition is the canonical example) you usually want each viewer's runs to land in the viewer's own home instead, so each user's activity feed shows their own history independent of who else is browsing.
+By default a script's activity lands at `{partitionRoot}/_Activity/{guid}` — the partition the Code node lives in. For shared or read-only partitions (the docs partition is the canonical example) you usually want each viewer's runs to land in the viewer's own home instead, so each user's activity feed shows their own history independent of who else is browsing.
 
 Two layered hooks resolve this, in order:
 
 1. **Per Code node:** set `CodeConfiguration.ActivityParentPath` on the Code node itself. The literal sentinel `"{viewer}"` expands to the calling user's home (their `AccessContext.ObjectId`); any other value is taken as-is.
-2. **Per partition:** set `PartitionDefinition.DefaultActivityParentPath` on the partition's `Admin/Partition/{Name}` node. Applies to every Code node in that partition that doesn't override #1. Same `"{viewer}"` sentinel rule.
+2. **Per partition:** set `PartitionDefinition.DefaultActivityParentPath` on the partition's `Admin/Partition/{Name}` node. Applies to every Code node in that partition that doesn't override step 1. Same `"{viewer}"` sentinel rule.
 3. **Default:** the partition root.
 
 The partition lookup is reactive — `PartitionRegistry.GetPartition(namespace)` returns an `IObservable<PartitionDefinition?>` cached via `Replay(1).RefCount()`, composed into the create-activity chain. Updating a partition's `DefaultActivityParentPath` at runtime takes effect immediately for subsequent runs.
@@ -670,13 +575,17 @@ builder.AddMeshNodes(new MeshNode("Documentation", "Admin/Partition")
 });
 ```
 
-After this, any executable Code node under `Doc/...` that a viewer triggers writes its activity to `{viewer}/_Activity/{guid}` — e.g. `rbuergi/_Activity/abc...` for the user `rbuergi`. The viewer sees the run in their own activity stripe, the originating Code node's `LastActivityPath` field still points back to the cross-partition activity for the Output pane.
+After this, any executable Code node under `Doc/...` that a viewer triggers writes its activity to `{viewer}/_Activity/{guid}` — e.g. `rbuergi/_Activity/abc...` for the user `rbuergi`. The viewer sees the run in their own activity stripe; the originating Code node's `LastActivityPath` field still points back to the cross-partition activity for the Output pane.
 
-Use this any time the partition is shared (docs, demos, reference data) and the runs are user-specific. Skip it for partitions where the runs themselves belong to the partition (a per-tenant data pipeline whose runs are tenant-scoped, not viewer-scoped).
+Use this any time the partition is shared (docs, demos, reference data) and the runs are user-specific. Skip it for partitions where runs belong to the partition itself (a per-tenant data pipeline whose runs are tenant-scoped, not viewer-scoped).
+
+---
 
 ## When to break the rule
 
-- **Cross-hub one-shot triggers** that don't belong to a long-lived entity (e.g. "render this report once") may still be plain request/response — there's no living state to patch.
-- **Internal hub-to-hub plumbing** (e.g. the kernel executor's `CancelScriptRequest`) is fine as a message type because it's an implementation detail behind the public content-driven surface.
+A few situations legitimately call for something other than the property pattern:
 
-If you're not sure: **default to the property pattern**. It scales better as the number of operations grows, and it forces you to think about the state your nodes actually live in.
+- **Cross-hub one-shot triggers** that don't belong to a long-lived entity (e.g. "render this report once") may still be plain request/response — there's no living state to patch.
+- **Internal hub-to-hub plumbing** (e.g. the kernel executor's `CancelScriptRequest`) is fine as a message type because it's an implementation detail hidden behind the public content-driven surface.
+
+If you're not sure: **default to the property pattern**. It scales better as the number of operations grows, and it forces you to think clearly about the state your nodes actually live in.

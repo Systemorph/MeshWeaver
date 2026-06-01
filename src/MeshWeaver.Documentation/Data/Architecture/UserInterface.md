@@ -1,21 +1,25 @@
 ---
 Name: User Interface Architecture
 Category: Documentation
-Description: How UI components are generated where data lives and streamed to browsers with two-way binding
+Description: How MeshWeaver generates UI where data lives, streams rendered components to the browser, and binds user interactions back to server-side hubs.
 Icon: /static/DocContent/Architecture/UserInterface/icon.svg
 ---
 
-MeshWeaver generates UI where the data lives. Instead of transferring large datasets to clients, we compute visualizations server-side and stream only the rendered components. This dramatically reduces network traffic and enables real-time interactivity.
+MeshWeaver generates UI where the data lives. Instead of shipping large datasets to clients and rendering them in the browser, computations happen server-side and only the rendered components stream across the wire. The result is dramatically lower network traffic and real-time interactivity without sacrificing data security.
 
-# The Data Compression Principle
+## The Data Compression Principle
 
-Consider displaying a million-row dataset as a 10x10 summary table. Rather than transferring all rows to create a 10x10 grid, we want to transfer only 100 numbers:
+The design philosophy is easiest to grasp with a concrete example. Suppose you need to display a million-row dataset as a 10 × 10 summary table. The naive approach transfers all one million rows to the client; MeshWeaver transfers only the 100 aggregated numbers:
 
 @@content:data-compression.svg
 
-# Controls Language
+This pattern applies everywhere — charts, grids, KPI tiles — and becomes especially powerful when data is sensitive or very large.
 
-In MessageHubs, we define UI using a **Controls Language** - an immutable, declarative API that serializes to JSON:
+---
+
+## The Controls Language
+
+Inside a `MessageHub`, UI is described using the **Controls Language**: an immutable, declarative API whose objects serialize naturally to JSON.
 
 ```csharp
 // Server-side control definition
@@ -25,11 +29,13 @@ Controls.Stack
     .WithView(Controls.DataGrid(salesData), "Sales")
 ```
 
-This serializes to JSON and streams to the Portal, which renders it as HTML for the browser.
+The resulting JSON streams to the Portal, which renders it as HTML for the browser. Because the control tree is plain data, it round-trips cleanly over any transport and is trivial to version or diff.
 
-# Two-Way Data Binding
+---
 
-The synchronization uses a "walkie-talkie" pattern where both sides hold an `ISynchronizationStream`:
+## Two-Way Data Binding
+
+Rendering is only half the story. MeshWeaver uses a **walkie-talkie pattern** where both the hub and the Portal hold a live `ISynchronizationStream`. Changes flow in both directions: control updates push outward to the browser, and user events push inward to the hub.
 
 ```mermaid
 flowchart TB
@@ -54,14 +60,17 @@ flowchart TB
     PS -->|DataChangedEvent| DH
 ```
 
-**Key Features:**
-- Controls defined server-side where data resides
-- `ISynchronizationStream` on both Hub and Portal sides (walkie-talkie pattern)
-- HTML rendering happens in the Portal
-- Browser is a thin display layer showing HTML and forwarding user events
-- Two-way binding: UI changes stream back to hubs as events
+| Layer | Role |
+|---|---|
+| **MessageHub** | Defines controls and owns data; processes click and change events |
+| **Portal** | Holds the server-side `ISynchronizationStream`; renders controls to HTML |
+| **Browser** | Thin display layer — shows HTML and forwards user events back to the Portal |
 
-# Control Lifecycle
+---
+
+## Control Lifecycle
+
+The sequence below shows a full round trip from hub to browser and back:
 
 ```mermaid
 sequenceDiagram
@@ -77,24 +86,43 @@ sequenceDiagram
     Hub->>Hub: Execute ClickAction
 ```
 
-## Incremental Updates
+### Incremental Updates
 
-After initial load, only changes are transmitted using **JSON Patch** (RFC 6902):
+After the initial load, only *changes* travel over the wire. MeshWeaver uses **JSON Patch** (RFC 6902) for this:
 
 ```json
 [{"op": "replace", "path": "/areas/counter/Data", "value": 42}]
 ```
 
-This minimizes bandwidth for real-time updates.
+A counter incrementing once sends a single-operation patch rather than re-sending the entire control tree. This keeps real-time dashboards snappy even under heavy update rates.
 
-# Available Controls
+---
 
-MeshWeaver provides a rich control library. See the [complete controls reference](AvailableControls) for details.
+## Handling User Interactions
 
-**Common Controls:**
+User interactions become hub messages. When a button is clicked, the browser sends `OnClick` to the Portal, which forwards a `ClickedEvent` to the hub and invokes the registered action:
+
+```csharp
+Controls.Button("Save")
+    .WithClickAction(async context =>
+    {
+        // context.Area   – which control was clicked
+        // context.Payload – custom data attached to the event
+        // context.Hub    – hub reference for posting messages
+        await context.Hub.Post(new SaveRequest(data));
+    })
+```
+
+> **Note:** Inside hub-reachable code, prefer the reactive pattern (`IObservable<T>`) over `async`/`await`. The `async` lambda above is shown for illustration; production handlers compose `IObservable` chains and call `Subscribe`. See [AsynchronousCalls.md](AsynchronousCalls) for the canonical patterns.
+
+---
+
+## Available Controls
+
+MeshWeaver ships a rich control library. The table below lists the most commonly used controls; see the [complete controls reference](AvailableControls) for the full set including advanced layout, charting, and editor controls.
 
 | Control | Purpose |
-|---------|----------|
+|---|---|
 | `TextFieldControl` | Text input with validation |
 | `SelectControl` | Dropdown selection |
 | `DataGridControl` | Tabular data display |
@@ -103,28 +131,27 @@ MeshWeaver provides a rich control library. See the [complete controls reference
 | `EditFormControl` | Form containers |
 | `LayoutAreaControl` | Nested layout regions |
 
-# Interaction Handling
+---
 
-User interactions become messages:
+## Live Example
 
-```csharp
-// Define a button with click handler
-Controls.Button("Save")
-    .WithClickAction(async context =>
-    {
-        // context.Area - which control was clicked
-        // context.Payload - custom data
-        // context.Hub - for posting messages
-        await context.Hub.Post(new SaveRequest(data));
-    })
+The cell below runs in the kernel and renders a small stack of controls — the same building blocks used throughout the framework:
+
+```csharp --render UIArchExample --show-code
+MeshWeaver.Layout.Controls.Stack
+    .WithView(MeshWeaver.Layout.Controls.Markdown("### Controls Language — live demo\nEach `.WithView(...)` call adds a child to this stack."))
+    .WithView(MeshWeaver.Layout.Controls.Html("<p>A plain HTML paragraph rendered inside a stack control.</p>"))
+    .WithView(MeshWeaver.Layout.Controls.Button("Click Me"))
 ```
 
-When clicked, the browser sends an `OnClick` to the Portal, which forwards a `ClickedEvent` message to the hub, invoking the registered action.
+---
 
-# Benefits
+## Why This Architecture?
 
-1. **Bandwidth Efficiency**: Transfer summaries, not raw data
-2. **Real-time Updates**: JSON Patch for incremental changes
-3. **Security**: Data never leaves the server unnecessarily
-4. **Consistency**: Single source of truth on server
-5. **Flexibility**: Any control can be data-bound
+| Benefit | How it is achieved |
+|---|---|
+| **Bandwidth efficiency** | Transfer summaries and patches, never raw datasets |
+| **Real-time updates** | JSON Patch (RFC 6902) for incremental control-tree changes |
+| **Data security** | Sensitive data never leaves the server unnecessarily |
+| **Single source of truth** | All state lives server-side; the browser is a passive renderer |
+| **Flexibility** | Any control can be data-bound; controls compose freely |

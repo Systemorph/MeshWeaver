@@ -1,59 +1,58 @@
 ---
 Name: Schema Prefix
 Category: Documentation
-Description: Embed type schemas and data models
+Description: Embed live type schemas and data models directly into documentation
 Icon: /static/DocContent/DataMesh/UnifiedPath/SchemaPrefix/icon.svg
 ---
 
-The `schema/` prefix embeds type schema definitions from a node as JSON schema.
+The `schema/` prefix lets you embed a type's JSON Schema definition directly into any node. Rather than maintaining separate schema documentation by hand, a single reference pulls the authoritative schema from the type itself — keeping your docs and your data model permanently in sync.
 
 # Syntax
 
 ```
 @@{address}/schema/{typeName}
-@@{address}/schema/         (current node's schema)
+@@{address}/schema/         (current node's schema — self-reference)
 ```
 
-> **Note:** The legacy colon syntax (`schema:TypeName`) is still supported for backward compatibility.
+> **Legacy syntax:** The colon form (`schema:TypeName`) is still supported for backward compatibility.
 
-# Use Cases
+# Common References
 
-| Reference | Description |
-|-----------|-------------|
-| `schema:` | Schema of the current node (self-reference) |
-| `schema:MeshNode` | Built-in MeshNode schema |
-| `schema:CustomType` | Custom type schema |
+| Reference | What it embeds |
+|-----------|----------------|
+| `@@schema:` | Schema of the current node (self-reference) |
+| `@@Doc/DataMesh/UnifiedPath/schema:MeshNode` | Built-in `MeshNode` schema |
+| `@@Doc/DataMesh/UnifiedPath/schema:CustomType` | Any registered custom type |
 
-# Example: Node Schema
+# Embedding the MeshNode Schema
 
-Embed the schema definition of MeshNode:
+The following reference embeds the full schema for the built-in `MeshNode` type:
 
-**Syntax:**
 ```
 @@Doc/DataMesh/UnifiedPath/schema:MeshNode
 ```
 
-**Result:**
+**Live result:**
 
 @@../schema:MeshNode
 
-# Example: Self Schema
+# Embedding a Self-Schema
 
-Show the schema of this node (empty path means self-reference):
+Use an empty type name to embed the schema of the node you are currently editing. This is useful for NodeType documentation pages that need to describe their own shape:
 
-**Syntax:**
 ```
 @@Doc/DataMesh/UnifiedPath/SchemaPrefix/schema:
 ```
 
-**Result:**
+**Live result:**
 
 @@schema:
 
-# Schema Rendering
+# How Schemas Are Rendered
 
-Schemas are rendered as JSON Schema:
-- Property table with types
-- Required/optional indicators
-- Default values
-- Nested type expansion
+An embedded schema is rendered as a structured JSON Schema block containing:
+
+- A property table listing each field with its type
+- Required / optional indicators
+- Default values where defined
+- Inline expansion of nested types

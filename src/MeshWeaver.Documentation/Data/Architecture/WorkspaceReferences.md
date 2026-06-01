@@ -5,32 +5,38 @@ Description: How to register custom workspace references, reducers, and patch fu
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
 ---
 
-MeshWeaver uses **workspace references** to define typed views over the underlying `EntityStore` data. Each reference type maps to a specific reduction of the data and can optionally support write-back via **patch functions**.
+Every piece of live data in MeshWeaver is accessed through a **workspace reference** — a typed lens over the underlying `EntityStore`. A reference describes *what* you want; the framework does the work of subscribing, reducing, serializing, and keeping values in sync. Custom reference types let you add new lenses with full write-back support.
 
-# Built-in Reference Types
+---
+
+## Built-in Reference Types
+
+The platform ships with six reference types that cover the most common access patterns:
 
 | Reference | Reduces To | Purpose |
-|-----------|-----------|---------|
-| `CollectionReference(name)` | `InstanceCollection` | All entities in a collection |
-| `CollectionsReference(names)` | `EntityStore` | Multiple collections |
-| `EntityReference(collection, id)` | `object` | Single entity by collection + id |
-| `InstanceReference(id)` | `object` | Single entity by id |
-| `JsonPointerReference(pointer)` | `JsonElement` | JSON path within a stream |
-| `MeshNodeReference()` | `MeshNode` | Hub's own MeshNode with typed write-back |
+|---|---|---|
+| `CollectionReference(name)` | `InstanceCollection` | All entities in a named collection |
+| `CollectionsReference(names)` | `EntityStore` | A named subset of collections |
+| `EntityReference(collection, id)` | `object` | A single entity by collection + id |
+| `InstanceReference(id)` | `object` | A single entity by id |
+| `JsonPointerReference(pointer)` | `JsonElement` | A JSON path within a stream |
+| `MeshNodeReference()` | `MeshNode` | The hub's own `MeshNode`, with typed write-back |
 
-# Getting Streams
+---
 
-## Local Stream (own hub)
+## Getting Streams
+
+### Local stream (own hub)
 
 ```csharp
-// Get the hub's EntityStore stream for a type
+// Full EntityStore stream for a type
 var stream = workspace.GetStream(typeof(MeshNode));
 
-// Get typed observable
+// Typed observable shorthand
 var nodes = workspace.GetStream<MeshNode>();
 ```
 
-## Remote Stream (another hub)
+### Remote stream (another hub)
 
 ```csharp
 // Observable of all MeshNodes on a remote hub
@@ -41,31 +47,36 @@ var stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
     new Address(path), new MeshNodeReference());
 ```
 
-# Registering Custom References
+> **Tip:** Prefer the two-type overload (`GetRemoteStream<TValue, TReference>`) whenever you need to write back. It wires the `PatchFunction` automatically, so `stream.Update(...)` propagates changes to the owning hub.
 
-Custom workspace references enable typed stream access with proper serialization and write-back support. Registration happens in the `DataContext` configuration via `AddData` or `AddMeshDataSource`.
+---
 
-## 1. Define the Reference Type
+## Registering Custom References
+
+Custom workspace references give you a named, typed projection of data with proper serialization and optional write-back. Registration is a three-step pattern inside `DataContext` configuration.
+
+### Step 1 — Define the reference type
+
+A reference type is a simple record that inherits `WorkspaceReference<T>`:
 
 ```csharp
-// A workspace reference that returns a specific type
 public record MeshNodeReference() : WorkspaceReference<MeshNode>;
 ```
 
-## 2. Register the Reducer
+### Step 2 — Register the reducer
 
-The reducer maps from a parent stream type to the target type. Registration uses `ForReducedStream` on the `ReduceManager`:
+The reducer maps a parent stream into the target type. You register it on the `ReduceManager` via `ForReducedStream`:
 
 ```csharp
 config.AddData(data => data
     .Configure(rm => rm
-        // Register on the InstanceCollection reduce manager
+        // Reducer: InstanceCollection → MeshNode
         .ForReducedStream<InstanceCollection>(reduced => reduced
             .AddWorkspaceReference<MeshNodeReference, MeshNode>(ReduceToMeshNode))
-        // Register PatchFunction for write-back
+        // PatchFunction: write-back from subscriber to owner
         .ForReducedStream<MeshNode>(reduced => reduced
             .AddPatchFunction(PatchMeshNode))
-        // Register stream factory for workspace resolution
+        // Stream factory: resolves MeshNodeReference requests at runtime
         .AddWorkspaceReferenceStream<MeshNode>(
             (workspace, reference, configuration) =>
             {
@@ -77,9 +88,7 @@ config.AddData(data => data
             })));
 ```
 
-### The Reducer Function
-
-Maps a `ChangeItem<InstanceCollection>` to `ChangeItem<MeshNode>`:
+**The reducer function** maps `ChangeItem<InstanceCollection>` → `ChangeItem<MeshNode>`. For patch events it forwards the relevant `EntityUpdate` rather than re-reducing the whole collection:
 
 ```csharp
 private static ChangeItem<MeshNode> ReduceToMeshNode(
@@ -97,9 +106,7 @@ private static ChangeItem<MeshNode> ReduceToMeshNode(
 }
 ```
 
-### The PatchFunction (Write-Back)
-
-Converts `JsonElement` back to the typed object when changes propagate from subscriber to owner:
+**The patch function** deserializes a `JsonElement` back to the typed object when a subscriber writes a change. It must produce an `EntityUpdate` so the owning hub can apply the mutation correctly:
 
 ```csharp
 private static ChangeItem<MeshNode> PatchMeshNode(
@@ -114,22 +121,24 @@ private static ChangeItem<MeshNode> PatchMeshNode(
 }
 ```
 
-# Updating via Streams
+---
 
-## Using UpdateMeshNode Extension
+## Updating via Streams
 
-The `UpdateMeshNode` extension handles both local and remote updates:
+### `UpdateMeshNode` extension (recommended)
+
+`UpdateMeshNode` handles both local and remote cases with a single, consistent call:
 
 ```csharp
 // Update on own hub (uses GetStream locally)
 workspace.UpdateMeshNode(null, threadPath, node =>
     node with { Content = updatedContent });
 
-// Update on remote hub (uses GetRemoteStream with MeshNodeReference)
+// Update on a remote hub (uses GetRemoteStream with MeshNodeReference)
 workspace.UpdateMeshNode(new Address(remotePath), remotePath, node =>
     node with { Content = updatedContent });
 
-// Typed content update
+// Typed content update — unpacks and repacks Content for you
 workspace.UpdateMeshNode<MyContentType>(new Address(path), path,
     (node, content) => node with
     {
@@ -137,9 +146,9 @@ workspace.UpdateMeshNode<MyContentType>(new Address(path), path,
     });
 ```
 
-## Direct Stream Update
+### Direct stream update
 
-For EntityStore streams, use `UpdateMeshNode` on the stream directly:
+When you already hold an `EntityStore` stream, you can call `UpdateMeshNode` directly on it:
 
 ```csharp
 var stream = workspace.GetStream(typeof(MeshNode));
@@ -147,35 +156,38 @@ stream.UpdateMeshNode(nodePath, node =>
     node with { Content = updatedContent });
 ```
 
-# The Reduce Chain
+---
 
-Data flows through a reduction chain from `EntityStore` down to typed objects:
+## The Reduce Chain
+
+Data flows downward from `EntityStore` through successive reductions. Each level adds a finer-grained projection:
 
 ```
-EntityStore                    (root store with all collections)
-    |
-    +-- CollectionReference --> InstanceCollection  (single collection)
-    |       |
-    |       +-- EntityReference --> object           (single entity)
-    |       +-- InstanceReference --> object          (single entity by id)
-    |       +-- MeshNodeReference --> MeshNode        (typed MeshNode)
-    |
-    +-- CollectionsReference --> EntityStore          (subset of collections)
-    |
-    +-- JsonPointerReference --> JsonElement          (JSON path)
+EntityStore                      (root store — all collections)
+    │
+    ├── CollectionReference  →  InstanceCollection   (one collection)
+    │       ├── EntityReference    →  object          (single entity by collection + id)
+    │       ├── InstanceReference  →  object          (single entity by id)
+    │       └── MeshNodeReference  →  MeshNode        (typed MeshNode)
+    │
+    ├── CollectionsReference →  EntityStore           (subset of collections)
+    │
+    └── JsonPointerReference →  JsonElement           (JSON path)
 ```
 
-Each level can have a `PatchFunction` registered for write-back. Write-back flows in reverse: typed changes are serialized to JSON, sent to the owner hub via `PatchDataChangeRequest` or `DataChangeRequest`, and applied using the registered `PatchFunction`.
+Each level can register a `PatchFunction` for write-back. Write-back travels the chain in reverse: typed changes are serialized to JSON, dispatched to the owner hub via `PatchDataChangeRequest` or `DataChangeRequest`, and applied using the registered `PatchFunction`.
 
-# Bidirectional Sync
+---
 
-When a subscriber updates a remote stream:
+## Bidirectional Sync
 
-1. `stream.Update(fn)` posts `UpdateStreamRequest` to the local sync hub
-2. The sync hub executes the update and calls `SetCurrent()`
-3. The feedback subscription converts the change to `PatchDataChangeRequest` (for JsonElement streams) or `DataChangeRequest` (for typed streams)
-4. The change is sent to the **owner hub** via `hub.Post(e, o => o.WithTarget(owner))`
-5. The owner hub applies the change using its `PatchFunction`
-6. The owner broadcasts to all subscribers
+When a subscriber calls `stream.Update(fn)` on a remote stream, the framework executes a six-step round trip to keep the owner authoritative:
 
-The feedback predicate ensures only **client-originated** changes are sent back (not echoes from the owner).
+1. `stream.Update(fn)` posts an `UpdateStreamRequest` to the local sync hub.
+2. The sync hub executes the update function and calls `SetCurrent()`.
+3. The feedback subscription detects the change and converts it to `PatchDataChangeRequest` (JSON element streams) or `DataChangeRequest` (typed streams).
+4. The change is forwarded to the **owner hub**: `hub.Post(e, o => o.WithTarget(owner))`.
+5. The owner applies the change using its registered `PatchFunction`.
+6. The owner broadcasts the reconciled state to all subscribers.
+
+A feedback predicate ensures only **client-originated** changes travel back — owner broadcasts are filtered out, preventing echo loops.

@@ -1,93 +1,25 @@
 ---
 Name: Data Modeling Guide
 Category: Documentation
-Description: How to define data models using C# records, attributes, and reference data patterns
+Description: Define data models in MeshWeaver using C# records, attributes, and the reference data pattern — with examples from the Todo/Project domain.
 Icon: /static/DocContent/DataMesh/DataModeling/icon.svg
 ---
 
-This guide explains how to define data models in MeshWeaver using C# records, attributes, and reference data patterns.
+This guide walks through how to define data models in MeshWeaver: from basic C# record definitions and attribute annotations to rich reference data, content initialization, and hub-level configuration.
 
-# Overview
+---
 
-MeshWeaver data models are defined as C# records that combine:
-- **Properties** with standard CLR types (string, int, DateTime, etc.)
-- **Attributes** that control persistence, validation, and UI behavior
-- **Static instances** for reference data (lookups, categories, statuses)
+## Overview
 
-# Key Concepts
+MeshWeaver data models are plain C# records that layer three concerns:
 
-## C# Records
+| Layer | Mechanism | Purpose |
+|---|---|---|
+| **Shape** | Record properties + CLR types | Store and transport data |
+| **Behavior** | Attributes (`[Key]`, `[Required]`, `[Markdown]`, …) | Drive validation, UI, and persistence |
+| **Lookup values** | Static reference-data records | Provide dropdowns, ordering, and rich metadata |
 
-Records are a C# language feature for defining data types. Unlike regular classes, records:
-- Are **immutable by default** - properties can't be changed after creation
-- Have **value-based equality** - two records with the same property values are considered equal
-- Support **with expressions** - create modified copies without changing the original
-
-```csharp
-// Define a record
-public record Person { public string Name { get; init; } }
-
-// Create an instance
-var alice = new Person { Name = "Alice" };
-
-// Create a modified copy (original unchanged)
-var bob = alice with { Name = "Bob" };
-```
-
-Records are ideal for data models because they prevent accidental mutations and simplify change tracking.
-
-## Attributes
-
-Attributes are metadata annotations applied to code elements using square brackets `[]`. They provide declarative information that MeshWeaver reads at runtime to determine how to handle properties.
-
-```csharp
-[Key]                    // Marks as primary key
-[Required]               // Validates non-empty value
-[DisplayName("Due Date")] // Sets UI label
-public DateTime? DueDate { get; init; }
-```
-
-Attributes don't change what the code does - they add information that frameworks can use to generate UI, validate data, or control persistence.
-
-## Standard CLR Types
-
-CLR (Common Language Runtime) is .NET's execution engine. Standard CLR types are the built-in types available in any .NET application:
-
-| Type | Description | Example Values |
-|------|-------------|----------------|
-| `string` | Text | `"Hello"`, `"ACME"` |
-| `int` | Whole numbers | `1`, `42`, `-5` |
-| `decimal` | Precise decimals | `19.99m`, `0.001m` |
-| `bool` | True/false | `true`, `false` |
-| `DateTime` | Date and time | `DateTime.UtcNow` |
-| `Guid` | Unique identifiers | `Guid.NewGuid()` |
-
-Nullable versions (e.g., `int?`, `DateTime?`) allow the value to be absent.
-
-## Reference Data Pattern
-
-Reference data (also called lookup data or master data) represents predefined values that rarely change - like statuses, categories, or priorities. Instead of using simple enums, MeshWeaver uses rich data objects:
-
-```csharp
-// Simple enum - limited metadata
-public enum Priority { Low, Medium, High }
-
-// Reference data - rich metadata
-public record Priority
-{
-    public string Id { get; init; }
-    public string Name { get; init; }
-    public string Emoji { get; init; }  // Display icon
-    public int Order { get; init; }      // Sort order
-
-    public static readonly Priority High = new() { Id = "High", Name = "High Priority", Emoji = "🔥", Order = 0 };
-    public static readonly Priority[] All = [High, Medium, Low];
-}
-```
-
-This pattern provides display names, icons, descriptions, and ordering that enums cannot express.
-
-# Anatomy of a Data Model
+The diagram below shows how a `Todo` entity references `Category` and `Priority` dimension data, both hosted in the same or a parent hub.
 
 ```mermaid
 classDiagram
@@ -119,11 +51,91 @@ classDiagram
     Todo --> Priority : Dimension
 ```
 
-# Basic Record Structure
+---
 
-Data models are defined as C# records with properties and attributes.
+## C# Records
 
-## Example: Simple Entity
+Records are the idiomatic carrier for MeshWeaver data models. Compared to classes, they offer:
+
+- **Immutability by default** — `init`-only properties prevent accidental mutation.
+- **Value-based equality** — two records with identical property values are equal.
+- **`with` expressions** — create modified copies without touching the original.
+
+```csharp
+// Define a record
+public record Person { public string Name { get; init; } }
+
+// Create an instance
+var alice = new Person { Name = "Alice" };
+
+// Create a modified copy — original is unchanged
+var bob = alice with { Name = "Bob" };
+```
+
+These guarantees simplify change tracking and make records a natural fit for MeshWeaver's reactive, stream-based data layer.
+
+---
+
+## Attributes
+
+Attributes are metadata annotations (`[...]`) that MeshWeaver reads at runtime to drive validation, UI rendering, and persistence decisions. They do not change what the C# code computes — they describe *how* the framework should treat a property.
+
+```csharp
+[Key]                       // Marks as primary key
+[Required]                  // Validates non-empty value before save
+[DisplayName("Due Date")]   // Sets UI label
+public DateTime? DueDate { get; init; }
+```
+
+---
+
+## Standard CLR Types
+
+| Type | Description | Example values |
+|---|---|---|
+| `string` | Text | `"Hello"`, `"ACME"` |
+| `int` | Whole numbers | `1`, `42`, `-5` |
+| `decimal` | Precise decimals | `19.99m`, `0.001m` |
+| `bool` | True/false | `true`, `false` |
+| `DateTime` | Date and time | `DateTime.UtcNow` |
+| `Guid` | Unique identifiers | `Guid.NewGuid()` |
+
+Append `?` to make any type nullable (e.g., `int?`, `DateTime?`) when the value may be absent.
+
+---
+
+## Reference Data Pattern
+
+Reference data — statuses, categories, priorities — benefits from carrying rich metadata that a plain `enum` cannot express: display names, icons, sort order, and per-value UI hints. MeshWeaver models these as record types with static instances.
+
+**Enum (limited):**
+
+```csharp
+public enum Priority { Low, Medium, High }
+```
+
+**Reference data record (rich):**
+
+```csharp
+public record Priority
+{
+    public string Id    { get; init; }
+    public string Name  { get; init; }
+    public string Emoji { get; init; }   // Display icon
+    public int    Order { get; init; }   // Sort position
+
+    public static readonly Priority High = new() { Id = "High", Name = "High Priority", Emoji = "🔥", Order = 0 };
+    public static readonly Priority[] All = [High, Medium, Low];
+}
+```
+
+This pattern lets every consumer — dropdowns, groupings, data grids — share the same display contract without bespoke mapping code.
+
+---
+
+## Basic Record Structure
+
+### Example: Simple Entity
 
 ```csharp
 public record Todo
@@ -145,55 +157,56 @@ public record Todo
 }
 ```
 
-**Result in Editor UI:**
+**How the editor renders each field:**
 
-| Field | Rendered As |
-|-------|-------------|
-| Id | Hidden (Browsable=false) |
-| Title | Required text input with validation |
-| Description | Markdown editor, 200px height |
-| Due Date | Date picker with "Due Date" label |
-| Status | Dropdown with enum values |
+| Field | Rendered as |
+|---|---|
+| `Id` | Hidden (`Browsable=false`) |
+| `Title` | Required text input with validation message |
+| `Description` | Markdown editor, 200 px height, no preview pane |
+| `DueDate` | Date picker labelled "Due Date" |
+| `Status` | Dropdown with enum values |
 
-# Key Attributes
+---
 
-## [Key]
+## Key Attribute Reference
 
-Marks the primary key field. Required for all data models.
+### `[Key]`
+
+Marks the primary key. Every data model requires exactly one.
 
 ```csharp
 [Key]
 public string Id { get; init; } = string.Empty;
 ```
 
-## [Required]
+### `[Required]`
 
-Validates that the field has a non-empty value before saving.
+Prevents saving until the field contains a non-empty value.
 
 ```csharp
 [Required]
 public string Title { get; init; } = string.Empty;
 ```
 
-**Result:** Attempting to save without a Title shows validation error: "Title is required"
+Attempting to save without a `Title` shows: *"Title is required"*.
 
-## [Browsable(false)]
+### `[Browsable(false)]`
 
-Hides the field from editor forms and data grids.
+Hides the field from editor forms and data grids. Use for:
+
+- Internal identifiers users should not edit
+- Computed properties
+- System-managed timestamps
 
 ```csharp
 [Browsable(false)]
 public string Id { get; init; } = string.Empty;
 ```
 
-**Use cases:**
-- Internal identifiers users shouldn't edit
-- Computed fields
-- System timestamps
+### `[DisplayName]`
 
-## [DisplayName]
-
-Sets a custom label in the UI instead of the property name.
+Overrides the property name in all UI surfaces.
 
 ```csharp
 [DisplayName("Due Date")]
@@ -203,24 +216,23 @@ public DateTime? DueDate { get; init; }
 public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
 ```
 
-**Result:** Property `DueDate` displays as "Due Date" in forms and grids.
+### `[Markdown]`
 
-## [Markdown]
-
-Renders a markdown editor for rich text content.
+Renders a markdown editor for rich text fields.
 
 ```csharp
 [Markdown(EditorHeight = "200px", ShowPreview = false)]
 public string? Description { get; init; }
 ```
 
-**Parameters:**
-- `EditorHeight`: Height of the editor area (default: auto)
-- `ShowPreview`: Whether to show live preview pane (default: true)
+| Parameter | Default | Purpose |
+|---|---|---|
+| `EditorHeight` | auto | Height of the edit pane |
+| `ShowPreview` | `true` | Show live preview alongside the editor |
 
-## [Dimension<T>]
+### `[Dimension<T>]`
 
-Links the field to a reference data type for dropdown selection.
+Links a string field to a reference-data type, rendering a dropdown populated from `T.All`.
 
 ```csharp
 [Dimension<Category>]
@@ -230,13 +242,11 @@ public string Category { get; init; } = "General";
 public string Priority { get; init; } = "Medium";
 ```
 
-**Result:** The editor renders a dropdown populated with values from the `Category.All` and `Priority.All` arrays.
+---
 
-# Reference Data Pattern
+## Reference Data in Depth
 
-Reference data (lookups, categories, statuses) follows a specific pattern with static instances.
-
-## Structure
+### Full Priority Example
 
 ```csharp
 public record Priority
@@ -253,73 +263,57 @@ public record Priority
 
     public bool IsExpandedByDefault { get; init; } = true;
 
-    // Static instances
     public static readonly Priority Critical = new()
     {
-        Id = "Critical",
-        Name = "Critical Priority",
-        Emoji = "🚨",
-        Order = 0,
-        IsExpandedByDefault = true
+        Id = "Critical", Name = "Critical Priority",
+        Emoji = "🚨", Order = 0, IsExpandedByDefault = true
     };
 
     public static readonly Priority High = new()
     {
-        Id = "High",
-        Name = "High Priority",
-        Emoji = "🔥",
-        Order = 1,
-        IsExpandedByDefault = true
+        Id = "High", Name = "High Priority",
+        Emoji = "🔥", Order = 1, IsExpandedByDefault = true
     };
 
     public static readonly Priority Medium = new()
     {
-        Id = "Medium",
-        Name = "Medium Priority",
-        Emoji = "🟡",
-        Order = 2,
-        IsExpandedByDefault = false
+        Id = "Medium", Name = "Medium Priority",
+        Emoji = "🟡", Order = 2, IsExpandedByDefault = false
     };
 
     public static readonly Priority Low = new()
     {
-        Id = "Low",
-        Name = "Low Priority",
-        Emoji = "🟢",
-        Order = 3,
-        IsExpandedByDefault = false
+        Id = "Low", Name = "Low Priority",
+        Emoji = "🟢", Order = 3, IsExpandedByDefault = false
     };
 
     public static readonly Priority Unset = new()
     {
-        Id = "Unset",
-        Name = "Unset Priority",
-        Emoji = "❓",
-        Order = 4,
-        IsExpandedByDefault = false
+        Id = "Unset", Name = "Unset Priority",
+        Emoji = "❓", Order = 4, IsExpandedByDefault = false
     };
 
-    // All instances array for initialization
+    // Canonical collection used for data initialization
     public static readonly Priority[] All = [Critical, High, Medium, Low, Unset];
 
-    // Helper method for lookups
+    // Safe lookup with fallback
     public static Priority GetById(string? id) =>
         All.FirstOrDefault(p => p.Id == id) ?? Unset;
 }
 ```
 
-## Key Components
+### Key Components
 
 | Component | Purpose |
-|-----------|---------|
-| Static instances | Named constants for type-safe references |
-| `All` array | Collection for data initialization |
-| `Order` property | Controls sort order in dropdowns and groupings |
-| `GetById` method | Safe lookup with fallback to default |
+|---|---|
+| Static instances | Named constants for type-safe references in code |
+| `All` array | Collection passed to `WithInitialData(...)` on hub startup |
+| `Order` | Controls dropdown sort order and group-by rendering |
+| `GetById` | Safe lookup returning `Unset` for unknown keys |
 
-## Configuring Reference Data
+### Wiring Reference Data into a Hub
 
-Reference data is initialized when configuring the NodeType:
+Reference data is seeded when configuring the NodeType:
 
 ```csharp
 config => config
@@ -331,13 +325,15 @@ config => config
             .WithType<Priority>(t => t.WithInitialData(Priority.All))))
 ```
 
-**Result:** When a Project hub initializes, it populates its data store with all predefined Status, Category, and Priority values.
+When the hub initialises, it populates its data store with every predefined instance from each `All` array.
 
-# Enums vs Reference Data
+---
 
-MeshWeaver supports both enums and reference data records. Choose based on your requirements.
+## Enums vs Reference Data
 
-## When to Use Enums
+Choose the right tool for the complexity of your domain.
+
+### When to Use Enums
 
 ```csharp
 public enum TodoStatus
@@ -350,17 +346,14 @@ public enum TodoStatus
 }
 ```
 
-**Advantages:**
-- Simple to define
-- Type-safe in code
-- No additional configuration needed
+**Good fit when:**
+- No display metadata needed beyond the member name
+- Values are stable and change only with a recompile
+- Simple type safety is the goal
 
-**Limitations:**
-- No metadata (descriptions, icons, order)
-- Requires recompilation to add values
-- Display name is the enum member name
+**Limitations:** no icons, no ordering hints, no descriptions.
 
-## When to Use Reference Data
+### When to Use Reference Data
 
 ```csharp
 public record Status
@@ -377,10 +370,8 @@ public record Status
 
     public static readonly Status Planning = new()
     {
-        Id = "Planning",
-        Name = "Planning",
-        Description = "Project is in planning phase",
-        Order = 1
+        Id = "Planning", Name = "Planning",
+        Description = "Project is in planning phase", Order = 1
     };
 
     // ... additional instances
@@ -389,23 +380,17 @@ public record Status
 }
 ```
 
-**Advantages:**
-- Rich metadata (descriptions, icons, colors)
-- Configurable display order
-- Can be extended without recompilation (future)
-- Supports hub-to-hub synchronization
-
-**Use reference data when:**
-- Values need descriptions or display metadata
-- Grouping/ordering behavior varies by context
+**Good fit when:**
+- Values carry descriptions, icons, or colors
+- Ordering varies by context
 - Values are shared across hub boundaries
-- UI customization per value is needed
+- Per-value UI customisation (e.g., `IsExpandedByDefault`) is needed
 
-# Content Initialization
+---
 
-Implement `IContentInitializable` to transform data when loaded from storage.
+## Content Initialization
 
-## Example: Computing Dates
+Implement `IContentInitializable` to transform a record when it is loaded from storage. The common use case is converting stored relative offsets into absolute dates for demo or template data.
 
 ```csharp
 public record Todo : IContentInitializable
@@ -426,17 +411,13 @@ public record Todo : IContentInitializable
     public object Initialize()
     {
         if (DueDateOffsetDays.HasValue)
-        {
             return this with { DueDate = DateTime.UtcNow.Date.AddDays(DueDateOffsetDays.Value) };
-        }
         return this;
     }
 }
 ```
 
-**Use case:** Store relative offsets in JSON for demo data, compute actual dates at runtime.
-
-**JSON input:**
+**JSON stored in the mesh:**
 ```json
 {
   "id": "ReviewDocs",
@@ -445,7 +426,7 @@ public record Todo : IContentInitializable
 }
 ```
 
-**Result after initialization (if today is 2026-01-29):**
+**Record after `Initialize()` runs (today = 2026-01-29):**
 ```json
 {
   "id": "ReviewDocs",
@@ -455,11 +436,13 @@ public record Todo : IContentInitializable
 }
 ```
 
-# Data Model Relationships
+---
 
-## One-to-Many via Dimension
+## Data Relationships
 
-The `[Dimension<T>]` attribute creates a foreign key relationship:
+### One-to-Many via `[Dimension<T>]`
+
+`[Dimension<T>]` creates a foreign-key-style reference from a string field to a reference-data type.
 
 ```csharp
 public record Todo
@@ -469,7 +452,7 @@ public record Todo
 }
 ```
 
-**Data flow:**
+Data flow between hubs:
 
 ```mermaid
 graph LR
@@ -483,9 +466,9 @@ graph LR
     T -.->|References| C
 ```
 
-## Parent-Child via Hub Hierarchy
+### Parent-Child via `AddHubSource`
 
-Child hubs can access parent hub data using `AddHubSource`:
+A child hub can pull reference data from a parent hub using `AddHubSource` with a computed parent address:
 
 ```csharp
 // Todo NodeType configuration
@@ -500,14 +483,19 @@ config => config
                 .WithType<Priority>()))
 ```
 
-**Address calculation:**
-- Todo at: `ACME/ProductLaunch/Todo/AnalystBriefings`
-- Parent at: `ACME/ProductLaunch`
-- Formula: Remove last 2 segments
+**Address arithmetic:**
 
-# Complete Example
+| Path | Value |
+|---|---|
+| Todo hub | `ACME/ProductLaunch/Todo/AnalystBriefings` |
+| Parent hub | `ACME/ProductLaunch` |
+| Formula | Remove last 2 segments |
 
-## Project Data Model
+---
+
+## Complete Example
+
+### Project Data Model
 
 ```csharp
 public record Project
@@ -530,7 +518,7 @@ public record Project
 }
 ```
 
-## Project NodeType Configuration
+### Project NodeType Configuration
 
 ```json
 {
@@ -544,7 +532,7 @@ public record Project
 }
 ```
 
-## Todo Data Model
+### Todo Data Model (Full)
 
 ```csharp
 public record Todo : IContentInitializable
@@ -578,15 +566,13 @@ public record Todo : IContentInitializable
     public object Initialize()
     {
         if (DueDateOffsetDays.HasValue)
-        {
             return this with { DueDate = DateTime.UtcNow.Date.AddDays(DueDateOffsetDays.Value) };
-        }
         return this;
     }
 }
 ```
 
-## Todo NodeType Configuration
+### Todo NodeType Configuration
 
 ```json
 {
@@ -600,33 +586,59 @@ public record Todo : IContentInitializable
 }
 ```
 
-# Best Practices
+---
 
-1. **Use records, not classes**: Records provide immutability and value semantics ideal for data models
+## Attribute Quick Reference
 
-2. **Always provide defaults**: Initialize properties with sensible defaults to avoid null issues
+The cell below renders a live summary of the attributes covered in this guide.
+
+```csharp --render AttributeSummaryCard --show-code
+MeshWeaver.Layout.Controls.Stack
+    .WithView(MeshWeaver.Layout.Controls.Markdown("""
+## Common Data Modeling Attributes
+
+| Attribute | Applied to | Effect |
+|---|---|---|
+| `[Key]` | One property per record | Marks the primary key |
+| `[Required]` | Any property | Validates non-empty before save |
+| `[Browsable(false)]` | Any property | Hides from forms and grids |
+| `[DisplayName("…")]` | Any property | Overrides the UI label |
+| `[Markdown(…)]` | `string?` properties | Renders a markdown editor |
+| `[Dimension<T>]` | `string` FK properties | Dropdown from `T.All` |
+
+> **Tip:** Combine `[Key]` with `[Browsable(false)]` on your `Id` field so the primary key is managed by the framework but never shown to end users.
+"""))
+```
+
+---
+
+## Best Practices
+
+1. **Use records, not classes.** Records give you immutability and value semantics for free.
+
+2. **Always provide sensible defaults** to avoid null surprises at runtime:
    ```csharp
    public string Status { get; init; } = "Pending";
    ```
 
-3. **Hide internal fields**: Use `[Browsable(false)]` for IDs, timestamps, and computed fields
+3. **Hide internal fields** with `[Browsable(false)]` — IDs, system timestamps, and computed properties should not appear in editor forms.
 
-4. **Prefer reference data over enums**: For values that need metadata, ordering, or UI customization
+4. **Prefer reference data over enums** whenever values need metadata, ordering, or UI customisation.
 
-5. **Use `Order` for consistent sorting**: Define explicit order values in reference data
+5. **Define `Order` explicitly** in reference data so dropdown and grouping order is deterministic and independent of declaration order.
 
-6. **Include fallback in GetById**: Always handle missing values gracefully
+6. **Always include a `GetById` fallback** to handle unknown or legacy values gracefully:
    ```csharp
    public static Priority GetById(string? id) =>
        All.FirstOrDefault(p => p.Id == id) ?? Unset;
    ```
 
-7. **Document with XML comments**: Add summaries for complex fields
+7. **Document complex fields with XML comments:**
    ```csharp
    /// <summary>
-   /// Offset in days from today for calculating DueDate.
+   /// Offset in days from today used to compute DueDate at load time.
    /// </summary>
    public int? DueDateOffsetDays { get; init; }
    ```
 
-8. **Use meaningful property names**: Prefer `Category` over `CategoryId` when using `[Dimension<T>]`
+8. **Prefer `Category` over `CategoryId`** when naming `[Dimension<T>]` properties — the string stores the key, so the `Id` suffix is redundant and clutters the UI label.

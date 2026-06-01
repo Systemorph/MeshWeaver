@@ -1,108 +1,35 @@
 ---
 Name: Displaying Data in a UI
 Category: Documentation
-Description: Display collections of data with sortable, resizable columns
+Description: Display collections of data with sortable, resizable columns and optional virtualization for large datasets
 Icon: /static/DocContent/GUI/DataGrid/icon.svg
 ---
 
-The DataGrid control displays collections of data in a tabular format with sortable, resizable columns and optional virtualization for large datasets.
+`DataGridControl` renders any collection as a tabular layout with sortable, resizable columns. It supports pagination, virtual scrolling for large datasets, custom cell templates, and column-level formatting — all wired up with a fluent builder API.
+
+---
 
 # Basic Usage
 
-## Simple DataGrid
+The minimum setup is a `DataGridControl(data)` call plus one or more column definitions.
 
 ```csharp --render DataGridSimple --show-code
-record Product(string Name, decimal Price, int Stock);  // Define data record
+record Product(string Name, decimal Price, int Stock);
 
-var products = new[]                                    // Create sample data
+var products = new[]
 {
-    new Product("Widget", 9.99m, 100),                  // First product
-    new Product("Gadget", 24.99m, 50),                  // Second product
-    new Product("Gizmo", 14.99m, 75)                    // Third product
+    new Product("Widget", 9.99m, 100),
+    new Product("Gadget", 24.99m, 50),
+    new Product("Gizmo", 14.99m, 75)
 };
 
-new DataGridControl(products)                           // Create grid with data
-    .WithColumn(new PropertyColumnControl<string>       // Add Name column
-        { Property = "name" }                           // Map to Name property
-        .WithTitle("Product Name"))                     // Set column header
-    .WithColumn(new PropertyColumnControl<decimal>      // Add Price column
-        { Property = "price" }                          // Map to Price property
-        .WithTitle("Price"))                            // Set column header
-    .WithColumn(new PropertyColumnControl<int>          // Add Stock column
-        { Property = "stock" }                          // Map to Stock property
-        .WithTitle("In Stock"))                         // Set column header
+new DataGridControl(products)
+    .WithColumn(new PropertyColumnControl<string>  { Property = "name"  }.WithTitle("Product Name"))
+    .WithColumn(new PropertyColumnControl<decimal> { Property = "price" }.WithTitle("Price"))
+    .WithColumn(new PropertyColumnControl<int>     { Property = "stock" }.WithTitle("In Stock"))
 ```
 
----
-
-## With Pagination
-
-```csharp --render DataGridPagination --show-code
-record Item(int Id, string Name, string Category);      // Define data record
-
-var items = Enumerable.Range(1, 25)                     // Create 25 items
-    .Select(i => new Item(i, $"Item {i}", i % 2 == 0 ? "A" : "B"))
-    .ToArray();
-
-new DataGridControl(items)                              // Create grid with data
-    .WithPagination(true)                               // Enable pagination
-    .WithItemsPerPage(5)                                // Show 5 rows per page
-    .WithColumn(new PropertyColumnControl<int>          // Add Id column
-        { Property = "id" }.WithTitle("ID"))
-    .WithColumn(new PropertyColumnControl<string>       // Add Name column
-        { Property = "name" }.WithTitle("Name"))
-    .WithColumn(new PropertyColumnControl<string>       // Add Category column
-        { Property = "category" }.WithTitle("Category"))
-```
-
----
-
-## With Action Buttons
-
-```csharp --render DataGridActions --show-code
-record User(string Name, string Email);                 // Define data record
-
-var users = new[]                                       // Create sample data
-{
-    new User("Alice", "alice@example.com"),             // First user
-    new User("Bob", "bob@example.com"),                 // Second user
-    new User("Carol", "carol@example.com")              // Third user
-};
-
-var actionButtons = Controls.Stack                      // Create action button template
-    .WithOrientation(Orientation.Horizontal)            // Horizontal layout
-    .WithHorizontalGap("4px")                           // Gap between buttons
-    .WithView(Controls.Button("Edit"))                  // Edit button
-    .WithView(Controls.Button("Delete"));               // Delete button
-
-new DataGridControl(users)                              // Create grid with data
-    .WithColumn(new PropertyColumnControl<string>       // Add Name column
-        { Property = "name" }.WithTitle("Name"))
-    .WithColumn(new PropertyColumnControl<string>       // Add Email column
-        { Property = "email" }.WithTitle("Email"))
-    .WithColumn(new TemplateColumnControl(actionButtons)// Add Actions column
-        .WithTitle("Actions").WithSortable(false))      // Disable sorting
-```
-
----
-
-## Virtualized Large Dataset
-
-```csharp --render DataGridVirtualized --show-code
-record DataRow(int Id, string Value);                   // Define data record
-
-var largeDataset = Enumerable.Range(1, 100)             // Create 100 rows
-    .Select(i => new DataRow(i, $"Row {i}"))
-    .ToArray();
-
-new DataGridControl(largeDataset)                       // Create grid with data
-    .WithVirtualize(true)                               // Enable virtual scrolling
-    .WithItemSize(40)                                   // Row height in pixels
-    .WithColumn(new PropertyColumnControl<int>          // Add Id column
-        { Property = "id" }.WithTitle("ID"))
-    .WithColumn(new PropertyColumnControl<string>       // Add Value column
-        { Property = "value" }.WithTitle("Value"))
-```
+> **Property names are camelCase.** The `Property` value on `PropertyColumnControl` must match the camelCase form of the record/class property name (e.g. `"name"` for `Name`, `"unitPrice"` for `UnitPrice`).
 
 ---
 
@@ -110,115 +37,191 @@ new DataGridControl(largeDataset)                       // Create grid with data
 
 ## PropertyColumnControl
 
-Displays a property value from each row. Configure columns with these methods:
+Renders the value of a typed property from each row. The generic type parameter controls sorting and formatting behaviour.
 
 ```csharp
-new PropertyColumnControl<string>                       // Column for string property
-    { Property = "email" }                              // Property name (camelCase)
-    .WithTitle("Email Address")                         // Column header
-    .WithWidth("200px")                                 // Fixed width
-    .WithSortable(true)                                 // Enable sorting (default: true)
-    .WithResizable(true)                                // Enable resizing (default: true)
-    .WithAlign("start")                                 // Cell alignment: start, center, end
+new PropertyColumnControl<string> { Property = "email" }
+    .WithTitle("Email Address")
+    .WithWidth("200px")
+    .WithSortable(true)       // default: true
+    .WithResizable(true)      // default: true
+    .WithAlign("end")         // start | center | end
+    .WithDefaultSort()        // make this the initial sort column
+    .WithFormat("C2")         // standard .NET format string (numbers, dates)
 ```
 
 ## TemplateColumnControl
 
-Custom content for each cell - useful for action buttons:
+Places an arbitrary `UiControl` in every cell of the column. Use this for action buttons, badges, or any custom rendering.
 
 ```csharp
-new TemplateColumnControl(Controls.Button("View"))      // Control to render in each row
-    .WithTitle("Actions")                               // Column header
-    .WithSortable(false)                                // Disable sorting for action columns
-    .WithWidth("100px")                                 // Fixed width
-```
-
-# DataGrid Configuration
-
-| Method | Purpose | Default |
-|--------|---------|---------|
-| `WithVirtualize(bool)` | Enable virtual scrolling | false |
-| `WithItemSize(int)` | Row height in pixels | 50 |
-| `Resizable(bool)` | Allow column resizing | true |
-| `WithPagination(bool)` | Enable pagination | false |
-| `WithItemsPerPage(int)` | Rows per page | - |
-| `WithPageSizeOptions(int[])` | Page size choices | [5,10,25,50,100] |
-| `WithShowHover(bool)` | Highlight row on hover | true |
-| `WithSelectionMode(string)` | Row selection | - |
-| `WithEmptyContent(control)` | Content when data is empty | - |
-| `WithLoading(bool)` | Show loading state | false |
-
-# Column Configuration
-
-| Method | Purpose | Default |
-|--------|---------|---------|
-| `WithTitle(string)` | Column header text | - |
-| `WithWidth(string)` | Fixed width | - |
-| `WithMinWidth(string)` | Minimum width | - |
-| `WithMaxWidth(string)` | Maximum width | - |
-| `WithAlign(string)` | Cell alignment | - |
-| `WithSortable(bool)` | Enable sorting | true |
-| `WithResizable(bool)` | Enable resizing | true |
-| `WithVisible(bool)` | Show/hide column | true |
-| `WithFrozen(bool)` | Freeze column | false |
-
-# Common Patterns
-
-## Data Table with Actions
-
-```csharp --render PatternActions --show-code
-record Employee(string Name, string Email, string Dept); // Define data record
-
-var employees = new[]                                   // Create sample data
-{
-    new Employee("Alice", "alice@co.com", "Engineering"),
-    new Employee("Bob", "bob@co.com", "Marketing"),
-    new Employee("Carol", "carol@co.com", "Sales")
-};
-
-new DataGridControl(employees)                          // Create grid with data
-    .WithColumn(new PropertyColumnControl<string>       // Add Name column
-        { Property = "name" }.WithTitle("Name"))
-    .WithColumn(new PropertyColumnControl<string>       // Add Email column
-        { Property = "email" }.WithTitle("Email"))
-    .WithColumn(new PropertyColumnControl<string>       // Add Department column
-        { Property = "dept" }.WithTitle("Department"))
-    .WithColumn(new TemplateColumnControl(              // Add Actions column
-        Controls.Button("View Details"))                // Action button
-        .WithTitle("").WithWidth("120px").WithSortable(false))
-    .Resizable(true)                                    // Allow column resizing
-    .WithShowHover(true)                                // Highlight on hover
+new TemplateColumnControl(Controls.Button("View"))
+    .WithTitle("Actions")
+    .WithSortable(false)   // action columns are rarely sortable
+    .WithWidth("100px")
 ```
 
 ---
 
-## Read-Only Report Grid
+# Configuration Reference
+
+## DataGrid options
+
+| Method | Purpose | Default |
+|---|---|---|
+| `WithVirtualize(bool)` | Enable virtual (windowed) scrolling | `false` |
+| `WithItemSize(int)` | Row height in pixels (used by virtualizer) | `50` |
+| `Resizable(bool)` | Allow column resizing globally | `true` |
+| `WithPagination(bool)` | Enable built-in pagination | `false` |
+| `WithItemsPerPage(int)` | Rows per page | — |
+| `WithPageSizeOptions(int[])` | Available page size choices | `[5,10,25,50,100]` |
+| `WithShowHover(bool)` | Highlight row under the pointer | `true` |
+| `WithSelectionMode(string)` | Row selection mode | — |
+| `WithEmptyContent(control)` | Content shown when the dataset is empty | — |
+| `WithLoading(bool)` | Show loading skeleton | `false` |
+| `WithGenerateHeader(string)` | Header generation strategy (`"Sticky"`, etc.) | `"Sticky"` |
+
+## Column options (all column types)
+
+| Method | Purpose | Default |
+|---|---|---|
+| `WithTitle(string)` | Column header text | — |
+| `WithWidth(string)` | Fixed CSS width | — |
+| `WithMinWidth(string)` | Minimum CSS width | — |
+| `WithMaxWidth(string)` | Maximum CSS width | — |
+| `WithAlign(string)` | Cell alignment (`start`, `center`, `end`) | — |
+| `WithSortable(bool)` | Enable column sorting | `true` |
+| `WithResizable(bool)` | Enable column resizing | `true` |
+| `WithVisible(bool)` | Show or hide the column | `true` |
+| `WithFrozen(bool)` | Freeze column (pin to left edge) | `false` |
+| `WithFilterable(bool)` | Enable column filtering | — |
+
+## PropertyColumnControl extras
+
+| Method | Purpose |
+|---|---|
+| `WithFormat(string)` | .NET format string (`"C2"`, `"d"`, etc.) |
+| `WithDefaultSort()` | Make this the initial sort column |
+| `WithInitialSortDirection(dir)` | `"Ascending"` or `"Descending"` |
+| `WithEditable()` | Allow inline editing |
+| `WithPlaceholderText(string)` | Placeholder shown for null/empty cells |
+| `WithNullDisplayText(string)` | Text rendered when value is `null` |
+
+---
+
+# Common Patterns
+
+## Pagination for longer lists
+
+```csharp --render DataGridPagination --show-code
+record Item(int Id, string Name, string Category);
+
+var items = Enumerable.Range(1, 25)
+    .Select(i => new Item(i, $"Item {i}", i % 2 == 0 ? "A" : "B"))
+    .ToArray();
+
+new DataGridControl(items)
+    .WithPagination(true)
+    .WithItemsPerPage(5)
+    .WithColumn(new PropertyColumnControl<int>    { Property = "id"       }.WithTitle("ID"))
+    .WithColumn(new PropertyColumnControl<string> { Property = "name"     }.WithTitle("Name"))
+    .WithColumn(new PropertyColumnControl<string> { Property = "category" }.WithTitle("Category"))
+```
+
+## Action buttons
+
+Use `TemplateColumnControl` for per-row commands. Disable sorting on it so users aren't confused by clicking the header.
+
+```csharp --render DataGridActions --show-code
+record User(string Name, string Email);
+
+var users = new[]
+{
+    new User("Alice", "alice@example.com"),
+    new User("Bob",   "bob@example.com"),
+    new User("Carol", "carol@example.com")
+};
+
+var actionButtons = Controls.Stack
+    .WithOrientation(Orientation.Horizontal)
+    .WithHorizontalGap("4px")
+    .WithView(Controls.Button("Edit"))
+    .WithView(Controls.Button("Delete"));
+
+new DataGridControl(users)
+    .WithColumn(new PropertyColumnControl<string> { Property = "name"  }.WithTitle("Name"))
+    .WithColumn(new PropertyColumnControl<string> { Property = "email" }.WithTitle("Email"))
+    .WithColumn(new TemplateColumnControl(actionButtons)
+        .WithTitle("Actions").WithSortable(false))
+```
+
+## Virtual scrolling for large datasets
+
+Enable `WithVirtualize(true)` together with a fixed `WithItemSize` so the renderer can calculate offsets without measuring every row.
+
+```csharp --render DataGridVirtualized --show-code
+record DataRow(int Id, string Value);
+
+var largeDataset = Enumerable.Range(1, 100)
+    .Select(i => new DataRow(i, $"Row {i}"))
+    .ToArray();
+
+new DataGridControl(largeDataset)
+    .WithVirtualize(true)
+    .WithItemSize(40)
+    .WithColumn(new PropertyColumnControl<int>    { Property = "id"    }.WithTitle("ID"))
+    .WithColumn(new PropertyColumnControl<string> { Property = "value" }.WithTitle("Value"))
+```
+
+## Read-only report grid
+
+For display-only tables, disable resizing and right-align numeric columns.
 
 ```csharp --render PatternReport --show-code
-record Report(string Category, decimal Amount);         // Define data record
+record Report(string Category, decimal Amount);
 
-var reportData = new[]                                  // Create sample data
+var reportData = new[]
 {
-    new Report("Sales", 15000.00m),
-    new Report("Marketing", 8500.50m),
+    new Report("Sales",      15000.00m),
+    new Report("Marketing",   8500.50m),
     new Report("Operations", 12300.75m)
 };
 
-new DataGridControl(reportData)                         // Create grid with data
-    .Resizable(false)                                   // Disable column resizing
-    .WithColumn(new PropertyColumnControl<string>       // Add Category column
-        { Property = "category" }                       // Map to Category property
-        .WithTitle("Category")                          // Column header
-        .WithResizable(false))                          // No resizing
-    .WithColumn(new PropertyColumnControl<decimal>      // Add Amount column
-        { Property = "amount" }                         // Map to Amount property
-        .WithTitle("Amount")                            // Column header
-        .WithAlign("end"))                              // Right-align numbers
+new DataGridControl(reportData)
+    .Resizable(false)
+    .WithColumn(new PropertyColumnControl<string>  { Property = "category" }
+        .WithTitle("Category").WithResizable(false))
+    .WithColumn(new PropertyColumnControl<decimal> { Property = "amount" }
+        .WithTitle("Amount").WithAlign("end").WithFormat("C2"))
+```
+
+## Table with action column
+
+A complete employee directory showing name, email, department, and a "View Details" action — a common production pattern.
+
+```csharp --render PatternActions --show-code
+record Employee(string Name, string Email, string Dept);
+
+var employees = new[]
+{
+    new Employee("Alice", "alice@co.com", "Engineering"),
+    new Employee("Bob",   "bob@co.com",   "Marketing"),
+    new Employee("Carol", "carol@co.com", "Sales")
+};
+
+new DataGridControl(employees)
+    .WithColumn(new PropertyColumnControl<string> { Property = "name"  }.WithTitle("Name"))
+    .WithColumn(new PropertyColumnControl<string> { Property = "email" }.WithTitle("Email"))
+    .WithColumn(new PropertyColumnControl<string> { Property = "dept"  }.WithTitle("Department"))
+    .WithColumn(new TemplateColumnControl(Controls.Button("View Details"))
+        .WithTitle("").WithWidth("120px").WithSortable(false))
+    .Resizable(true)
+    .WithShowHover(true)
 ```
 
 ---
 
 # See Also
 
-- [Editor Control](../Editor) - Form generation
-- [Stack Control](../ContainerControl/Stack) - Layout container
+- [Editor Control](../Editor) — Form generation
+- [Stack Control](../ContainerControl/Stack) — Layout container

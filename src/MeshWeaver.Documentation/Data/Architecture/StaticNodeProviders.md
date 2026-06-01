@@ -1,16 +1,11 @@
 ---
 Name: Static Node Providers
-Description: "IStaticNodeProvider pattern for non-persisted built-in MeshNodes and the rationale for removing the old MeshConfiguration.Nodes dictionary."
+Description: "How the IStaticNodeProvider pattern surfaces non-persisted built-in MeshNodes, and why the old MeshConfiguration.Nodes dictionary was removed."
 ---
 
 # Static Node Providers
 
-The mesh exposes a stable set of "built-in" `MeshNode`s — NodeType definitions
-(`Markdown`, `Agent`, `Code`, …), platform agents (`BuiltInAgentProvider`),
-language-model definitions (`BuiltInLanguageModelProvider`), embedded
-documentation, partition meta-nodes. None of these live in persistence;
-they're declared at config time and surfaced uniformly through
-`IStaticNodeProvider`.
+The mesh ships with a stable set of built-in `MeshNode`s — NodeType definitions (`Markdown`, `Agent`, `Code`, …), platform agents, language-model definitions, embedded documentation, partition meta-nodes. None of these live in persistence. They are declared at configuration time and surfaced uniformly through a single, lightweight abstraction: `IStaticNodeProvider`.
 
 ## The contract
 
@@ -21,69 +16,45 @@ public interface IStaticNodeProvider
 }
 ```
 
-Every provider is registered as a DI singleton. The mesh runtime enumerates
-them on demand:
+Every provider is registered as a DI singleton. The mesh runtime enumerates all registered providers on demand through two extension methods in `MeshWeaver.Mesh.Services.StaticNodeProviderExtensions`:
 
 ```csharp
-// Find a specific static node by path
+// Resolve a specific static node by path
 var node = serviceProvider.FindStaticNode("Markdown");
 
-// Walk every registered static node
+// Walk every registered static node across all providers
 foreach (var node in serviceProvider.EnumerateStaticNodes()) { … }
 ```
 
-Both extension methods live in
-`MeshWeaver.Mesh.Services.StaticNodeProviderExtensions`. They are the
-**only** way application code should read static nodes — there is no
-`MeshConfiguration.Nodes` dictionary or any other central registry to dip
-into.
+> **These are the only way application code should read static nodes.** There is no `MeshConfiguration.Nodes` dictionary or any other central registry to reach into.
 
-## Why there is no central dictionary
+## Why the central dictionary was removed
 
-Historically `MeshConfiguration` carried an
-`IReadOnlyDictionary<string, MeshNode> Nodes` populated from
-`MeshBuilder.AddMeshNodes(...)` (group-by-path). That dictionary has been
-removed. Three reasons:
+`MeshConfiguration` used to carry an `IReadOnlyDictionary<string, MeshNode> Nodes` populated by `MeshBuilder.AddMeshNodes(...)`, with a `GroupBy(Path).Last()` de-dup rule baked in. That dictionary has been removed for three interconnected reasons:
 
-1. **It duplicated the provider abstraction.** Every consumer eventually
-   wanted to iterate "all static nodes" or "find one by path" — the same
-   surface `IStaticNodeProvider` already offered. The dictionary was a
-   parallel pipe that some sources fed (AddMeshNodes) and others didn't
-   (BuiltInAgentProvider, DefaultPartitionProvider). Consumers that read
-   only the dictionary missed half the nodes.
-
-2. **The de-dup semantics were ambiguous.** `GroupBy(Path).Last()` baked a
-   "last-write-wins" rule into the type, which forced every consumer to
-   trust that order. Per-provider iteration lets each provider decide its
-   own ordering and a single de-dup happens at the consumption site.
-
-3. **It coupled `MeshConfiguration` to a runtime-mutable concept.** Tests
-   that need different static nodes can't easily swap the dictionary; they
-   *can* register an additional `IStaticNodeProvider`.
+| Problem | Consequence |
+|---|---|
+| **Duplicated the provider abstraction** | `IStaticNodeProvider` already offered "find by path" and "iterate all". The dictionary was a parallel pipe that some sources fed (`AddMeshNodes`) and others never did (`BuiltInAgentProvider`, `DefaultPartitionProvider`). Consumers reading only the dictionary saw half the nodes. |
+| **Ambiguous de-dup semantics** | `GroupBy(Path).Last()` imposed a silent "last-write-wins" ordering on all callers. Per-provider iteration lets each provider own its ordering; de-dup happens exactly once, at the call site that needs it. |
+| **Coupled config to a runtime-mutable concept** | Tests that need different static nodes could not easily swap a dictionary entry; they *can* register an additional `IStaticNodeProvider`. |
 
 ## How `AddMeshNodes` still works
 
-`MeshBuilder.AddMeshNodes(params MeshNode[])` is unchanged — existing call
-sites keep compiling. At `MeshBuilder.Build`, the accumulated list is
-wrapped in a `StaticMeshNodeListProvider` and registered as an
-`IStaticNodeProvider`:
+`MeshBuilder.AddMeshNodes(params MeshNode[])` is unchanged — all existing call sites keep compiling. At `MeshBuilder.Build` time, the accumulated list is wrapped in a `StaticMeshNodeListProvider` and registered as an `IStaticNodeProvider`:
 
 ```csharp
 .AddSingleton<IStaticNodeProvider>(new StaticMeshNodeListProvider(MeshNodes))
 ```
 
-`StaticMeshNodeListProvider.GetStaticNodes()` applies the same
-`GroupBy(Path).Last()` de-dup the dictionary used to apply at build time —
-the semantic is preserved, just deferred to iteration.
+`StaticMeshNodeListProvider.GetStaticNodes()` applies the same `GroupBy(Path).Last()` de-dup the old dictionary used at build time. The semantic is preserved — just deferred to iteration.
 
 ## Adding a new built-in node
 
-Two equivalent paths:
+Two paths are available, and the right choice depends on complexity:
 
-**A — quick (one node):** `builder.AddMeshNodes(myNode)` from an extension
-method. The node flows through the list provider automatically.
+**Option A — quick, for a single node.** Call `builder.AddMeshNodes(myNode)` from an extension method. The node flows through the list provider automatically and requires no extra class.
 
-**B — explicit provider (preferred for any non-trivial set):**
+**Option B — explicit provider (preferred for any non-trivial set).**
 
 ```csharp
 public sealed class MyBuiltInsProvider : IStaticNodeProvider
@@ -95,38 +66,28 @@ public sealed class MyBuiltInsProvider : IStaticNodeProvider
     }
 }
 
-// Register
+// Register alongside other singletons
 services.AddSingleton<IStaticNodeProvider, MyBuiltInsProvider>();
 ```
 
-(B) is preferred when the nodes depend on configuration / embedded resources
-/ require a constructor parameter. (A) is fine for stateless one-off
-registrations from a `NodeType.Add…Type()` extension method.
+Use option B whenever the nodes depend on configuration, embedded resources, or constructor parameters. Option A is fine for stateless, one-off registrations from a `NodeType.Add…Type()` extension method.
 
-## What goes wrong when nodes are missing
+## What happens when a node type is missing
 
-When a `MeshNode` references `nodeType = "X"` and **no** provider returns a
-node at path `X`, `EnrichWithNodeType` runs a 3-second existence probe
-(`path:X` against `IMeshQueryCore`). If the probe returns empty, activation
-fails fast with an error overlay:
+When a `MeshNode` references `nodeType = "X"` and no provider returns a node at path `X`, `EnrichWithNodeType` runs a 3-second existence probe (`path:X` against `IMeshQueryCore`). If the probe returns empty, activation fails fast with a clear error overlay:
 
-> NodeType 'X' is not registered (referenced by instance '<path>').
-> Either register the type via AddXxxType() in your mesh builder, or
-> fix the instance's NodeType field. Activation cannot proceed.
+> NodeType 'X' is not registered (referenced by instance '&lt;path&gt;').  
+> Either register the type via `AddXxxType()` in your mesh builder, or fix the instance's `NodeType` field. Activation cannot proceed.
 
-Before this probe existed, the slow path waited the full
-`SlowPathTimeout = 30s` (stacked to 60s on double-enrichment) for a
-typeStream emission that would never come — and the stuck per-node hub
-jammed the routing action block, cascading 10s timeouts to every other
-activation that posted through the same client. See
-`test/MeshWeaver.Persistence.Test/UnregisteredNodeTypeTest.cs` for the
-regression guard.
+Before this probe existed, the slow path waited the full `SlowPathTimeout = 30s` (stacked to 60s on double-enrichment) for a typeStream emission that would never come. The stuck per-node hub then jammed the routing action block, cascading 10-second timeouts to every other activation posted through the same client.
+
+See `test/MeshWeaver.Persistence.Test/UnregisteredNodeTypeTest.cs` for the regression guard.
 
 ## Related
 
-- `MeshWeaver.Mesh.Services.IStaticNodeProvider` — the interface
-- `MeshWeaver.Mesh.Services.StaticNodeProviderExtensions` — the helpers
-- `MeshWeaver.Mesh.Services.StaticMeshNodeListProvider` — internal wrapper
-  that bridges `AddMeshNodes` to the provider model
-- `MeshWeaver.Graph.Configuration.NodeTypeEnrichmentHelpers` — the
-  existence probe + slow path
+| Symbol | Location |
+|---|---|
+| `IStaticNodeProvider` | `MeshWeaver.Mesh.Services` |
+| `StaticNodeProviderExtensions` | `MeshWeaver.Mesh.Services` — `FindStaticNode` / `EnumerateStaticNodes` helpers |
+| `StaticMeshNodeListProvider` | `MeshWeaver.Mesh.Services` — internal wrapper bridging `AddMeshNodes` to the provider model |
+| `NodeTypeEnrichmentHelpers` | `MeshWeaver.Graph.Configuration` — existence probe and slow path |

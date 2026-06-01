@@ -5,15 +5,29 @@ Description: How to launch C# scripts on the mesh, write progress, and observe r
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
 ---
 
-MeshWeaver runs C# scripts on a per-Activity Roslyn kernel hosted inside the mesh. Scripts have first-class access to the live `IMessageHub`, so they can post messages, mutate nodes, and stream results just like compiled hub handlers — but without a recompile cycle. This page covers (a) how to launch a script, (b) how to emit progress so subscribers see live updates, and (c) the architecture that keeps the host hub responsive while a script runs.
+MeshWeaver runs C# scripts on a per-Activity Roslyn kernel hosted inside the mesh. Scripts have first-class access to the live `IMessageHub`, so they can post messages, mutate nodes, and stream results just like compiled hub handlers — but without a recompile cycle.
 
-> **Lifting an existing operation onto script execution?** Read *[Activity Control Plane → Operations as scripts](ActivityControlPlane#operations-as-scripts--the-canonical-shape-for-export-import-compile-)* first. That section is the canonical shape for export, import, compile, mirror, etc.: form-bound inputs via `JsonPointerReference` → patch `RequestedStatus = Running` → activity-driven progress → result panel subscribes to the same activity. This page documents the lower-level mechanics; that page documents the user-facing pattern.
+This page covers three things:
 
-## The two ways to launch a script
+1. **How to launch a script** — from a Code node, from application code, or from an MCP agent.
+2. **How to emit progress** — so subscribers see live updates as work unfolds.
+3. **The architecture** — how the host hub stays responsive while a script runs.
 
-### 1. From an executable Code node — `ExecuteScriptRequest`
+> **Lifting an existing operation onto script execution?** Read *[Activity Control Plane → Operations as scripts](ActivityControlPlane#operations-as-scripts--the-canonical-shape-for-export-import-compile-)* first. That section is the canonical shape for export, import, compile, mirror, and similar operations: form-bound inputs via `JsonPointerReference` → patch `RequestedStatus = Running` → activity-driven progress → result panel subscribes to the same activity. This page documents the lower-level mechanics; that page documents the user-facing pattern.
 
-The canonical way. Create a `Code` MeshNode with `IsExecutable = true`, then post `ExecuteScriptRequest` to the node's address. The node's hub (a) creates a fresh `Activity` MeshNode for this run, (b) submits the script to the kernel hosted at that activity, and (c) responds with the activity's path so the caller can subscribe to progress.
+---
+
+## Launching a script
+
+There are three entry points, all converging on the same Activity hub and the same progress stream.
+
+### 1. From a Code node — `ExecuteScriptRequest`
+
+This is the canonical path. Create a `Code` MeshNode with `IsExecutable = true`, then post `ExecuteScriptRequest` to the node's address. The node's hub:
+
+- Creates a fresh `Activity` MeshNode for this run.
+- Submits the script to the kernel hosted at that activity.
+- Responds with the activity's path so the caller can subscribe to progress.
 
 ```csharp
 var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
@@ -44,16 +58,18 @@ hub.Observe<ExecuteScriptResponse>(
     });
 ```
 
-Each call to `ExecuteScriptRequest` creates a **new** Activity node in the **user's home** (the partition root, e.g. `rbuergi/_Activity/{guid}`) — not nested under the Code node. The originating Code node is preserved on the Activity's `MainNode` and the `ActivityLog.HubPath`. Reasons:
+Each call to `ExecuteScriptRequest` creates a **new** Activity node in the **user's home** partition (e.g. `rbuergi/_Activity/{guid}`) — not nested under the Code node. The originating Code node is preserved on the Activity's `MainNode` and `ActivityLog.HubPath`. Two reasons for this placement:
 
-1. The user's activity log is the natural place to find every script the user has run, regardless of which Code node it came from.
-2. Routing is reliable for top-level satellite paths; deeply nested satellite paths require an extra MeshNode-materialization step that races `CreateNode` → `SubscribeRequest` and frequently times out.
+| Reason | Detail |
+|---|---|
+| Natural activity log | The user's partition root is the right home for every script run, regardless of which Code node triggered it. |
+| Reliable routing | Top-level satellite paths route predictably; deeply nested satellite paths require an extra materialization step that races `CreateNode` → `SubscribeRequest` and frequently times out. |
 
-Historical runs accumulate as siblings under `{partitionRoot}/_Activity/*`, and the Code node's `LastExecutedAt` field is stamped to the latest run. A "Run" button on Code views (rendered when the caller has `Permission.Execute`) wires this exact request.
+Historical runs accumulate as siblings under `{partitionRoot}/_Activity/*`, and the Code node's `LastExecutedAt` field is stamped on each run. A **Run** button rendered on Code views (visible when the caller has `Permission.Execute`) wires this exact request.
 
 ### 2. From application code — `SubmitCodeRequest` directly
 
-For one-off submissions (interactive markdown cells, REPL-style flows) where you already own an Activity hub address:
+For one-off submissions — interactive markdown cells, REPL-style flows — where you already own an Activity hub address:
 
 ```csharp
 hub.Post(
@@ -63,9 +79,9 @@ hub.Post(
 
 Progress flows into the activity hub's `ActivityLog` content the same way as for `ExecuteScriptRequest`.
 
-### 3. From an MCP agent — `mcp__memex-prod__execute_script`
+### 3. From an MCP agent — `execute_script`
 
-Agents call the same path as `ExecuteScriptRequest` but through the MCP tool surface. Same activity creation, same activity-log streaming. **Agents authoring a new script must follow the same progress conventions below** so a human can watch the execution land in real time.
+Agents call the same path as `ExecuteScriptRequest` but through the MCP tool surface. Activity creation and activity-log streaming behave identically. **Agents authoring a new script must follow the same progress conventions below** so a human watching the run sees it unfold in real time.
 
 ```jsonc
 // Agent-side tool call
@@ -75,20 +91,26 @@ Agents call the same path as `ExecuteScriptRequest` but through the MCP tool sur
 }
 ```
 
+---
+
 ## Writing progress in scripts
 
-Scripts get three globals:
-- **`Mesh`** — the live `IMessageHub` for posting messages, subscribing to streams, anything mesh-side.
-- **`Log`** — an `ILogger` whose every entry appends to the activity's `ActivityLog.Messages` and flushes a snapshot through the activity hub's workspace. **Subscribers see it land within milliseconds of the call.**
-- **`Ct`** — a `CancellationToken` rebound per submission. **Pass it to every cancellable async API** (`Task.Delay(ms, Ct)`, `HttpClient.GetAsync(url, Ct)`, reactive `FirstAsync(predicate).ToTask(Ct)`) so a user-initiated cancel via the Activity Control Plane actually interrupts long-running work mid-flight.
+Every script receives three globals:
 
-### Reactive waiting (reporting status back to the UI)
+| Global | Type | Purpose |
+|---|---|---|
+| `Mesh` | `IMessageHub` | Full mesh access — post messages, subscribe to streams, mutate nodes. |
+| `Log` | `ILogger` | Each call appends to `ActivityLog.Messages` and flushes a snapshot to all subscribers within milliseconds. |
+| `Ct` | `CancellationToken` | Rebound per submission. Pass it to every cancellable async API so user-initiated cancellation actually interrupts in-flight work. |
 
-Don't `Thread.Sleep` and don't `Task.Delay(ms)` without the cancellation token. Both block the work cleanly enough but neither responds to a user clicking Cancel until the wait completes. The right shape uses **reactive subscriptions on the workspace** — both for waiting on external state and for reporting status back to the UI as it changes:
+> **Always pass `Ct` to async calls.** `Task.Delay(ms, Ct)`, `HttpClient.GetAsync(url, Ct)`, `FirstAsync(predicate).ToTask(Ct)` — every cancellable API should receive it. Without `Ct`, clicking Cancel in the Activity Control Plane sends the signal but the script can't act on it until the current await returns.
+
+### Reactive waiting
+
+Don't `Thread.Sleep` and don't `Task.Delay(ms)` without the cancellation token. For waiting on external state, the right shape is a **reactive subscription on the workspace** — it's both cancellable and gives you a natural place to log progress:
 
 ```csharp
-// Wait for a downstream node to flip to a target status — and the wait is
-// cancellable mid-flight if the user clicks Cancel.
+// Wait for a downstream node to flip to a target status — cancellable mid-flight.
 Log.LogInformation("Waiting for downstream job to finish…");
 await Mesh.GetWorkspace()
     .GetMeshNodeStream("rbuergi/downstream-job")
@@ -98,9 +120,9 @@ await Mesh.GetWorkspace()
 Log.LogInformation("Downstream finished — proceeding");
 ```
 
-This is the canonical pattern. Pair it with `Log.LogInformation(...)` checkpoints so the user sees what the script is waiting for. Don't loop-poll; subscribe and let the workspace push you the next emission.
+Don't loop-poll; subscribe and let the workspace push you the next emission.
 
-For longer waits with periodic heartbeats, combine `Observable.Interval` with `TakeUntil`:
+For longer waits with periodic heartbeats, combine `Observable.Interval` with a linked cancellation source:
 
 ```csharp
 Log.LogInformation("Crunching…");
@@ -119,14 +141,16 @@ finally
 }
 ```
 
-Every `Log.LogInformation(...)` snapshot lands on the activity log within milliseconds of the call — that's how the user's UI stripe + activity-details view stay live without polling.
+### Log calls — what they emit
+
+Every `Log.LogInformation(...)` snapshot lands on the activity log within milliseconds of the call. Console output is captured too — each completed line becomes an `Information`-level entry on the same activity log.
 
 ```csharp
 Log.LogInformation("Starting import...");
 Log.LogWarning("Skipping malformed row {Row}", row);
 Log.LogError(ex, "Failed to write {Path}", path);
 
-// Console output is captured too — each completed line lands as
+// Console output is captured — each completed line lands as
 // an Information-level entry on the same activity log.
 Console.WriteLine("Wrote 42 rows");
 ```
@@ -140,14 +164,16 @@ Console.WriteLine("Wrote 42 rows");
 
 ### Rules for agent-authored scripts
 
-When an agent (Claude, Copilot, etc.) writes a script for an MCP user to run, the agent is responsible for emitting useful progress. The user is going to subscribe via the activity stream and watch the run unfold — silent scripts are unobservable scripts.
+When an agent (Claude, Copilot, etc.) writes a script for an MCP user to run, the agent is responsible for emitting useful progress. Silent scripts are unobservable scripts.
 
-- Begin each script with `Log.LogInformation("...")` describing what it is about to do.
-- Emit progress at every coarse-grained step (per file processed, per phase entered).
-- On failure paths, prefer `Log.LogError(ex, "...")` over throwing — the activity will still flip to `Failed` (terminal log levels are aggregated into status), and the message survives so the user can see what went wrong.
-- End with `Log.LogInformation("Completed: {Summary}", summary)` so the user knows the run actually finished and isn't still in flight.
+- Begin with `Log.LogInformation("...")` describing what the script is about to do.
+- Emit progress at every coarse-grained step — per file processed, per phase entered.
+- On failure paths, prefer `Log.LogError(ex, "...")` over throwing. The activity will still flip to `Failed` (terminal log levels are aggregated into status), and the message survives so the user can diagnose what went wrong.
+- End with `Log.LogInformation("Completed: {Summary}", summary)` so the user knows the run is finished and isn't still in flight.
 
-## Observing progress — `GetRemoteStream`
+---
+
+## Observing progress
 
 Subscribers use the canonical CQRS read pattern: subscribe to the activity hub's `MeshNodeReference` stream and observe the `ActivityLog` content updating live.
 
@@ -170,7 +196,7 @@ foreach (var msg in final!.Messages)
     Console.WriteLine($"[{msg.LogLevel}] {msg.Message}");
 ```
 
-For **live** display (e.g. a streaming UI), don't filter by terminal status — just project `log.Messages.Count` and let the subscription tick on every snapshot:
+For **live display** — a streaming UI stripe or detail view — don't filter by terminal status. Just project `Messages.Count` and let the subscription tick on every snapshot:
 
 ```csharp
 var liveMessageCount = stream
@@ -178,11 +204,13 @@ var liveMessageCount = stream
     .DistinctUntilChanged();
 ```
 
-**Never query for the activity log** with `IMeshService.QueryAsync("path:...")`. The query path is eventually consistent and will lag behind the workspace stream, so you may miss intermediate snapshots or read a stale `Status`. The `GetRemoteStream` pattern bypasses the index and observes the owning hub's workspace directly. See `Doc/Architecture/CqrsAndContentAccess.md`.
+> **Never query for the activity log** with `IMeshService.QueryAsync("path:...")`. The query path is eventually consistent and will lag behind the workspace stream — you may miss intermediate snapshots or read a stale `Status`. `GetRemoteStream` bypasses the index and observes the owning hub's workspace directly. See [CqrsAndContentAccess.md](CqrsAndContentAccess).
 
-## Why progress is timely — the architecture
+---
 
-The Activity hub does **not** run the script itself. When a `SubmitCodeRequest` arrives, a thin `KernelContainer` forwarder spins up a hosted child hub (`{activity}/_KernelExec`) and delegates execution there. Scripts run inside the executor's action block; the Activity hub's action block stays free to (a) accept new submissions and (b) process the `DataChangeRequest`s the script's `Log` writer pushes back.
+## How progress stays timely — the architecture
+
+The Activity hub does **not** run the script itself. When a `SubmitCodeRequest` arrives, a thin `KernelContainer` forwarder spins up a hosted child hub (`{activity}/_KernelExec`) and delegates execution there. Scripts run inside the executor's action block; the Activity hub's action block stays free to accept new submissions and process the `DataChangeRequest`s the script's `Log` writer pushes back.
 
 ```mermaid
 sequenceDiagram
@@ -207,12 +235,48 @@ sequenceDiagram
     Activity-->>Caller: SubmitCodeResponse
 ```
 
-Because the executor's address is internal — never exposed to clients — every external caller and every subscriber sees the kernel as a single addressable surface (the Activity hub). The forwarding is an implementation detail.
+Because the executor's address is internal and never exposed to clients, every external caller and every subscriber sees the kernel as a single addressable surface — the Activity hub. The forwarding is an implementation detail.
+
+---
+
+## Live demo — script globals available in cells
+
+The same `Log`, `Mesh`, and `Ct` globals available inside a mesh script are also available in interactive markdown cells. This cell renders the names and types of the three globals:
+
+```csharp --render ScriptGlobalsDemo --show-code
+var rows = new[]
+{
+    ("Log",  "ILogger",         "Appends to ActivityLog.Messages; each call flushes a snapshot to all subscribers."),
+    ("Mesh", "IMessageHub",     "Full mesh access — post messages, subscribe to streams, mutate nodes."),
+    ("Ct",   "CancellationToken", "Rebound per submission. Pass to every cancellable async API."),
+};
+
+var header = MeshWeaver.Layout.Controls.Html(
+    "<table style='border-collapse:collapse;width:100%'>" +
+    "<thead><tr>" +
+    "<th style='text-align:left;padding:6px 12px;border-bottom:2px solid #e2e8f0'>Global</th>" +
+    "<th style='text-align:left;padding:6px 12px;border-bottom:2px solid #e2e8f0'>Type</th>" +
+    "<th style='text-align:left;padding:6px 12px;border-bottom:2px solid #e2e8f0'>Purpose</th>" +
+    "</tr></thead><tbody>" +
+    string.Join("", rows.Select((r, i) =>
+        $"<tr style='background:{( i % 2 == 0 ? "#f8fafc" : "white" )}'>" +
+        $"<td style='padding:6px 12px;font-family:monospace;font-weight:600'>{r.Item1}</td>" +
+        $"<td style='padding:6px 12px;font-family:monospace;color:#6366f1'>{r.Item2}</td>" +
+        $"<td style='padding:6px 12px;color:#374151'>{r.Item3}</td>" +
+        "</tr>")) +
+    "</tbody></table>");
+
+header
+```
+
+---
 
 ## Common pitfalls
 
-- **`await` inside a click handler that wraps `ExecuteScriptRequest`.** Click actions must be sync. Use `hub.Post(...)` (fire and forget) or `hub.Observe(...).Subscribe(...)`. See `Doc/Architecture/AsynchronousCalls.md`.
-- **Subscribing only to `SubmitCodeResponse`.** That's the completion ack — it doesn't carry progress. Subscribe to the activity log via `GetRemoteStream` for the live feed.
-- **Polling `IMeshService.QueryAsync` for activity status.** Eventually consistent, will lag. Use `GetRemoteStream`.
-- **`Console.WriteLine` from heavy parallel loops.** Each line becomes an activity-log message; flooding the log overwhelms the subscriber and may DoS the workspace. Aggregate before logging.
-- **Long-running synchronous CPU loops without log calls.** No `Log` call → no snapshot → subscribers see nothing for the duration of the loop. Add a heartbeat log if a phase runs longer than ~1 s.
+| Pitfall | What goes wrong | Fix |
+|---|---|---|
+| `await` inside a click handler wrapping `ExecuteScriptRequest` | Click actions must be synchronous. | Use `hub.Post(...)` (fire-and-forget) or `hub.Observe(...).Subscribe(...)`. See [AsynchronousCalls.md](AsynchronousCalls). |
+| Subscribing only to `SubmitCodeResponse` | That's the completion ack — it carries no progress. | Subscribe to the activity log via `GetRemoteStream`. |
+| Polling `IMeshService.QueryAsync` for activity status | Eventually consistent, will lag. | Use `GetRemoteStream` — it observes the owning hub's workspace directly. |
+| `Console.WriteLine` from heavy parallel loops | Every line becomes an activity-log message; flooding the log overwhelms subscribers and may DoS the workspace. | Aggregate before logging — one line per step, not per iteration. |
+| Long synchronous CPU loops with no log calls | No `Log` call → no snapshot → subscribers see nothing. | Add a heartbeat log if a phase runs longer than ~1 s. |

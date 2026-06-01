@@ -8,23 +8,30 @@ icon: /static/NodeTypeIcons/document.svg
 
 # Adding a New Node Type
 
-This is the canonical recipe for introducing a new built-in node type with
-its own partition (e.g. `Agent`, `LanguageModel`, `Thread`). The pattern is
-the same in every case — get one wrong and the symptoms cascade
-(empty dropdowns, missing partition, types deserialised as raw
-`JsonElement`, sticky cluster errors). Following all six steps in order
-makes the type Just Work.
+Every built-in type — `Agent`, `LanguageModel`, `Thread` — follows the same six-step recipe. The pattern is strict by design: miss any one piece and the symptoms cascade in ways that look unrelated (empty dropdowns, deserialization falling back to raw `JsonElement`, sticky cluster errors). Follow all six steps in order and the type just works.
 
-## The six pieces
+> **Before you start**, look at the reference implementations listed at the bottom of this page. Reading one concrete example end-to-end takes five minutes and prevents the most common mistakes.
 
-A new node type needs **all six** of the following. Skipping any one
-leaves a partial registration that fails in subtle ways.
+---
+
+## The Six Required Pieces
+
+A new node type needs **all six** of the following. The table below is a quick orientation; the sections that follow give the full detail.
+
+| # | What | Why it matters |
+|---|---|---|
+| 1 | Content record | The typed payload for `MeshNode.Content` |
+| 2 | NodeType definition class | Discriminator constant + partition meta-node |
+| 3 | `Add{NodeType}Type` extension | Wires the partition, access policy, and provider into the mesh |
+| 4 | TypeRegistry entry | Maps the `$type` discriminator to the runtime type |
+| 5 | Call in the module entry point | Keeps every type under one auditable umbrella |
+| 6 | Static-node provider *(if needed)* | Emits built-in instances (agents, platform models, …) |
+
+---
 
 ### 1. Content record
 
-The deserialised payload that lives in `MeshNode.Content`. A plain
-record. Keep it data-only — no behaviour, no DI. Carries the
-content-shape contract for the type.
+The deserialized payload that lives in `MeshNode.Content`. Keep it a plain record — data only, no behavior, no DI. This is the content-shape contract for the type.
 
 ```csharp
 // src/MeshWeaver.AI/ModelDefinition.cs
@@ -39,10 +46,11 @@ public record ModelDefinition
 }
 ```
 
+---
+
 ### 2. NodeType definition class
 
-A static class that holds the discriminator constant and the partition
-meta-node. Mirrors `AgentNodeType.cs` / `LanguageModelNodeType.cs`.
+A static class that holds the discriminator constant and the partition meta-node. Mirrors `AgentNodeType.cs` and `LanguageModelNodeType.cs`.
 
 ```csharp
 public static class LanguageModelNodeType
@@ -62,19 +70,19 @@ public static class LanguageModelNodeType
 }
 ```
 
-The `HubConfiguration` lambda is what tells per-node hubs to deserialise
-`Content` as `ModelDefinition` rather than leaving it as
-`JsonElement`. **Skipping `WithContentType<T>()` is the #1 cause of
-"my dropdown is empty even though the synced query returned 9 nodes"
-bugs** — Content arrives unparsed and downstream `Content is T` casts
-fail silently.
+The `HubConfiguration` lambda tells per-node hubs to deserialize `Content` as `ModelDefinition` instead of leaving it as a raw `JsonElement`.
+
+> **Skipping `WithContentType<T>()` is the #1 cause of "my dropdown is empty even though the synced query returned 9 nodes" bugs.** Content arrives unparsed and all downstream `Content is T` casts fail silently.
+
+---
 
 ### 3. `Add{NodeType}Type` extension on MeshBuilder
 
-Wires four things at builder time:
-- The partition meta-node (so `path:LanguageModel` lookup hits)
+This extension wires four things at builder time:
+
+- The partition meta-node (so a `path:LanguageModel` lookup succeeds)
 - Public-read access policy for the type
-- A static-node provider (only if the type has built-in static instances)
+- A static-node provider (only if the type has built-in instances)
 - Any ancillary singletons the provider depends on
 
 ```csharp
@@ -94,17 +102,13 @@ public static TBuilder AddLanguageModelType<TBuilder>(this TBuilder builder)
 }
 ```
 
-**`AddMeshNodes(CreateMeshNode())` is mandatory.** It's what registers
-the partition meta-node so a `path:Model` lookup returns
-`{ Path: "Model", NodeType: "LanguageModel" }`. Without it the
-partition exists conceptually but isn't discoverable; the chat
-dropdown's `namespace:Model` query returns nothing.
+> **`AddMeshNodes(CreateMeshNode())` is mandatory.** It registers the partition meta-node so `path:Model` returns `{ Path: "Model", NodeType: "LanguageModel" }`. Without it the partition exists conceptually but is undiscoverable — the chat dropdown's `namespace:Model` query returns nothing.
 
-### 4. Type registry entry
+---
 
-The TypeRegistry maps `$type` JSON discriminators to runtime types.
-Without an entry, polymorphic deserialisation falls through to
-`JsonElement` and downstream `Content is T` checks fail.
+### 4. TypeRegistry entry
+
+The TypeRegistry maps `$type` JSON discriminators to runtime types. Without an entry, polymorphic deserialization falls through to `JsonElement` and all downstream `Content is T` checks fail silently.
 
 ```csharp
 // src/MeshWeaver.AI/AIExtensions.cs — AddAITypes()
@@ -115,27 +119,20 @@ public static ITypeRegistry AddAITypes(this ITypeRegistry typeRegistry)
         ...;
 ```
 
-Then `AddAITypes()` itself must be called on **every hub that reads
-the content** — at minimum the mesh hub AND every per-user portal
-hub. Look at `AIExtensions.AddAI()` for the canonical wiring:
+`AddAITypes()` must then be called on **every hub that reads the content** — at minimum the mesh hub and every per-user portal hub. See `AIExtensions.AddAI()` for the canonical wiring:
 
 ```csharp
 .ConfigureHub(config => { config.TypeRegistry.AddAITypes(); return config; })
 .ConfigureDefaultNodeHub(config => { config.TypeRegistry.AddAITypes(); ... })
 ```
 
-A type registered on the mesh hub but missed on the portal hub
-deserialises in queries that hit the mesh, but appears as raw JSON in
-queries scoped to the portal. That's the symptom that looks like "the
-dropdown is full when I navigate but empty after a reload".
+> A type registered on the mesh hub but missed on the portal hub deserializes correctly in queries that hit the mesh, but appears as raw JSON in queries scoped to the portal. The symptom: "the dropdown is full when I navigate but empty after a reload."
 
-### 5. Wire-up call in `AddAI()` (or your equivalent module entry)
+---
 
-The point at which everything comes together. **Every type belongs
-under one umbrella extension** (`AddAI()`, `AddGraph()`, etc.) — never
-register a type directly from app code. That keeps the type catalog
-auditable and prevents "I added the type but forgot the registry"
-half-states.
+### 5. Wire-up call in `AddAI()` (or your module entry point)
+
+This is where everything comes together. **Every type belongs under one umbrella extension** (`AddAI()`, `AddGraph()`, etc.) — never register a type directly from app code. This keeps the type catalog auditable and prevents "I added the type but forgot the registry" half-states.
 
 ```csharp
 public TBuilder AddAI()
@@ -151,13 +148,14 @@ public TBuilder AddAI()
 }
 ```
 
-### 6. Static-node provider (optional, for built-in instances)
+---
 
-If the type ships with built-in nodes (built-in agents, platform
-models, embedded markdown), implement `IStaticNodeProvider` and emit
-them from `GetStaticNodes()`. Two patterns:
+### 6. Static-node provider *(optional — for built-in instances)*
 
-**Direct (ships from embedded resources):**
+If the type ships with built-in nodes (built-in agents, platform models, embedded markdown), implement `IStaticNodeProvider` and emit them from `GetStaticNodes()`. Two patterns are in common use:
+
+**Direct — ships from embedded resources:**
+
 ```csharp
 public class BuiltInAgentProvider : IStaticNodeProvider
 {
@@ -168,7 +166,8 @@ public class BuiltInAgentProvider : IStaticNodeProvider
 }
 ```
 
-**Config-driven (reads `IConfiguration` at runtime):**
+**Config-driven — reads `IConfiguration` at runtime:**
+
 ```csharp
 public class BuiltInLanguageModelProvider : IStaticNodeProvider
 {
@@ -179,29 +178,28 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
 }
 ```
 
-Note the constructor takes **plain singleton** options, not
-`IOptions<T>`. The `IOptions<>` pipeline doesn't propagate Configure
-delegates across the mesh hub's DI scope; live `namespace:Model`
-queries returned only the access policy because Sources was empty at
-provider-resolve time. Use a direct singleton + idempotent `Add()` and
-mutate it from `ConfigureServices` blocks. See
-`LanguageModelNodeType.AddLanguageModelCatalogSource` for the helper.
+Note that the constructor takes **a plain singleton** options object, not `IOptions<T>`. The `IOptions<>` pipeline does not propagate `Configure` delegates across the mesh hub's DI scope — live `namespace:Model` queries returned only the access policy because `Sources` was empty at provider-resolve time. Use a direct singleton with idempotent `Add()` and mutate it from `ConfigureServices` blocks. See `LanguageModelNodeType.AddLanguageModelCatalogSource` for the helper.
 
-## Common pitfalls (and how to avoid them)
+---
 
-| Symptom | Skipped step |
+## Common Pitfalls
+
+| Symptom | Root cause |
 |---|---|
-| `Content` is `JsonElement` instead of typed record | (4) TypeRegistry entry, OR (4) `AddAITypes` not called on the consuming hub |
-| `path:Foo` returns nothing | (3) `AddMeshNodes(CreateMeshNode())` not called |
-| Partition exists but dropdown is empty | (6) Provider didn't emit; or `IConfiguration` is missing the section it reads from |
-| `nodeType:Foo|Bar` query returns Bar but not Foo | (4) Foo's TypeRegistry entry missing in one of the queried hubs |
-| New type works in dev but not in prod | Type registered in monolith config but not in the AppHost's per-process config (env vars, `Parameters:*`) |
+| `Content` is `JsonElement` instead of a typed record | TypeRegistry entry missing, **or** `AddAITypes` not called on the consuming hub |
+| `path:Foo` returns nothing | `AddMeshNodes(CreateMeshNode())` not called in the `Add{NodeType}Type` extension |
+| Partition exists but dropdown is empty | Provider didn't emit; or `IConfiguration` is missing the section the provider reads |
+| `nodeType:Foo\|Bar` query returns Bar but not Foo | Foo's TypeRegistry entry missing on one of the queried hubs |
+| New type works in dev but not in prod | Type registered in the monolith config but not in the AppHost's per-process config (env vars, `Parameters:*`) |
 
-## Tests you should write
+---
 
-For each new node type, write **two** test layers:
+## Tests to Write
 
-**Unit test for the provider:**
+For each new node type, write **two** test layers — one for provider logic, one for the registration pipeline.
+
+**Unit test for the provider** — catches logic regressions:
+
 ```csharp
 public class FooProviderTest
 {
@@ -210,8 +208,7 @@ public class FooProviderTest
 }
 ```
 
-**Integration test for the synced-query path** (the one the chat /
-catalog actually uses) — backed by `MonolithMeshTestBase`:
+**Integration test for the synced-query path** — catches registration-pipeline regressions. This is the hardest class of bug because the runtime symptom (empty dropdowns) is far removed from the cause (a missing wiring step). Back it with `MonolithMeshTestBase`:
 
 ```csharp
 public class FooSyncedQueryTest : MonolithMeshTestBase
@@ -226,35 +223,25 @@ public class FooSyncedQueryTest : MonolithMeshTestBase
 }
 ```
 
-The provider unit test catches logic regressions; the integration test
-catches *registration-pipeline* regressions — the hardest class of bug
-because the runtime symptom (empty dropdowns) is far from the cause
-(missing wiring on one of the six pieces above). See
-`test/MeshWeaver.Hosting.Monolith.Test/LanguageModelSyncedQueryTest.cs`
-for the canonical example.
+See `test/MeshWeaver.Hosting.Monolith.Test/LanguageModelSyncedQueryTest.cs` for the canonical example.
 
-## Consuming the new type's instances
+---
 
-Anything that reads `nodeType:LanguageModel` (or any synced collection of
-MeshNodes) **must** go through `workspace.GetQuery(id, queries...)` —
-the `SyncedQueryMeshNodes` API. See **[Synced Mesh Node Queries](SyncedMeshNodeQueries.md)**
-for the rationale, the canonical patterns, and what NOT to do. The short
-version:
+## Consuming the New Type's Instances
 
-- ✅ `workspace.GetQuery(id, "namespace:Foo nodeType:Foo")` — gives you
-  provider fan-out (incl. static nodes), all-Initial gating, path-keyed
-  dedup, and workspace-level caching.
-- 🛑 Don't roll your own merge with `IMeshService.ObserveQuery` —
-  loses every one of those properties. Most notably,
-  `IMeshQueryCore.ObserveQuery` does NOT see static-node-provider
-  entries; your dropdown will be silently empty even though MCP shows
-  9 nodes.
+Anything that reads `nodeType:LanguageModel` (or any synced collection of MeshNodes) **must** go through `workspace.GetQuery(id, queries...)` — the `SyncedQueryMeshNodes` API. See **[Synced Mesh Node Queries](SyncedMeshNodeQueries.md)** for the full rationale and canonical patterns.
 
-## Reference implementations
+The short version:
 
-- **Agent** (with embedded-markdown static provider):
-  `src/MeshWeaver.AI/AgentNodeType.cs` + `BuiltInAgentProvider.cs`
-- **LanguageModel** (with config-driven static provider):
-  `src/MeshWeaver.AI/LanguageModelNodeType.cs` + `BuiltInLanguageModelProvider.cs`
-- **Thread / ThreadMessage** (no static provider, content-only):
-  `src/MeshWeaver.AI/ThreadNodeType.cs`
+- `workspace.GetQuery(id, "namespace:Foo nodeType:Foo")` — gives you provider fan-out (including static nodes), all-Initial gating, path-keyed dedup, and workspace-level caching.
+- **Do not** roll your own merge with `IMeshService.ObserveQuery` — you lose every one of those properties. Most notably, `IMeshQueryCore.ObserveQuery` does NOT see static-node-provider entries; your dropdown will be silently empty even though MCP shows 9 nodes.
+
+---
+
+## Reference Implementations
+
+| Type | Files | Notes |
+|---|---|---|
+| **Agent** | `src/MeshWeaver.AI/AgentNodeType.cs` + `BuiltInAgentProvider.cs` | Embedded-markdown static provider |
+| **LanguageModel** | `src/MeshWeaver.AI/LanguageModelNodeType.cs` + `BuiltInLanguageModelProvider.cs` | Config-driven static provider |
+| **Thread / ThreadMessage** | `src/MeshWeaver.AI/ThreadNodeType.cs` | No static provider; content-only |

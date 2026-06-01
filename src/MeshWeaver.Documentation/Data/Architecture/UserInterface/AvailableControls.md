@@ -1,19 +1,21 @@
 ---
 Name: Available Controls Reference
 Category: Documentation
-Description: Complete reference for MeshWeaver UI controls including layout, input, display, and navigation components
+Description: Complete reference for MeshWeaver UI controls — layout, input, display, navigation, and container components, all created server-side via the Controls factory.
 Icon: /static/DocContent/Architecture/UserInterface/AvailableControls/icon.svg
 ---
 
-MeshWeaver provides a comprehensive library of UI controls defined server-side and rendered in the browser. All controls are created using the `Controls` factory class.
+MeshWeaver's UI is built from a library of composable controls defined entirely in C# on the server. The browser renders whatever the server describes — there is no client-side component code to write. Every control is created through the `Controls` factory class and composed into trees that update reactively as your data changes.
 
-# Layout Controls
+---
 
-Controls for organizing and structuring UI content.
+## Layout Controls
 
-## StackControl
+Layout controls determine how other controls are spatially arranged on the page.
 
-Arranges children vertically or horizontally.
+### StackControl
+
+The workhorse layout control. Arranges children in a single axis — vertical by default, or horizontal when you need a toolbar or button row.
 
 ```csharp
 Controls.Stack()
@@ -25,14 +27,16 @@ Controls.Stack()
 ```
 
 | Property | Type | Description |
-|----------|------|-------------|
-| `Orientation` | `Orientation` | Vertical or Horizontal layout |
-| `Spacing` | `string` | Gap between children (CSS value) |
+|---|---|---|
+| `Orientation` | `Orientation` | `Vertical` (default) or `Horizontal` |
+| `Spacing` | `string` | Gap between children — any CSS value |
 | `Children` | `IEnumerable<UiControl>` | Child controls |
 
-## GridControl
+---
 
-CSS Grid-based layout for complex arrangements.
+### GridControl
+
+When a single axis isn't enough, `GridControl` exposes the full power of CSS Grid for arbitrary two-dimensional layouts.
 
 ```csharp
 Controls.Grid()
@@ -46,14 +50,16 @@ Controls.Grid()
 ```
 
 | Property | Type | Description |
-|----------|------|-------------|
-| `Columns` | `string` | CSS grid-template-columns |
-| `Rows` | `string` | CSS grid-template-rows |
+|---|---|---|
+| `Columns` | `string` | CSS `grid-template-columns` value |
+| `Rows` | `string` | CSS `grid-template-rows` value |
 | `Gap` | `string` | Gap between grid cells |
 
-## LayoutAreaControl
+---
 
-Defines a named region that can be updated independently.
+### LayoutAreaControl
+
+A named region that can be updated independently of its surroundings. Use it to carve a page into independently-refreshable zones — a detail panel that reloads on row selection, for example.
 
 ```csharp
 Controls.LayoutArea("detail-panel")
@@ -61,17 +67,19 @@ Controls.LayoutArea("detail-panel")
 ```
 
 | Property | Type | Description |
-|----------|------|-------------|
+|---|---|---|
 | `Area` | `string` | Unique area identifier |
 | `View` | `Func<LayoutAreaContext, UiControl>` | View rendering function |
 
-# Input Controls
+---
 
-Controls for user data entry.
+## Input Controls
 
-## TextFieldControl
+Input controls bind to your data model and surface user edits through the reactive data pipeline.
 
-Single-line text input with validation.
+### TextFieldControl
+
+Single-line text input with built-in validation support.
 
 ```csharp
 Controls.TextField("username")
@@ -82,17 +90,19 @@ Controls.TextField("username")
 ```
 
 | Property | Type | Description |
-|----------|------|-------------|
+|---|---|---|
 | `DataContext` | `string` | Binding path for the value |
 | `Label` | `string` | Field label |
 | `Placeholder` | `string` | Placeholder text |
-| `Required` | `bool` | Whether field is required |
+| `Required` | `bool` | Whether the field is required |
 | `MaxLength` | `int?` | Maximum character length |
-| `Disabled` | `bool` | Disable input |
+| `Disabled` | `bool` | Disables the input |
 
-## NumberFieldControl
+---
 
-Numeric input with formatting and validation.
+### NumberFieldControl
+
+Numeric input with formatting options and min/max/step constraints.
 
 ```csharp
 Controls.NumberField("amount")
@@ -104,15 +114,17 @@ Controls.NumberField("amount")
 ```
 
 | Property | Type | Description |
-|----------|------|-------------|
+|---|---|---|
 | `Min` | `double?` | Minimum value |
 | `Max` | `double?` | Maximum value |
 | `Step` | `double?` | Increment step |
-| `Format` | `string` | Number format string |
+| `Format` | `string` | .NET number format string |
 
-## SelectControl
+---
 
-Dropdown selection from a list of options.
+### SelectControl
+
+Dropdown selection from a static or dynamic list of options.
 
 ```csharp
 Controls.Select("status")
@@ -125,23 +137,27 @@ Controls.Select("status")
 ```
 
 | Property | Type | Description |
-|----------|------|-------------|
+|---|---|---|
 | `Options` | `IEnumerable<SelectOption>` | Available choices |
-| `Multiple` | `bool` | Allow multiple selection |
+| `Multiple` | `bool` | Allow multi-selection |
 | `Searchable` | `bool` | Enable search filtering |
 
-## CheckboxControl
+---
 
-Boolean toggle input.
+### CheckboxControl
+
+A simple boolean toggle, typically used inside a form.
 
 ```csharp
 Controls.Checkbox("agreed")
     .WithLabel("I agree to the terms")
 ```
 
-## DatePickerControl
+---
 
-Date selection with calendar popup.
+### DatePickerControl
+
+Date selection backed by a calendar popup, with optional min/max bounds.
 
 ```csharp
 Controls.DatePicker("startDate")
@@ -151,18 +167,20 @@ Controls.DatePicker("startDate")
 ```
 
 | Property | Type | Description |
-|----------|------|-------------|
+|---|---|---|
 | `MinDate` | `DateTime?` | Earliest selectable date |
 | `MaxDate` | `DateTime?` | Latest selectable date |
-| `Format` | `string` | Date display format |
+| `Format` | `string` | Date display format string |
 
-# Display Controls
+---
 
-Controls for presenting data.
+## Display Controls
 
-## TextControl
+Display controls present data to the user without expecting direct edits.
 
-Text display with optional styling.
+### TextControl
+
+Styled text with configurable typography and colour. Covers headings, body copy, captions, and everything in between.
 
 ```csharp
 Controls.Text("Welcome to MeshWeaver")
@@ -171,14 +189,16 @@ Controls.Text("Welcome to MeshWeaver")
 ```
 
 | Property | Type | Description |
-|----------|------|-------------|
+|---|---|---|
 | `Content` | `string` | Text content |
-| `Typography` | `Typography` | Text style (H1-H6, Body, Caption) |
-| `Color` | `string` | Text color |
+| `Typography` | `Typography` | H1–H6, Body, Caption, and more |
+| `Color` | `string` | Text colour |
 
-## DataGridControl
+---
 
-Tabular data display with sorting, filtering, and pagination.
+### DataGridControl
+
+Full-featured tabular display with sorting, filtering, pagination, and row-click actions — the standard way to render any collection.
 
 ```csharp
 Controls.DataGrid(claimsData)
@@ -193,16 +213,18 @@ Controls.DataGrid(claimsData)
 ```
 
 | Property | Type | Description |
-|----------|------|-------------|
-| `Data` | `object` | Data source (collection) |
+|---|---|---|
+| `Data` | `object` | Data source (any collection) |
 | `Columns` | `IEnumerable<Column>` | Column definitions |
 | `PageSize` | `int` | Rows per page |
 | `Sortable` | `bool` | Enable column sorting |
 | `Filterable` | `bool` | Enable column filtering |
 
-## CardControl
+---
 
-Content container with optional header and actions.
+### CardControl
+
+A visually distinct container with an optional title, subtitle, body, and action strip — useful for summary panels and entity detail views.
 
 ```csharp
 Controls.Card()
@@ -216,9 +238,11 @@ Controls.Card()
     )
 ```
 
-## ChartControl
+---
 
-Data visualization with various chart types.
+### ChartControl
+
+Data visualisation powered by Chart.js, supporting bar, line, pie, area, and other chart types.
 
 ```csharp
 Controls.Chart()
@@ -229,40 +253,45 @@ Controls.Chart()
 ```
 
 | Property | Type | Description |
-|----------|------|-------------|
+|---|---|---|
 | `Type` | `ChartType` | Bar, Line, Pie, Area, etc. |
 | `Data` | `object` | Chart data source |
 | `XAxis` | `string` | X-axis data field |
 | `YAxis` | `string` | Y-axis data field |
 
-# Action Controls
+---
 
-Controls for user interactions.
+## Action Controls
 
-## ButtonControl
+Action controls let the user trigger operations. Their click handlers run server-side — you always have direct access to the hub and the full mesh.
 
-Clickable button with action handler.
+### ButtonControl
+
+The primary interaction control. Supports variants, icons, and a synchronous click handler.
 
 ```csharp
 Controls.Button("Submit")
     .WithVariant(ButtonVariant.Primary)
     .WithIcon("Send")
-    .WithClickAction(async context => {
-        await context.Hub.Post(new SubmitRequest());
+    .WithClickAction(context => {
+        context.Hub.Post(new SubmitRequest());
+        return Task.CompletedTask;
     })
 ```
 
 | Property | Type | Description |
-|----------|------|-------------|
+|---|---|---|
 | `Label` | `string` | Button text |
 | `Variant` | `ButtonVariant` | Primary, Secondary, Outlined, Text |
 | `Icon` | `string` | Icon name |
-| `Disabled` | `bool` | Disable button |
+| `Disabled` | `bool` | Disables the button |
 | `ClickAction` | `Func<ClickContext, Task>` | Click handler |
 
-## IconButtonControl
+---
 
-Icon-only button for compact actions.
+### IconButtonControl
+
+A compact, icon-only button suited to inline actions such as delete, edit, or expand. Always pair with a tooltip for accessibility.
 
 ```csharp
 Controls.IconButton("Delete")
@@ -271,9 +300,11 @@ Controls.IconButton("Delete")
     .WithClickAction(OnDelete)
 ```
 
-## MenuControl
+---
 
-Dropdown menu with action items.
+### MenuControl
+
+A contextual dropdown menu triggered by any control — typically an `IconButton` with a "more_vert" icon.
 
 ```csharp
 Controls.Menu()
@@ -286,13 +317,13 @@ Controls.Menu()
     )
 ```
 
-# Navigation Controls
+---
 
-Controls for navigation and structure.
+## Navigation Controls
 
-## TabsControl
+### TabsControl
 
-Tabbed content navigation.
+Switches between named content panels without a full page reload.
 
 ```csharp
 Controls.Tabs()
@@ -303,9 +334,11 @@ Controls.Tabs()
     )
 ```
 
-## BreadcrumbControl
+---
 
-Navigation breadcrumb trail.
+### BreadcrumbControl
+
+Shows the user's position in the mesh hierarchy and lets them jump back up.
 
 ```csharp
 Controls.Breadcrumb()
@@ -316,22 +349,26 @@ Controls.Breadcrumb()
     )
 ```
 
-## LinkControl
+---
 
-Navigation link within the mesh.
+### LinkControl
+
+A navigational link to any path within the mesh.
 
 ```csharp
 Controls.Link("View Claim")
     .WithPath("Insurance/Claims/CLM-2024-001")
 ```
 
-# Container Controls
+---
 
-Controls for grouping and organization.
+## Container Controls
 
-## DialogControl
+Container controls group other controls and add behaviour — form validation, modal presentation, or collapsible visibility.
 
-Modal dialog with content and actions.
+### DialogControl
+
+A modal dialog with a content area and an action strip. Show it programmatically from a button's click handler.
 
 ```csharp
 Controls.Dialog()
@@ -343,9 +380,11 @@ Controls.Dialog()
     )
 ```
 
-## EditFormControl
+---
 
-Form container with validation and submission.
+### EditFormControl
+
+Wraps input controls in a validated form container, giving you a single `SubmitAction` entry point instead of wiring each field individually.
 
 ```csharp
 Controls.EditForm(claimData)
@@ -358,14 +397,16 @@ Controls.EditForm(claimData)
 ```
 
 | Property | Type | Description |
-|----------|------|-------------|
+|---|---|---|
 | `Data` | `object` | Form data object |
 | `Children` | `IEnumerable<UiControl>` | Form field controls |
 | `SubmitAction` | `Func<SubmitContext, Task>` | Form submission handler |
 
-## ExpansionPanelControl
+---
 
-Collapsible content section.
+### ExpansionPanelControl
+
+A collapsible section that keeps the page tidy by hiding infrequently-needed content behind a clickable header.
 
 ```csharp
 Controls.ExpansionPanel()
@@ -374,11 +415,15 @@ Controls.ExpansionPanel()
     .WithExpanded(false)
 ```
 
-# Utility Controls
+---
 
-## SpinnerControl
+## Utility Controls
 
-Loading indicator.
+Small, single-purpose controls that fill common UI gaps.
+
+### SpinnerControl
+
+A loading indicator for asynchronous operations.
 
 ```csharp
 Controls.Spinner()
@@ -386,9 +431,11 @@ Controls.Spinner()
     .WithLabel("Loading...")
 ```
 
-## AlertControl
+---
 
-Informational message display.
+### AlertControl
+
+An inline message banner — use it to surface warnings, errors, or success confirmations without a full dialog.
 
 ```csharp
 Controls.Alert()
@@ -398,30 +445,34 @@ Controls.Alert()
 ```
 
 | Property | Type | Description |
-|----------|------|-------------|
+|---|---|---|
 | `Severity` | `AlertSeverity` | Info, Success, Warning, Error |
 | `Title` | `string` | Alert title |
-| `Message` | `string` | Alert message |
+| `Message` | `string` | Alert message body |
 
-## DividerControl
+---
 
-Visual separator.
+### DividerControl
+
+A thin visual rule for separating content regions.
 
 ```csharp
 Controls.Divider()
     .WithOrientation(Orientation.Horizontal)
 ```
 
-# Control Composition
+---
 
-Controls can be composed to build complex UIs:
+## Composing Controls
+
+Controls are plain C# objects — compose them freely in helper methods to build rich, readable view code. The example below assembles a complete claim view from layout, display, navigation, and action controls:
 
 ```csharp
 public UiControl BuildClaimView(Claim claim)
 {
     return Controls.Stack()
         .WithChildren(
-            // Header
+            // Header card with a 3-column summary grid
             Controls.Card()
                 .WithTitle(claim.ClaimNumber)
                 .WithContent(
@@ -433,19 +484,21 @@ public UiControl BuildClaimView(Claim claim)
                             LabelValue("Reserve", claim.ReserveAmount.ToString("C"))
                         )
                 ),
-            // Details
+            // Tabbed detail sections
             Controls.Tabs()
                 .WithTabs(
                     Tab.Create("notes", "Notes", BuildNotesTab(claim)),
                     Tab.Create("documents", "Documents", BuildDocsTab(claim)),
                     Tab.Create("history", "History", BuildHistoryTab(claim))
                 ),
-            // Actions
+            // Horizontal action strip
             Controls.Stack()
                 .WithOrientation(Orientation.Horizontal)
                 .WithChildren(
                     Controls.Button("Edit").WithClickAction(OnEdit),
-                    Controls.Button("Close Claim").WithVariant(ButtonVariant.Primary).WithClickAction(OnClose)
+                    Controls.Button("Close Claim")
+                        .WithVariant(ButtonVariant.Primary)
+                        .WithClickAction(OnClose)
                 )
         );
 }
@@ -458,4 +511,22 @@ private UiControl LabelValue(string label, string value)
             Controls.Text(value).WithTypography(Typography.Body1)
         );
 }
+```
+
+---
+
+## Live Demo
+
+The cell below renders a small stack of controls directly in this page, illustrating how layout, text, and button controls compose together at runtime:
+
+```csharp --render ControlsDemo --show-code
+MeshWeaver.Layout.Controls.Stack
+    .WithView(MeshWeaver.Layout.Controls.Text("Layout Controls — live in the kernel"))
+    .WithView(MeshWeaver.Layout.Controls.Html("<hr style='margin:4px 0'/>"))
+    .WithView(MeshWeaver.Layout.Controls.Stack
+        .WithView(MeshWeaver.Layout.Controls.Html("<b>Stack (Vertical, default)</b>"))
+        .WithView(MeshWeaver.Layout.Controls.Html("Item A"))
+        .WithView(MeshWeaver.Layout.Controls.Html("Item B"))
+        .WithView(MeshWeaver.Layout.Controls.Html("Item C")))
+    .WithView(MeshWeaver.Layout.Controls.Button("Example Button"))
 ```

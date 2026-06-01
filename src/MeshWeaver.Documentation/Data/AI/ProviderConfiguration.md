@@ -13,66 +13,86 @@ Tags:
   - "Providers"
 ---
 
-## Overview
+MeshWeaver speaks to multiple LLM providers — Claude via Anthropic, GPT-class models via the Azure AI Services multi-model gateway, embedding models, and more — but the configuration surface is intentionally small: **one shared key, a handful of endpoints, and no hardcoded model lists.** This page explains the design and points you to the right knobs when you need to extend it.
 
-MeshWeaver talks to multiple LLM providers (Claude via Anthropic, GPT-class models via the Azure AI Services multi-model gateway, embedding models, etc.) but configures them in a deliberately small surface: one shared key, a handful of endpoints, and zero hardcoded model lists. This page exists because the previous shape — provider-specific `*__Models__*` env vars — has been removed, and contributors will reasonably ask "where did the model list go?"
+> **Why read this?** The previous shape used provider-specific `*__Models__*` environment variables. Those have been removed. If you're wondering where the model list went, this page has the answer.
 
-## One Azure Foundry key, multiple endpoints
+---
 
-A single Aspire parameter, `azure-foundry-key` (declared in [`memex/aspire/Memex.AppHost/Program.cs:51`](../../../../memex/aspire/Memex.AppHost/Program.cs)), backs both `Anthropic__ApiKey` and `AzureAIS__ApiKey`. The two providers reach different endpoint paths under the Azure Foundry resource:
+## One Azure Foundry Key, Two Providers
 
-- `/anthropic/...` for Claude
-- `/models/...` for the multi-model gateway
+A single Aspire parameter — `azure-foundry-key`, declared in [`memex/aspire/Memex.AppHost/Program.cs:51`](../../../../memex/aspire/Memex.AppHost/Program.cs) — backs both the Anthropic and AzureAIS credentials:
 
-but they share one credential. **Anthropic does not need its own key in this deployment.** Adding a separate Anthropic key only makes sense if you ever route directly to api.anthropic.com instead of through Foundry.
+| Env var | Provider | Endpoint path |
+|---|---|---|
+| `Anthropic__ApiKey` | Claude (Anthropic) | `/anthropic/...` |
+| `AzureAIS__ApiKey` | Multi-model gateway | `/models/...` |
 
-## Endpoints come from Aspire parameters, never hardcoded
+Both routes share one credential under the Azure Foundry resource. **You do not need a separate Anthropic key in this deployment.** A dedicated Anthropic key only makes sense if you route directly to `api.anthropic.com` rather than through Foundry.
 
-Endpoints are passed in as parameters; they are never literal strings in source. In dev they are set via `dotnet user-secrets` on the AppHost; in prod they come from GitHub Actions secrets and Azure Container Apps environment variables.
+---
 
-| Parameter             | Consumed as          |
-| --------------------- | -------------------- |
-| `anthropic-endpoint`  | `Anthropic__Endpoint` |
+## Endpoints Are Always Parametrised
+
+Endpoints are never literal strings in source code. In development they come from `dotnet user-secrets` on the AppHost; in production they are injected as GitHub Actions secrets and Azure Container Apps environment variables.
+
+| Aspire parameter | Environment variable |
+|---|---|
+| `anthropic-endpoint` | `Anthropic__Endpoint` |
 | `azure-foundry-endpoint` | `AzureAIS__Endpoint` |
-| `embedding-endpoint`  | `Embedding__Endpoint` |
-| `embedding-model`     | `Embedding__Model`    |
+| `embedding-endpoint` | `Embedding__Endpoint` |
+| `embedding-model` | `Embedding__Model` |
 
-The embedding pair (`embedding-endpoint` + `embedding-model`) is the established pattern; chat providers follow the same shape.
+The embedding pair establishes the canonical pattern — a sibling `endpoint` + `model` parameter per provider. Chat providers follow the same shape.
 
-## Models live in agent definitions, not in config
+---
 
-The AppHost no longer ships any `*__Models__*` environment variables. The source of truth for "which model should this agent use" is the agent's own definition:
+## Models Live in Agent Definitions, Not in Config
 
-- `AgentConfiguration.PreferredModel` — a per-agent pinned model name.
-- `AgentConfiguration.ModelTier` — `"heavy"`, `"standard"`, or `"light"`, resolved through the Aspire parameters `ModelTier__Heavy`, `ModelTier__Standard`, `ModelTier__Light`.
+The AppHost no longer ships any `*__Models__*` environment variables. The authoritative source for "which model should this agent use" is the agent's own definition:
 
-Factories such as `AzureOpenAIChatClientAgentFactory` and `AzureClaudeChatClientAgentFactory` read agent config when constructing a chat client. **The agent's `PreferredModel` wins over the global chat-dropdown selection (`CurrentModelName`).** That is intentional: agents are tuned for specific models; the dropdown is for the user's free-form chat with the default agent.
+- **`AgentConfiguration.PreferredModel`** — a pinned model name for this specific agent.
+- **`AgentConfiguration.ModelTier`** — `"heavy"`, `"standard"`, or `"light"`, resolved through the Aspire parameters `ModelTier__Heavy`, `ModelTier__Standard`, and `ModelTier__Light`.
 
-## Why the model dropdown is empty
+Factories such as `AzureOpenAIChatClientAgentFactory` and `AzureClaudeChatClientAgentFactory` read agent config when constructing the chat client.
 
-`ModelAutocompleteProvider` displays the union of every `IChatClientFactory.Models[]` array. With the `*__Models__*` env vars gone, those arrays are empty by default — so the dropdown is normally empty too. **This is by design.** Users see the agent's own selection, not a global override list. If you want to surface a curated list to humans, populate `Models[]` from a small, explicit config section — but resist the urge to mirror "everything the provider sells."
+> **The agent's `PreferredModel` wins over the global chat-dropdown selection (`CurrentModelName`).** This is intentional — agents are tuned for specific models. The dropdown is for the user's free-form chat with the default agent, not a global override for all agents.
 
-## Model-to-factory routing
+---
 
-`AgentChatClient.GetFactoryForModel` asks each registered `IChatClientFactory.Supports(string)` whether it serves a given model name, ordered by `Order` (lower first). Concrete factories implement shape-aware predicates so routing works without any populated `Models[]` array:
+## Why the Model Dropdown Is Empty
 
-| Factory | Predicate |
-| --- | --- |
+`ModelAutocompleteProvider` populates the dropdown from the union of every `IChatClientFactory.Models[]` array. With `*__Models__*` env vars gone, those arrays are empty by default, so **the dropdown is normally empty — and that is by design.** Users see the agent's own model selection rather than a global override list.
+
+If you want to surface a curated list to humans, populate `Models[]` from a small, explicit config section. Resist the urge to mirror "everything the provider sells."
+
+---
+
+## Model-to-Factory Routing
+
+When an agent needs a chat client for a given model name, `AgentChatClient.GetFactoryForModel` iterates the registered `IChatClientFactory` implementations in `Order` (lower first) and calls `Supports(string)` on each. Routing works without any populated `Models[]` array because the concrete factories implement shape-aware predicates:
+
+| Factory | `Supports` predicate |
+|---|---|
 | `AzureClaudeChatClientAgentFactory` | `name.StartsWith("claude", IgnoreCase)` |
-| `AzureFoundryChatClientAgentFactory` | catch-all for non-claude (gpt-*, o*, Mistral-*, DeepSeek-*, …) |
+| `AzureFoundryChatClientAgentFactory` | catch-all for non-claude names (`gpt-*`, `o*`, `Mistral-*`, `DeepSeek-*`, …) |
 
-The default `IChatClientFactory.Supports` falls back to the legacy `Models[]` lookup, so factories that don't override still work via explicit `Models` config — useful for tests or for a curated subset.
+The default `IChatClientFactory.Supports` falls back to the legacy `Models[]` lookup, so factories that don't override still work through explicit `Models` config — useful for tests or for serving a curated subset.
 
-## Adding a new provider
+---
 
-To wire in a new provider (e.g. a second Azure OpenAI deployment or a hosted local model):
+## Adding a New Provider
 
-1. Implement `IChatClientFactory` and register it via DI (`services.AddAzureOpenAI(...)` or similar).
-2. Bind its options from a new section in `MemexConfiguration.cs` — endpoint and any auth fields, **not** model names.
-3. Add Aspire parameters in `memex/aspire/Memex.AppHost/Program.cs` for the endpoint (and a key, if it doesn't share `azure-foundry-key`).
-4. Reference the new model in agent definitions via `PreferredModel` or `ModelTier`.
+To wire in a new provider (a second Azure OpenAI deployment, a hosted local model, etc.):
 
-Do **not** hardcode model identifiers anywhere in framework code. If you find yourself writing `"gpt-4o"` or `"claude-sonnet-4-5"` in a `.cs` file outside an agent definition, that is the smell this page exists to prevent.
+1. **Implement `IChatClientFactory`** and register it via DI (`services.AddAzureOpenAI(...)` or similar).
+2. **Bind its options** from a new section in `MemexConfiguration.cs` — endpoint and auth fields only, **not** model names.
+3. **Add Aspire parameters** in `memex/aspire/Memex.AppHost/Program.cs` for the endpoint (and a key, if it doesn't share `azure-foundry-key`).
+4. **Reference the new model** in agent definitions via `PreferredModel` or `ModelTier`.
+
+> **Do not hardcode model identifiers in framework code.** If you find yourself writing `"gpt-4o"` or `"claude-sonnet-4-5"` in a `.cs` file outside an agent definition, that is precisely the pattern this page exists to prevent.
+
+---
 
 ## Related
 

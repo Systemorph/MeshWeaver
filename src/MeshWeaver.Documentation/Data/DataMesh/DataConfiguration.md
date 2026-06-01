@@ -1,20 +1,23 @@
 ---
 Name: Data Configuration Guide
 Category: Documentation
-Description: How to configure data sources, initialization, and hub-to-hub synchronization
+Description: Configure local data sources with seeded reference data and synchronize data across related hubs in the mesh.
 Icon: /static/DocContent/DataMesh/DataConfiguration/icon.svg
 ---
 
-This guide explains how to configure data in message hubs, including data sources with initialization and hub-to-hub data synchronization.
+MeshWeaver gives every hub its own data layer — locally owned collections, initial seed data, and live synchronization from related hubs. This guide walks through the three core configuration primitives and shows how they compose into a working cross-hub data pipeline.
 
-# Overview
+## Core Primitives
 
-MeshWeaver provides flexible data configuration patterns:
-- **AddSource**: Configure local data sources with optional initialization
-- **AddHubSource**: Synchronize data from parent or related hubs
-- **WithInitialData**: Seed data sources with predefined records
+| API | Purpose |
+|-----|---------|
+| `AddSource` | Register a local data collection within a hub |
+| `WithInitialData` | Seed a collection with predefined records at startup |
+| `AddHubSource` | Pull a live-synchronized copy of a collection from another hub |
 
-# Data Model Relationships
+---
+
+## Data Model Relationships
 
 ```mermaid
 classDiagram
@@ -40,7 +43,11 @@ classDiagram
     Todo --> Status : syncs from Project
 ```
 
-# Data Flow Architecture
+The `Status` type lives in the Project hub and flows into the Todo hub via `AddHubSource`. Neither hub has to duplicate business logic; the Todo hub simply declares a dependency on the parent's collection.
+
+---
+
+## Data Flow Overview
 
 ```mermaid
 graph LR
@@ -53,15 +60,13 @@ graph LR
     PS -->|AddHubSource| TS
 ```
 
-# Configuring Data Sources
+---
 
-## AddSource with WithInitialData
+## Configuring a Local Source
 
-Use `AddSource` to configure local data sources. The `WithInitialData` method seeds the source with predefined records.
+### Define the data model
 
-### Example: Status Data Model
-
-First, define the data model in your `Source/Status.cs` file:
+Place your data model in `Source/Status.cs`. Using a record rather than an enum gives you richer metadata — descriptions, display order, and future extensibility without recompilation.
 
 ```csharp
 public record Status
@@ -97,9 +102,7 @@ public record Status
 }
 ```
 
-### Configuration in NodeType
-
-Add the data configuration to your NodeType's configuration string:
+### Wire up the source in the NodeType configuration
 
 ```csharp
 config => config
@@ -110,25 +113,29 @@ config => config
     .AddLayout(layout => layout.AddDefaultLayoutAreas())
 ```
 
-# Hub-to-Hub Data Synchronization
+`WithInitialData` seeds the collection on first activation. Subsequent starts do not re-insert records that already exist in persistence.
 
-## AddHubSource
+---
 
-Use `AddHubSource` to synchronize data from a parent or related hub. This is useful when child hubs need access to reference data owned by a parent.
+## Synchronizing Data from a Parent Hub
 
-### Address Derivation
+### When to use `AddHubSource`
 
-When a Todo hub needs to access Status data from its parent Project hub, compute the parent address:
+Use `AddHubSource` when a child hub needs read access to reference data owned by a parent. The child hub stays up-to-date automatically — no polling, no duplicated ownership.
+
+### Deriving the parent address
+
+Hub addresses are hierarchical path segments. A Todo instance lives at `ACME/ProductLaunch/Todo/AnalystBriefings`; its owning Project hub is two segments up.
 
 ```csharp
 // Todo instance at: ACME/ProductLaunch/Todo/AnalystBriefings
 // Parent Project at: ACME/ProductLaunch
-// Formula: Remove last 2 segments (Todo collection + instance id)
+// Formula: remove the last 2 segments (collection name + instance id)
 
 new Address(config.Address.Segments.Take(config.Address.Segments.Length - 2).ToArray())
 ```
 
-### Configuration Example
+### Configuration
 
 ```csharp
 config => config
@@ -137,11 +144,13 @@ config => config
         .AddHubSource(
             new Address(config.Address.Segments.Take(config.Address.Segments.Length - 2).ToArray()),
             source => source.WithType<Status>()))
-    ```
+```
 
-## Synchronization Flow
+---
 
-This example shows a scenario where the Todo hub is dormant (not in memory). When a message arrives, the hub is woken up and initialized before processing the request.
+## Initialization and Synchronization Sequence
+
+When a message reaches a dormant Todo hub, the framework wakes it and completes full initialization — including the cross-hub Status sync — before the request is handled.
 
 ```mermaid
 sequenceDiagram
@@ -163,23 +172,44 @@ sequenceDiagram
     Todo-->>Client: Return data
 ```
 
-When a `DataChangeRequest` arrives at the Todo hub, changes are persisted to storage and synced out to subscribers.
+After initialization, any `DataChangeRequest` that arrives at the Todo hub is persisted to storage and fanned out to all subscribers.
 
-# Best Practices
+---
 
-1. **Use data models instead of enums**: Data models provide richer metadata (descriptions, display order) and can be extended without recompilation
+## Live Example
 
-2. **Initialize reference data at the source**: Use `WithInitialData` on the hub that owns the data, then sync to dependent hubs
+The cell below renders a summary of the configuration patterns covered on this page — a quick reference you can keep open alongside your code.
 
-3. **Derive addresses dynamically**: Use `config.Address.Segments` to compute relative addresses between hubs
+```csharp --render DataConfigSummary --show-code
+MeshWeaver.Layout.Controls.Stack
+    .WithView(MeshWeaver.Layout.Controls.Markdown("### Data Configuration Quick Reference"))
+    .WithView(MeshWeaver.Layout.Controls.Markdown(
+        "| Pattern | API | When to use |\n" +
+        "|---------|-----|-------------|\n" +
+        "| Local collection | `AddSource(...)` | Hub owns the data |\n" +
+        "| Seed on startup | `.WithInitialData(records)` | Reference / lookup data |\n" +
+        "| Cross-hub sync | `AddHubSource(address, ...)` | Child needs parent's data |\n"))
+    .WithView(MeshWeaver.Layout.Controls.Markdown(
+        $"*Rendered at {DateTime.Now:HH:mm:ss}*"))
+```
 
-4. **Keep data models synchronized**: When using `AddHubSource`, ensure the data model definition exists in both hubs
+---
 
-> **Note**: Future versions of MeshWeaver will support shared data model assemblies to avoid duplicating model definitions across hubs.
+## Best Practices
 
-# Complete Example
+> **Use data models instead of enums.** Records provide descriptions, display order, and localization hooks. They can be extended at runtime without a recompile.
 
-## Project Hub Configuration
+> **Initialize reference data at the owner.** Call `WithInitialData` on the hub that owns the type, then let dependent hubs pull via `AddHubSource`. Avoid seeding the same data in multiple places.
+
+> **Derive addresses dynamically.** Use `config.Address.Segments` to compute relative addresses rather than hardcoding path strings. This makes NodeType configurations portable across namespaces.
+
+> **Keep shared model definitions aligned.** When using `AddHubSource`, both hubs must reference the same `Status` type (same assembly or an identical record definition). A future MeshWeaver release will support shared data model assemblies to eliminate this duplication.
+
+---
+
+## Complete NodeType JSON
+
+### Project Hub
 
 ```json
 {
@@ -193,7 +223,7 @@ When a `DataChangeRequest` arrives at the Todo hub, changes are persisted to sto
 }
 ```
 
-## Todo Hub Configuration
+### Todo Hub
 
 ```json
 {
@@ -207,4 +237,4 @@ When a `DataChangeRequest` arrives at the Todo hub, changes are persisted to sto
 }
 ```
 
-This configuration enables the Todo hub to access Status reference data from its parent Project hub, ensuring consistent status options across the hierarchy.
+With this configuration the Todo hub accesses live Status reference data from its parent Project hub, ensuring consistent status options across the entire hierarchy.
