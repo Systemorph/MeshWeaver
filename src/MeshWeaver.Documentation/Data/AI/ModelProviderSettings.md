@@ -74,6 +74,76 @@ The AI settings tab is registered without an `Icon`. Add one where the Settings 
 (the AI/Models tab registration in the portal settings) — e.g. a FluentUI `Sparkle`/`Bot` icon —
 consistent with the other tabs' icon usage.
 
+## UI — inline login (chosen)
+
+The CLI login expands **inside the provider card** (no modal, no panel) — lightest weight, stays in
+context. The card is a small state machine.
+
+### Models tab
+```
+Settings ▸ ✦ AI / Models
+
+API providers — add a key, choose models
+┌─ Azure AI Foundry ──────────────────────────────── [API] ┐
+│ Endpoint  https://….services.ai.azure.com   [Save]  ✓     │
+│ API key   ••••••••••••••••                                 │
+│ Models    ☑ gpt-4o   ☑ o3-mini   ☐ cohere-embed-v-4-0      │
+└────────────────────────────────────────────────────────────┘
+┌─ Anthropic ─────────────────────────────────────── [API] ┐
+│ API key  •••••••• [Save]    Models  ☑ claude-opus-4         │
+└────────────────────────────────────────────────────────────┘
+
+CLI providers — log in with your subscription (no key, no model list)
+┌─ Claude Code ───────────────────────────────────── [CLI] ┐
+│ ● Not connected — uses your Claude subscription            │
+│                                  [ Connect Claude Code ]   │
+└────────────────────────────────────────────────────────────┘
+┌─ GitHub Copilot ────────────────────────────────── [CLI] ┐
+│ ✓ Connected as @rbuergi                    [ Disconnect ]  │
+└────────────────────────────────────────────────────────────┘
+```
+
+### CLI card states
+**Connecting — Claude (paste-a-code):**
+```
+┌─ Claude Code ──────────────── [CLI] ┐
+│ ● Connecting…                       │
+│ 1  Authorize in your browser:       │
+│    claude.ai/oauth/auth?…  [Copy][Open]
+│ 2  Paste the code Claude shows:     │
+│    [ __________________ ] [Submit]  │
+│    ⏳ waiting for code… (4:58)       │
+└──────────────────────────────────────┘
+```
+**Connecting — Copilot (device code, auto-poll, nothing to paste):**
+```
+┌─ GitHub Copilot ───────────── [CLI] ┐
+│ ● Connecting…  enter code at         │
+│   github.com/login/device            │
+│        ┌───────────────┐             │
+│        │  AB12-CD34     │  [Copy]     │
+│        └───────────────┘             │
+│   ⏳ auto-checking…                   │
+└──────────────────────────────────────┘
+```
+**Connected:** `✓ Connected as <name>   [ Disconnect ]`  ·  **Error/Expired:** red line + `[ Retry ]`.
+
+### Inline state machine
+```
+NotConnected ──[Connect]──▶ Connecting ──(code submitted / device poll OK)──▶ Connected
+     ▲                          │  ▲                                              │
+     └──────[Disconnect]────────┘  └──(5-min timeout · Cancel · auth error)──▶ Error/Expired
+                                            └──────────────[Retry]──────────────────┘
+```
+- **Connecting** is driven by `ConnectSessionManager` + the provider's `IConnectStrategy`: it holds
+  the live CLI `Process`, exposes the auth URL (+ device code for Copilot), and either accepts a
+  pasted code (Claude, `RequiresPastedCode`) or polls auth status (Copilot). 5-min timeout disposes
+  the process (`Kill(entireProcessTree:true)`).
+- **On success** the strategy hands back the token → `ModelProviderService.CreateProvider/RotateKey`
+  (encrypted via the Key-Vault-sourced master key) → the card flips to **Connected** reactively.
+- The card renders the right inline body off `strategy.RequiresPastedCode` (paste field vs device
+  code) and `IsLoggedIn(userConfigDir)` (Connected vs NotConnected on first render).
+
 ## Files to touch
 - `memex/Memex.Portal.Shared/Settings/ModelsSettingsTab.cs` — switch on `ProviderKind`; API card
   (form + model list), CLI card (login status + connect button); fix the tab icon.
