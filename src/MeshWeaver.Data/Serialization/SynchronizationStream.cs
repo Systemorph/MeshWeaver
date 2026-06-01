@@ -583,6 +583,9 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                     StreamId,
                     Host.Version));
                 Set(currentJson);
+                // A Full re-established Current — any pending resync is satisfied;
+                // allow a future Patch-before-Full gap to resubscribe again.
+                _resyncInFlight = false;
             }
             catch (Exception ex)
             {
@@ -603,8 +606,10 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             // ColdStart, Resubmit, HungSubThread).
             if (Current is null || currentJson is null)
             {
-                logger.LogDebug("[SYNC_STREAM] Patch arrived before base Full for {StreamId}; requesting fresh snapshot", StreamId);
-                RequestFreshSnapshot();
+                // No base snapshot yet — drop this Patch (the owner's Full, or a
+                // resync's fresh Full, will deliver the current state). Do NOT
+                // resubscribe here: that floods the owner with SubscribeRequests.
+                logger.LogDebug("[SYNC_STREAM] Patch arrived before base Full for {StreamId}; dropping", StreamId);
                 return;
             }
             try
@@ -664,8 +669,19 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     /// emission thread (often a <c>sync/&lt;id&gt;</c> hub address); user-level
     /// access enforcement happens at the consumer layer, not this seam.
     /// </summary>
+    // Guards against a resync STORM. RequestFreshSnapshot nulls the cached JSON,
+    // so every subsequent Patch (until the fresh Full lands) re-enters the
+    // "Patch before base Full" path. Without this gate each of those Patches would
+    // post another SubscribeRequest, flooding the owner's action block and starving
+    // real requests (the TodoDataChangeWorkflow UpdateNodeRequest leak). One
+    // resubscribe per gap; cleared when a Full re-establishes Current.
+    private bool _resyncInFlight;
+
     private void RequestFreshSnapshot()
     {
+        if (_resyncInFlight)
+            return;
+        _resyncInFlight = true;
         Set<JsonElement?>(null);
         if (Reference is WorkspaceReference wsRef)
         {
