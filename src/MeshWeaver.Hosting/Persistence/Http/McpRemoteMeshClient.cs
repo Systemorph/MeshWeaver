@@ -3,6 +3,7 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
@@ -39,11 +40,18 @@ public sealed class McpRemoteMeshClient : IRemoteMeshClient, IAsyncDisposable
     private McpClient? _client;
     private readonly SemaphoreSlim _connectGate = new(1, 1);
 
+    // Http I/O pool — every CallToolAsync leaf routes through it so the remote
+    // HTTP wait runs off the calling hub scheduler (the deadlock fix) and is
+    // bounded. Falls back to the stateless unbounded pool (still offloads) when
+    // constructed without a registry. See ControlledIoPooling.md.
+    private readonly IIoPool _pool;
+
     public McpRemoteMeshClient(
         string remoteBaseUrl,
         string remoteToken,
         JsonSerializerOptions jsonOptions,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        IIoPool? pool = null)
     {
         if (string.IsNullOrWhiteSpace(remoteBaseUrl))
             throw new ArgumentException("Remote base URL is required.", nameof(remoteBaseUrl));
@@ -54,10 +62,11 @@ public sealed class McpRemoteMeshClient : IRemoteMeshClient, IAsyncDisposable
         _remoteToken = remoteToken;
         _jsonOptions = jsonOptions;
         _loggerFactory = loggerFactory ?? Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance;
+        _pool = pool ?? IoPool.Unbounded;
     }
 
     public IObservable<MeshNode?> Get(string path) =>
-        Observable.FromAsync(async ct =>
+        _pool.Invoke(async ct =>
         {
             var client = await GetClientAsync(ct).ConfigureAwait(false);
             var result = await client.CallToolAsync(
@@ -74,7 +83,7 @@ public sealed class McpRemoteMeshClient : IRemoteMeshClient, IAsyncDisposable
         });
 
     public IObservable<Unit> Create(MeshNode node) =>
-        Observable.FromAsync(async ct =>
+        _pool.Invoke(async ct =>
         {
             var client = await GetClientAsync(ct).ConfigureAwait(false);
             var nodeJson = JsonSerializer.Serialize(node, _jsonOptions);
@@ -87,7 +96,7 @@ public sealed class McpRemoteMeshClient : IRemoteMeshClient, IAsyncDisposable
         });
 
     public IObservable<Unit> Update(MeshNode node) =>
-        Observable.FromAsync(async ct =>
+        _pool.Invoke(async ct =>
         {
             var client = await GetClientAsync(ct).ConfigureAwait(false);
             var nodesJson = JsonSerializer.Serialize(new[] { node }, _jsonOptions);
@@ -100,7 +109,7 @@ public sealed class McpRemoteMeshClient : IRemoteMeshClient, IAsyncDisposable
         });
 
     public IObservable<Unit> Delete(string path) =>
-        Observable.FromAsync(async ct =>
+        _pool.Invoke(async ct =>
         {
             var client = await GetClientAsync(ct).ConfigureAwait(false);
             var result = await client.CallToolAsync(
@@ -112,7 +121,7 @@ public sealed class McpRemoteMeshClient : IRemoteMeshClient, IAsyncDisposable
         });
 
     public IObservable<IReadOnlyList<string>> SearchPaths(string query) =>
-        Observable.FromAsync(async ct =>
+        _pool.Invoke(async ct =>
         {
             var client = await GetClientAsync(ct).ConfigureAwait(false);
             var result = await client.CallToolAsync(

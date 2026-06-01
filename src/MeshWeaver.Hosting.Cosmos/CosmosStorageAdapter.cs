@@ -5,6 +5,7 @@ using System.Text.Json;
 using Microsoft.Azure.Cosmos;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 
 namespace MeshWeaver.Hosting.Cosmos;
 
@@ -19,6 +20,14 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
     private readonly CosmosSqlGenerator _sqlGenerator = new();
     private CosmosChangeFeedProcessor? _changeFeedProcessor;
     private readonly Subject<DataChangeNotification> _changes = new();
+
+    // Controlled I/O pool (Blob resource class — Cosmos is treated as cloud I/O,
+    // like Azure Blob). The Cosmos SDK pools HTTP connections internally, but the
+    // bare Observable.FromAsync leaves these methods used to expose ran their sync
+    // prologue on the subscribing (hub) thread; routing through _pool.Invoke /
+    // _pool.InvokeStream offloads them onto the ThreadPool and bounds concurrency.
+    // Falls back to the stateless unbounded pool when constructed outside DI (tests).
+    private readonly IIoPool _pool;
 
     /// <inheritdoc />
     public IObservable<DataChangeNotification> Changes => _changes.AsObservable();
@@ -41,10 +50,12 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
 
     public CosmosStorageAdapter(
         Container nodesContainer,
-        Container partitionsContainer)
+        Container partitionsContainer,
+        IIoPool? pool = null)
     {
         _nodesContainer = nodesContainer;
         _partitionsContainer = partitionsContainer;
+        _pool = pool ?? IoPool.Unbounded;
     }
 
     /// <summary>
@@ -87,7 +98,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
         => select is null || select.Any(s => s.Equals(column, StringComparison.OrdinalIgnoreCase));
 
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
-        => Observable.FromAsync(ct => ReadAsyncCore(path, options, ct));
+        => _pool.Invoke(ct => ReadAsyncCore(path, options, ct));
 
     private async Task<MeshNode?> ReadAsyncCore(string path, JsonSerializerOptions options, CancellationToken ct)
     {
@@ -115,7 +126,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
     }
 
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
-        => Observable.FromAsync(async ct => { await WriteAsyncCore(node, options, ct); return node; });
+        => _pool.Invoke(async ct => { await WriteAsyncCore(node, options, ct); return node; });
 
     private async Task WriteAsyncCore(MeshNode node, JsonSerializerOptions options, CancellationToken ct)
     {
@@ -130,7 +141,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
     }
 
     public IObservable<string> Delete(string path)
-        => Observable.FromAsync(async ct => { await DeleteAsyncCore(path, ct); return path; });
+        => _pool.Invoke(async ct => { await DeleteAsyncCore(path, ct); return path; });
 
     private async Task DeleteAsyncCore(string path, CancellationToken ct)
     {
@@ -157,7 +168,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
     }
 
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
-        => Observable.FromAsync(ct => ListChildPathsAsyncCore(parentPath, ct));
+        => _pool.Invoke(ct => ListChildPathsAsyncCore(parentPath, ct));
 
     private async Task<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPathsAsyncCore(
         string? parentPath, CancellationToken ct)
@@ -193,7 +204,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
     }
 
     public IObservable<bool> Exists(string path)
-        => Observable.FromAsync(ct => ExistsAsyncCore(path, ct));
+        => _pool.Invoke(ct => ExistsAsyncCore(path, ct));
 
     private async Task<bool> ExistsAsyncCore(string path, CancellationToken ct)
     {
@@ -217,12 +228,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
 
     public IObservable<object> GetPartitionObjects(
         string nodePath, string? subPath, JsonSerializerOptions options)
-        => Observable.Create<object>(async (observer, ct) =>
-        {
-            await foreach (var obj in GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct))
-                observer.OnNext(obj);
-            observer.OnCompleted();
-        });
+        => _pool.InvokeStream(ct => GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct));
 
     private async IAsyncEnumerable<object> GetPartitionObjectsAsyncCore(
         string nodePath, string? subPath, JsonSerializerOptions options,
@@ -250,7 +256,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
     public IObservable<Unit> SavePartitionObjects(
         string nodePath, string? subPath,
         IReadOnlyCollection<object> objects, JsonSerializerOptions options)
-        => Observable.FromAsync(async ct => { await SavePartitionObjectsAsyncCore(nodePath, subPath, objects, options, ct); return Unit.Default; });
+        => _pool.Invoke(async ct => { await SavePartitionObjectsAsyncCore(nodePath, subPath, objects, options, ct); return Unit.Default; });
 
     private async Task SavePartitionObjectsAsyncCore(
         string nodePath,
@@ -285,7 +291,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
     }
 
     public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
-        => Observable.FromAsync(async ct => { await DeletePartitionObjectsAsyncCore(nodePath, subPath, ct); return Unit.Default; });
+        => _pool.Invoke(async ct => { await DeletePartitionObjectsAsyncCore(nodePath, subPath, ct); return Unit.Default; });
 
     private async Task DeletePartitionObjectsAsyncCore(
         string nodePath,
@@ -322,7 +328,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
     }
 
     public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
-        => Observable.FromAsync(ct => GetPartitionMaxTimestampAsyncCore(nodePath, subPath, ct));
+        => _pool.Invoke(ct => GetPartitionMaxTimestampAsyncCore(nodePath, subPath, ct));
 
     private async Task<DateTimeOffset?> GetPartitionMaxTimestampAsyncCore(
         string nodePath,

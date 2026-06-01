@@ -137,8 +137,11 @@ cache.GetQuery(id, queries)
 
 The `SubscribeOn` at the cache layer doesn't widen this risk — the upstream change-feed emissions were already coming from background threads regardless of `SubscribeOn`. The offload only shifts the *subscribe-time work*, which is exactly what you want off the grain.
 
+This `SubscribeOn` offload is the **query-construction** half of keeping the grain free; its leaf-execution counterpart is the [Controlled I/O Pooling](ControlledIoPooling) primitive (`IIoPool`), which uses the same `SubscribeOn(TaskPoolScheduler.Default)` move plus a concurrency bound so the actual file/blob/HTTP leaf both runs off the grain **and** can't fan out unboundedly.
+
 ## Cross-references
 
 - [Asynchronous Calls](AsynchronousCalls) — the actor-model rules this implements.
+- [Controlled I/O Pooling](ControlledIoPooling) — bounds the leaf I/O that this scheduling model offloads.
 - [Thread Execution Streaming](ThreadExecutionStreaming) — the streaming-loop pattern that depends on this isolation.
 - [Debugging Message Flow](DebuggingMessageFlow) — how to recognise a scheduler-sharing deadlock in trace logs.

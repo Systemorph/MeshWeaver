@@ -1,6 +1,7 @@
 using System.Reactive.Linq;
 using System.Text;
 using MeshWeaver.Data;
+using MeshWeaver.Mesh.Threading;
 
 namespace MeshWeaver.ContentCollections;
 
@@ -8,25 +9,34 @@ namespace MeshWeaver.ContentCollections;
 /// Implementation of <see cref="IFileContentProvider"/> that uses <see cref="IContentService"/> to access file content.
 /// Automatically converts binary documents (.docx, .pptx, etc.) to markdown via <see cref="IContentTransformer"/>.
 /// All public methods return <see cref="IObservable{T}"/>; the I/O bridge sits inside each method body
-/// via <see cref="Observable.FromAsync{TResult}(Func{System.Threading.CancellationToken, Task{TResult}})"/> —
-/// the innermost async edge.
+/// via the FileSystem <see cref="IIoPool"/> — the innermost async edge, off the hub scheduler and bounded.
 /// </summary>
 public class FileContentProvider : IFileContentProvider
 {
     private readonly IContentService contentService;
     private readonly IEnumerable<IContentTransformer> transformers;
 
-    public FileContentProvider(IContentService contentService, IEnumerable<IContentTransformer> transformers)
+    // Controlled I/O pool (FileSystem resource class). The genuinely-async file
+    // read/write/list/delete leaves route through _pool.Invoke so the I/O runs off
+    // the hub scheduler and is bounded. Falls back to the stateless unbounded pool
+    // when no registry is wired (tests).
+    private readonly IIoPool _pool;
+
+    public FileContentProvider(
+        IContentService contentService,
+        IEnumerable<IContentTransformer> transformers,
+        IoPoolRegistry? registry = null)
     {
         this.contentService = contentService;
         this.transformers = transformers;
+        _pool = registry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
     }
 
     public IObservable<FileContentResult> GetFileContent(
         string collectionName,
         string filePath,
         int? numberOfRows = null) =>
-        Observable.FromAsync(async ct =>
+        _pool.Invoke(async ct =>
         {
             try
             {
@@ -87,7 +97,7 @@ public class FileContentProvider : IFileContentProvider
         string collectionName,
         string filePath,
         Stream content) =>
-        Observable.FromAsync(async ct =>
+        _pool.Invoke(async ct =>
         {
             try
             {
@@ -110,7 +120,7 @@ public class FileContentProvider : IFileContentProvider
     public IObservable<FileOperationResult> DeleteFile(
         string collectionName,
         string filePath) =>
-        Observable.FromAsync(async ct =>
+        _pool.Invoke(async ct =>
         {
             try
             {
@@ -130,7 +140,7 @@ public class FileContentProvider : IFileContentProvider
     public IObservable<CollectionListingResult> ListCollectionItems(
         string collectionName,
         string path) =>
-        Observable.FromAsync(async ct =>
+        _pool.Invoke(async ct =>
         {
             try
             {

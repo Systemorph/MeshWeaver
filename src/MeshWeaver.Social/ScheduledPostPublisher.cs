@@ -6,6 +6,7 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
+using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -32,18 +33,26 @@ public sealed class ScheduledPostPublisher : BackgroundService
     private readonly SocialOptions _options;
     private readonly ILogger<ScheduledPostPublisher>? _logger;
 
+    // Controlled I/O pool (Http resource class). The genuinely-async publish leaf
+    // routes through _http.Invoke so the network round-trip runs off the hub
+    // scheduler and is bounded. Falls back to the stateless unbounded pool when
+    // no registry is wired (tests).
+    private readonly IIoPool _http;
+
     public ScheduledPostPublisher(
         IPublishQueue queue,
         IEnumerable<IPlatformPublisher> publishers,
         IApprovalPublishBridge bridge,
         SocialOptions options,
-        ILogger<ScheduledPostPublisher>? logger = null)
+        ILogger<ScheduledPostPublisher>? logger = null,
+        IoPoolRegistry? registry = null)
     {
         _queue = queue;
         _publishers = publishers;
         _bridge = bridge;
         _options = options;
         _logger = logger;
+        _http = registry?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
     }
 
     // BackgroundService boundary — single .ToTask() bridge for the framework's Task
@@ -102,7 +111,7 @@ public sealed class ScheduledPostPublisher : BackgroundService
         PlatformPublishRequest request,
         PublishableSnapshot snapshot,
         int attempt) =>
-        Observable.FromAsync(ct => publisher.PublishAsync(request, ct))
+        _http.Invoke(ct => publisher.PublishAsync(request, ct))
             .Catch((Exception ex) =>
             {
                 _logger?.LogWarning(ex, "Publish attempt {Attempt}/{Max} threw for {PostPath}",

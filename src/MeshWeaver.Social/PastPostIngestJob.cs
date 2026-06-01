@@ -6,6 +6,7 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Reactive;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -30,18 +31,26 @@ public sealed class PastPostIngestJob : BackgroundService
     private readonly SocialOptions _options;
     private readonly ILogger<PastPostIngestJob>? _logger;
 
+    // Controlled I/O pool (Http resource class). The genuinely-async history-pull
+    // leaf (fetch past posts + upsert) routes through _http.Invoke so the network
+    // round-trip runs off the hub scheduler and is bounded. Falls back to the
+    // stateless unbounded pool when no registry is wired (tests).
+    private readonly IIoPool _http;
+
     public PastPostIngestJob(
         IPastPostIngestSource source,
         IPastPostSink sink,
         IEnumerable<IPlatformPublisher> publishers,
         SocialOptions options,
-        ILogger<PastPostIngestJob>? logger = null)
+        ILogger<PastPostIngestJob>? logger = null,
+        IoPoolRegistry? registry = null)
     {
         _source = source;
         _sink = sink;
         _publishers = publishers;
         _options = options;
         _logger = logger;
+        _http = registry?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
     }
 
     // BackgroundService boundary — single .ToTask() bridge for the framework's Task
@@ -74,7 +83,7 @@ public sealed class PastPostIngestJob : BackgroundService
             string.Equals(p.Platform, target.Platform, StringComparison.OrdinalIgnoreCase));
         if (publisher is null) return Observable.Return(Unit.Default);
 
-        return Observable.FromAsync(async ct =>
+        return _http.Invoke(async ct =>
         {
             var imported = 0;
             await foreach (var past in publisher.ListPastPostsAsync(

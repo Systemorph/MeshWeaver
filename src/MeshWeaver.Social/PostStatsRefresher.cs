@@ -7,6 +7,7 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Reactive;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -48,18 +49,26 @@ public sealed class PostStatsRefresher : BackgroundService
     private readonly ConcurrentDictionary<string, DateTimeOffset> _failureBackoff =
         new(StringComparer.Ordinal);
 
+    // Controlled I/O pool (Http resource class). The genuinely-async stats-fetch
+    // leaf routes through _http.Invoke so the network round-trip runs off the hub
+    // scheduler and is bounded. Falls back to the stateless unbounded pool when
+    // no registry is wired (tests).
+    private readonly IIoPool _http;
+
     public PostStatsRefresher(
         IStatsRefreshSource source,
         IEnumerable<IPlatformPublisher> publishers,
         IApprovalPublishBridge bridge,
         SocialOptions options,
-        ILogger<PostStatsRefresher>? logger = null)
+        ILogger<PostStatsRefresher>? logger = null,
+        IoPoolRegistry? registry = null)
     {
         _source = source;
         _publishers = publishers;
         _bridge = bridge;
         _options = options;
         _logger = logger;
+        _http = registry?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
     }
 
     // BackgroundService boundary — single .ToTask() bridge for the framework's Task
@@ -102,7 +111,7 @@ public sealed class PostStatsRefresher : BackgroundService
             string.Equals(p.Platform, target.Platform, StringComparison.OrdinalIgnoreCase));
         if (publisher is null) return Observable.Return(Unit.Default);
 
-        return Observable.FromAsync(ct => publisher.GetStatsAsync(target.Urn, target.Credential, ct))
+        return _http.Invoke(ct => publisher.GetStatsAsync(target.Urn, target.Credential, ct))
             .SelectMany(stats => _bridge.ApplyStats(target.PostPath, stats))
             .Do(_ =>
             {

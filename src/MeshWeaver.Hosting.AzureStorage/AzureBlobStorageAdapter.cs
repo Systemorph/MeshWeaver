@@ -6,6 +6,7 @@ using Azure.Storage.Blobs.Models;
 using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 
 namespace MeshWeaver.Hosting.AzureStorage;
 
@@ -19,14 +20,21 @@ public class AzureBlobStorageAdapter : IStorageAdapter
     private readonly BlobContainerClient _containerClient;
     private readonly FileFormatParserRegistry _parserRegistry = new();
 
+    // Controlled I/O pool (Blob resource class). Every leaf is genuinely-async
+    // (Azure SDK), so all route through _pool.Invoke / _pool.InvokeStream. The
+    // Azure SDK pools HTTP connections internally, but unbounded from MeshWeaver's
+    // view; this is the MeshWeaver-side governor on concurrent blob ops.
+    private readonly IIoPool _pool;
+
     /// <summary>
     /// Supported file extensions in priority order for reading.
     /// </summary>
     private static readonly string[] SupportedExtensions = [".md", ".json"];
 
-    public AzureBlobStorageAdapter(BlobContainerClient containerClient)
+    public AzureBlobStorageAdapter(BlobContainerClient containerClient, IIoPool? pool = null)
     {
         _containerClient = containerClient;
+        _pool = pool ?? IoPool.Unbounded;
     }
 
     private static string NormalizePath(string? path) =>
@@ -62,7 +70,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
     }
 
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
-        => Observable.FromAsync(ct => ReadAsyncCore(path, options, ct));
+        => _pool.Invoke(ct => ReadAsyncCore(path, options, ct));
 
     private async Task<MeshNode?> ReadAsyncCore(string path, JsonSerializerOptions options, CancellationToken ct)
     {
@@ -117,7 +125,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
     }
 
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
-        => Observable.FromAsync(async ct => { await WriteAsyncCore(node, options, ct); return node; });
+        => _pool.Invoke(async ct => { await WriteAsyncCore(node, options, ct); return node; });
 
     private async Task WriteAsyncCore(MeshNode node, JsonSerializerOptions options, CancellationToken ct)
     {
@@ -174,7 +182,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
     }
 
     public IObservable<string> Delete(string path)
-        => Observable.FromAsync(async ct => { await DeleteAsyncCore(path, ct); return path; });
+        => _pool.Invoke(async ct => { await DeleteAsyncCore(path, ct); return path; });
 
     private async Task DeleteAsyncCore(string path, CancellationToken ct)
     {
@@ -188,7 +196,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
     }
 
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
-        => Observable.FromAsync(ct => ListChildPathsAsyncCore(parentPath, ct));
+        => _pool.Invoke(ct => ListChildPathsAsyncCore(parentPath, ct));
 
     private async Task<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPathsAsyncCore(
         string? parentPath, CancellationToken ct)
@@ -252,7 +260,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
     }
 
     public IObservable<bool> Exists(string path)
-        => Observable.FromAsync(async ct =>
+        => _pool.Invoke(async ct =>
         {
             var (blobClient, _) = await FindBlobWithExtensionAsync(path, ct);
             return blobClient != null;
@@ -271,12 +279,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
             : $"partitions/{NormalizePath(nodePath)}/{NormalizePath(subPath)}/";
 
     public IObservable<object> GetPartitionObjects(string nodePath, string? subPath, JsonSerializerOptions options)
-        => Observable.Create<object>(async (observer, ct) =>
-        {
-            await foreach (var obj in GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct))
-                observer.OnNext(obj);
-            observer.OnCompleted();
-        });
+        => _pool.InvokeStream(ct => GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct));
 
     private async IAsyncEnumerable<object> GetPartitionObjectsAsyncCore(
         string nodePath,
@@ -313,7 +316,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
     public IObservable<Unit> SavePartitionObjects(
         string nodePath, string? subPath,
         IReadOnlyCollection<object> objects, JsonSerializerOptions options)
-        => Observable.FromAsync(async ct => { await SavePartitionObjectsAsyncCore(nodePath, subPath, objects, options, ct); return Unit.Default; });
+        => _pool.Invoke(async ct => { await SavePartitionObjectsAsyncCore(nodePath, subPath, objects, options, ct); return Unit.Default; });
 
     private async Task SavePartitionObjectsAsyncCore(
         string nodePath,
@@ -349,7 +352,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
     }
 
     public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
-        => Observable.FromAsync(async ct => { await DeletePartitionObjectsAsyncCore(nodePath, subPath, ct); return Unit.Default; });
+        => _pool.Invoke(async ct => { await DeletePartitionObjectsAsyncCore(nodePath, subPath, ct); return Unit.Default; });
 
     private async Task DeletePartitionObjectsAsyncCore(string nodePath, string? subPath, CancellationToken ct)
     {
@@ -363,7 +366,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
     }
 
     public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
-        => Observable.FromAsync(ct => GetPartitionMaxTimestampAsyncCore(nodePath, subPath, ct));
+        => _pool.Invoke(ct => GetPartitionMaxTimestampAsyncCore(nodePath, subPath, ct));
 
     private async Task<DateTimeOffset?> GetPartitionMaxTimestampAsyncCore(string nodePath, string? subPath, CancellationToken ct)
     {

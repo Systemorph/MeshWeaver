@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using MeshWeaver.Layout;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
@@ -19,6 +20,17 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
     private readonly MeshOperations ops = new(hub) { OnNodeChange = change => chat.ForwardNodeChange?.Invoke(change) };
     private readonly ILogger<MeshPlugin> logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshPlugin>>();
     private readonly AccessService? accessService = hub.ServiceProvider.GetService<AccessService>();
+
+    // Bounded "Process" pool (Wave 3 of Controlled I/O Pooling). RunTests spawns a
+    // `dotnet test` child process and BLOCKS a thread for the whole run (up to 5
+    // minutes) — that thread-holding wait must run OFF the hub/grain scheduler and
+    // be bounded so a fan-out of test runs can't trigger ThreadPool thread-injection
+    // that starves Orleans' grain schedulers. Resolve the mesh-scoped pool from DI;
+    // fall back to the stateless IoPool.Unbounded when no registry is wired (still
+    // offloads to the ThreadPool — never worse than the inline call). No static state.
+    private readonly IIoPool _processPool =
+        hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Process)
+            ?? IoPool.Unbounded;
 
     [Description("Retrieves a node or content from the mesh by path. Paths are relative to current context; use @/ prefix for absolute paths. Supports Unified Path prefixes: content/, data/, schema/, model/, collection/, area/.")]
     public Task<string> Get(
@@ -104,7 +116,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
     }
 
     [Description("Runs xUnit tests via `dotnet test` on the given test project path (repo-relative, e.g. 'test/MeshWeaver.Acme.Test'). Optional filter uses the xunit `--filter` syntax: 'FullyQualifiedName~TodoViewsTest' to narrow by class, or '...Test.MethodName' for a single method. Returns the condensed test runner output (stdout + pass/fail summary). Dev-only — intended for the Monolith portal, not production.")]
-    public async Task<string> RunTests(
+    public Task<string> RunTests(
         [Description("Repo-relative path to the test project or its directory (e.g. 'test/MeshWeaver.Acme.Test')")] string projectPath,
         [Description("Optional xunit filter expression (e.g. 'FullyQualifiedName~TodoViewsTest')")] string? filter = null)
     {
@@ -112,13 +124,13 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
 
         var repoRoot = FindRepoRoot(AppContext.BaseDirectory);
         if (repoRoot is null)
-            return "{\"status\":\"Error\",\"message\":\"Could not locate repo root (no MeshWeaver.slnx upstream from executable).\"}";
+            return Task.FromResult("{\"status\":\"Error\",\"message\":\"Could not locate repo root (no MeshWeaver.slnx upstream from executable).\"}");
 
         var fullPath = Path.GetFullPath(Path.Combine(repoRoot, projectPath));
         if (!fullPath.StartsWith(repoRoot, StringComparison.OrdinalIgnoreCase))
-            return "{\"status\":\"Error\",\"message\":\"projectPath must stay inside the repo root.\"}";
+            return Task.FromResult("{\"status\":\"Error\",\"message\":\"projectPath must stay inside the repo root.\"}");
         if (!Directory.Exists(fullPath) && !File.Exists(fullPath))
-            return $"{{\"status\":\"Error\",\"message\":\"Path not found: {projectPath}\"}}";
+            return Task.FromResult($"{{\"status\":\"Error\",\"message\":\"Path not found: {projectPath}\"}}");
 
         var args = new List<string> { "test", fullPath, "--no-restore", "--nologo" };
         if (!string.IsNullOrWhiteSpace(filter))
@@ -127,6 +139,21 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
             args.Add(filter);
         }
 
+        // Route the thread-holding `dotnet test` wait onto the bounded Process pool
+        // (off the hub/grain scheduler). InvokeBlocking dispatches on the pool's
+        // LimitedConcurrencyLevelTaskScheduler; the .ToTask() at the MCP/AI-tool
+        // boundary is the only Task bridge (the AIFunctionFactory surface requires
+        // a Task<string>). Behavior is identical to the previous inline await.
+        return _processPool
+            .InvokeBlocking(ct => RunTestsCore(repoRoot, projectPath, filter, args, ct))
+            .FirstAsync()
+            .ToTask();
+    }
+
+    private static string RunTestsCore(
+        string repoRoot, string projectPath, string? filter,
+        IReadOnlyList<string> args, CancellationToken ct)
+    {
         using var process = new System.Diagnostics.Process
         {
             StartInfo = new System.Diagnostics.ProcessStartInfo
@@ -150,16 +177,19 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
-        try
-        {
-            await process.WaitForExitAsync(cts.Token);
-        }
-        catch (OperationCanceledException)
+        // Block this pooled thread on the child process. A pool unsubscribe / dispose
+        // (ct) tears the process down; a 5-minute wall clock cap bounds the run. Both
+        // resolve to the same Timeout result the inline await produced before.
+        using var killOnCancel = ct.Register(() => { try { process.Kill(entireProcessTree: true); } catch { } });
+        var exited = process.WaitForExit((int)TimeSpan.FromMinutes(5).TotalMilliseconds);
+        if (!exited)
         {
             try { process.Kill(entireProcessTree: true); } catch { }
             return "{\"status\":\"Timeout\",\"message\":\"Test run exceeded 5 minutes.\"}";
         }
+        // WaitForExit(timeout) can return before the async output handlers have
+        // flushed the final lines; the parameterless overload waits for that flush.
+        process.WaitForExit();
 
         var combined = stdout.ToString();
         if (stderr.Length > 0) combined += "\n--- stderr ---\n" + stderr;

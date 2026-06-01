@@ -6,6 +6,7 @@ using System.Text.Json;
 using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 
 namespace MeshWeaver.Hosting.Persistence;
 
@@ -61,12 +62,20 @@ public sealed class EmbeddedResourceStorageAdapter : IStorageAdapter
     private readonly ConcurrentDictionary<string, MeshNode?> _writeOverlay =
         new(StringComparer.OrdinalIgnoreCase);
 
+    // Controlled I/O pool (FileSystem resource class). The only genuinely-async
+    // leaf — Read, which pulls bytes off a manifest resource stream — goes through
+    // _pool.Invoke so the await runs OFF the hub scheduler and bounded. Falls back
+    // to the stateless unbounded pool when constructed outside DI (tests).
+    private readonly IIoPool _pool;
+
     public EmbeddedResourceStorageAdapter(
         Assembly assembly,
         string prefix,
         IEnumerable<MeshNode>? seedNodes = null,
-        string? partitionNamespace = null)
+        string? partitionNamespace = null,
+        IIoPool? pool = null)
     {
+        _pool = pool ?? IoPool.Unbounded;
         _assembly = assembly;
         _prefix = prefix.EndsWith('.') ? prefix : prefix + ".";
         // Routing layer hands us paths *with* the partition namespace
@@ -135,7 +144,7 @@ public sealed class EmbeddedResourceStorageAdapter : IStorageAdapter
     }
 
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
-        => Observable.FromAsync(ct => ReadAsyncCore(path, options, ct));
+        => _pool.Invoke(ct => ReadAsyncCore(path, options, ct));
 
     private async Task<MeshNode?> ReadAsyncCore(string path, JsonSerializerOptions options, CancellationToken ct)
     {

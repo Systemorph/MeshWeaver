@@ -7,6 +7,7 @@ using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 
 #pragma warning disable CS8618 // Required properties may be uninitialized in partial classes
@@ -26,6 +27,9 @@ public class CosmosStorageAdapterFactory(
         var opts = options.Value;
         var logger = serviceProvider.GetService<ILogger<CosmosStorageAdapterFactory>>();
 
+        // Cosmos is cloud I/O — governed by the Blob resource-class pool.
+        var pool = serviceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Blob);
+
         // Prefer Aspire-injected keyed containers (registered via AddAzureCosmosDatabase + AddKeyedContainer)
         logger?.LogDebug("Resolving keyed Container '{Name}'", opts.NodesContainerName);
         var nodesContainer = serviceProvider.GetKeyedService<Container>(opts.NodesContainerName);
@@ -34,7 +38,7 @@ public class CosmosStorageAdapterFactory(
         logger?.LogDebug("partitions={Found}", partitionsContainer != null);
 
         if (nodesContainer != null && partitionsContainer != null)
-            return new CosmosStorageAdapter(nodesContainer, partitionsContainer);
+            return new CosmosStorageAdapter(nodesContainer, partitionsContainer, pool);
 
         // Fallback: create CosmosClient manually from connection string (non-Aspire scenarios)
         var connectionString = opts.ConnectionString
@@ -52,7 +56,8 @@ public class CosmosStorageAdapterFactory(
         var database = cosmosClient.GetDatabase(opts.DatabaseName);
         return new CosmosStorageAdapter(
             database.GetContainer(opts.NodesContainerName),
-            database.GetContainer(opts.PartitionsContainerName));
+            database.GetContainer(opts.PartitionsContainerName),
+            pool);
     }
 }
 
