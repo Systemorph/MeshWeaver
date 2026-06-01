@@ -2,7 +2,6 @@ using Azure.Storage.Blobs;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh.Services;
-using MeshWeaver.Mesh.Threading;
 
 namespace MeshWeaver.Hosting.AzureStorage;
 
@@ -26,8 +25,7 @@ public class AzureBlobStorageAdapterFactory : IStorageAdapterFactory
         var containerClient = blobServiceClient.GetBlobContainerClient(containerName);
         containerClient.CreateIfNotExists();
 
-        return new AzureBlobStorageAdapter(containerClient,
-            serviceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Blob));
+        return new AzureBlobStorageAdapter(containerClient);
     }
 }
 
@@ -56,10 +54,8 @@ public static class PersistenceExtensions
         this IServiceCollection services,
         BlobContainerClient containerClient)
     {
-        // Deferred factory so the adapter can resolve the mesh-scoped Blob IoPool.
-        return services.AddPersistence(sp =>
-            new AzureBlobStorageAdapter(containerClient,
-                sp.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Blob)));
+        var storageAdapter = new AzureBlobStorageAdapter(containerClient);
+        return services.AddPersistence(storageAdapter);
     }
 
     /// <summary>
@@ -103,9 +99,7 @@ public static class PersistenceExtensions
         if (!await containerClient.ExistsAsync())
             await containerClient.CreateAsync();
 
-        // Deferred factory so the adapter can resolve the mesh-scoped Blob IoPool.
-        return services.AddPersistence(sp =>
-            new AzureBlobStorageAdapter(containerClient,
-                sp.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Blob)));
+        var storageAdapter = new AzureBlobStorageAdapter(containerClient);
+        return services.AddPersistence(storageAdapter);
     }
 }
