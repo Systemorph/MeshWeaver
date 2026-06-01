@@ -236,7 +236,14 @@ var appInsights = useLocalDb
 // --- Database Migration ---
 var dbMigration = builder
     .AddProject<Projects.Memex_Database_Migration>("db-migration")
+    .WithEnvironment("Embedding__Endpoint", embeddingEndpoint)
     .WithEnvironment("Embedding__Model", embeddingModel);
+
+// Embedding API key is a secret — only set when configured (ACA rejects empty secrets).
+// Without it the documentation backfill still runs; docs are full-text searchable, just
+// not vector-indexed.
+if (embeddingKey is not null)
+    dbMigration.WithEnvironment("Embedding__ApiKey", embeddingKey);
 
 if (appInsights is not null)
 {

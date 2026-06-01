@@ -1,7 +1,7 @@
 ---
 Name: Interactive Markdown
 Category: Documentation
-Description: Interactive markdown is the future of software engineering. With the introduction of AI in software engineering, the main job of humans will be to compose different parts and review the quality. Executable markdown facilitates this process.
+Description: "MeshWeaver's executable markdown dialect: embed C# fenced code blocks with --render flags to run code and display live layout areas inside a document."
 Icon: /static/DocContent/DataMesh/InteractiveMarkdown/icon.svg
 ---
 

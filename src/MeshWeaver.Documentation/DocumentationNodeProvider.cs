@@ -117,6 +117,53 @@ public class DocumentationNodeProvider : IStaticNodeProvider
     }
 
     /// <summary>
+    /// Parses the embedded documentation into MeshNodes whose <see cref="MeshNode.Namespace"/>,
+    /// <see cref="MeshNode.Id"/>, and Path match exactly what
+    /// <see cref="MeshWeaver.Hosting.Persistence.EmbeddedResourceStorageAdapter"/> serves at
+    /// runtime (full path = <c>Doc/&lt;folder&gt;/&lt;file&gt;</c>, path-source-of-truth, no
+    /// <c>index→folder</c> collapse). Used by the out-of-process database-migration backfill to
+    /// mirror docs into Postgres for full-text + vector search, so search-result links resolve to
+    /// the same path the embedded partition reads. Returns content pages only (no governance nodes).
+    /// </summary>
+    public static IReadOnlyList<MeshNode> LoadIndexableNodes(JsonSerializerOptions? jsonOptions = null)
+    {
+        var assembly = typeof(DocumentationNodeProvider).Assembly;
+        var prefix = $"{assembly.GetName().Name}.Data.";
+        var parserRegistry = new FileFormatParserRegistry(jsonOptions ?? new JsonSerializerOptions());
+
+        var nodes = new List<MeshNode>();
+        foreach (var resourceName in assembly.GetManifestResourceNames()
+                     .Where(n => n.StartsWith(prefix))
+                     .Order())
+        {
+            using var stream = assembly.GetManifestResourceStream(resourceName);
+            if (stream == null) continue;
+            using var reader = new StreamReader(stream);
+            var content = reader.ReadToEnd();
+
+            var relativePath = ResourceNameToPath(resourceName, prefix);
+            var extension = Path.GetExtension(relativePath);
+            var withoutExt = relativePath.EndsWith(extension, StringComparison.OrdinalIgnoreCase)
+                ? relativePath[..^extension.Length]
+                : relativePath;
+            var fullPath = $"{RootNamespace}/{withoutExt}".Replace('\\', '/').Trim('/');
+
+            var node = parserRegistry.TryParseAsync(extension, relativePath, content, fullPath, default)
+                .GetAwaiter().GetResult();
+            if (node == null) continue;
+
+            // Align Namespace/Id with the served path (mirrors EmbeddedResourceStorageAdapter's
+            // path normalization, including the partition prefix and NO index→parent collapse).
+            var lastSlash = fullPath.LastIndexOf('/');
+            node = lastSlash > 0
+                ? node with { Namespace = fullPath[..lastSlash], Id = fullPath[(lastSlash + 1)..] }
+                : node with { Namespace = "", Id = fullPath };
+            nodes.Add(node);
+        }
+        return nodes;
+    }
+
+    /// <summary>
     /// Converts embedded resource name back to file path relative to Data/.
     /// E.g. "MeshWeaver.Documentation.Data.AI.AgenticAI.md" → "AI/AgenticAI.md"
     /// </summary>

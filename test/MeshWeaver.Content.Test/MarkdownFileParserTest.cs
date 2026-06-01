@@ -54,6 +54,9 @@ public class MarkdownFileParserTest
         node.Category.Should().Be("Documentation");
         node.Icon.Should().Be("BookOpen");
         node.State.Should().Be(MeshNodeState.Transient);
+        // The YAML Description/Abstract is surfaced on the node's Description column so
+        // catalog/TOC cards and Postgres search show a real one-line summary.
+        node.Description.Should().Be("A detailed article");
 
         var mdContent = node.Content.Should().BeOfType<MarkdownContent>().Subject;
         mdContent.Authors.Should().BeEquivalentTo(new[] { "John Doe", "Jane Smith" }, System.Text.Json.JsonSerializerOptions.Default);

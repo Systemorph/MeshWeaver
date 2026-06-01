@@ -562,6 +562,56 @@ the admin password works out of the box.
 
 ---
 
+## Documentation search — full-text + optional vector
+
+The built-in MeshWeaver platform documentation ships **inside the images** (embedded
+resources) and is served from memory at runtime. So that it also shows up in the portal's
+**main search bar**, the one-shot **migration mirrors every doc page into a Postgres `doc`
+schema** on each deploy:
+
+- **Full-text search** (always on, no external dependency). Each doc's title + one-line
+  description is indexed; the search bar finds docs by keyword out of the box.
+- **Semantic / vector search** (opt-in). When an embeddings endpoint is configured, the
+  migration also computes an embedding per doc (title + description + body) and stores it in
+  the pgvector **HNSW** index, so natural-language queries (“how do I cancel a running job”)
+  rank the right page. The portal embeds the search query the same way, so both sides must use
+  the same model. (`pgvector` is already allowlisted on the Flexible Server — see the Database
+  section.)
+
+The mirror is a **full replace + incremental embed**: every deploy upserts the current doc set
+and prunes rows whose source page no longer ships, and the (paid) embedding call only fires for
+pages whose content actually changed since the last run. Reads/navigation still come from the
+in-memory copy — the `doc` schema is purely a search index.
+
+### Configure it
+
+The embeddings provider is **optional**. Leave it unset and docs are full-text-searchable with
+no external AI dependency; set it to enable vector ranking. The deploy AppHost
+(`deploy/aspire/Memex.Deploy.AppHost`) reads three parameters and flows them to **both** the
+migration and the portal:
+
+| Deploy parameter | Container env (migration **and** portal) | Notes |
+|---|---|---|
+| `Parameters:embedding-endpoint` | `Embedding__Endpoint` | Azure AI Foundry embeddings endpoint (Cohere embed-v4). Empty ⇒ full-text only. |
+| `Parameters:embedding-key` | `Embedding__ApiKey` | Secret — only emitted when set (ACA/compose reject empty secrets). |
+| `Parameters:embedding-model` | `Embedding__Model` | Defaults to `cohere-embed-v-4-0`. Migration + portal must agree (sizes the vector column). |
+
+Set them via `dotnet user-secrets` / env / GitHub secrets at publish time, e.g.:
+
+```bash
+aspire publish --apphost deploy/aspire/Memex.Deploy.AppHost/Memex.Deploy.AppHost.csproj \
+  -o deploy/helm -- --mode kubernetes \
+  -- --Parameters:embedding-endpoint=https://<foundry>.services.ai.azure.com/... \
+     --Parameters:embedding-key=<key>
+```
+
+For the **AKS / Helm** path these surface as `config.Embedding__*` (and the key as a
+`secrets.*` entry) on the regenerated chart's migration Job and portal Deployment — set them in
+`values.aks.yaml` (or `--set`) alongside the other secrets, and wire the key through the CSI
+Secrets Store add-on for production rather than committing it.
+
+---
+
 ## Authentication — Systemorph AAD (home) + Google + LinkedIn
 
 `values.aks.yaml` wires the login providers the portal's auth pipeline

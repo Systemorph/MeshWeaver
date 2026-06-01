@@ -43,9 +43,14 @@ public static class MemexHostingExtensions
         var db = postgres.AddDatabase("memex");
 
         // --- One-shot DB migration; the portal waits for it to complete (mirrors DbVersionGate) ---
+        // The migration also mirrors the built-in documentation into the `doc` Postgres schema for
+        // search; with the embedding endpoint/key set it vector-indexes them too.
         var migration = builder.AddContainer($"{name}-migration", $"{registry}/memex-migration", tag)
             .WithReference(db)
             .WaitFor(db);
+
+        foreach (var kv in options.EmbeddingEnvironment())
+            migration.WithEnvironment(kv.Key, kv.Value);
 
         // --- Portal (co-hosted Orleans silo + Blazor web) ---
         // Resource name is "{name}-portal" so it never collides with the "memex" database
@@ -82,6 +87,11 @@ public static class MemexHostingExtensions
         // only wires the OTLP push path; ServiceDefaults no-ops the exporter when it's unset.
         if (!string.IsNullOrEmpty(options.OtlpEndpoint))
             portal.WithEnvironment("OTEL_EXPORTER_OTLP_ENDPOINT", options.OtlpEndpoint);
+
+        // Embeddings — the portal embeds search-bar queries so they hit the HNSW index that the
+        // migration populated. Same config flows to both so the vector dimensions line up.
+        foreach (var kv in options.EmbeddingEnvironment())
+            portal.WithEnvironment(kv.Key, kv.Value);
 
         foreach (var kv in options.FeatureEnvironment())
             portal.WithEnvironment(kv.Key, kv.Value);

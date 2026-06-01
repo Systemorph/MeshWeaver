@@ -1,3 +1,8 @@
+---
+Name: Initialization Gates
+Description: "How to declare, open, and bypass hub initialization gates that defer inbound traffic until reactive data loads complete — without deadlocking via await."
+---
+
 # Initialization Gates
 
 > **TL;DR:** A hub may need to defer non-`CreateNodeRequest` traffic until its own data

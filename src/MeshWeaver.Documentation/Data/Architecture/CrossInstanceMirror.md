@@ -1,4 +1,5 @@
 ---
+Description: "MirrorToRemote and PullFromRemote MCP tools for pushing or pulling MeshNode subtrees between running MeshWeaver instances over HTTPS."
 title: Cross-Instance Mirror — Push & Pull between MeshWeaver portals
 order: 30
 ---

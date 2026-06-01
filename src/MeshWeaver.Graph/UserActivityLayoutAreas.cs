@@ -22,6 +22,17 @@ public static class UserActivityLayoutAreas
 
     private const string ThinScrollbar = "scrollbar-width: thin; scrollbar-color: rgba(128,128,128,0.3) transparent;";
 
+    // Catalog tab state — the selected tab name is held in the host data stream
+    // (same local-UI-state pattern as CommentLayoutAreas). Clicking a tab button
+    // writes the name; the content pane observes the key and swaps the MeshSearch.
+    private const string CatalogTabStateKey = "ownerCatalogTab";
+    private const string TabPinned = "Pinned";
+    private const string TabThreads = "Threads";
+    private const string TabMyItems = "My Items";
+    private const string TabLastRead = "Last Read";
+    private const string TabLastEdited = "Last Edited";
+    private static readonly string[] CatalogTabs = { TabPinned, TabThreads, TabMyItems, TabLastRead, TabLastEdited };
+
     /// <summary>
     /// Adds the Activity view to the User node's layout.
     /// </summary>
@@ -112,8 +123,9 @@ public static class UserActivityLayoutAreas
     }
 
     /// <summary>
-    /// Personal dashboard shown to the node owner — welcome banner, pinned items, threads,
-    /// child items, activity feed, recently viewed, and the chat input pinned to the bottom.
+    /// Personal dashboard shown to the node owner — three bands in a flex column:
+    /// a welcome banner, a catalog with tab toggles (Pinned / Threads / My Items /
+    /// Last Read / Last Edited), and the chat input pinned to the bottom.
     /// </summary>
     private static UiControl BuildOwnerDashboard(LayoutAreaHost host, string nodePath, string ownerName, string nodeOwnerId, MeshNode? ownerNode)
     {
@@ -130,41 +142,101 @@ public static class UserActivityLayoutAreas
             $"<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-top: 2px;\">Here's what's happening across your workspace</div>" +
             "</div>"));
 
-        // Scrollable content area — full-width layout grid
-        var content = Controls.LayoutGrid
-            .WithStyle("padding: 0 24px; flex: 1; min-height: 0; overflow-y: auto; gap: 24px; width: 100%; " + ThinScrollbar);
+        // Catalog region: a fixed tab bar over a swappable content pane. The
+        // selected tab lives in the host data stream so a button click re-emits
+        // both the bar (active styling) and the content (which MeshSearch shows).
+        var catalog = Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; padding: 0 24px;");
 
-        // Pinned items — compact, first section
-        var pinnedSection = BuildPinnedItems(ownerNode);
-        if (pinnedSection != null)
-            content = content.WithView(pinnedSection, skin => skin.WithXs(12));
+        // Init-once seed of the default tab — heap-captured so it survives the
+        // per-subscription re-evaluation of the view-definition lambda.
+        var initialized = new[] { false };
 
-        // Latest Threads — full width
-        content = content.WithView(BuildLatestThreads(nodePath, nodeOwnerId),
-            skin => skin.WithXs(12));
+        catalog = catalog.WithView((h, _) =>
+        {
+            if (!initialized[0])
+            {
+                h.UpdateData(CatalogTabStateKey, TabPinned);
+                initialized[0] = true;
+            }
+            return h.Stream.GetDataStream<string>(CatalogTabStateKey)
+                .DistinctUntilChanged()
+                .Select(selected => BuildCatalogTabBar(selected ?? TabPinned));
+        });
 
-        // My Items — full width. Items live in the user's own partition
-        // (rbuergi.* post-v10), not under the User/-prefixed dashboard path.
-        content = content.WithView(BuildChildren(nodeOwnerId),
-            skin => skin.WithXs(12));
+        catalog = catalog.WithView((h, _) =>
+            h.Stream.GetDataStream<string>(CatalogTabStateKey)
+                .DistinctUntilChanged()
+                .Select(selected => BuildCatalogContent(selected ?? TabPinned, nodePath, nodeOwnerId, ownerNode)));
 
-        // Activity Feed — 2/3 width on desktop, full on mobile
-        content = content.WithView(
-            BuildActivityFeed(),
-            skin => skin.WithXs(12).WithSm(8));
-
-        // Recently Viewed — 1/3 width on desktop, full on mobile
-        content = content.WithView(
-            BuildRecentActivity(nodePath),
-            skin => skin.WithXs(12).WithSm(4));
-
-        dashboard = dashboard.WithView(content);
+        dashboard = dashboard.WithView(catalog);
 
         // Chat input — pinned to the bottom of the dashboard column
         dashboard = dashboard.WithView(BuildChatSection(host, nodePath));
 
         return dashboard;
     }
+
+    /// <summary>
+    /// Horizontal row of tab toggle buttons. The active tab is rendered with an
+    /// accent appearance; clicking any tab writes its name to the catalog state key.
+    /// </summary>
+    private static UiControl BuildCatalogTabBar(string selected)
+    {
+        var bar = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithHorizontalGap(4)
+            .WithStyle("flex-shrink: 0; align-items: center; padding: 4px 0 12px 0; border-bottom: 1px solid var(--neutral-stroke-rest);");
+
+        foreach (var tab in CatalogTabs)
+        {
+            var captured = tab; // bind per-iteration for the click closure
+            var isActive = string.Equals(tab, selected, StringComparison.Ordinal);
+            bar = bar.WithView(Controls.Button(captured)
+                .WithAppearance(isActive ? Appearance.Accent : Appearance.Stealth)
+                .WithStyle(isActive
+                    ? "font-weight: 600;"
+                    : "font-weight: 400; color: var(--neutral-foreground-hint);")
+                .WithClickAction(ctx =>
+                {
+                    ctx.Host.UpdateData(CatalogTabStateKey, captured);
+                    return Task.CompletedTask;
+                }));
+        }
+
+        return bar;
+    }
+
+    /// <summary>
+    /// Maps the selected tab to its existing MeshSearch builder, wrapped in a
+    /// scrolling pane. The Pinned tab shows a hint when nothing is pinned (its
+    /// builder returns <c>null</c> rather than an empty query).
+    /// </summary>
+    private static UiControl BuildCatalogContent(string selected, string nodePath, string nodeOwnerId, MeshNode? ownerNode)
+    {
+        var pane = Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("flex: 1; min-height: 0; overflow-y: auto; padding-top: 12px; " + ThinScrollbar);
+
+        UiControl? content = selected switch
+        {
+            TabThreads => BuildLatestThreads(nodePath, nodeOwnerId),
+            // My Items live in the user's own partition (rbuergi.* post-v10), not
+            // under the User/-prefixed dashboard path — pass nodeOwnerId.
+            TabMyItems => BuildChildren(nodeOwnerId),
+            TabLastRead => BuildRecentActivity(nodePath),
+            TabLastEdited => BuildActivityFeed(),
+            _ => BuildPinnedItems(ownerNode), // Pinned + default
+        };
+
+        return pane.WithView(content ?? BuildPinnedEmptyState());
+    }
+
+    /// <summary>Placeholder shown on the Pinned tab when the owner has nothing pinned.</summary>
+    private static UiControl BuildPinnedEmptyState() =>
+        Controls.Html("<div style=\"padding: 24px; color: var(--neutral-foreground-hint); font-size: 0.9rem;\">" +
+                      "Nothing pinned yet. Pin items from their thumbnail to see them here.</div>");
 
     /// <summary>
     /// Public profile shown to visitors — UserProfileControl (rendered by Blazor)
@@ -367,50 +439,6 @@ public static class UserActivityLayoutAreas
             .WithCollapsibleSections(true)
             .WithReactiveMode(true)
             .WithCreateHref($"/create?type=Markdown&namespace={Uri.EscapeDataString(nodePath)}");
-    }
-
-    private static UiControl BuildNotifications(string _, string userId)
-    {
-        var section = Controls.Stack
-            .WithVerticalGap(8)
-            .WithStyle("overflow-y: auto; padding: 4px;");
-
-        section = section.WithView(Controls.PaneHeader("Notifications"));
-
-        var searchControl = Controls.MeshSearch
-            .WithHiddenQuery($"path:User/{userId} nodeType:{NotificationNodeType.NodeType} scope:descendants")
-            .WithShowSearchBox(false)
-            .WithRenderMode(MeshSearchRenderMode.Flat)
-            .WithSortBy("CreatedAt", ascending: false)
-            .WithReactiveMode(true)
-            .WithCollapsibleSections(false)
-            .WithSectionCounts(false)
-            .WithMaxColumns(2);
-
-        section = section.WithView(searchControl);
-        return section;
-    }
-
-    private static UiControl BuildPendingActions(string _)
-    {
-        var section = Controls.Stack
-            .WithVerticalGap(8)
-            .WithStyle("overflow-y: auto; padding: 4px;");
-
-        section = section.WithView(Controls.PaneHeader("Pending Actions"));
-
-        var searchControl = Controls.MeshSearch
-            .WithHiddenQuery($"nodeType:{ApprovalNodeType.NodeType}")
-            .WithShowSearchBox(false)
-            .WithRenderMode(MeshSearchRenderMode.Flat)
-            .WithSortBy("CreatedAt", ascending: false)
-            .WithReactiveMode(true)
-            .WithCollapsibleSections(false)
-            .WithSectionCounts(false)
-            .WithMaxColumns(2);
-
-        section = section.WithView(searchControl);
-        return section;
     }
 
     private static string EscapeHtml(string? text)

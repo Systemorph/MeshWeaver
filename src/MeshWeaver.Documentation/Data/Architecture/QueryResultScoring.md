@@ -1,3 +1,8 @@
+---
+Name: Query Result Scoring
+Description: "Explains how MeshQuery merges and sorts multi-provider query results using per-provider scores, sort dimensions, and PostgreSQL scoring components."
+---
+
 # Query Result Scoring
 
 `MeshQuery` is the boss for every `path:` / `namespace:` / `nodeType:` /

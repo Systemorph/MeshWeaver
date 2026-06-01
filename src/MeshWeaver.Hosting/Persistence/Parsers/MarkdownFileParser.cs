@@ -172,6 +172,10 @@ public partial class MarkdownFileParser : IFileFormatParser
             NodeType = frontMatter?.NodeType ?? "Markdown",
             Name = frontMatter?.Name ?? id,
             Category = frontMatter?.Category,
+            // Surface the YAML Abstract (aka the legacy `Description:` alias) on the
+            // node's Description column so catalog/TOC cards and Postgres search see
+            // a real one-line summary. The Abstract also stays inside MarkdownContent.
+            Description = frontMatter?.Abstract,
             // Icon: prefer Icon, then Thumbnail (fallback), resolve relative paths
             Icon = ResolveIcon(frontMatter?.Icon ?? frontMatter?.Thumbnail, ns),
             State = ParseState(frontMatter?.State),
@@ -201,7 +205,9 @@ public partial class MarkdownFileParser : IFileFormatParser
             Authors = mdContent?.Authors?.ToList(),
             Tags = mdContent?.Tags?.ToList(),
             Thumbnail = mdContent?.Thumbnail,
-            Abstract = mdContent?.Abstract
+            // Prefer the Content abstract; fall back to the node Description so a
+            // Description set directly on the node still round-trips to frontmatter.
+            Abstract = mdContent?.Abstract ?? node.Description
         };
 
         // Only write YAML block if there's meaningful content

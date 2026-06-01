@@ -1,3 +1,8 @@
+---
+Name: Request Via Stream Update
+Description: "Canonical pattern for all mesh-node mutations: use workspace.GetMeshNodeStream(path).Update(...) instead of bespoke request/response types, with helpers, cross-hub patch semantics, and rationale."
+---
+
 # Requesting Work via `stream.Update()`
 
 > **🚨 DEFAULT PATTERN for every mesh-node mutation.** Threads, thread messages, NodeType compile state, Code editing, satellite annotations — all of them. If you are about to write `class XxxRequest : IRequest<XxxResponse>` to mutate a node's content, **stop and read this page**.

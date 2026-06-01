@@ -1,3 +1,8 @@
+---
+Name: Memex Cloud Deployment
+Description: "Step-by-step architecture and operations manual for deploying the Memex portal on a private Azure Kubernetes Service cluster."
+---
+
 # Deploying the Memex Portal to a Private AKS Cluster
 
 A configuration manual for standing up the Memex portal on a **private** Azure Kubernetes Service
@@ -220,8 +225,12 @@ To reset to the post-initialize state, drop the per-user partition schemas + tru
 - **Static/seed user shadowing onboarding** — if a static node provider seeds a User for the admin
   email, a fresh `CreateUser` refuses with `Node already exists`, and the interactive form shows
   "user exists" even with 0 DB users. Remove the seed so real onboarding can persist the partition root.
-- **Secrets → Key Vault** — move the PG password, master key, OAuth client secrets, Grafana password,
-  and `Bootstrap:Secret` into the shared Key Vault via the CSI Secrets Store add-on.
+- **Secrets in Key Vault (done):** the master key, PG connection string, Microsoft client secret, and
+  `Bootstrap:Secret` live in `meshweaverkeyvault`; a `SecretProviderClass` + the AKS CSI Secrets Store
+  add-on sync them into a k8s Secret the portal reads via `envFrom` (see §10.6) — no plaintext env.
+  Remaining: the Grafana admin password (monitoring namespace), and folding the `SecretProviderClass`
+  + the deployment's CSI volume/`envFrom` into the chart/AddMemex so a fresh deploy wires KV
+  automatically instead of the current post-`deploy.sh` patch.
 - **Multi-replica HA** — needs Orleans `AzureTables`/`AdoNet` clustering wired on the Filesystem backend.
 - **Migration as a Job** — see §4.
 - **Release image** — replace any temporary debug image tag with a clean `latest`/release tag before
