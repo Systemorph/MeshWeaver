@@ -212,6 +212,24 @@ kubectl -n memex run pg --restart=Never --rm -i --image=postgres:17 \
 To reset to the post-initialize state, drop the per-user partition schemas + truncate content
 (keep `admin.db_version`), then **restart the portal** (direct SQL bypasses the workspace cache).
 
+### 10.6 Secrets via Key Vault (CSI Secrets Store)
+Production secrets live in **`meshweaverkeyvault`** (access-policy mode) and are projected into the
+pod by the AKS **CSI Secrets Store** add-on — no plaintext env, the vault is the source of truth.
+One-time wiring: grant the CSI add-on's identity `get/list` on the vault, store each secret, then a
+`SecretProviderClass` maps KV secret names → env-var keys and syncs them into a k8s Secret the
+deployment mounts (CSI volume) + reads (`envFrom`):
+```bash
+# CSI identity object id: az aks show -g <rg> -n <cluster> --query addonProfiles.azureKeyvaultSecretsProvider.identity.objectId -o tsv
+az keyvault set-policy -n meshweaverkeyvault --object-id <csi-identity-objectid> --secret-permissions get list
+az keyvault secret set --vault-name meshweaverkeyvault --name ai-keyprotection-masterkey --value '<value>'   # dashes only in KV names
+# SecretProviderClass `memex-kv` maps ai-keyprotection-masterkey -> Ai__KeyProtection__MasterKey (and the
+# PG conn / Microsoft secret / Bootstrap secret) and syncs them into the `memex-kv-secrets` k8s Secret;
+# the portal has a CSI volume for `memex-kv` + `envFrom: secretRef: memex-kv-secrets`.
+```
+**Rotate:** `az keyvault secret set` (new version) → `kubectl -n memex rollout restart deployment/memex-portal-deployment`
+(the CSI driver re-reads on the next mount). The `SecretProviderClass` + the CSI volume/`envFrom` are
+applied post-`deploy.sh` today (folding them into the chart is the §11 follow-up).
+
 > **Windows `az` gotcha:** the CLI's console writer can't encode non-ASCII characters in cp1252 and
 > crashes a raw log dump. Pipe the cluster-side command through `tr -cd '\11\12\15\40-\176'` to strip
 > non-ASCII before `az` prints it.
