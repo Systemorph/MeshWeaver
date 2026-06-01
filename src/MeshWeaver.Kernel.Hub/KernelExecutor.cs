@@ -11,7 +11,6 @@ using MeshWeaver.Data.Serialization;
 using MeshWeaver.Kernel;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using MeshWeaver.NuGet;
 using Microsoft.CodeAnalysis;
@@ -41,22 +40,6 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
     private bool initialized;
 
     private readonly SemaphoreSlim executionLock = new(1, 1);
-
-    // Bounded I/O pools (Wave 3 of Controlled I/O Pooling). The two genuine-I/O
-    // leaves run OFF the action block / TaskPool subscription so they neither
-    // block the executor's action block nor trigger unbounded ThreadPool injection:
-    //   • NuGet feed resolution (HTTP) → _httpPool.Invoke
-    //   • the cold Roslyn script compile+run (CPU) → _compilePool.InvokeBlocking
-    // The executionLock acquire is a lock, NOT I/O, and stays on its own
-    // Observable.FromAsync — untouched. Resolve the mesh-scoped pools from DI;
-    // fall back to the stateless IoPool.Unbounded when no registry is wired (still
-    // offloads to the ThreadPool — never worse than the bare leaf). No static state.
-    private readonly IIoPool _httpPool =
-        publicHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http)
-            ?? IoPool.Unbounded;
-    private readonly IIoPool _compilePool =
-        publicHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Compile)
-            ?? IoPool.Unbounded;
 
     // Cancellation source for the script currently inside ExecuteAsync. Replaced
     // on each submission. CancelScriptRequest cancels it; the script's
@@ -212,11 +195,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
             .SelectMany(_ =>
             {
                 EnsureInitialized();
-                // NuGet feed resolution is the HTTP leaf — route it through the
-                // bounded Http pool (off the action block, bounded). The pool's ct
-                // flows into ResolveNuGetReferencesAsync; the submission ct is also
-                // honoured by RunOnePass downstream.
-                return _httpPool.Invoke(t => ResolveNuGetReferencesAsync(code, t))
+                return Observable.FromAsync(t => ResolveNuGetReferencesAsync(code, t))
                     .SelectMany(cleaned => RunOnePass(cleaned, viewId, scriptOutputLogger, inputs, ct));
             })
             .Catch<object?, Exception>(ex =>
@@ -260,18 +239,9 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                 var capture = CapturingTextWriter.Capture(stdoutPipe);
                 return new StdoutScope(stdoutPipe, capture);
             },
-            // The cold Roslyn compile + run is the CPU leaf — route it through the
-            // bounded Compile pool's limited-concurrency scheduler (off the action
-            // block / TaskPool subscription). InvokeBlocking captures the ambient
-            // ExecutionContext at dispatch, so the AsyncLocal stdout capture set in
-            // the Using resource factory above flows onto the pool thread. The
-            // RunAsync/ContinueWithAsync Tasks are awaited inline on that pooled
-            // thread (.GetAwaiter().GetResult()); the submission ct — the one
-            // CancelScriptRequest trips — is threaded into the script run.
-            scope => _compilePool.InvokeBlocking(_ => (scriptState is null
-                    ? CSharpScript.RunAsync(cleaned, scriptOptions, scriptGlobals, typeof(MeshScriptGlobals), ct)
-                    : scriptState.ContinueWithAsync(cleaned, scriptOptions, ct))
-                    .GetAwaiter().GetResult())
+            scope => Observable.FromAsync(t => scriptState is null
+                    ? CSharpScript.RunAsync(cleaned, scriptOptions, scriptGlobals, typeof(MeshScriptGlobals), t)
+                    : scriptState.ContinueWithAsync(cleaned, scriptOptions, t))
                 .Select(state =>
                 {
                     scriptState = state;

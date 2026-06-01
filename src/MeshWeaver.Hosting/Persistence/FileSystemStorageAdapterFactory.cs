@@ -1,7 +1,5 @@
 using System.Text.Json;
 using MeshWeaver.Mesh.Services;
-using MeshWeaver.Mesh.Threading;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Hosting.Persistence;
 
@@ -39,7 +37,6 @@ public class FileSystemStorageAdapterFactory : IStorageAdapterFactory
             writeOptionsModifier = FormattedJsonModifier;
         }
 
-        return new FileSystemStorageAdapter(basePath, writeOptionsModifier,
-            serviceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem));
+        return new FileSystemStorageAdapter(basePath, writeOptionsModifier);
     }
 }

@@ -86,22 +86,25 @@ Pools are keyed by resource class and resolved lazily from `IoPoolRegistry` (a m
 
 ## Hidden inside the interfaces
 
-A leaf adapter takes an optional `IIoPool? pool = null` and stores `_pool = pool ?? IoPool.Unbounded`. Every leaf then reads uniformly:
+A leaf takes an optional `IIoPool? pool = null` and stores `_pool = pool ?? IoPool.Unbounded`. Each leaf reads uniformly:
 
 ```csharp
-public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
-    => _pool.Invoke(ct => ReadAsyncCore(path, options, ct));           // was Observable.FromAsync(...)
+// HTTP leaf (McpRemoteMeshClient) — was Observable.FromAsync(async ct => …)
+public IObservable<MeshNode?> Get(string path)
+    => _httpPool.Invoke(async ct => { var client = await GetClientAsync(ct); … });
 
-public IObservable<object> GetPartitionObjects(string nodePath, string? subPath, JsonSerializerOptions options)
-    => _pool.InvokeStream(ct => GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct));
-
-public IObservable<bool> Exists(string path)
-    => _pool.InvokeBlocking(_ => { var (f, _) = FindFileWithExtension(path); return f != null && File.Exists(f); });
+// CPU / process leaf — InvokeBlocking on the dedicated limited-concurrency scheduler
+=> _compilePool.InvokeBlocking(ct => RunRoslynScript(…));   // KernelExecutor
+=> _processPool.InvokeBlocking(ct => RunTestsCore(…));      // MeshPlugin.RunTests
 ```
 
-`IoPool.Unbounded` is a stateless fallback (used when an adapter is constructed with `new` outside DI — i.e. tests). It still offloads onto the ThreadPool, so it is never *worse* than the bare `Observable.FromAsync` it replaces; it just applies no cap. It holds no mutable state, so it is a true immutable constant, not a cache.
+`IoPool.Unbounded` is a stateless fallback (used when a leaf is constructed with `new` outside DI). It still offloads onto the ThreadPool — never *worse* than the bare `Observable.FromAsync` it replaces — but applies no cap. No mutable state: an immutable constant, not a cache. Pools come from the mesh-scoped `IoPoolRegistry` (registered by `MeshBuilder.AddIoPools()`), resolved from the owning hub's `ServiceProvider` or injected via the leaf's constructor.
 
-DI wires the real pool: the storage-adapter factories and `Add…Persistence` registrations resolve `sp.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem | Blob)` and pass it to the adapter constructor. `MeshBuilder` registers the registry via `.AddIoPools()` in its core `ConfigureServices` chain.
+## Scope — and why storage is NOT pooled
+
+This pool targets the **blocking I/O leaves that would otherwise block the single-threaded hub scheduler**: outbound HTTP (MCP mirror, social publishing), NuGet resolution, Roslyn script execution, and external processes (`dotnet test`). These are low-frequency and genuinely deadlock-prone.
+
+The **storage / file-system adapters are deliberately left on plain `Observable.FromAsync`** (not pooled). Their I/O is already asynchronous (the `await` is on the real file/blob call, which already runs off the hub turn), and they sit on the *hottest* path in the system — every node read/write, every hub init, every permission evaluation. Routing them through the pool added a `SubscribeOn(TaskPoolScheduler.Default)` hop to **every** read, which under CI's constrained ThreadPool starved init/permission reads past their timeouts (hub-init failures, spurious "access denied"); the bound also throttled a path that needs high concurrency. For storage the pool's cost outweighs its benefit — the existing async `FromAsync` is the right shape. (Postgres likewise stays on its own connection pool — see below.)
 
 ## Why Postgres is left as-is
 
@@ -114,11 +117,12 @@ DI wires the real pool: the storage-adapter factories and `Add…Persistence` re
 - **Disposal.** `IoPoolRegistry` disposes each `IoPool` → each disposes its `SemaphoreSlim`. The limited-concurrency scheduler borrows ThreadPool threads — nothing to dispose.
 - **No sync-context capture.** `.SubscribeOn(TaskPoolScheduler.Default)` + `.ConfigureAwait(false)` everywhere; `InvokeBlocking` dispatches via the scheduler-bound `TaskFactory`, never `TaskScheduler.Current`. Safe even when `Subscribe` is called inside a grain handler.
 
-## Rollout waves
+## Applied to (current scope)
 
-- **Wave 1 — storage** (done): `FileSystemStorageAdapter`, `AzureBlobStorageAdapter`, `CachingStorageAdapter`.
-- **Wave 2 — HTTP/network** (`Http` pool): social publishers (LinkedIn/X), AI providers, web search, embeddings, `McpRemoteMeshClient`.
-- **Wave 3 — compile/process/nuget** (`Compile` / `Process` pools): `MeshNodeCompilationService` and `KernelExecutor` (CPU-bound → `InvokeBlocking`), `MeshPlugin.RunTests` (`Process.Start`), `NuGetAssemblyResolver`.
+- **Http** pool: `McpRemoteMeshClient` (MCP mirror), Social publishers (`ScheduledPostPublisher` / `PostStatsRefresher` / `PastPostIngestJob`).
+- **Process** pool: `MeshPlugin.RunTests` (`dotnet test` via `Process.Start`, `InvokeBlocking`).
+
+The `Compile` pool exists but is currently unused: pooling `KernelExecutor`'s Roslyn run was reverted because it perturbed the carefully-ordered REPL execution path (submission-order / no-deadlock guarantees). Also not pooled (see "Scope" above): storage / file-system adapters (already-async, hottest path), `MeshNodeCompilationService` (recompile-timing path), `NuGetAssemblyResolver` (`MeshWeaver.NuGet` doesn't reference `Mesh.Contract`). Each can be revisited with care.
 
 ## Cross-references
 
