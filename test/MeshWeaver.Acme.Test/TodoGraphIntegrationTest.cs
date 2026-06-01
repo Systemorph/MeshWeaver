@@ -37,6 +37,10 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
         "MeshWeaverTodoGraphTests",
         ".mesh-cache");
 
+    // NOTE: cannot opt into ShareMeshAcrossTests — Task_Instances_HaveCorrectNodeType
+    // and Task_Instance_CanBeInitialized fail under a shared mesh (order/activation-
+    // sensitive even though read-only). Needs per-test isolation before it can share.
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         var graphPath = TestPaths.SamplesGraph;
