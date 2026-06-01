@@ -159,6 +159,54 @@ kubectl -n monitoring port-forward svc/loki-grafana 3000:80   # http://localhost
 | Run SQL | one-off `kubectl run … --image=postgres:17 … psql -h <pg-private-ip> -U <admin> -d memex` (password from Key Vault) |
 | Reach Postgres | private IP only (from inside the VNet / over the VPN) |
 
+All admin commands run against the **private** API server, so they go through
+`az aks command invoke -g <rg> -n <cluster> --command "<kubectl…>"` (or `kubectl` directly once
+you're on the P2S VPN, §9). Common tasks:
+
+### 10.1 Update the portal to a new image
+Build + push (§2), then repoint the deployment and roll:
+```bash
+kubectl -n memex set image deployment/memex-portal-deployment memex-portal=<registry>.azurecr.io/memex-portal-ai:<tag>
+kubectl -n memex rollout status deployment/memex-portal-deployment --timeout=220s
+```
+Use a **fresh tag** each build so the pull is guaranteed. Roll back by setting the previous tag.
+
+### 10.2 See the logs
+- **Quick (no VPN):** `az aks command invoke -g <rg> -n <cluster> --command "kubectl -n memex logs deployment/memex-portal-deployment --since=10m"`
+- **Dashboard (Grafana, via the P2S VPN — §9):** `kubectl -n monitoring port-forward svc/loki-grafana 3000:80` → `http://localhost:3000` → Explore → `{namespace="memex"}` (add `|= "error"` to filter).
+
+### 10.3 Enable / configure AI providers
+Providers are gated by feature flags; set them on the deployment, then each user supplies credentials:
+```bash
+kubectl -n memex set env deployment/memex-portal-deployment \
+  Features__Ai__Providers__AzureFoundry=true Features__Ai__Providers__AzureOpenAI=true \
+  Features__Ai__Providers__Anthropic=true   Features__Ai__Providers__OpenAI=true \
+  Features__Ai__Clis__ClaudeCode=true       Features__Ai__Clis__Copilot=true \
+  Ai__KeyProtection__MasterKey='<base64-32-byte-key>'    # encrypts stored provider credentials at rest
+```
+Then in **Settings → Models**: API providers (Anthropic, Azure OpenAI, Azure AI Foundry, OpenAI)
+work via **bring-your-own-key** (add the endpoint+key per user). The co-hosted CLIs (Claude Code,
+GitHub Copilot) need the **per-user Connect flow** (Phase 1 — see §11); the CLI binaries ship in the
+`portal-ai` image but the per-user login isn't wired yet. The master key should live in Key Vault,
+not a plaintext env var — see §11.
+
+### 10.4 Restart, scale, inspect
+```bash
+kubectl -n memex rollout restart deployment/memex-portal-deployment   # also clears in-memory caches + any wedged hub
+kubectl -n memex scale deployment/memex-portal-deployment --replicas=1  # >1 needs Orleans AzureTables clustering (§11)
+kubectl -n memex get pods -o wide
+```
+
+### 10.5 Postgres: query + reset
+Postgres is private (VNet IP only). Run SQL via a throwaway pod inside the cluster:
+```bash
+kubectl -n memex run pg --restart=Never --rm -i --image=postgres:17 \
+  --env=PGPASSWORD=<pw> --env=PGSSLMODE=require --command -- \
+  psql -h <pg-private-ip> -U <admin> -d memex -c "SELECT count(*) FROM auth.mesh_nodes WHERE node_type='User';"
+```
+To reset to the post-initialize state, drop the per-user partition schemas + truncate content
+(keep `admin.db_version`), then **restart the portal** (direct SQL bypasses the workspace cache).
+
 > **Windows `az` gotcha:** the CLI's console writer can't encode non-ASCII characters in cp1252 and
 > crashes a raw log dump. Pipe the cluster-side command through `tr -cd '\11\12\15\40-\176'` to strip
 > non-ASCII before `az` prints it.
