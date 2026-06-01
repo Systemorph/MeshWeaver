@@ -21,6 +21,9 @@ public sealed record MemexFeatureOptions
     /// <summary>User self-provisioning (open vs closed registration).</summary>
     public OnboardingFeatureOptions Onboarding { get; init; } = new();
 
+    /// <summary>Orleans clustering provider selection (membership store).</summary>
+    public OrleansFeatureOptions Orleans { get; init; } = new();
+
     /// <summary>
     /// True when the deployment ships at least one in-process API provider OR one
     /// co-hosted CLI. When false, the portal has no built-in chat capability via
@@ -50,6 +53,23 @@ public sealed record OnboardingFeatureOptions
     /// existing "no existing User nodes" detection in the onboarding flow.</para>
     /// </summary>
     public bool AllowSelfOnboarding { get; init; } = true;
+}
+
+/// <summary>
+/// Selects the Orleans cluster-membership provider. Bound from
+/// <c>Features:Orleans:Clustering</c>. Values:
+/// <list type="bullet">
+///   <item><c>AzureTables</c> (default) — Aspire-injected Azure Table Storage membership
+///     (the ACA / Marketplace path; the silo relies on the Aspire Orleans integration).</item>
+///   <item><c>AdoNet</c> — PostgreSQL-backed membership on the separate <c>orleans</c> database
+///     (real clustering for self-host / HA). The silo calls <c>UseAdoNetClustering</c> against the
+///     Aspire-injected <c>ConnectionStrings:orleans</c>; the migration creates the membership tables.</item>
+///   <item><c>Localhost</c> — single in-process silo (local dev only; never production).</item>
+/// </list>
+/// </summary>
+public sealed record OrleansFeatureOptions
+{
+    public string Clustering { get; init; } = "AzureTables";
 }
 
 public sealed record AiFeatureOptions

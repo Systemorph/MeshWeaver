@@ -67,7 +67,9 @@ if (mode is "compose" or "compose-ha" or "kubernetes" or "kubernetes-ha")
     builder.AddMemex("memex", o =>
     {
         o.Backend = "Filesystem";
-        o.OrleansClustering = ha ? "AdoNet" : "Localhost";
+        // Real, Postgres-backed cluster membership (never Localhost in prod). Works for a single
+        // silo or HA; `ha` only drives replica count, not the membership provider.
+        o.OrleansClustering = "AdoNet";
         o.IncludeAiClis = true;
         o.ImageTag = builder.Configuration["Parameters:image-tag"] ?? "latest";
         o.MasterKey = builder.Configuration["Parameters:key-protection-master-key"];

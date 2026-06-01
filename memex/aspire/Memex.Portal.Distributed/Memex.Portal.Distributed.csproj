@@ -25,6 +25,7 @@
     <PackageReference Include="Aspire.Azure.Data.Tables" />
     <PackageReference Include="Aspire.Npgsql" />
     <PackageReference Include="Microsoft.Orleans.Clustering.AzureStorage" />
+    <PackageReference Include="Microsoft.Orleans.Clustering.AdoNet" />
     <PackageReference Include="Microsoft.Orleans.Persistence.AzureStorage" />
     <PackageReference Include="Microsoft.Orleans.Server" />
     <PackageReference Include="Microsoft.Orleans.Sdk" />

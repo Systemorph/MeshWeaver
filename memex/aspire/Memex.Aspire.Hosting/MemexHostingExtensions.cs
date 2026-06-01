@@ -41,13 +41,21 @@ public static class MemexHostingExtensions
             .WithImage("pgvector/pgvector", "pg17")
             .WithDataVolume($"{name}-pgdata");
         var db = postgres.AddDatabase("memex");
+        // Orleans cluster-membership lives on the SAME Postgres server in a SEPARATE database,
+        // so silo membership never shares tables/locks with mesh data. Aspire owns the DB + its
+        // connection string (injected as ConnectionStrings:orleans); the migration creates the
+        // Orleans membership tables and the portal silo uses AdoNet clustering against it.
+        var clusteringDb = postgres.AddDatabase("orleans");
 
         // --- One-shot DB migration; the portal waits for it to complete (mirrors DbVersionGate) ---
         // The migration also mirrors the built-in documentation into the `doc` Postgres schema for
-        // search; with the embedding endpoint/key set it vector-indexes them too.
+        // search (with the embedding endpoint/key set it vector-indexes them too) and creates the
+        // Orleans membership tables in the `orleans` database.
         var migration = builder.AddContainer($"{name}-migration", $"{registry}/memex-migration", tag)
             .WithReference(db)
-            .WaitFor(db);
+            .WithReference(clusteringDb)
+            .WaitFor(db)
+            .WaitFor(clusteringDb);
 
         foreach (var kv in options.EmbeddingEnvironment())
             migration.WithEnvironment(kv.Key, kv.Value);
@@ -61,13 +69,16 @@ public static class MemexHostingExtensions
             .WithHttpEndpoint(targetPort: 8080, name: "http")
             .WithExternalHttpEndpoints()
             .WithReference(db)
+            .WithReference(clusteringDb)
             .WaitFor(db)
             .WaitForCompletion(migration)
             .WithEnvironment("ASPNETCORE_HTTP_PORTS", "8080")
             // Backend axis (Phase-0 switch in Memex.Portal.Distributed/Program.cs).
             .WithEnvironment("Deployment__Backend", options.Backend)
             .WithEnvironment("Deployment__DataRoot", "/data")
-            .WithEnvironment("Deployment__Orleans__Clustering", options.OrleansClustering)
+            // Orleans clustering provider — a feature flag (Features:Orleans:Clustering). The
+            // silo reads ConnectionStrings:orleans (injected by WithReference(clusteringDb)).
+            .WithEnvironment("Features__Orleans__Clustering", options.OrleansClustering)
             // Content storage + graph base paths (filesystem backend).
             .WithEnvironment("Storage__Name", "content")
             .WithEnvironment("Storage__SourceType", "FileSystem")
