@@ -135,6 +135,7 @@ var migrations = new IMigration[]
     new V26_AddNotificationsSatelliteTable(),
     new V27_RenameUserSchemaToAuthAndMirrorApiTokens(),
     new V28_RenameOrganizationToSpace(),
+    new V29_PinDocsForExistingUsers(),
 };
 
 var ctx = new MigrationContext(dataSource, connectionString, options, logger, initResult.IsFreshDb);
