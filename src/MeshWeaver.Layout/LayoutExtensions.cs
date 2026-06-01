@@ -197,6 +197,18 @@ public static class LayoutExtensions
             .Synchronize() // Ensure thread-safety for the 'first' closure variable
             .Where(i =>
                 first
+                // 🚨 A Full is a COMPLETE snapshot, never a delta — it carries no
+                // per-area Updates (the client materialises a Full as a ChangeItem
+                // with empty Updates, see SynchronizationStream.UpdateStream). Always
+                // re-evaluate the pointer against a Full so content that arrives in a
+                // (re-)snapshot reaches this stream regardless of whether this
+                // subscription already consumed its first frame. Without this, a
+                // control-stream subscription that caught an early frame where its
+                // area was not yet present would consume `first` on that empty frame
+                // and then never see the area delivered by a later Full (the area's
+                // content rides the snapshot, not an Update) — the layout render path
+                // delivers initial/observable-generator content as Fulls.
+                || i.ChangeType == ChangeType.Full
                 || i.Updates.Any(
                     p => p.Collection == collection && (p.Id == null || id == null || MatchesId(p.Id, id)))
                 )

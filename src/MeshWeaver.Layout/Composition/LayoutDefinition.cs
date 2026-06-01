@@ -1,19 +1,29 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Layout.Composition;
 
 public delegate EntityStoreAndUpdates Renderer(LayoutAreaHost host, RenderingContext context, EntityStore store);
-public delegate Task<EntityStoreAndUpdates> AsyncRenderer(LayoutAreaHost host, RenderingContext context, EntityStore store);
+
+/// <summary>
+/// The reactive renderer the layout engine composes for an area. Returns an
+/// <see cref="IObservable{T}"/> of <see cref="EntityStoreAndUpdates"/> — the area's
+/// content as it arrives: a renderer for a synchronous control emits once
+/// (<c>Observable.Return</c>), a renderer for a live generator re-emits over the
+/// area's lifetime. Every emission flows through the layout-area init subscription
+/// as a <c>SetCurrent</c>, so a synchronous emission produced during init is never
+/// dropped by the init window (the bug the old async <c>RenderAsync</c> hit).
+/// </summary>
+public delegate IObservable<EntityStoreAndUpdates> ObservableRenderer(LayoutAreaHost host, RenderingContext context, EntityStore store);
+
 public record LayoutDefinition(IMessageHub Hub)
 {
-    private ImmutableList<(Func<RenderingContext, bool> Filter, AsyncRenderer Renderer)> AsyncRenderers { get; init; } = [];
+    private ImmutableList<(Func<RenderingContext, bool> Filter, ObservableRenderer Renderer)> Renderers { get; init; } = [];
 
-    private ImmutableDictionary<string, AsyncRenderer> NamedRenderers { get; init; }
-        = ImmutableDictionary<string, AsyncRenderer>.Empty;
+    private ImmutableDictionary<string, ObservableRenderer> NamedRenderers { get; init; }
+        = ImmutableDictionary<string, ObservableRenderer>.Empty;
 
     /// <summary>
     /// The default area to display when no area is specified in the URL.
@@ -27,91 +37,95 @@ public record LayoutDefinition(IMessageHub Hub)
         => this with { DefaultArea = area };
 
     public LayoutDefinition WithRenderer(Func<RenderingContext, bool> filter, Renderer renderer)
+        => WithRenderer(filter, (h, ctx, s) => Observable.Return(renderer.Invoke(h, ctx, s)));
+
+    public LayoutDefinition WithRenderer(Func<RenderingContext, bool> filter, ObservableRenderer renderer)
         => this with
         {
-            AsyncRenderers = AsyncRenderers.Add((filter, (h,ctx, s) => Task.FromResult(renderer.Invoke(h, ctx, s))))
-        };
-    public LayoutDefinition WithRenderer(Func<RenderingContext, bool> filter, AsyncRenderer renderer)
-        => this with
-        {
-            AsyncRenderers = AsyncRenderers.Add((filter, renderer))
+            Renderers = Renderers.Add((filter, renderer))
         };
 
     public LayoutDefinition WithNamedRenderer(string area, Renderer renderer)
-        => this with
-        {
-            NamedRenderers = NamedRenderers.SetItem(area, (h, ctx, s) =>
-                Task.FromResult(renderer.Invoke(h, ctx, s)))
-        };
+        => WithNamedRenderer(area, (h, ctx, s) => Observable.Return(renderer.Invoke(h, ctx, s)));
 
-    public LayoutDefinition WithNamedRenderer(string area, AsyncRenderer renderer)
+    public LayoutDefinition WithNamedRenderer(string area, ObservableRenderer renderer)
         => this with
         {
             NamedRenderers = NamedRenderers.SetItem(area, renderer)
         };
 
-    public async ValueTask<EntityStoreAndUpdates> RenderAsync(
+    /// <summary>
+    /// Renders <paramref name="context"/>'s area reactively. Composes the named
+    /// renderer (if one is registered for <c>context.Area</c>) and every matching
+    /// predicate renderer, accumulating their <see cref="EntityStoreAndUpdates"/> onto
+    /// the running store, and emits each accumulated store over time as the area's
+    /// content arrives. When no renderer matches at all, emits a visible
+    /// "area not found" <see cref="MarkdownControl"/> so the client never spins forever
+    /// waiting for content no renderer will produce.
+    /// </summary>
+    public IObservable<EntityStoreAndUpdates> Render(
         LayoutAreaHost host,
         RenderingContext context,
         EntityStore store)
     {
-        var defLogger = Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("LayoutDefinition");
-        defLogger?.LogInformation("[LD-RENDER] RenderAsync entered area={area} hub={hub} namedRenderers=[{named}] asyncRenderers={asyncCount}",
-            context.Area, host.Hub.Address, string.Join(",", NamedRenderers.Keys), AsyncRenderers.Count);
-        var result = new EntityStoreAndUpdates(store, [], host.Stream.StreamId);
-        var hasContent = false;
-
-        // Execute named renderer if one exists for this area
+        // Collect the renderers that apply to this area, in order: the named renderer
+        // first, then every predicate renderer whose filter matches.
+        var rendererList = ImmutableList.CreateBuilder<ObservableRenderer>();
         if (NamedRenderers.TryGetValue(context.Area, out var namedRenderer))
-        {
-            defLogger?.LogInformation("[LD-RENDER] invoking named renderer area={area}", context.Area);
-            var ret = await namedRenderer.Invoke(host, context, result.Store);
-            result = ret with { Updates = result.Updates.Concat(ret.Updates) };
-            hasContent = true;
-        }
-        else
-        {
-            defLogger?.LogInformation("[LD-RENDER] NO named renderer for area={area}", context.Area);
-        }
+            rendererList.Add(namedRenderer);
+        foreach (var (filter, renderer) in Renderers)
+            if (filter(context))
+                rendererList.Add(renderer);
+        var applicable = rendererList.ToImmutable();
 
-        // Execute predicate-based renderers (existing behavior)
-        await foreach (var x in AsyncRenderers.ToAsyncEnumerable().Where(r => r.Filter(context)))
-        {
-            defLogger?.LogInformation("[LD-RENDER] invoking predicate renderer area={area}", context.Area);
-            var ret = await x.Renderer.Invoke(host, context, result.Store);
-            result = ret with { Updates = result.Updates.Concat(ret.Updates) };
-            hasContent = true;
-        }
+        if (applicable.Count == 0)
+            // No renderer for this area — surface a visible placeholder.
+            return Observable.Return(NotFound(host, context, store));
 
-        if (!hasContent)
-        {
-            var logger = Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("LayoutDefinition");
-            logger?.LogWarning("No renderer produced content for area '{Area}' on hub {Address}. " +
-                "Named renderers: [{Named}], predicate renderers: {Count}",
-                context.Area, host.Hub.Address,
-                string.Join(", ", NamedRenderers.Keys), AsyncRenderers.Count);
+        // Single renderer (the overwhelmingly common case: one named area, or one
+        // predicate match) — render directly onto the base store. Each emission is the
+        // renderer's own EntityStoreAndUpdates, which the init subscription sets as
+        // Current. A synchronous control emits once; a live generator re-emits.
+        if (applicable.Count == 1)
+            return applicable[0].Invoke(host, context, store);
 
-            // Surface a visible "area not found" placeholder so the client doesn't spin forever
-            // waiting for an Update that no renderer is going to produce.
-            var availableAreas = NamedRenderers.Keys.OrderBy(k => k).ToArray();
-            var availableLine = availableAreas.Length == 0
-                ? "_no named areas registered on this hub_"
-                : "Available named areas: " + string.Join(", ", availableAreas.Select(a => $"`{a}`"));
-            var notFound = new MarkdownControl(
-                $"**Area not found**\n\nNo renderer is registered for area `{context.Area}` on hub `{host.Hub.Address}`.\n\n{availableLine}");
-            result = result with
-            {
-                Store = result.Store.Update(LayoutAreaReference.Areas,
-                    coll => coll.SetItem(context.Area, notFound)),
-                Updates = result.Updates.Append(
-                    new EntityUpdate(LayoutAreaReference.Areas, context.Area, notFound))
-            };
-        }
-
-        return result;
+        // Multiple renderers (e.g. two WithNavMenu registrations for the same area, or a
+        // named area PLUS the predicate menu renderer). They must compose SEQUENTIALLY —
+        // each renders onto the store the PREVIOUS renderer produced, not against the
+        // bare base — because a renderer can read what an earlier one wrote (two
+        // WithNavMenu calls accumulate their links onto the same NavMenuControl; the
+        // second reads the first's control from the store). We fold the renderers into a
+        // chain where renderer N's input store is renderer N-1's latest output, and
+        // SelectMany re-runs the downstream when any upstream re-emits (a live renderer —
+        // e.g. the permission-reactive menu — re-emitting re-threads the chain). The
+        // running Updates are accumulated alongside the store.
+        var seed = Observable.Return(new EntityStoreAndUpdates(store, [], host.Stream.StreamId));
+        return applicable.Aggregate(seed, (accObservable, renderer) =>
+            accObservable.SelectMany(acc =>
+                renderer.Invoke(host, context, acc.Store)
+                    .Select(slice => new EntityStoreAndUpdates(
+                        slice.Store,
+                        acc.Updates.Concat(slice.Updates),
+                        host.Stream.StreamId))));
     }
 
-    public int Count => AsyncRenderers.Count + NamedRenderers.Count;
+    private EntityStoreAndUpdates NotFound(LayoutAreaHost host, RenderingContext context, EntityStore store)
+    {
+        // Surface a visible "area not found" placeholder so the client doesn't spin forever
+        // waiting for an Update that no renderer is going to produce.
+        var availableAreas = NamedRenderers.Keys.OrderBy(k => k).ToArray();
+        var availableLine = availableAreas.Length == 0
+            ? "_no named areas registered on this hub_"
+            : "Available named areas: " + string.Join(", ", availableAreas.Select(a => $"`{a}`"));
+        var notFound = new MarkdownControl(
+            $"**Area not found**\n\nNo renderer is registered for area `{context.Area}` on hub `{host.Hub.Address}`.\n\n{availableLine}");
+        return new EntityStoreAndUpdates(
+            store.Update(LayoutAreaReference.Areas, coll => coll.SetItem(context.Area, notFound)),
+            [new EntityUpdate(LayoutAreaReference.Areas, context.Area, notFound)],
+            host.Stream.StreamId);
+    }
+
+    public int Count => Renderers.Count + NamedRenderers.Count;
 
     /// <summary>
     /// Conversion rules collected at config time. Applied by UiControlService at construction.
