@@ -33,3 +33,13 @@ for s in memex-portal-secrets memex-migration-secrets; do
 done
 kubectl -n "$NS" rollout restart deployment/memex-portal-deployment deployment/memex-migration-deployment
 echo "=== deployed ==="; kubectl -n "$NS" get deploy,pvc,svc -o wide
+
+# Observability (opt-in, folded into the standard deploy): set GRAFANA_PW to also bring up
+# Grafana + Loki + Promtail + Prometheus (Promtail scrapes every pod's stdout into Loki, so the
+# portal logs flow with no portal-side config). Stays private — reach it via the P2S VPN +
+# `kubectl port-forward` (see DEPLOY-RUNBOOK.md §6). Non-fatal: a monitoring failure must not
+# fail the app deploy.
+if [ -n "${GRAFANA_PW:-}" ] && [ -f ./install-observability.sh ]; then
+  echo "=== observability (GRAFANA_PW set) ==="
+  GRAFANA_PW="$GRAFANA_PW" bash ./install-observability.sh || echo "WARN: observability install failed (non-fatal)"
+fi

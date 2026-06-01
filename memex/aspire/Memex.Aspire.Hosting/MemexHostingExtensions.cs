@@ -77,6 +77,12 @@ public static class MemexHostingExtensions
         if (!string.IsNullOrEmpty(options.MasterKey))
             portal.WithEnvironment("Ai__KeyProtection__MasterKey", options.MasterKey);
 
+        // Observability: export OTLP traces/metrics to a collector when one is configured.
+        // Logs are scraped from container stdout by the cluster log agent (Promtail), so this
+        // only wires the OTLP push path; ServiceDefaults no-ops the exporter when it's unset.
+        if (!string.IsNullOrEmpty(options.OtlpEndpoint))
+            portal.WithEnvironment("OTEL_EXPORTER_OTLP_ENDPOINT", options.OtlpEndpoint);
+
         foreach (var kv in options.FeatureEnvironment())
             portal.WithEnvironment(kv.Key, kv.Value);
 
