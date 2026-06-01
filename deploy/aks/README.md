@@ -612,6 +612,41 @@ Secrets Store add-on for production rather than committing it.
 
 ---
 
+## Orleans clustering — Postgres-backed (never Localhost in prod)
+
+HA runs the portal as **multiple silos**, which must form one cluster via a shared membership
+store. This deployment uses **Postgres-backed ADO.NET clustering** on the **same Postgres server
+in a separate `orleans` database** (so silo membership never shares tables or locks with mesh
+data). It works for a single silo too, so the self-host AppHosts use it in every mode — Localhost
+clustering is never used in a deployment.
+
+How it's wired (all DB config flows through Aspire):
+
+- The `AddMemex` integration declares the `orleans` database on the same Postgres server and
+  references it on both the portal and the migration, so Aspire injects `ConnectionStrings:orleans`.
+- The portal silo selects the provider from the **feature flag `Features:Orleans:Clustering`**
+  (set to `AdoNet` by the self-host AppHosts; legacy `Deployment:Orleans:Clustering` still works)
+  and calls `UseAdoNetClustering(Invariant=Npgsql)` against that injected connection string.
+- The **db-migration creates the Orleans membership tables** (`OrleansQuery`,
+  `OrleansMembershipTable`, …) in the `orleans` database from the verbatim Orleans 10 PostgreSQL
+  scripts — idempotent, and it auto-creates the database on self-managed Postgres. The Orleans
+  provider does *not* self-create these tables, so the migration must run before the silos start
+  (the portal already `WaitForCompletion(migration)`).
+
+> Aspire's Orleans integration only wires Redis / Azure-Table clustering — not ADO.NET — so the
+> `orleans` database lives in Aspire while the silo wiring and the membership DDL live in the
+> portal and the migration. (The Azure/ACA path instead uses Azure Table Storage clustering via
+> the Aspire Orleans integration and doesn't need any of this.)
+
+**AKS / Flexible Server note:** on the managed-Postgres path, ensure the `orleans` database exists
+on the server (the chart's migration Job creates the tables but the managed server must allow the
+DB; `azure.extensions` already includes pgvector for the mesh DB). The regenerated chart carries
+`Features__Orleans__Clustering=AdoNet` and the `orleans` connection string from the Aspire model;
+set the connection-string secret in `values.aks.yaml` alongside the `memex` one. HA needs **≥2
+replicas** (the `portal-ha-patch.yaml` already sets 3).
+
+---
+
 ## Authentication — Systemorph AAD (home) + Google + LinkedIn
 
 `values.aks.yaml` wires the login providers the portal's auth pipeline
