@@ -7,20 +7,18 @@ Icon: /static/DocContent/Architecture/AccessControl/icon.svg
 
 # Extensible Defaults
 
-A pattern for NodeType entities where **the framework ships built-in
-defaults** *and* **the mesh allows user-defined extensions** at any
-namespace. Every per-node hub sees one live synced collection that
-unions both layers — built-ins are visible immediately on first
-subscribe, user extensions stream in as they are created.
+Some features need to work on a blank mesh — no database rows, no user configuration — but they also need to grow: customers and tenants must be able to add their own instances anywhere in the node hierarchy. The **Extensible Defaults** pattern satisfies both requirements without compromise.
 
-Applies whenever a feature has
+> **Core idea:** the framework ships *built-in* entities via a read-only static provider; the mesh allows *user-defined* extensions at any namespace. Every per-node hub sees one live synced collection that unions both layers. Built-ins are visible the instant a consumer subscribes; user extensions stream in as they are created.
 
-- a small set of canonical entities the platform must ship (so the
-  feature works out-of-the-box on a blank mesh), and
-- an open extension point so customers/tenants can add their own
-  instances at any node in the hierarchy.
+## When to use this pattern
 
-Current callers in the codebase:
+Apply Extensible Defaults whenever a feature has:
+
+- A small set of canonical entities the platform must ship so the feature works out-of-the-box on a blank mesh, **and**
+- An open extension point so customers or tenants can add their own instances at any node in the hierarchy.
+
+### Current callers in the codebase
 
 | Entity | NodeType | Root namespace | Static provider | Picker projection |
 |--------|----------|----------------|-----------------|-------------------|
@@ -28,7 +26,9 @@ Current callers in the codebase:
 | Language Model | `LanguageModel` | `Model` | `BuiltInModelProvider` | `AgentPickerProjection.BuildModelQueries` |
 | Role | `Role` | `Role` | [`RoleNodeType.BuiltInRolesProvider`](xref:MeshWeaver.Graph.Configuration.RoleNodeType) | *(to follow Agent/Model)* |
 
-# The three layers
+---
+
+## The three layers
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -55,57 +55,33 @@ Current callers in the codebase:
 └─────────────────────────────────────────────────────────────┘
 ```
 
-`scope:selfAndAncestors` on (2) and (3) means a hub at
-`acme/team/proj` sees extensions defined at `acme/team/proj`,
-`acme/team`, `acme`, and the root — closest-wins behaviour is the
-caller's job (the same convention used by AccessAssignment).
+`scope:selfAndAncestors` on queries (2) and (3) means a hub at `acme/team/proj` sees extensions defined at `acme/team/proj`, `acme/team`, `acme`, and the root — closest-wins behaviour is the caller's responsibility (the same convention used by AccessAssignment).
 
-The union is computed by [`MeshQueryEngine`](xref:MeshWeaver.Hosting.Persistence.Query.MeshQueryEngine)
-inside a single `IMeshQueryCore.ObserveQuery` call — see
-[Synced Query Data Source](../DataMesh/SyncedQueryDataSource) for the
-delta protocol. Static-provider nodes participate via
-[`StaticNodeQueryProvider`](xref:MeshWeaver.Hosting.Persistence.Query.StaticNodeQueryProvider),
-so a query against `namespace:Agent` returns built-in Agents without
-touching persistence.
+The union is computed by [`MeshQueryEngine`](xref:MeshWeaver.Hosting.Persistence.Query.MeshQueryEngine) inside a single `IMeshQueryCore.ObserveQuery` call — see [Synced Query Data Source](../DataMesh/SyncedQueryDataSource) for the delta protocol. Static-provider nodes participate via [`StaticNodeQueryProvider`](xref:MeshWeaver.Hosting.Persistence.Query.StaticNodeQueryProvider), so a query against `namespace:Agent` returns built-in Agents without touching persistence.
 
-# Why this shape
+---
 
-**Instant Initial.** Static nodes are in-memory; the union's first
-emission carries every built-in synchronously on first subscribe. No
-permission check, no first-render path waits multiple seconds for a
-Postgres round-trip. The synced query is a Replay(1).RefCount stream,
-so subsequent consumers in the same workspace get the cached snapshot
-immediately.
+## Why this shape
 
-**Zero-config defaults.** A fresh mesh works without any
-AccessAssignment, Agent, or Model rows in Postgres — the static repo
-covers the baseline. The framework never blocks on "did the DB warm
-up yet".
+**Instant first emission.** Static nodes are in-memory; the union's first emission carries every built-in synchronously on first subscribe. No permission check, no first-render path waits on a Postgres round-trip. The synced query is a `Replay(1).RefCount` stream, so subsequent consumers in the same workspace get the cached snapshot immediately.
 
-**Mesh-level customisation.** Users create a `Role` / `Agent` /
-`LanguageModel` MeshNode anywhere in their hierarchy. The synced
-query picks it up on the next `IDataChangeNotifier` tick and emits an
-`Added` delta; every consuming hub re-projects.
+**Zero-config defaults.** A fresh mesh works without any AccessAssignment, Agent, or Model rows in Postgres — the static repo covers the baseline. The framework never blocks on "did the database warm up yet?"
 
-**Read-only built-ins.** The static provider ships a
-`PartitionAccessPolicy` named `_Policy` at the root namespace with
-`Create/Update/Delete/Comment/Thread = false`. That makes
-`namespace:Agent` (or `:Role`, `:Model`) unmodifiable — extensions
-must live in user namespaces.
+**Mesh-level customisation.** Users create a `Role`, `Agent`, or `LanguageModel` MeshNode anywhere in their hierarchy. The synced query picks it up on the next `IDataChangeNotifier` tick and emits an `Added` delta; every consuming hub re-projects automatically.
 
-**Parallel to Agent/Model.** New entities replicate the same wiring
-verbatim. No bespoke service, no per-feature cache layer, no special
-deadlock-handling.
+**Read-only built-ins.** The static provider ships a `PartitionAccessPolicy` named `_Policy` at the root namespace with `Create/Update/Delete/Comment/Thread = false`. That makes `namespace:Agent` (or `:Role`, `:Model`) unmodifiable — extensions must live in user namespaces.
 
-# Anatomy of an Extensible Default
+**Replicate, don't reinvent.** New entities replicate the same wiring verbatim. No bespoke service, no per-feature cache layer, no special deadlock-handling.
+
+---
+
+## Anatomy of an Extensible Default
 
 Three pieces of code per entity.
 
-## 1. Static provider — the built-ins
+### 1. Static provider — the built-ins
 
-`IStaticNodeProvider` is a singleton that returns the MeshNodes the
-framework wants visible on every mesh. The provider's `GetStaticNodes`
-runs synchronously at routing time — keep it cheap.
+`IStaticNodeProvider` is a singleton that returns the MeshNodes the framework wants visible on every mesh. `GetStaticNodes` runs synchronously at routing time — keep it cheap.
 
 ```csharp
 private class BuiltInRolesProvider : IStaticNodeProvider
@@ -138,19 +114,13 @@ builder.ConfigureServices(services =>
     services.AddSingleton<IStaticNodeProvider, BuiltInRolesProvider>());
 ```
 
-## 2. NodeType — the extension surface
+### 2. NodeType — the extension surface
 
-Register the NodeType MeshNode itself so the routing layer knows the
-content type and how to host the per-instance hub. This is the same
-shape every NodeType uses — see
-[`RoleNodeType.AddRoleType`](xref:MeshWeaver.Graph.Configuration.RoleNodeType.AddRoleType*).
+Register the NodeType MeshNode itself so the routing layer knows the content type and how to host the per-instance hub. This is the same shape every NodeType uses — see [`RoleNodeType.AddRoleType`](xref:MeshWeaver.Graph.Configuration.RoleNodeType.AddRoleType*).
 
-## 3. Picker / projection — the consumer entry point
+### 3. Picker / projection — the consumer entry point
 
-A small static helper that builds the three query strings and
-projects the resulting MeshNode snapshot into the typed view the
-feature actually wants. Modelled on
-[`AgentPickerProjection`](xref:MeshWeaver.AI.AgentPickerProjection):
+A small static helper that builds the three query strings and projects the resulting MeshNode snapshot into the typed view the feature actually needs. Modelled on [`AgentPickerProjection`](xref:MeshWeaver.AI.AgentPickerProjection):
 
 ```csharp
 public static class RolePickerProjection
@@ -188,45 +158,34 @@ public static class RolePickerProjection
 }
 ```
 
-Same query id everywhere = one shared upstream subscription via the
-workspace's per-id cache. Every consumer in the same hub (chat picker
-UI, permission evaluator, RLS validator) gets the cached
-`Replay(1)` snapshot.
+Using the same query id everywhere means a single shared upstream subscription via the workspace's per-id cache. Every consumer in the same hub — chat picker UI, permission evaluator, RLS validator — gets the cached `Replay(1)` snapshot at no extra cost.
 
-# Hot mistakes — and why this pattern fixes them
+---
+
+## Hot mistakes — and why this pattern fixes them
 
 | Mistake | Symptom | What this pattern enforces |
 |---------|---------|----------------------------|
-| Per-user `MemoryCache` with a `Timeout()` fallback. | First permission check after process start waits the full Timeout (e.g. 2 s) while the upstream synced query warms; the fallback emits empty roles and the UI looks "logged out". | The Replay(1) is fed by the static provider's nodes *synchronously* on first subscribe. There is no "warm-up window" to time out against. |
+| Per-user `MemoryCache` with a `Timeout()` fallback. | First permission check after process start waits the full timeout (e.g. 2 s) while the upstream synced query warms; the fallback emits empty roles and the UI looks "logged out". | The `Replay(1)` is fed by the static provider's nodes *synchronously* on first subscribe — there is no warm-up window to time out against. |
 | Reading the entity via `IMeshQueryCore.QueryAsync` (CQRS read side). | Index-lag staleness after writes; missed Initial emissions. | Reads come from the local workspace's synced collection, which folds `Added`/`Updated`/`Removed` deltas verbatim. See [CQRS and Content Access](CqrsAndContentAccess). |
-| Reaching for `ConfigResolver.ResolveConfigurationAsync` on every per-node activation. | Every grain activation does a Postgres round-trip + an extra async resolution before the hub can answer messages. | The static repo carries enough state for the activation; user extensions arrive lazily via the same synced collection. |
-| Caching at the application service ("`PermissionEvaluator._userScopeRolesCache`"). | Cache invalidation is its own deadlock surface; runtime updates need a separate invalidation hook. | No application cache. The synced collection *is* the cache, kept consistent by `IDataChangeNotifier`. |
+| Calling `ConfigResolver.ResolveConfigurationAsync` on every per-node activation. | Every grain activation does a Postgres round-trip plus an async resolution before the hub can answer any messages. | The static repo carries enough state for activation; user extensions arrive lazily via the same synced collection. |
+| Application-level caching (e.g. `PermissionEvaluator._userScopeRolesCache`). | Cache invalidation is its own deadlock surface; runtime updates need a separate invalidation hook. | No application cache. The synced collection *is* the cache, kept consistent by `IDataChangeNotifier`. |
 
-# Applying this to Roles & AccessAssignments
+---
 
-Today `PermissionEvaluator` hand-rolls a per-user `MemoryCache` over a
-synced AccessAssignment query and falls through a 2 s `Timeout()` on
-first use — that fallback fires hundreds of times during a single
-thread render and is the dominant cost of opening a chat. Migrating
-the surface to this pattern means:
+## Applying this to Roles & AccessAssignments
 
-1. Keep `BuiltInRolesProvider` (already shipping the four canonical
-   roles + the read-only `_Policy`).
-2. Add a `BuiltInAccessAssignmentProvider` for baseline assignments
-   (e.g. `Public → Viewer` on shipped namespaces) so the synced
-   collection has a non-empty Initial on a blank mesh.
-3. Replace `PermissionEvaluator.GetUserScopeRolesStream` with a
-   workspace-local consumer of the same `workspace.GetQuery(id,
-   BuildRoleAssignmentQueries(...))` projection that Agent/Model use.
-   No `Timeout`, no `Catch`-to-empty fallback — the Replay(1)
-   snapshot is already populated when the first permission check
-   arrives.
+Today `PermissionEvaluator` hand-rolls a per-user `MemoryCache` over a synced AccessAssignment query and falls through a 2 s `Timeout()` on first use. That fallback fires hundreds of times during a single thread render and is the dominant cost of opening a chat. Migrating to this pattern means:
 
-See [Access Control](AccessControl) for the role / assignment data
-model and the per-hub `PermissionEvaluator` evaluator that consumes the
-projection.
+1. **Keep `BuiltInRolesProvider`** — it already ships the four canonical roles plus the read-only `_Policy`.
+2. **Add `BuiltInAccessAssignmentProvider`** for baseline assignments (e.g. `Public → Viewer` on shipped namespaces), so the synced collection has a non-empty Initial on a blank mesh.
+3. **Replace `PermissionEvaluator.GetUserScopeRolesStream`** with a workspace-local consumer of the same `workspace.GetQuery(id, BuildRoleAssignmentQueries(...))` projection that Agent and Model use. No `Timeout`, no `Catch`-to-empty fallback — the `Replay(1)` snapshot is already populated when the first permission check arrives.
 
-# References
+See [Access Control](AccessControl) for the role / assignment data model and the per-hub `PermissionEvaluator` that consumes the projection.
+
+---
+
+## References
 
 - [`AgentPickerProjection`](xref:MeshWeaver.AI.AgentPickerProjection) — canonical caller (Agent & Model).
 - [`BuiltInAgentProvider`](xref:MeshWeaver.AI.BuiltInAgentProvider), [`RoleNodeType.BuiltInRolesProvider`](xref:MeshWeaver.Graph.Configuration.RoleNodeType) — static repo examples.

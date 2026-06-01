@@ -1,13 +1,15 @@
 ---
 Name: Data Versioning Strategies
 Category: Documentation
-Description: Technology-specific approaches to data versioning across Snowflake, SQL Server, Cosmos DB, and file storage
+Description: Technology-specific approaches to data versioning across Snowflake, SQL Server, Cosmos DB, and file storage — choosing the right mechanism for each backend.
 Icon: /static/DocContent/Architecture/DataVersioning/icon.svg
 ---
 
-MeshWeaver supports data versioning through technology-specific mechanisms. The approach depends on the underlying data store, leveraging native capabilities where available.
+MeshWeaver takes a pragmatic stance on data versioning: rather than imposing a single strategy across all backends, it delegates to each store's native capabilities wherever they exist. The result is richer history, lower application complexity, and better performance than any cross-cutting shim could deliver.
 
-# Strategy Selection
+## Choosing a Strategy
+
+Your data store determines the versioning model:
 
 ```mermaid
 flowchart TB
@@ -18,50 +20,60 @@ flowchart TB
     Q -->|File/Blob| FB[Manual Versioning<br/>path@V1, V2]
 ```
 
-# Snowflake: Time Travel
+| Technology | Method | Retention | Query Syntax |
+|------------|--------|-----------|---------------|
+| Snowflake | Time Travel | 1–90 days | `AT(TIMESTAMP => ...)` |
+| SQL Server | Temporal Tables | Unlimited | `FOR SYSTEM_TIME AS OF` |
+| Cosmos DB | Manual | Unlimited | `path@V{n}` |
+| Blob Storage | Manual / Native | Configurable | Folder or blob versioning |
 
-Snowflake provides built-in temporal versioning through **Time Travel**:
+---
 
-## Capabilities
+## Snowflake: Time Travel
+
+Snowflake's **Time Travel** gives you transparent, zero-effort history for any table — no triggers, no shadow tables, no ETL.
+
+### Capabilities
 
 | Feature | Description |
 |---------|-------------|
-| **Time Travel** | Query data as it existed at any point (up to 90 days) |
-| **Fail-safe** | 7-day recovery period after Time Travel expires |
-| **Zero-Copy Cloning** | Instant snapshots without data duplication |
-| **Retention** | Configurable 1-90 days per table |
+| **Time Travel** | Query data as it existed at any point, up to 90 days in the past |
+| **Fail-safe** | A 7-day recovery window after the Time Travel period expires |
+| **Zero-Copy Cloning** | Instant snapshots with no data duplication |
+| **Retention** | Configurable per table from 1 to 90 days |
 
-## Query Historical Data
+### Querying Historical Data
 
 ```sql
--- Query data from 1 hour ago
+-- Data as it was 1 hour ago
 SELECT * FROM pricing
 AT(OFFSET => -3600);
 
--- Query data at specific timestamp
+-- Data at a specific timestamp
 SELECT * FROM pricing
 AT(TIMESTAMP => '2024-01-15 10:00:00');
 
--- Query before a statement was executed
+-- Data as it existed before a specific statement ran
 SELECT * FROM pricing
 BEFORE(STATEMENT => '01234567-89ab-cdef-0123-456789abcdef');
 ```
 
-## Clone for Snapshots
+### Cloning for Snapshots
+
+Zero-copy clones let you take an instant point-in-time snapshot without consuming additional storage:
 
 ```sql
--- Create instant snapshot
 CREATE TABLE pricing_q4_snapshot
 CLONE pricing
 AT(TIMESTAMP => '2024-12-31 23:59:59');
 ```
 
-## MeshWeaver Integration
+### MeshWeaver Integration
 
-Access historical data through versioned entity references:
+Access historical Snowflake data through versioned entity references:
 
 ```csharp
-// Query claim as of specific date
+// Query a claim as it existed on a specific date
 var historicalClaim = await hub.AwaitResponse(
     new GetDataRequest(
         new VersionedEntityReference(
@@ -74,11 +86,13 @@ var historicalClaim = await hub.AwaitResponse(
 );
 ```
 
-# SQL Server: Temporal Tables
+---
 
-SQL Server offers **system-versioned temporal tables** for automatic history tracking:
+## SQL Server: Temporal Tables
 
-## Setup
+SQL Server's **system-versioned temporal tables** automatically maintain a complete row-level history with no application-layer changes required after the initial schema setup.
+
+### Creating a Temporal Table
 
 ```sql
 CREATE TABLE Contracts
@@ -87,41 +101,43 @@ CREATE TABLE Contracts
     Name NVARCHAR(100),
     Amount DECIMAL(18,2),
     ValidFrom DATETIME2 GENERATED ALWAYS AS ROW START,
-    ValidTo DATETIME2 GENERATED ALWAYS AS ROW END,
+    ValidTo   DATETIME2 GENERATED ALWAYS AS ROW END,
     PERIOD FOR SYSTEM_TIME (ValidFrom, ValidTo)
 )
 WITH (SYSTEM_VERSIONING = ON (HISTORY_TABLE = dbo.ContractsHistory));
 ```
 
-## Query Historical Data
+### Querying Historical Data
 
 ```sql
--- Current data
+-- Current data (unchanged syntax)
 SELECT * FROM Contracts;
 
--- Data at specific point in time
+-- State at a specific point in time
 SELECT * FROM Contracts
 FOR SYSTEM_TIME AS OF '2024-06-01 12:00:00';
 
--- All changes in a time range
+-- All rows that were active within a date range
 SELECT * FROM Contracts
 FOR SYSTEM_TIME BETWEEN '2024-01-01' AND '2024-12-31';
 
--- Complete history
+-- Complete change history
 SELECT * FROM Contracts
 FOR SYSTEM_TIME ALL;
 ```
 
-## Benefits
+### Why Temporal Tables Work Well Here
 
-- Automatic history capture on UPDATE/DELETE
-- No application code changes required
-- Query optimizer aware of temporal predicates
-- History table can be partitioned separately
+- History is captured automatically on every `UPDATE` and `DELETE` — no application code involved.
+- The query optimizer understands temporal predicates and plans accordingly.
+- The history table can be partitioned independently for cost control.
+- Retention is unlimited by default; old rows stay until you explicitly purge them.
 
-# Manual Versioning: Path Pattern
+---
 
-For stores without built-in versioning (Cosmos DB, Blob Storage), use path-based versioning:
+## Manual Versioning: Path Pattern
+
+When the underlying store has no built-in history mechanism (Cosmos DB, Azure Blob Storage), MeshWeaver uses an explicit **path-based versioning** convention.
 
 ```mermaid
 flowchart LR
@@ -134,45 +150,48 @@ flowchart LR
     style VN fill:#c8e6c9
 ```
 
-## Version Path Format
+### Path Format
 
 ```
-@{path}@V{version}
+{path}@V{version}
 ```
 
-**Examples:**
-- `@pricing/MS-2024` → Current version
-- `@pricing/MS-2024@V1` → Version 1
-- `@pricing/MS-2024@V2` → Version 2
-- `@contracts/deal-123@V5` → Version 5
+The undecorated path always points to the **current** version; decorated paths are immutable snapshots:
 
-## Implementation Pattern
+| Path | Meaning |
+|------|---------|
+| `pricing/MS-2024` | Current version |
+| `pricing/MS-2024@V1` | Version 1 (immutable) |
+| `pricing/MS-2024@V2` | Version 2 (immutable) |
+| `contracts/deal-123@V5` | Version 5 of deal-123 |
+
+### Implementation Pattern
 
 ```csharp
-// Save new version
+// Save a new version
 public async Task SaveVersionAsync(string path, object data)
 {
-    // Get current version number
+    // Determine the next version number
     var current = await GetCurrentVersionAsync(path);
     var newVersion = current + 1;
 
-    // Save versioned copy
+    // Write the immutable versioned snapshot
     await SaveAsync($"{path}@V{newVersion}", data);
 
-    // Update current pointer
+    // Advance the current pointer
     await SaveAsync(path, data);
 }
 
-// Read specific version
+// Read a specific historical version
 public async Task<T> GetVersionAsync<T>(string path, int version)
 {
     return await GetAsync<T>($"{path}@V{version}");
 }
 ```
 
-## Cosmos DB Implementation
+### Cosmos DB
 
-In Cosmos DB, include version in the partition key or document:
+Include the version in the document itself (and optionally in the partition key):
 
 ```json
 {
@@ -180,28 +199,28 @@ In Cosmos DB, include version in the partition key or document:
   "partitionKey": "pricing",
   "version": 3,
   "createdAt": "2024-03-15T10:00:00Z",
-  "data": { ... }
+  "data": { }
 }
 ```
 
-## Blob Storage Implementation
+### Blob Storage
 
-For file/blob storage, use folder structure:
+Use a folder-per-entity layout with a `current.json` pointer, or enable **Azure Blob versioning** to get automatic version tracking at the storage layer:
 
 ```
 pricing/
   MS-2024/
-    current.json        <- Latest version
+    current.json        ← always the latest version
     v1.json
     v2.json
     v3.json
 ```
 
-Or enable **blob versioning** in Azure Storage for automatic version tracking.
+---
 
-# Version Metadata
+## Version Metadata
 
-Regardless of storage technology, track version metadata:
+Regardless of which storage technology is in use, each version snapshot should carry consistent metadata so the audit trail is human-readable:
 
 ```json
 {
@@ -213,19 +232,12 @@ Regardless of storage technology, track version metadata:
 }
 ```
 
-# Comparison
+---
 
-| Technology | Method | Retention | Query Syntax |
-|------------|--------|-----------|---------------|
-| Snowflake | Time Travel | 1-90 days | `AT(TIMESTAMP => ...)` |
-| SQL Server | Temporal Tables | Unlimited | `FOR SYSTEM_TIME AS OF` |
-| Cosmos DB | Manual | Unlimited | `path@V{n}` |
-| Blob Storage | Manual/Native | Configurable | Folder or blob versioning |
+## Best Practices
 
-# Best Practices
-
-1. **Use native features** when available (Snowflake, SQL Server)
-2. **Consistent naming** for manual versioning (`@V{n}` suffix)
-3. **Track metadata** (who, when, why)
-4. **Retention policies** to manage storage costs
-5. **Point-in-time queries** for audit and debugging
+1. **Prefer native features.** Snowflake Time Travel and SQL Server temporal tables provide history at zero application cost — use them before reaching for manual versioning.
+2. **Use consistent naming.** Manual versions always use the `@V{n}` suffix so path-parsing code has a single, unambiguous pattern to follow.
+3. **Always record metadata.** Capture who created the version, when, and why — debugging and auditing are far easier with this context.
+4. **Set retention policies.** Native Time Travel and blob versioning can accumulate storage costs; configure table-level retention in Snowflake and lifecycle rules in Azure Storage accordingly.
+5. **Lean on point-in-time queries.** Reconstructing state as of a specific timestamp is the cleanest way to answer audit questions — avoid reconstructing it manually from event logs when the store offers `AS OF` semantics natively.

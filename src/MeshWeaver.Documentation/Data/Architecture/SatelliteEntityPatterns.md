@@ -1,37 +1,39 @@
 ---
 Name: Satellite Entity Patterns
 Category: Architecture
-Description: Implementation and test patterns for satellite entities (comments, threads, tracked changes) — data model, handlers, workspace updates, and Orleans testing
+Description: Data model, handler, and test patterns for satellite entities (Comments, Threads, Tracked Changes) — parent-child tracking, synchronous handler rules, access control, and Orleans verification.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v7M5 20l5.5-7M19 20l-5.5-7"/><circle cx="12" cy="2" r="2"/><circle cx="5" cy="20" r="2"/><circle cx="19" cy="20" r="2"/></svg>
 ---
 
-Satellite entities (Comments, Threads, Tracked Changes) follow a specific pattern for both handler implementation and testing. This document covers the non-blocking handler pattern, the parent-child tracking pattern, and the reactive test verification approach.
+Satellite entities — Comments, Threads, Tracked Changes — are secondary nodes that live under a primary content node. They share a consistent set of patterns for data modeling, handler implementation, access control, and reactive testing. This page is the canonical reference for all three.
 
-## Data Model Pattern: Parent Tracks Children
+## Data Model: Parent Tracks Children
 
-Satellite entities use an `ImmutableList<string>` on the parent to track child IDs. This is how the layout area knows which children to render — it reads the list from the workspace stream, not from queries.
+A parent node holds an `ImmutableList<string>` of child IDs. The layout area reads this list from the workspace stream and renders a `LayoutAreaControl` for each entry — it never issues a query to discover children.
 
-| Entity | Parent Field | Children |
-|--------|-------------|----------|
-| Thread | `Messages: ImmutableList<string>` | ThreadMessage nodes |
-| Comment | `Replies: ImmutableList<string>` | Reply Comment nodes |
+| Entity | Parent field | Child node type |
+|--------|-------------|-----------------|
+| Thread | `Messages: ImmutableList<string>` | `ThreadMessage` |
+| Comment | `Replies: ImmutableList<string>` | Reply `Comment` |
 
-When a child is created, the handler updates the parent's list via `workspace.UpdateMeshNode()`. The layout area reads the list from the node stream and renders `LayoutArea` controls for each child path.
+When a child is created, the handler appends its ID to the parent list via `workspace.UpdateMeshNode()`. The update flows immediately into every subscribed Blazor client through the sync stream — no polling, no page refresh.
 
-### Top-level vs Reply detection
+### Top-level vs. reply detection
 
-A comment is top-level when its namespace ends with `_Comment` (e.g., `Doc/MyDoc/_Comment`). A reply's namespace is the parent comment path (e.g., `Doc/MyDoc/_Comment/c1`). No need to load the parent — just inspect the path.
+A comment is top-level when its namespace ends with `_Comment` (e.g. `Doc/MyDoc/_Comment`). A reply's namespace is the parent comment's path (e.g. `Doc/MyDoc/_Comment/c1`). No parent load is required — the shape of the path is the signal.
 
-## Handler Pattern
+---
 
-Satellite entity handlers must be **fully synchronous** (no `await`). They run inside the hub execution pipeline where blocking causes deadlocks in Orleans distributed mode.
+## Handler Pattern: Synchronous, Reactive, Error-Safe
 
-### Reference Implementation: `ThreadExecution.ExecuteMessageAsync` (post-SubmitMessageRequest deletion)
+Satellite entity handlers **must be fully synchronous**. Running `await` inside the hub execution pipeline causes deadlocks in Orleans distributed mode. The right shape is: start an `IObservable` chain, subscribe, and return immediately — the response is posted from inside the callback.
+
+### Reference implementation
 
 ```csharp
-// SubmitMessageRequest deleted 2026-05-25. The submission watcher invokes this
-// method directly after writing PendingUserMessages via stream.Update on the
-// thread node — no wire message, no handler.
+// SubmitMessageRequest was deleted 2026-05-25. The submission watcher invokes
+// ExecuteMessageAsync directly after writing PendingUserMessages via stream.Update
+// on the thread node — no wire message, no handler dispatch.
 internal static void ExecuteMessageAsync(
     IMessageHub hub,
     RoundParams request,
@@ -40,15 +42,15 @@ internal static void ExecuteMessageAsync(
     var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
     var workspace = hub.GetWorkspace();  // Capture BEFORE Subscribe
 
-    // 1) Create child nodes via Observable (fire-and-forget)
-    var inputObs = meshService.CreateNode(new MeshNode(...));
+    // 1) Start both node creates concurrently (IObservable — cold until Subscribe)
+    var inputObs  = meshService.CreateNode(new MeshNode(...));
     var outputObs = meshService.CreateNode(new MeshNode(...));
 
-    // 2) Zip concurrent creates, handle result in Subscribe callback
+    // 2) Zip waits for both, then fires the callback exactly once
     inputObs.Zip(outputObs).Subscribe(
         pair =>
         {
-            // 3) Update parent node — add child IDs to tracking list
+            // 3) Update parent — append child IDs to tracking list
             workspace.UpdateMeshNode(node =>
             {
                 var thread = node.Content as Thread ?? new Thread();
@@ -61,7 +63,7 @@ internal static void ExecuteMessageAsync(
                 };
             });
 
-            // 4) Post response INSIDE the callback (after nodes exist)
+            // 4) Post response INSIDE the callback — nodes exist before caller is notified
             hub.Post(new Response { Success = true }, o => o.ResponseFor(delivery));
         },
         error =>
@@ -70,26 +72,26 @@ internal static void ExecuteMessageAsync(
                 o => o.ResponseFor(delivery));
         });
 
-    // 5) Return immediately — response posted from callback
+    // 5) Return immediately — response is posted from the callback above
     return delivery.Processed();
 }
 ```
 
-### Rules
+### Handler rules
 
-1. **Synchronous signature**: `IMessageDelivery` return type, never `async Task<IMessageDelivery>`
-2. **Never await — anywhere in the message pipeline**: `await` == deadlock in Orleans. This applies to handlers, Blazor components sending requests, layout areas, and any code on the hub execution path. Use `Post` + `RegisterCallback` instead of `AwaitResponse`.
-3. **No permission checks in handlers or layout areas**: Access control is handled by the delivery pipeline via partition access policies. If a user lacks the `Comment` permission (for comments) or `Thread` permission (for threads), the request is rejected before reaching the handler. Handlers and layout areas assume the caller is authorized. This is symmetrical: threads use `Thread` permission, comments use `Comment` permission.
-4. **Never use IMeshStorage/persistence directly**: Use `IMeshService` for CRUD, `workspace.UpdateMeshNode()` for in-memory updates
-5. **Capture workspace before Subscribe**: `var workspace = hub.GetWorkspace()` must be called before entering the Subscribe callback
-6. **Post response in callback**: The response must be posted inside `Subscribe(onNext)`, not before — the caller needs to know the operation completed
-7. **Wrap onNext in try/catch**: If `workspace.UpdateMeshNode()` or any code in the Subscribe callback throws, catch the exception and post a negative response. Otherwise the caller hangs forever waiting.
-8. **Use `meshService.CreateNode()`**: Returns `IObservable<MeshNode>` — internally uses `Post` + `RegisterCallback`
-9. **Use `workspace.UpdateMeshNode()`**: Updates the in-memory workspace stream, which triggers persistence via the debounced `MeshNodeTypeSource`
+1. **Synchronous signature** — return `IMessageDelivery`, never `async Task<IMessageDelivery>`.
+2. **No `await` anywhere in the message pipeline** — `await` deadlocks in Orleans. This applies to handlers, Blazor components, layout areas, and any code on the hub execution path. Use `Post` + `RegisterCallback` instead of `AwaitResponse`.
+3. **No permission checks in handlers or layout areas** — access control is enforced by the delivery pipeline via partition access policies. If a user lacks the `Comment` or `Thread` permission, the request is rejected before reaching the handler. Handlers assume the caller is authorized.
+4. **Never use `IMeshStorage` or persistence directly** — use `IMeshService` for CRUD and `workspace.UpdateMeshNode()` for in-memory workspace updates.
+5. **Capture `workspace` before `Subscribe`** — `var workspace = hub.GetWorkspace()` must be called on the handler thread, not inside the callback closure.
+6. **Post the response inside the callback** — the caller needs to know the operation completed; posting before the observable fires gives a false success.
+7. **Wrap the `onNext` body in `try/catch`** — if `workspace.UpdateMeshNode()` or any callback code throws and you do not catch it, the caller hangs indefinitely waiting for a response that never comes.
+8. **Use `meshService.CreateNode()`** — returns `IObservable<MeshNode>`; internally uses `Post` + `RegisterCallback`.
+9. **Use `workspace.UpdateMeshNode()`** — updates the in-memory stream and triggers persistence via the debounced `MeshNodeTypeSource`.
 
-### Blazor Component Pattern
+### Blazor component pattern
 
-Blazor components must also use `Post` + `RegisterCallback`, not `AwaitResponse`:
+Blazor components follow the same rule: `Post` + `RegisterCallback`, never `AwaitResponse`.
 
 ```csharp
 // CORRECT: fire-and-forget with callback
@@ -102,11 +104,11 @@ Hub.RegisterCallback<CreateCommentResponse>(delivery!, response =>
     return response;
 });
 
-// WRONG: AwaitResponse blocks the Blazor circuit if response never comes
+// WRONG: AwaitResponse blocks the Blazor circuit if response never arrives
 await Hub.AwaitResponse(request, o => o.WithTarget(address), default);  // DEADLOCK
 ```
 
-### Anti-Patterns
+### Anti-patterns to avoid
 
 ```csharp
 // WRONG: await in handler — deadlocks in Orleans
@@ -123,14 +125,14 @@ await persistence.SaveNodeAsync(node, ct);  // WRONG
 hub.Post(response, o => o.ResponseFor(request));  // too early
 meshService.CreateNode(node).Subscribe(...);       // not done yet
 
-// WRONG: no error handling in Subscribe callback — caller hangs forever
+// WRONG: no error handling — caller hangs forever if callback throws
 meshService.CreateNode(node).Subscribe(_ =>
 {
     workspace.UpdateMeshNode(...);  // throws? response never posted!
     hub.Post(response, o => o.ResponseFor(request));
-}, ...);
+});
 
-// CORRECT: wrap in try/catch, always post response
+// CORRECT: always post a response, success or failure
 meshService.CreateNode(node).Subscribe(_ =>
 {
     try
@@ -142,63 +144,69 @@ meshService.CreateNode(node).Subscribe(_ =>
     {
         hub.Post(failureResponse, o => o.ResponseFor(request));
     }
-}, ...);
+});
 ```
+
+---
 
 ## MainNode: Access Control for Satellite Nodes
 
-**Every satellite node MUST set `MainNode` to the content entity it belongs to.** Without this, access control fails because the hub uses the node's own path as identity.
+> **Every satellite node MUST set `MainNode` to the content entity it belongs to.** Without this, access control fails because the hub uses the node's own path as its identity — a path that has no permissions attached.
 
-Example: A thread under `PartnerRe/AiConsulting` must have `MainNode = "PartnerRe/AiConsulting"`, not the thread's own path. Same for sub-threads, thread messages, and comments.
+For example, a thread under `PartnerRe/AiConsulting` must carry `MainNode = "PartnerRe/AiConsulting"`, not the thread's own path. The same requirement applies to sub-threads, thread messages, comments, and tracked changes.
 
 ```csharp
-// CORRECT: MainNode = content entity
+// CORRECT: MainNode points to the owning content entity
 var threadNode = new MeshNode(threadId, ns)
 {
     NodeType = "Thread",
-    MainNode = contextPath,  // e.g., "PartnerRe/AiConsulting"
-    Content = new Thread()
+    MainNode  = contextPath,   // e.g., "PartnerRe/AiConsulting"
+    Content   = new Thread()
 };
 
 var msgNode = new MeshNode(msgId, threadPath)
 {
     NodeType = "ThreadMessage",
-    MainNode = contextPath,  // same content entity, not the thread path
-    Content = new ThreadMessage { ... }
+    MainNode  = contextPath,   // same content entity — NOT the thread path
+    Content   = new ThreadMessage { ... }
 };
 
-// WRONG: MainNode defaults to self (node.Path) — access denied for sub-threads
+// WRONG: MainNode defaults to the node's own path — no permissions, access denied
 var node = new MeshNode(id, threadPath) { NodeType = "ThreadMessage" };
-// MainNode = "PartnerRe/.../threadId/msgId" — not a real entity, no permissions
+// MainNode = "PartnerRe/.../threadId/msgId" — not a real entity; has no permissions
 ```
 
-This applies to all satellite types: Thread, ThreadMessage, Comment, TrackedChange, Approval.
+This applies to all satellite types: `Thread`, `ThreadMessage`, `Comment`, `TrackedChange`, `Approval`.
+
+---
 
 ## SwitchAccessContext: Scoped Identity in Callbacks
 
-When code runs outside the hub delivery pipeline (e.g., in `Subscribe` callbacks), the `AccessContext` is not set. Use `SwitchAccessContext` for scoped identity:
+Code that runs outside the hub delivery pipeline — such as inside `Subscribe` callbacks — does not automatically inherit the caller's `AccessContext`. Use `SwitchAccessContext` to establish a scoped identity for the duration of the callback body.
 
 ```csharp
 var accessService = hub.ServiceProvider.GetService<AccessService>();
 childStream.Subscribe(change =>
 {
     using var _ = accessService?.SwitchAccessContext(userAccessContext);
-    // ... operations here run under the correct user identity
+    // Operations here run under the correct user identity
     workspace.UpdateMeshNode(node => { ... });
 });
 ```
 
+---
+
 ## Remote Stream Subscription Pattern (Delegation)
 
-When a thread delegates to a sub-thread, subscribe to the child's MeshNode and keep the subscription alive. **Never await completion — use `TaskCompletionSource` instead.**
+When a thread delegates to a sub-thread, subscribe to the child's `MeshNode` stream and keep the subscription alive for the lifetime of the operation. Never await completion inline — the AI framework owns the `await`; MeshWeaver code only supplies a `Task` via `TaskCompletionSource`.
 
 ```csharp
 var tcs = new TaskCompletionSource<DelegationResult>();
 
-// 1. Create node (Observable, no await)
+// 1. Create sub-thread node (Observable — no await)
 meshService.CreateNode(subThreadNode).Subscribe(_ =>
 {
-    // 2. Subscribe to child — RegisterForDisposal keeps it alive
+    // 2. Subscribe to child stream — AddDisposable keeps it alive
     var childStream = workspace.GetRemoteStream<MeshNode>(
         new Address(subThreadPath), new MeshNodeReference());
     workspace.AddDisposable(childStream);
@@ -209,10 +217,10 @@ meshService.CreateNode(subThreadNode).Subscribe(_ =>
         var childThread = change.Value?.Content as Thread;
         if (childThread == null) return;
 
-        // Update parent's progress
+        // Mirror child progress into the parent node
         workspace.UpdateMeshNode(node => { ... merge child progress ... });
 
-        // On completion, resolve TCS
+        // On completion, resolve the TCS
         if (!childThread.IsExecuting)
             tcs.TrySetResult(new DelegationResult { ... });
     });
@@ -224,14 +232,18 @@ meshService.CreateNode(subThreadNode).Subscribe(_ =>
 },
 error => tcs.TrySetResult(new DelegationResult { Success = false }));
 
-return tcs.Task; // AI framework awaits this — our code never does
+return tcs.Task;  // The AI framework awaits this — our code never does
 ```
 
-## Test Pattern
+---
 
-Tests for satellite entities must verify through **reactive streams**, not `QueryAsync`. This ensures the test exercises the same path the GUI uses.
+## Test Pattern: Reactive Verification
 
-### Orleans Test Setup
+Tests for satellite entities verify state through **reactive streams**, not `QueryAsync`. This exercises the same code path as the GUI and eliminates timing-dependent polling.
+
+### Orleans test setup
+
+Both the silo and the client must register domain types. Without `AddGraph()` on the client, type names diverge and deserialization silently fails.
 
 ```csharp
 // Silo: registers handlers and persistence
@@ -248,12 +260,12 @@ public class MySiloConfigurator : ISiloConfigurator, IHostConfigurator
         hostBuilder.UseOrleansMeshServer()
             .AddFileSystemPersistence(dataPath)
             .ConfigurePortalMesh()
-            .AddGraph()  // Registers ALL domain types
+            .AddGraph()   // Registers ALL domain types
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 }
 
-// Client: MUST also register domain types for serialization
+// Client: MUST also register domain types for serialization alignment
 public class MyClientConfigurator : IHostConfigurator
 {
     public void Configure(IHostBuilder hostBuilder)
@@ -264,12 +276,12 @@ public class MyClientConfigurator : IHostConfigurator
 }
 ```
 
-### Verification via GetRemoteStream
+### Verification via `GetRemoteStream`
 
-Subscribe to the node's workspace stream **before** triggering the operation, then reactively wait for the expected state:
+Subscribe to the node's workspace stream **before** triggering the operation, then reactively wait for the expected state to appear.
 
 ```csharp
-// 0) Subscribe to stream BEFORE sending the request
+// 0) Subscribe BEFORE sending the request — never after
 var markersAppeared = workspace.GetRemoteStream<MeshNode>(docAddress)
     .Select(nodes => nodes?.FirstOrDefault(n => n.Path == docPath))
     .Select(node => (node?.Content as MarkdownContent)?.Content ?? "")
@@ -280,13 +292,13 @@ var markersAppeared = workspace.GetRemoteStream<MeshNode>(docAddress)
 // 1) Send request
 var response = await client.AwaitResponse(request, o => o.WithTarget(address), ct);
 
-// 2) Wait for stream to reflect the change
+// 2) Wait for the stream to reflect the change
 var updatedContent = await markersAppeared;
 ```
 
-### Verification via GetDataRequest
+### Verification via `GetDataRequest`
 
-For verifying individual node content (same pattern as `OrleansChatTest`):
+For verifying the content of an individual node (mirrors the pattern in `OrleansChatTest`):
 
 ```csharp
 private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct)
@@ -308,24 +320,26 @@ private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, Ca
 }
 ```
 
-### Complete Test Flow (Comment Example)
+### Complete test flow (Comment example)
 
 ```
-1. Deploy Orleans cluster with domain types registered on both silo and client
-2. Create client hub, register for streaming
-3. Ping target grain to activate it
-4. Subscribe to markdown stream (GetRemoteStream)
-5. Send CreateCommentRequest
-6. Assert CreateCommentResponse.Success == true
-7. Await markdown stream to contain comment markers
-8. GetDataRequest on comment path to verify Comment content
-9. (Optional) Subscribe to comment layout area to verify rendering
+1.  Deploy Orleans cluster with domain types registered on silo AND client
+2.  Create client hub, register for streaming
+3.  Ping target grain to activate it
+4.  Subscribe to markdown stream via GetRemoteStream (before sending request)
+5.  Send CreateCommentRequest
+6.  Assert CreateCommentResponse.Success == true
+7.  Await markdown stream to contain comment markers
+8.  GetDataRequest on comment path to verify Comment content
+9.  (Optional) Subscribe to comment layout area to verify rendering
 10. (Optional) Send reply CreateCommentRequest, verify via stream
 ```
 
+---
+
 ## Type Registration
 
-All satellite entity types must be registered in the mesh builder so Orleans serialization works:
+All satellite entity types must be registered in the mesh builder so Orleans serialization works end-to-end.
 
 ```csharp
 // In AddCommentType() — called by AddGraph()
@@ -337,23 +351,26 @@ builder.ConfigureHub(config => config
 );
 ```
 
-Both the **silo** and **client** must call `AddGraph()` (or equivalent) to share the same type registry. Without this, the client serializes types with full namespace names that the silo can't match.
+Both the **silo** and **client** must call `AddGraph()` (or the equivalent domain registration). Without this, the client serializes types with fully qualified names that the silo cannot match.
+
+---
 
 ## Cross-Grain Live Updates (Critical for Orleans)
 
-When pushing data from one grain to another (e.g., thread execution updating the response message), **never** use:
-- `workspace.GetRemoteStream().Update()` — creates a local proxy, doesn't propagate to other clients
-- `DataChangeRequest` posted to another grain — updates entity store but doesn't trigger the sync stream
+Pushing data from one grain to another — for example, a thread execution grain updating the response message node — requires care. Two approaches that appear to work but **do not trigger live updates** to Blazor clients:
 
-These methods persist data correctly (visible on page refresh) but **do not trigger live updates** to Blazor clients.
+- `workspace.GetRemoteStream().Update()` — creates a local proxy; change does not propagate to other subscribers.
+- `DataChangeRequest` posted to another grain — updates the entity store but does not fire the sync stream.
 
-### Correct Pattern: Custom Message + Local Workspace Update
+Both persist data correctly (the change is visible after a page refresh) but the UI does not update in real time.
+
+### Correct pattern: custom message + local workspace update
 
 ```csharp
 // 1. Define a message type
 public record UpdateMyContent { public string Text { get; init; } }
 
-// 2. Register handler ON the target hub (runs on the target grain)
+// 2. Register a handler ON the target hub (runs on the target grain)
 config.WithHandler<UpdateMyContent>((hub, delivery) =>
 {
     hub.GetWorkspace().UpdateMeshNode(node =>
@@ -366,4 +383,4 @@ hub.Post(new UpdateMyContent { Text = "hello" },
     o => o.WithTarget(new Address(targetPath)));
 ```
 
-**Why this works:** `workspace.UpdateMeshNode()` updates the **local** data source stream on the target grain. This triggers `DataChangedEvent` on the sync stream that clients subscribe to via `GetRemoteStream`. The update flows: grain workspace → sync stream → Orleans routing → Blazor SignalR → UI render.
+**Why this works:** `workspace.UpdateMeshNode()` updates the **local** data source stream on the target grain, which fires a `DataChangedEvent` on the sync stream. Blazor clients that subscribed via `GetRemoteStream` receive this event over SignalR and re-render without any polling. The update path is: grain workspace → sync stream → Orleans routing → Blazor SignalR → UI render.

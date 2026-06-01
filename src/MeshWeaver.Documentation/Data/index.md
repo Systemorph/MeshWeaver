@@ -19,6 +19,8 @@ Icon: /static/storage/content/MeshWeaver/logo.svg
 
 ## Platform at a glance
 
+MeshWeaver is organized around four interconnected pillars. Each section below opens onto its own table of contents — pick a topic that interests you, or scroll down to browse everything.
+
 ```mermaid
 graph LR
     MW((MeshWeaver))
@@ -34,4 +36,9 @@ graph LR
     click AI "AI"
 ```
 
-The four pillars below each open onto their own table of contents. Pick a topic, or scroll down to browse every section.
+| Pillar | What you'll find |
+|---|---|
+| **[Architecture](Architecture)** | Message-based communication, the actor model, access control, and deployment patterns |
+| **[Data Mesh](DataMesh)** | Node types, the query syntax, collaborative editing, and data modeling |
+| **[GUI](GUI)** | Controls, layout areas, data binding, and reactive observables |
+| **[AI Integration](AI)** | Agents, MCP tools, and natural-language access to your mesh |

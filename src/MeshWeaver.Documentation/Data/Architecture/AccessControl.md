@@ -1,36 +1,42 @@
 ---
 Name: Access Control Architecture
 Category: Documentation
-Description: How MeshWeaver implements row-level security through AccessAssignment MeshNodes and hierarchical permission evaluation
+Description: How MeshWeaver implements row-level security through AccessAssignment MeshNodes, hierarchical permission evaluation, and a fully reactive, zero-round-trip permission check pipeline
 Icon: /static/DocContent/Architecture/AccessControl/icon.svg
 ---
 
-MeshWeaver provides row-level security through **AccessAssignment MeshNodes** stored directly in the mesh node hierarchy. Permissions are evaluated by walking the node tree from root to target path, applying closest-wins semantics.
+MeshWeaver implements row-level security through **AccessAssignment MeshNodes** stored directly in the mesh node hierarchy. Permissions propagate down the tree and are resolved from a live, fully reactive cache — no storage walks, no TTLs, no cache invalidation needed.
 
-# 🚨 Public API — read this first
+---
 
-**Application code calls `hub.CheckPermission(path, permission)` or `hub.GetEffectivePermissions(path)`.** Both return `IObservable<T>` end-to-end — compose with `CombineLatest`/`Select`, never `await`. Full reference: [PermissionApi](PermissionApi).
+# Public API — start here
+
+Application code calls two extension methods on `IMessageHub`. Both return `IObservable<T>` — compose them with `CombineLatest`/`Select`, never `await`. Full reference: [PermissionApi](PermissionApi).
 
 ```csharp
 using MeshWeaver.Mesh;
 
-// True / false on the current ambient user
+// Check a single permission for the ambient user
 hub.CheckPermission(nodePath, Permission.Update);
 
-// Full effective Permission set
+// Get the full effective Permission set
 hub.GetEffectivePermissions(nodePath);
 
-// Explicit user (admin tooling, server-to-server)
+// Explicit user identity (admin tooling, server-to-server)
 hub.CheckPermission(nodePath, "alice", Permission.Update);
 ```
 
-The rest of this document covers the **internals** that back those extensions: AccessAssignment node shape, the recursive scope walk, the per-scope synced subscriptions cached on `IMeshNodeStreamCache` under system identity, the RLS validator wired into the storage adapter. Don't resolve `PermissionEvaluator` directly from application code — it's framework-internal infrastructure that the extension wraps.
+The rest of this page covers the **internals** that back those extensions: the AccessAssignment node shape, the recursive scope walk, the per-scope synced subscriptions cached on `IMeshNodeStreamCache` under system identity, and the RLS validator wired into the storage adapter.
 
-# Core Concepts
+> Do not resolve `PermissionEvaluator` directly from application code — it is framework-internal infrastructure that the extension methods wrap.
+
+---
+
+# Core concepts
 
 ## AccessAssignment MeshNodes
 
-Access control is managed through AccessAssignment nodes — first-class MeshNodes with `nodeType: "AccessAssignment"`. Each assignment grants (or denies) a role to a subject at a specific scope.
+Access control is managed through **AccessAssignment** nodes — first-class MeshNodes with `nodeType: "AccessAssignment"`. Each assignment grants (or denies) a role to a subject at a specific scope.
 
 AccessAssignment nodes are **satellite entities** stored in the `_Access` sub-namespace:
 
@@ -47,7 +53,8 @@ Content: {
 }
 ```
 
-On disk (file system persistence), access files live in `_Access/` sub-directories:
+On disk (file system persistence), access files live under `_Access/` sub-directories:
+
 ```
 ACME/
   _Access/
@@ -60,28 +67,28 @@ ACME/
 
 In PostgreSQL, access nodes are routed to a dedicated `access` table (via `PartitionDefinition.StandardTableMappings`), separate from the main `mesh_nodes` table.
 
-Each AccessAssignment node maps **one subject** (User or Group) to **multiple roles** at a given scope. This reduces the number of nodes and trigger invocations compared to one-node-per-role.
+Each AccessAssignment node maps **one subject** (User or Group) to **multiple roles** at a given scope. Storing all roles in one node reduces trigger invocations compared to a one-node-per-role approach.
 
 **Key properties:**
 
 | Property | Description |
-|----------|-------------|
+|---|---|
 | `AccessObject` | User or Group identifier |
 | `DisplayName` | Optional display name for the subject |
 | `Roles` | Array of `RoleAssignment` entries |
-| `Roles[].Role` | Role to grant/deny (Admin, Editor, Viewer, Commenter, or custom) |
-| `Roles[].Denied` | If true, denies the role instead of granting it |
+| `Roles[].Role` | Role to grant or deny (`Admin`, `Editor`, `Viewer`, `Commenter`, or custom) |
+| `Roles[].Denied` | When `true`, denies the role instead of granting it |
 
-## Built-in Roles
+## Built-in roles
 
-| Role | Permissions | Flag Value |
-|------|------------|------------|
+| Role | Permissions | Flag value |
+|---|---|---|
 | Admin | Read, Create, Update, Delete, Comment | 31 (All) |
 | Editor | Read, Create, Update, Comment | 23 |
 | Viewer | Read | 1 |
 | Commenter | Read, Comment | 17 |
 
-## Permission Flags
+## Permission flags
 
 ```csharp
 [Flags]
@@ -97,20 +104,17 @@ public enum Permission
 }
 ```
 
-# Permission Evaluation
+---
 
-Permissions are evaluated **inside the per-node hub of the resource being
-accessed**, against a locally-cached `EffectiveAssignments` collection.
-The cache is populated by virtual data sources (see
-[Virtual Data Sources](../DataMesh/VirtualDataSources)) that sync from
-two places: the hub's own `_Access` subtree, and the parent hub's
-`EffectiveAssignments` collection. The aggregate is exposed in turn for
-*its* children to sync from. **No storage walk on the read path. No
-cache TTL. Live updates via `IDataChangeNotifier`.**
+# Permission evaluation
 
-## Scope Hierarchy as a sync tree
+Permissions are evaluated **inside the per-node hub of the resource being accessed**, against a locally-cached `EffectiveAssignments` collection. The cache is populated by virtual data sources (see [Virtual Data Sources](../DataMesh/VirtualDataSources)) that sync from two places: the hub's own `_Access` subtree, and the parent hub's `EffectiveAssignments` collection. That aggregate is in turn exposed for *its* children to sync from.
 
-For a target path `ACME/Project/Task1`, the access-data sync tree is:
+**No storage walk on the read path. No cache TTL. Live updates via `IDataChangeNotifier`.**
+
+## Scope hierarchy as a sync tree
+
+For a target path `ACME/Project/Task1`, the access-data sync tree flows from root to leaf:
 
 ```
 ┌───────────────────────────────────┐
@@ -146,34 +150,22 @@ Each hub registers three virtual data sources via `AddMeshDataSource`:
 
 - **`LocalAccessAssignments`** — `WithMeshQuery<AccessAssignment>("nodeType:AccessAssignment namespace:{thisPath}")`
 - **`LocalPolicies`** — `WithMeshQuery<PartitionAccessPolicy>("nodeType:PartitionAccessPolicy namespace:{thisPath}")`
-- **`InheritedEffectiveAssignments`** — cross-hub
-  `WithVirtualType<AccessAssignment>(ws => ws.GetRemoteStream(parentAddr, new CollectionReference("EffectiveAssignments")))`
+- **`InheritedEffectiveAssignments`** — cross-hub `WithVirtualType<AccessAssignment>(ws => ws.GetRemoteStream(parentAddr, new CollectionReference("EffectiveAssignments")))`
 
-A computed `EffectiveAssignments` virtual collection then merges
-`InheritedEffectiveAssignments ∪ LocalAccessAssignments`, applying
-`LocalPolicies` caps and `BreaksInheritance`. That collection is what
-*child* hubs subscribe to.
+A computed `EffectiveAssignments` virtual collection then merges `InheritedEffectiveAssignments ∪ LocalAccessAssignments`, applying `LocalPolicies` caps and `BreaksInheritance`. That collection is what child hubs subscribe to.
 
-## Evaluation Flow — fully local, zero round-trips
+## Evaluation flow — fully local, zero round-trips
 
-The check happens **inside** the resource's per-node hub via a
-**hub-scoped `PermissionEvaluator`** that reads from the hub's own
-workspace. No cross-hub request, no global singleton, no storage walk.
+The check happens **inside** the resource's per-node hub via a **hub-scoped `PermissionEvaluator`** that reads from the hub's own workspace. No cross-hub request, no global singleton, no storage walk.
 
-Every per-node hub registers an `PermissionEvaluator` as scoped DI in its
-own service container. The instance closes over the hub's `IWorkspace`
-and answers from these synced virtual data sources:
+Every per-node hub registers a `PermissionEvaluator` as scoped DI in its own service container. The instance closes over the hub's `IWorkspace` and answers from these synced virtual data sources:
 
 - `LocalAccessAssignments` — own `_Access` subtree.
-- `InheritedEffectiveAssignments` — parent hub's `EffectiveAssignments`
-  via cross-hub remote stream.
-- `EffectiveAssignments` — computed merge of the two above + local
-  policy caps.
+- `InheritedEffectiveAssignments` — parent hub's `EffectiveAssignments` via cross-hub remote stream.
+- `EffectiveAssignments` — computed merge of the two above plus local policy caps.
 - `LocalPolicies` — own `_Policy` node.
-- `GroupMemberships` — global `nodeType:GroupMembership` set, synced
-  via `WithMeshQuery<GroupMembership>`.
-- `Roles` — custom role catalogue, synced from the mesh hub's `Roles`
-  virtual collection.
+- `GroupMemberships` — global `nodeType:GroupMembership` set, synced via `WithMeshQuery<GroupMembership>`.
+- `Roles` — custom role catalogue, synced from the mesh hub's `Roles` virtual collection.
 
 ```mermaid
 sequenceDiagram
@@ -192,53 +184,41 @@ sequenceDiagram
     Pipeline->>Client: invoke handler (or DeliveryFailure on Unauthorized)
 ```
 
-The user identity rides on the in-flight delivery's
-`AccessContext.ObjectId` — no need to ask anyone where it is.
+The user identity rides on the in-flight delivery's `AccessContext.ObjectId` — no need to ask anyone where it is.
 
-All inputs are **already in the hub's workspace** by the time the
-check fires (synced reactively via `IDataChangeNotifier`). The check
-itself is a couple of LINQ filters over in-memory collections —
-microseconds, not the hundreds of ms a storage walk used to take.
+All inputs are **already in the hub's workspace** by the time the check fires (synced reactively via `IDataChangeNotifier`). The check itself is a couple of LINQ filters over in-memory collections — microseconds, not the hundreds of ms a storage walk used to take.
 
 ## Reactive update semantics
 
 When an `AccessAssignment` is created at scope `S`:
 
-1. The hub at `S` sees the new node via its `LocalAccessAssignments`
-   `WithMeshQuery` subscription (driven by `IDataChangeNotifier`).
-2. The hub at `S` re-emits its `EffectiveAssignments` collection with
-   the new entry merged in.
-3. Every descendant hub subscribed to `S.EffectiveAssignments` via
-   their `InheritedEffectiveAssignments` remote stream sees the update
-   and re-emits their own `EffectiveAssignments`.
-4. The next `CheckPermissionRequest` on any descendant hub reflects
-   the new assignment.
+1. The hub at `S` sees the new node via its `LocalAccessAssignments` `WithMeshQuery` subscription (driven by `IDataChangeNotifier`).
+2. The hub at `S` re-emits its `EffectiveAssignments` collection with the new entry merged in.
+3. Every descendant hub subscribed to `S.EffectiveAssignments` via their `InheritedEffectiveAssignments` remote stream sees the update and re-emits their own `EffectiveAssignments`.
+4. The next `CheckPermissionRequest` on any descendant hub reflects the new assignment.
 
 When a user joins or leaves a group:
 
-1. The `GroupMembership` MeshNode is created/deleted.
-2. The user's hub picks up the change via its
-   `WithMeshQuery<GroupMembership>` subscription.
+1. The `GroupMembership` MeshNode is created or deleted.
+2. The user's hub picks up the change via its `WithMeshQuery<GroupMembership>` subscription.
 3. The next `GetGroupMembershipsRequest` returns the new list.
 4. Subsequent `CheckPermissionRequest`s see the updated group set.
 
-End-to-end propagation is on the order of the change-notifier tick
-(low milliseconds), not the 5-minute TTL the previous PermissionEvaluator
-cache used.
+End-to-end propagation is on the order of the change-notifier tick (low milliseconds), not the 5-minute TTL the previous `PermissionEvaluator` cache used.
 
-## Closest-Wins Semantics
+## Closest-wins semantics
 
-When the same role is assigned at multiple levels, the deepest (closest to target) assignment wins:
+When the same role is assigned at multiple levels, the **deepest assignment wins**:
 
 | Scope | Assignment | Effect |
-|-------|-----------|--------|
+|---|---|---|
 | `""` (global) | Alice: Admin | Grants All permissions globally |
 | `ACME` | Alice: Admin (Denied) | **Overrides** global grant — no Admin at ACME |
 | `ACME/Project` | Alice: Editor | Grants Editor at ACME/Project |
 
 At `ACME/Project`, Alice has Editor permissions (Read + Create + Update + Comment) but not Admin.
 
-## Deny Override
+## Deny override
 
 A deny assignment blocks an inherited grant for a specific role, but does not affect other roles. Each node's `Roles[]` array can mix grants and denies:
 
@@ -248,13 +228,16 @@ ACME:        Alice_Access → roles: [{ role: "Editor" }]
 ACME/Secure: Alice_Access → roles: [{ role: "Admin", denied: true }]
 ```
 
-At `ACME/Secure`, Alice has Editor permissions (from ACME, inherited) but not Admin (denied at ACME/Secure).
+At `ACME/Secure`, Alice has Editor permissions (inherited from ACME) but not Admin (denied at `ACME/Secure`).
 
-# Node Type Architecture
+---
+
+# Node type architecture
 
 Access control uses these shipped node types:
 
 ## AccessAssignment
+
 - **NodeType**: `"AccessAssignment"`
 - **Content**: `AccessAssignment` record with `Id` and `Roles[]` array
 - **Path pattern**: `{scope}/_Access/{Subject}_Access`
@@ -263,17 +246,20 @@ Access control uses these shipped node types:
 - One node per subject per scope — multiple roles are stored in the `Roles` array
 
 ## User
+
 - **NodeType**: `"User"`
 - **Content**: `AccessObject` record (Id, Name, Description, Icon)
 - Used as subjects in AccessAssignment nodes
 
 ## Group
+
 - **NodeType**: `"Group"`
 - **Content**: `AccessObject` record
 - Contains GroupMembership child nodes for members
 - Groups can be nested (a group member can be another group)
 
 ## GroupMembership
+
 - **NodeType**: `"GroupMembership"`
 - **Content**: `GroupMembership` record (`Member`, `DisplayName`, `Groups[]`)
 - **Path pattern**: `{Scope}/{Member}_Membership`
@@ -282,71 +268,37 @@ Access control uses these shipped node types:
 - `Groups[]` contains `MembershipEntry` records with a `Group` property
 
 ## Role
+
 - **NodeType**: `"Role"`
 - **Content**: `Role` record (Id, DisplayName, Permissions, IsInheritable)
 - Custom roles extend the built-in set
 
+---
+
 # PermissionEvaluator — hub-scoped, 100% IObservable
 
-`PermissionEvaluator` is registered **scoped per per-node hub**, never as
-a singleton. Each instance closes over the hub's `IWorkspace` and
-answers reads from the synced virtual collections listed above. Writes
-post `CreateNodeRequest` / `UpdateNodeRequest` / `DeleteNodeRequest`
-through the hub's `IMessageHub` and surface the response as an
-observable.
+`PermissionEvaluator` is registered **scoped per per-node hub**, never as a singleton. Each instance closes over the hub's `IWorkspace` and answers reads from the synced virtual collections listed above. Writes post `CreateNodeRequest` / `UpdateNodeRequest` / `DeleteNodeRequest` through the hub's `IMessageHub` and surface the response as an observable.
 
-Roles and baseline AccessAssignments follow the [Extensible
-Defaults](ExtensibleDefaults) pattern — built-ins ship via
-`IStaticNodeProvider` (read-only `_Policy` at the root namespace),
-mesh-level extensions live as user-created MeshNodes, and both layers
-project into the hub's local synced collection via the same
-three-query union that Agent and Model use. The evaluator below reads
-from that collection — no per-process role cache, no `Timeout`
-fallback.
+Roles and baseline AccessAssignments follow the [Extensible Defaults](ExtensibleDefaults) pattern — built-ins ship via `IStaticNodeProvider` (read-only `_Policy` at the root namespace), mesh-level extensions live as user-created MeshNodes, and both layers project into the hub's local synced collection via the same three-query union that Agent and Model use. The evaluator reads from that collection — no per-process role cache, no `Timeout` fallback.
 
 ## Effective-assignments lookup: the 4-query union
 
-For a permission check at scope `S` of a node whose NodeType is `T`,
-the effective AccessAssignment set is the **union** of four synced
-mesh-node queries, issued via a single `workspace.GetQuery(id,
-queries[])` call (same primitive `AgentPickerProjection` uses for
-agents and models — the engine unions across queries by `Path`):
+For a permission check at scope `S` of a node whose NodeType is `T`, the effective AccessAssignment set is the **union** of four synced mesh-node queries, issued via a single `workspace.GetQuery(id, queries[])` call (the same primitive `AgentPickerProjection` uses for agents and models — the engine unions across queries by `Path`):
 
 | # | Source | Query | Reactive empty? |
-|---|--------|-------|-----------------|
-| 1 | Self  | `namespace:{S}/_Access nodeType:AccessAssignment` | Yes — empty `Initial` is a valid value. |
+|---|---|---|---|
+| 1 | Self | `namespace:{S}/_Access nodeType:AccessAssignment` | Yes — empty `Initial` is a valid value. |
 | 2 | Parent chain | `namespace:{parent(S)}/_Access scope:selfAndAncestors nodeType:AccessAssignment` | Yes |
 | 3 | NodeType chain | `namespace:{T}/_Access scope:selfAndAncestors nodeType:AccessAssignment` | Yes |
 | 4 | Static baselines | `namespace:_Access nodeType:AccessAssignment` | Yes — empty when no `IStaticNodeProvider` ships baselines. |
 
-The four sub-queries are independent synced subscriptions; the engine
-unions their result sets internally and emits one combined
-`IEnumerable<MeshNode>` snapshot. Each scope's combined observable is
-cached per `(S, T)` with sliding 5-minute TTL via
-`Replay(1).RefCount`, so consecutive checks under the same scope hit
-the cached snapshot synchronously.
+The four sub-queries are independent synced subscriptions; the engine unions their result sets internally and emits one combined `IEnumerable<MeshNode>` snapshot. Each scope's combined observable is cached per `(S, T)` with a sliding 5-minute TTL via `Replay(1).RefCount`, so consecutive checks under the same scope hit the cached snapshot synchronously.
 
-**Sparsity-friendly.** Every sub-query allows an empty result — a
-scope with no local `_Access` simply emits an empty Initial through
-`MeshQueryEngine` (no Postgres rows for that namespace prefix). The
-union still fires immediately, the closest-wins merge proceeds with
-"local = nothing, parent provides everything, statics provide
-baselines". No `Timeout` fallback needed.
+**Sparsity-friendly.** Every sub-query allows an empty result — a scope with no local `_Access` simply emits an empty Initial through `MeshQueryEngine` (no Postgres rows for that namespace prefix). The union still fires immediately; closest-wins merge proceeds with "local = nothing, parent provides everything, statics provide baselines". No `Timeout` fallback needed.
 
-**Reactivity correct.** A future `CreateNode(AccessAssignment at
-acme/foo)` triggers an `Added` delta on sub-query (1); the union
-re-emits; the cached effective observable re-fires; descendants see
-the new effective on the next tick.
+**Reactivity correct.** A future `CreateNode(AccessAssignment at acme/foo)` triggers an `Added` delta on sub-query (1); the union re-emits; the cached effective observable re-fires; descendants see the new effective assignment on the next tick.
 
-**Why this beats the previous shape**: the old PermissionEvaluator kept a
-per-user `MemoryCache` over a single `scope:subtree` synced query and
-fell through a 2-second `Timeout()` whenever the upstream synced
-query's first emission lagged. In production, that fallback fired
-hundreds of times per chat-thread render — every cold scope, every
-new user, every cache eviction. The 4-query union shifts the cache
-key from *user* to *scope* (one cache entry per scope, shared across
-all users) and lets each sub-query emit an empty Initial fast,
-removing the warm-up window the timeout was guarding against.
+**Why this beats the previous shape.** The old `PermissionEvaluator` kept a per-user `MemoryCache` over a single `scope:subtree` synced query and fell through a 2-second `Timeout()` whenever the upstream synced query's first emission lagged. In production that fallback fired hundreds of times per chat-thread render — every cold scope, every new user, every cache eviction. The 4-query union shifts the cache key from *user* to *scope* (one cache entry per scope, shared across all users) and lets each sub-query emit an empty Initial fast, removing the warm-up window the timeout was guarding against.
 
 ```csharp
 // Inside the global PermissionEvaluator.
@@ -387,16 +339,9 @@ private IObservable<IEnumerable<MeshNode>> ObserveEffectiveAssignments(
 }
 ```
 
-Closest-wins + deny + `BreaksInheritance` semantics still apply when
-the unioned MeshNode set is folded into per-user permissions — the
-fold walks the scope hierarchy in the projection, exactly as the
-existing `ComputeRoleState` does today; only the *source* changes.
+Closest-wins + deny + `BreaksInheritance` semantics still apply when the unioned MeshNode set is folded into per-user permissions — the fold walks the scope hierarchy in the projection, exactly as the existing `ComputeRoleState` does today; only the *source* changes.
 
-**No `Task` returns anywhere on the surface** — every method returns
-`IObservable<T>` (`Unit` for fire-and-forget writes). Bridging to
-`Task` from hub-reachable code is the canonical deadlock pattern (see
-[Asynchronous Calls](AsynchronousCalls)); the only sanctioned bridge
-is at the test edge or grain-lifecycle boundary.
+**No `Task` returns anywhere on the surface** — every method returns `IObservable<T>` (`Unit` for fire-and-forget writes). Bridging to `Task` from hub-reachable code is the canonical deadlock pattern (see [Asynchronous Calls](AsynchronousCalls)); the only sanctioned bridge is at the test edge or grain-lifecycle boundary.
 
 ```csharp
 public abstract class PermissionEvaluator
@@ -421,20 +366,11 @@ public abstract class PermissionEvaluator
 }
 ```
 
-Callers compose with `.Subscribe(onNext, onError)` — never `await`.
-The previous singleton's storage walks, `_permissionCache`,
-`_policyCache`, `_customRoleCache`, and `_staticAccessAssignments`
-collection are all gone. **No per-process global state remains.**
+Callers compose with `.Subscribe(onNext, onError)` — never `await`. The previous singleton's storage walks, `_permissionCache`, `_policyCache`, `_customRoleCache`, and `_staticAccessAssignments` collection are all gone. **No per-process global state remains.**
 
 ## Writes drive the stream — persistence subscribes
 
-Writes (`AddUserRole`, `SetPolicy`, …) **update the hub's local
-workspace stream directly**. The stream is the source of truth. The
-persistence layer (file system / PostgreSQL / Cosmos) is itself a
-**subscriber** of the stream — it observes updates and writes to its
-backing store. Child hubs subscribing to the parent's
-`EffectiveAssignments` see the change via the same stream-sync
-protocol used for `MeshNodeReference`.
+Writes (`AddUserRole`, `SetPolicy`, …) **update the hub's local workspace stream directly**. The stream is the source of truth. The persistence layer (file system / PostgreSQL / Cosmos) is itself a **subscriber** of the stream — it observes updates and writes to its backing store. Child hubs subscribing to the parent's `EffectiveAssignments` see the change via the same stream-sync protocol used for `MeshNodeReference`.
 
 ```
 ┌──────────────────────────────────────┐
@@ -469,19 +405,17 @@ public IObservable<Unit> AddUserRole(string userId, string roleId,
 }
 ```
 
-Why: callers (UI, scripts, tests) need read-after-write consistency.
-The write observable completes when the workspace stream has surfaced
-the change — a follow-up `HasPermission(...)` already reflects it. The
-DB write happens off the critical path, with eventual consistency
-guaranteed by the persister's stream subscription.
+Why: callers (UI, scripts, tests) need read-after-write consistency. The write observable completes when the workspace stream has surfaced the change — a follow-up `HasPermission(...)` already reflects it. The DB write happens off the critical path, with eventual consistency guaranteed by the persister's stream subscription.
 
-# Anonymous and Public Access
+---
+
+# Anonymous and Public access
 
 MeshWeaver distinguishes between two well-known user groups:
 
 | User | Constant | Meaning |
-|------|----------|---------|
-| **Anonymous** | `WellKnownUsers.Anonymous` | Unauthenticated/virtual visitors (not logged in) |
+|---|---|---|
+| **Anonymous** | `WellKnownUsers.Anonymous` | Unauthenticated visitors (not logged in) |
 | **Public** | `WellKnownUsers.Public` | Baseline permissions for all authenticated users |
 
 When no user context is available (empty userId or virtual user), permissions are evaluated for the **Anonymous** user. Authenticated users automatically inherit **Public** permissions in addition to their own.
@@ -504,7 +438,9 @@ securityService.HasPermission("Anonymous", Permission.Read)
     .Subscribe(allowed => /* ... */);
 ```
 
-# Hierarchical Access Pattern
+---
+
+# Hierarchical access pattern
 
 ```mermaid
 flowchart TB
@@ -523,19 +459,21 @@ flowchart TB
 - Org Editor: `AddUserRoleAsync("Alice", "Editor", "ACME", ...)` → edit within ACME and descendants
 - Project Viewer: `AddUserRoleAsync("Bob", "Viewer", "ACME/ProjectX", ...)` → read-only at ProjectX
 
+---
+
 # Access Control UI
 
-The Access Control layout area (`AccessControlArea`) provides:
+The Access Control layout area (`AccessControlArea`) provides three panels:
 
-1. **Inherited Permissions** (read-only markdown table): Shows AccessAssignment nodes from ancestor scopes, displaying Subject, Role, Source path, and Allow/Deny status.
+1. **Inherited Permissions** (read-only markdown table) — shows AccessAssignment nodes from ancestor scopes, displaying Subject, Role, Source path, and Allow/Deny status.
+2. **Local Assignments** (editable) — shows AccessAssignment nodes that are direct children of the current node. Admins can toggle Allow/Deny and delete assignments.
+3. **Add Assignment** (admin-only) — dialog with autocompleting comboboxes for Subject (User/Group search via `IMeshService`) and Role selection.
 
-2. **Local Assignments** (editable): Shows AccessAssignment nodes that are direct children of the current node. Admins can toggle Allow/Deny and delete assignments.
+---
 
-3. **Add Assignment** (admin-only): Dialog with autocompleting comboboxes for Subject (User/Group search via IMeshService) and Role selection.
+# Partition access control
 
-# Partition Access Control
-
-In multi-tenant PostgreSQL deployments, each organization has its own schema (partition). Access to partitions is controlled by the `partition_access` table:
+In multi-tenant PostgreSQL deployments, each organisation has its own schema (partition). Access to partitions is controlled by the `partition_access` table:
 
 ```sql
 CREATE TABLE public.partition_access (
@@ -545,16 +483,16 @@ CREATE TABLE public.partition_access (
 );
 ```
 
-Populated automatically by `rebuild_user_effective_permissions()` in each partition's schema. When a user has any role in a partition, they get a `partition_access` entry.
+Populated automatically by `rebuild_user_effective_permissions()` in each partition's schema. When a user has any role in a partition, they receive a `partition_access` entry.
 
-## Partition Access in Search
+## Partition access in search
 
 Cross-schema search (`search_across_schemas`) enforces partition access at the SQL level. The access control clause requires:
 
-1. **Partition access** — user must have `partition_access` entry for the schema (always required)
+1. **Partition access** — user must have a `partition_access` entry for the schema (always required)
 2. **Node-level permission** — user must have Read permission on the node's `main_node` path
 
-`public_read` node types (e.g., User, Markdown) skip the node-level check but still require partition access. This prevents cross-partition data leakage — a user can't see another organization's nodes just because the node type is publicly readable.
+`public_read` node types (e.g., User, Markdown) skip the node-level check but still require partition access. This prevents cross-partition data leakage — a user cannot see another organisation's nodes just because the node type is publicly readable.
 
 ```sql
 -- Access control: partition_access is ALWAYS required.
@@ -564,24 +502,26 @@ WHERE partition_access_exists AND (
 )
 ```
 
-## AI Tool Call Identity
+## AI tool call identity
 
 When AI agents execute tool calls (Get, Update, Create, etc.) during thread streaming, the user's `AsyncLocal` access context doesn't flow through the AI framework's async tool invocation chain. All tools are wrapped with `AccessContextAIFunction` (a `DelegatingAIFunction`) that restores the user's identity from `ThreadExecutionContext.UserAccessContext` before each invocation.
 
 This ensures tool calls run with the correct user identity for permission checks.
 
-## Satellite Node Permissions
+## Satellite node permissions
 
-Satellite node types (Thread, Comment, ApiToken) use `GetPermissionForNodeType` to map to their required permission:
+Satellite node types map to their required permission via `GetPermissionForNodeType`:
 
-| Node Type | Required Permission |
-|-----------|-------------------|
+| Node type | Required permission |
+|---|---|
 | Thread, ThreadMessage | `Permission.Thread` |
 | Comment | `Permission.Comment` |
 | ApiToken | `Permission.Api` |
 | All others | `Permission.Create` |
 
-# PostgreSQL Integration
+---
+
+# PostgreSQL integration
 
 For PostgreSQL deployments, a denormalized `user_effective_permissions` table enables fast query-time permission checks. A trigger on `mesh_nodes` automatically rebuilds this table when AccessAssignment or GroupMembership nodes change.
 
@@ -599,7 +539,9 @@ The rebuild function:
 4. Produces per-user, per-permission rows in a shadow table
 5. Atomically swaps the shadow table into the live table
 
-# Node Validation (INodeValidator)
+---
+
+# Node validation (INodeValidator)
 
 The `RlsNodeValidator` integrates with the mesh node CRUD pipeline to enforce permissions on Create, Update, and Delete operations:
 
@@ -630,7 +572,9 @@ public class RlsNodeValidator : INodeValidator
 }
 ```
 
-Read operations are not validated by the node validator — read filtering is handled by `SecurePersistenceServiceDecorator` which wraps `GetChildrenAsync` and `GetNodeAsync` with permission checks.
+Read operations are not validated by the node validator — read filtering is handled by `SecurePersistenceServiceDecorator`, which wraps `GetChildrenAsync` and `GetNodeAsync` with permission checks.
+
+---
 
 # Hub identity and sanctioned dedicated identities
 
@@ -686,16 +630,16 @@ public async Task MeshNodeCacheIdentity_CannotWrite()
 
 ## Identity resolution in node operations
 
-When `HandleCreateNodeRequest` (and `Update/Delete/CopyNodeRequest` siblings) receives a message, it resolves the identity:
+When `HandleCreateNodeRequest` (and its `Update/Delete/CopyNodeRequest` siblings) receives a message, it resolves the identity:
 
 1. If the request's `CreatedBy` / `UpdatedBy` / `DeletedBy` is explicitly set, use it.
 2. Otherwise fill from `delivery.AccessContext.ObjectId`.
 
-So the principal that ran through the baton (Phase 2 → Phase 4 in the propagation doc) ends up on the stored row's `CreatedBy`. For user-driven writes this is the user's ObjectId. For sanctioned-identity-driven writes this is the dedicated address — auditable, visible in logs and queries.
+So the principal that ran through the baton ends up on the stored row's `CreatedBy`. For user-driven writes this is the user's ObjectId; for sanctioned-identity-driven writes it is the dedicated address — auditable, visible in logs and queries.
 
 ## `IMeshService.ImpersonateAsNode()` — legacy surface
 
-`IMeshService.ImpersonateAsNode()` used to switch the operation's identity to the hub's own address. This is the old "hub-as-principal" model that the 2026-05-22 cleanup deprecates. New code should prefer:
+`IMeshService.ImpersonateAsNode()` used to switch the operation's identity to the hub's own address. This is the old "hub-as-principal" model deprecated by the 2026-05-22 cleanup. New code should prefer:
 
 - **Sanctioned dedicated identity** if there's a defined role for the operation (`cache/mesh-node-cache`, `portal/onboarding`).
 - **`accessService.ImpersonateAsSystem()`** if the operation is genuinely system infrastructure with no narrower seat.
@@ -703,13 +647,13 @@ So the principal that ran through the baton (Phase 2 → Phase 4 in the propagat
 
 Existing `ImpersonateAsNode()` callsites are tracked in `Doc/Architecture/AccessContextPropagation.md` → audit list as of 2026-05-22.
 
-# Per-Node-Type Access Rules (INodeTypeAccessRule)
+---
 
-## Overview
+# Per-node-type access rules (INodeTypeAccessRule)
 
-Some node types require custom access logic that differs from the standard AccessAssignment-based RLS check. For example, VUser nodes should only be creatable by portal hubs, regardless of AccessAssignment configurations.
+Some node types require custom access logic that differs from the standard AccessAssignment-based RLS check. For example, VUser nodes should only be creatable by portal hubs, regardless of AccessAssignment configuration.
 
-The `INodeTypeAccessRule` interface allows node types to replace the standard RLS check with custom logic:
+The `INodeTypeAccessRule` interface lets node types replace the standard RLS check with custom logic:
 
 ```csharp
 public interface INodeTypeAccessRule
@@ -723,7 +667,7 @@ public interface INodeTypeAccessRule
 
 When `RlsNodeValidator` encounters a node whose type has a registered `INodeTypeAccessRule`, it delegates to the rule **instead of** checking AccessAssignment permissions. The rule returns `true` to allow or `false` to deny.
 
-## How It Works
+## How it works
 
 ```mermaid
 flowchart TD
@@ -736,7 +680,7 @@ flowchart TD
     D -->|No permission| F
 ```
 
-## Registering a Custom Access Rule
+## Registering a custom access rule
 
 Register via DI in your node type's configuration method:
 
@@ -754,7 +698,7 @@ public static TBuilder AddVUserType<TBuilder>(this TBuilder builder)
 }
 ```
 
-## Example: VUser Access Rule
+## Example: VUser access rule
 
 The VUser node type uses a custom access rule that allows portal namespace hubs to create, read, and update VUser nodes:
 
@@ -785,7 +729,7 @@ private class VUserAccessRule : INodeTypeAccessRule
 - Other identities are denied — the standard AccessAssignment check is **not** performed for VUser nodes.
 - Delete operations are not covered by this rule and fall through to standard RLS.
 
-## End-to-End: Portal Hub Creating a VUser
+## End-to-end: portal hub creating a VUser
 
 ```mermaid
 sequenceDiagram
@@ -806,11 +750,13 @@ sequenceDiagram
     Mesh-->>Portal: CreateNodeResponse(Success)
 ```
 
-# Message-Level Permission Enforcement
+---
+
+# Message-level permission enforcement
 
 ## RequiresPermissionAttribute
 
-Message types can declare the permission they require via `[RequiresPermission]`. When a message arrives at a node hub with the `AccessControlPipeline` enabled, the pipeline checks whether the sender has the required permission on the hub's path. If denied, a `DeliveryFailure` with `ErrorType.Unauthorized` is returned.
+Message types declare the permission they require via `[RequiresPermission]`. When a message arrives at a node hub with the `AccessControlPipeline` enabled, the pipeline checks whether the sender has the required permission on the hub's path. If denied, a `DeliveryFailure` with `ErrorType.Unauthorized` is returned.
 
 ```csharp
 // Simple: single permission on the hub path
@@ -824,10 +770,10 @@ public record CreateNodeRequest(...);
 public record DataChangeRequest(...);
 ```
 
-### Built-in Annotated Messages
+### Built-in annotated messages
 
-| Message | Required Permission |
-|---------|-------------------|
+| Message | Required permission |
+|---|---|
 | `SubscribeRequest` | Read |
 | `GetDataRequest` | Read |
 | `CreateNodeRequest` | Create |
@@ -843,9 +789,9 @@ public record DataChangeRequest(...);
 | `DeleteUnifiedReferenceRequest` | Delete |
 | `MoveNodeRequest` | Custom (see below) |
 
-### Custom Permission Checks
+### Custom permission checks
 
-For messages that need non-trivial authorization logic, inherit from `RequiresPermissionAttribute` and override `GetPermissionChecks`. The method receives the `IMessageDelivery` and the hub path, and returns multiple `(path, permission)` pairs — all must pass.
+For messages that need non-trivial authorisation logic, inherit from `RequiresPermissionAttribute` and override `GetPermissionChecks`. The method receives the `IMessageDelivery` and the hub path, and returns multiple `(path, permission)` pairs — all must pass.
 
 ```csharp
 // MoveNodeRequest needs Delete on source + Create on target
@@ -876,7 +822,7 @@ public class MoveNodePermissionAttribute() : RequiresPermissionAttribute(Permiss
 }
 ```
 
-### Extending with Custom Permissions
+### Extending with custom permissions
 
 The `Permission` enum uses `[Flags]` with bits 1–32 reserved for built-in permissions. Custom permissions use higher bits:
 
@@ -900,6 +846,8 @@ The `AccessControlPipeline` is a delivery pipeline step registered by `AddRowLev
 
 Messages without `[RequiresPermission]` pass through unchecked. System messages (`PingRequest`, `InitializeHubRequest`, etc.) are not annotated and are always allowed.
 
+---
+
 # Configuration
 
 Enable row-level security in your mesh configuration:
@@ -911,14 +859,16 @@ var builder = new MeshBuilder()
     .AddRowLevelSecurity();  // Registers PermissionEvaluator, RlsNodeValidator, etc.
 ```
 
-# Best Practices
+---
 
-1. **Start with hierarchy** — assign roles at the organizational level and let inheritance handle descendants
-2. **Use deny sparingly** — deny overrides only the specific role, not all permissions
-3. **Anonymous for unauthenticated access** — configure Anonymous user with Viewer role on namespaces that should be visible without login
-3. **Public for authenticated baseline** — configure Public user with Viewer role on namespaces that all logged-in users should access
-4. **No manual caching** — `PermissionEvaluator` is hub-scoped and reads from the local workspace's synced `AccessAssignments` / `Policies` / `Roles` collections. Those collections are kept live by the synced query data source; there is no separate TTL cache to invalidate.
-5. **Fail closed** — no roles assigned means no permissions (Permission.None)
-6. **Audit via MeshNodes** — AccessAssignment nodes provide a clear audit trail of who has access to what
-7. **Use ImpersonateAsHub() for hub operations** — when a hub needs to perform operations as itself, use `PostOptions.ImpersonateAsHub()` instead of setting identity on `AccessService` directly
-8. **Custom access rules for special node types** — use `INodeTypeAccessRule` when a node type needs access logic that differs from standard AccessAssignment-based RLS (e.g., namespace-based identity checks)
+# Best practices
+
+1. **Start with hierarchy** — assign roles at the organisational level and let inheritance handle descendants.
+2. **Use deny sparingly** — deny overrides only the specific role, not all permissions.
+3. **Anonymous for unauthenticated access** — configure the Anonymous user with Viewer role on namespaces that should be visible without login.
+4. **Public for authenticated baseline** — configure the Public user with Viewer role on namespaces that all logged-in users should access.
+5. **No manual caching** — `PermissionEvaluator` is hub-scoped and reads from the local workspace's synced `AccessAssignments` / `Policies` / `Roles` collections. Those collections are kept live by the synced query data source; there is no separate TTL cache to invalidate.
+6. **Fail closed** — no roles assigned means no permissions (`Permission.None`).
+7. **Audit via MeshNodes** — AccessAssignment nodes provide a clear audit trail of who has access to what.
+8. **Use `ImpersonateAsHub()` for hub operations** — when a hub needs to perform operations as itself, use `PostOptions.ImpersonateAsHub()` instead of setting identity on `AccessService` directly.
+9. **Custom access rules for special node types** — use `INodeTypeAccessRule` when a node type needs access logic that differs from standard AccessAssignment-based RLS (e.g., namespace-based identity checks).

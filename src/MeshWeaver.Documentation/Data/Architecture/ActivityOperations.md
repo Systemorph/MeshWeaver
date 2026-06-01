@@ -1,53 +1,61 @@
 ---
 Name: Activity Operations
 Category: Documentation
-Description: The canonical IMessageHub extension surface for driving activities — cancel, restart, request status transitions.
+Description: The canonical IMessageHub extension surface for driving activity state transitions — cancel, restart, and request status changes.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/><path d="m9 11 3 3L22 4"/></svg>
 ---
 
-# Activity Operations — the canonical `IMessageHub` surface
+# Activity Operations
 
-Every activity state-transition request in MeshWeaver — cancel, restart, request "now I want it Running" — goes through extension methods on `IMessageHub` defined in `src/MeshWeaver.Mesh.Contract/HubActivityExtensions.cs`. **Tests, GUI click handlers, MCP agents, and plugins all call these.** There is no other public entry point.
+Every activity state-transition in MeshWeaver — cancel, restart, or any `RequestedStatus` flip — goes through extension methods on `IMessageHub` defined in `src/MeshWeaver.Mesh.Contract/HubActivityExtensions.cs`. Tests, GUI click handlers, MCP agents, and plugins all call these methods. There is no other public entry point.
 
-This page is the client-side counterpart to [Activity Control Plane](ActivityControlPlane), which covers the server side (the watcher that consumes the requested-status flip and runs the internal transition).
+> This page covers the **client side**: how callers request a transition. For the server side — the watcher that consumes the flip and drives the internal transition — see [Activity Control Plane](ActivityControlPlane).
 
-## Why
+---
 
-Same three reasons as the thread surface:
+## Why a dedicated surface?
 
-1. **Single source of truth.** Before the consolidation, every cancel button rolled its own five-line `GetMeshNodeStream(path).Update(curr => curr.Content is ActivityLog log ? curr with { Content = log with { RequestedStatus = ActivityStatus.Cancelled } } : curr).Subscribe(...)` — a different lambda per call site, half of them missing the no-op guard or the error logger. The IMessageHub extensions are the *only* shape; tests and the UI go through the same method.
+Before consolidation, every cancel button rolled its own five-line lambda — a different `GetMeshNodeStream(path).Update(...)` call per call site, with roughly half of them missing the no-op guard or the error logger. The `IMessageHub` extensions fix that in three ways:
 
-2. **No verb-shaped messages.** All thread mutations write the activity node via `hub.GetWorkspace().GetMeshNodeStream(activityPath).Update(...)`. No `CancelActivityRequest`, no `RestartActivityRequest` — only `RequestedStatus` patches that the [activity control plane](ActivityControlPlane) translates into the internal transition.
+| Reason | Detail |
+|---|---|
+| **Single source of truth** | Every cancel, restart, and status flip goes through one implementation. |
+| **No verb-shaped messages** | There is no `CancelActivityRequest` or `RestartActivityRequest`. All mutations write `RequestedStatus` to the activity node, and the [activity control plane](ActivityControlPlane) reacts. |
+| **Discoverable** | Type `hub.` and IntelliSense surfaces the full surface. No need to know `HubActivityExtensions` exists. |
 
-3. **Discoverable.** `hub.` + IntelliSense lists the surface. No need to know `HubActivityExtensions` or `ActivityControlPlaneExtensions` exist.
+---
 
-## The surface
+## The extension surface
 
 ```csharp
 using MeshWeaver.Mesh;
 
-// 1. Cancel a running activity. Patches RequestedStatus = Cancelled. The
-//    activity hub's WatchControlPlane handler reacts: trips the stored CTS,
-//    transitions Status from Running to Cancelled.
+// Cancel a running activity.
+// Patches RequestedStatus = Cancelled. The activity hub's WatchControlPlane
+// handler trips the stored CTS and transitions Status → Cancelled.
 hub.CancelActivity(activityPath);
 
-// 2. Generic status flip — use for restart (Running), or any other transition
-//    the activity hub's WatchControlPlane handler is set up to honour.
+// Generic status flip — use for restart (Running) or any other transition
+// the activity hub's WatchControlPlane handler is wired to honour.
 hub.RequestActivityStatus(activityPath, ActivityStatus.Running);
 hub.RequestActivityStatus(activityPath, ActivityStatus.Cancelled);
 
-// Both accept an optional onError callback for one-shot signalling:
+// Both accept an optional onError callback for one-shot error signalling:
 hub.CancelActivity(activityPath, onError: msg => ShowToast(msg));
 ```
 
-`hub` is any `IMessageHub` — the click context's `ctx.Host.Hub`, a test fixture's `Mesh`, an MCP plugin's captured hub, the activity hub itself patching its own status from a worker. The extension routes the write through `hub.GetWorkspace().GetMeshNodeStream(activityPath).Update(...)`, which auto-dispatches:
+`hub` can be any `IMessageHub`: a click context's `ctx.Host.Hub`, a test fixture's `Mesh`, an MCP plugin's captured hub, or even the activity hub itself patching its own status from within a worker. The extension routes the write through `hub.GetWorkspace().GetMeshNodeStream(activityPath).Update(...)`, which auto-dispatches based on who is calling:
 
-- If the writer is the activity hub itself, the write goes through its local data source.
-- If the writer is anywhere else, the write routes as an RFC-7396 JSON-merge patch via the process-wide `IMeshNodeStreamCache`. The activity hub's single-threaded action block serialises every mirror's write — no races.
+- **Writer is the activity hub itself** — write goes through its local data source.
+- **Writer is anywhere else** — write routes as an RFC 7396 JSON-merge patch via the process-wide `IMeshNodeStreamCache`. The activity hub's single-threaded action block serialises every mirror's write, so there are no races.
+
+---
 
 ## Observing the result
 
-The mutation methods are `void` / fire-and-forget. Callers observe state by **subscribing** to the activity node's remote stream — the same stream the running-activities UI strip already binds to. **The flow is 100% reactive end-to-end**: no `FirstAsync().ToTask(ct)`, no `await`, no `Task<T>` boundary. The UI re-renders when the stream ticks; a worker waiting for a terminal state chains via `SelectMany`. See [AsynchronousCalls](AsynchronousCalls) → "Why `await` Deadlocks in Hub Handlers".
+The mutation methods are fire-and-forget. To observe the outcome, subscribe to the activity node's remote stream — the same stream the running-activities UI strip already binds to.
+
+> **The flow is 100% reactive end-to-end.** No `FirstAsync().ToTask(ct)`, no `await`, no `Task<T>` boundary. The UI re-renders when the stream ticks; a worker waiting for a terminal state chains via `SelectMany`. See [AsynchronousCalls](AsynchronousCalls) → "Why `await` Deadlocks in Hub Handlers".
 
 ```csharp
 var sub = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
@@ -59,15 +67,18 @@ var sub = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
         terminal => Logger.LogInformation(
             "Activity {Path} settled to {Status}", activityPath, terminal!.Status),
         ex => Logger.LogWarning(ex, "Activity stream errored for {Path}", activityPath));
-// Caller owns `sub` and disposes when the wait is no longer relevant
+
+// The caller owns `sub` and disposes it when the wait is no longer relevant
 // (component dispose, parent scope dispose, etc.).
 ```
 
-Tests bridge to `Task` exactly once at the assertion edge — see [WritingTests](WritingTests). Application code stays observable.
+Tests bridge to `Task` exactly once at the assertion edge — see [WritingTests](WritingTests). Application code stays observable throughout.
 
-## What the activity hub does
+---
 
-When `RequestedStatus` flips, the activity hub's `WatchControlPlane` subscription (registered via `MessageHubConfiguration.WithInitialization(...)` in the activity NodeType's `HubConfiguration`) fires on the value change. The handler runs on the hub's own action block:
+## What the activity hub does in response
+
+When `RequestedStatus` flips, the activity hub's `WatchControlPlane` subscription fires on the value change. This subscription is registered via `MessageHubConfiguration.WithInitialization(...)` in the activity NodeType's `HubConfiguration`, and it runs on the hub's own action block:
 
 ```csharp
 threadHub.WatchControlPlane(requested =>
@@ -79,18 +90,23 @@ threadHub.WatchControlPlane(requested =>
 });
 ```
 
-The script throws `OperationCanceledException`, completion flows through the executor's normal terminal path, and the hub writes `Status = Cancelled` back to its own MeshNode. The same stream the cancel button is bound to ticks one more time with the terminal state; the UI re-renders without the cancel button.
+The running script receives the cancellation, throws `OperationCanceledException`, and the executor's normal terminal path writes `Status = Cancelled` back to the activity's MeshNode. The same stream the cancel button is bound to ticks one final time with the terminal state, and the UI re-renders — the cancel button disappears without any additional coordination.
 
-See [Activity Control Plane](ActivityControlPlane) for the full server-side pattern, including how to wire your own NodeType to honour `RequestedStatus` transitions.
+---
 
-## What about `ActivityControlPlaneExtensions.WatchControlPlane`?
+## `WatchControlPlane` — server side only
 
-That's the **server-side** helper that the activity hub uses to install its own subscription. Application code never calls it — it lives in the `WithInitialization` callback of the activity NodeType's `HubConfiguration` (or any custom NodeType that follows the control-plane pattern).
+`ActivityControlPlaneExtensions.WatchControlPlane` is the **server-side** helper that an activity hub uses to install its own subscription inside `WithInitialization`. Application code never calls it directly.
 
-If you're writing application code — a click action, a test, a plugin — use the `IMessageHub` extensions on this page. If you're writing a *new* NodeType's HubConfiguration, use `WatchControlPlane` to subscribe inside the hub.
+| You are writing… | Use… |
+|---|---|
+| A click action, test, or plugin | `hub.CancelActivity(...)` / `hub.RequestActivityStatus(...)` (this page) |
+| A new NodeType's `HubConfiguration` | `WatchControlPlane` inside the `WithInitialization` callback |
+
+---
 
 ## See also
 
-- [Activity Control Plane](ActivityControlPlane) — the canonical Status / RequestedStatus pattern + how to wire your own NodeType to it
+- [Activity Control Plane](ActivityControlPlane) — the `Status` / `RequestedStatus` pattern and how to wire your own NodeType to it
 - [Thread Operations](ThreadOperations) — the matching `IMessageHub` surface for thread mutations (same shape)
 - [RequestViaStreamUpdate](RequestViaStreamUpdate) — the underlying `stream.Update` mechanism every method here is built on

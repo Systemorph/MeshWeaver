@@ -1,57 +1,75 @@
 ---
 Name: Unified Path Syntax
 Category: Documentation
-Description: The address/prefix/path pattern explained
+Description: How the address/prefix/path pattern works — and when to use @ vs @@
 Icon: /static/DocContent/DataMesh/UnifiedPath/Syntax/icon.svg
 ---
 
-Unified Path references use the pattern:
+Every content reference in MeshWeaver follows one compact pattern:
 
 ```
 {address}/{prefix}/{path}
 ```
 
-> **Note:** The legacy `{prefix}:{path}` format (with colon) is still supported for backward compatibility.
+Three parts, one slash between each. Once you know what each part does, you can construct any reference by inspection.
 
-# Components
+> **Backward compatibility.** The legacy `{prefix}:{path}` colon format is still accepted wherever Unified Paths are parsed.
 
-| Component | Description | Example |
-|-----------|-------------|----------|
-| `address` | The MeshNode address (resolved via MeshCatalog) | `Doc/DataMesh` |
-| `prefix` | Content type selector | `content/`, `data/`, `area/`, `schema/`, `model/` |
-| `path` | Resource path within the address | `docs/readme.md`, `Posts`, `Thumbnail` |
+---
 
-# Address Resolution
+## The Three Parts
 
-The `address` portion is matched against nodes in the MeshCatalog using score-based matching:
+| Part | What it identifies | Example |
+|------|--------------------|---------|
+| `address` | A MeshNode in the catalog, resolved by best-match scoring | `Doc/DataMesh` |
+| `prefix` | The kind of content you want from that node | `content/`, `data/`, `area/` … |
+| `path` | The specific resource within the node | `docs/readme.md`, `Posts`, `Thumbnail` |
 
-1. The path is split into segments
-2. Each segment is matched against registered namespace patterns
-3. The best match (highest score) determines the target node
-4. Remaining segments become the `path` portion
+### Address Resolution
 
-# Prefix Types
+The address segment is not a hard-coded node ID — it is resolved dynamically against the MeshCatalog using score-based matching:
 
-| Prefix | Purpose | Renders As |
-|--------|---------|------------|
-| `content/` | Static files (images, markdown, etc.) | File content inline |
-| `data/` | Data collections/entities | Data grid or entity view |
+1. The path is split into segments.
+2. Each segment is matched against registered namespace patterns.
+3. The highest-scoring match identifies the target node.
+4. Any remaining segments become the `path` portion.
+
+This means short, human-readable addresses like `Doc/DataMesh` resolve correctly even as the catalog grows.
+
+---
+
+## Prefix Reference
+
+The prefix tells MeshWeaver how to interpret the resource at the resolved address.
+
+| Prefix | Purpose | Rendered as |
+|--------|---------|-------------|
+| `content/` | Static files — images, markdown, attachments | File content, inline |
+| `data/` | Data collections or entities | Data grid or entity view |
 | `area/` | Layout areas | Layout component |
 | `schema/` | Type schemas | JSON schema code block |
 | `model/` | Data model diagrams | Mermaid class diagram |
 | `menu/` | Menu structure | Menu items |
 | *(none)* | Default area reference | Layout component |
 
-# Single @ vs Double @@
+---
+
+## @ vs @@
+
+The leading `@` character controls whether the reference becomes a **link** or an **inline embed**.
 
 | Syntax | Behavior |
 |--------|----------|
 | `@path` | Creates a **hyperlink** to the referenced content |
-| `@@path` | **Embeds** the content inline |
+| `@@path` | **Embeds** the content inline at that point in the document |
 
-# Examples
+Use `@` when you want the reader to navigate to the content. Use `@@` when the content should appear directly in the page — for thumbnails, summaries, or reusable snippets.
 
-## Simple Reference (hyperlink)
+---
+
+## Examples
+
+### Simple Reference (hyperlink)
 
 ```
 @Doc/DataMesh/QuerySyntax
@@ -61,7 +79,7 @@ Result:
 
 @../../QuerySyntax
 
-## Embedded Content
+### Embedded Content
 
 ```
 @@Doc/DataMesh/UnifiedPath/Thumbnail
@@ -71,7 +89,9 @@ Result:
 
 @@../Thumbnail
 
-# Related
+---
+
+## Related Pages
 
 @../ContentPrefix
 

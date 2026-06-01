@@ -1,45 +1,50 @@
 ---
 Name: Reactive Dialogs
 Category: Documentation
-Description: Handle complex dialog logic with reactive programming patterns
+Description: Build complex dialogs with reactive programming — declare what should happen, not how
 Icon: /static/DocContent/GUI/ReactiveDialogs/icon.svg
 ---
 
-In typical business applications, we often encounter dialogs which contain complex business logic. We need to react on user interaction, switch parts depending on certain settings, compute results and display them. Reactive design is a low-complexity way of achieving this.
+Business dialogs rarely stay simple. They accumulate conditions: switch a section based on a dropdown, trigger a calculation when the user clicks a button, display a spinner while work runs on the server. The imperative approach — `if/else` trees, manual state flags, callbacks wired to callbacks — scales poorly and quickly becomes a maintenance burden.
 
-# Reactive Programming Concepts
-
-Reactive programming was made popular in the early 2010s by the [Reactive Manifesto](https://reactivemanifesto.org/) and libraries such as [Reactive Extensions](http://reactivex.io/) and [React](https://react.dev/).
-
-The basic idea is to model applications as a stream of events:
-- User interactions (clicks, text changes)
-- Network messages
-- Timer events
-
-The application reacts to these events by executing actions - updating the UI, computing values, or sending messages.
+**Reactive programming** offers a cleaner contract: model the dialog as a graph of data streams and let the framework propagate changes automatically. This page shows how MeshWeaver's `LayoutAreaHost` makes that pattern concrete.
 
 ---
 
-# Example: Distribution Statistics Dialog
+# Reactive Programming in Brief
 
-This example demonstrates a dialog for simulating statistical distributions:
+Reactive programming treats application state as a composition of observable streams. Every user action, network message, or timer tick is an event; the application declares how those events transform into new state or side effects.
 
-```csharp --render Dialog
-using static MeshWeaver.Layout.Controls;
-using MeshWeaver.Mesh;
-LayoutArea(new ApplicationAddress("Documentation"), "DistributionStatistics")
+In MeshWeaver, `IObservable<T>` is the universal currency. The host's `GetDataStream<T>` call exposes any named piece of data as a stream — and any LINQ-style operator (`Select`, `DistinctUntilChanged`, `CombineLatest`, …) can be used to derive new state from it.
+
+> **Background reading:** [Reactive Manifesto](https://reactivemanifesto.org/) · [Reactive Extensions](http://reactivex.io/) · [React](https://react.dev/)
+
+---
+
+# Worked Example: Distribution Statistics Dialog
+
+The example below implements a simulation dialog. A user picks a statistical distribution and a sample count, clicks **Run Simulation**, and sees summary statistics computed entirely on the server.
+
+```csharp --render DistributionDialogPreview --show-code
+MeshWeaver.Layout.Controls.Stack
+    .WithView(MeshWeaver.Layout.Controls.Markdown("## Distribution Statistics\n\nThis page documents how to build reactive dialogs. See the code blocks below for the full implementation pattern."))
+    .WithView(MeshWeaver.Layout.Controls.Html(
+        "<table><thead><tr><th>Control</th><th>Bound to</th><th>Reactive trigger</th></tr></thead>" +
+        "<tbody>" +
+        "<tr><td>Sample count</td><td><code>BasicInput.Samples</code></td><td>—</td></tr>" +
+        "<tr><td>Distribution selector</td><td><code>BasicInput.DistributionType</code></td><td>Swaps the parameter editor</td></tr>" +
+        "<tr><td>Parameter editor</td><td><code>Distribution</code></td><td>Re-rendered on type change</td></tr>" +
+        "<tr><td>Run button</td><td>Click action</td><td>Emits to <code>Subject&lt;(double[], TimeSpan)&gt;</code></td></tr>" +
+        "<tr><td>Results area</td><td>Subject subscription</td><td>Updated on each emission</td></tr>" +
+        "</tbody></table>"))
 ```
 
----
+## Domain Model
 
-# Domain Model
-
-Define distributions as immutable records with sensible defaults:
+Define distributions as immutable records with sensible parameter defaults. Linking to Wikipedia articles for each distribution keeps reference material close to the type:
 
 ```csharp
-/// <summary>
-/// Distribution base class
-/// </summary>
+/// <summary>Distribution base class</summary>
 public abstract record Distribution;
 
 /// <summary>
@@ -48,74 +53,74 @@ public abstract record Distribution;
 public record Pareto(double Alpha = 2, double X0 = 1) : Distribution;
 
 /// <summary>
-/// LogNormal distribution <see ref="https://en.wikipedia.org/wiki/Log-normal_distribution"/>
+/// Log-normal distribution <see ref="https://en.wikipedia.org/wiki/Log-normal_distribution"/>
 /// </summary>
 public record LogNormal(double Mu = 1, double Sigma = 1) : Distribution;
 ```
 
-Linking to Wiki articles for parameter definitions keeps documentation close to the model. Defaults specified here are used directly in the dialog.
+Immutable records are ideal here: each edit produces a new value, streams can use `DistinctUntilChanged()` reliably, and there is no accidental shared-state mutation between subscribers.
 
----
+## View Model
 
-# View Model
-
-The view model captures dialog-specific state (not persisted to database):
+The view model holds dialog-specific transient state — it is never persisted to the database:
 
 ```csharp
-/// <summary>
-/// Basic input section for the simulation
-/// </summary>
+/// <summary>Basic input section for the simulation</summary>
 public record BasicInput
 {
-    /// <summary>
-    /// Number of samples used in the simulation
-    /// </summary>
+    /// <summary>Number of samples used in the simulation</summary>
     public int Samples { get; init; } = 1000;
 
-    /// <summary>
-    /// The choice of the distribution type
-    /// </summary>
+    /// <summary>The chosen distribution type</summary>
     [Dimension<string>(Options = nameof(DistributionTypes))]
     public string DistributionType { get; init; } = "Pareto";
 }
 ```
 
----
+The `[Dimension<string>(Options = …)]` attribute wires the property to a named options list, automatically rendering it as a dropdown in the generated editor.
 
-# Layout Area Setup
+## Layout Area Setup
 
-The reactive dialog wires together inputs, distribution selection, and results:
+The heart of the dialog is the `DistributionStatistics` method. Read it top-to-bottom as a series of declarations:
 
 ```csharp
 public static object DistributionStatistics(LayoutAreaHost host, RenderingContext context)
 {
+    // 1. Seed the dropdown options list.
     host.UpdateData(nameof(DistributionTypes), DistributionTypes);
 
+    // 2. Whenever the user picks a different distribution type, swap out the
+    //    parameter record so the parameter editor re-renders with fresh defaults.
     host.RegisterForDisposal(host.GetDataStream<BasicInput>(nameof(BasicInput))
         .Select(x => x.DistributionType)
         .DistinctUntilChanged()
         .Subscribe(t => host.UpdateData(nameof(Distribution), Distributions[t])));
 
+    // 3. A Subject holds the heavyweight simulation result on the server.
+    //    Only the rendered markdown summary is pushed to the client.
     var subject = new Subject<(double[] Samples, TimeSpan Time)>();
 
     return Controls.Stack
         .WithView(host.Edit(new BasicInput(), nameof(BasicInput)), nameof(BasicInput))
-        .WithView(host.GetDataStream<Distribution>(nameof(Distribution)).Select(x => x.GetType())
+        .WithView(host.GetDataStream<Distribution>(nameof(Distribution))
+            .Select(x => x.GetType())
             .DistinctUntilChanged()
             .Select(t => host.Edit(t, nameof(Distribution))))
         .WithView(Controls.Button("Run Simulation")
             .WithClickAction(ctx =>
             {
-                // Read latest form values reactively — no `await`. The streams emit
-                // the current value synchronously on subscribe, so the simulation
-                // runs on the freshest state when the click fires.
+                // Read the latest form values synchronously from both streams, then
+                // run the simulation. CombineLatest + Take(1) gives us a snapshot of
+                // the current state without any async plumbing.
                 host.Stream.GetDataStream<BasicInput>(nameof(BasicInput))
                     .CombineLatest(host.Stream.GetDataStream<Distribution>(nameof(Distribution)))
                     .Take(1)
                     .Subscribe(t => subject.OnNext(Simulate(t.First, t.Second)));
                 return Task.CompletedTask;
             }))
-        .WithView(subject.Select(x => x.Statistics()).StartWith(Controls.Markdown("### Click to run simulation")));
+        .WithView(subject
+            .Select(x => x.Statistics())
+            .StartWith(Controls.Markdown("### Click to run simulation")));
 }
 ```
 
@@ -123,29 +128,33 @@ public static object DistributionStatistics(LayoutAreaHost host, RenderingContex
 
 # Key Patterns
 
-## LayoutAreaHost
+## LayoutAreaHost — the dialog's "island"
 
-The host is an "island" where the layout area lives, synchronized with the view:
+`LayoutAreaHost` is the server-side container that backs a layout area. It owns the named data slots that the UI is synchronized with. Three responsibilities emerge naturally:
 
-1. **Initialize reference data** - `UpdateData` sets options for dropdowns
-2. **React to changes** - Subscribe to data streams with `GetDataStream<T>`
-3. **Use Subject for computation results** - Keeps large results server-side
+| Responsibility | How |
+|---|---|
+| Seed reference data (dropdown options) | `host.UpdateData(name, value)` |
+| React to form changes | `host.GetDataStream<T>(name)` + LINQ operators + `Subscribe` |
+| Hold heavyweight results server-side | `Subject<T>` — only derived views reach the client |
 
-## Subject (Publish-Subscribe)
+All subscriptions created inside the host must be registered for disposal with `host.RegisterForDisposal(...)` so they are cleaned up when the layout area closes.
 
-The `Subject<T>` implements the [Publish-Subscribe Pattern](https://en.wikipedia.org/wiki/Publish%E2%80%93subscribe_pattern):
+## Subject — server-side result bus
 
-- Stores simulation results on the server
-- Only the rendered markdown table is synchronized to the UI
-- Avoids sending large data arrays to the client
+`Subject<T>` is an observable that you push values into explicitly (it implements both `IObserver<T>` and `IObservable<T>`). Storing the raw `double[]` sample array in a Subject rather than in a named data slot means:
 
-## Declarative Composition
+- **No serialization cost** — the array never crosses the SignalR wire.
+- **Clean separation** — the button's click handler is a pure producer; the results view is a pure consumer.
+- **Composability** — you can pipe the Subject through additional operators (throttle, buffer, error-handling) before connecting to the view.
 
-No imperative specification needed:
-1. Know what data you need
-2. Get it from the layout area or subject
-3. Do your computation
-4. Update the layout area
+## Declarative composition
+
+The return value of the layout area method is a static description of what the dialog looks like as a function of its data streams. The framework re-evaluates view segments automatically when the underlying streams emit:
+
+1. Identify which data the segment depends on.
+2. Express the segment as a stream transformation (`Select`, `CombineLatest`, …).
+3. Return the composition — no manual `if/else` re-render triggers required.
 
 ---
 
@@ -154,29 +163,37 @@ No imperative specification needed:
 ```mermaid
 sequenceDiagram
     participant U as User
-    participant UI as UI (Blazor/Razor Page)
+    participant UI as UI (Blazor)
     participant APP as Application
     participant S as Subject
 
-    U->>UI: Request DistributionStatistics Dialog
-    UI->>APP: Subscribes to layout area stream
-    APP->>UI: Build dialog with defaults and initialize stream
-    UI->>U: Render and display dialog
+    U->>UI: Open DistributionStatistics dialog
+    UI->>APP: Subscribe to layout area stream
+    APP->>UI: Emit initial dialog with defaults
+    UI->>U: Render dialog
+
+    U->>UI: Change distribution type
+    UI->>APP: BasicInput stream emits new DistributionType
+    APP->>APP: DistinctUntilChanged fires → UpdateData(Distribution, …)
+    APP->>UI: Parameter editor segment re-renders
+    UI->>U: New parameter fields appear
+
     U->>UI: Click "Run Simulation"
-    UI->>APP: Send click event to application
-    APP->>S: Perform calculation, emit result into Subject
-    S->>APP: Subject subscription triggers update of result view
-    APP->>UI: Synchronize result view with UI
-    UI->>U: Show result view
+    UI->>APP: Click action fires
+    APP->>APP: CombineLatest snapshot → Simulate(…) → subject.OnNext(result)
+    S->>APP: Subject subscription derives Statistics view
+    APP->>UI: Results segment updated
+    UI->>U: Summary statistics displayed
 ```
 
 ---
 
-# Benefits
+# Why Reactive?
 
-| Aspect | Reactive Approach |
-|--------|------------------|
-| **Complexity** | Lower - declare what should happen, not how |
-| **Robustness** | Events are processed in order, state is explicit |
-| **Maintainability** | Business logic stays close to domain model |
-| **Testability** | Pure functions transform streams to streams |
+| Concern | Imperative approach | Reactive approach |
+|---|---|---|
+| **Complexity** | Grows with each conditional | Declared once as a stream graph |
+| **State consistency** | Requires careful synchronization | Streams guarantee order and freshness |
+| **Maintainability** | Business logic scattered in callbacks | Logic lives next to the domain model |
+| **Testability** | Mocking UI interactions is fragile | Pure stream-to-stream transformations are trivially testable |
+| **Server/client split** | Manual serialization decisions | Subject keeps heavy data server-side automatically |

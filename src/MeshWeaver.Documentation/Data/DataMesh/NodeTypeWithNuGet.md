@@ -1,16 +1,25 @@
 ---
 Name: NuGet Packages in Node Types
 Category: Documentation
-Description: Reference any NuGet package from a node type's Source/*.cs file using the #r "nuget:..." directive. No redeploy, no SDK on the container.
+Description: Reference any NuGet package from a node type's Source/*.cs file using the #r "nuget:..." directive — no redeploy, no SDK on the container.
 ---
 
-When a node type needs a library that isn't already referenced by the portal — statistics, charting, PDF, a cloud SDK — you don't want to redeploy. Add a `#r "nuget:..."` directive at the top of any file under the node type's `Source/` folder and the compiler restores the package in-process before compiling.
+Need a statistics library, a PDF renderer, or a cloud SDK in your node type? You don't have to redeploy the portal to get it. Drop a `#r "nuget:..."` directive at the top of any `.cs` file under the node type's `Source/` folder and the compiler restores the package in-process before building.
 
-This works for both **node type compilation** (C# sources under `Source/`) and **interactive markdown** code cells (see [NuGet Packages](NugetPackages)). The same resolver handles both.
+This mechanism works in two places:
+
+| Where | What happens |
+|---|---|
+| `Source/*.cs` files in a node type | Package resolves at node-type compilation time |
+| Interactive markdown code cells | Package resolves before the kernel compiles the cell |
+
+Both routes go through the same `NuGetAssemblyResolver`. See also [NuGet Packages](NugetPackages) for the interactive-markdown side of the story.
+
+---
 
 ## The directive
 
-At the top of any `.cs` file under `Source/`, before `using` statements:
+Place `#r "nuget:..."` at the very top of any `.cs` file, before `using` statements:
 
 ```csharp
 #r "nuget:MathNet.Numerics, 5.0.0"
@@ -26,13 +35,15 @@ public record MatrixDemo
 }
 ```
 
-Always pin a specific version. `#r "nuget:MathNet.Numerics"` without a version resolves "latest" at compile time — that makes your node type non-reproducible and may pick up a breaking change.
+> **Always pin a specific version.** `#r "nuget:MathNet.Numerics"` without a version resolves "latest" at compile time — that makes your node type non-reproducible and may silently pick up a breaking change.
+
+---
 
 ## End-to-end example
 
-A complete node type that uses MathNet.Numerics to compute the inverse of a 2×2 matrix and renders the result.
+The following walks through a complete node type that uses MathNet.Numerics to compute the inverse of a 2×2 matrix and renders the result as a layout area.
 
-### 1. Folder layout
+### Folder layout
 
 ```
 samples/Graph/Data/
@@ -41,10 +52,10 @@ samples/Graph/Data/
     Matrix/
       Source/
         Matrix.cs            # Content record — references MathNet
-        MatrixLayoutAreas.cs # Layout area that invokes MathNet
+        MatrixLayoutAreas.cs # Layout area that calls MathNet
 ```
 
-### 2. `Source/Matrix.cs`
+### `Source/Matrix.cs`
 
 ```csharp
 // <meshweaver>
@@ -79,7 +90,7 @@ public record Matrix
 }
 ```
 
-### 3. `Source/MatrixLayoutAreas.cs`
+### `Source/MatrixLayoutAreas.cs`
 
 ```csharp
 // <meshweaver>
@@ -120,9 +131,9 @@ public static class MatrixLayoutAreas
 }
 ```
 
-Pin the same package version across every `Source/` file that uses it — each file is resolved independently, so mismatched versions would produce conflicting assemblies.
+> Pin the same package version across every `Source/` file that uses it. Each file is resolved independently, so mismatched versions produce conflicting assemblies.
 
-### 4. `Matrix.json`
+### `Matrix.json`
 
 ```json
 {
@@ -143,13 +154,15 @@ Pin the same package version across every `Source/` file that uses it — each f
 }
 ```
 
+---
+
 ## See it run
 
-The deployed sample lives at `MathDemo/Matrix/Example`. Its `Inverse` layout area — rendered by `MatrixLayoutAreas.Inverse` compiled from `Source/` with the `#r "nuget:MathNet.Numerics, 5.0.0"` directive — embeds directly below:
+The deployed sample lives at `MathDemo/Matrix/Example`. Its `Inverse` layout area — compiled from `Source/` with the `#r "nuget:MathNet.Numerics, 5.0.0"` directive — is embedded directly below:
 
 @MathDemo/Matrix/Example/Inverse
 
-And here is the equivalent interactive-markdown cell — same NuGet directive, same MathNet call, executed by the kernel every time this page loads:
+Here is the equivalent interactive-markdown cell: same NuGet directive, same MathNet call, executed by the kernel every time this page loads:
 
 ```csharp --render MatrixInverseDemo --show-code
 #r "nuget:MathNet.Numerics, 5.0.0"
@@ -170,32 +183,46 @@ Controls.Markdown($"""
 """)
 ```
 
-Both routes go through the same `NuGetAssemblyResolver` — the node-type compilation path for the layout-area embed, and the kernel preprocessor for the code cell. On a fresh replica the first of the two pays the single MathNet restore; the second hits the in-memory cache instantly.
+On a fresh replica the first of the two pays the single MathNet restore; the second hits the in-memory cache instantly. Both use the same `NuGetAssemblyResolver` under the hood.
+
+---
 
 ## Caching
 
-The resolver keeps an in-memory cache keyed by the sorted `(Id, VersionRange)` tuple. Within a single portal process every subsequent compilation that names the same packages reuses the already-resolved assembly list — no repeat HTTP calls. Across restarts, the NuGet package folder on disk (`$NUGET_PACKAGES`, default `~/.nuget/packages`) provides the second level of caching; only a fresh replica on a fresh ACA node triggers a real download.
+The resolver maintains an in-memory cache keyed by the sorted `(Id, VersionRange)` tuple. Within a single portal process, every subsequent compilation that names the same packages reuses the already-resolved assembly list — no repeat HTTP calls.
+
+Across restarts, the NuGet package folder on disk (`$NUGET_PACKAGES`, default `~/.nuget/packages`) provides a second caching layer. Only a fresh replica on a fresh ACA node triggers a real download.
+
+---
 
 ## Deployment — no .NET SDK required
 
-The resolver is built on the public `NuGet.Protocol` / `NuGet.Packaging` / `NuGet.Resolver` libraries. It does not invoke `dotnet restore`, does not need MSBuild, and runs on the plain `mcr.microsoft.com/dotnet/aspnet` runtime image. ACA needs only:
+The resolver is built on the public `NuGet.Protocol`, `NuGet.Packaging`, and `NuGet.Resolver` libraries. It does not invoke `dotnet restore`, does not need MSBuild, and runs on the plain `mcr.microsoft.com/dotnet/aspnet` runtime image. ACA needs only:
 
-- Outbound HTTPS to `api.nuget.org` (the default egress policy allows it).
-- A writable cache directory. The Aspire AppHost sets `NUGET_PACKAGES=/tmp/nuget-cache` on the portal resource; this is ephemeral per replica, which is fine because in-memory cache + first-use restore is fast.
+- **Outbound HTTPS** to `api.nuget.org` (the default egress policy allows this).
+- **A writable cache directory.** The Aspire AppHost sets `NUGET_PACKAGES=/tmp/nuget-cache` on the portal resource. This is ephemeral per replica, which is fine — in-memory cache plus first-use restore is fast.
+
+---
 
 ## Transitive dependencies at runtime
 
 NuGet packages often pull in transitive assemblies that aren't referenced by your code at compile time but are loaded later by the main package. The node's `AssemblyLoadContext` is extended with a probing directory list pointing at every `lib/<tfm>/` folder of every resolved package, so those loads succeed without extra configuration.
 
+---
+
 ## Failure modes
 
-- **Unknown package id** — compilation fails with a NuGet error naming the id. Typo check and retry.
-- **No matching version** — same, the error lists the versions that were available on the feed.
-- **Network blocked** — timeout from the NuGet protocol. Verify the ACA egress policy and that the `NUGET_PACKAGES` directory is writable.
-- **Package ships only full-framework assemblies** — the resolver picks the nearest compatible TFM via `FrameworkReducer.GetNearest`. If the package has no `.NET Standard` or `.NET 8/10` asset, no DLLs are returned and compilation fails with "type not found". Pick a different package or version.
+| Symptom | Cause | Fix |
+|---|---|---|
+| NuGet error naming the package id | Unknown package id — likely a typo | Check the exact id on nuget.org and retry |
+| NuGet error listing available versions | No matching version | Pin a version that exists on the feed |
+| Timeout from NuGet protocol | Network blocked | Verify ACA egress policy and that `NUGET_PACKAGES` is writable |
+| "type not found" at compilation | Package has no .NET Standard / .NET 8/10 asset | The resolver uses `FrameworkReducer.GetNearest`; if no compatible TFM exists, no DLLs are returned — pick a different package or version |
+
+---
 
 ## Related
 
-- [NuGet Packages](NugetPackages) — same `#r "nuget:..."` directive inside interactive markdown code cells.
+- [NuGet Packages](NugetPackages) — the same `#r "nuget:..."` directive inside interactive markdown code cells.
 - [Creating Node Types](CreatingNodeTypes) — the base walkthrough for defining content types and layout areas.
 - [Interactive Markdown](InteractiveMarkdown) — how code cells execute.

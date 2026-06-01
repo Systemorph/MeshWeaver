@@ -1,19 +1,23 @@
 ---
 Name: Agentic AI Architecture
 Category: Documentation
-Description: How AI agents collaborate within the mesh, using MeshPlugin tools and integrating with external AI services
+Description: How AI agents collaborate within the mesh — self-guided discovery, multi-agent orchestration, MeshPlugin tools, and bidirectional MCP integration
 Icon: /static/DocContent/Architecture/AgenticAI/icon.svg
 ---
 
-MeshWeaver integrates AI agents as first-class citizens in the mesh. Agents can query data, navigate structures, execute tasks, and collaborate with other agents - all through unified mesh references.
+MeshWeaver integrates AI agents as first-class citizens. Agents can query data, navigate structures, execute tasks, and collaborate with one another — all through the same unified mesh references that every other component uses.
 
 # Design Philosophy
 
 ## Self-Guided Discovery
 
-Unlike traditional approaches with extensive system prompts, MeshWeaver agents **find documentation as they go**. Instead of encoding all knowledge upfront, agents dynamically discover context from the mesh itself.
+Traditional agent architectures front-load everything into a system prompt: schemas, business rules, examples, edge cases. As the domain grows, that prompt grows — fragile, expensive, and hard to maintain.
+
+MeshWeaver agents take a different approach: **they find documentation as they go**. Rather than encoding all knowledge upfront, agents dynamically discover context from the mesh itself. The mesh is the system prompt.
 
 ### Example: Email Processing Workflow
+
+The following diagram shows how an agent handles an incoming email without any domain knowledge baked in at start-up:
 
 ```mermaid
 flowchart TB
@@ -27,21 +31,18 @@ flowchart TB
     L --> X["6. Execute until complete"]
 ```
 
-**How it works:**
-1. An email arrives and triggers agent processing
-2. The agent detects the email's purpose (inquiry, claim, request)
-3. Based on purpose, it loads instructions from the mesh (e.g., `Insurance/Claims/Instructions`)
-4. Instructions guide the agent to gather more context:
-   - Which line of business is this?
-   - Which department should handle it?
-5. The agent loads department-specific instructions and schemas
-6. Execution continues with full context until the task completes
+1. An email arrives and triggers agent processing.
+2. The agent detects the email's purpose (inquiry, claim, request).
+3. Based on purpose, it loads instructions from the mesh — e.g. `Insurance/Claims/Instructions`.
+4. Those instructions guide the agent to gather more context: line of business, responsible department.
+5. The agent loads department-specific instructions and schemas.
+6. Execution continues with full context until the task completes.
 
-This keeps agents adaptable and reduces prompt maintenance.
+Because instructions live in the mesh, updating business rules requires no code change and no prompt rewrite — just edit the relevant node.
 
 ## Agents as Data Elements
 
-Agents are stored as nodes in the mesh hierarchy:
+Agents are stored as ordinary nodes in the mesh hierarchy, alongside the data they act on:
 
 ```
 Insurance/
@@ -54,12 +55,15 @@ Insurance/
       ...
 ```
 
-When a task is invoked, MeshWeaver selects the **lowest-most agent** in the hierarchy **marked as an entry agent**. This allows:
-- Problem-specific agents at lower levels
-- Generic fallback agents at higher levels
-- Override behavior without changing code
+When a task is invoked, MeshWeaver selects the **lowest agent in the hierarchy that is marked as an entry agent**. This gives you:
+
+- Problem-specific agents at the leaves for fine-grained control
+- Generic fallback agents at higher levels for broad coverage
+- The ability to override behaviour at any level without touching code
 
 # Multi-Agent Collaboration
+
+Agents rarely work alone. MeshWeaver orchestrates teams of specialised agents, each sized for its job:
 
 ```mermaid
 flowchart TB
@@ -85,17 +89,17 @@ flowchart TB
 ## Agent Roles
 
 | Agent | Model Size | Purpose |
-|-------|------------|----------|
-| **Orchestrator** | Standard | Understands the situation, plans the work itself, dispatches execution |
-| **Researcher** | Small LM (GPT-3.5, Haiku) | Gathers context, searches data |
-| **Worker** | Medium | Performs CRUD operations, runs the dispatched write steps |
-| **Custom** | Configurable | Domain-specific tasks (claims, underwriting, etc.) |
+|-------|------------|---------|
+| **Orchestrator** | Standard | Understands the situation, plans the work, dispatches sub-tasks |
+| **Researcher** | Small LM (GPT-3.5, Haiku) | Gathers context and searches data cheaply |
+| **Worker** | Medium | Performs CRUD operations and executes dispatched write steps |
+| **Custom** | Configurable | Domain-specific tasks — claims processing, underwriting, etc. |
 
-You can define **custom agents** for specific tasks by creating Agent nodes in the mesh. These agents inherit from base agents but add domain-specific instructions, tools, and behaviors.
+Custom agents are ordinary Agent nodes in the mesh. They inherit from a base agent and add domain-specific instructions, tools, and behaviours — no code required.
 
 # Custom Commands
 
-Define custom `/commands` to provide detailed instructions for specific contexts:
+Define `/commands` to provide detailed, step-by-step instructions for specific operations. Commands live in the mesh alongside the data they operate on:
 
 ```
 Insurance/Claims/
@@ -122,11 +126,11 @@ This command imports claims from external sources.
 - claimReference, policyNumber, lossDate, description
 ```
 
-Commands serve as detailed, context-aware instructions that agents can discover and follow.
+Commands are context-aware and discoverable. An agent handling a claims task will find and follow `Insurance/Claims/Command/import.md` automatically — no wiring needed.
 
 # MeshPlugin Tools
 
-Agents interact with the mesh through `MeshPlugin`, which provides these operations:
+Agents interact with the mesh through `MeshPlugin`, which exposes a concise set of operations:
 
 ```mermaid
 flowchart LR
@@ -144,13 +148,13 @@ flowchart LR
 
 ## Read Operations
 
-**Get** — Retrieve data by path:
+**Get** — Retrieve a node or its children by path:
 ```
 Get("@Insurance/Claims/CLM-2024-001")     -> Returns claim JSON
 Get("@Insurance/Claims/*")                -> Returns all claims (children)
 ```
 
-**Get with Unified Path prefixes** — Access schemas and data models:
+**Get with Unified Path prefixes** — Access schemas and data models without knowing the underlying storage:
 ```
 Get("@Cornerstone/schema:")             -> JSON Schema for content type
 Get("@Cornerstone/schema:Pricing")      -> Schema for a specific named type
@@ -173,7 +177,7 @@ Create('{"id": "CLM-2024-002", "namespace": "Insurance/Claims",
   "content": {"status": "Open"}}')
 ```
 
-**Update** — Modify existing nodes (Get → modify → Update):
+**Update** — Modify existing nodes. The canonical workflow is Get → modify → Update:
 ```
 // 1. Get existing: result = Get("@Insurance/Claims/CLM-2024-001")
 // 2. Modify the JSON
@@ -197,7 +201,7 @@ NavigateTo("@Insurance/Claims/CLM-2024-001")  -> Shows claim detail view
 
 ## Path Shorthand & Unified Path
 
-The `@` prefix provides convenient shorthand. Unified Path prefixes access specific resource types:
+The `@` prefix is a convenient shorthand. Unified Path prefixes let agents address specific resource types without knowing the underlying structure:
 
 | Syntax | Returns |
 |--------|---------|
@@ -207,9 +211,9 @@ The `@` prefix provides convenient shorthand. Unified Path prefixes access speci
 | `@Cornerstone/schema:TypeName` | Schema for a specific named type |
 | `@Cornerstone/model:` | Full data model |
 
-# Include External MCP Servers
+# Including External MCP Servers
 
-MeshWeaver supports the **Model Context Protocol (MCP)** to include external AI tools:
+MeshWeaver supports the **Model Context Protocol (MCP)** so agents can reach out to any compatible external tool provider:
 
 ```mermaid
 flowchart LR
@@ -225,18 +229,21 @@ flowchart LR
     External -->|MCP Protocol| MeshWeaver
 ```
 
-**Available Integrations:**
-- **Snowflake Cortex**: AI/ML functions, document processing
-- **Databricks**: Unity Catalog, ML models, notebooks
-- **GitHub**: Repository access, code search, issue management
-- **Microsoft 365**: Email, calendar, documents, Teams
-- **Other MCP servers**: Any compatible tool provider
+**Available integrations:**
 
-Tools from external MCP servers appear automatically in agent context.
+| Server | Capabilities |
+|--------|-------------|
+| **Snowflake Cortex** | AI/ML functions, document processing |
+| **Databricks** | Unity Catalog, ML models, notebooks |
+| **GitHub** | Repository access, code search, issue management |
+| **Microsoft 365** | Email, calendar, documents, Teams |
+| **Any MCP server** | Any compatible tool provider |
 
-# Exposing MeshWeaver as MCP Server
+Tools from external MCP servers appear automatically in agent context — no additional wiring required.
 
-MeshWeaver provides an MCP server that external systems can include:
+# Exposing MeshWeaver as an MCP Server
+
+The relationship is bidirectional. MeshWeaver also acts as an MCP server, so external AI systems can include MeshWeaver as a tool provider:
 
 ```mermaid
 flowchart RL
@@ -252,47 +259,48 @@ flowchart RL
     Consumers -->|Include| MCP
 ```
 
-**Use Cases:**
-- **GitHub/Claude Code**: Read task descriptions and prompts from MeshWeaver to execute using external agents
-- **Microsoft Copilot**: Query business data when composing Word documents or emails
-- **Snowflake Agents**: Access organizational context and workflows
-- **Custom Integrations**: Any MCP-compatible AI system
+**Common use cases:**
+
+- **GitHub Copilot / Claude Code**: Read task descriptions and prompts from MeshWeaver, then execute using external agents
+- **Microsoft Copilot**: Query live business data while composing Word documents or emails
+- **Snowflake Agents**: Access organisational context and workflows
+- **Custom integrations**: Any MCP-compatible AI system
 
 ### MCP Server Tools
 
-The MCP server exposes the same mesh operations as the internal MeshPlugin, so external AI systems get full access:
+The MCP server exposes the same operations as the internal MeshPlugin, so external AI systems get full mesh access:
 
 | Tool | Description |
 |------|-------------|
 | **Get** | Retrieve nodes by path. Supports `@` shorthand, `/*` for children, and Unified Path prefixes (`schema:`, `model:`) |
 | **Search** | Query nodes using GitHub-style syntax with optional base path scoping |
 | **Create** | Create new nodes from JSON MeshNode objects |
-| **Update** | Update existing nodes (pass JSON array of complete MeshNode objects) |
-| **Delete** | Delete nodes by path (pass JSON array of path strings) |
-| **NavigateTo** | Returns a URL to view a node in the MeshWeaver UI |
+| **Update** | Update existing nodes (pass a JSON array of complete MeshNode objects) |
+| **Delete** | Delete nodes by path (pass a JSON array of path strings) |
+| **NavigateTo** | Returns a browser URL to view a node in the MeshWeaver UI |
 
-**Key difference from internal MeshPlugin:** `NavigateTo` returns a browser URL (e.g., `https://app.example.com/node/Insurance%2FClaims`) rather than rendering inline, since external consumers operate outside the MeshWeaver UI.
+> **External vs. internal NavigateTo**: When called from an external system, `NavigateTo` returns a URL such as `https://app.example.com/node/Insurance%2FClaims` rather than rendering inline, because external consumers operate outside the MeshWeaver UI.
 
 **Example — Claude Code using MeshWeaver MCP:**
 ```
-Get("@Cornerstone/Claims/*")           -> List all claims
-Get("@Cornerstone/schema:")             -> Get content type schema
-Search("nodeType:Claim status:Open")       -> Find open claims
-Create('{"id": "CLM-NEW", ...}')           -> Create a claim
+Get("@Cornerstone/Claims/*")              -> List all claims
+Get("@Cornerstone/schema:")               -> Get content type schema
+Search("nodeType:Claim status:Open")      -> Find open claims
+Create('{"id": "CLM-NEW", ...}')          -> Create a claim
 ```
 
 # Alternative AI APIs
 
-Some platforms provide dedicated APIs beyond MCP for AI access:
+Some platforms provide dedicated APIs alongside MCP for direct AI access:
 
-| Platform | API Type | Use Case |
-|----------|----------|----------|
+| Platform | API Type | Example use case |
+|----------|----------|-----------------|
 | **Snowflake** | SQL (Cortex functions) | `SELECT SNOWFLAKE.CORTEX.SENTIMENT(text)` |
 | **Azure OpenAI** | REST API | Direct model access |
-| **Databricks** | REST/SDK | Model serving endpoints |
+| **Databricks** | REST / SDK | Model serving endpoints |
 | **AWS Bedrock** | REST API | Foundation models |
 
-These APIs are used when hubs need to communicate with AI from external systems directly:
+These APIs are used when a hub needs to invoke AI from an external system directly:
 
 ```sql
 -- Snowflake Cortex via SQL
@@ -306,18 +314,22 @@ WHERE status = 'Open'
 
 # Agent Context Discovery
 
-Agents discover their context from the mesh:
+At runtime, an agent builds its context from the mesh — no pre-loaded knowledge required:
 
-1. **Task Descriptions**: Stored as markdown nodes
-2. **Data Schemas**: NodeType definitions with field metadata
-3. **Custom Commands**: `/command` instructions for specific operations
-4. **Domain Knowledge**: Documentation throughout the hierarchy
+1. **Task Descriptions** — Markdown nodes that explain what needs to be done
+2. **Data Schemas** — NodeType definitions with field metadata and validation rules
+3. **Custom Commands** — `/command` instruction nodes for specific operations
+4. **Domain Knowledge** — Documentation distributed throughout the hierarchy
 
-# Benefits
+This keeps agents thin at start-up and rich in context by the time they act.
 
-1. **Adaptability**: Agents learn from mesh, not hardcoded prompts
-2. **Hierarchy**: Override agents at any node level
-3. **Collaboration**: Multiple agents with specialized roles
-4. **Custom Agents**: Define domain-specific agents for specialized tasks
-5. **Integration**: MCP connects any AI system bidirectionally
-6. **Transparency**: All agent actions are mesh operations
+# Summary of Benefits
+
+| Benefit | How it works |
+|---------|-------------|
+| **Adaptability** | Agents read instructions from the mesh; update rules without touching code |
+| **Hierarchical override** | Deploy specialised agents at any level; generic agents fall back naturally |
+| **Collaboration** | Orchestrator + researcher + worker pattern keeps each model sized for its task |
+| **Custom agents** | Create domain-specific Agent nodes without writing new agent code |
+| **Bidirectional MCP** | Connect any external AI tool inbound; expose MeshWeaver outbound |
+| **Transparency** | Every agent action is a mesh operation — observable, auditable, reproducible |

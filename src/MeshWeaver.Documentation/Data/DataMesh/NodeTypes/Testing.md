@@ -4,14 +4,20 @@ Category: Documentation
 Description: End-to-end test node types with MonolithMeshTestBase — render layout areas, exercise request/response, run simulations against a real client.
 ---
 
-A node type isn't "done" until there's a test that drives it. MeshWeaver ships a test base (`MonolithMeshTestBase`) that spins up a monolith mesh in-process so you can write integration tests that look and feel like a Blazor client: initialize a hub, request a layout area, assert on the streamed response.
+A node type isn't "done" until it has a test that drives it. MeshWeaver ships `MonolithMeshTestBase`, which spins up a full monolith mesh in-process so your integration tests can behave exactly like a Blazor client: initialize a hub, request a layout area, and assert on the streamed response — no mocking, no seams.
 
-This doc walks through two archetypes of test you'll write for every node type:
+This page covers two archetypes you'll write for every node type:
 
-1. **Layout-area rendering** — prove the `Details`, `Thumbnail`, `Overview` etc. views render for an instance. Pattern from `test/MeshWeaver.Acme.Test/TodoViewsTest.cs`.
-2. **Request/response functionality** — prove a node-type-specific request is handled and its response is correct. Useful for simulations, computations, or any hub handler you wire in via `config => config.WithHandler<MyRequest>(...)`.
+| Archetype | What it proves |
+|---|---|
+| **Layout-area rendering** | The `Details`, `Thumbnail`, `Overview`, and other views render correctly for a real node instance. |
+| **Request/response** | A node-type-specific request is handled and produces the expected response — useful for simulations, computations, and any handler wired in via `config.WithHandler<TRequest>(...)`. |
+
+---
 
 ## Test project layout
+
+A typical test project follows this structure:
 
 ```
 test/MeshWeaver.MyType.Test/
@@ -21,7 +27,7 @@ test/MeshWeaver.MyType.Test/
   MyTypeRequestResponseTest.cs  # request/response tests
 ```
 
-`.csproj` — minimum references (copy from `test/MeshWeaver.Acme.Test/MeshWeaver.Acme.Test.csproj`):
+The `.csproj` needs a handful of standard references. Use `test/MeshWeaver.Acme.Test/MeshWeaver.Acme.Test.csproj` as your starting point:
 
 ```xml
 <Project Sdk="Microsoft.NET.Sdk">
@@ -47,9 +53,11 @@ test/MeshWeaver.MyType.Test/
 </Project>
 ```
 
+---
+
 ## Archetype 1 — layout-area rendering
 
-The canonical pattern in `test/MeshWeaver.Acme.Test/TodoViewsTest.cs:32`. Inherit `MonolithMeshTestBase`, override `ConfigureMesh` to point at `samples/Graph/Data`, `AddGraph()` + your type, then `GetRemoteStream` against a `LayoutAreaReference`.
+The canonical reference is `test/MeshWeaver.Acme.Test/TodoViewsTest.cs:32`. Inherit `MonolithMeshTestBase`, override `ConfigureMesh` to point at `samples/Graph/Data`, call `AddGraph()` together with your type, then subscribe to `GetRemoteStream` against a `LayoutAreaReference`.
 
 ```csharp
 public class MatrixViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
@@ -99,16 +107,19 @@ public class MatrixViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
 }
 ```
 
-Things to know:
+### Four things to keep in mind
 
-- **`PingRequest` first.** Layout-area routing is per-hub; the first request to a fresh hub triggers address registration. Without the ping, the `GetRemoteStream` call can race the hub creation and time out.
-- **`GetRemoteStream<JsonElement, LayoutAreaReference>`** returns a cold observable. `.Timeout(...).FirstAsync()` is the common way to get the first rendered payload.
-- **Shared cache directory.** If tests compile node types via the source folder, use a shared `.mesh-cache/` across test methods (see `SharedCacheDirectory` in `TodoViewsTest`) — otherwise each test pays the full Roslyn compile cost.
-- **Collection fixtures.** Tests using the same `samples/Graph` should share a fixture; parallelism inside `xunit.runner.json` is disabled (see repo `CLAUDE.md`).
+> **`PingRequest` first.** Layout-area routing is per-hub. The first request to a fresh hub triggers address registration — without the ping, `GetRemoteStream` can race hub creation and time out.
+
+> **`GetRemoteStream<JsonElement, LayoutAreaReference>`** returns a cold observable. `.Timeout(...).FirstAsync()` is the idiomatic way to get the first rendered payload.
+
+> **Shared cache directory.** If your tests compile node types from `Source/`, pass a shared `.mesh-cache/` across test methods (see `SharedCacheDirectory` in `TodoViewsTest`). Otherwise each test pays the full Roslyn compile cost independently.
+
+> **Collection fixtures.** Tests that share `samples/Graph` should share a fixture. Parallelism inside `xunit.runner.json` is disabled at the repo level.
 
 ### Control-typed assertion
 
-`GetRemoteStream` returns `JsonElement` by default. To assert on the concrete control type:
+`GetRemoteStream` yields `JsonElement` by default. To assert on the concrete control type, chain `GetControlStream`:
 
 ```csharp
 var control = await stream
@@ -120,11 +131,13 @@ var stack = control.Should().BeOfType<StackControl>().Subject;
 stack.Areas.Should().NotBeEmpty();
 ```
 
-See `TodoViewsTest.CreateArea_WithTypeParam_ShouldRenderCreateForm` for a full example with form-field assertions.
+See `TodoViewsTest.CreateArea_WithTypeParam_ShouldRenderCreateForm` for a complete example with form-field assertions.
 
-## Archetype 2 — request/response / simulation
+---
 
-When your node type wires in a custom handler — `config.WithHandler<RunSimulationRequest>(HandleRunSimulation)` in `Source/MyHub.cs` — test it the same way the UI would invoke it: `client.AwaitResponse<TResponse>(request, o => o.WithTarget(address))`.
+## Archetype 2 — request/response and simulation
+
+When your node type registers a custom handler — for example `config.WithHandler<RunSimulationRequest>(HandleRunSimulation)` in `Source/MyHub.cs` — test it the same way the UI would invoke it: `client.AwaitResponse<TResponse>(request, o => o.WithTarget(address))`. This exercises the real routing and serialization path, not a mocked seam.
 
 ```csharp
 [Fact(Timeout = 15_000)]
@@ -142,17 +155,23 @@ public async Task RunSimulation_ReturnsExpectedYield()
 }
 ```
 
-This is the same pattern as inter-hub messaging in production, so it exercises the real routing + serialization path, not a mocked seam.
+---
 
-## Tests for node types *without* a samples folder
+## Node types without a samples folder
 
-If your node type lives entirely in a `Source/` under `samples/Graph/Data/MyNamespace/MyType/`, the layout-area test above already exercises the whole pipeline: load the node, compile `Source/`, register handlers, render. Nothing extra.
+If your node type lives entirely inside `Source/` under `samples/Graph/Data/MyNamespace/MyType/`, the layout-area test above already exercises the whole pipeline: load the node, compile `Source/`, register handlers, render. Nothing extra is needed.
 
-If your node type ships as a compiled assembly (a typed record in the portal itself, not a dynamic node), the pattern is identical — just skip the `samples/Graph` pre-copy and register the type via `builder.AddMyType()` in `ConfigureMesh`.
+If your node type ships as a compiled assembly — a typed record in the portal itself rather than a dynamic node — the pattern is identical. Just skip the `samples/Graph` pre-copy and register the type via `builder.AddMyType()` in `ConfigureMesh`.
+
+---
 
 ## NuGet-referenced node types
 
-A node type that adds `#r "nuget:..."` at the top of its `Source/*.cs` compiles identically under `MonolithMeshTestBase` — the test's compilation path hits the same `MeshNodeCompilationService` and the same `INuGetAssemblyResolver` that the portal uses. The only prerequisite is network access to `api.nuget.org` during the test (the resolver caches so subsequent test methods in the same process are instant). See `test/MeshWeaver.Graph.Test/NodeTypeWithNuGetCompilationTest.cs` for a narrowly-scoped compilation test against `MathNet.Numerics`.
+A node type that adds `#r "nuget:..."` at the top of its `Source/*.cs` compiles identically under `MonolithMeshTestBase`. The test's compilation path hits the same `MeshNodeCompilationService` and the same `INuGetAssemblyResolver` that the portal uses. The only prerequisite is network access to `api.nuget.org` during the test run — the resolver caches packages, so subsequent test methods in the same process are instant.
+
+See `test/MeshWeaver.Graph.Test/NodeTypeWithNuGetCompilationTest.cs` for a narrowly-scoped compilation test against `MathNet.Numerics`.
+
+---
 
 ## Running the tests
 
@@ -168,7 +187,9 @@ dotnet test test/MeshWeaver.Acme.Test --filter "FullyQualifiedName~TodoViewsTest
 dotnet test
 ```
 
-`xunit.runner.json` at the repo root forces sequential execution (`parallelizeAssembly: false`, `maxParallelThreads: 1`). Expect each method to take 1–5 s for a cold compile; subsequent methods in the same class share the compilation cache and finish in ms.
+`xunit.runner.json` at the repo root enforces sequential execution (`parallelizeAssembly: false`, `maxParallelThreads: 1`). Expect each method to take 1–5 s on a cold Roslyn compile; subsequent methods in the same class share the compilation cache and complete in milliseconds.
+
+---
 
 ## Related
 

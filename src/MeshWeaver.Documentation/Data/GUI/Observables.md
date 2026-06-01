@@ -1,87 +1,81 @@
 ---
 Name: Static vs. Dynamic Views
 Category: Documentation
-Description: Understanding when and how UI areas update in response to data changes
+Description: How MeshWeaver UI areas decide when to re-render — and how to use observables to keep them live
 Icon: /static/DocContent/GUI/Observables/icon.svg
 ---
 
-MeshWeaver distinguishes between **static** views (rendered once) and **dynamic** views (re-rendered when observables emit). Understanding this distinction is key for efficient UIs.
-
-# Static Views
-
-A static view is rendered once and never updates:
-
-```csharp --render StaticExample --show-code
-Controls.Stack                                              // Create a container
-    .WithView(Controls.Html("<h2>Dashboard</h2>"))          // Static heading
-    .WithView(Controls.Label("This text never changes"))    // Static label
-```
+MeshWeaver draws a clean line between **static** views (rendered once and forgotten) and **dynamic** views (re-rendered every time an observable emits). Getting this distinction right is the foundation of an efficient, responsive UI.
 
 ---
 
-**Characteristics:**
-- Rendered once at initial load
-- No subscriptions created
-- Most efficient for unchanging content
+# Static Views
+
+A static view is computed exactly once — when the layout area first loads. No subscription is created and no watcher is registered. This makes it the most efficient option for content that never needs to change.
+
+```csharp --render StaticExample --show-code
+Controls.Stack
+    .WithView(Controls.Html("<h2>Dashboard</h2>"))
+    .WithView(Controls.Label("This text never changes"))
+```
+
+> **Use static views for:** headers, navigation, action buttons with fixed labels, and any content that is determined entirely at render time.
 
 ---
 
 # Dynamic Views
 
-A dynamic view updates when its observable emits:
+Wrap a control in an `IObservable<T>` and MeshWeaver subscribes to it. Every time the observable emits, only that area of the DOM is replaced — the rest of the page is untouched.
 
 ```csharp --render DynamicExample --show-code
-var counter = Observable.Interval(TimeSpan.FromSeconds(1));  // Stream that emits every second
+var counter = Observable.Interval(TimeSpan.FromSeconds(1));
 
-Controls.Stack                                                   // Create a container
-    .WithView(Controls.Label("Page Title"))                      // Static - never changes
-    .WithView(counter.Select(n => Controls.Label($"Count: {n}"))) // Dynamic - updates each second
+Controls.Stack
+    .WithView(Controls.Label("Page Title"))                        // static — never changes
+    .WithView(counter.Select(n => Controls.Label($"Count: {n}"))) // dynamic — updates each second
 ```
 
----
-
-**Characteristics:**
-- Creates a subscription to the observable
-- Re-renders only that area on each emission
-- Subscription disposed when area removed
+The subscription is created when the area is mounted and disposed automatically when it is removed. Only the specific area backed by the observable participates in the update cycle.
 
 ---
 
-# Real-time Clock Example
+# Real-Time Clock Example
+
+A live clock shows the pattern at its simplest — a single observable drives continuous DOM updates with no explicit state management:
 
 ```csharp --render Clock --show-code
-var tick = Observable.Interval(TimeSpan.FromSeconds(1));  // Stream that emits every second
+var tick = Observable.Interval(TimeSpan.FromSeconds(1));
 
-Controls.Stack                                                                  // Container
-    .WithView(tick.Select(_ => Controls.Label(DateTime.Now.ToString("HH:mm:ss"))))  // Updates every second
+Controls.Stack
+    .WithView(tick.Select(_ => Controls.Label(DateTime.Now.ToString("HH:mm:ss"))))
 ```
 
 ---
 
 # Combining Static and Dynamic
 
-A typical pattern combines both:
+In practice, most layout areas are a mix: structural scaffolding is static, and only the data-driven regions are reactive. This keeps subscriptions narrow and re-renders cheap.
 
 ```csharp
 Controls.Stack
-    .WithView(Controls.Html("<h1>Dashboard</h1>"))           // Static header
-    .WithView(metricsStream.Select(m => BuildMetrics(m)))   // Dynamic content
-    .WithView(Controls.Button("Refresh"))                    // Static button
+    .WithView(Controls.Html("<h1>Dashboard</h1>"))         // static header
+    .WithView(metricsStream.Select(m => BuildMetrics(m))) // dynamic content
+    .WithView(Controls.Button("Refresh"))                  // static button
 ```
 
-The header and button never re-render. Only the middle area updates when `metricsStream` emits.
+The header and button are never touched by the update cycle. Only the middle area re-renders when `metricsStream` emits.
 
 ---
 
 # Loading Data First
 
-When you need to fetch data before showing content:
+When you need to fetch data before producing a control, an `async` delegate runs once at render time and returns the result. The delegate is not a subscription — it fires exactly once:
 
 ```csharp
-Controls.Stack                                      // Create a container
-    .WithView(async (host, ctx, ct) => {            // Async function - runs once when rendering
-        var user = await LoadUserAsync(ct);         // Fetch user data from server
-        return Controls.Label($"Hello, {user.Name}"); // Return control after data loaded
+Controls.Stack
+    .WithView(async (host, ctx, ct) => {
+        var user = await LoadUserAsync(ct);
+        return Controls.Label($"Hello, {user.Name}");
     })
 ```
 
@@ -89,39 +83,43 @@ Controls.Stack                                      // Create a container
 
 # Reacting to Data Changes
 
-When content depends on data in the store:
+When the content depends on a data stream, expose that stream directly via `WithView`. The area subscribes and stays in sync for as long as it is mounted:
 
 ```csharp
-Controls.Stack                                          // Create a container
-    .WithView((host, ctx, store) =>                     // Function with access to data store
-        host.GetDataStream<User>("currentUser")         // Get stream of user updates
-            .Select(user => Controls.Label($"Logged in as {user.Name}")))  // Update when user changes
+Controls.Stack
+    .WithView((host, ctx, store) =>
+        host.GetDataStream<User>("currentUser")
+            .Select(user => Controls.Label($"Logged in as {user.Name}")))
 ```
 
 ---
 
 # How Re-rendering Works
 
-When a dynamic view receives a new value:
+Understanding the internals helps avoid surprises. When a dynamic view receives a new value, the framework:
 
-1. Observable is subscribed with `DistinctUntilChanged()` to skip duplicates
-2. Each emission calls `UpdateArea`
-3. Existing views in that area are removed
-4. New view is rendered
-5. Only affected DOM elements update
+1. Subscribes to the observable with `DistinctUntilChanged()` to skip identical emissions.
+2. Calls `UpdateArea` on each new value.
+3. Removes the existing controls in that area.
+4. Renders the new control in their place.
+5. Writes only the affected DOM elements to the client.
 
 ```csharp
-// This is what happens internally
+// Framework internals — shown for clarity, not for direct use
 generator
     .DistinctUntilChanged()
     .Subscribe(view => UpdateArea(context, view))
 ```
+
+The key insight is that only the area backed by the emitting observable updates. Everything else on the page remains untouched.
 
 ---
 
 # Common Patterns
 
 ## Conditional Content
+
+Toggle between controls based on a boolean stream:
 
 ```csharp
 isLoadingStream.Select(loading =>
@@ -132,6 +130,8 @@ isLoadingStream.Select(loading =>
 
 ## Computed Display
 
+Derive a rendered value from a data stream in a single expression:
+
 ```csharp
 dataStream.Select(data =>
     Controls.Markdown($"**Total:** {data.Items.Sum(i => i.Value)}"))
@@ -139,12 +139,16 @@ dataStream.Select(data =>
 
 ## Combined Streams
 
+Combine two independent streams into a single view — the area updates whenever either stream emits:
+
 ```csharp
 userStream.CombineLatest(settingsStream, (user, settings) =>
     Controls.Label($"{user.Name} - {settings.Theme}"))
 ```
 
 ## Debounced Updates
+
+Throttle high-frequency input before building controls:
 
 ```csharp
 searchStream
@@ -154,45 +158,39 @@ searchStream
 
 ---
 
-# Observable Operators
+# Observable Operators for UI
 
-Common Rx operators for UI:
+These Rx operators appear most often in MeshWeaver UI code:
 
-| Operator | Purpose | Example |
-|----------|---------|---------|
-| `Select` | Transform data to controls | `stream.Select(d => Controls.Label(d.Name))` |
-| `DistinctUntilChanged` | Skip duplicate values | `stream.DistinctUntilChanged()` |
+| Operator | Purpose | Typical use |
+|---|---|---|
+| `Select` | Transform data to a control | `stream.Select(d => Controls.Label(d.Name))` |
+| `DistinctUntilChanged` | Skip duplicate emissions | `stream.DistinctUntilChanged()` |
 | `Debounce` | Reduce update frequency | `stream.Debounce(TimeSpan.FromMilliseconds(100))` |
-| `CombineLatest` | Combine multiple streams | `a.CombineLatest(b, (x, y) => ...)` |
-| `StartWith` | Provide initial value | `stream.StartWith(defaultValue)` |
+| `CombineLatest` | Merge two streams into one view | `a.CombineLatest(b, (x, y) => ...)` |
+| `StartWith` | Provide an initial value before the first emission | `stream.StartWith(defaultValue)` |
 
 ---
 
 # Performance Guidelines
 
-**Use static for:**
-- Headers, labels, navigation
-- Action buttons with fixed text
-- Content that doesn't change
+The most important rule: keep dynamic regions small. A large re-render is always more expensive than a small one, even if the data-fetch is fast.
 
-**Use dynamic for:**
-- Data displays
-- Computed values
-- Content dependent on user input
-
-**Optimize with:**
-- `DistinctUntilChanged()` to skip unchanged values
-- `Debounce()` for high-frequency streams
-- Minimal re-render scope (only the changing area)
+| Scenario | Recommendation |
+|---|---|
+| Headers, labels, navigation, buttons with fixed text | Static view — no subscription overhead |
+| Data displays, computed values, user-input-dependent content | Dynamic view — scoped to only the changing area |
+| High-frequency streams (e.g. search input) | Add `Debounce()` to reduce render churn |
+| Streams that frequently re-emit the same value | Add `DistinctUntilChanged()` to skip no-op renders |
 
 ---
 
 # Click Actions Are Reactive, Not Async
 
-Button clicks via `WithClickAction` run inside the layout area host's hub pump. **Never use `await` on mesh-backed services inside a click handler** — it deadlocks the pump. Instead, compose `IObservable<T>` chains and `Subscribe`.
+> **🚨 ABSOLUTE:** Never use `await` inside a `WithClickAction` handler. The handler runs inside the layout hub's message pump. Awaiting a mesh-backed service inside the pump deadlocks it. Compose `IObservable<T>` chains instead and call `Subscribe`.
 
 ```csharp
-// ✅ Reactive — synchronous click handler, observable chain
+// ✅ Correct — synchronous handler, observable chain for the async work
 .WithClickAction(ctx =>
 {
     ctx.Host.UpdateData(statusId, "<p>Working…</p>");  // immediate feedback
@@ -203,16 +201,15 @@ Button clicks via `WithClickAction` run inside the layout area host's hub pump. 
         {
             var input = data?.GetValueOrDefault("field")?.ToString() ?? "";
 
-            // IMeshService.CreateNode/UpdateNode/DeleteNode return IObservable<T>
             myService.DoReactive(input).Subscribe(
                 result => ctx.Host.UpdateData(statusId, $"<p>Done: {result}</p>"),
                 ex     => ctx.Host.UpdateData(statusId, $"<p>Error: {ex.Message}</p>"));
         });
 
-    return Task.CompletedTask;  // click handler itself is sync
+    return Task.CompletedTask;  // the handler itself is synchronous
 })
 
-// ❌ DON'T: async click handler — deadlocks under load.
+// ❌ Wrong — async handler deadlocks the pump under load
 .WithClickAction(async ctx =>
 {
     var data = await ctx.Host.Stream.GetDataStream<T>(id).FirstAsync();
@@ -221,13 +218,13 @@ Button clicks via `WithClickAction` run inside the layout area host's hub pump. 
 })
 ```
 
-See [AsynchronousCalls](../../Architecture/AsynchronousCalls) for the full rationale.
+See [AsynchronousCalls](../../Architecture/AsynchronousCalls) for the full rationale and additional patterns.
 
 ---
 
 # See Also
 
-- [Container Control](../ContainerControl) - Adding content to containers
-- [Data Binding](../DataBinding) - How data flows to controls
-- [Editor Control](../Editor) - Real-world dynamic examples
-- [Asynchronous Calls](../../Architecture/AsynchronousCalls) - Why `await` deadlocks and how to compose observables
+- [Container Control](../ContainerControl) — Adding content to containers
+- [Data Binding](../DataBinding) — How data flows to controls
+- [Editor Control](../Editor) — Real-world dynamic examples
+- [Asynchronous Calls](../../Architecture/AsynchronousCalls) — Why `await` deadlocks and how to compose observables

@@ -14,24 +14,24 @@ Tags:
   - "API Tokens"
 ---
 
-## Overview
+The MeshWeaver MCP endpoint (`/mcp`) uses bearer token authentication. Every MCP client — Claude Code, Cursor, or a custom integration — must include a valid API token in its `Authorization` header. Without one, requests receive `401 Unauthorized` and never reach the MCP handler.
 
-The MeshWeaver MCP endpoint (`/mcp`) requires bearer token authentication. Every MCP client (Claude Code, Cursor, custom integrations) must include a valid API token in the `Authorization` header. Without a token, requests receive a `401 Unauthorized` response.
+Tokens are personal. Each token is tied to a specific user, so all MCP operations run under that user's identity with full row-level security (RLS) enforced.
 
-Tokens are personal — each token is tied to a specific user identity, so all actions performed through MCP run with that user's permissions (RLS is enforced).
+---
 
 ## Generating a Token
 
 ### Via the Web UI
 
-1. Log in to the Memex portal
-2. Navigate to **Settings** (gear icon) on any node
-3. Under the **Security** group, click **API Tokens**
-4. Enter a label (e.g. "Claude Code") and optionally set an expiry in days
-5. Click **Generate Token**
-6. **Copy the token immediately** — it is shown only once and cannot be retrieved later
+1. Log in to the Memex portal.
+2. Navigate to **Settings** (gear icon) on any node.
+3. Under the **Security** group, open **API Tokens**.
+4. Enter a label (e.g. `Claude Code`) and optionally set an expiry in days.
+5. Click **Generate Token**.
+6. **Copy the token immediately** — it is shown only once and cannot be retrieved later.
 
-The token starts with `mw_` followed by a base64url-encoded random string. Example:
+Tokens start with `mw_` followed by a base64url-encoded random string:
 
 ```
 mw_dGhpcyBpcyBhIHNhbXBsZSB0b2tlbg
@@ -39,7 +39,7 @@ mw_dGhpcyBpcyBhIHNhbXBsZSB0b2tlbg
 
 ### Via the REST API
 
-If you prefer automation, use the token management API (requires cookie authentication from a logged-in session):
+If you prefer automation, the token API accepts a cookie-authenticated session:
 
 ```bash
 # Create a token
@@ -49,7 +49,7 @@ curl -X POST https://your-portal.com/api/tokens \
   -d '{"label": "Claude Code", "expiresInDays": 90}'
 ```
 
-The response includes the raw token:
+The response returns the raw token — copy it now, as it is not stored in plaintext:
 
 ```json
 {
@@ -61,9 +61,13 @@ The response includes the raw token:
 }
 ```
 
-## Configuring Claude Code
+---
 
-Add the MCP server to your Claude Code configuration (`.claude/settings.json` or project-level `claude_code_config.json`):
+## Configuring MCP Clients
+
+### Claude Code
+
+Add the MCP server to your Claude Code configuration (`.claude/settings.json` or a project-level `claude_code_config.json`):
 
 ```json
 {
@@ -79,48 +83,51 @@ Add the MCP server to your Claude Code configuration (`.claude/settings.json` or
 }
 ```
 
-Once configured, Claude Code can use MeshWeaver tools (Get, Search, Create, Update, Delete) with your identity.
+After saving, Claude Code can use MeshWeaver tools (Get, Search, Create, Update, Delete) with your identity and permissions.
 
-## Configuring Other MCP Clients
+### Other MCP Clients
 
-Any MCP client that supports HTTP/SSE transport can connect. The key requirement is sending the `Authorization` header:
+Any MCP client that supports HTTP/SSE transport can connect. The only requirement is sending the `Authorization` header on every request:
 
 ```
 Authorization: Bearer mw_<your-token>
 ```
 
-### Example with curl
+#### Smoke-test with curl
 
 ```bash
-# Test the MCP endpoint
 curl -X POST https://your-portal.com/mcp \
   -H "Authorization: Bearer mw_dGhpcyBpcyBhIHNhbXBsZSB0b2tlbg" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"initialize","params":{},"id":1}'
 ```
 
-A successful response means authentication is working. A `401` response means the token is missing, invalid, expired, or revoked.
+A successful JSON-RPC response confirms authentication is working. A `401` means the token is missing, invalid, expired, or revoked.
+
+---
 
 ## Managing Tokens
 
-### Listing Tokens
+### Viewing Your Tokens
 
-View all your tokens in the **API Tokens** settings page. Each token shows:
+The **API Tokens** settings page lists every token you own, with the following columns:
 
-- **Label** — the name you gave it
-- **Token ID** — first 8 characters of the hash (for identification)
-- **Created** — when the token was generated
-- **Expires** — expiration date, or "Never"
-- **Last Used** — last time the token was used for authentication
-- **Status** — Active, Expired, or Revoked
+| Column | Description |
+|---|---|
+| **Label** | The name you gave the token |
+| **Token ID** | First 8 characters of the hash (for identification) |
+| **Created** | When the token was generated |
+| **Expires** | Expiration date, or "Never" |
+| **Last Used** | Last successful authentication |
+| **Status** | Active, Expired, or Revoked |
 
-### Revoking Tokens
+### Revoking a Token
 
-Click **Revoke** next to any active token to immediately invalidate it. Revoked tokens cannot be used for authentication. This is useful when:
+Click **Revoke** next to any active token to invalidate it immediately. Revoked tokens are permanently unusable — there is no undo. Revoke when:
 
-- A token may have been compromised
-- A team member leaves the project
-- You want to rotate credentials
+- A token may have been compromised.
+- A team member leaves the project.
+- You want to rotate credentials on a schedule.
 
 ### Via the REST API
 
@@ -132,13 +139,18 @@ curl https://your-portal.com/api/tokens -b cookies.txt
 curl -X DELETE https://your-portal.com/api/tokens/ApiToken/a1b2c3d4e5f6 -b cookies.txt
 ```
 
+---
+
 ## Security Best Practices
 
-- **One token per client** — create separate tokens for each tool or integration. This makes revocation granular.
-- **Set expiration dates** — for shared environments, set tokens to expire (e.g. 90 days). Regenerate as needed.
-- **Revoke unused tokens** — regularly review your token list and revoke any tokens you no longer need.
-- **Never commit tokens to source control** — store them in environment variables or secure secret managers.
-- **Use HTTPS** — tokens are sent in HTTP headers. Always use HTTPS in production to prevent interception.
+> **One token per client.** Create a separate token for each tool or integration so you can revoke access precisely without affecting others.
+
+- **Set expiration dates** — for shared environments, expire tokens after a fixed window (e.g. 90 days) and regenerate on rotation.
+- **Revoke unused tokens** — review your token list regularly and revoke anything you no longer actively use.
+- **Never commit tokens to source control** — store them in environment variables or a secret manager (e.g. Azure Key Vault, 1Password).
+- **Always use HTTPS** — tokens travel in HTTP headers; plaintext HTTP exposes them to interception.
+
+---
 
 ## How It Works
 
@@ -161,12 +173,12 @@ sequenceDiagram
     MCP-->>Client: MCP response (RLS enforced)
 ```
 
-When a request arrives at `/mcp`:
+When a request arrives at `/mcp`, the pipeline runs in five steps:
 
-1. The **ApiTokenAuthenticationHandler** extracts the Bearer token from the `Authorization` header
-2. It hashes the token with SHA-256 and looks up the corresponding `ApiToken` node
-3. If found and valid (not expired, not revoked), it builds a `ClaimsPrincipal` with the token owner's identity
-4. The **UserContextMiddleware** reads these claims and sets the `AccessContext` on the request
-5. MCP tools execute with the token owner's identity — row-level security (RLS) is enforced naturally
+1. **`ApiTokenAuthenticationHandler`** extracts the Bearer token from the `Authorization` header.
+2. It hashes the token with SHA-256 and looks up the corresponding `ApiToken` node by that hash.
+3. If found and valid (not expired, not revoked), it builds a `ClaimsPrincipal` with the token owner's identity.
+4. **`UserContextMiddleware`** reads those claims and sets the `AccessContext` on the request.
+5. MCP tools execute under the token owner's identity — row-level security is enforced throughout.
 
-Unauthenticated requests never reach the MCP handler — they receive `401 Unauthorized` immediately.
+Unauthenticated requests are rejected before they reach any MCP handler, so there is no risk of bypassing identity checks by omitting the header.

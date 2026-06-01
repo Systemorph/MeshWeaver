@@ -5,103 +5,90 @@ Description: "Canonical pattern for all mesh-node mutations: use workspace.GetMe
 
 # Requesting Work via `stream.Update()`
 
-> **🚨 DEFAULT PATTERN for every mesh-node mutation.** Threads, thread messages, NodeType compile state, Code editing, satellite annotations — all of them. If you are about to write `class XxxRequest : IRequest<XxxResponse>` to mutate a node's content, **stop and read this page**.
->
-> Mutate the target node's state via `workspace.GetMeshNodeStream(path).Update(current => modified)`. A server-side watcher on the owning hub picks up the change and dispatches any side-effect work. The result is published by writing back to the same node — propagated cluster-wide automatically by the synchronization protocol.
->
-> **Reads use the same stream.** Server-side, [`IMeshNodeStreamCache`](xref:Hosting/MeshNodeStreamCache) hands out a single shared stream per node; client-side, the Blazor view holds an `ISynchronizationStream<MeshNode>` (see [GUI Data Binding](xref:GUI/DataBinding)). Same stream serves read + write — no parallel read API to keep coherent.
->
-> **Why this is mandatory** (not just preferred): every recent "hub becomes unresponsive after the second operation" CI failure (CodeEditRecompile, NodeTypeRelease, LinkedInPullActions, ThreadAgentIntegration in run 26036857424) traced back to bespoke request/response handlers racing the watcher → two concurrent activities → leaked callbacks → wedged hub. The stream-based pattern is race-free by construction.
+> **🚨 DEFAULT PATTERN — required for every mesh-node mutation.** Threads, thread messages, NodeType compile state, code editing, satellite annotations — all of them. If you are about to write `class XxxRequest : IRequest<XxxResponse>` to mutate a node's content, **stop and read this page first**.
 
-## Sanctioned exceptions
+The single rule: mutate the target node's state via `workspace.GetMeshNodeStream(path).Update(current => modified)`. A server-side watcher on the owning hub picks up the change and dispatches any side-effect work. Results are published by writing back to the same node, and the synchronization protocol propagates them cluster-wide automatically.
 
-Use `hub.Observe(request)` ONLY for:
+**Reads use the same stream.** Server-side, [`IMeshNodeStreamCache`](xref:Hosting/MeshNodeStreamCache) hands out a single shared stream per node. Client-side, the Blazor view holds an `ISynchronizationStream<MeshNode>` (see [GUI Data Binding](xref:GUI/DataBinding)). Read and write share one stream — there is no separate read API to keep in sync.
 
-- **Node lifecycle on the mesh hub** — `CreateNodeRequest`, `DeleteNodeRequest`, `MoveNodeRequest`. These create / destroy / re-key the node itself; they don't mutate its content.
-- **Transient queries that don't belong on any node** — e.g. autocomplete completions, one-shot diagnostic probes that aren't part of the node's state.
+**Why this is mandatory, not merely preferred.** Every recent "hub becomes unresponsive after the second operation" CI failure — CodeEditRecompile, NodeTypeRelease, LinkedInPullActions, ThreadAgentIntegration in run 26036857424 — traced back to bespoke request/response handlers racing the watcher: two concurrent activities, leaked callbacks, wedged hub. The stream-based pattern is race-free by construction.
 
-Everything else — including every state machine, every "trigger work and observe progress" flow, every UI button that mutates a node — uses `stream.Update()`.
+---
 
-## Staleness-safe cross-hub patches
+## Sanctioned Exceptions
 
-`workspace.GetMeshNodeStream(otherPath).Update(...)` from a non-owner hub
-(`UpdateRemote`) currently re-runs the lambda against the caller's
-snapshot, NOT the owner's current state. The framework then ships an
-RFC 7396 JSON-merge patch of the diff to the owner.
+`hub.Observe(request)` is valid only for:
 
-That works correctly only when the patch is **idempotent under
-merge** — i.e. applying it twice produces the same result as applying
-it once. Two cases are merge-safe:
+| Use case | Why it's different |
+|---|---|
+| **Node lifecycle** — `CreateNodeRequest`, `DeleteNodeRequest`, `MoveNodeRequest` | Creates, destroys, or re-keys the node itself; does not mutate its content |
+| **Transient queries** — autocomplete completions, one-shot diagnostic probes | Result does not belong on any node's persistent state |
 
-1. **Single-field assignment**: `{ Foo: value }`. Merging twice = same.
-2. **Dict SetItem by key**: `{ Bag: { key: value } }`. Merging twice = same key+value.
+Everything else — state machines, "trigger work and observe progress" flows, every UI button that mutates a node — uses `stream.Update()`.
 
-Two cases are NOT merge-safe:
+---
 
-1. **List append / prepend**: `node with { Messages = Messages.Add(x) }`.
-   The diff becomes the WHOLE list (with `x` at the end). Two concurrent
-   appends from different hubs each compute a list ending in `x`; the
-   owner merges them in order and the last write wins, dropping the first.
-2. **List rewrite based on read-modify-write**: same root cause —
-   the patch is the new list, which doesn't account for concurrent
-   writers.
+## Cross-Hub Patch Semantics
 
-**Design rule**: cross-hub mutations are a single `stream.Update(...)` on the
-target node. The action-block serialisation on the owning hub guarantees
-race-free merge; RFC-7396 patch semantics let the lambda touch only the
-fields it intends to change.
+When you call `workspace.GetMeshNodeStream(otherPath).Update(...)` from a non-owner hub (`UpdateRemote`), the framework re-runs your lambda against the caller's snapshot and ships an RFC 7396 JSON-merge patch of the diff to the owner.
 
-The thread refactor is the canonical example. The whole resubmit/delete-from/
-record-failure flow used to post bespoke `ResubmitTrigger` / `DeleteFromTrigger` /
-`RecordFailureTrigger` messages, then briefly used intent-field payloads
-(`RequestedResubmit`, `RequestedDeleteFromMessageId`, `PendingFailures`)
-consumed by per-operation watchers, and now does the **full mutation inline**
-inside the hub extension method's `stream.Update` lambda — truncate `Messages`,
-re-queue `PendingUserMessages`, etc. all in one patch. See
-`Doc/Architecture/ThreadOperations.md` for the public API
-(`hub.ResubmitMessage`, `hub.DeleteFromMessage`, `hub.RecordSubmissionFailure`).
+This is safe only when the patch is **idempotent under merge** — applying it twice yields the same result as applying it once.
 
-## Use the canonical helpers
+**Merge-safe operations:**
 
-Don't roll your own watcher. Two helpers in `MeshWeaver.Mesh.Contract`
-(`ActivityControlPlaneExtensions.cs`) implement this pattern as one-liners:
+- **Single-field assignment** — `{ Foo: value }`. Merging twice gives the same result.
+- **Dict `SetItem` by key** — `{ Bag: { key: value } }`. Merging twice leaves the same key-value pair.
 
-- **`hub.WatchControlPlane(onRequestedStatus, logger)`** — when the trigger is the
-  single `ActivityLog.RequestedStatus` field. Drives Cancel / Start / Retry off a
-  property patch.
-- **`hub.WatchSubmission(fingerprint, needsDispatch, dispatch, logger)`** — when the
-  trigger is an arbitrary "this state needs work now" predicate (e.g. a thread has
-  unprocessed user messages and isn't already executing). Pure
-  `GetMeshNodeStream → DistinctUntilChanged(fingerprint) → Where(needsDispatch) →
-  SelectMany(dispatch)` composition.
+**Not merge-safe:**
 
-The canonical reference for both is
-[ActivityControlPlane.md](ActivityControlPlane) (see § "Generalising:
-`WatchSubmission`" and § "Anti-patterns to remove on sight"). Everything below is
-how those helpers are *used* for the request-via-stream-update pattern; if you find
-yourself reaching for `Throttle(...)`, `Interlocked.CompareExchange`, or a manual
-`Subject` + flag, that's the signal you should be calling one of the helpers above
-instead.
+- **List append / prepend** — `node with { Messages = Messages.Add(x) }`. The patch becomes the whole list with `x` at the end. Two concurrent appends each compute a list ending in `x`; the owner merges them in order and the last write wins, silently dropping the first.
+- **Read-modify-write on a list** — same root cause: the patch is the new list, unaware of concurrent writers.
 
-## When to use this pattern
+> **Design rule:** Cross-hub mutations should be a single `stream.Update(...)` on the target node. The owning hub's action-block serialisation guarantees race-free merge; RFC 7396 patch semantics ensure you touch only the fields you intend to change.
 
-Use it when:
+**The thread refactor as the canonical example.** The full resubmit/delete-from/record-failure flow once posted bespoke trigger messages, then briefly used intent-field payloads (`RequestedResubmit`, `RequestedDeleteFromMessageId`, `PendingFailures`) consumed by per-operation watchers. Today, the **full mutation is inline** inside the hub extension method's `stream.Update` lambda — truncate `Messages`, re-queue `PendingUserMessages`, etc., all in one patch. See [ThreadOperations.md](ThreadOperations) for the public API (`hub.ResubmitMessage`, `hub.DeleteFromMessage`, `hub.RecordSubmissionFailure`).
 
-- The work needs to be **triggered** by a state change (caller mutates input fields).
-- The work's **result** belongs on the same node (caller observes output fields on the same MeshNode it mutated).
-- You want **automatic cluster-wide propagation** of the result (every silo that subscribes via `SyncedMeshNodeQuery` or per-node remote stream sees the update).
-- You want **no cross-silo request/response round-trip during grain activation** (the watcher runs in-grain on whichever silo owns the node).
+---
 
-Do NOT use it for:
+## Canonical Helpers
 
-- One-shot transient queries that don't belong on the node (use `hub.Observe(request)` instead).
-- Cases where the caller needs an *immediate* synchronous response (the watcher dispatches reactively off the node's stream — the round still has multi-step latency vs. a direct `hub.Observe` round-trip).
+Don't roll your own watcher. Two helpers in `MeshWeaver.Mesh.Contract` (`ActivityControlPlaneExtensions.cs`) implement this pattern as one-liners:
 
-## The canonical example: thread execution request
+**`hub.WatchControlPlane(onRequestedStatus, logger)`**
+Use when the trigger is the single `ActivityLog.RequestedStatus` field. Drives Cancel / Start / Retry off a property patch.
 
-`MeshWeaver.AI` already implements this pattern for thread execution dispatch.
+**`hub.WatchSubmission(fingerprint, needsDispatch, dispatch, logger)`**
+Use when the trigger is an arbitrary "this state needs work now" predicate — for example, a thread has unprocessed user messages and isn't already executing. Internally it composes:
 
-### Caller (request side)
+```
+GetMeshNodeStream → DistinctUntilChanged(fingerprint) → Where(needsDispatch) → SelectMany(dispatch)
+```
+
+The canonical reference for both helpers is [ActivityControlPlane.md](ActivityControlPlane) (see § "Generalising: `WatchSubmission`" and § "Anti-patterns to remove on sight"). If you find yourself reaching for `Throttle(...)`, `Interlocked.CompareExchange`, or a manual `Subject` + flag, that's the signal you should be calling one of these helpers instead.
+
+---
+
+## When to Use This Pattern
+
+**Use it when:**
+
+- The work is **triggered by a state change** (caller mutates input fields).
+- The result **belongs on the same node** (caller observes output fields on the same `MeshNode` it mutated).
+- You want **automatic cluster-wide propagation** — every silo that subscribes via `SyncedMeshNodeQuery` or a per-node remote stream sees the update without any explicit broadcast.
+- You want **no cross-silo round-trip during grain activation** — the watcher runs in-grain on whichever silo owns the node.
+
+**Do not use it for:**
+
+- One-shot transient queries whose result doesn't belong on a node (use `hub.Observe(request)` instead).
+- Cases requiring an immediate synchronous response — the watcher dispatches reactively off the node stream, so the round has multi-step latency compared to a direct `hub.Observe` round-trip.
+
+---
+
+## The Canonical Example: Thread Execution
+
+`MeshWeaver.AI` already implements this pattern end-to-end for thread execution dispatch.
+
+### Caller — writing the request into node state
 
 ```csharp
 // MeshWeaver.AI/ThreadInput.cs — AppendUserInput
@@ -114,17 +101,15 @@ workspace.UpdateMeshNode(node =>
         {
             UserMessageIds = thread.UserMessageIds.Add(msgId),
             PendingUserMessages = thread.PendingUserMessages.SetItem(msgId, message),
-            // ... pending fields ...
+            // ... other pending fields ...
         }
     };
 });
 ```
 
-The caller writes the request *into* the thread node's state — `PendingUserMessages` is
-the request payload. No `IRequest<TResponse>` posted. No callback registered. The work
-is requested by the very act of mutating the node.
+The caller writes the request *into* the thread node's state. `PendingUserMessages` is the request payload. No `IRequest<TResponse>` is posted. No callback is registered. The work is requested by the very act of mutating the node.
 
-### Server (dispatch side)
+### Server — the dispatch watcher
 
 ```csharp
 // MeshWeaver.AI/ThreadSubmission.cs — ThreadSubmissionServer.InstallServerWatcher
@@ -135,49 +120,31 @@ return threadHub.WatchSubmission(
     logger:        logger);
 ```
 
-The watcher subscribes once at hub init. `DistinctUntilChanged` on the fingerprint
-guarantees the same actionable state cannot fire twice — there is no `dispatching`
-flag, no `Throttle`, no reentrancy guard. `DispatchRoundObs` is an
-`IObservable<Unit>` that creates satellite cells, commits the round to the thread
-node, and posts to the `_Exec` hub; it composes via `SelectMany` into one round per
-emission. Failures in `dispatch` are logged and swallowed — the next state change
-retries naturally. See `ThreadSubmissionServer.InstallServerWatcher` in
-`MeshWeaver.AI/ThreadSubmission.cs` for the full live example.
+The watcher subscribes once at hub init. `DistinctUntilChanged` on the fingerprint guarantees the same actionable state cannot fire twice — there is no `dispatching` flag, no `Throttle`, no reentrancy guard. `DispatchRoundObs` is an `IObservable<Unit>` that creates satellite cells, commits the round to the thread node, and posts to the `_Exec` hub; it composes via `SelectMany` into one round per emission. Failures in `dispatch` are logged and swallowed — the next state change retries naturally. See `ThreadSubmissionServer.InstallServerWatcher` in `MeshWeaver.AI/ThreadSubmission.cs` for the full live source.
 
 ### Result publication
 
-The dispatched work writes its progress + final result back onto the same node (or a
-satellite node owned by it) via `workspace.UpdateMeshNode(...)` — fire-and-forget. The
-result reaches every subscriber automatically:
+The dispatched work writes its progress and final result back onto the same node (or a satellite node it owns) via `workspace.UpdateMeshNode(...)`. The result reaches every subscriber automatically:
 
-- Local: the same hub's other subscribers see the next emission of the
-  `MeshNodeReference` reducer.
-- Cross-silo / clients: `SyncedMeshNodeQuery` subscribers and `GetRemoteStream<MeshNode,
-  MeshNodeReference>` subscribers see the change via the synchronization protocol —
-  no explicit broadcast needed.
+- **Local:** other subscribers on the same hub see the next emission of the `MeshNodeReference` reducer.
+- **Cross-silo / clients:** `SyncedMeshNodeQuery` and `GetRemoteStream<MeshNode, MeshNodeReference>` subscribers see the change via the synchronization protocol — no explicit broadcast needed.
 
-## Applied: dynamic NodeType compilation
+---
 
-`INodeTypeService.EnrichWithNodeType`'s slow path now uses this pattern.
-`GetCompilationPathRequest` is retained as a fallback (for hubs without a workspace /
-remote-stream reducer); the primary path is stream-based.
+## Applied: Dynamic NodeType Compilation
+
+`INodeTypeService.EnrichWithNodeType`'s slow path now uses this pattern. `GetCompilationPathRequest` is retained as a fallback for hubs without a workspace / remote-stream reducer; the primary path is stream-based.
 
 ### Caller — `NodeTypeService.ResolveViaStream`
 
-> **Note**: The current production code in `NodeTypeService.cs` still uses an
-> `Interlocked.CompareExchange(ref triggered, 1, 0)` flag to guard the one-shot
-> `Pending` trigger. That is the imperative anti-pattern — it is being migrated
-> to the shape below. The example shows the **target** shape: split the chain
-> into a one-shot trigger pipeline and a terminal-status observation pipeline,
-> both reactive.
+> **Note:** The current production code in `NodeTypeService.cs` still uses an `Interlocked.CompareExchange(ref triggered, 1, 0)` flag to guard the one-shot `Pending` trigger. That is the imperative anti-pattern and is being migrated to the shape below. The example shows the **target** form: split the chain into a one-shot trigger pipeline and a terminal-status observation pipeline, both reactive.
 
 ```csharp
-// Subscribe to the per-NodeType remote stream. The trigger pipeline takes the
-// first emission whose CompilationStatus is null/Unknown and writes a single
-// stream.Update flipping it to Pending — `.Take(1)` makes the trigger
-// inherently one-shot; no `triggered` flag, no CompareExchange. The
-// observation pipeline waits for the terminal status (Ok / Error) on the
-// same stream.
+// Subscribe to the per-NodeType remote stream.
+// Trigger pipeline: takes the first emission whose CompilationStatus is null/Unknown
+// and writes a single stream.Update flipping it to Pending.
+// .Take(1) makes the trigger inherently one-shot — no `triggered` flag, no CompareExchange.
+// Observation pipeline: waits for terminal status (Ok / Error) on the same stream.
 var stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
     new Address(nodeType), new MeshNodeReference());
 
@@ -214,14 +181,7 @@ return trigger.Merge(terminal)
 
 ### Server — `MeshDataSourceExtensions.InstallCompileWatcher`
 
-> **Note**: The previous `InstallCompileWatcher` (`Throttle(50ms)` +
-> `SelectMany` + manual `Pending → Compiling` flip to dodge throttle's
-> trailing-edge re-emission) was removed from `MeshDataSource.cs`. The
-> shape below is the **target** if/when the per-NodeType compile watcher
-> is re-introduced — it uses `WatchSubmission` with the
-> `CompilationStatus` field as the fingerprint, which makes the
-> "Pending → Compiling" guard unnecessary because `DistinctUntilChanged`
-> on the fingerprint already prevents re-firing on our own write.
+> **Note:** The previous `InstallCompileWatcher` (`Throttle(50ms)` + `SelectMany` + a manual `Pending → Compiling` flip to dodge throttle's trailing-edge re-emission) was removed from `MeshDataSource.cs`. The shape below is the **target** if/when the per-NodeType compile watcher is re-introduced — `WatchSubmission` with `CompilationStatus` as the fingerprint makes the `Pending → Compiling` guard unnecessary, because `DistinctUntilChanged` already prevents re-firing on our own write.
 
 ```csharp
 hub.WatchSubmission(
@@ -236,34 +196,28 @@ hub.WatchSubmission(
 // compilationService.CompileAndGetConfigurations, then writes the terminal
 // (Ok / Error) status + AssemblyLocation back via workspace.UpdateMeshNode.
 // Because the fingerprint is CompilationStatus, the watcher's own writes
-// are filtered out by DistinctUntilChanged — no Throttle needed, no
-// reentrancy guard needed.
+// are filtered out by DistinctUntilChanged — no Throttle needed, no reentrancy guard.
 ```
 
 ### Cluster-wide cache propagation
 
-Every silo's `NodeTypeService` uses `SyncedMeshNodeQuery` to subscribe to all `Code`
-NodeType nodes. When the result is written back, the synced query emits the new node
-state to every subscriber. Each silo's local `_hubConfigurations` cache picks up the
-new `(AssemblyLocation, HubConfiguration)` automatically. The
-`EnrichWithNodeType` fast-path then hits for that NodeType — `OnActivateAsync` becomes
-synchronous.
+Every silo's `NodeTypeService` uses `SyncedMeshNodeQuery` to subscribe to all `Code` NodeType nodes. When the compiled result is written back, the synced query emits the new node state to every subscriber. Each silo's local `_hubConfigurations` cache picks up the new `(AssemblyLocation, HubConfiguration)` automatically — `EnrichWithNodeType`'s fast path then hits for that NodeType, and `OnActivateAsync` becomes synchronous.
 
-## Error notification — caller must observe failure
+---
 
-The watcher dispatching the work MUST publish failure as well as success — a missing
-or invalid NodeType, a compilation error, an unreachable persistence layer, all of
-these need to flip a status field on the node. **Silent timeout is not acceptable**:
-the caller is observing the same node's reducer; if the request never lands a
-response, the caller has no way to distinguish "still working" from "broken".
+## Error Notification — Callers Must Observe Failure
 
-Conventional shape:
+The watcher dispatching the work **must** publish failure as well as success. A missing or invalid NodeType, a compilation error, an unreachable persistence layer — all must flip a status field on the node.
+
+> **Silent timeout is not acceptable.** The caller observes the same node's reducer. If the request never lands a response, the caller cannot distinguish "still working" from "broken".
+
+Conventional status shape:
 
 ```csharp
 record CompilationStatus { Pending, Compiling, Ok, Failed, NodeNotFound, InvalidNodeType }
 ```
 
-The caller's observation chain:
+Caller observation chain:
 
 ```csharp
 workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReference())
@@ -274,15 +228,17 @@ workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReferen
     .Select(c => /* unwrap */);
 ```
 
-## Summary
+---
+
+## Pattern Comparison
 
 | Aspect | Request/response (`hub.Observe`) | State-change-driven (`stream.Update`) |
 |---|---|---|
 | Trigger | Posted message | Node state mutation |
-| Result delivery | Response message | Node state mutation (write-back) |
-| Cluster propagation | Caller-targeted only | Every subscriber sees it |
+| Result delivery | Response message | Node state write-back |
+| Cluster propagation | Targeted at caller only | Every subscriber sees it automatically |
 | Activation-time cost | Cross-silo round-trip | Local cache lookup (after first warm-up) |
-| Error model | DeliveryFailure / Timeout | Status field on node |
-| Use when | Node lifecycle + transient queries (see "Sanctioned exceptions" above) | **Every other mutation** — default pattern |
+| Error model | `DeliveryFailure` / `Timeout` | Status field on node |
+| **Use when** | Node lifecycle + transient queries (see exceptions above) | **Every other mutation — the default** |
 
-Request/response is the *exception*, not a peer pattern. The work's result almost always belongs on a node (thread, message, NodeType, satellite); making the node's own content the contract eliminates an entire class of race conditions, leaked callbacks, and hub wedges that bespoke handlers reintroduce every time.
+Request/response is the *exception*, not a peer pattern. The work's result almost always belongs on a node (thread, message, NodeType, satellite). Making the node's own content the contract eliminates an entire class of race conditions, leaked callbacks, and hub wedges that bespoke handlers reintroduce every time.

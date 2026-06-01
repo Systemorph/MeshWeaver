@@ -4,44 +4,31 @@ Description: "Practical playbook for using IObservable<T> with Subscribe in Blaz
 ---
 # Blazor Async — `Subscribe`, not `await`
 
-> **TL;DR:** In MeshWeaver Blazor code, *every* mesh / hub call is `IObservable<T>`,
-> and you `Subscribe(...)` to it — you never `await` it, never call `.ToTask()`,
-> never call `.FirstAsync().ToTask()`, never call `.FirstOrDefaultAsync()`. State
-> updates from the Subscribe callback always go through `InvokeAsync(...)` so they
-> run on the Blazor circuit's dispatcher.
+> **TL;DR** Every mesh / hub call returns `IObservable<T>`. You `Subscribe(...)` to it — never `await`, never `.ToTask()`, never `.FirstAsync().ToTask()`, never `.FirstOrDefaultAsync()`. State updates from your Subscribe callback always go through `InvokeAsync(...)` so they run on the Blazor circuit's dispatcher.
 
-This is the companion article to [Asynchronous Calls](AsynchronousCalls). That doc
-defines the deadlock semantics for hub-handler code; this one is the practical
-playbook for Blazor components, layout-area views, and click-action handlers.
+This is the companion article to [Asynchronous Calls](AsynchronousCalls), which covers deadlock semantics in hub-handler code. This page is the practical playbook for Blazor components, layout-area views, and click-action handlers.
 
-## The two reasons `await` is wrong in Blazor (one is the deadlock, one isn't)
+---
 
-### 1. The deadlock — Blazor circuit and hub schedulers share message-pump infrastructure
+## Why `await` is wrong in Blazor
 
-The Blazor circuit dispatcher and the mesh hub's `ActionBlock` both pump messages
-through scheduling primitives that, under load, can end up serialising work onto
-the same thread. Awaiting a hub round-trip inside a Blazor component method blocks
-the dispatcher waiting for a response that has to flow back through the same
-dispatcher. Under any concurrent load — multiple users, parallel queries from one
-page, even rapid keystrokes — this deadlocks deterministically.
+There are two distinct failure modes — one is a deadlock, the other is a stale-data problem.
 
-This is the same root cause as the hub-handler deadlock described in
-[Asynchronous Calls](AsynchronousCalls), but with one extra layer: the awaiting
-context is the Blazor circuit, not a hub `ActionBlock`. The deadlock surface is
-real even though the path is shorter.
+### 1. Deadlock — shared scheduling infrastructure
 
-### 2. The freeze — `Task<T>` is a snapshot, not a subscription
+The Blazor circuit dispatcher and the mesh hub's `ActionBlock` both pump messages through scheduling primitives that, under load, can end up serialising work onto the same thread. Awaiting a hub round-trip inside a Blazor component method blocks the dispatcher waiting for a response that has to flow *back through that same dispatcher*. Under any concurrent load — multiple users, parallel queries from one page, even rapid keystrokes — this deadlocks deterministically.
 
-A `Task<T>` resolves once and is done. If you bind your view to a `Task<T>` result
-or `Task.FromResult(snapshot)`, the view shows the value at the call moment and
-never updates when the underlying mesh state changes. Even if the await *worked*,
-the result would be a stale snapshot the next time the data moves.
+This is the same root cause as the hub-handler deadlock described in [Asynchronous Calls](AsynchronousCalls), with one extra layer: the awaiting context is the Blazor circuit rather than a hub `ActionBlock`. The deadlock surface is real even though the path is shorter.
 
-The correct primitive in MeshWeaver is `IObservable<T>` — it emits the initial
-value *and* every subsequent change. The view re-renders on each emission via
-`InvokeAsync(StateHasChanged)`.
+### 2. Stale data — `Task<T>` is a snapshot, not a subscription
 
-## The canonical patterns
+A `Task<T>` resolves once. If you bind your view to a `Task<T>` result, it shows the value captured at call time and never updates when the underlying mesh state changes. Even if the await *worked*, you'd see a stale snapshot the moment the data moves.
+
+The correct primitive is `IObservable<T>` — it emits the initial value *and* every subsequent change. The view re-renders on each emission via `InvokeAsync(StateHasChanged)`.
+
+---
+
+## Canonical patterns
 
 ### Lifecycle: read live data, hold a subscription, dispose on tear-down
 
@@ -68,17 +55,13 @@ public partial class MyView : ComponentBase, IDisposable
 }
 ```
 
-Why `OnParametersSet` (sync) and not `OnParametersSetAsync`? Because async
-lifecycle hooks invite an `await` on the mesh observable inside the body, which
-gets you the deadlock from §1 above. The sync version forces the `Subscribe`
-shape.
+**Why `OnParametersSet` (sync) and not `OnParametersSetAsync`?** Async lifecycle hooks invite an `await` on the mesh observable inside the body, which triggers the deadlock from §1. The sync variant forces the `Subscribe` shape and removes the temptation entirely.
 
 ### Click handler: synchronous body, fire-and-forget Subscribe
 
 ```csharp
 private void OnSaveClicked()
 {
-    // Subscribe — no await on the hub round-trip.
     MeshService.UpdateNode(_node!).Subscribe(
         updated => InvokeAsync(() =>
         {
@@ -93,18 +76,15 @@ private void OnSaveClicked()
 }
 ```
 
-Notes:
-- The handler returns `void` (or `Task.CompletedTask` for `EventCallback`
-  signatures that require it) — never `async void`, never `async Task`.
-- State mutation goes inside `InvokeAsync(...)` so it runs on the Blazor
-  dispatcher.
-- Both `onNext` and `onError` paths update UI; never let `OnError` fall on
-  the floor.
+Key rules:
 
-### Multiple parallel queries: `Observable.CombineLatest` + single Subscribe
+- The handler returns `void` (or wraps in `Task.CompletedTask` for `EventCallback` signatures that require it) — never `async void`, never `async Task`.
+- State mutation goes inside `InvokeAsync(...)` so it runs on the Blazor dispatcher.
+- Both `onNext` and `onError` paths must update UI — never let `onError` fall on the floor.
 
-When a view needs N independent results before rendering, replace
-`Task.WhenAll(tasks)` with `CombineLatest`:
+### Multiple parallel queries: `CombineLatest` instead of `Task.WhenAll`
+
+When a view needs N independent results before rendering, replace `Task.WhenAll(tasks)` with `CombineLatest`:
 
 ```csharp
 private void LoadResults()
@@ -126,17 +106,13 @@ private void LoadResults()
 }
 ```
 
-`CombineLatest` waits for the initial emission from every observable before
-firing once with the assembled tuple. Add `.Take(1)` to complete the chain.
+`CombineLatest` waits for the first emission from every observable before firing once with the assembled tuple. Add `.Take(1)` to complete the chain after that single combined result arrives.
 
-### Multi-step flow (e.g., export → ZIP → download): chain or split
+### Multi-step flow (e.g., export → ZIP → download)
 
-Two acceptable shapes when a click action does *hub work* followed by *non-hub
-work* (file I/O, JSInterop):
+When a click action does *hub work* followed by *non-hub work* (file I/O, JSInterop), there are two acceptable shapes.
 
-**Shape A — split into two methods at the boundary.** The hub work is
-observable, the JS interop is in a follow-on `async Task` invoked from the
-Subscribe callback:
+**Shape A — split at the boundary.** The hub work is observable; the JS interop lives in a follow-on `async Task` invoked from the Subscribe callback:
 
 ```csharp
 private void ExportClicked()
@@ -158,11 +134,9 @@ private async Task OnExportCompletedAsync(MeshExportResult result, string tempDi
 }
 ```
 
-The `await JSRuntime.InvokeVoidAsync(...)` in `OnExportCompletedAsync` is fine —
-JSInterop is not a hub round-trip.
+The `await JSRuntime.InvokeVoidAsync(...)` inside `OnExportCompletedAsync` is fine — JSInterop is not a hub round-trip.
 
-**Shape B — chain inside the observable.** When the follow-on work is itself
-synchronous or wrapped in `Observable.FromAsync` at a non-hub boundary:
+**Shape B — chain inside the observable.** When follow-on work is synchronous or wrapped in `Observable.FromAsync` at a non-hub boundary:
 
 ```csharp
 ExportService.ExportToDirectory(...)
@@ -193,14 +167,11 @@ private void Submit(EditContext context)
 }
 ```
 
-`Submit` is `void`, not `async void`. The framework's `OnSubmit` `EventCallback`
-accepts both, so the void form is fine.
+`Submit` is `void`, not `async void`. The framework's `OnSubmit` `EventCallback` accepts both, so the void form is always preferred.
 
-### Bridging an observable into `IAsyncEnumerable` (for autocomplete callbacks etc.)
+### Bridging to `IAsyncEnumerable` (autocomplete callbacks, etc.)
 
-Some FluentUI / third-party APIs require `Func<string, Task<T[]>>` or
-`IAsyncEnumerable<T>`. Rather than `await observable.FirstAsync().ToTask()` (the
-deadlock pattern), use a `Channel`:
+Some FluentUI / third-party APIs require `Func<string, Task<T[]>>` or `IAsyncEnumerable<T>`. Rather than `await observable.FirstAsync().ToTask()` (the deadlock pattern), use a `Channel`:
 
 ```csharp
 private async IAsyncEnumerable<MyItem> StreamItems(string query,
@@ -221,24 +192,26 @@ private async IAsyncEnumerable<MyItem> StreamItems(string query,
 }
 ```
 
-The `await foreach` is iterating a `ChannelReader` — that's not a hub round-trip
-Task bridge, so no deadlock surface. The Subscribe lives for the duration of the
-iteration; `using var sub` cleans up when the consumer stops reading.
+The `await foreach` iterates a `ChannelReader` — that is not a hub round-trip Task bridge, so there is no deadlock surface. `using var sub` disposes the subscription when the consumer stops reading.
+
+---
 
 ## Forbidden patterns and their fixes
 
 | ❌ Wrong | ✅ Right |
 |---|---|
-| `var x = await mesh.QueryAsync<T>("path:X").FirstOrDefaultAsync()` | `mesh.GetMeshNode(path).Subscribe(n => UpdateState(n))` for known path; `mesh.ObserveQuery<T>(req).Subscribe(...)` for set queries |
+| `var x = await mesh.QueryAsync<T>("path:X").FirstOrDefaultAsync()` | `mesh.GetMeshNode(path).Subscribe(n => UpdateState(n))` for a known path; `mesh.ObserveQuery<T>(req).Subscribe(...)` for set queries |
 | `var r = await Hub.AwaitResponse<R>(req)` | `Hub.Observe(req).Subscribe(r => …, ex => …)` |
 | `Hub.RegisterCallback(d, r => { … })` | `Hub.Observe(d).Subscribe(r => …, ex => …)` |
 | `var x = await stream.FirstAsync().ToTask()` | `stream.Take(1).Subscribe(x => UpdateState(x))` |
 | `var x = await meshService.UpdateNode(node).FirstAsync()` | `meshService.UpdateNode(node).Subscribe(n => …, ex => …)` |
-| `return Task.FromResult(_items.ToArray())` (callback returning a snapshot) | bind directly to `_items`; the Subscribe pushes updates and `StateHasChanged` re-renders |
-| `_ = LoadAsync(); await ...` (fire-and-forget Task swallowing errors) | sync method that fires `Subscribe(onNext, onError)` — both paths handled |
+| `return Task.FromResult(_items.ToArray())` (callback returning a snapshot) | Bind directly to `_items`; Subscribe pushes updates and `StateHasChanged` re-renders |
+| `_ = LoadAsync(); await ...` (fire-and-forget Task swallowing errors) | Sync method that fires `Subscribe(onNext, onError)` — both paths handled |
 | `private async void Submit(...) => await svc.DoAsync()` | `private void Submit(...) => svc.Do().Subscribe(...)` |
 | `private async Task RunCell(int i) { ... await ExecuteAsync ... }` | `private void RunCell(int i) { ... ExecuteCode(...).Subscribe(...) }` |
 | `await Task.WhenAll(observables.Select(o => o.ToTask()))` | `Observable.Merge(observables)` or `Observable.CombineLatest(observables)` + single Subscribe |
+
+---
 
 ## Lifecycle reference
 
@@ -252,29 +225,24 @@ iteration; `using var sub` cleans up when the consumer stops reading.
 | Click / event handlers | Call services, post messages, update state | `Subscribe`, never `await` mesh observables |
 | `Dispose` | Tear down subscriptions | Dispose all `IDisposable`s held by the component |
 
+---
+
 ## When `await` IS allowed in Blazor code
 
-There is a narrow set of awaits that are safe because they don't bridge a hub
-round-trip:
+There is a narrow set of awaits that are safe because they don't bridge a hub round-trip:
 
-- `await JSRuntime.InvokeVoidAsync(...)` / `InvokeAsync<T>(...)` — JSInterop is
-  not a hub call.
-- `await InvokeAsync(...)` to marshal a state mutation onto the Blazor
-  dispatcher — this is the dispatcher itself, not a mesh round-trip.
+- `await JSRuntime.InvokeVoidAsync(...)` / `InvokeAsync<T>(...)` — JSInterop is not a hub call.
+- `await InvokeAsync(...)` to marshal a state mutation onto the Blazor dispatcher — this is the dispatcher itself, not a mesh round-trip.
 - `await Task.Delay(...)` for debouncing — pure timer.
 - `await streamRef.WriteToStreamAsync(...)` / file I/O — sanctioned boundary.
-- `await foreach (var x in channelReader.ReadAllAsync(ct))` — channel iteration,
-  not a `.ToTask()` bridge.
+- `await foreach (var x in channelReader.ReadAllAsync(ct))` — channel iteration, not a `.ToTask()` bridge.
 
-Everything else — every `await` whose right-hand side touches `IMessageHub`,
-`IMeshService`, `IWorkspace`, `ISynchronizationStream`, or any extension of
-those — must become a `Subscribe`.
+Everything else — every `await` whose right-hand side touches `IMessageHub`, `IMeshService`, `IWorkspace`, `ISynchronizationStream`, or any extension of those — must become a `Subscribe`.
+
+---
 
 ## Cross-references
 
-- [Asynchronous Calls](AsynchronousCalls) — the master doc on hub-handler
-  deadlock semantics; this article specialises that to the Blazor surface.
-- [Blazor Data Binding](BlazorDataBinding) — how layout-area paths bind to
-  Razor view fields, and the canonical view-side stream patterns.
-- [CQRS — Queries vs. Content Access](CqrsAndContentAccess) — when to use
-  `QueryAsync` / `ObserveQuery` vs. `GetMeshNode` / `GetRemoteStream`.
+- [Asynchronous Calls](AsynchronousCalls) — the master doc on hub-handler deadlock semantics; this article specialises that to the Blazor surface.
+- [Blazor Data Binding](BlazorDataBinding) — how layout-area paths bind to Razor view fields, and the canonical view-side stream patterns.
+- [CQRS — Queries vs. Content Access](CqrsAndContentAccess) — when to use `QueryAsync` / `ObserveQuery` vs. `GetMeshNode` / `GetRemoteStream`.

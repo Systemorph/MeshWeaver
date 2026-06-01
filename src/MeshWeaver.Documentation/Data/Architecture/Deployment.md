@@ -1,32 +1,38 @@
 ---
 Name: Deployment
 Category: Architecture
-Description: Deploying MeshWeaver with .NET Aspire to Azure Container Apps, including modes, secrets, and infrastructure
+Description: Deploying MeshWeaver with .NET Aspire to Azure Container Apps — modes, secrets, infrastructure, and the deploy wrapper that catches silent migration failures
 Icon: Cloud
 ---
 
-MeshWeaver uses **.NET Aspire** for orchestration and deployment. The Aspire AppHost (`memex/aspire/Memex.AppHost`) defines all infrastructure resources — PostgreSQL, Azure Blob Storage, Orleans clustering, Application Insights — and provisions them automatically via the Aspire CLI.
+MeshWeaver uses **.NET Aspire** for orchestration and deployment. The AppHost project (`memex/aspire/Memex.AppHost`) is the single source of truth for every infrastructure resource — PostgreSQL, Azure Blob Storage, Orleans clustering, Application Insights — and provisions them all automatically.
+
+---
 
 # Deployment Modes
 
-The AppHost supports multiple modes, passed as `--mode <mode>`:
+The AppHost supports four modes, selected via `--mode <mode>` on the command line.
 
-| Mode        | PostgreSQL                   | Blob Storage                  | Orleans   | Portal Name     |
-|-------------|------------------------------|-------------------------------|-----------|-----------------|
-| `local`     | Docker pgvector container    | Emulated (Azurite)            | Emulated  | memex-local     |
-| `test`      | Azure (memex-test)           | Azure (meshweavermemextest)   | Azure     | memex-test      |
-| `prod`      | Azure (memex)                | Azure (meshweavermemex)       | Azure     | memex-prod      |
-| `monolith`  | FileSystem (standalone)      | —                             | —         | memex-monolith  |
+| Mode | PostgreSQL | Blob Storage | Orleans | Portal name |
+|---|---|---|---|---|
+| `local` | Docker pgvector container | Azurite emulator | Emulated (in-process) | memex-local |
+| `test` | Azure (memex-test) | Azure (meshweavermemextest) | Azure | memex-test |
+| `prod` | Azure (memex) | Azure (meshweavermemex) | Azure | memex-prod |
+| `monolith` | FileSystem (standalone) | — | — | memex-monolith |
 
-# How to Deploy
+---
+
+# Deploying to Azure
 
 ## Prerequisites
 
-1. **Azure CLI** authenticated (`az login`)
-2. **Aspire CLI** installed (`dotnet tool install -g aspire`)
-3. **Docker** running (required for building container images)
-4. **Secrets configured** in the AppHost project (see [Secrets Management](#secrets-management) below)
-5. **dotnet-script** for the post-deploy DB version check (`dotnet tool install -g dotnet-script`)
+Before running a deploy, confirm:
+
+1. **Azure CLI** is authenticated — `az login`
+2. **Aspire CLI** is installed — `dotnet tool install -g aspire`
+3. **Docker** is running (required to build container images)
+4. **Secrets** are configured in the AppHost project (see [Secrets Management](#secrets-management) below)
+5. **dotnet-script** is installed for the post-deploy DB version check — `dotnet tool install -g dotnet-script`
 
 ## 🚨 Always use `tools/deploy.sh` — never bare `aspire deploy`
 
@@ -34,26 +40,26 @@ The AppHost supports multiple modes, passed as `--mode <mode>`:
 tools/deploy.sh prod    # or: tools/deploy.sh test
 ```
 
-`aspire deploy` on its own **silently passes when the db-migration container crashes**. Aspire's pipeline reports `✓ provision-db-migration-containerapp completed successfully` as soon as the Container App *definition* provisions — it doesn't watch the actual migration container's exit code. Result: a half-migrated DB, an exit-0 deploy, and a portal that comes up against broken data and 401s every user.
+Running `aspire deploy` on its own **silently passes when the db-migration container crashes**. Aspire's pipeline reports `✓ provision-db-migration-containerapp completed successfully` as soon as the Container App *definition* provisions — it does not watch the migration container's actual exit code. The result is a half-migrated database, an exit-0 deploy, and a portal that comes up against broken data with 401 errors for every user.
 
-The wrapper script closes that gap:
+The wrapper script closes that gap in three steps:
 
-1. Runs `aspire deploy --project memex/aspire/Memex.AppHost/Memex.AppHost.csproj -- --mode <prod|test>` (the same command Aspire docs sanction).
-2. After Aspire returns, polls `az containerapp replica list -n db-migration -g <rg>` until the replica reaches `Terminated` and reads `lastTerminationState.exitCode`. Non-zero → fails the deploy with the last 100 log lines.
-3. Runs `tools/check-db-version.csx` to assert `admin.mesh_nodes.db_version >= 15` against the deployed DB via AAD-authenticated psql. End-to-end check — catches the case where the migration container terminated 0 but didn't finish (e.g., crashed inside a try/catch that swallowed the exception).
+1. Runs `aspire deploy --project memex/aspire/Memex.AppHost/Memex.AppHost.csproj -- --mode <prod|test>` (the command Aspire docs sanction).
+2. After Aspire returns, polls `az containerapp replica list -n db-migration -g <rg>` until the replica reaches `Terminated`, then reads `lastTerminationState.exitCode`. A non-zero exit fails the deploy and dumps the last 100 log lines.
+3. Runs `tools/check-db-version.csx` to assert `admin.mesh_nodes.db_version >= 15` against the deployed DB via AAD-authenticated psql — catching the edge case where the migration container exited 0 but crashed inside a `try/catch` that swallowed the exception.
 
-Two layers of belt-and-braces backstop the wrapper inside the portal itself:
+Two additional safeguards run inside the portal itself:
 
-- **`DbVersionGate` (`Memex.Portal.Distributed/DbVersionGate.cs`)**: `IHostedService` that runs at portal startup, queries `admin.mesh_nodes.db_version`, and calls `IHostApplicationLifetime.StopApplication()` if it's missing or below `ExpectedDbVersion = 15`. Container Apps then marks the revision `Failed` and routes no traffic to it.
-- **`DbVersionHealthCheck`**: Live healthcheck wrapping the same query — surfaces drift if someone manually rolls a partial migration via `psql` after startup.
+- **`DbVersionGate`** (`Memex.Portal.Distributed/DbVersionGate.cs`) — an `IHostedService` that queries `admin.mesh_nodes.db_version` at portal startup and calls `IHostApplicationLifetime.StopApplication()` if the version is missing or below `ExpectedDbVersion = 15`. Container Apps then marks the revision `Failed` and routes no traffic to it.
+- **`DbVersionHealthCheck`** — a live healthcheck wrapping the same query, surfacing any drift if someone manually runs a partial migration via `psql` after startup.
 
-Bump `DbVersionGate.ExpectedDbVersion` and `tools/check-db-version.csx`'s `ExpectedVersion` constant in lock-step with the highest `Vxx_*.cs` migration in `memex/aspire/Memex.Database.Migration/Migrations/`.
+> **Keep these in sync.** Bump `DbVersionGate.ExpectedDbVersion` and the `ExpectedVersion` constant in `tools/check-db-version.csx` in lock-step with the highest `Vxx_*.cs` migration file in `memex/aspire/Memex.Database.Migration/Migrations/`.
 
-> **Why not gate this inside `aspire deploy` itself?** Aspire 13.2.x has no first-party API for a deploy-time callback that can poll a provisioned resource and fail the pipeline. The required `DeployingCallbackAnnotation` + `IReportingTask.FailAsync` surface ships in **Wave 14**. When we bump to 14.x, the bash poller can move into `Memex.AppHost/Program.cs` as an annotation on the `db-migration` resource, and `tools/deploy.sh` can collapse back to a thin alias.
+> **Why not gate this inside `aspire deploy` itself?** Aspire 13.2.x has no first-party API for a deploy-time callback that can poll a provisioned resource and fail the pipeline. The required `DeployingCallbackAnnotation` + `IReportingTask.FailAsync` surface ships in **Wave 14**. When the project upgrades to 14.x, the bash poller can move into `Memex.AppHost/Program.cs` as an annotation on the `db-migration` resource, and `tools/deploy.sh` can collapse back to a thin alias.
 
-## Verify Deployment
+## Verifying a Deployment
 
-`tools/deploy.sh` already runs the version gate. If you ran `aspire deploy` directly, verify manually:
+`tools/deploy.sh` already runs the version gate automatically. If you ran `aspire deploy` directly, verify manually:
 
 ```bash
 dotnet script tools/check-db-version.csx -- prod
@@ -61,34 +67,37 @@ dotnet script tools/check-db-version.csx -- prod
 
 Expect `✅ db_version=15 (>= 15)`.
 
-After verification:
-- Open the portal URL in a browser
-- Check the Aspire dashboard for service health
-- Review Application Insights for startup telemetry
+After verification, open the portal URL in a browser, check the Aspire dashboard for service health, and review Application Insights for startup telemetry.
+
+---
 
 # Running Locally
 
-For local development with Docker containers:
+## Aspire (local mode)
+
+For full local development with Docker containers:
 
 ```bash
 aspire run --project memex/aspire/Memex.AppHost/Memex.AppHost.csproj -- --mode local
 ```
 
-This starts in `local` mode by default, using Docker pgvector and emulated Azure services.
+This starts PostgreSQL (pgvector) and Azurite in Docker containers, with Orleans running in-process.
 
-# Monolith Mode
+## Monolith (standalone, no Docker)
 
-For standalone development without Orleans or external infrastructure:
+For a lighter setup without Orleans or external infrastructure:
 
 ```bash
 dotnet run --project memex/Memex.Portal.Monolith
 ```
 
-Or via Aspire:
+Or via the AppHost:
 
 ```bash
 aspire run --project memex/aspire/Memex.AppHost/Memex.AppHost.csproj -- --mode monolith
 ```
+
+---
 
 # Infrastructure
 
@@ -98,30 +107,32 @@ Deployed modes (`test`, `prod`) run on **Azure Container Apps** in Sweden Centra
 
 ## PostgreSQL
 
-- **Local**: Docker container with pgvector extension (`pgvector/pgvector:pg17`)
-- **Deployed**: Azure PostgreSQL Flexible Server with pgvector, provisioned automatically
+- **Local** — Docker container with pgvector extension (`pgvector/pgvector:pg17`)
+- **Deployed** — Azure PostgreSQL Flexible Server with pgvector, provisioned automatically by Aspire
 
 ## Azure Blob Storage
 
-Content files (attachments, documents) are stored in Azure Blob Storage.
+Content files (attachments, documents) live in Azure Blob Storage.
 
-- **Local**: Azurite emulator with persistent data bind mount
-- **Deployed**: Azure Storage Account provisioned in Sweden Central
+- **Local** — Azurite emulator with a persistent data bind mount
+- **Deployed** — Azure Storage Account provisioned in Sweden Central
 
 ## Orleans
 
 Orleans provides distributed actor clustering for the microservices deployment.
 
-- **Local**: Emulated (in-process)
-- **Deployed**: Azure Table Storage for clustering, Azure Blob Storage for grain state
+- **Local** — Emulated in-process
+- **Deployed** — Azure Table Storage for clustering, Azure Blob Storage for grain state
 
 ## Application Insights
 
-Telemetry and distributed tracing via Azure Application Insights, provisioned automatically in all deployed modes.
+Telemetry and distributed tracing via Azure Application Insights are provisioned automatically in all deployed modes.
+
+---
 
 # Azure AD App Registration
 
-Microsoft authentication requires an app registration in Microsoft Entra ID (Azure AD):
+Microsoft authentication requires an app registration in Microsoft Entra ID (Azure AD).
 
 1. **Azure Portal** → **App registrations** → select your app (or create one)
 2. Under **Authentication** → **Platform configurations** → **Web**, add redirect URIs:
@@ -130,16 +141,18 @@ Microsoft authentication requires an app registration in Microsoft Entra ID (Azu
 3. Note the **Application (client) ID** and **Directory (tenant) ID** from the **Overview** page
 4. Under **Certificates & secrets**, create a client secret
 
-For single-tenant apps, the tenant ID must be configured — the default `/common` endpoint is not supported.
+For single-tenant apps, configure the tenant ID explicitly — the default `/common` endpoint is not supported.
+
+---
 
 # Secrets Management
 
-Secrets are managed via `dotnet user-secrets` locally and GitHub secrets in CI/CD.
+Secrets are stored in `dotnet user-secrets` for local development and in GitHub secrets for CI/CD.
 
 Required secrets for distributed modes:
 
 | Secret | Description |
-|--------|-------------|
+|---|---|
 | `Parameters:azure-foundry-key` | Azure AI Foundry API key (LLM access) |
 | `Parameters:embedding-endpoint` | Embedding model endpoint |
 | `Parameters:embedding-key` | Embedding model API key |
@@ -149,23 +162,25 @@ Required secrets for distributed modes:
 | `Parameters:microsoft-tenant-id` | Microsoft Entra tenant ID (single-tenant apps) |
 | `Parameters:google-client-id` | Google OAuth client ID |
 | `Parameters:google-client-secret` | Google OAuth client secret |
-| `Parameters:custom-domain` | Custom domain for deployed portal |
-| `Parameters:certificate-name` | TLS certificate name for custom domain |
+| `Parameters:custom-domain` | Custom domain for the deployed portal |
+| `Parameters:certificate-name` | TLS certificate name for the custom domain |
 
-Set secrets using:
+Set a secret with:
 
 ```bash
 cd memex/aspire/Memex.AppHost
 dotnet user-secrets set "Parameters:azure-foundry-key" "<your-key>"
 ```
 
+---
+
 # Project Structure
 
 ```
 memex/aspire/
-├── Memex.AppHost/           # Aspire orchestrator (defines all resources)
-├── Memex.Portal.Distributed/  # Portal with co-hosted Orleans silo
-├── Memex.Portal.Orleans/      # Orleans grain interfaces
-├── Memex.Portal.ServiceDefaults/ # Shared service defaults (health, telemetry)
-└── Memex.Database.Migration/  # Database migration project
+├── Memex.AppHost/                  # Aspire orchestrator — defines all resources
+├── Memex.Portal.Distributed/       # Portal with co-hosted Orleans silo
+├── Memex.Portal.Orleans/           # Orleans grain interfaces
+├── Memex.Portal.ServiceDefaults/   # Shared service defaults (health, telemetry)
+└── Memex.Database.Migration/       # Database migration project
 ```

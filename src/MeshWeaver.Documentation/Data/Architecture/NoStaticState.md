@@ -1,73 +1,108 @@
 ---
 Name: No Static State
-Description: "Explains why static collection/cache fields are forbidden and how every cache must be a mesh-scoped instance singleton to prevent cross-test and cross-partition bleed."
+Description: "Why static collection and cache fields are forbidden in MeshWeaver, and how to scope every cache as a mesh-owned instance singleton so it can never bleed across tests or partitions."
 ---
 
-# 🚨 No Static Collections — Ever
+# No Static Collections — Ever
 
-> **The rule, in one line:** a `static` field that holds a collection or cache is forbidden. Every cache and every repository is an **instance owned by the mesh** (or by a hub, component, request, or app), so its lifetime is bounded and it never bleeds across tests, users, or partitions.
+> **The rule in one sentence:** any `static` field that holds a collection or cache is forbidden. Every cache and every repository must be an **instance owned by the mesh**, so its lifetime is bounded and it can never bleed across tests, users, or partitions.
 
-This is an absolute architectural invariant, equal in weight to "nothing async ever" and "`GetMeshNodeStream().Update()` is the only mutation API". It is enforced by the **`NoStaticCollectionsTest`** build guard (in `MeshWeaver.PathResolution.Test`), which reflects over every `MeshWeaver.*` assembly and fails on any static mutable-collection field that isn't in its classified allow-list. The allow-list is the single source of truth for what static state exists; this document explains the categories it permits.
-
----
-
-## Why
-
-The mesh is an actor system stood up and torn down many times in one process — once per test, and per partition/tenant in production. A `static` field lives for the lifetime of the *process*, not the mesh, so a static collection:
-
-- **bleeds across tests** — one test's writes are visible to the next (the tell-tale is a `Clear()` "for test isolation" method, which papers over the leak rather than fixing it), and makes parallel test execution unsafe;
-- **bleeds across users/partitions in prod** — a process-wide cache is shared by every tenant, so one partition's state leaks into another's reads.
-
-An instance owned by the right scope has neither problem: it is created and disposed with that scope and is invisible to every other.
+This is an absolute architectural invariant — equal in weight to "nothing async ever" and "`GetMeshNodeStream().Update()` is the only mutation API". It is enforced at build time by **`NoStaticCollectionsTest`** (in `MeshWeaver.PathResolution.Test`), which reflects over every `MeshWeaver.*` assembly and fails the build on any static mutable-collection field not recorded in the classified allow-list. The allow-list is the single source of truth for permitted static state; this document explains the categories and shows you what to do instead.
 
 ---
 
-## How caches are scoped
+## Why static state is dangerous here
 
-Pick the **narrowest** scope that owns the state, and hold the backing collection as an **instance field** on a type with that lifetime:
+The mesh is an actor system that is **stood up and torn down many times in a single process** — once per test run, and once per tenant or partition in production. A `static` field lives for the lifetime of the *process*, not the mesh, so it persists across those boundaries in two harmful ways:
 
-| Scope | Owner | Backing field | Example |
+- **Cross-test bleed.** One test's writes are visible to the next test in the same process. The tell-tale symptom is a `Clear()` method added "for test isolation" — which papers over the structural problem without fixing it and makes parallel test execution unsafe.
+- **Cross-partition bleed in prod.** A process-wide cache is shared by every tenant in the same worker. One partition's writes become visible in another partition's reads.
+
+An instance owned by the correct scope has neither problem: it is created when that scope starts, disposed when it ends, and is invisible to every other concurrent scope.
+
+---
+
+## Scoping caches correctly
+
+Choose the **narrowest** scope that owns the state, then hold the backing collection as an **instance field** on a type with that lifetime.
+
+| Scope | Register / own it as | Backing field | Example |
 |---|---|---|---|
-| **Mesh** | a singleton registered in `MeshBuilder.ConfigureServices` (one instance per hub container) | instance `ConcurrentDictionary` / `IMemoryCache` | a repo registered `AddSingleton<T>()` |
-| **Per-hub** | a service in a node-type's `HubConfiguration`, or a hub-owned object | instance field | `CachingStorageAdapter._snapshot` (the adapter is `AddSingleton<IStorageAdapter>` per hub); `SearchHub._pending` (per hosted hub) |
-| **Per-session / component** | a per-render object the framework already creates | instance field | `LayoutAreaHost.TryMarkEditStateInitialized` (per layout-area session) |
-| **App** | an ASP.NET singleton (e.g. middleware) | instance field | `UserContextMiddleware._loginDedup` (one app-lifetime middleware instance) |
-| **Per execution context** | `AsyncLocal<T>` (a single value, not a collection) | `AsyncLocal<T>` | `XUnitFileOutputRegistry` (the active test's output helper) |
+| **Mesh** | `AddSingleton<T>()` in `MeshBuilder.ConfigureServices` | instance `ConcurrentDictionary` / `IMemoryCache` | a node-type repository registered per hub container |
+| **Per-hub** | service in a node-type's `HubConfiguration`, or hub-owned object | instance field | `CachingStorageAdapter._snapshot`; `SearchHub._pending` |
+| **Per-session / component** | per-render object the framework creates | instance field | `LayoutAreaHost.TryMarkEditStateInitialized` |
+| **App** | ASP.NET `AddSingleton` middleware | instance field | `UserContextMiddleware._loginDedup` |
+| **Per execution context** | `AsyncLocal<T>` (a single value, not a collection) | `AsyncLocal<T>` | `XUnitFileOutputRegistry` (active test's output helper) |
+
+### The canonical mesh-scoped repository
 
 ```csharp
-// the canonical mesh-scoped repo
+// ❌ FORBIDDEN — process-wide, survives mesh disposal, bleeds across tests
+public static class NodeTypeRegistry
+{
+    private static readonly ConcurrentDictionary<string, MeshNode> Nodes = new();
+    public static void Clear() => Nodes.Clear();   // ← "for test isolation" = the tell
+}
+
+// ✅ REQUIRED — instance repo, dies with the mesh, no Clear() needed
 public sealed class NodeTypeRepository
 {
-    private readonly ConcurrentDictionary<string, MeshNode> nodes = new();   // instance, not static
+    private readonly ConcurrentDictionary<string, MeshNode> nodes = new();   // instance field
     public void Register(MeshNode node) => nodes[node.Path] = node;
     public bool TryGet(string path, out MeshNode? node) => nodes.TryGetValue(path, out node);
 }
-builder.ConfigureServices(s => s.AddSingleton<NodeTypeRepository>());          // dies with the mesh — no Clear()
+
+// Register once in MeshBuilder — lifetime IS the mesh
+builder.ConfigureServices(s => s.AddSingleton<NodeTypeRepository>());
 ```
 
-For caches that need TTL or eviction, the instance field is an `IMemoryCache` (and the owner implements `IDisposable` so the cache is disposed with it).
+For caches that need TTL or eviction, hold an `IMemoryCache` as the instance field and implement `IDisposable` so the cache is disposed with its owner.
 
 ---
 
-## The static state that *is* allowed
+## What static state IS allowed
 
-The guard permits four buckets. Everything else must become an instance.
+The build guard classifies permitted static fields into four buckets. Everything else must become an instance.
 
-- **CONST** — `static readonly` immutable lookups initialized once and **never written at runtime**: media-type maps, reserved-word sets, built-in role tables, SQL-keyword lists, parser char-sets. If nothing `Add`/`[]=`/`Remove`/`Clear`s it after construction, it's a constant, not a cache.
-- **MEMO** — process-global memoization keyed by a **process-global identity** (`Type`, `MethodInfo`, or deterministic content), where the cached value is a pure function of the key, so cross-mesh sharing is correct. Current MEMO caches: `GenericCaches.TypeCaches`/`MethodCaches` (`Type`/`MethodInfo`), `AccessControlPipeline.AttributeCache` (`Type`), `MessageHubConfiguration._systemMessageCache` (`Type`), `MarkdownExtensions.PipelineCache` (content), `DynamicTypeGenerator.TypeCache` (property schema), `DefaultImplementationOfInterfacesExtensions.NonVirtualInvocationThunks` (`MethodInfo`).
-- **PROC** — a registry tied to a **process-global resource** where per-mesh makes no sense and there is no bleed. Current PROC cache: `KernelExecutor._probingDirs`, which backs the single process-wide `AssemblyLoadContext.Default.Resolving` hook.
-- **TESTPERF** — `MonolithMeshTestBase._sharedProviders`: a service-provider cache keyed by **test-class `Type`**, so it isolates across classes and only shares within a class's own methods (which xUnit serializes). `IClassFixture` is the eventual idiomatic form.
+### CONST — Immutable lookup tables
 
-A new static collection that doesn't fit one of these fails the build. Add it to the allow-list with a one-word bucket only if it genuinely belongs to one — otherwise make it an instance.
+`static readonly` collections initialized once and **never written at runtime**: media-type maps, reserved-word sets, built-in role tables, SQL-keyword lists, parser character sets. If nothing calls `Add`, `[]=`, `Remove`, or `Clear` on it after construction, it is a *constant*, not a cache — it is safe.
+
+### MEMO — Pure memoization on process-global keys
+
+Process-global memoization keyed by a **process-global identity** (`Type`, `MethodInfo`, or deterministic content), where the cached value is a pure function of the key so cross-mesh sharing is always correct.
+
+Current MEMO caches:
+
+- `GenericCaches.TypeCaches` / `MethodCaches` — keyed by `Type` / `MethodInfo`
+- `AccessControlPipeline.AttributeCache` — keyed by `Type`
+- `MessageHubConfiguration._systemMessageCache` — keyed by `Type`
+- `MarkdownExtensions.PipelineCache` — keyed by content
+- `DynamicTypeGenerator.TypeCache` — keyed by property schema
+- `DefaultImplementationOfInterfacesExtensions.NonVirtualInvocationThunks` — keyed by `MethodInfo`
+
+### PROC — Process-global resource registrations
+
+A registry tied to a **process-global resource** where per-mesh scoping makes no sense and there is no possibility of cross-partition bleed.
+
+Current PROC cache: `KernelExecutor._probingDirs`, which backs the single process-wide `AssemblyLoadContext.Default.Resolving` hook.
+
+### TESTPERF — Cross-method fixture sharing within a test class
+
+`MonolithMeshTestBase._sharedProviders`: a service-provider cache keyed by **test-class `Type`**, so it isolates across classes and only shares within a single class's methods (which xUnit serializes). `IClassFixture` is the idiomatic long-term form.
 
 ---
 
-## Reads, not caches: token validation
+> **Adding a new static collection?** If it genuinely fits one of the four buckets above, add it to the allow-list with the one-word bucket label. If it does not fit, make it an instance — that is always the right answer.
 
-API-token validation does **not** cache. The token is a node at `{userId}/Token/{tokenHash}` under the user partition, mirrored into the `auth` schema by the per-partition trigger (same as `User`/`Group`/`Role`/`VUser`). Validation is a single live query against that schema:
+---
+
+## Token validation: reads, not caches
+
+API-token validation deliberately does **not** cache. Each token lives as a node at `{userId}/Token/{tokenHash}` under the user partition, mirrored into the `auth` schema by the per-partition trigger (alongside `User`, `Group`, `Role`, and `VUser`). Validation is a single live query:
 
 ```csharp
 workspace.GetQuery("auth:tokenByHash:{hash}", "nodeType:ApiToken content.tokenHash:{hash} limit:1")
 ```
 
-The synced query is live (`IMeshNodeStreamCache`-backed), so a revoked token (`IsRevoked` flips on the node) is rejected immediately — no cache to hold a stale answer, no cross-hub invalidation. This is the same shape as `OnboardingMiddleware.FindUserByEmail` (`nodeType:User content.email:{email}`).
+Because the query is backed by `IMeshNodeStreamCache`, it is always live. When a token is revoked (the `IsRevoked` field flips on the node), the change propagates immediately — there is no cache to hold a stale answer and no cross-hub invalidation to coordinate. The same shape is used by `OnboardingMiddleware.FindUserByEmail` (`nodeType:User content.email:{email}`).

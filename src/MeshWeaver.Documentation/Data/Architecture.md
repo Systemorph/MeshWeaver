@@ -12,20 +12,21 @@ Icon: /static/DocContent/Architecture/icon.svg
   </div>
 </div>
 
-MeshWeaver is a distributed platform for building data-driven applications with AI capabilities.
-A handful of principles hold the whole system together:
+MeshWeaver is a distributed platform for building data-driven applications with AI capabilities. A handful of principles hold the whole system together:
 
-- **Data locality** — process and render *where the data lives*.
-- **Message-driven** — every operation is a typed message routed through the hub.
-- **Type as data** — node types live in the mesh, not only in code.
-- **Agent-ready** — AI agents reach everything through the same unified APIs as users.
-- **Security-first** — validation at every operation.
+| Principle | What it means |
+|---|---|
+| **Data locality** | Process and render *where the data lives* — no unnecessary round-trips. |
+| **Message-driven** | Every operation is a typed message routed through the hub; no direct object calls across boundaries. |
+| **Type as data** | Node types live in the mesh, not only in compiled code — they can be authored, versioned, and released at runtime. |
+| **Agent-ready** | AI agents reach everything through the same unified APIs as users — no special back-channels. |
+| **Security-first** | Access control is validated at every read and write, not bolted on after the fact. |
 
-# Platform overview
+## Platform overview
 
 @@content:platform-overview.svg
 
-# Core concepts
+## Core concepts
 
 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin: 20px 0;">
   <div style="border: 1px solid var(--neutral-stroke-divider); border-radius: 12px; padding: 18px;">
@@ -60,8 +61,6 @@ A handful of principles hold the whole system together:
   </div>
 </div>
 
-# Getting started
+## Getting started
 
-New to the platform? Read [Specifying Software](SpecifyingSoftware) to learn how to write iterative
-specifications closely aligned with implementation, then explore the full catalog of architecture
-topics below.
+New to the platform? Read [Specifying Software](SpecifyingSoftware) to learn how to write iterative specifications closely aligned with implementation, then explore the full catalog of architecture topics above.

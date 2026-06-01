@@ -1,45 +1,42 @@
 ---
 title: Granting Access via AccessAssignments
 order: 25
-Description: "How to grant user permissions in MeshWeaver by creating AccessAssignment MeshNodes in _Access satellite namespaces, with field anatomy and recipes."
+Description: "Grant user permissions in MeshWeaver by creating AccessAssignment MeshNodes in _Access satellite namespaces — field anatomy, three ready-to-run recipes, and common pitfalls."
 ---
 
 # Granting Access via AccessAssignments
 
-Permissions in MeshWeaver are data — they live as `AccessAssignment` MeshNodes
-in `_Access` satellite namespaces. There is no admin UI; you grant access by
-*creating an AccessAssignment node* (via MCP, a hub message, or the migration
-runner) and the PermissionEvaluator picks it up via its synced query.
+Permissions in MeshWeaver are **data** — they live as `AccessAssignment` MeshNodes inside `_Access` satellite namespaces. There is no dedicated admin UI. You grant access by creating an `AccessAssignment` node via MCP, a hub message, or the migration runner, and the `PermissionEvaluator` picks it up automatically via its synced query.
 
-This page is the recipe.
+This page walks through the field anatomy and provides copy-paste recipes for the most common scenarios.
+
+---
 
 ## Anatomy of an AccessAssignment
 
-Three fields decide what the assignment *grants*:
+Every assignment is a MeshNode whose placement and content together determine what it grants.
 
-| Field            | Meaning                                                                  |
-|------------------|--------------------------------------------------------------------------|
-| `path`           | Where the assignment lives — must be **`{scope}/_Access/{id}`** (or `_Access/{id}` for global). |
-| `mainNode`       | The path the assignment scopes to. Must equal `{scope}` from above.       |
-| `accessObject`   | The user (or group) this grants permissions to. Match against `userId`.   |
-| `roles[].role`   | The role names the user gets at this scope (typically `Admin` or `Editor`). |
+| Field | Meaning |
+|---|---|
+| `path` | Where the assignment lives — must be **`{scope}/_Access/{id}`** (or `_Access/{id}` for global). |
+| `mainNode` | The path the assignment scopes to. Must equal `{scope}` from the `path` above. |
+| `accessObject` | The user or group this grants permissions to. Matched against `userId`. |
+| `roles[].role` | The role names the user gets at this scope — typically `Admin` or `Editor`. |
 
-🚨 **Both `path` (via the `/_Access/` segment) and `mainNode` matter.** The
-PermissionEvaluator's `SatelliteAccessRule` uses `mainNode` to decide which
-partition / subtree the assignment binds to. If `mainNode` is empty for a
-non-global assignment, the assignment is silently ignored and the user gets
-zero permissions. Symptom: `Access denied: user 'X' lacks Read permission on
-'{scope}/Y'` even though the AccessAssignment exists at `{scope}/_Access/X_Access`.
+> 🚨 **Both `path` (via the `/_Access/` segment) and `mainNode` matter.**  
+> The `PermissionEvaluator`'s `SatelliteAccessRule` uses `mainNode` to decide which partition or subtree the assignment binds to. If `mainNode` is empty for a non-global assignment, the assignment is **silently ignored** and the user gets zero permissions.  
+> **Symptom:** `Access denied: user 'X' lacks Read permission on '{scope}/Y'` even though an `AccessAssignment` exists at `{scope}/_Access/X_Access`.
 
-🚨 **The namespace must end in `/_Access`** (or equal `_Access` globally).
-PermissionEvaluator's synced query routes only those, and a path containing
-`_Access` segment lands in the partition's `access` table. Anywhere else and
-the assignment never reaches the security pipeline.
+> 🚨 **The namespace must end in `/_Access`** (or equal `_Access` exactly for global assignments).  
+> The `PermissionEvaluator`'s synced query only routes namespaces that match this pattern, and nodes with an `_Access` segment land in the partition's `access` table. Place the node anywhere else and it never reaches the security pipeline.
 
-## Recipe 1 — grant a user Admin on a partition
+---
 
-For example, granting `rbuergi` Admin on the entire `rbuergi` partition (his
-home — every node under `rbuergi/...`):
+## Recipe 1 — Grant a user Admin on their partition
+
+This is the most common setup: giving a user Admin access over every node under their own partition (e.g. `rbuergi/...`).
+
+**MCP (bash):**
 
 ```bash
 mcp create --node '{
@@ -57,7 +54,7 @@ mcp create --node '{
 }'
 ```
 
-Or as a `MeshNode` in C# / a migration:
+**C# / migration:**
 
 ```csharp
 new MeshNode("rbuergi_Access", "rbuergi/_Access")
@@ -75,15 +72,11 @@ new MeshNode("rbuergi_Access", "rbuergi/_Access")
 }
 ```
 
-After the create, the PermissionEvaluator's synced query picks the new node up
-within ~1 second and `partition_access` + `user_effective_permissions` rebuild
-via the `access_changed` Postgres trigger. No restart needed.
+After the node is created, the `PermissionEvaluator`'s synced query picks it up within about one second. The `access_changed` Postgres trigger then rebuilds `partition_access` and `user_effective_permissions` automatically — no restart needed.
 
-### Existing assignment with empty `mainNode`
+### Fixing an existing assignment with empty `mainNode`
 
-If a partition's AccessAssignment already exists but has empty `mainNode`
-(symptom: assignment shows up in `mcp search nodeType:AccessAssignment` but
-permissions still fail), patch it:
+If an assignment already exists but `mainNode` is empty (the node shows up in `mcp search nodeType:AccessAssignment` yet permissions still fail), patch it with a full update:
 
 ```bash
 mcp update --nodes '[{
@@ -103,13 +96,13 @@ mcp update --nodes '[{
 }]'
 ```
 
-`mcp patch` does not update `mainNode` (it's part of the indexed columns and
-patching ignores unknown fields). Use `mcp update` with a full node body.
+> **Note:** `mcp patch` does **not** update `mainNode` — it is an indexed column and the patch operation ignores it. Always use `mcp update` with a full node body when you need to change `mainNode`.
 
-## Recipe 2 — grant a user Global Admin
+---
 
-Global Admin = Admin everywhere. The assignment lives at the root `_Access`
-namespace (no scope prefix), `mainNode` empty:
+## Recipe 2 — Grant a user Global Admin
+
+Global Admin means Admin everywhere. The assignment lives at the root `_Access` namespace with no scope prefix, and `mainNode` is left empty.
 
 ```bash
 mcp create --node '{
@@ -127,13 +120,13 @@ mcp create --node '{
 }'
 ```
 
-This grants `rbuergi` the `Admin` role at the root, which `SatelliteAccessRule`
-treats as Admin everywhere.
+`SatelliteAccessRule` treats a root-level `Admin` role as Admin across the entire mesh.
 
-## Recipe 3 — grant another user access to my partition
+---
 
-Once you're Admin on a partition, you can grant other users access to it.
-For example, `rbuergi` gives `alice` Editor access on `rbuergi`:
+## Recipe 3 — Grant another user access to your partition
+
+Once you have Admin rights on a partition, you can extend access to other users. Here, `rbuergi` gives `alice` Editor rights on the `rbuergi` partition:
 
 ```bash
 mcp create --node '{
@@ -151,34 +144,42 @@ mcp create --node '{
 }'
 ```
 
-Same shape, different `accessObject`.
+The shape is identical to Recipe 1 — only `accessObject` and `displayName` differ.
+
+---
 
 ## Verification
 
-After creating the assignment:
+After creating or updating an assignment, run through this checklist:
 
-1. `mcp search nodeType:AccessAssignment scope:descendants --basePath {scope}` —
-   confirm it landed in the right partition.
+1. `mcp search nodeType:AccessAssignment scope:descendants --basePath {scope}` — confirm the node landed in the right partition.
 2. `mcp get @{scope}/_Access/{id}` — confirm `mainNode` is set correctly.
-3. Refresh the user's home page in the portal — the `Activity` area should
-   render its `MeshSearch` panels without the `Access denied` red banner.
-4. Optional sanity check: `select * from "rbuergi".access where namespace =
-   'rbuergi/_Access';` in psql shows the row, and
-   `select * from public.user_effective_permissions where user_id = 'rbuergi';`
-   shows rebuilt rows for the partition.
+3. Refresh the user's home page in the portal — the `Activity` area should render its `MeshSearch` panels without an `Access denied` red banner.
+4. **Optional SQL sanity check:**
+   ```sql
+   select * from "rbuergi".access where namespace = 'rbuergi/_Access';
+   select * from public.user_effective_permissions where user_id = 'rbuergi';
+   ```
+   The first query should show the row; the second should show rebuilt permission rows for the partition.
+
+---
 
 ## Common pitfalls
 
 | Symptom | Likely cause |
-|---------|--------------|
-| `Access denied` despite AccessAssignment existing | `mainNode` empty for a non-root assignment |
-| Permissions still wrong after edit | Used `mcp patch` instead of `mcp update`; patch ignores `mainNode` |
-| Search finds the assignment but it does nothing | Namespace doesn't end in `/_Access` — assignment lives in the wrong table |
-| Public→Admin works but per-user denies fail in a test | Tests must use per-user `accessObject`, not a Public assignment whose union bypasses negative tests |
+|---|---|
+| `Access denied` despite an AccessAssignment existing | `mainNode` is empty for a non-root assignment |
+| Permissions still wrong after editing the assignment | Used `mcp patch` instead of `mcp update`; patch silently ignores `mainNode` |
+| Search finds the assignment but it has no effect | Namespace doesn't end in `/_Access` — node landed in the wrong table |
+| `Public→Admin` works but per-user denials fail in a test | Tests must use a per-user `accessObject`, not a Public assignment whose union bypasses negative-permission assertions |
 
-## Source links
+---
 
-- `src/MeshWeaver.Graph/Configuration/AccessAssignmentNodeType.cs` — the NodeType definition + post-create handler that rebuilds permissions.
-- `src/MeshWeaver.Graph/Security/RlsNodeValidator.cs` — the read-side enforcer that surfaces `Access denied`.
-- `src/MeshWeaver.Hosting/Security/PermissionEvaluator.cs` — the synced query that aggregates AccessAssignments per user.
-- `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlSchemaInitializer.cs` — the `access_changed` trigger that rebuilds `partition_access` + `user_effective_permissions` after every assignment write.
+## Source references
+
+| File | Purpose |
+|---|---|
+| `src/MeshWeaver.Graph/Configuration/AccessAssignmentNodeType.cs` | NodeType definition and post-create handler that rebuilds permissions |
+| `src/MeshWeaver.Graph/Security/RlsNodeValidator.cs` | Read-side enforcer that surfaces `Access denied` |
+| `src/MeshWeaver.Hosting/Security/PermissionEvaluator.cs` | Synced query that aggregates AccessAssignments per user |
+| `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlSchemaInitializer.cs` | `access_changed` trigger that rebuilds `partition_access` and `user_effective_permissions` |

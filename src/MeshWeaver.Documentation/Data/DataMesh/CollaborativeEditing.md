@@ -1,75 +1,92 @@
 ---
 Name: Collaborative Editing
 Category: Documentation
-Description: How to use collaborative markdown editing with comments, track changes, and annotation entities
+Description: Real-time collaborative markdown editing with comments, track changes, and annotation satellite entities
 Icon: /static/DocContent/DataMesh/CollaborativeEditing/icon.svg
 ---
 
-Work together on documents in real-time with comments and suggestions.
+Work together on documents in real time — comment on passages, propose edits as tracked suggestions, and accept or reject changes without ever leaving the document.
 
-## Architecture: Annotations as Satellite Entities
+---
 
-Annotations are stored as **satellite entities** alongside the document:
+## How It Works: Annotations as Satellite Entities
 
-- **Comments** live in the `_Comment` partition (see `CommentsExtensions`)
-- **Tracked changes** live in the `_Tracking` partition (see `AnnotationExtensions`)
+MeshWeaver stores annotations **beside** the document, not inside it. Every comment or tracked change is a satellite entity living in a dedicated partition next to the document node:
 
-The markdown content keeps inline markers (`<!--comment:id-->text<!--/comment:id-->`) as the source of truth for text ranges. During editing, the system separates content from markers:
+| Annotation type | Partition | Extension class |
+|---|---|---|
+| Comment | `_Comment` | `CommentsExtensions` |
+| Tracked change | `_Tracking` | `AnnotationExtensions` |
 
-1. **Load**: Read markdown with markers
-2. **Separate**: Strip markers to get clean text + annotation ranges (ephemeral positions derived from markers)
-3. **Edit**: User edits clean text; annotations rendered as overlays
-4. **Save**: Compute position shifts, reassemble markers into text, save
+The markdown source itself holds lightweight **inline markers** (`<!--comment:id-->text<!--/comment:id-->`) as the authoritative record of which text range an annotation covers. Positions are always *derived* from those markers at load time — they are never stored on the entities.
 
-### Annotation Entity Types
+### The load–edit–save cycle
 
-- **Comment** (`_Comment` partition) — a comment anchored to a text range or attached to the page
-  - `MarkerId`: links to the inline marker in the markdown
-  - `HighlightedText`: the original selected text
-  - `Status`: Active or Resolved
-  - `PrimaryNodePath`: document path for permission delegation
+Every time a document is opened or saved, the system runs a three-step pipeline:
 
-- **TrackedChange** (`_Tracking` partition) — a suggested insertion or deletion
-  - `ChangeType`: Insertion or Deletion
-  - `Status`: Pending, Accepted, or Rejected
-  - `PrimaryNodePath`: document path for permission delegation
+1. **Load** — read markdown including inline markers.
+2. **Separate** — `AnnotationSyncService.Separate()` strips the markers to produce clean editable text plus ephemeral position ranges.
+3. **Edit** — the user edits clean text; annotations render as overlays without cluttering the editor.
+4. **Save** — `ComputePositionShifts()` detects the edit zone, shifts annotation positions accordingly, and `Reassemble()` re-injects markers before writing back. This runs inside the existing 500 ms auto-save throttle.
 
-Both types are satellite entities (`IsSatelliteType = true`). Text range positions are always derived from inline markers at load time — they are not stored on the entities.
+### Annotation entity reference
+
+**Comment** (`_Comment` partition)
+
+| Field | Purpose |
+|---|---|
+| `MarkerId` | Links to the inline marker in the markdown source |
+| `HighlightedText` | The originally selected text |
+| `Status` | `Active` or `Resolved` |
+| `PrimaryNodePath` | Document path used for permission delegation |
+
+**TrackedChange** (`_Tracking` partition)
+
+| Field | Purpose |
+|---|---|
+| `ChangeType` | `Insertion` or `Deletion` |
+| `Status` | `Pending`, `Accepted`, or `Rejected` |
+| `PrimaryNodePath` | Document path used for permission delegation |
+
+Both types have `IsSatelliteType = true`.
 
 ---
 
 ## Adding Comments
 
-Select text and click **Comment** in the toolbar. A Comment entity is created with a `MarkerId` linking it to the inline marker wrapping the selected text. Comments without a marker are attached to the bottom of the page.
+Select any passage and click **Comment** in the toolbar. The system creates a `Comment` entity whose `MarkerId` links it to the inline marker that now wraps your selection.
 
-### Example: A paragraph with comments
+> Comments without a selected range attach to the bottom of the page.
+
+### Example — a paragraph with comments
 
 > MeshWeaver is a <!--comment:c1-->powerful platform<!--/comment:c1--> for building <!--comment:c2-->collaborative applications<!--/comment:c2-->. It provides real-time synchronization and <!--comment:c3-->conflict-free editing<!--/comment:c3-->.
 
-In this example:
-- "powerful platform" has a comment asking for more specific metrics
-- "collaborative applications" has a suggestion to add examples
-- "conflict-free editing" has a question about the technology used
+In the above example three comment markers are embedded in the source:
+
+- `c1` — "powerful platform" flagged for more specific metrics
+- `c2` — "collaborative applications" tagged with a request for examples
+- `c3` — "conflict-free editing" questioned about the underlying technology
 
 ---
 
 ## Making Suggestions (Track Changes)
 
-Use **Suggest Edit** to propose changes without directly editing. A TrackedChange entity is created with the change details. Others can accept or reject your suggestions.
+**Suggest Edit** lets you propose changes without altering the document directly. A `TrackedChange` entity is created; reviewers can accept or reject each suggestion individually — or all at once.
 
-### Suggested Additions
+### Suggested additions
 
-Text that you add appears with a <!--insert:i1:Alice:Dec 18-->green underline<!--/insert:i1-->. Others can review and accept or reject your addition.
+Proposed new text gets a <!--insert:i1:Alice:Dec 18-->green underline<!--/insert:i1-->.
 
 > The quarterly report shows <!--insert:i2:Bob:Dec 19-->significant growth of 25%<!--/insert:i2--> in user engagement.
 
-### Suggested Deletions
+### Suggested deletions
 
-Text you want to remove appears with a <!--delete:d1:Carol:Dec 20-->red strikethrough<!--/delete:d1-->. The original text remains visible until the change is accepted.
+Text proposed for removal gets a <!--delete:d1:Carol:Dec 20-->red strikethrough<!--/delete:d1-->. The original text stays visible until the suggestion is decided.
 
 > Please review the <!--delete:d2:Alice:Dec 21-->outdated and no longer relevant<!--/delete:d2--> documentation before the meeting.
 
-### Combined Example
+### Combined example
 
 > Our team has completed the <!--delete:d3:Bob:Dec 22-->initial<!--/delete:d3--><!--insert:i3:Bob:Dec 22-->comprehensive<!--/insert:i3--> analysis of the <!--comment:c4-->market trends<!--/comment:c4-->. We recommend <!--insert:i4:Alice:Dec 23-->immediate action on the following priorities<!--/insert:i4-->:
 >
@@ -81,49 +98,51 @@ Text you want to remove appears with a <!--delete:d1:Carol:Dec 20-->red striketh
 
 ## Reviewing Changes
 
-### Accepting Changes
+### Accepting a change
 
-Click the **checkmark** next to a suggestion to accept it:
-- **Accept insertion**: The suggested text becomes permanent; TrackedChange status becomes Accepted
-- **Accept deletion**: The marked text is removed; TrackedChange status becomes Accepted
+Click the **checkmark** next to a suggestion:
 
-### Rejecting Changes
+- **Accept insertion** — the suggested text becomes permanent; `TrackedChange.Status` → `Accepted`.
+- **Accept deletion** — the marked text is removed; `TrackedChange.Status` → `Accepted`.
 
-Click the **X** next to a suggestion to reject it:
-- **Reject insertion**: The suggested text is removed; TrackedChange status becomes Rejected
-- **Reject deletion**: The original text is kept; TrackedChange status becomes Rejected
+### Rejecting a change
 
-### Accept All / Reject All
+Click the **X** next to a suggestion:
 
-Use the toolbar buttons to accept or reject all pending changes at once.
+- **Reject insertion** — the suggested text is discarded; `TrackedChange.Status` → `Rejected`.
+- **Reject deletion** — the original text is restored; `TrackedChange.Status` → `Rejected`.
+
+### Bulk review
+
+Use the toolbar **Accept All** and **Reject All** buttons to resolve every pending suggestion in one step.
 
 ---
 
-## Position Tracking and Shifts
+## Position Tracking Under Edits
 
-When you edit text, annotation positions are automatically recomputed from inline markers:
+When a user types between two annotations, MeshWeaver automatically recomputes all positions so nothing drifts:
 
-1. On load, `AnnotationSyncService.Separate()` parses markers into clean text + ephemeral position ranges
-2. After editing, `ComputePositionShifts()` detects the **edit zone** by comparing old and new clean text
-3. Annotations **before** the edit zone keep their positions
-4. Annotations **after** the edit zone shift by the content length delta
-5. Annotations **within** the edit zone are clamped to boundaries
-6. `Reassemble()` re-injects markers at the shifted positions
+1. `AnnotationSyncService.Separate()` parses markers into clean text and ephemeral position ranges on load.
+2. `ComputePositionShifts()` detects the **edit zone** by diffing the old and new clean text.
+3. Annotations **before** the edit zone keep their positions unchanged.
+4. Annotations **after** the edit zone shift by the content-length delta.
+5. Annotations **within** the edit zone are clamped to the nearest boundary.
+6. `Reassemble()` re-injects markers at their new positions before saving.
 
-This happens on every save (using the existing 500ms auto-save throttle). Positions are never persisted — they are derived from markers each time.
+Because positions are always re-derived from markers, there is no stored position state to go stale.
 
 ---
 
 ## Working with Multiple Collaborators
 
-When multiple people edit the same document:
+Multiple editors work on the same document without conflicts:
 
-- Each person's suggestions are color-coded
-- Comments show the author's name and timestamp
-- Changes sync automatically via the auto-save window
-- Annotation entities update reactively for all connected editors
+- Each collaborator's suggestions are **colour-coded** by author.
+- Comments show the **author name and timestamp**.
+- Changes sync automatically within the auto-save window.
+- Annotation entities update **reactively** for every connected editor.
 
-### Example: Team Review Session
+### Example — team review session
 
 > **Project Proposal** *(3 collaborators editing)*
 >
@@ -137,8 +156,8 @@ When multiple people edit the same document:
 
 ## Tips for Effective Collaboration
 
-1. **Use comments for questions** - Don't change text when you're unsure; ask first
-2. **Make atomic suggestions** - One change per suggestion is easier to review
-3. **Resolve conversations** - Mark comment threads as resolved when done
-4. **Review before accepting** - Read through all suggestions before bulk-accepting
-5. **Add context** - Include a note explaining why you're suggesting a change
+1. **Comment before you change** — if you are uncertain, ask rather than edit.
+2. **Keep suggestions atomic** — one logical change per suggestion makes review faster.
+3. **Resolve threads when done** — mark comment threads resolved to keep the sidebar clean.
+4. **Read before bulk-accepting** — scan all pending suggestions before using Accept All.
+5. **Add context** — a brief note explaining *why* you propose a change helps reviewers decide quickly.
