@@ -1,7 +1,9 @@
 using System;
+using System.Threading;
 using Memex.Portal.Shared.Authentication;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -145,5 +147,75 @@ public class UserOnboardingServiceTests(ITestOutputHelper output) : MonolithMesh
             "the login query MUST find the user by email — that's why we keep the " +
             "user-catalog mirror at user.mesh_nodes (namespace=User)");
         found.Items[0].Id.Should().Be(username);
+    }
+
+    /// <summary>
+    /// ONBOARD-FIRST (the rule): tracking activity for an identity that has NOT
+    /// been onboarded (no partition root / User node) must NOT create the
+    /// partition. Reproduces the "partition created before onboarding" bug —
+    /// before the HandleTrackActivity gate, the first-time create wrote
+    /// {userId}/_UserActivity and lazily materialised the {userId} schema ahead
+    /// of onboarding. The gate now probes the partition root and skips when absent.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public void TrackActivity_BeforeOnboarding_DoesNotCreatePartition()
+    {
+        var ghost = $"ghost-{Guid.NewGuid():N}".ToLowerInvariant()[..16];
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+
+        // A login activity for an un-onboarded identity (no CreateUser has run).
+        using (accessService.ImpersonateAsSystem())
+            Mesh.Post(new TrackActivityRequest(
+                NodePath: ghost, UserId: ghost, NodeName: ghost, NodeType: "User", Namespace: "")
+            { ActivityType = ActivityType.Login });
+
+        // Give the fire-and-forget handler time to run (and skip). Sanctioned
+        // bounded wait for a "nothing happened" assertion (WritingTests.md).
+        Thread.Sleep(3000);
+
+        // Query the activity catalog GLOBALLY (no `content.userId:{ghost}` filter — that
+        // routes to the non-existent ghost partition and hangs). Assert nothing was
+        // written under the {ghost} partition. If the gate had failed, the ghost
+        // partition would exist and its activity node would show up here.
+        var result = meshService
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("nodeType:UserActivity"))
+            .Should().Within(8.Seconds()).Match(_ => true);
+        result.Items.Should().NotContain(
+            n => n.Path != null && n.Path.StartsWith($"{ghost}/", StringComparison.Ordinal),
+            "activity tracking for an un-onboarded identity must not create the " +
+            "partition/activity node — onboarding is the only thing that creates a partition");
+    }
+
+    /// <summary>
+    /// After onboarding (the partition root exists), activity tracking DOES
+    /// write — the gate blocks only un-onboarded identities, not real users.
+    /// Also guards the negative test above: if the handler weren't reachable
+    /// this would fail, so a green positive proves the negative is meaningful.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public void TrackActivity_AfterOnboarding_WritesActivity()
+    {
+        var username = $"obtest-{Guid.NewGuid():N}".ToLowerInvariant()[..16];
+        var service = Mesh.ServiceProvider.GetRequiredService<UserOnboardingService>();
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+
+        using (accessService.ImpersonateAsSystem())
+        {
+            service.CreateUser(new UserOnboardingRequest(
+                    username, $"{username}@example.com", FullName: "Track Test"))
+                .Should().Emit();
+            Mesh.Post(new TrackActivityRequest(
+                NodePath: username, UserId: username, NodeName: username, NodeType: "User", Namespace: "")
+            { ActivityType = ActivityType.Login });
+        }
+
+        var result = meshService
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                $"nodeType:UserActivity content.userId:{username}"))
+            .Should().Within(15.Seconds()).Match(c => c.Items.Count > 0);
+        result.Items.Should().NotBeEmpty(
+            "an onboarded user's activity IS tracked — the gate blocks only un-onboarded identities");
     }
 }
