@@ -91,7 +91,15 @@ var portal = builder.AddMemex("memex", o => o
         clientState: builder.Configuration["Parameters:email-subscription-client-state"])
 
     // Invitation-only onboarding (Features:Onboarding:InvitationOnly).
-    .WithInvitationOnly(ParseBool(builder.Configuration["Parameters:invitation-only"])));
+    .WithInvitationOnly(ParseBool(builder.Configuration["Parameters:invitation-only"]))
+
+    // Microsoft Teams bot (bidirectional). Needs an Azure Bot resource + a Teams app. On AKS the bot
+    // secret comes from Key Vault (teams-apppassword → Teams__AppPassword); the rest are non-secret.
+    .WithTeams(
+        enabled: ParseBool(builder.Configuration["Parameters:teams-enabled"]),
+        appId: builder.Configuration["Parameters:teams-app-id"],
+        appPassword: builder.Configuration["Parameters:teams-app-password"],
+        tenantId: builder.Configuration["Parameters:teams-tenant-id"]));
 
 // Self-host filesystem backend: the portal writes DataProtection keys, the NodeType
 // assembly cache, and the NuGet cache under /data. The aspnet base image runs as the

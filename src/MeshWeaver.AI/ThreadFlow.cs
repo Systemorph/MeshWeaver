@@ -96,6 +96,28 @@ public static class ThreadFlow
     }
 
     /// <summary>
+    /// Emits each <b>completed agent reply</b> as the thread runs — one per round. This is the single
+    /// read-side abstraction for delivering an agent's answer anywhere (Teams reply sender, email reply
+    /// sender, GUI): observe the thread the canonical way, and each time a round finishes
+    /// (<c>!IsExecuting</c>) read the new last message at <c>{threadPath}/{msgId}</c> once it is a
+    /// <c>Completed</c> assistant message with text. Emits the message id alongside so callers can
+    /// de-duplicate / mark-delivered. Stays subscribed (ongoing, unlike one-shot <see cref="SubmitAndWait"/>).
+    /// </summary>
+    public static IObservable<(string MessageId, ThreadMessage Message)> ObserveResponses(
+        IMessageHub client, string threadPath, TimeSpan? readTimeout = null) =>
+        ObserveThread(client, threadPath)
+            .Where(t => !t.IsExecuting && t.Messages.Count > 0)
+            .Select(t => t.Messages[^1])
+            .DistinctUntilChanged()
+            .SelectMany(msgId => ReadMessage(client, threadPath, msgId,
+                    m => m.Status == ThreadMessageStatus.Completed
+                         && string.Equals(m.Role, "assistant", StringComparison.OrdinalIgnoreCase)
+                         && !string.IsNullOrWhiteSpace(m.Text),
+                    readTimeout ?? TimeSpan.FromSeconds(30))
+                .Select(m => (msgId, m))
+                .Catch(Observable.Empty<(string MessageId, ThreadMessage Message)>()));
+
+    /// <summary>
     /// Submits via the GUI path then emits exactly once when the resulting
     /// round completes — the response message id (last entry of
     /// <c>Thread.Messages</c> after <c>IsExecuting</c> flips back to false
