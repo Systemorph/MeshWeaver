@@ -136,6 +136,10 @@ var azureFoundryEndpoint = builder.AddParameter("azure-foundry-endpoint", secret
 var modelTierHeavy = builder.AddParameter("model-tier-heavy", secret: false);
 var modelTierStandard = builder.AddParameter("model-tier-standard", secret: false);
 var modelTierLight = builder.AddParameter("model-tier-light", secret: false);
+// Utility tier — a cheap/fast model (e.g. Kimi) for background micro-jobs: node icon +
+// user-avatar generation, description writing, and thread auto-naming. Optional (empty
+// default); when unset, ModelTierConfiguration falls back to the light model.
+var modelTierUtility = builder.AddParameter("model-tier-utility", value: "", secret: false);
 
 // Provider-key encryption master key (Ai:KeyProtection:MasterKey). Encrypts the
 // literal ApiKey stored on ModelProvider nodes at rest so a Postgres/backup leak
@@ -283,6 +287,7 @@ var portal = builder
     .WithEnvironment("ModelTier__Heavy", modelTierHeavy)
     .WithEnvironment("ModelTier__Standard", modelTierStandard)
     .WithEnvironment("ModelTier__Light", modelTierLight)
+    .WithEnvironment("ModelTier__Utility", modelTierUtility)
     // Provider-key encryption master key (ConfigMasterKeyProvider reads this).
     .WithEnvironment("Ai__KeyProtection__MasterKey", keyProtectionMasterKey)
     // LLM: Azure AI Foundry (multi-model inference endpoint — covers OpenAI,
