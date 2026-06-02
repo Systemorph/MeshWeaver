@@ -1115,9 +1115,16 @@ public static class PostgreSqlSchemaInitializer
             -- on the "auth" schema itself (it's the mirror target).
             DO $$
             BEGIN
-                IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'mesh_node_mirror_access_objects')
-                   AND EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'mirror_access_object_to_auth_schema')
+                -- Schema-scoped install: DROP IF EXISTS (the CURRENT schema's mesh_nodes
+                -- only, resolved via search_path) then CREATE. The previous global guard
+                -- `NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = ...)` was wrong: once
+                -- ANY schema had the trigger, every later partition's install was skipped, so
+                -- only the first-initialised schema ever mirrored. Skip only when the mirror
+                -- function is absent (fresh-DB ordering) or on the "auth" schema itself
+                -- (it's the mirror target, not a source).
+                IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'mirror_access_object_to_auth_schema')
                    AND current_schema() <> 'auth' THEN
+                    DROP TRIGGER IF EXISTS mesh_node_mirror_access_objects ON mesh_nodes;
                     CREATE TRIGGER mesh_node_mirror_access_objects
                         AFTER INSERT OR UPDATE OR DELETE ON mesh_nodes
                         FOR EACH ROW EXECUTE FUNCTION public.mirror_access_object_to_auth_schema();
@@ -1781,9 +1788,16 @@ public static class PostgreSqlSchemaInitializer
             -- on the "auth" schema itself (it's the mirror target).
             DO $$
             BEGIN
-                IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'mesh_node_mirror_access_objects')
-                   AND EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'mirror_access_object_to_auth_schema')
+                -- Schema-scoped install: DROP IF EXISTS (the CURRENT schema's mesh_nodes
+                -- only, resolved via search_path) then CREATE. The previous global guard
+                -- `NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = ...)` was wrong: once
+                -- ANY schema had the trigger, every later partition's install was skipped, so
+                -- only the first-initialised schema ever mirrored. Skip only when the mirror
+                -- function is absent (fresh-DB ordering) or on the "auth" schema itself
+                -- (it's the mirror target, not a source).
+                IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'mirror_access_object_to_auth_schema')
                    AND current_schema() <> 'auth' THEN
+                    DROP TRIGGER IF EXISTS mesh_node_mirror_access_objects ON mesh_nodes;
                     CREATE TRIGGER mesh_node_mirror_access_objects
                         AFTER INSERT OR UPDATE OR DELETE ON mesh_nodes
                         FOR EACH ROW EXECUTE FUNCTION public.mirror_access_object_to_auth_schema();
@@ -1943,9 +1957,16 @@ public static class PostgreSqlSchemaInitializer
             -- on the "auth" schema itself (it's the mirror target).
             DO $$
             BEGIN
-                IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'mesh_node_mirror_access_objects')
-                   AND EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'mirror_access_object_to_auth_schema')
+                -- Schema-scoped install: DROP IF EXISTS (the CURRENT schema's mesh_nodes
+                -- only, resolved via search_path) then CREATE. The previous global guard
+                -- `NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = ...)` was wrong: once
+                -- ANY schema had the trigger, every later partition's install was skipped, so
+                -- only the first-initialised schema ever mirrored. Skip only when the mirror
+                -- function is absent (fresh-DB ordering) or on the "auth" schema itself
+                -- (it's the mirror target, not a source).
+                IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'mirror_access_object_to_auth_schema')
                    AND current_schema() <> 'auth' THEN
+                    DROP TRIGGER IF EXISTS mesh_node_mirror_access_objects ON mesh_nodes;
                     CREATE TRIGGER mesh_node_mirror_access_objects
                         AFTER INSERT OR UPDATE OR DELETE ON mesh_nodes
                         FOR EACH ROW EXECUTE FUNCTION public.mirror_access_object_to_auth_schema();

@@ -308,6 +308,86 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
     }
 
     /// <summary>
+    /// 🚨 Regression guard for the empty-`auth`-mirror bug found on prod (2026-06-02):
+    /// the per-partition DDL installs the <c>mesh_node_mirror_access_objects</c> trigger
+    /// ONLY IF <c>public.mirror_access_object_to_auth_schema()</c> already exists, and that
+    /// function used to be created only by the V27 *repair* migration — which
+    /// <c>MigrationRunner</c> SKIPS on fresh DBs. So fresh deployments installed no trigger
+    /// and <c>auth</c> stayed empty.
+    ///
+    /// <para>This test asserts the always-run schema-init now creates the function, and that
+    /// a partition provisioned via <c>public.ensure_partition_schema</c> gets the trigger,
+    /// so writing a <c>User</c> node replicates it into <c>auth.mesh_nodes</c>.</para>
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public void AuthMirror_FunctionInstalledByInit_TriggerReplicatesUserIntoAuth()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        // Touch the mesh so schema-init (InitializeAsync on public) has definitely run.
+        _ = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+
+        // (1) The always-run init must have created the mirror function — without it the
+        //     per-partition trigger guard silently no-ops on fresh DBs.
+        var funcExists = AuthMirrorFunctionExistsAsync(ct).ToObservable()
+            .Should().Within(20.Seconds()).Emit();
+        funcExists.Should().BeTrue(
+            "InitializeAsync must create public.mirror_access_object_to_auth_schema() so the " +
+            "per-partition trigger guard passes on fresh DBs");
+
+        // (2) Provision the auth mirror target + a content partition via the stored proc.
+        CallEnsurePartitionSchemaAsync("auth", ct).ToObservable().Should().Within(30.Seconds()).Emit();
+        // NB: schema names must not start with the reserved 'pg_' prefix (42939).
+        var part = $"authmir_{Guid.NewGuid():N}".ToLowerInvariant()[..20];
+        CallEnsurePartitionSchemaAsync(part, ct).ToObservable().Should().Within(30.Seconds()).Emit();
+
+        // (3) A User written into the partition must be mirrored into auth by the trigger.
+        var userId = $"u_{Guid.NewGuid():N}"[..12];
+        InsertAccessObjectAsync(part, part, userId, "User", ct).ToObservable()
+            .Should().Within(20.Seconds()).Emit();
+
+        var mirrored = CountAuthRowsAsync(part, userId, ct).ToObservable()
+            .Should().Within(20.Seconds()).Emit();
+        mirrored.Should().Be(1,
+            "the mesh_node_mirror_access_objects trigger must replicate the User node into auth.mesh_nodes");
+    }
+
+    private async Task<bool> AuthMirrorFunctionExistsAsync(CancellationToken ct)
+    {
+        await using var cmd = _fixture.DataSource.CreateCommand("""
+            SELECT count(*) FROM pg_proc p
+            JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = 'public' AND p.proname = 'mirror_access_object_to_auth_schema'
+            """);
+        return (long)(await cmd.ExecuteScalarAsync(ct))! > 0;
+    }
+
+    private async Task<int> InsertAccessObjectAsync(
+        string schema, string ns, string id, string nodeType, CancellationToken ct)
+    {
+        await using var cmd = _fixture.DataSource.CreateCommand($"""
+            INSERT INTO "{schema}".mesh_nodes
+                (namespace, id, name, node_type, state, version, last_modified, main_node)
+            VALUES (@ns, @id, @name, @nt, 2, 1, now(), @id)
+            ON CONFLICT (namespace, id) DO NOTHING
+            """);
+        cmd.Parameters.AddWithValue("ns", ns);
+        cmd.Parameters.AddWithValue("id", id);
+        cmd.Parameters.AddWithValue("name", id);
+        cmd.Parameters.AddWithValue("nt", nodeType);
+        return await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    private async Task<int> CountAuthRowsAsync(string ns, string id, CancellationToken ct)
+    {
+        await using var cmd = _fixture.DataSource.CreateCommand("""
+            SELECT count(*) FROM "auth".mesh_nodes WHERE namespace = @ns AND id = @id
+            """);
+        cmd.Parameters.AddWithValue("ns", ns);
+        cmd.Parameters.AddWithValue("id", id);
+        return (int)(long)(await cmd.ExecuteScalarAsync(ct))!;
+    }
+
+    /// <summary>
     /// Top-level invariant: a Space IS a partition root, so creating one with a
     /// non-empty namespace must be rejected server-side with a clear error.
     /// </summary>
