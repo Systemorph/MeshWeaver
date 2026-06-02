@@ -138,6 +138,7 @@ var migrations = new IMigration[]
     new V29_PinDocsForExistingUsers(),
     new V30_EnsurePartitionSchemaStoredProc(),
     new V31_UnifyUserMirrorIntoAuthAndRelocateContent(),
+    new V32_RepairAuthMirrorTriggerAndBackfill(),
 };
 
 var ctx = new MigrationContext(dataSource, connectionString, options, logger, initResult.IsFreshDb);
