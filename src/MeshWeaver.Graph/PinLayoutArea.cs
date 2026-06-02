@@ -90,47 +90,52 @@ public static class PinLayoutArea
     {
         var thumbnail = MeshNodeThumbnailControl.FromNode(node, hubPath);
 
-        var stack = Controls.Stack
-            .WithStyle("position: relative; width: 100%; height: 100%;")
+        // The card is a self-contained box: a positioning context (position: relative)
+        // with interior padding so content doesn't crowd the edges or the pin toggle.
+        var card = Controls.Stack
+            .WithStyle("position: relative; width: 100%; height: 100%; min-height: 92px; " +
+                       "padding: 6px 8px; box-sizing: border-box;")
             .WithView(thumbnail);
 
         if (string.IsNullOrEmpty(viewerId))
-            return stack;
+            return card;
 
-        // Overlay unpin button, top-right corner.
-        // The click handler mutates PinnedPaths on the viewer's User node via workspace.UpdateMeshNode,
-        // which dispatches remotely since the viewer's hub differs from this item's hub.
-        // The viewer's dashboard observes the user stream and re-renders — the card disappears.
         var userPath = viewerId;
         var userAddress = new Address(userPath);
-        var unpinButton = Controls.Button("")
-            .WithIconStart(FluentIcons.Dismiss())
-            .WithAppearance(Appearance.Stealth)
-            .WithStyle("position: absolute; top: 4px; right: 4px; z-index: 5; " +
-                       "min-width: 24px; width: 24px; height: 24px; padding: 0; " +
-                       "border-radius: 50%; background: rgba(0,0,0,0.55); color: #fff;")
-            .WithClickAction(ctx =>
-            {
-                // Remote write to a different hub's MeshNode (the User node lives at
-                // userAddress, not this host's hub). Single-op write → one-shot read
-                // via GetDataRequest, apply transform, post DataChangeRequest. The
-                // owning hub's data layer applies the patch and broadcasts to subscribers.
-                ctx.Host.Hub.GetMeshNode(userPath, TimeSpan.FromSeconds(10))
-                    .Subscribe(n =>
-                    {
-                        if (n?.Content is not User user) return;
-                        var paths = user.PinnedPaths?.ToImmutableList() ?? ImmutableList<string>.Empty;
-                        var updated = paths.RemoveAll(p =>
-                            string.Equals(p, hubPath, StringComparison.OrdinalIgnoreCase));
-                        var newNode = n with { Content = user with { PinnedPaths = updated } };
-                        ctx.Host.Hub.Post(
-                            new DataChangeRequest { Updates = [newNode] },
-                            o => o.WithTarget(userAddress));
-                    });
-                return Task.CompletedTask;
-            });
 
-        return stack.WithView(unpinButton);
+        // Pin toggle overlaid INSIDE the card, top-right. The button is wrapped in an
+        // absolutely-positioned Stack: a position:absolute style on the button alone
+        // does not escape its own flex wrapper (it stays in flow and renders as a row
+        // below the card — the bug this fixes), but an absolute wrapper Stack does.
+        var pinToggle = Controls.Stack
+            .WithStyle("position: absolute; top: 6px; right: 6px; z-index: 5;")
+            .WithView(Controls.Button("")
+                .WithIconStart(FluentIcons.Pin())
+                .WithAppearance(Appearance.Stealth)
+                .WithStyle("min-width: 28px; width: 28px; height: 28px; padding: 0; " +
+                           "border-radius: 50%; background: rgba(0,0,0,0.45); color: #fff;")
+                .WithClickAction(ctx =>
+                {
+                    // Remote write to a different hub's MeshNode (the User node lives at
+                    // userAddress, not this host's hub). One-shot read, apply transform,
+                    // post DataChangeRequest. The owning hub broadcasts to subscribers, so
+                    // the viewer's dashboard re-renders and the card disappears.
+                    ctx.Host.Hub.GetMeshNode(userPath, TimeSpan.FromSeconds(10))
+                        .Subscribe(n =>
+                        {
+                            if (n?.Content is not User user) return;
+                            var paths = user.PinnedPaths?.ToImmutableList() ?? ImmutableList<string>.Empty;
+                            var updated = paths.RemoveAll(p =>
+                                string.Equals(p, hubPath, StringComparison.OrdinalIgnoreCase));
+                            var newNode = n with { Content = user with { PinnedPaths = updated } };
+                            ctx.Host.Hub.Post(
+                                new DataChangeRequest { Updates = [newNode] },
+                                o => o.WithTarget(userAddress));
+                        });
+                    return Task.CompletedTask;
+                }));
+
+        return card.WithView(pinToggle);
     }
 
     private static IObservable<UiControl?> TogglePinAndRender(LayoutAreaHost host, bool unpin)
