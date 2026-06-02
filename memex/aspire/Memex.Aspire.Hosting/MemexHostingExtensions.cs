@@ -119,6 +119,10 @@ public static class MemexHostingExtensions
         foreach (var kv in options.EmailEnvironment())
             portal.WithEnvironment(kv.Key, kv.Value);
 
+        // Microsoft Teams bot (bidirectional). Secret normally via Key Vault → Teams__AppPassword.
+        foreach (var kv in options.TeamsEnvironment())
+            portal.WithEnvironment(kv.Key, kv.Value);
+
         // MCP back-connection base URL for the co-hosted CLIs ({BaseUrl}/mcp). Defaults to the
         // portal's own allocated external endpoint (Aspire substitutes the real URL at publish).
         if (!string.IsNullOrEmpty(options.BaseUrl))

@@ -138,6 +138,16 @@ public sealed record MemexOptions
     /// <summary>Require an invitation to onboard (<c>Features:Onboarding:InvitationOnly</c>). null = portal default (false).</summary>
     public bool? InvitationOnly { get; init; }
 
+    // --- Microsoft Teams bot (bidirectional channel) ------------------------
+    /// <summary>Enable the Teams bot channel. null/false = inert (endpoint NotFound, no reply sender).</summary>
+    public bool? TeamsEnabled { get; init; }
+    /// <summary>Azure Bot / app registration id (Bot Framework <c>MicrosoftAppId</c>).</summary>
+    public string? TeamsAppId { get; init; }
+    /// <summary>Bot app client secret (<c>MicrosoftAppPassword</c>). Keep in Key Vault.</summary>
+    public string? TeamsAppPassword { get; init; }
+    /// <summary>Entra tenant id for a single-tenant bot (optional; multi-tenant when empty).</summary>
+    public string? TeamsTenantId { get; init; }
+
     // === Fluent configuration ===============================================
     // Each helper returns a NEW MemexOptions (record `with`); chain them in the AddMemex
     // lambda. Empty/null arguments leave the existing value untouched where keeping a
@@ -260,6 +270,24 @@ public sealed record MemexOptions
     /// <summary>Require an invitation to onboard. <see langword="null"/> leaves the portal default (false).</summary>
     public MemexOptions WithInvitationOnly(bool? invitationOnly = true) => this with { InvitationOnly = invitationOnly };
 
+    /// <summary>
+    /// Microsoft Teams bot (bidirectional). Needs an Azure Bot resource + a Teams app; the secret is
+    /// normally supplied out-of-band (Key Vault → <c>Teams__AppPassword</c>). A <see langword="null"/>
+    /// <paramref name="enabled"/> leaves it inert.
+    /// </summary>
+    public MemexOptions WithTeams(
+        bool? enabled = true,
+        string? appId = null,
+        string? appPassword = null,
+        string? tenantId = null) =>
+        this with
+        {
+            TeamsEnabled = enabled,
+            TeamsAppId = appId,
+            TeamsAppPassword = appPassword,
+            TeamsTenantId = tenantId,
+        };
+
     internal IEnumerable<KeyValuePair<string, string>> AuthEnvironment()
     {
         if (!string.IsNullOrEmpty(MicrosoftClientId)) yield return new("Authentication__Microsoft__ClientId", MicrosoftClientId);
@@ -318,5 +346,17 @@ public sealed record MemexOptions
         if (EmailInboundEnabled is { } ib) yield return new("Email__InboundEnabled", ib ? "true" : "false");
         if (!string.IsNullOrEmpty(EmailWebhookBaseUrl)) yield return new("Email__WebhookBaseUrl", EmailWebhookBaseUrl);
         if (!string.IsNullOrEmpty(EmailSubscriptionClientState)) yield return new("Email__SubscriptionClientState", EmailSubscriptionClientState);
+    }
+
+    /// <summary>
+    /// Teams bot config. Emitted only when set; the bot secret is best supplied out-of-band (Key Vault →
+    /// <c>Teams__AppPassword</c>) rather than here.
+    /// </summary>
+    internal IEnumerable<KeyValuePair<string, string>> TeamsEnvironment()
+    {
+        if (TeamsEnabled is { } en) yield return new("Teams__Enabled", en ? "true" : "false");
+        if (!string.IsNullOrEmpty(TeamsAppId)) yield return new("Teams__AppId", TeamsAppId);
+        if (!string.IsNullOrEmpty(TeamsAppPassword)) yield return new("Teams__AppPassword", TeamsAppPassword);
+        if (!string.IsNullOrEmpty(TeamsTenantId)) yield return new("Teams__TenantId", TeamsTenantId);
     }
 }

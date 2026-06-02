@@ -164,6 +164,12 @@ public static class MemexConfiguration
             sp.GetRequiredService<PortalApplication>().Hub,
             sp.GetRequiredService<Teams.ITeamsClient>(),
             sp.GetService<Microsoft.Extensions.Logging.ILogger<Teams.TeamsInboundProcessor>>()));
+        if (teamsOptions.Enabled)
+            // Delivers agent replies back into Teams, reading them via the shared
+            // ThreadFlow.ObserveResponses abstraction (same read-side primitive the GUI uses).
+            // Only the hosted service is feature-gated; the client + inbound processor stay registered
+            // so the messaging endpoint can resolve them and return NotFound when disabled.
+            services.AddHostedService<Teams.TeamsReplySender>();
 
         if (features.Ai.Clis.Copilot)
             services.AddCopilot(config =>
