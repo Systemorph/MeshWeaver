@@ -98,7 +98,18 @@ public sealed class UserOnboardingService(
             _ => meshService.CreateNode(partitionRootNode)
                 .Do(__ => logger?.LogInformation(
                     "Onboarding: wrote partition-root User '{Username}' to {Schema}.mesh_nodes",
-                    username, username.ToLowerInvariant())))
+                    username, username.ToLowerInvariant()))
+                // Idempotent / self-repairing: a leftover partition-root (a pre-gate
+                // activity-tracking row, or a half-finished prior onboarding) must not
+                // dead-end onboarding with "Node already exists" — fold into an update so
+                // the row is brought to the intended User content and onboarding completes.
+                .Catch<MeshNode, Exception>(ex =>
+                    ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase)
+                        ? meshService.UpdateNode(partitionRootNode)
+                            .Do(__ => logger?.LogInformation(
+                                "Onboarding: partition-root User '{Username}' already existed — repaired via update",
+                                username))
+                        : Observable.Throw<MeshNode>(ex)))
             // Best-effort: once the user node exists, generate an inline-SVG avatar in the
             // background (the configurable utility model, via IIconGenerator → NodeInitializer)
             // and stamp it onto the node's Icon — exactly like thread auto-naming runs AFTER a

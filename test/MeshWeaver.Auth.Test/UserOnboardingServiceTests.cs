@@ -115,6 +115,40 @@ public class UserOnboardingServiceTests(ITestOutputHelper output) : MonolithMesh
     }
 
     /// <summary>
+    /// Regression for the "user already exists" onboarding dead-end: calling
+    /// CreateUser when the partition-root already exists (a leftover from a
+    /// half-finished onboarding or a pre-gate activity row) must NOT throw
+    /// "Node already exists" — it folds into an update so onboarding completes.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public void CreateUser_WhenPartitionRootExists_RepairsViaUpdate_NoThrow()
+    {
+        var username = $"obtest-{Guid.NewGuid():N}".ToLowerInvariant()[..16];
+        var service = Mesh.ServiceProvider.GetRequiredService<UserOnboardingService>();
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var request = new UserOnboardingRequest(
+            username, $"{username}@example.com", FullName: "Repair Test");
+
+        MeshNode repaired;
+        using (accessService.ImpersonateAsSystem())
+        {
+            // First onboarding writes the partition root.
+            service.CreateUser(request).Should().Emit();
+            // Second call must repair (update) the existing root, not throw.
+            repaired = service.CreateUser(request with { FullName = "Repaired Name" })
+                .Should().Emit();
+        }
+
+        repaired.Should().NotBeNull();
+        repaired.Id.Should().Be(username);
+
+        var root = ReadNode(username).Should().Emit();
+        root.Should().NotBeNull();
+        root!.Name.Should().Be("Repaired Name",
+            "the second CreateUser must have updated the existing partition root, not dead-ended");
+    }
+
+    /// <summary>
     /// Login query (the actual one used by <c>OnboardingMiddleware.FindUserByEmail</c>)
     /// must find the just-created user by email. With the User-catalog mirror write removed,
     /// this is now served by the partition-root User node directly (the query is
