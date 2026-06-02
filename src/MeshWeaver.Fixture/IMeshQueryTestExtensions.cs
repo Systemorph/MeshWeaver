@@ -97,8 +97,12 @@ public static class IMeshQueryTestExtensions
         string? contextPath = null,
         string? context = null,
         CancellationToken ct = default)
+        // TakeLast(1) = the SETTLED snapshot. Autocomplete is a CombineLatest over
+        // providers each seeded with .StartWith(empty), so the FIRST emission is all-empty;
+        // the merged result arrives as providers complete. CombineLatest completes when every
+        // provider completes (each is one-shot), so the last emission is the full snapshot.
         => svc.Autocomplete(basePath, prefix, mode, limit, contextPath, context)
-            .Take(1)
+            .TakeLast(1)
             .SelectMany(snapshot => snapshot.ToObservable())
             .Select(r => new QuerySuggestion(r.Path, r.Name ?? "", r.NodeType, r.Score, r.Icon))
             .ToAsyncEnumerableSequence(ct);

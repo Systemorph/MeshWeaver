@@ -40,7 +40,7 @@ public class McpCompletionProvider
         // suggestions is projected to paths.
         return meshQuery
             .Autocomplete(basePath: "", prefix: prefix, mode: AutocompleteMode.RelevanceFirst, limit: limit)
-            .Take(1)
+            .TakeLast(1)
             .Select(rows => (IReadOnlyList<string>)rows.Select(r => r.Path).ToList())
             .Catch((Exception ex) =>
             {

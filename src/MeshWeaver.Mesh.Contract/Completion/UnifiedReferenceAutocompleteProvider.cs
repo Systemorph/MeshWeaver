@@ -21,7 +21,7 @@ namespace MeshWeaver.Mesh.Completion;
 /// <c>Merge</c>/<c>SelectMany</c>. The only I/O is <c>meshQuery.Autocomplete(...)</c>
 /// (whose leaf runs in the IIoPool) and the per-node delegated hub round-trip — there is
 /// no <c>IAsyncEnumerable</c>, no <c>await</c>, no <c>Channel</c> bridge. Each
-/// <c>Autocomplete(...)</c> is <c>.Take(1)</c>: the Monaco widget re-invokes
+/// <c>Autocomplete(...)</c> is <c>.TakeLast(1)</c>: the Monaco widget re-invokes
 /// <see cref="GetItems"/> per keystroke, so each call is a point-in-time snapshot for that
 /// exact prefix.
 /// </summary>
@@ -151,7 +151,7 @@ internal class UnifiedReferenceAutocompleteProvider(
         // Suggest child nodes at the searchBase
         streams.Add(
             meshQuery.Autocomplete(searchBase, currentSegment, AutocompleteMode.RelevanceFirst, 15)
-                .Take(1)
+                .TakeLast(1)
                 .SelectMany(rows => rows.Select(s => new AutocompleteItem(
                     Label: s.Name ?? s.Path,
                     InsertText: $"@{relativePrefix}{s.Name}/",
@@ -194,7 +194,7 @@ internal class UnifiedReferenceAutocompleteProvider(
             return Observable.Empty<AutocompleteItem>();
 
         return meshQuery.Autocomplete(searchBase, currentSegment, AutocompleteMode.RelevanceFirst, 15)
-            .Take(1)
+            .TakeLast(1)
             .SelectMany(rows => rows.Select(s => new AutocompleteItem(
                 Label: s.Name ?? s.Path,
                 InsertText: $"@{relativePrefix}{s.Name} ",
@@ -252,7 +252,7 @@ internal class UnifiedReferenceAutocompleteProvider(
         if (meshQuery != null)
             streams.Add(
                 meshQuery.Autocomplete(address, currentSegment, AutocompleteMode.RelevanceFirst, 15)
-                    .Take(1)
+                    .TakeLast(1)
                     .SelectMany(rows => rows.Select(s => new AutocompleteItem(
                         Label: $"{s.Name}/",
                         InsertText: $"@/{s.Path}/",
@@ -273,7 +273,7 @@ internal class UnifiedReferenceAutocompleteProvider(
     {
         var meshRows = meshQuery != null
             ? meshQuery.Autocomplete("", prefix, AutocompleteMode.RelevanceFirst, 15)
-                .Take(1)
+                .TakeLast(1)
                 .Catch(Observable.Return(EmptyRows))
             : Observable.Return(EmptyRows);
 
@@ -344,7 +344,7 @@ internal class UnifiedReferenceAutocompleteProvider(
             return Observable.Empty<AutocompleteItem>();
 
         return meshQuery.Autocomplete(address, prefix, AutocompleteMode.RelevanceFirst, 15)
-            .Take(1)
+            .TakeLast(1)
             .SelectMany(rows => rows.Select(s => new AutocompleteItem(
                 Label: s.Name ?? s.Path,
                 InsertText: $"@/{address}/{keyword}/{s.Name} ",
