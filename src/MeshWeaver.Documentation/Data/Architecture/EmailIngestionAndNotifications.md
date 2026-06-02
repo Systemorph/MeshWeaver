@@ -243,6 +243,35 @@ Deploy parameters (`Memex.Deploy.AppHost` → `MemexOptions`) map 1:1: `email-en
 `email-tenant-id`, `email-client-id`, `email-inbound-enabled`, `email-webhook-base-url`,
 `email-subscription-client-state`, plus the KV mapping for the secret.
 
-> **Graph permissions:** the mail app registration needs the **application** permissions `Mail.Send` and
-> `Mail.ReadWrite` with tenant-admin consent, and a real licensed/shared mailbox it may act as. Missing
-> consent → Graph 403. See [SendingEmail.md](SendingEmail.md).
+> **Graph permissions:** the mail app registration needs the **application** permissions `Mail.Send`,
+> `Mail.ReadWrite` and `Calendars.ReadWrite` (the last for the Executive Assistant, §7) with tenant-admin
+> consent, and a real licensed/shared mailbox it may act as. Missing consent → Graph 403. See
+> [SendingEmail.md](SendingEmail.md).
+
+---
+
+## 7. Executive Assistant — a mail & calendar agent
+
+The [Executive Assistant agent](../../Agent/ExecutiveAssistant.md) gives a user a personal assistant over
+**their own** mailbox and calendar. Unlike the ingestion mailbox (the shared `memex@` inbox), the EA tool
+acts on the **signed-in user's** mailbox/calendar: every Graph call targets `users/{me}/…`, where `{me}` is
+resolved from the caller's `AccessService` identity at call time — so the agent can only ever touch the
+acting user's own data.
+
+It is wired as an `IAgentPlugin` named **`ExecutiveAssistant`** (`ExecutiveAssistantPlugin`), registered
+when `Email:Enabled=true`, and surfaced to any agent that lists it in frontmatter (`plugins: [ ...,
+ExecutiveAssistant ]`). Tools:
+
+| Area | Tools |
+|---|---|
+| Mail | `ListInbox`, `SearchMail`, `ReadMail`, `SendMail`, `ReplyToMail` |
+| Calendar | `ListEvents`, `CreateEvent` (book + invite), `CancelEvent` |
+
+It uses the **same Graph app credential** as the ingestion/outbound side, so it needs the additional
+application permission **`Calendars.ReadWrite`** (admin-consented) on top of `Mail.ReadWrite` / `Mail.Send`.
+
+Example asks the agent handles: *"What's on my calendar tomorrow?"*, *"Book 30 min with Alice next Tuesday
+afternoon"*, *"reply to the vendor that we accept"*, *"clear my Friday"*.
+
+> The EA tools are agent tools (the Microsoft.Extensions.AI boundary), so they are `async` — that is the
+> sanctioned place for `await` (they are not hub-reachable code).
