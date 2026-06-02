@@ -18,13 +18,23 @@ namespace Memex.Portal.Shared.Email;
 /// shared <c>Http</c> <see cref="IIoPool"/> — off the hub scheduler and bounded — never a bare
 /// <c>await</c> on the calling thread (see <c>Doc/Architecture/ControlledIoPooling.md</c>).</para>
 /// </summary>
-public sealed class GraphMail
+public sealed class GraphMail : IDisposable
 {
+    // Bound to a sane cap so a burst of inbound notifications can't open unbounded Graph calls.
+    private const int HttpConcurrency = 8;
+
     private readonly EmailOptions _options;
     private readonly Lazy<GraphServiceClient> _graph;
-    private readonly IIoPool _http;
 
-    public GraphMail(EmailOptions options, IoPoolRegistry? ioPools = null)
+    // Dedicated bounded HTTP pool, ALWAYS created fresh and owned by this instance — never resolved
+    // from the mesh-scoped IoPoolRegistry. The portal builds GraphMail from its OWN DI container
+    // while activating hosted services; reaching across into the mesh hub's ServiceProvider at that
+    // moment races that provider's internal service realization and surfaced as an NRE inside
+    // ConcurrentDictionary.GetOrAdd, crash-looping the portal. A self-owned pool always resolves and
+    // is disposed with this singleton when the container tears down.
+    private readonly IoPool _http = new(HttpConcurrency);
+
+    public GraphMail(EmailOptions options)
     {
         _options = options;
         // Built lazily so the type is constructible without valid creds (unit tests that exercise
@@ -36,8 +46,9 @@ public sealed class GraphMail
                 : new ClientSecretCredential(options.TenantId, options.ClientId, options.ClientSecret);
             return new GraphServiceClient(credential, ["https://graph.microsoft.com/.default"]);
         });
-        _http = ioPools?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
     }
+
+    public void Dispose() => _http.Dispose();
 
     private GraphServiceClient Client => _graph.Value;
 

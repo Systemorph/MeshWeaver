@@ -134,9 +134,7 @@ public static class MemexConfiguration
         // finds-or-creates a conversation thread and appends its latest message (referencing the email
         // by path). The Graph subscription self-skips unless Email:Enabled && Email:InboundEnabled.
         services.AddSingleton<GraphMail>(sp => new GraphMail(
-            sp.GetRequiredService<EmailOptions>(),
-            sp.GetRequiredService<PortalApplication>().Hub.ServiceProvider
-                .GetService<MeshWeaver.Mesh.Threading.IoPoolRegistry>()));
+            sp.GetRequiredService<EmailOptions>()));
         services.AddSingleton<EmailInboundProcessor>(sp => new EmailInboundProcessor(
             sp.GetRequiredService<PortalApplication>().Hub,
             sp.GetRequiredService<GraphMail>(),
