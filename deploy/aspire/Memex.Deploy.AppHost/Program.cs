@@ -75,7 +75,7 @@ var portal = builder.AddMemex("memex", o =>
     // On AKS the client secret comes from Key Vault (email-clientsecret → Email__ClientSecret via
     // the SecretProviderClass), so it is NOT passed here; the rest are non-secret parameters.
     o.EmailEnabled = ParseBool(builder.Configuration["Parameters:email-enabled"]);
-    o.EmailNoReplyAddress = builder.Configuration["Parameters:email-noreply-address"];
+    o.EmailMailboxAddress = builder.Configuration["Parameters:email-mailbox-address"];
     o.EmailTenantId = builder.Configuration["Parameters:email-tenant-id"];
     o.EmailClientId = builder.Configuration["Parameters:email-client-id"];
     o.EmailClientSecret = builder.Configuration["Parameters:email-client-secret"];

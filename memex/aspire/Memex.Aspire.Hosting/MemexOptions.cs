@@ -102,7 +102,7 @@ public sealed class MemexOptions
     /// <summary>Enable outbound email. null/false = NoOp sender (no mail sent).</summary>
     public bool? EmailEnabled { get; set; }
     /// <summary>Mailbox to send as (e.g. <c>no-reply@yourtenant.com</c>).</summary>
-    public string? EmailNoReplyAddress { get; set; }
+    public string? EmailMailboxAddress { get; set; }
     /// <summary>Entra tenant GUID for the mail app (client-secret flow).</summary>
     public string? EmailTenantId { get; set; }
     /// <summary>Mail app registration client id (client-secret flow).</summary>
@@ -165,7 +165,7 @@ public sealed class MemexOptions
     internal IEnumerable<KeyValuePair<string, string>> EmailEnvironment()
     {
         if (EmailEnabled is { } en) yield return new("Email__Enabled", en ? "true" : "false");
-        if (!string.IsNullOrEmpty(EmailNoReplyAddress)) yield return new("Email__NoReplyAddress", EmailNoReplyAddress);
+        if (!string.IsNullOrEmpty(EmailMailboxAddress)) yield return new("Email__MailboxAddress", EmailMailboxAddress);
         if (!string.IsNullOrEmpty(EmailTenantId)) yield return new("Email__TenantId", EmailTenantId);
         if (!string.IsNullOrEmpty(EmailClientId)) yield return new("Email__ClientId", EmailClientId);
         if (!string.IsNullOrEmpty(EmailClientSecret)) yield return new("Email__ClientSecret", EmailClientSecret);

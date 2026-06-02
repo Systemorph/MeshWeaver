@@ -55,9 +55,9 @@ public sealed class GraphEmailSender : IEmailSender
             SaveToSentItems = false
         };
 
-        await _graph.Users[_options.NoReplyAddress].SendMail.PostAsync(body, cancellationToken: ct);
+        await _graph.Users[_options.MailboxAddress].SendMail.PostAsync(body, cancellationToken: ct);
         _logger?.LogInformation("Sent email to {To} (subject: {Subject}) as {From}",
-            toAddress, subject, _options.NoReplyAddress);
+            toAddress, subject, _options.MailboxAddress);
         return true;
     }
 }
