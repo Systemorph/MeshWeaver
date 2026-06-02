@@ -2,6 +2,7 @@ using System.Reactive.Linq;
 using Azure.Core;
 using Azure.Identity;
 using Microsoft.Extensions.Logging;
+using MeshWeaver.Mesh;
 using Microsoft.Graph;
 using Microsoft.Graph.Models;
 using Microsoft.Graph.Users.Item.SendMail;

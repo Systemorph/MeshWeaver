@@ -340,7 +340,8 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                 "MeshWeaver.Application.Styles",
                 "MeshWeaver.Layout",
                 "MeshWeaver.Layout.DataGrid",
-                "MeshWeaver.Messaging"
+                "MeshWeaver.Messaging",
+                "MeshWeaver.Mesh"
             )
             .WithEmitDebugInformation(true);
     }

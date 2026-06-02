@@ -70,6 +70,19 @@ var portal = builder.AddMemex("memex", o =>
     o.GoogleClientSecret = builder.Configuration["Parameters:google-client-secret"];
     o.LinkedInClientId = builder.Configuration["Parameters:linkedin-client-id"];
     o.LinkedInClientSecret = builder.Configuration["Parameters:linkedin-client-secret"];
+
+    // Outbound email (Microsoft Graph /sendMail) — invitations + script-triggered notifications.
+    // On AKS the client secret comes from Key Vault (email-clientsecret → Email__ClientSecret via
+    // the SecretProviderClass), so it is NOT passed here; the rest are non-secret parameters.
+    o.EmailEnabled = ParseBool(builder.Configuration["Parameters:email-enabled"]);
+    o.EmailNoReplyAddress = builder.Configuration["Parameters:email-noreply-address"];
+    o.EmailTenantId = builder.Configuration["Parameters:email-tenant-id"];
+    o.EmailClientId = builder.Configuration["Parameters:email-client-id"];
+    o.EmailClientSecret = builder.Configuration["Parameters:email-client-secret"];
+    o.EmailUseManagedIdentity = ParseBool(builder.Configuration["Parameters:email-use-managed-identity"]);
+
+    // Invitation-only onboarding (Features:Onboarding:InvitationOnly).
+    o.InvitationOnly = ParseBool(builder.Configuration["Parameters:invitation-only"]);
 });
 
 // Self-host filesystem backend: the portal writes DataProtection keys, the NodeType
@@ -86,3 +99,8 @@ if (!mode.StartsWith("kubernetes", StringComparison.Ordinal) && mode != "azure")
 }
 
 builder.Build().Run();
+
+// Parses an optional bool deploy parameter: null when unset (leave the portal default),
+// otherwise true/false. Hoisted local function — usable from the AddMemex lambda above.
+static bool? ParseBool(string? value) =>
+    string.IsNullOrEmpty(value) ? null : string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
