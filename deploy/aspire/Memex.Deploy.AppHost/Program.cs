@@ -81,6 +81,11 @@ var portal = builder.AddMemex("memex", o =>
     o.EmailClientSecret = builder.Configuration["Parameters:email-client-secret"];
     o.EmailUseManagedIdentity = ParseBool(builder.Configuration["Parameters:email-use-managed-identity"]);
 
+    // Inbound email→agent channel (Graph subscription + webhook). Needs Mail.ReadWrite + a public URL.
+    o.EmailInboundEnabled = ParseBool(builder.Configuration["Parameters:email-inbound-enabled"]);
+    o.EmailWebhookBaseUrl = builder.Configuration["Parameters:email-webhook-base-url"];
+    o.EmailSubscriptionClientState = builder.Configuration["Parameters:email-subscription-client-state"];
+
     // Invitation-only onboarding (Features:Onboarding:InvitationOnly).
     o.InvitationOnly = ParseBool(builder.Configuration["Parameters:invitation-only"]);
 });

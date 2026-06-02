@@ -36,47 +36,15 @@ public static class InvitationsSettingsTab
 
     public static MessageHubConfiguration AddInvitationsSettingsTab(
         this MessageHubConfiguration config)
-        => config.AddSettingsMenuItems(new SettingsMenuItemProvider(GetInvitationsTabAsync));
+        => config.AddGlobalSettingsMenuItems(new GlobalSettingsMenuItemProvider(GetInvitationsTabAsync));
 
-    private static async IAsyncEnumerable<SettingsMenuItemDefinition> GetInvitationsTabAsync(
+    private static async IAsyncEnumerable<GlobalSettingsMenuItemDefinition> GetInvitationsTabAsync(
         LayoutAreaHost host, RenderingContext ctx)
     {
-        // Owner check — same shape as UserNodeType.GetGlobalAdminTabAsync.
-        var hubPath = host.Hub.Address.ToString();
-        var nodeOwnerId = hubPath.StartsWith("User/", StringComparison.OrdinalIgnoreCase)
-            ? hubPath["User/".Length..]
-            : hubPath;
-        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
-        var viewerId = accessService?.Context?.ObjectId
-                       ?? accessService?.CircuitContext?.ObjectId;
-
-        if (string.IsNullOrEmpty(viewerId)
-            || !string.Equals(viewerId, nodeOwnerId, StringComparison.OrdinalIgnoreCase))
+        if (!await AdminMenuGate.IsRootAdminAsync(host))
             yield break;
 
-        // Root-level Admin permission gate — bridge the IObservable to IAsyncEnumerable
-        // via a Channel (no .ToTask() on a hub round-trip). See AsynchronousCalls.md.
-        var permsChannel = Channel.CreateBounded<Permission>(
-            new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropOldest });
-
-        using var sub = host.Hub.GetEffectivePermissions("", viewerId)
-            .FirstAsync()
-            .Subscribe(
-                perm => { permsChannel.Writer.TryWrite(perm); permsChannel.Writer.TryComplete(); },
-                _ => permsChannel.Writer.TryComplete(),
-                () => permsChannel.Writer.TryComplete());
-
-        Permission rootPerms = Permission.None;
-        await foreach (var perm in permsChannel.Reader.ReadAllAsync())
-        {
-            rootPerms = perm;
-            break;
-        }
-
-        if (!rootPerms.HasFlag(Permission.All))
-            yield break;
-
-        yield return new SettingsMenuItemDefinition(
+        yield return new GlobalSettingsMenuItemDefinition(
             Id: TabId,
             Label: "Invitations",
             ContentBuilder: BuildInvitationsContent,
@@ -87,7 +55,7 @@ public static class InvitationsSettingsTab
     }
 
     internal static UiControl BuildInvitationsContent(
-        LayoutAreaHost host, StackControl stack, MeshNode? node)
+        LayoutAreaHost host, StackControl stack)
     {
         var invitationService = host.Hub.ServiceProvider.GetRequiredService<InvitationService>();
         var emailSender = host.Hub.ServiceProvider.GetRequiredService<IEmailSender>();

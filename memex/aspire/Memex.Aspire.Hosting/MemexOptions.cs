@@ -112,6 +112,13 @@ public sealed class MemexOptions
     /// <summary>Authenticate via managed identity instead of a client secret (prod).</summary>
     public bool? EmailUseManagedIdentity { get; set; }
 
+    /// <summary>Enable the inbound email→agent channel (Graph subscription + webhook). Needs Mail.ReadWrite + a public WebhookBaseUrl.</summary>
+    public bool? EmailInboundEnabled { get; set; }
+    /// <summary>Public base URL Graph calls back for inbound notifications (e.g. <c>https://memex.systemorph.com</c>).</summary>
+    public string? EmailWebhookBaseUrl { get; set; }
+    /// <summary>Shared secret echoed by Graph on each inbound notification (webhook validation).</summary>
+    public string? EmailSubscriptionClientState { get; set; }
+
     /// <summary>Require an invitation to onboard (<c>Features:Onboarding:InvitationOnly</c>). null = portal default (false).</summary>
     public bool? InvitationOnly { get; set; }
 
@@ -170,5 +177,8 @@ public sealed class MemexOptions
         if (!string.IsNullOrEmpty(EmailClientId)) yield return new("Email__ClientId", EmailClientId);
         if (!string.IsNullOrEmpty(EmailClientSecret)) yield return new("Email__ClientSecret", EmailClientSecret);
         if (EmailUseManagedIdentity is { } mi) yield return new("Email__UseManagedIdentity", mi ? "true" : "false");
+        if (EmailInboundEnabled is { } ib) yield return new("Email__InboundEnabled", ib ? "true" : "false");
+        if (!string.IsNullOrEmpty(EmailWebhookBaseUrl)) yield return new("Email__WebhookBaseUrl", EmailWebhookBaseUrl);
+        if (!string.IsNullOrEmpty(EmailSubscriptionClientState)) yield return new("Email__SubscriptionClientState", EmailSubscriptionClientState);
     }
 }
