@@ -26,12 +26,13 @@ public static class UserActivityLayoutAreas
     // (same local-UI-state pattern as CommentLayoutAreas). Clicking a tab button
     // writes the name; the content pane observes the key and swaps the MeshSearch.
     private const string CatalogTabStateKey = "ownerCatalogTab";
-    private const string TabPinned = "Pinned";
     private const string TabThreads = "Threads";
     private const string TabMyItems = "My Items";
     private const string TabLastRead = "Last Read";
     private const string TabLastEdited = "Last Edited";
-    private static readonly string[] CatalogTabs = { TabPinned, TabThreads, TabMyItems, TabLastRead, TabLastEdited };
+    // Threads first → it is the default tab shown on load. Pinned is NOT a tab; it has its
+    // own always-visible section above the tab bar (see BuildOwnerDashboard).
+    private static readonly string[] CatalogTabs = { TabThreads, TabMyItems, TabLastRead, TabLastEdited };
 
     /// <summary>
     /// Adds the Activity view to the User node's layout.
@@ -123,9 +124,9 @@ public static class UserActivityLayoutAreas
     }
 
     /// <summary>
-    /// Personal dashboard shown to the node owner — three bands in a flex column:
-    /// a welcome banner, a catalog with tab toggles (Pinned / Threads / My Items /
-    /// Last Read / Last Edited), and the chat input pinned to the bottom.
+    /// Personal dashboard shown to the node owner — a welcome banner, an always-visible
+    /// Pinned section, a catalog with tab toggles (Threads / My Items / Last Read /
+    /// Last Edited, Threads default), and the chat input pinned to the bottom.
     /// </summary>
     private static UiControl BuildOwnerDashboard(LayoutAreaHost host, string nodePath, string ownerName, string nodeOwnerId, MeshNode? ownerNode)
     {
@@ -142,6 +143,14 @@ public static class UserActivityLayoutAreas
             $"<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-top: 2px;\">Here's what's happening across your workspace</div>" +
             "</div>"));
 
+        // Pinned section — its own band ABOVE the tabs, always visible (when the owner has pins).
+        var pinned = BuildPinnedItems(ownerNode);
+        if (pinned != null)
+            dashboard = dashboard.WithView(Controls.Stack
+                .WithWidth("100%")
+                .WithStyle("flex-shrink: 0; padding: 0 24px 8px 24px;")
+                .WithView(pinned));
+
         // Catalog region: a fixed tab bar over a swappable content pane. The
         // selected tab lives in the host data stream so a button click re-emits
         // both the bar (active styling) and the content (which MeshSearch shows).
@@ -157,18 +166,18 @@ public static class UserActivityLayoutAreas
         {
             if (!initialized[0])
             {
-                h.UpdateData(CatalogTabStateKey, TabPinned);
+                h.UpdateData(CatalogTabStateKey, TabThreads);
                 initialized[0] = true;
             }
             return h.Stream.GetDataStream<string>(CatalogTabStateKey)
                 .DistinctUntilChanged()
-                .Select(selected => BuildCatalogTabBar(selected ?? TabPinned));
+                .Select(selected => BuildCatalogTabBar(selected ?? TabThreads));
         });
 
         catalog = catalog.WithView((h, _) =>
             h.Stream.GetDataStream<string>(CatalogTabStateKey)
                 .DistinctUntilChanged()
-                .Select(selected => BuildCatalogContent(selected ?? TabPinned, nodePath, nodeOwnerId, ownerNode)));
+                .Select(selected => BuildCatalogContent(selected ?? TabThreads, nodePath, nodeOwnerId)));
 
         dashboard = dashboard.WithView(catalog);
 
@@ -209,34 +218,27 @@ public static class UserActivityLayoutAreas
     }
 
     /// <summary>
-    /// Maps the selected tab to its existing MeshSearch builder, wrapped in a
-    /// scrolling pane. The Pinned tab shows a hint when nothing is pinned (its
-    /// builder returns <c>null</c> rather than an empty query).
+    /// Maps the selected tab to its existing MeshSearch builder, wrapped in a scrolling pane.
+    /// Threads is the default (shown on load). Pinned is not a tab — it has its own section.
     /// </summary>
-    private static UiControl BuildCatalogContent(string selected, string nodePath, string nodeOwnerId, MeshNode? ownerNode)
+    private static UiControl BuildCatalogContent(string selected, string nodePath, string nodeOwnerId)
     {
         var pane = Controls.Stack
             .WithWidth("100%")
             .WithStyle("flex: 1; min-height: 0; overflow-y: auto; padding-top: 12px; " + ThinScrollbar);
 
-        UiControl? content = selected switch
+        UiControl content = selected switch
         {
-            TabThreads => BuildLatestThreads(nodePath, nodeOwnerId),
             // My Items live in the user's own partition (rbuergi.* post-v10), not
             // under the User/-prefixed dashboard path — pass nodeOwnerId.
             TabMyItems => BuildChildren(nodeOwnerId),
             TabLastRead => BuildRecentActivity(nodePath),
             TabLastEdited => BuildActivityFeed(),
-            _ => BuildPinnedItems(ownerNode), // Pinned + default
+            _ => BuildLatestThreads(nodePath, nodeOwnerId), // Threads + default
         };
 
-        return pane.WithView(content ?? BuildPinnedEmptyState());
+        return pane.WithView(content);
     }
-
-    /// <summary>Placeholder shown on the Pinned tab when the owner has nothing pinned.</summary>
-    private static UiControl BuildPinnedEmptyState() =>
-        Controls.Html("<div style=\"padding: 24px; color: var(--neutral-foreground-hint); font-size: 0.9rem;\">" +
-                      "Nothing pinned yet. Pin items from their thumbnail to see them here.</div>");
 
     /// <summary>
     /// Public profile shown to visitors — UserProfileControl (rendered by Blazor)
