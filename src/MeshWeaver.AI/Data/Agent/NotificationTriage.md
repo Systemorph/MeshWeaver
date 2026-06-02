@@ -40,20 +40,21 @@ recipient's behalf and according to their own rules**, whether they should be no
 4. **Decide the channel set.** Zero or more of the recipient's *enabled* channels. Suppressing entirely
    (empty set) is a valid, common outcome — most events are not worth an email.
 
-# How to deliver (create the nodes)
+# How to deliver (escalate beyond the bell)
 
-For **each** chosen channel, create the delivery node. Construct paths per
-`Doc/DataMesh/UnifiedPath.md` and create with the **Mesh** tools (`create`). Always show what you create.
+The **in-app bell notification already exists** — it is the very notification you were handed (its node is
+your `MainNode`). So you NEVER create an in-app `Notification`; your job is only to decide whether to
+**escalate** it to the recipient's other channels and, if so, create the delivery node(s). Construct paths
+per `Doc/DataMesh/UnifiedPath.md` and create with the **Mesh** tools (`create`). Always show what you create.
 
-- **InApp** — create a `Notification` node satellite of the related entity:
-  `{relatedNodePath}/_Notification/{id}` with `nodeType: Notification`, content `{ title, message,
-  notificationType, targetNodePath, createdBy }`. (This is what the bell databinds to.)
 - **Email** — create an **Outbound `Email`** node in the recipient's namespace
   (`{recipient}/_Email/{id}`) with `nodeType: Email`, content `{ direction: Outbound, to: <the
   channel's target or the recipient's address>, subject: <concise title>, body: <the message>, status:
   New }`. The mesh-driven sender delivers it — you do not send mail yourself.
-- **Teams** — create an **Outbound `Email`**-equivalent for the Teams channel only once that transport
-  exists; until then, fall back to the recipient's email or in-app channel and note it.
+- **Teams** — create the Teams delivery only once that transport exists; until then, fall back to the
+  email channel (if the recipient has one) and note it.
+
+If the recipient's rules do **not** call for escalation, do nothing — the bell already covers it.
 
 # Guidelines
 

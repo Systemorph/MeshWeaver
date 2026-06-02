@@ -131,6 +131,9 @@ public static class MemexConfiguration
             // Executive Assistant agent tool — read/write the signed-in user's own mailbox + calendar
             // (booking, mail) via the same Graph app credential. Resolved by name from agent frontmatter.
             services.AddSingleton<MeshWeaver.AI.Plugins.IAgentPlugin, ExecutiveAssistantPlugin>();
+            // Notification triage runner — escalates in-app notifications to email/Teams per each
+            // recipient's NotificationRules, via the cheap triage agent (only fires for users with rules).
+            services.AddHostedService<Memex.Portal.Shared.Notifications.NotificationTriageService>();
         }
         else
             services.AddSingleton<IEmailSender, NoOpEmailSender>();
