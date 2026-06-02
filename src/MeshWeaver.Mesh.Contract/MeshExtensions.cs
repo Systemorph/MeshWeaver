@@ -1048,7 +1048,7 @@ public static class MeshExtensions
             // owner's [RequiresPermission(Delete)] gate denies. The original
             // request's AccessContext carries the caller's full identity + roles,
             // captured at handler entry where AsyncLocal was correct.
-            .Observe(new ValidateDeleteRequest(p), o => callerAccessContext is null
+            .Observe(new ValidateDeleteRequest(p, rootPath), o => callerAccessContext is null
                 ? o.WithTarget(new Address(p))
                 : o.WithTarget(new Address(p)).WithAccessContext(callerAccessContext))
             .Take(1)
@@ -1136,7 +1136,7 @@ public static class MeshExtensions
                     return Observable.Return(
                         ValidateDeleteResponse.FromError($"Node not found at path: {path}"));
 
-                return RunDeletionValidatorsObs(hub, node, proxyDeleteRequest)
+                return RunDeletionValidatorsObs(hub, node, proxyDeleteRequest, request.Message.RootPath)
                     .Select(err => err is null
                         ? ValidateDeleteResponse.Ok()
                         : ValidateDeleteResponse.FromError(err.Value.ErrorMessage ?? "Validation failed"));
@@ -1312,7 +1312,8 @@ public static class MeshExtensions
     private static IObservable<(string? ErrorMessage, NodeDeletionRejectionReason Reason)?> RunDeletionValidatorsObs(
         IMessageHub hub,
         MeshNode node,
-        DeleteNodeRequest request)
+        DeleteNodeRequest request,
+        string? cascadeRootPath = null)
     {
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var context = new NodeValidationContext
@@ -1320,7 +1321,8 @@ public static class MeshExtensions
             Operation = NodeOperation.Delete,
             Node = node,
             Request = request,
-            AccessContext = accessService?.Context ?? accessService?.CircuitContext
+            AccessContext = accessService?.Context ?? accessService?.CircuitContext,
+            DeleteCascadeRootPath = cascadeRootPath ?? request.Path
         };
 
         var validators = hub.ServiceProvider.GetServices<INodeValidator>()
@@ -1367,7 +1369,10 @@ public static class MeshExtensions
             Operation = NodeOperation.Delete,
             Node = node,
             Request = request,
-            AccessContext = accessService?.Context ?? accessService?.CircuitContext
+            AccessContext = accessService?.Context ?? accessService?.CircuitContext,
+            // This runner validates the ROOT node of the delete, so the cascade root is the
+            // request path itself.
+            DeleteCascadeRootPath = request.Path
         };
 
         var validators = hub.ServiceProvider.GetServices<INodeValidator>()
