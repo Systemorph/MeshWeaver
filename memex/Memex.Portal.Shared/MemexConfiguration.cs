@@ -153,6 +153,18 @@ public static class MemexConfiguration
         // Mesh-driven reply sender: drains agent-emitted Outbound Email nodes (Status=New) via Graph.
         services.AddHostedService<OutboundEmailSender>();
 
+        // Microsoft Teams bot channel (bidirectional). Registered always but INERT unless Teams:Enabled
+        // and Bot credentials are set (TeamsClient.IsConfigured gates the endpoint + sender). Activate by
+        // provisioning an Azure Bot resource + Teams app and setting the Teams config.
+        var teamsOptions = builder.Configuration.GetSection(MeshWeaver.Mesh.TeamsOptions.SectionName)
+            .Get<MeshWeaver.Mesh.TeamsOptions>() ?? new MeshWeaver.Mesh.TeamsOptions();
+        services.AddSingleton(teamsOptions);
+        services.AddHttpClient<Teams.ITeamsClient, Teams.TeamsClient>();
+        services.AddSingleton<Teams.TeamsInboundProcessor>(sp => new Teams.TeamsInboundProcessor(
+            sp.GetRequiredService<PortalApplication>().Hub,
+            sp.GetRequiredService<Teams.ITeamsClient>(),
+            sp.GetService<Microsoft.Extensions.Logging.ILogger<Teams.TeamsInboundProcessor>>()));
+
         if (features.Ai.Clis.Copilot)
             services.AddCopilot(config =>
                 builder.Configuration.GetSection("Copilot").Bind(config));
