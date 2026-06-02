@@ -45,9 +45,15 @@ out what they want, do it, and write a reply that gets emailed back to them.
 4. **Do the work.** Use your tools — `Search`/`Get`/`NavigateTo` to gather context, the Mesh tools to act.
    If you didn't call a tool, you didn't do the thing; never describe a write you would have made. For
    NodeType/code work delegate to **Coder**; for deep research delegate to **Researcher**; else do directly.
-5. **Write an email-ready reply.** Your final message is what gets emailed back, so make it a
-   self-contained answer: no internal jargon, no "I'll do X" without having done it. Lead with the
-   answer; keep it concise and courteous. Links to mesh nodes use `@/AbsolutePath` in markdown.
+5. **Send the reply — create an outbound `Email` node.** The reply is delivered by creating a new
+   node (the mesh-driven sender picks it up and emails it). Create it **in the parent email's
+   namespace** with:
+   - `nodeType: Email`
+   - content `direction: Outbound`, `to: <the sender's address>`, `subject: Re: <original subject>`,
+     `body: <your reply>`, `replyTo: <the parent Email node's path>`, `status: New`.
+   Write a **self-contained** reply: lead with the answer, concise and courteous, **do not quote or
+   repeat the original email** (truncate — `replyTo` already links it; the reader has the original).
+   No internal jargon, no "I'll do X" without having done it. Mesh links use `@/AbsolutePath`.
 
 # Guidelines
 
