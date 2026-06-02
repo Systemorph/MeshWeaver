@@ -1,4 +1,5 @@
-﻿using Npgsql;
+﻿using MeshWeaver.Mesh;
+using Npgsql;
 
 namespace MeshWeaver.Hosting.PostgreSql;
 
@@ -133,6 +134,85 @@ public static class PostgreSqlSchemaInitializer
         {
             await cmd.ExecuteNonQueryAsync(ct);
         }
+
+        // Step 4: (Re)create the public.ensure_partition_schema(text) stored proc —
+        // the single source of truth for per-partition provisioning. CREATE OR REPLACE
+        // keeps it idempotent and in sync on every init (runtime bootstrap + the test
+        // fixture both run InitializeAsync against public, so both DBs get the proc).
+        // Routed to by PostgreSqlPartitionStorageProvider.EnsureSchemaAsync.
+        await using (var cmd = dataSource.CreateCommand(GetEnsurePartitionSchemaProcScript(options.VectorDimensions)))
+        {
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+    }
+
+    /// <summary>
+    /// Builds the <c>CREATE OR REPLACE FUNCTION public.ensure_partition_schema(partition_name text)</c>
+    /// DDL. The proc idempotently creates the partition's schema + the full versioned
+    /// table set (<c>{partition}.mesh_nodes</c> + every satellite table from
+    /// <see cref="PartitionDefinition.StandardTableMappings"/>) + the permission-rebuild
+    /// functions and notify/mirror/history triggers.
+    ///
+    /// <para><b>Byte-faithful to the C# DDL.</b> The proc body embeds the exact strings
+    /// produced by <see cref="GetVersionedPartitionDdl"/> and
+    /// <see cref="GetSatelliteTableScript"/> — the same definitions
+    /// <see cref="InitializeAsync"/> / <see cref="CreateSatelliteTablesAsync"/> run for the
+    /// public schema and per-schema data sources. Same columns, types, PKs, indexes,
+    /// triggers, satellite tables. The only runtime difference is the partition name,
+    /// substituted from <see cref="PartitionNameSentinel"/> via <c>replace()</c>.</para>
+    ///
+    /// <para><b>Idempotent + safe.</b> <c>CREATE SCHEMA IF NOT EXISTS</c> + every inner
+    /// statement is <c>CREATE TABLE/INDEX/TRIGGER … IF NOT EXISTS</c> (or
+    /// <c>CREATE OR REPLACE FUNCTION</c> / guarded <c>DO</c> blocks). Schema + table names
+    /// are interpolated through <c>format(%I)</c> so the identifier is always correctly
+    /// quoted. Setting <c>search_path</c> to the target schema makes the unqualified DDL
+    /// land in the partition exactly as the per-schema NpgsqlDataSource does at runtime.</para>
+    /// </summary>
+    public static string GetEnsurePartitionSchemaProcScript(int dim)
+    {
+        // Versioned-partition DDL with the schema self-reference left as the quoted
+        // sentinel; the proc replace()s it with the real partition name at runtime.
+        var partitionDdl = GetVersionedPartitionDdl(dim, $"'{PartitionNameSentinel}'");
+
+        // Satellite tables: same set the runtime provider + SchemaInitialization create.
+        // These are schema-agnostic (no schema self-reference), so no sentinel needed.
+        var satelliteDdl = string.Join("\n\n",
+            PartitionDefinition.StandardTableMappings.Values.Distinct()
+                .Select(t => GetSatelliteTableScript(t, dim)));
+
+        // The DDL bodies contain $$ / $migrate$ dollar-quoted blocks, so the proc body
+        // uses a distinct $ensure_partition_schema$ tag. Inner SQL string literals
+        // (the DDL) use their own dollar-quote tags so we don't have to escape '.
+        return $"""
+            CREATE OR REPLACE FUNCTION public.ensure_partition_schema(partition_name text)
+            RETURNS void AS $ensure_partition_schema$
+            DECLARE
+                versioned_ddl text;
+                satellite_ddl text;
+            BEGIN
+                -- 1. Create the schema (idempotent, identifier-safe via %I).
+                EXECUTE format('CREATE SCHEMA IF NOT EXISTS %I', partition_name);
+
+                -- 2. Route all subsequent unqualified DDL into the partition schema —
+                --    mirrors the per-schema NpgsqlDataSource(SearchPath=partition,public)
+                --    the runtime provider builds. public stays on the path for the
+                --    shared notify/mirror functions + public.partition_access.
+                EXECUTE format('SET LOCAL search_path TO %I, public', partition_name);
+
+                -- 3. Bind the partition name into the versioned DDL's schema
+                --    self-references (rebuild_*_permissions search_path + partition_access
+                --    sync) via plain replace() — NOT format() — so the %I/%L inside the
+                --    DDL's own format() calls survive untouched.
+                versioned_ddl := replace($versioned${partitionDdl}$versioned$,
+                                         '{PartitionNameSentinel}', partition_name);
+                EXECUTE versioned_ddl;
+
+                -- 4. Satellite tables (schema-agnostic; land in the partition via search_path).
+                satellite_ddl := $satellite${satelliteDdl}$satellite$;
+                EXECUTE satellite_ddl;
+            END;
+            $ensure_partition_schema$ LANGUAGE plpgsql;
+            """;
     }
 
     /// <summary>
@@ -282,57 +362,65 @@ public static class PostgreSqlSchemaInitializer
         var dim = options.VectorDimensions;
         foreach (var tableName in tableNames.Distinct())
         {
-            var sql = $$"""
-                CREATE TABLE IF NOT EXISTS "{{tableName}}" (
-                    namespace       TEXT        NOT NULL DEFAULT '',
-                    id              TEXT        NOT NULL,
-                    path            TEXT        GENERATED ALWAYS AS (
-                                        CASE WHEN namespace = '' THEN id ELSE namespace || '/' || id END
-                                    ) STORED,
-                    name            TEXT,
-                    node_type       TEXT,
-                    description     TEXT,
-                    category        TEXT,
-                    icon            TEXT,
-                    display_order   INTEGER,
-                    last_modified   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    version         BIGINT      NOT NULL DEFAULT 0,
-                    state           SMALLINT    NOT NULL DEFAULT 0,
-                    content         JSONB,
-                    desired_id      TEXT,
-                    main_node       TEXT,
-                    embedding       vector({{dim}}),
-                    PRIMARY KEY (namespace, id)
-                );
-
-                CREATE INDEX IF NOT EXISTS "idx_{{tableName}}_path" ON "{{tableName}}" (path);
-                CREATE INDEX IF NOT EXISTS "idx_{{tableName}}_main_node" ON "{{tableName}}" (main_node);
-                CREATE INDEX IF NOT EXISTS "idx_{{tableName}}_node_type" ON "{{tableName}}" (node_type);
-                CREATE INDEX IF NOT EXISTS "idx_{{tableName}}_last_modified" ON "{{tableName}}" (last_modified DESC);
-                -- Functional LOWER() indexes — SQL generator case-folds every
-                -- text equality (LOWER(n.namespace) = $1 etc.); without these
-                -- the plain indexes above don't match and Postgres falls back
-                -- to sequential scan on satellite tables.
-                CREATE INDEX IF NOT EXISTS "idx_{{tableName}}_namespace_lower" ON "{{tableName}}" (LOWER(namespace));
-                CREATE INDEX IF NOT EXISTS "idx_{{tableName}}_node_type_lower" ON "{{tableName}}" (LOWER(node_type));
-                CREATE INDEX IF NOT EXISTS "idx_{{tableName}}_main_node_lower" ON "{{tableName}}" (LOWER(main_node));
-
-                -- pg_notify trigger on the satellite table — mirrors the one
-                -- installed on mesh_nodes by GetSchemaScript. Without this,
-                -- writes to satellite tables (AccessAssignment / Thread /
-                -- Activity / Comment / etc.) never fire pg_notify and synced
-                -- queries scoped to satellite namespaces (`namespace:X/_Access`,
-                -- `namespace:X/_Thread`, …) stay frozen at their Initial state.
-                DROP TRIGGER IF EXISTS "{{tableName}}_notify" ON "{{tableName}}";
-                CREATE TRIGGER "{{tableName}}_notify"
-                    AFTER INSERT OR UPDATE OR DELETE ON "{{tableName}}"
-                    FOR EACH ROW EXECUTE FUNCTION notify_mesh_node_changes();
-                """;
-
-            await using var cmd = schemaDataSource.CreateCommand(sql);
+            await using var cmd = schemaDataSource.CreateCommand(GetSatelliteTableScript(tableName, dim));
             await cmd.ExecuteNonQueryAsync(ct);
         }
     }
+
+    /// <summary>
+    /// DDL for one satellite table (same structure as mesh_nodes) + its indexes
+    /// and pg_notify trigger. Unqualified — resolves against the connection's
+    /// search_path. Shared by <see cref="CreateSatelliteTablesAsync"/> (per-schema
+    /// data source) AND <see cref="GetEnsurePartitionSchemaProcScript"/> (the
+    /// <c>public.ensure_partition_schema</c> stored proc, which SETs search_path
+    /// then EXECUTEs this verbatim) so the two paths are byte-faithful.
+    /// </summary>
+    internal static string GetSatelliteTableScript(string tableName, int dim) => $$"""
+        CREATE TABLE IF NOT EXISTS "{{tableName}}" (
+            namespace       TEXT        NOT NULL DEFAULT '',
+            id              TEXT        NOT NULL,
+            path            TEXT        GENERATED ALWAYS AS (
+                                CASE WHEN namespace = '' THEN id ELSE namespace || '/' || id END
+                            ) STORED,
+            name            TEXT,
+            node_type       TEXT,
+            description     TEXT,
+            category        TEXT,
+            icon            TEXT,
+            display_order   INTEGER,
+            last_modified   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            version         BIGINT      NOT NULL DEFAULT 0,
+            state           SMALLINT    NOT NULL DEFAULT 0,
+            content         JSONB,
+            desired_id      TEXT,
+            main_node       TEXT,
+            embedding       vector({{dim}}),
+            PRIMARY KEY (namespace, id)
+        );
+
+        CREATE INDEX IF NOT EXISTS "idx_{{tableName}}_path" ON "{{tableName}}" (path);
+        CREATE INDEX IF NOT EXISTS "idx_{{tableName}}_main_node" ON "{{tableName}}" (main_node);
+        CREATE INDEX IF NOT EXISTS "idx_{{tableName}}_node_type" ON "{{tableName}}" (node_type);
+        CREATE INDEX IF NOT EXISTS "idx_{{tableName}}_last_modified" ON "{{tableName}}" (last_modified DESC);
+        -- Functional LOWER() indexes — SQL generator case-folds every
+        -- text equality (LOWER(n.namespace) = $1 etc.); without these
+        -- the plain indexes above don't match and Postgres falls back
+        -- to sequential scan on satellite tables.
+        CREATE INDEX IF NOT EXISTS "idx_{{tableName}}_namespace_lower" ON "{{tableName}}" (LOWER(namespace));
+        CREATE INDEX IF NOT EXISTS "idx_{{tableName}}_node_type_lower" ON "{{tableName}}" (LOWER(node_type));
+        CREATE INDEX IF NOT EXISTS "idx_{{tableName}}_main_node_lower" ON "{{tableName}}" (LOWER(main_node));
+
+        -- pg_notify trigger on the satellite table — mirrors the one
+        -- installed on mesh_nodes by GetSchemaScript. Without this,
+        -- writes to satellite tables (AccessAssignment / Thread /
+        -- Activity / Comment / etc.) never fire pg_notify and synced
+        -- queries scoped to satellite namespaces (`namespace:X/_Access`,
+        -- `namespace:X/_Thread`, …) stay frozen at their Initial state.
+        DROP TRIGGER IF EXISTS "{{tableName}}_notify" ON "{{tableName}}";
+        CREATE TRIGGER "{{tableName}}_notify"
+            AFTER INSERT OR UPDATE OR DELETE ON "{{tableName}}"
+            FOR EACH ROW EXECUTE FUNCTION notify_mesh_node_changes();
+        """;
 
     /// <summary>
     /// Returns SQL for the versions schema: mesh_node_history table + indexes.
@@ -1002,6 +1090,40 @@ public static class PostgreSqlSchemaInitializer
     {
         var dim = options.VectorDimensions;
         var schemaName = options.Schema ?? "public";
+        // Existing callers (public bootstrap + per-schema NpgsqlDataSource init) hardcode
+        // the schema name as a SQL string literal — the schema is known at C# build time.
+        return GetVersionedPartitionDdl(dim, $"'{schemaName}'");
+    }
+
+    /// <summary>
+    /// Sentinel that <see cref="GetEnsurePartitionSchemaProcScript"/> substitutes for the
+    /// real partition name at proc-runtime via plain <c>replace()</c> (NOT <c>format()</c> —
+    /// the DDL body contains <c>%I</c>/<c>%L</c> inside its own <c>format()</c> calls that
+    /// must survive untouched). Never appears in a real schema name.
+    /// </summary>
+    internal const string PartitionNameSentinel = "__mw_partition__";
+
+    /// <summary>
+    /// The full versioned-partition DDL (mesh_nodes + support tables + the access
+    /// satellite + permission-rebuild functions + notify/mirror/history triggers).
+    /// Unqualified — resolves against the connection's <c>search_path</c>.
+    ///
+    /// <para><paramref name="schemaRef"/> is the SQL <i>literal/expression</i> spliced in
+    /// where the rebuild functions <c>SET LOCAL search_path</c> and the
+    /// <c>public.partition_access</c> sync reference the owning schema. Two callers:
+    /// <list type="bullet">
+    ///   <item><see cref="GetSchemaScript"/> passes a quoted literal
+    ///         (<c>'rbuergi'</c>) — the schema is fixed at C# build time.</item>
+    ///   <item><see cref="GetEnsurePartitionSchemaProcScript"/> passes the quoted
+    ///         <see cref="PartitionNameSentinel"/> (<c>'__mw_partition__'</c>); the proc
+    ///         <c>replace()</c>s the sentinel with the real partition name before
+    ///         <c>EXECUTE</c>, yielding the same <c>'rbuergi'</c> literal at runtime.</item>
+    /// </list>
+    /// Both produce byte-identical table/index/PK/trigger DDL; only the schema
+    /// self-reference differs.</para>
+    /// </summary>
+    internal static string GetVersionedPartitionDdl(int dim, string schemaRef)
+    {
         return $$"""
             CREATE EXTENSION IF NOT EXISTS vector;
 
@@ -1122,7 +1244,7 @@ public static class PostgreSqlSchemaInitializer
             CREATE OR REPLACE FUNCTION rebuild_user_effective_permissions() RETURNS void AS $$
             BEGIN
                 -- Set search_path so unqualified table names resolve to this schema
-                EXECUTE format('SET LOCAL search_path TO %I, public', '{{schemaName}}');
+                EXECUTE format('SET LOCAL search_path TO %I, public', {{schemaRef}});
                 TRUNCATE user_effective_permissions_shadow;
 
                 -- Direct entries from AccessAssignment nodes (access satellite table)
@@ -1291,13 +1413,13 @@ public static class PostgreSqlSchemaInitializer
                 -- Sync partition_access: upsert users with Read permission, remove revoked
                 BEGIN
                     INSERT INTO public.partition_access (user_id, partition)
-                    SELECT DISTINCT user_id, '{{schemaName}}'
+                    SELECT DISTINCT user_id, {{schemaRef}}
                     FROM user_effective_permissions
                     WHERE permission = 'Read' AND is_allow = true
                     ON CONFLICT (user_id, partition) DO NOTHING;
 
                     DELETE FROM public.partition_access
-                    WHERE partition = '{{schemaName}}'
+                    WHERE partition = {{schemaRef}}
                       AND user_id NOT IN (
                         SELECT user_id FROM user_effective_permissions
                         WHERE permission = 'Read' AND is_allow = true
@@ -1343,7 +1465,7 @@ public static class PostgreSqlSchemaInitializer
             -- Per-user permission rebuild: concurrent-safe, only touches one user's rows.
             CREATE OR REPLACE FUNCTION rebuild_user_permissions_for(p_user_id TEXT) RETURNS void AS $$
             BEGIN
-                EXECUTE format('SET LOCAL search_path TO %I, public', '{{schemaName}}');
+                EXECUTE format('SET LOCAL search_path TO %I, public', {{schemaRef}});
                 DELETE FROM user_effective_permissions WHERE user_id = p_user_id;
 
                 -- Direct entries from AccessAssignment nodes for this user
@@ -1456,10 +1578,10 @@ public static class PostgreSqlSchemaInitializer
                     IF EXISTS (SELECT 1 FROM user_effective_permissions
                                WHERE user_id = p_user_id AND permission = 'Read' AND is_allow = true) THEN
                         INSERT INTO public.partition_access (user_id, partition)
-                        VALUES (p_user_id, '{{schemaName}}') ON CONFLICT DO NOTHING;
+                        VALUES (p_user_id, {{schemaRef}}) ON CONFLICT DO NOTHING;
                     ELSE
                         DELETE FROM public.partition_access
-                        WHERE user_id = p_user_id AND partition = '{{schemaName}}';
+                        WHERE user_id = p_user_id AND partition = {{schemaRef}};
                     END IF;
                 EXCEPTION WHEN undefined_table THEN NULL;
                 END;

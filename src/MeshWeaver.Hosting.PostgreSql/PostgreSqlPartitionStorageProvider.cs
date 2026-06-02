@@ -107,42 +107,54 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
 
         if (_schemasInitialized.ContainsKey(schema)) return def;
 
-        await using (var cmd = _baseDataSource.CreateCommand(
-            $"CREATE SCHEMA IF NOT EXISTS \"{schema}\""))
+        // Single source of truth for per-partition DDL: the public.ensure_partition_schema
+        // stored proc (installed by PostgreSqlSchemaInitializer.InitializeAsync on the
+        // public schema + the V29 migration). It idempotently creates the schema +
+        // {schema}.mesh_nodes + every StandardTableMappings satellite + the permission
+        // rebuild functions + notify/mirror/history triggers — byte-faithful to the C#
+        // GetVersionedPartitionDdl/GetSatelliteTableScript bodies the proc embeds.
+        // The base data source has UseVector() so the proc's vector(dim) columns resolve.
+        await using (var cmd = _baseDataSource.CreateCommand("SELECT public.ensure_partition_schema(@partition)"))
         {
+            cmd.Parameters.AddWithValue("partition", schema);
             await cmd.ExecuteNonQueryAsync(ct);
         }
 
-        var builder = new NpgsqlConnectionStringBuilder(_baseConnectionString)
-        {
-            SearchPath = $"{schema},public",
-            MaxPoolSize = 2,
-            ConnectionIdleLifetime = 10
-        };
-        var dsBuilder = new NpgsqlDataSourceBuilder(builder.ConnectionString);
-        dsBuilder.UseVector();
-        _configureDataSource?.Invoke(dsBuilder);
-        await using var ddlDs = dsBuilder.Build();
-
-        var schemaOptions = new PostgreSqlStorageOptions
-        {
-            ConnectionString = builder.ConnectionString,
-            VectorDimensions = _options.VectorDimensions,
-            Schema = schema
-        };
-        await PostgreSqlSchemaInitializer.InitializeAsync(ddlDs, schemaOptions, ct);
-
-        var satelliteTables = new HashSet<string>(StringComparer.Ordinal);
+        // Non-standard satellite tables: the proc only provisions the standard set
+        // (PartitionDefinition.StandardTableMappings). If this def carries a bespoke
+        // Table or TableMappings entry outside that set, create it too so routing to it
+        // doesn't hit 42P01. The common partition-root case (StandardTableMappings +
+        // Table="mesh_nodes") finds nothing extra here and skips the per-schema datasource.
+        var standard = new HashSet<string>(
+            PartitionDefinition.StandardTableMappings.Values, StringComparer.Ordinal);
+        var extraTables = new HashSet<string>(StringComparer.Ordinal);
         if (def.TableMappings is { Count: > 0 })
             foreach (var t in def.TableMappings.Values)
-                if (!string.IsNullOrEmpty(t)) satelliteTables.Add(t);
+                if (!string.IsNullOrEmpty(t) && !standard.Contains(t)) extraTables.Add(t);
         if (!string.IsNullOrEmpty(def.Table) &&
-            !string.Equals(def.Table, "mesh_nodes", StringComparison.Ordinal))
-            satelliteTables.Add(def.Table);
-        if (satelliteTables.Count > 0)
+            !string.Equals(def.Table, "mesh_nodes", StringComparison.Ordinal) &&
+            !standard.Contains(def.Table))
+            extraTables.Add(def.Table);
+        if (extraTables.Count > 0)
         {
+            var builder = new NpgsqlConnectionStringBuilder(_baseConnectionString)
+            {
+                SearchPath = $"{schema},public",
+                MaxPoolSize = 2,
+                ConnectionIdleLifetime = 10
+            };
+            var dsBuilder = new NpgsqlDataSourceBuilder(builder.ConnectionString);
+            dsBuilder.UseVector();
+            _configureDataSource?.Invoke(dsBuilder);
+            await using var ddlDs = dsBuilder.Build();
+            var schemaOptions = new PostgreSqlStorageOptions
+            {
+                ConnectionString = builder.ConnectionString,
+                VectorDimensions = _options.VectorDimensions,
+                Schema = schema
+            };
             await PostgreSqlSchemaInitializer.CreateSatelliteTablesAsync(
-                ddlDs, schemaOptions, satelliteTables, ct);
+                ddlDs, schemaOptions, extraTables, ct);
         }
 
         _schemasInitialized.TryAdd(schema, 0);
@@ -151,6 +163,28 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
             "PostgreSqlPartitionStorageProvider: schema {Schema} ready for partition {Namespace}",
             schema, def.Namespace);
         return def;
+    }
+
+    /// <summary>
+    /// Public provisioning entry point used by eager-provisioning hooks (e.g. the
+    /// Space top-level validator) to create a partition's schema + tables BEFORE the
+    /// first read- or write-shaped touch — routed through
+    /// <c>public.ensure_partition_schema</c> like every other provisioning path.
+    /// Idempotent; the per-silo memo short-circuits repeat calls for the same schema.
+    /// </summary>
+    public Task EnsurePartitionProvisionedAsync(string @namespace, CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(@namespace)) return Task.CompletedTask;
+        var def = new PartitionDefinition
+        {
+            Namespace = @namespace,
+            DataSource = Name,
+            Schema = @namespace.ToLowerInvariant(),
+            Table = "mesh_nodes",
+            TableMappings = PartitionDefinition.StandardTableMappings,
+            Versioned = true,
+        };
+        return EnsureSchemaAsync(def, ct);
     }
 
     /// <summary>

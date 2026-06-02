@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Messaging;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Domain;
@@ -16,8 +17,8 @@ namespace MeshWeaver.Blazor.Portal;
 
 /// <summary>
 /// Represents a tenant container — a company, team, or organizational unit that owns
-/// its own partition. Each Space gets a dedicated Postgres schema (lazy-created on
-/// first write) and a root <c>AccessAssignment</c> granting the creator Admin.
+/// its own partition. Each Space gets a dedicated Postgres schema (provisioned eagerly
+/// on create) and a root <c>AccessAssignment</c> granting the creator Admin.
 /// </summary>
 public record Space
 {
@@ -54,9 +55,34 @@ public record Space
 
 /// <summary>
 /// Provides configuration for Space nodes in the graph. A Space is a tenant
-/// container — the root of a per-tenant partition. The partition schema itself
-/// is created lazily on first write by the path-routing adapter; there is no
-/// dedicated <c>Partition</c> MeshNode emitted for a Space.
+/// container — the root of a per-tenant partition. Creating one is a fool-proof
+/// server-side invariant (driven entirely from <see cref="SpaceTopLevelValidator"/>
+/// + <see cref="SpacePostCreationHandler"/>, so it holds for MCP <c>create</c> and
+/// every other caller):
+///
+/// <list type="number">
+///   <item><b>Top-level only.</b> A Space's path is just its id (empty namespace).
+///     <see cref="SpaceTopLevelValidator"/> rejects any create with a non-empty
+///     namespace.</item>
+///   <item><b>Eagerly provisioned partition.</b> The validator runs BEFORE the root
+///     write and, under <c>AccessService.ImpersonateAsSystem</c>, calls every
+///     <see cref="IPartitionStorageProvider"/>'s
+///     <c>EnsurePartitionProvisionedAsync</c> — which routes to the
+///     <c>public.ensure_partition_schema</c> Postgres stored procedure
+///     (<c>PostgreSqlPartitionStorageProvider.EnsureSchemaAsync</c>). The per-Space
+///     schema (<c>{id}.mesh_nodes</c> + every satellite table) therefore exists before
+///     the Space root write or any child touch — no more <c>42P01 relation does not
+///     exist</c>. Idempotent.</item>
+///   <item><b>Routing primed.</b> <see cref="SpacePostCreationHandler.GetAdditionalNodes"/>
+///     emits an <c>Admin/Partition/{id}</c> <see cref="PartitionDefinition"/>. Persisting
+///     it primes <c>PgPartitionCache</c> (positive) across the mesh and drives the
+///     <c>partition_changes</c> pg_notify provisioning so every silo/mirror agrees the
+///     partition exists.</item>
+///   <item><b>Creator gets Admin.</b> The handler persists an <c>AccessAssignment</c> at
+///     <c>{id}/_Access</c> under <c>AccessService.ImpersonateAsSystem</c>; the write is
+///     <b>awaited</b>, so a failed grant faults the create response rather than being
+///     silently dropped.</item>
+/// </list>
 ///
 /// Access rules: Read/Create/Update/Delete controlled by partition-level
 /// permissions via <c>SecurityService</c>. Space instances live in
@@ -102,9 +128,18 @@ public static class SpaceNodeType
         {
             services.AddSingleton<INodeTypeAccessRule>(sp =>
                 new SpaceAccessRule(sp.GetRequiredService<IMessageHub>()));
+            // Top-level invariant: a Space IS a partition root. Reject any create with a
+            // non-empty namespace BEFORE the root write, and eagerly provision the
+            // partition's schema+tables (via public.ensure_partition_schema) so the
+            // root write + first child touch never race a missing relation.
+            services.AddSingleton<INodeValidator>(sp =>
+                new SpaceTopLevelValidator(
+                    sp,
+                    sp.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Blazor.Portal.SpaceTopLevelValidator")));
             services.AddSingleton<INodePostCreationHandler>(sp =>
                 new SpacePostCreationHandler(
                     sp.GetRequiredService<IMeshService>(),
+                    sp.GetRequiredService<AccessService>(),
                     sp.GetService<ILoggerFactory>()?.CreateLogger<SpacePostCreationHandler>()));
             return services;
         });
@@ -129,15 +164,28 @@ public static class SpaceNodeType
     };
 
     /// <summary>
-    /// Post-creation handler: grants the creator Admin role on the new Space's
-    /// scope. Triggered implicitly by <c>RunPostCreationHandlersAsync</c> when
-    /// a Space is created via normal CreateNodeRequest. No longer emits a
-    /// dedicated <c>Partition</c> MeshNode — the path-routing adapter creates
-    /// the partition schema lazily on first write via
-    /// <c>public.ensure_partition_schema</c>.
+    /// Post-creation handler that makes a Space create a fool-proof partition root.
+    /// Triggered implicitly by <c>RunPostCreationHandlersObs</c> when a Space is
+    /// created via a normal <c>CreateNodeRequest</c> (MCP <c>create</c> and every
+    /// other caller funnel through there).
+    ///
+    /// <para>The per-Space schema is already provisioned eagerly by
+    /// <see cref="SpaceTopLevelValidator"/> before the root write; this handler
+    /// (1) emits the <c>Admin/Partition/{id}</c> <see cref="PartitionDefinition"/>
+    /// that primes <c>PgPartitionCache</c> + the <c>partition_changes</c> notify pump,
+    /// and (2) grants the creator Admin.</para>
+    ///
+    /// <para><b>The creator-admin grant</b> runs under
+    /// <c>AccessService.ImpersonateAsSystem</c> (the new user / brand-new partition
+    /// root means the caller can't already hold Create on it — the canonical
+    /// infrastructure-write case) and is <b>awaited</b>, not fire-and-forget: a
+    /// failed grant faults <see cref="HandleAsync"/>, which
+    /// <c>RunPostCreationHandlersObs</c> surfaces as a failed create response
+    /// instead of silently dropping it.</para>
     /// </summary>
     private class SpacePostCreationHandler(
         IMeshService meshService,
+        AccessService accessService,
         ILogger<SpacePostCreationHandler>? logger) : INodePostCreationHandler
     {
         public string NodeType => SpaceNodeType.NodeType;
@@ -163,13 +211,128 @@ public static class SpaceNodeType
                     Roles = [new RoleAssignment { Role = Role.Admin.Id, Denied = false }]
                 }
             };
-            meshService.CreateNode(assignmentNode).Subscribe(
-                _ => { },
-                ex => logger?.LogWarning(ex, "Failed to grant Admin role to {User} on Space {Path}", createdBy, createdNode.Path));
-            return Task.CompletedTask;
+            // Await the grant under System impersonation so:
+            //   (1) the write authorises (creator can't already hold Create on a
+            //       brand-new partition root they don't own yet);
+            //   (2) a failure propagates — the awaited Task faults, which
+            //       RunPostCreationHandlersObs reports as a failed create response.
+            //       The old `.Subscribe(onError: log)` fire-and-forget swallowed it.
+            // INodePostCreationHandler is a Task-based contract invoked via
+            // Observable.FromAsync (the sanctioned reactive→Task boundary), so the
+            // ToTask bridge here is allowed (see AsynchronousCalls.md).
+            return Observable.Using(
+                    () => accessService.ImpersonateAsSystem(),
+                    _ => meshService.CreateNode(assignmentNode))
+                .Do(_ => logger?.LogInformation(
+                    "Granted Admin to {User} on Space {Path} at {GrantPath}",
+                    createdBy, createdNode.Path, assignmentNode.Path))
+                .FirstAsync()
+                .ToTask(ct);
         }
 
-        public IEnumerable<MeshNode> GetAdditionalNodes(MeshNode createdNode) => [];
+        /// <summary>
+        /// Emits the per-Space <c>Admin/Partition/{id}</c> <see cref="PartitionDefinition"/>.
+        /// Persisting this primes the partition cache + notify-driven schema
+        /// provisioning so the partition is consistently routable across the mesh.
+        /// </summary>
+        public IEnumerable<MeshNode> GetAdditionalNodes(MeshNode createdNode)
+        {
+            yield return new MeshNode(createdNode.Id, PartitionNodeType.Namespace)
+            {
+                NodeType = PartitionNodeType.NodeType,
+                Name = createdNode.Name ?? createdNode.Id,
+                State = MeshNodeState.Active,
+                Content = new PartitionDefinition
+                {
+                    Namespace = createdNode.Id,
+                    DataSource = "default",
+                    Schema = createdNode.Id.ToLowerInvariant(),
+                    TableMappings = PartitionDefinition.StandardTableMappings,
+                    Description = $"Partition for space {createdNode.Name ?? createdNode.Id}"
+                }
+            };
+        }
+    }
+
+    /// <summary>
+    /// Enforces the top-level invariant AND eagerly provisions the partition.
+    ///
+    /// <para>A Space IS a partition root, so its path must be just its id (empty
+    /// namespace). Rejecting non-empty-namespace creates up front prevents the
+    /// half-registered split state (routing/index entry with no schema or creator
+    /// grant) that a nested Space would otherwise leave behind.</para>
+    ///
+    /// <para>For a valid top-level Space, the validator runs BEFORE the root write
+    /// and provisions the partition's backing store via every
+    /// <see cref="IPartitionStorageProvider"/>'s <c>EnsurePartitionProvisionedAsync</c>
+    /// (the Postgres provider routes to <c>public.ensure_partition_schema</c>). It runs
+    /// under <c>AccessService.ImpersonateAsSystem</c> because creating a partition schema
+    /// is an infrastructure operation the creating user has no permission for yet. The
+    /// provisioning is idempotent, so re-validation (retries) is harmless.</para>
+    /// </summary>
+    private sealed class SpaceTopLevelValidator(
+        IServiceProvider serviceProvider,
+        ILogger? logger) : INodeValidator
+    {
+        public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Create];
+
+        public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
+        {
+            if (!string.Equals(context.Node.NodeType, SpaceNodeType.NodeType, StringComparison.OrdinalIgnoreCase))
+                return Observable.Return(NodeValidationResult.Valid());
+
+            if (!string.IsNullOrEmpty(context.Node.Namespace))
+                return Observable.Return(NodeValidationResult.Invalid(
+                    $"A Space must be top-level: it is a partition root, so its path is just its id. " +
+                    $"Cannot create Space '{context.Node.Id}' under namespace '{context.Node.Namespace}'.",
+                    NodeRejectionReason.InvalidPath));
+
+            // Eagerly provision the partition's schema + tables BEFORE the root write,
+            // so neither the Space root write nor any follow-up child touch races a
+            // missing relation. Idempotent + routed through the stored proc.
+            var partitionName = context.Node.Id;
+            return Observable
+                .FromAsync(ct => ProvisionPartitionAsync(partitionName, ct))
+                .Select(_ => NodeValidationResult.Valid());
+        }
+
+        private async Task ProvisionPartitionAsync(string partitionName, CancellationToken ct)
+        {
+            var accessService = serviceProvider.GetService<AccessService>();
+            var providers = serviceProvider.GetServices<IPartitionStorageProvider>().ToList();
+
+            // ImpersonateAsSystem: creating a brand-new partition schema is an
+            // infrastructure write the creating user has no permission for yet (the
+            // partition root doesn't exist, so no AccessAssignment grants Create on it).
+            IDisposable? scope = null;
+            try
+            {
+                scope = accessService?.ImpersonateAsSystem();
+                foreach (var provider in providers)
+                {
+                    try
+                    {
+                        await provider.EnsurePartitionProvisionedAsync(partitionName, ct);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Surface but don't necessarily fail the whole create: the lazy
+                        // path-routing provisioning still runs on first write. Log so a
+                        // genuinely broken backend is visible.
+                        logger?.LogWarning(ex,
+                            "Eager partition provisioning failed for Space '{Partition}' via provider {Provider}",
+                            partitionName, provider.Name);
+                    }
+                }
+                logger?.LogInformation(
+                    "Eagerly provisioned partition '{Partition}' for new Space across {Count} provider(s)",
+                    partitionName, providers.Count);
+            }
+            finally
+            {
+                scope?.Dispose();
+            }
+        }
     }
 
     /// <summary>

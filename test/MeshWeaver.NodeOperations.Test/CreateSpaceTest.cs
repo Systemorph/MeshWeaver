@@ -13,8 +13,9 @@ namespace MeshWeaver.NodeOperations.Test;
 
 /// <summary>
 /// Tests that creating a Space via normal CreateNodeRequest grants admin access
-/// to the creator. The per-tenant Partition MeshNode is no longer emitted —
-/// the routing layer creates the partition schema lazily on first write.
+/// to the creator. The Space top-level validator eagerly provisions the partition
+/// (a no-op on the in-memory backend used here) and the post-creation handler emits
+/// the Admin/Partition/{id} PartitionDefinition + the creator-admin AccessAssignment.
 /// </summary>
 public class CreateSpaceTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
