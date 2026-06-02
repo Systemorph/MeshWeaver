@@ -94,6 +94,27 @@ public sealed class MemexOptions
     /// <summary>LinkedIn OAuth client secret.</summary>
     public string? LinkedInClientSecret { get; set; }
 
+    // --- Outbound email (Microsoft Graph /sendMail) -------------------------
+    // When EmailEnabled is true the portal sends mail (invitations, notifications) as the
+    // configured no-reply mailbox via the Mail.Send application permission. Left unset = disabled
+    // (the portal registers a NoOp sender). See Doc/Architecture/SendingEmail.md.
+
+    /// <summary>Enable outbound email. null/false = NoOp sender (no mail sent).</summary>
+    public bool? EmailEnabled { get; set; }
+    /// <summary>Mailbox to send as (e.g. <c>no-reply@yourtenant.com</c>).</summary>
+    public string? EmailNoReplyAddress { get; set; }
+    /// <summary>Entra tenant GUID for the mail app (client-secret flow).</summary>
+    public string? EmailTenantId { get; set; }
+    /// <summary>Mail app registration client id (client-secret flow).</summary>
+    public string? EmailClientId { get; set; }
+    /// <summary>Mail app client secret (keep in Key Vault).</summary>
+    public string? EmailClientSecret { get; set; }
+    /// <summary>Authenticate via managed identity instead of a client secret (prod).</summary>
+    public bool? EmailUseManagedIdentity { get; set; }
+
+    /// <summary>Require an invitation to onboard (<c>Features:Onboarding:InvitationOnly</c>). null = portal default (false).</summary>
+    public bool? InvitationOnly { get; set; }
+
     internal IEnumerable<KeyValuePair<string, string>> AuthEnvironment()
     {
         if (!string.IsNullOrEmpty(MicrosoftClientId)) yield return new("Authentication__Microsoft__ClientId", MicrosoftClientId);
@@ -134,5 +155,20 @@ public sealed class MemexOptions
         if (OpenAI is { } op) yield return new("Features__Ai__Providers__OpenAI", op ? "true" : "false");
         if (ClaudeCode is { } cc) yield return new("Features__Ai__Clis__ClaudeCode", cc ? "true" : "false");
         if (Copilot is { } co) yield return new("Features__Ai__Clis__Copilot", co ? "true" : "false");
+        if (InvitationOnly is { } io) yield return new("Features__Onboarding__InvitationOnly", io ? "true" : "false");
+    }
+
+    /// <summary>
+    /// Outbound-email config. Emitted only when configured (ACA rejects empty secrets). The client
+    /// secret is best supplied out-of-band (Key Vault → <c>Email__ClientSecret</c>) rather than here.
+    /// </summary>
+    internal IEnumerable<KeyValuePair<string, string>> EmailEnvironment()
+    {
+        if (EmailEnabled is { } en) yield return new("Email__Enabled", en ? "true" : "false");
+        if (!string.IsNullOrEmpty(EmailNoReplyAddress)) yield return new("Email__NoReplyAddress", EmailNoReplyAddress);
+        if (!string.IsNullOrEmpty(EmailTenantId)) yield return new("Email__TenantId", EmailTenantId);
+        if (!string.IsNullOrEmpty(EmailClientId)) yield return new("Email__ClientId", EmailClientId);
+        if (!string.IsNullOrEmpty(EmailClientSecret)) yield return new("Email__ClientSecret", EmailClientSecret);
+        if (EmailUseManagedIdentity is { } mi) yield return new("Email__UseManagedIdentity", mi ? "true" : "false");
     }
 }

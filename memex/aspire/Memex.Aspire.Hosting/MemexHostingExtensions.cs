@@ -111,6 +111,12 @@ public static class MemexHostingExtensions
         foreach (var kv in options.AuthEnvironment())
             portal.WithEnvironment(kv.Key, kv.Value);
 
+        // Outbound email (Microsoft Graph) — invitations + script-triggered notifications.
+        // The client secret is normally supplied out-of-band (Key Vault → Email__ClientSecret);
+        // any value set here is emitted too.
+        foreach (var kv in options.EmailEnvironment())
+            portal.WithEnvironment(kv.Key, kv.Value);
+
         // MCP back-connection base URL for the co-hosted CLIs ({BaseUrl}/mcp). Defaults to the
         // portal's own allocated external endpoint (Aspire substitutes the real URL at publish).
         if (!string.IsNullOrEmpty(options.BaseUrl))

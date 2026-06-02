@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using MeshWeaver.Mesh;
 using Microsoft.Extensions.Logging;
 
 namespace Memex.Portal.Shared.Email;
