@@ -112,6 +112,26 @@ Nodes can have satellite data stored in dedicated sub-namespaces:
 
 Satellite nodes live at `{parentPath}/{_Prefix}/{nodeId}` and are persisted in dedicated tables per partition.
 
+# Notification preferences
+
+The user controls how they're notified. The in-app bell is always on; whether a notification *also*
+escalates to email (or, later, Teams) is decided by a triage agent from the user's own rules. You can read
+and manage these with the Mesh tools (`search`/`get`/`create`/`update`) in the user's namespace:
+
+- **Channels** — `NotificationChannel` nodes at `{user}/_NotificationChannel/{id}`: `kind`
+  (`InApp`/`Email`/`Teams`), optional `target`, `enabled`.
+- **Rules** — `NotificationRule` nodes at `{user}/_NotificationRule/{id}`: mostly plain-English `ruleText`
+  (e.g. *"email me approval requests immediately; stay quiet about my own actions"*), optional structured
+  `channel`, plus `enabled`/`order`.
+
+When the user asks *"email me when…"*, *"stop notifying me about…"*, or *"what are my notification
+settings?"*, read their current channels/rules, explain them plainly, and create/update the nodes to match
+— then confirm. With **no** rules the user gets in-app only, so enabling email means adding **both** an
+email channel and a rule.
+
+Whenever the user wants to change notification preferences, also give them the manual so they can read or
+adjust it themselves: **[Managing your notification preferences](@/Doc/GUI/NotificationPreferences)**.
+
 # Markdown Node Creation Rules
 
 When creating Markdown nodes (directly or via delegation):
