@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
@@ -336,5 +337,110 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
             .Should().Within(30.Seconds()).Emit();
         readBack.Should().NotBeNull(
             "the newly onboarded user must be able to read back their own writes");
+    }
+
+    /// <summary>
+    /// #9 (restored after the Organization→Space migration): ANY authenticated user —
+    /// not only a global admin — can create a top-level Space and automatically becomes
+    /// its Admin. Impersonates a brand-new user with no global-admin grant.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public void CreateSpace_ByNonGlobalAdmin_Succeeds_AndGrantsCreatorAdmin()
+    {
+        var creator = $"pg9d_anyone_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
+        var spaceId = $"pg9d_sp_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var workspace = Mesh.GetWorkspace();
+
+        // Act AS a regular (non-global-admin) user.
+        accessService.SetCircuitContext(new AccessContext { ObjectId = creator, Name = creator });
+
+        var created = meshService.CreateNode(new MeshNode(spaceId)
+        {
+            NodeType = SpaceNodeType.NodeType,
+            Name = spaceId,
+            State = MeshNodeState.Active,
+            Content = new Space { Name = spaceId },
+        }).Should().Within(45.Seconds()).Emit();
+        created.Should().NotBeNull("any authenticated user must be able to create a top-level Space");
+        created.Path.Should().Be(spaceId);
+
+        // Creator auto-becomes Admin of the Space they created.
+        var grantPath = $"{spaceId}/_Access/{creator}_Access";
+        var grant = workspace.GetMeshNodeStream(grantPath)
+            .Where(n => n is not null).Take(1).Timeout(20.Seconds())
+            .Catch<MeshNode?, TimeoutException>(_ => Observable.Return<MeshNode?>(null))
+            .Should().Within(30.Seconds()).Emit();
+        grant.Should().NotBeNull("the creator must be granted Admin on the Space they created");
+        var assignment = grant!.Content.Should().BeOfType<AccessAssignment>().Subject;
+        assignment.Roles.Should().Contain(r => r.Role == Role.Admin.Id && !r.Denied,
+            "the creator's grant must carry the non-denied Admin role");
+    }
+
+    /// <summary>
+    /// #10: a Space must always retain at least one administrator. Deleting the creator's
+    /// (sole) Admin AccessAssignment is rejected; once a SECOND admin exists, the first
+    /// can be removed. Enforced by <c>SpaceAdminInvariantValidator</c>.
+    /// </summary>
+    [Fact(Timeout = 90000)]
+    public void Space_CannotRemoveLastAdmin_AllowedAfterSecondAdmin()
+    {
+        var spaceId = $"pg9d_lastadm_{Guid.NewGuid():N}".ToLowerInvariant()[..20];
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var workspace = Mesh.GetWorkspace();
+
+        meshService.CreateNode(new MeshNode(spaceId)
+        {
+            NodeType = SpaceNodeType.NodeType,
+            Name = spaceId,
+            State = MeshNodeState.Active,
+            Content = new Space { Name = spaceId },
+        }).Should().Within(45.Seconds()).Emit();
+
+        var firstAdminPath = $"{spaceId}/_Access/{TestUsers.Admin.ObjectId}_Access";
+        workspace.GetMeshNodeStream(firstAdminPath)
+            .Where(n => n is not null).Take(1).Timeout(20.Seconds())
+            .Should().Within(30.Seconds()).Emit();
+
+        // (1) Deleting the LAST admin must be blocked (DeleteNode emits false / OnError,
+        //     never OnNext(true)).
+        var blocked = meshService.DeleteNode(firstAdminPath)
+            .Take(1).Materialize().Should().Within(30.Seconds()).Emit();
+        var deletedLast = blocked.Kind == System.Reactive.NotificationKind.OnNext && blocked.Value;
+        deletedLast.Should().BeFalse("deleting the last admin of a Space must be rejected");
+
+        // (2) Add a SECOND admin.
+        const string secondAdmin = "pg9dsecondadmin";
+        meshService.CreateNode(new MeshNode($"{secondAdmin}_Access", $"{spaceId}/_Access")
+        {
+            NodeType = "AccessAssignment",
+            Name = $"{secondAdmin} Access",
+            MainNode = spaceId,
+            Content = new AccessAssignment
+            {
+                AccessObject = secondAdmin,
+                DisplayName = secondAdmin,
+                Roles = [new RoleAssignment { Role = Role.Admin.Id, Denied = false }],
+            },
+        }).Should().Within(30.Seconds()).Emit();
+
+        // Wait until the read-side (what the validator reads) shows BOTH admins — accumulate
+        // ids across Initial + delta emissions so we don't race eventual consistency.
+        MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                $"namespace:{spaceId}/_Access nodeType:AccessAssignment"))
+            .Scan(ImmutableHashSet<string>.Empty, (acc, c) =>
+                c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset
+                    ? c.Items.Select(n => n.Id).ToImmutableHashSet()
+                    : acc.Union(c.Items.Select(n => n.Id)))
+            .Where(ids => ids.Count >= 2)
+            .Take(1).Timeout(30.Seconds())
+            .Should().Within(35.Seconds()).Emit();
+
+        // (3) Now the first admin CAN be removed — a second admin remains.
+        var allowed = meshService.DeleteNode(firstAdminPath)
+            .Take(1).Materialize().Should().Within(30.Seconds()).Emit();
+        var deletedFirst = allowed.Kind == System.Reactive.NotificationKind.OnNext && allowed.Value;
+        deletedFirst.Should().BeTrue("with a second admin present, the first admin can be removed");
     }
 }

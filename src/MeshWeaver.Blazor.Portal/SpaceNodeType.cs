@@ -141,6 +141,12 @@ public static class SpaceNodeType
                     sp.GetRequiredService<IMeshService>(),
                     sp.GetRequiredService<AccessService>(),
                     sp.GetService<ILoggerFactory>()?.CreateLogger<SpacePostCreationHandler>()));
+            // A Space must always retain at least one admin: block deleting / denying
+            // the last non-denied Admin AccessAssignment on any partition's _Access.
+            services.AddSingleton<INodeValidator>(sp =>
+                new SpaceAdminInvariantValidator(
+                    sp.GetRequiredService<IMessageHub>(),
+                    sp.GetService<ILoggerFactory>()?.CreateLogger<SpaceAdminInvariantValidator>()));
             return services;
         });
         // Space instances are NOT publicly readable — partition access controls visibility.
@@ -357,6 +363,17 @@ public static class SpaceNodeType
 
             if (context.Operation == NodeOperation.Create)
             {
+                // Anyone authenticated may create a top-level Space — they become its
+                // Admin via SpacePostCreationHandler. A Space is ALWAYS top-level
+                // (SpaceTopLevelValidator rejects non-empty namespaces), and a brand-new
+                // top-level partition has no parent to hold Create on, so requiring
+                // CheckPermission(parentPath, Create) here locked everyone except global
+                // admins out of creating spaces (the logic lost in the Organization→Space
+                // migration). Gate only on a present identity (userId != null, already
+                // checked above). Nested creates still require parent Create — though the
+                // validator rejects them first.
+                if (string.IsNullOrEmpty(context.Node.Namespace))
+                    return Observable.Return(true);
                 var parentPath = context.Node.GetParentPath() ?? context.Node.Path;
                 return hub.CheckPermission(parentPath, userId, Permission.Create);
             }
