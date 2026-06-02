@@ -1,3 +1,5 @@
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.Logging;
 
@@ -25,32 +27,27 @@ public class McpCompletionProvider
     /// <param name="limit">Maximum number of suggestions to return</param>
     /// <param name="ct">Cancellation token</param>
     /// <returns>List of path suggestions</returns>
-    public async Task<IReadOnlyList<string>> GetSuggestionsAsync(
+    public Task<IReadOnlyList<string>> GetSuggestionsAsync(
         string prefix,
         int limit = 100,
         CancellationToken ct = default)
     {
         logger.LogDebug("Getting autocomplete suggestions for prefix={Prefix}", prefix);
 
-        var suggestions = new List<string>();
-
-        try
-        {
-            await foreach (var item in meshQuery.AutocompleteAsync(
-                basePath: "",
-                prefix: prefix,
-                mode: AutocompleteMode.RelevanceFirst,
-                limit: limit,
-                ct: ct))
+        // Compose the Autocomplete observable — never await-foreach a hub query (deadlock).
+        // This is the MCP/SDK boundary, the one sanctioned single-point Task bridge
+        // (.FirstAsync().ToTask(); see AsynchronousCalls.md). The first snapshot of
+        // suggestions is projected to paths.
+        return meshQuery
+            .Autocomplete(basePath: "", prefix: prefix, mode: AutocompleteMode.RelevanceFirst, limit: limit)
+            .Take(1)
+            .Select(rows => (IReadOnlyList<string>)rows.Select(r => r.Path).ToList())
+            .Catch((Exception ex) =>
             {
-                suggestions.Add(item.Path);
-            }
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Error getting autocomplete suggestions for prefix={Prefix}", prefix);
-        }
-
-        return suggestions;
+                logger.LogWarning(ex, "Error getting autocomplete suggestions for prefix={Prefix}", prefix);
+                return Observable.Return<IReadOnlyList<string>>([]);
+            })
+            .FirstAsync()
+            .ToTask(ct);
     }
 }
