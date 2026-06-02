@@ -67,7 +67,7 @@ public static class InsuranceLayoutAreas
         var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
 
         var nodes = meshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Scan(new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase), ApplyChanges);
 
         return nodes.CombineLatest(statuses, (dict, statusList) =>

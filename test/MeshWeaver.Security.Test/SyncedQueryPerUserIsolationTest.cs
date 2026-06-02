@@ -33,7 +33,7 @@ namespace MeshWeaver.Security.Test;
 ///
 /// <para>The fix: cache by <c>(id, userId)</c>. Each user opens their own
 /// SyncedQueryMeshNodes with their own identity; the upstream
-/// <see cref="IMeshQueryCore.ObserveQuery"/> dispatcher routes real-user
+/// <see cref="IMeshQueryCore.Query"/> dispatcher routes real-user
 /// requests to the secured provider surface where the per-result RLS
 /// validators apply. System callers (SecurityService's _Access walks etc.)
 /// keep their validator-bypassing unsecured surface — their cache key

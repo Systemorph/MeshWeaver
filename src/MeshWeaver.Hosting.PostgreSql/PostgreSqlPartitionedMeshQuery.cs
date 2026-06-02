@@ -79,17 +79,17 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
     /// <see cref="NeedsFanOut"/>), so always claim a match. Returning
     /// <see langword="true"/> here is symmetric with
     /// <see cref="StorageAdapterMeshQueryProvider.Matches"/>: the routing
-    /// decision lives in <see cref="ObserveQuery{T}"/> / <see cref="QueryAsync"/>.
+    /// decision lives in <see cref="Query{T}"/> / <see cref="QueryAsync"/>.
     /// </remarks>
     public bool Matches(IReadOnlyList<string> queryNamespaces) => true;
 
     /// <inheritdoc/>
-    public IObservable<QueryResultChange<T>> ObserveQuery<T>(
+    public IObservable<QueryResultChange<T>> Query<T>(
         MeshQueryRequest request, JsonSerializerOptions options)
     {
         var parsed = ParseFirst(request);
         _logger?.LogDebug(
-            "[FanOut] ObserveQuery decision: NeedsFanOut={NeedsFanOut} Path='{Path}' Source={Source} Query='{Q}'",
+            "[FanOut] Query decision: NeedsFanOut={NeedsFanOut} Path='{Path}' Source={Source} Query='{Q}'",
             NeedsFanOut(parsed), parsed.Path ?? "(null)", parsed.Source, request.Query);
 
         // MergeProviderObservables in MeshQuery gates the merged Initial on

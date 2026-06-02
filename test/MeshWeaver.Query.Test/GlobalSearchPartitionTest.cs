@@ -50,7 +50,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
         NodeFactory.CreateNode(orgNode).Should().Emit();
 
         // Act: global search with no path (like the top search bar)
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("scope:descendants sort:LastModified-desc limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("scope:descendants sort:LastModified-desc limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Assert: the Organization should appear
         results.Should().Contain(n => n.Path == "TestCorp",
@@ -68,7 +68,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
         }).Should().Emit();
 
         // Act: search by text that matches the name
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("Acme scope:descendants limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("Acme scope:descendants limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Assert
         results.Should().Contain(n => n.Path == "AcmeCorp",
@@ -92,7 +92,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
         }).Should().Emit();
 
         // Act: search all descendants
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("scope:descendants limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("scope:descendants limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Assert: both org and child should appear
         results.Should().Contain(n => n.Path == "MegaCorp",
@@ -156,7 +156,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
         }).Should().Emit();
 
         // Act: search by nodeType
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Markdown scope:descendants limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Markdown scope:descendants limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Assert
         results.Should().Contain(n => n.Path == "GammaCorp",
@@ -195,7 +195,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
         }).Should().Emit();
 
         // Act: global search
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("scope:descendants limit:100")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("scope:descendants limit:100")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Assert: all nodes from both partitions should appear
         results.Should().Contain(n => n.Path == "OrgA", "OrgA should appear");
@@ -223,7 +223,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
         }).Should().Emit();
 
         // Act: search for "Delta"
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("Delta scope:descendants limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("Delta scope:descendants limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Assert: both the org and the child with "Delta" in name should appear
         results.Should().Contain(n => n.Path == "DeltaCorp",
@@ -251,7 +251,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
             .Should().Within(TimeSpan.FromSeconds(25)).Emit();
 
         // Act: search
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("scope:descendants limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("scope:descendants limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Assert
         results.Should().Contain(n => n.Path == "SecureCorp",
@@ -277,7 +277,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
         }).Should().Emit();
 
         // Act: search with explicit namespace (routing rule should restrict to EpsilonCorp partition)
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("namespace:EpsilonCorp scope:descendants limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:EpsilonCorp scope:descendants limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Assert: should find nodes in EpsilonCorp
         results.Should().Contain(n => n.Path == "EpsilonCorp/project",

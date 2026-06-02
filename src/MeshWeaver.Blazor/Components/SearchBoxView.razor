@@ -124,7 +124,7 @@
             : $"namespace:{BoundNamespace} *{query}* scope:descendants context:search";
 
         return MeshQuery
-            .ObserveQuery<MeshNode>(new MeshQueryRequest { Query = searchQuery, Limit = BoundMaxSuggestions })
+            .Query<MeshNode>(new MeshQueryRequest { Query = searchQuery, Limit = BoundMaxSuggestions })
             .Select(change => (IReadOnlyList<CompletionItem>)change.Items
                 .Select(node => new CompletionItem
                 {

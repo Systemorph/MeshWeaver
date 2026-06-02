@@ -157,13 +157,13 @@ The sanctioned mitigation is `Task.Run` to detach the long-running body from the
 
 ## `SubscribeOn(TaskPoolScheduler.Default)` inside a grain-hosted service
 
-`IMeshNodeStreamCache.GetQuery` and `MeshQuery.ObserveQuery` / `.Query` wrap their inner observables with `SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default)`. When the cache hub lives inside an Orleans grain, this is **intentional and correct**. Here is what happens step by step:
+`IMeshNodeStreamCache.GetQuery` and `MeshQuery.Query` / `.Query` wrap their inner observables with `SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default)`. When the cache hub lives inside an Orleans grain, this is **intentional and correct**. Here is what happens step by step:
 
 1. **The grain method call (`GetQuery(id, queries)`) runs on the grain scheduler.** Orleans serialises access; the `Interlocked.CompareExchange` on the cache's `_queries` dictionary is safe by virtue of single-threaded grain execution. The method returns an `IObservable<T>` description and the grain releases immediately.
 
 2. **`Subscribe` is called outside the grain method's scope** — typically from a downstream consumer such as a layout area, a validator, or another service. The grain holds no lock at this point.
 
-3. **`SubscribeOn(TaskPoolScheduler.Default)`** shifts the subscribe-time work — constructing `SyncedQueryMeshNodes`, opening the upstream `IMeshQueryCore.ObserveQuery` subscription, opening database connections and change feeds — onto a thread-pool thread. That is the right place for I/O. Without this offload, those subscriptions would run on whatever thread called `Subscribe`, which could be the grain scheduler if the caller is mid-handler.
+3. **`SubscribeOn(TaskPoolScheduler.Default)`** shifts the subscribe-time work — constructing `SyncedQueryMeshNodes`, opening the upstream `IMeshQueryCore.Query` subscription, opening database connections and change feeds — onto a thread-pool thread. That is the right place for I/O. Without this offload, those subscriptions would run on whatever thread called `Subscribe`, which could be the grain scheduler if the caller is mid-handler.
 
 4. **Emissions** (`OnNext` to the cache's `Replay(1).RefCount()` and onward to downstream subscribers) flow on whatever thread the upstream emits from — PostgreSQL change-feed threads, Orleans observer dispatchers, and so on. The cache's internal `Replay(1)` buffer is thread-safe; downstream subscribers reading from it are also safe.
 

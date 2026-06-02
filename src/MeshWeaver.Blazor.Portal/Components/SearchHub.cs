@@ -131,7 +131,7 @@ internal sealed class SearchHub
     }
 
     /// <summary>
-    /// Free-text search: subscribes to <see cref="IMeshService.ObserveQuery{T}"/>
+    /// Free-text search: subscribes to <see cref="IMeshService.Query{T}"/>
     /// for the initial candidate pool, scores each row by match quality, and
     /// pumps the top-N scored results into the pending channel. Fire-and-forget
     /// subscription — no <c>await</c> on hub-touching observables.
@@ -140,7 +140,7 @@ internal sealed class SearchHub
         IMeshService meshService, SearchRequest req, PendingSearch pending)
     {
         var query = $"*{req.Input}* scope:descendants context:search is:main limit:{CandidatePoolSize}";
-        meshService.ObserveQuery<MeshNode>(new MeshQueryRequest { Query = query })
+        meshService.Query<MeshNode>(new MeshQueryRequest { Query = query })
             .Take(1)
             .Subscribe(
                 change =>
@@ -172,7 +172,7 @@ internal sealed class SearchHub
         Func<MeshNode, QuerySuggestion> project,
         PendingSearch pending)
     {
-        meshService.ObserveQuery<MeshNode>(new MeshQueryRequest { Query = query })
+        meshService.Query<MeshNode>(new MeshQueryRequest { Query = query })
             .Take(1)
             .Subscribe(change =>
             {

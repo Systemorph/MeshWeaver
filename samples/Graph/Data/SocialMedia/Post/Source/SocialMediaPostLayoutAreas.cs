@@ -82,10 +82,10 @@ public static class SocialMediaPostLayoutAreas
         var filter = host.Reference.GetParameterValue("profile") ?? FilterMy;
 
         var posts = meshService
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("namespace:SocialMedia/Post"))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:SocialMedia/Post"))
             .Scan(new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase), ApplyChanges);
         var profiles = meshService
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("namespace:SocialMedia/Profile"))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:SocialMedia/Profile"))
             .Scan(new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase), ApplyChanges);
 
         return posts.CombineLatest(profiles, (postDict, profileDict) =>
@@ -255,7 +255,7 @@ public static class SocialMediaPostLayoutAreas
         var nodeStream = host.Workspace.GetStream<MeshNode>()!
             .Select(nodes => nodes?.FirstOrDefault(n => n.Path == hubPath));
         var profiles = meshService
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("namespace:SocialMedia/Profile"))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:SocialMedia/Profile"))
             .Scan(new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase), ApplyChanges);
 
         return nodeStream.CombineLatest(profiles, (node, profileDict) =>

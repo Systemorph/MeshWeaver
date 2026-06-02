@@ -291,7 +291,7 @@ public class CosmosMeshQuery : IMeshQueryProvider
     }
 
     /// <inheritdoc />
-    public IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request, JsonSerializerOptions options)
+    public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request, JsonSerializerOptions options)
     {
         // Self-filter: when the request only targets static-owned namespaces,
         // emit an empty Initial and exit — the static-node provider contributes

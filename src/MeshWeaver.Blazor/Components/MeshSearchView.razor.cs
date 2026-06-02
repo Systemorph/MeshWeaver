@@ -268,7 +268,7 @@ public partial class MeshSearchView : IDisposable
                 return;
             }
 
-            // Reactive mode: subscribe to ObserveQuery for live updates
+            // Reactive mode: subscribe to Query for live updates
             if (BoundReactiveMode)
             {
                 SubscribeToReactiveUpdates();
@@ -331,10 +331,10 @@ public partial class MeshSearchView : IDisposable
         StateHasChanged();
 
         var query = BuildFullQuery();
-        // Subscribe to ObserveQuery so the result set stays live as data changes.
+        // Subscribe to Query so the result set stays live as data changes.
         // _reactiveSubscription holds the active subscription (set up in SubscribeToReactiveUpdates).
         _reactiveSubscription?.Dispose();
-        _reactiveSubscription = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+        _reactiveSubscription = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Subscribe(
                 change =>
                 {
@@ -391,7 +391,7 @@ public partial class MeshSearchView : IDisposable
         // Individual cards handle their own content updates via LayoutAreaView.
         var knownPaths = new HashSet<string>();
 
-        _reactiveSubscription = MeshQuery.ObserveQuery<MeshNode>(request)
+        _reactiveSubscription = MeshQuery.Query<MeshNode>(request)
             .Subscribe(change =>
             {
                 // Compute updated path set without touching _nodes yet.

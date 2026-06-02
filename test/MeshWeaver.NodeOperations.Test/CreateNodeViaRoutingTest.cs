@@ -232,7 +232,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
 
             // Act — query WITHOUT impersonation ("no-access-user" has no read access)
             var initial = MeshQuery
-                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{nodePath}"))
+                .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{nodePath}"))
                 .Should().Within(45.Seconds()).Match(c => c.ChangeType == QueryChangeType.Initial);
 
             // Assert — should be empty (filtered by RLS)
@@ -287,7 +287,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
             using (accessService.ImpersonateAsHub(Mesh))
             {
                 var change = MeshQuery
-                    .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{nodePath}"))
+                    .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{nodePath}"))
                     .Should().Within(45.Seconds())
                     .Match(c => c.ChangeType == QueryChangeType.Initial && c.Items.Count > 0);
                 var result = change.Items;

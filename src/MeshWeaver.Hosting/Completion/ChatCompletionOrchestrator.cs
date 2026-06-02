@@ -90,7 +90,7 @@ internal sealed class ChatCompletionOrchestrator(
             Query = "namespace:Admin/Partition nodeType:Partition",
             Limit = 100
         };
-        return meshService.ObserveQuery<MeshNode>(request)
+        return meshService.Query<MeshNode>(request)
             .Take(1)
             .Select(change =>
             {
@@ -252,7 +252,7 @@ internal sealed class ChatCompletionOrchestrator(
             Limit = 20
         };
 
-        return meshService.ObserveQuery<MeshNode>(request)
+        return meshService.Query<MeshNode>(request)
             .Take(1)
             .SelectMany(c => c.Items.ToObservable())
             .Where(node => !string.IsNullOrEmpty(node.Path) && seenPaths.TryAdd(node.Path!, 0))

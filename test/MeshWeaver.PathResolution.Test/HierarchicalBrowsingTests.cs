@@ -22,7 +22,7 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
 
     /// <summary>Reactive query snapshot: the Initial emission carries the full result set.</summary>
     private IReadOnlyList<MeshNode> QueryNodes(MeshQueryRequest request)
-        => MeshQuery.ObserveQuery<MeshNode>(request)
+        => MeshQuery.Query<MeshNode>(request)
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
     private IReadOnlyList<MeshNode> QueryNodes(string query) => QueryNodes(MeshQueryRequest.FromQuery(query));
@@ -304,7 +304,7 @@ public class TypedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         => base.ConfigureMesh(builder);
 
     private IReadOnlyList<MeshNode> QueryNodes(MeshQueryRequest request)
-        => MeshQuery.ObserveQuery<MeshNode>(request)
+        => MeshQuery.Query<MeshNode>(request)
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
     [Fact]

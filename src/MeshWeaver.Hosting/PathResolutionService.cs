@@ -11,7 +11,7 @@ namespace MeshWeaver.Hosting;
 
 /// <summary>
 /// Resolves URL paths to hub addresses by delegating to
-/// <see cref="IMeshQueryCore.ObserveQuery{T}"/>. The query expresses
+/// <see cref="IMeshQueryCore.Query{T}"/>. The query expresses
 /// <i>"every path that is a prefix of the requested path"</i> via the
 /// canonical idiom (see <c>Doc/DataMesh/QuerySyntax.md</c> → "Path
 /// Resolution"):
@@ -35,7 +35,7 @@ namespace MeshWeaver.Hosting;
 ///     <c>AddMeshNodes</c> seed) — in-memory <c>StartsWith</c> filter.</item>
 /// </list></para>
 ///
-/// <para><b>No PathResolution-level cache.</b> <c>ObserveQuery</c> is live;
+/// <para><b>No PathResolution-level cache.</b> <c>Query</c> is live;
 /// memoizing here either races change-feed propagation (stale-NULL after
 /// CreateNode, repro:
 /// <c>AddressResolutionTest.ResolvePath_ExactMatch_ReturnsNullRemainder</c>)
@@ -129,7 +129,7 @@ internal class PathResolutionService : IPathResolver
         // CreateNode/DeleteNode events.
         return Observable.Using(
             () => _accessService?.ImpersonateAsSystem() ?? System.Reactive.Disposables.Disposable.Empty,
-            _ => _queryCore.ObserveQuery<MeshNode>(request, _hub.JsonSerializerOptions))
+            _ => _queryCore.Query<MeshNode>(request, _hub.JsonSerializerOptions))
             .Where(change => change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
             .Take(1)
             .Select<QueryResultChange<MeshNode>, AddressResolution?>(change =>
@@ -139,14 +139,14 @@ internal class PathResolutionService : IPathResolver
                 var matchedSegments = best.Path.Split('/').Length;
                 return BuildResolution(best.Path, segments, matchedSegments, matchedNode: best);
             })
-            // ObserveQuery returns Observable.Empty when no provider matches.
+            // Query returns Observable.Empty when no provider matches.
             // Without DefaultIfEmpty the chain dies silently on completion and
             // RoutingServiceBase's .Take(1) waits forever.
             .DefaultIfEmpty()
             // Partition-root fallback runs AFTER DefaultIfEmpty so the empty-
             // upstream case (no match for the requested path or any ancestor)
             // gets a chance to synthesize. Doing this inside the upstream Select
-            // wouldn't help: when ObserveQuery emits nothing, Scan never emits,
+            // wouldn't help: when Query emits nothing, Scan never emits,
             // Select never runs — the only emission is the null from
             // DefaultIfEmpty. The Select below intercepts that null.
             //

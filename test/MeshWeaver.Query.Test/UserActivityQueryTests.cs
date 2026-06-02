@@ -59,7 +59,7 @@ public class UserActivityQueryTests(ITestOutputHelper output) : MonolithMeshTest
         }).Should().Emit();
 
         // Query: the exact "My Items" query from UserActivityLayoutAreas.BuildChildren
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{p} is:main context:search scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{p} is:main context:search scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Threads must NOT appear
         results.Should().HaveCount(2);
@@ -91,7 +91,7 @@ public class UserActivityQueryTests(ITestOutputHelper output) : MonolithMeshTest
             NodeType = "ThreadMessage"
         }).Should().Emit();
 
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{p} is:main context:search scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{p} is:main context:search scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         results.Should().ContainSingle();
         results[0].Name.Should().Be("Notes");
@@ -124,7 +124,7 @@ public class UserActivityQueryTests(ITestOutputHelper output) : MonolithMeshTest
             }
         }).Should().Emit();
 
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{p} is:main context:search scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{p} is:main context:search scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         results.Should().ContainSingle();
         results[0].Name.Should().Be("My Project");
@@ -184,7 +184,7 @@ public class UserActivityQueryTests(ITestOutputHelper output) : MonolithMeshTest
             MainNode = $"{p}/doc"
         }).Should().Emit();
 
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{p} is:main context:search scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{p} is:main context:search scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Only the two main content nodes should appear
         results.Should().HaveCount(2);
@@ -219,7 +219,7 @@ public class UserActivityQueryTests(ITestOutputHelper output) : MonolithMeshTest
             MainNode = $"{p}/main"
         }).Should().Emit();
 
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{p} is:main scope:descendants")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{p} is:main scope:descendants")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         results.Should().ContainSingle();
         results[0].Name.Should().Be("Main Node");
@@ -259,7 +259,7 @@ public class UserActivityQueryTests(ITestOutputHelper output) : MonolithMeshTest
         }).Should().Emit();
 
         // source:activity auto-sets is:main=true
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"source:activity namespace:{p} scope:descendants")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"source:activity namespace:{p} scope:descendants")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Only the main content node should appear, not AccessAssignment
         results.Should().ContainSingle();
@@ -299,7 +299,7 @@ public class ActivityTrackingFilterTests(ITestOutputHelper output) : MonolithMes
             Content = new ActivityLog("DataUpdate") { HubPath = $"{p}/doc" }
         }).Should().Emit();
 
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"source:activity namespace:{p} scope:descendants")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"source:activity namespace:{p} scope:descendants")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         results.Should().ContainSingle();
         results[0].Name.Should().Be("Document");
@@ -329,7 +329,7 @@ public class ActivityTrackingFilterTests(ITestOutputHelper output) : MonolithMes
 
         // Check: no activity log should ever appear under the AccessAssignment node.
         // Negative assertion — flatten the live query's items and assert nothing arrives.
-        MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{p}/_Access/u1/_activity scope:descendants"))
+        MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{p}/_Access/u1/_activity scope:descendants"))
             .SelectMany(c => c.Items)
             .Should().NotEmit(within: TimeSpan.FromSeconds(2),
                 "AccessAssignment is a satellite type and should not have activity logs");
@@ -356,7 +356,7 @@ public class ActivityTrackingFilterTests(ITestOutputHelper output) : MonolithMes
         }).Should().Emit();
 
         // Negative assertion — no activity log should ever appear under the Thread node.
-        MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{p}/_Thread/t1/_activity scope:descendants"))
+        MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{p}/_Thread/t1/_activity scope:descendants"))
             .SelectMany(c => c.Items)
             .Should().NotEmit(within: TimeSpan.FromSeconds(2),
                 "Thread is a satellite type and should not have activity logs");
@@ -383,7 +383,7 @@ public class ActivityTrackingFilterTests(ITestOutputHelper output) : MonolithMes
         }).Should().Emit();
 
         // Query with nodeType condition to include satellites in results
-        var threadNodes = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{p}/_Thread/t1")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var threadNodes = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{p}/_Thread/t1")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
         threadNodes.Should().ContainSingle();
         var threadNode = threadNodes[0];
         threadNode.MainNode.Should().NotBe(threadNode.Path,
@@ -391,7 +391,7 @@ public class ActivityTrackingFilterTests(ITestOutputHelper output) : MonolithMes
         threadNode.MainNode.Should().Be($"{p}/_Thread",
             "Thread's MainNode should point to the parent namespace");
 
-        var accessNodes = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{p}/_Access/a1")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var accessNodes = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{p}/_Access/a1")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
         accessNodes.Should().ContainSingle();
         var accessNode = accessNodes[0];
         accessNode.MainNode.Should().NotBe(accessNode.Path,

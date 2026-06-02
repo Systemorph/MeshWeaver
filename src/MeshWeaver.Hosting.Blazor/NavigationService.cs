@@ -428,7 +428,7 @@ internal class NavigationService : INavigationService
         (resolution.Node is not null
             ? Observable.Return<MeshNode?>(resolution.Node)
             : _queryCore.Value
-                .ObserveQuery<MeshNode>(
+                .Query<MeshNode>(
                     MeshQueryRequest.FromQuery(
                         $"path:{resolution.Prefix} select:path,name,mainNode,nodeType,icon,preRenderedHtml,content"),
                     _hub.JsonSerializerOptions)

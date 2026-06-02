@@ -87,7 +87,7 @@ Before writing a test, review the invariants every test must respect:
 > A query goes through the lagged read-side index and returns stale content immediately after a write. Read a known node with `ReadNode(path).Should().Emit()` (from the test base), or `workspace.GetMeshNodeStream(path)` / `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReference())`.
 
 > **Rule 4 — Queries are only for sets and existence.**
-> Listing children, counting matches, "namespace is empty" — all legitimate uses of `ObserveQuery`. Reading a specific node's *content* is not.
+> Listing children, counting matches, "namespace is empty" — all legitimate uses of `Query`. Reading a specific node's *content* is not.
 
 > **Rule 5 — No mocking of core services.**
 > Never mock `IMessageHub`, `IMeshService`, or `IMeshStorage`. Inherit `MonolithMeshTestBase` or `OrleansTestBase` and run the real services. A mock that passes while production is broken is worse than no test.
@@ -232,7 +232,7 @@ var match = Observable.Interval(50.Milliseconds()).StartWith(0L)
     .Should().Within(15.Seconds()).Match(list => list.Count >= 3);
 ```
 
-For a synced query, prefer `MeshService.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(q))` and filter on `c.ChangeType == QueryChangeType.Initial` — its first emission is the full snapshot that the old `QueryAsync().ToListAsync()` used to return.
+For a synced query, prefer `MeshService.Query<MeshNode>(MeshQueryRequest.FromQuery(q))` and filter on `c.ChangeType == QueryChangeType.Initial` — its first emission is the full snapshot that the old `QueryAsync().ToListAsync()` used to return.
 
 ---
 
@@ -255,7 +255,7 @@ The read-side index is eventually consistent. Use `ReadNode(orgId)`.
 A change feed (pg_notify, any synced query) can deliver follow-up events for a row that already existed when the subscription wired up. Filter on the emission **shape**, not the count:
 
 ```csharp
-var initial = meshService.ObserveQuery<MeshNode>(req)
+var initial = meshService.Query<MeshNode>(req)
     .Should().Within(10.Seconds()).Match(c => c.ChangeType == QueryChangeType.Initial);
 initial.Items.Should().HaveCount(1);
 ```

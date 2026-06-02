@@ -120,10 +120,10 @@ public record Post
 
         // Wait for the catalog index to pick up Post's Source/code node before
         // Profile's compile queries `namespace:type/Post/Source scope:subtree`.
-        // ObserveQuery is a live change feed (fan-out baked in) — it emits the
+        // Query is a live change feed (fan-out baked in) — it emits the
         // Added change when the just-created Code node surfaces, so we just match
         // the first snapshot that contains it. No Interval poll.
-        MeshService.ObserveQuery<MeshNode>("namespace:type/Post/Source scope:subtree nodeType:Code")
+        MeshService.Query<MeshNode>("namespace:type/Post/Source scope:subtree nodeType:Code")
             .Should().Within(15.Seconds()).Match(c => c.Items.Any(n => n.Path == "type/Post/Source/code"));
 
         // Profile NodeType references Platform via cross-NodeType Sources.

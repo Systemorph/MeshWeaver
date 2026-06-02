@@ -87,7 +87,7 @@ public class CommentNodeLoadingTest(ITestOutputHelper output) : MonolithMeshTest
     public void CommentNodes_AreDiscoverableByNamespaceQuery()
     {
         var comments = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{DocPartitionNamespace} nodeType:{CommentNodeType.NodeType}"))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 

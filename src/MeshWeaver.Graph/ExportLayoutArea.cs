@@ -44,8 +44,8 @@ public static class ExportLayoutArea
         // Own node via MeshNodeReference stream — no QueryAsync, no Observable.FromAsync.
         var ownNode = host.Workspace.GetMeshNodeStream();
 
-        // Descendants via ObserveQuery initial snapshot — listing is legitimate observable.
-        var descendants = meshService.ObserveQuery<MeshNode>(
+        // Descendants via Query initial snapshot — listing is legitimate observable.
+        var descendants = meshService.Query<MeshNode>(
                 MeshQueryRequest.FromQuery($"path:{hubPath} scope:descendants"))
             .Take(1)
             .Select(c => c.Items);

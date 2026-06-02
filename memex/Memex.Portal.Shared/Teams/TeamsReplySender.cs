@@ -55,7 +55,7 @@ public sealed class TeamsReplySender(
 
             // Watch the Teams conversation links; subscribe to each link's thread exactly once.
             subscriptions.Add(query
-                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                .Query<MeshNode>(MeshQueryRequest.FromQuery(
                     $"nodeType:{TeamsConversationNodeType.NodeType}"), jsonOptions)
                 .Select(change => change.Items)
                 .Subscribe(

@@ -586,7 +586,7 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
 
         // Wait until the read-side (what the validator reads) shows BOTH admins — accumulate
         // ids across Initial + delta emissions so we don't race eventual consistency.
-        MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+        MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{spaceId}/_Access nodeType:AccessAssignment"))
             .Scan(ImmutableHashSet<string>.Empty, (acc, c) =>
                 c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset

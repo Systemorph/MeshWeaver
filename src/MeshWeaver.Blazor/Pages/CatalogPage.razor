@@ -174,8 +174,8 @@
         if (!string.IsNullOrEmpty(Query)) queryParts.Add(Query);
         var fullQuery = string.Join(" ", queryParts);
 
-        // Subscribe to ObserveQuery — keeps the view live as the underlying set changes.
-        _querySub = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(fullQuery))
+        // Subscribe to Query — keeps the view live as the underlying set changes.
+        _querySub = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(fullQuery))
             .Subscribe(
                 change =>
                 {

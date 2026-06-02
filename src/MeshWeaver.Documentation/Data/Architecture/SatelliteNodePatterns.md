@@ -182,7 +182,7 @@ Doc/MyDoc/_Comment/abc123/reply1       (Reply node)
 | Aspect | Thread/Message | Comment/Reply |
 |---|---|---|
 | Mutation entry point | Hub message handlers | Click actions in layout areas |
-| Child list | Indexed `ThreadMessages` on the parent | Discovered via `ObserveQuery` |
+| Child list | Indexed `ThreadMessages` on the parent | Discovered via `Query` |
 | Text edits | `DataChangeRequest` via `_Exec` sub-hub | Direct `UpdateNodeRequest` (fire-and-forget) |
 | Node creation | `CreateNodeAsync` → confirm in handler | `CreateTransientAsync` → confirm via `UpdateNodeRequest` |
 

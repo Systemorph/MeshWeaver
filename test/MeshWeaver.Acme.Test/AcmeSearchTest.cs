@@ -78,7 +78,7 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
     }
 
     /// <summary>
-    /// ObserveQuery goes through the catalog index which is populated asynchronously
+    /// Query goes through the catalog index which is populated asynchronously
     /// during persistence init. Locally this completes within the implicit test
     /// startup window; CI is slower and the Initial snapshot can be empty before the
     /// FileSystem partition's recursive scan finishes. Accumulate the live deltas
@@ -89,7 +89,7 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
     private IReadOnlyList<MeshNode> QueryUntilAcmeIndexed(string query)
     {
         var byPath = new Dictionary<string, MeshNode>(StringComparer.Ordinal);
-        return MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+        return MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Scan((IReadOnlyList<MeshNode>)Array.Empty<MeshNode>(), (_, change) =>
             {
                 if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)

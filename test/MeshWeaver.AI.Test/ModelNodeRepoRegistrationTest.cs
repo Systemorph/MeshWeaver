@@ -114,7 +114,7 @@ public class ModelNodeRepoRegistrationTest : AITestBase
     [Fact]
     public void QueryAsync_NamespaceProvider_ReturnsCatalog()
     {
-        var results = MeshService.ObserveQuery<MeshNode>(
+        var results = MeshService.Query<MeshNode>(
                 new MeshQueryRequest { Query = $"namespace:{ModelProviderNodeType.RootNamespace} nodeType:{ModelProviderNodeType.NodeType} scope:descendants" })
             .Should().Within(15.Seconds()).Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 

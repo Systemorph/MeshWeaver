@@ -779,7 +779,7 @@ internal static class ThreadExecution
             // restart still gets full context. Skipping the cache-miss
             // bootstrap query takes ~2s off cold-start latency on a brand-
             // new thread (formerly: "Loading conversation history..."
-            // placeholder + 10s-timeout IMeshQueryCore.ObserveQuery scan).
+            // placeholder + 10s-timeout IMeshQueryCore.Query scan).
             var c = new AgentChatClient(parentHub.ServiceProvider, priorMessages: null);
             c.SetThreadId(threadPath);
             parentHub.Set(c);

@@ -240,7 +240,7 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
 
         // 4. Verify the sub-thread is queryable — lives directly under the parent thread namespace
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        var threads = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+        var threads = meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
             $"namespace:{threadPath} nodeType:{ThreadNodeType.NodeType}"))
             .Should().Match(c => c.Items.Count >= 1).Items;
 

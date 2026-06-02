@@ -117,7 +117,7 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
         // Verify it's queryable by namespace
         var results = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{threadPath} nodeType:Markdown"))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{threadPath} nodeType:Markdown"))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         results.Should().ContainSingle(n => n.Id == "Plan",

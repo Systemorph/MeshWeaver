@@ -32,7 +32,7 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
     /// </summary>
     private IObservable<ImmutableList<QueryResultChange<MeshNode>>> ObserveAccumulated(string queryText)
         => Query
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(queryText))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(queryText))
             .Scan(ImmutableList<QueryResultChange<MeshNode>>.Empty, (acc, c) => acc.Add(c));
 
     [Fact]
@@ -243,7 +243,7 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
         var receivedChanges = new System.Collections.Concurrent.ConcurrentQueue<QueryResultChange<MeshNode>>();
 
         var subscription = Query
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{p} nodeType:Markdown scope:descendants"))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{p} nodeType:Markdown scope:descendants"))
             .Subscribe(receivedChanges.Enqueue);
 
         // Wait until THIS subscription (not a separate one) has recorded its initial emission, so

@@ -19,7 +19,7 @@ public static class AgentOrderingHelper
     /// (the canonical <c>workspace.GetQuery</c>-backed synced source) and emits the
     /// agents ordered by <see cref="OrderByRelevance"/>. Every consumer — picker UI,
     /// AgentDetailsArea, AzureClaude driver, tests — subscribes here, never to
-    /// <c>IMeshService.ObserveQuery</c> directly.
+    /// <c>IMeshService.Query</c> directly.
     /// </summary>
     public static IObservable<IReadOnlyList<AgentDisplayInfo>> ObserveAgents(
         IWorkspace workspace,

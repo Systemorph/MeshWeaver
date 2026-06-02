@@ -117,7 +117,7 @@ To hook into the aggregator's ranking:
 
 ## Why the Aggregator Owns the Sort
 
-A single provider can rank within its own result set, but cross-provider tie-breaking requires a single decision point. A PostgreSQL hit with name-prefix score 100 must beat a static-catalog hit with score 0, even though both `Initial` emissions arrive independently. Placing the sort in `ClipMergedInitial` guarantees that every downstream consumer of `ObserveQuery<T>` / `QueryAsync` sees the same deterministic ranking regardless of which providers contributed.
+A single provider can rank within its own result set, but cross-provider tie-breaking requires a single decision point. A PostgreSQL hit with name-prefix score 100 must beat a static-catalog hit with score 0, even though both `Initial` emissions arrive independently. Placing the sort in `ClipMergedInitial` guarantees that every downstream consumer of `Query<T>` / `QueryAsync` sees the same deterministic ranking regardless of which providers contributed.
 
 ## Legacy: The "Writable First, Static Last" Ordering
 

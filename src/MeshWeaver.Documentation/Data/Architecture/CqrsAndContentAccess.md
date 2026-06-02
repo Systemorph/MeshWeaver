@@ -36,7 +36,7 @@ MeshWeaver applies CQRS at every layer: **queries** route through a read-side in
   <text x="100" y="63" font-family="sans-serif" font-size="11" fill="#c5cae9" text-anchor="middle">hub / Blazor view</text>
   <rect x="20" y="130" width="160" height="60" rx="10" fill="#37474f"/>
   <text x="100" y="156" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff" text-anchor="middle">Read-side Index</text>
-  <text x="100" y="173" font-family="sans-serif" font-size="11" fill="#b0bec5" text-anchor="middle">ObserveQuery / QueryAsync</text>
+  <text x="100" y="173" font-family="sans-serif" font-size="11" fill="#b0bec5" text-anchor="middle">Query / QueryAsync</text>
   <text x="100" y="188" font-family="sans-serif" font-size="10" fill="#78909c" text-anchor="middle">eventually consistent</text>
   <rect x="20" y="230" width="160" height="55" rx="10" fill="#1b5e20" stroke="#43a047" stroke-width="1.5"/>
   <text x="100" y="254" font-family="sans-serif" font-size="11" fill="#a5d6a7" text-anchor="middle">Sets / shell projections</text>
@@ -55,7 +55,7 @@ MeshWeaver applies CQRS at every layer: **queries** route through a read-side in
   <text x="645" y="244" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff" text-anchor="middle">Patch Write</text>
   <text x="645" y="261" font-family="sans-serif" font-size="11" fill="#ffcc80" text-anchor="middle">RFC 7396 JSON-merge patch</text>
   <line x1="180" y1="42" x2="297" y2="140" stroke="#37474f" stroke-width="1.5" marker-end="url(#arr)" stroke-dasharray="5,3"/>
-  <text x="215" y="83" font-family="sans-serif" font-size="10" fill="#78909c" transform="rotate(-28,215,83)">ObserveQuery</text>
+  <text x="215" y="83" font-family="sans-serif" font-size="10" fill="#78909c" transform="rotate(-28,215,83)">Query</text>
   <line x1="180" y1="50" x2="298" y2="145" stroke="#1e88e5" stroke-width="2" marker-end="url(#arr-blue)"/>
   <text x="207" y="74" font-family="sans-serif" font-size="10" fill="#64b5f6" transform="rotate(-28,207,74)">GetMeshNodeStream</text>
   <line x1="100" y1="80" x2="100" y2="128" stroke="#37474f" stroke-width="1.5" marker-end="url(#arr)" stroke-dasharray="5,3"/>
@@ -72,7 +72,7 @@ MeshWeaver applies CQRS at every layer: **queries** route through a read-side in
 | Intent | Primitive |
 |---|---|
 | **Bind a UI control to a node** | Declare a path-bound control (`new MeshNodeThumbnailControl { NodePath = path }`) or `JsonPointerReference`. The Blazor view subscribes via `IMeshNodeStreamCache` — layout-area code never loads the node. See [Data Binding](xref:GUI/DataBinding). |
-| **Find a set of nodes** | `mesh.ObserveQuery<T>(request)` — reactive, live, composes with `Select`/`Where`/`Subscribe`. (The one-shot `QueryAsync` form is discouraged in hub-reachable code; see below.) |
+| **Find a set of nodes** | `mesh.Query<T>(request)` — reactive, live, composes with `Select`/`Where`/`Subscribe`. (The one-shot `QueryAsync` form is discouraged in hub-reachable code; see below.) |
 | **Read a known node's content (one-shot)** | `hub.Post(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(addr))` + `hub.Observe` |
 | **Subscribe to a node's live updates** | `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReference())` |
 | **Write to a node** | `hub.Post(new PatchDataChangeRequest(...), o => o.WithTarget(addr))` (or `DataChangeRequest` for full updates) |
@@ -100,7 +100,7 @@ That lag is *acceptable* for browsing and autocomplete. It is *lethal* for conte
 
 ## 🚨 Query `.Content` is always stale — never read it
 
-`mesh.ObserveQuery<MeshNode>`, `mesh.QueryAsync<MeshNode>`, and the lower-level `IStorageAdapter.Query(...)` enumerate MeshNodes by reading the read-side index. The returned objects technically have a `.Content` property — **but it must never be read**. The catalog is eventually consistent and the `Content` column lags every committed write by the index-refresh window.
+`mesh.Query<MeshNode>`, `mesh.QueryAsync<MeshNode>`, and the lower-level `IStorageAdapter.Query(...)` enumerate MeshNodes by reading the read-side index. The returned objects technically have a `.Content` property — **but it must never be read**. The catalog is eventually consistent and the `Content` column lags every committed write by the index-refresh window.
 
 **Bright-line rules — no exceptions:**
 
@@ -115,7 +115,7 @@ That lag is *acceptable* for browsing and autocomplete. It is *lethal* for conte
 
 ### 🚨 Select only what you need — no whole-node loads
 
-A query is a **shell projection**, not a node loader. Before writing `ObserveQuery<MeshNode>` or `QueryAsync`, ask "which fields do I actually consume?" and add a `select:` clause to pull only those. The whole-`MeshNode` shape is a historical convenience that defeats partition routing, balloons memory, and invites the stale-`Content` antipattern.
+A query is a **shell projection**, not a node loader. Before writing `Query<MeshNode>` or `QueryAsync`, ask "which fields do I actually consume?" and add a `select:` clause to pull only those. The whole-`MeshNode` shape is a historical convenience that defeats partition routing, balloons memory, and invites the stale-`Content` antipattern.
 
 The most common consumer — "is this set up to date?" — needs only `(path, version)`. That is enough to compare against a cached snapshot and decide "nothing changed, skip the work" vs. "something changed, recompile." You do **not** load the nodes themselves to answer this question.
 
@@ -268,7 +268,7 @@ The `DeleteNodeRequest` / `MoveNodeRequest` / `CopyNodeRequest` types are define
 
 ## 🚨 No "pedestrian queries" — use synced queries
 
-If a component needs to **react** to a set of MeshNodes (a list, a filter, a catalog, a picker, a compiler input set), do **not** call `meshService.QueryAsync` / `IMeshQueryCore.ObserveQuery` directly. Use the synced-query pattern from [Synced Mesh Node Queries](SyncedMeshNodeQueries.md):
+If a component needs to **react** to a set of MeshNodes (a list, a filter, a catalog, a picker, a compiler input set), do **not** call `meshService.QueryAsync` / `IMeshQueryCore.Query` directly. Use the synced-query pattern from [Synced Mesh Node Queries](SyncedMeshNodeQueries.md):
 
 ```csharp
 IObservable<IReadOnlyList<MeshNode>> stream = workspace.GetQuery(
@@ -283,13 +283,13 @@ This is the **only** correct way to consume a live MeshNode collection. For free
 
 - Path-keyed dedup across queries.
 - All-Initial gating (no empty-flash before the slowest provider settles).
-- Provider fan-out (static-node providers **and** storage providers). Direct `IMeshQueryCore.ObserveQuery` skips static providers — symptom: "empty Agent dropdown even though MCP `nodeType:Agent` returns 9 entries".
+- Provider fan-out (static-node providers **and** storage providers). Direct `IMeshQueryCore.Query` skips static providers — symptom: "empty Agent dropdown even though MCP `nodeType:Agent` returns 9 entries".
 - `Replay(1).RefCount()` upstream sharing — one upstream subscription, many subscribers.
 - Hub-level delete fast-path so the view drops the row the moment the owning hub publishes a delete.
 
-A direct `meshService.QueryAsync` / `mesh.ObserveQuery<MeshNode>` call from application code is a **pedestrian query** and is almost always wrong: either you don't need a live subscription (one-shot — use `GetMeshNodeStream` per path), or you do (use `workspace.GetQuery`).
+A direct `meshService.QueryAsync` / `mesh.Query<MeshNode>` call from application code is a **pedestrian query** and is almost always wrong: either you don't need a live subscription (one-shot — use `GetMeshNodeStream` per path), or you do (use `workspace.GetQuery`).
 
-The *only* legitimate uses of `IMeshQueryCore.ObserveQuery` are inside the synced-query implementation itself and inside the query engine. Everything user-facing — UI lists, pickers, settings tabs, compiler inputs, recursive operation enumeration — goes through `workspace.GetQuery`.
+The *only* legitimate uses of `IMeshQueryCore.Query` are inside the synced-query implementation itself and inside the query engine. Everything user-facing — UI lists, pickers, settings tabs, compiler inputs, recursive operation enumeration — goes through `workspace.GetQuery`.
 
 **Canonical patterns to copy** (read these before writing your own):
 
@@ -397,7 +397,7 @@ hub.Observe(delivery, (d, _) =>
 }, cancellationToken);
 ```
 
-No `ObserveQuery`, no `await`, no `FromAsync` bridge. The target hub activates on receipt of the message, responds with a `GetDataResponse` wrapping the current `MeshNode`, and your callback fires.
+No `Query`, no `await`, no `FromAsync` bridge. The target hub activates on receipt of the message, responds with a `GetDataResponse` wrapping the current `MeshNode`, and your callback fires.
 
 ---
 
@@ -607,8 +607,8 @@ return request.Processed();   // handler returns immediately
 
 | Intent | Primitive |
 |---|---|
-| List nodes under X (paths / metadata only) | `mesh.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(...))` — project to `Path` / `Name` / etc. **never read `.Content`** |
-| Does node X exist? | `ObserveQuery` + check `Items.Count` |
+| List nodes under X (paths / metadata only) | `mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(...))` — project to `Path` / `Name` / etc. **never read `.Content`** |
+| Does node X exist? | `Query` + check `Items.Count` |
 | Give me node X's MeshNode (live) | `workspace.GetMeshNodeStream(X)` — the **only** non-stale read path |
 | Give me node X's MeshNode (once) | `hub.Post(GetDataRequest(new MeshNodeReference()), WithTarget(X))` + `Observe` |
 | Keep me updated on node X's MeshNode | `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(X, new MeshNodeReference())` |
@@ -630,7 +630,7 @@ var node = await mesh.QueryAsync<MeshNode>($"path:{path}").FirstOrDefaultAsync()
 return JsonSerializer.Serialize(node);
 
 // ❌ Same in reactive clothing — still a query, still stale.
-return mesh.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}"))
+return mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}"))
     .Take(1).Select(c => c.Items.FirstOrDefault());
 
 // ❌ Reading Content while enumerating a query result — Content is stale.

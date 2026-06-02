@@ -241,7 +241,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
 
         // Static node read — no write before, catalog read is correct (no CQRS lag).
         var storyNode = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:graph/story1"))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery("path:graph/story1"))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial)
             .Items.FirstOrDefault();
 
@@ -266,12 +266,12 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         // Initialize graph hub
         client.Observe(new PingRequest(), o => o.WithTarget(graphAddress)).Should().Emit();
 
-        // Act - get children via IMeshService. ObserveQuery's first Initial
+        // Act - get children via IMeshService. Query's first Initial
         // emission carries the full result set the old QueryAsync().ToListAsync()
         // returned; if children trickle in as Added, wait for the snapshot that
         // has all expected paths.
         var children = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("namespace:graph"))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:graph"))
             .Should().Match(c =>
                 c.Items.Any(n => n.Path == "graph/story1") &&
                 c.Items.Any(n => n.Path == "graph/story2"))

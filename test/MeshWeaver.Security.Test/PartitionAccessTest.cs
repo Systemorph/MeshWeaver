@@ -72,7 +72,7 @@ public class PartitionAccessTest(ITestOutputHelper output) : MonolithMeshTestBas
     public void Admin_CanSee_AllPartitions()
     {
         // Default login is admin (Roland)
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
             $"namespace:{PartitionNodeType.Namespace} nodeType:{PartitionNodeType.NodeType}"))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
@@ -90,7 +90,7 @@ public class PartitionAccessTest(ITestOutputHelper output) : MonolithMeshTestBas
     {
         LoginAsUnprivilegedUser();
 
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
             $"namespace:{PartitionNodeType.Namespace} nodeType:{PartitionNodeType.NodeType}"))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
@@ -106,7 +106,7 @@ public class PartitionAccessTest(ITestOutputHelper output) : MonolithMeshTestBas
     [Fact(Timeout = 20000)]
     public void PartitionNode_HasCorrectNamespace()
     {
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
             "path:Admin/Partition/TestPartition"))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
@@ -123,7 +123,7 @@ public class PartitionAccessTest(ITestOutputHelper output) : MonolithMeshTestBas
     [Fact(Timeout = 20000)]
     public void DocumentationPartition_HasDocNamespace()
     {
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
             "path:Admin/Partition/Documentation"))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 

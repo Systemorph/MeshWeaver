@@ -100,7 +100,7 @@ public class DelegationExecutionTest(ITestOutputHelper output) : MonolithMeshTes
         parentThread.Messages.Should().HaveCount(2);
 
         var subThreads = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{parentMsgPath} nodeType:{ThreadNodeType.NodeType}"))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{parentMsgPath} nodeType:{ThreadNodeType.NodeType}"))
             .Should().Match(c => c.Items.Count >= 1).Items;
         subThreads.Should().ContainSingle("should find exactly one sub-thread");
         subThreads[0].Path.Should().Be(subThreadPath);

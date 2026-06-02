@@ -973,16 +973,16 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         return default;
     }
 
-    /// <inheritdoc cref="IMeshQueryCore.ObserveQuery{T}"/>
-    IObservable<QueryResultChange<T>> IMeshQueryCore.ObserveQuery<T>(MeshQueryRequest request, JsonSerializerOptions options)
+    /// <inheritdoc cref="IMeshQueryCore.Query{T}"/>
+    IObservable<QueryResultChange<T>> IMeshQueryCore.Query<T>(MeshQueryRequest request, JsonSerializerOptions options)
         => ObserveQueryInternal<T>(request, options, useSecurityFilter: false);
 
     /// <inheritdoc />
-    public IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request, JsonSerializerOptions options)
+    public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request, JsonSerializerOptions options)
         => ObserveQueryInternal<T>(request, options, useSecurityFilter: true);
 
     /// <summary>
-    /// Shared ObserveQuery body. <paramref name="useSecurityFilter"/> selects between the
+    /// Shared Query body. <paramref name="useSecurityFilter"/> selects between the
     /// security-filtered <see cref="QueryAsync"/> (IMeshQueryProvider surface) and the raw
     /// <see cref="QueryCoreAsync"/> (IMeshQueryCore surface). The latter is what
     /// SecurityService consumes via SyncedQueryMeshNodes — it must NOT re-enter

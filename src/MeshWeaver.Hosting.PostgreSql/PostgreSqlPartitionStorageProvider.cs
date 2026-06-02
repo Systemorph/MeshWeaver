@@ -15,7 +15,7 @@ namespace MeshWeaver.Hosting.PostgreSql;
 /// per-schema <see cref="PostgreSqlStorageAdapter"/>.
 ///
 /// <para><b>Partition discovery is lazy.</b> No upfront enumeration of
-/// schemas, no <c>ObserveQuery</c> fan-in of <c>Admin/Partition/*</c>
+/// schemas, no <c>Query</c> fan-in of <c>Admin/Partition/*</c>
 /// rows. Each first-segment is cached in a per-namespace
 /// <see cref="System.Reactive.Subjects.ReplaySubject{T}"/> (held by
 /// <see cref="PgPartitionCache"/>) probed on first access; cross-silo

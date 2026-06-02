@@ -59,7 +59,7 @@ public static class MeshCatalogView
             : $"namespace:{parentPath} nodeType:{nodeTypeFilter}";
 
         // Live observable — auto-updates when children added/removed.
-        return meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+        return meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Select(change => BuildNodesView(host, parentPath, nodeTypeFilter, change.Items))
             .Catch<UiControl, Exception>(_ => Observable.Return(BuildNodesView(host, parentPath, nodeTypeFilter, Array.Empty<MeshNode>())));
     }

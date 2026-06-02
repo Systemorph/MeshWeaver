@@ -111,7 +111,7 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
 
         ThreadFlow.ReadThread(client, threadPath, t => t.Messages.Count >= 2).Should().Within(20.Seconds()).Emit();
 
-        var children = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+        var children = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{threadPath} nodeType:{ThreadMessageNodeType.NodeType}"))
             .Should().Match(c => c.Items.Count >= 2).Items;
 

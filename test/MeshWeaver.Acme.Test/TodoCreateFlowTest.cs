@@ -369,12 +369,12 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
                 new CreateNodeRequest(nodeWithContent),
                 o => o.WithTarget(nodeAddress));
 
-            // Use IMeshService.ObserveQuery to wait for the state change to be persisted
+            // Use IMeshService.Query to wait for the state change to be persisted
             var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
             var query = MeshQueryRequest.FromQuery($"path:{nodePath}");
 
             var confirmedNode = meshQuery
-                .ObserveQuery<MeshNode>(query)
+                .Query<MeshNode>(query)
                 .SelectMany(change => change.Items)
                 .Should().Within(10.Seconds()).Match(node => node.State == MeshNodeState.Active);
 
@@ -547,7 +547,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             var query = MeshQueryRequest.FromQuery($"path:{nodePath}");
 
             var workspaceNode = meshQuery
-                .ObserveQuery<MeshNode>(query)
+                .Query<MeshNode>(query)
                 .SelectMany(change => change.Items)
                 .Should().Within(10.Seconds()).Emit();
 
@@ -583,7 +583,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
 
             // Step 6: Wait for node to become Active
             var confirmedNode = meshQuery
-                .ObserveQuery<MeshNode>(query)
+                .Query<MeshNode>(query)
                 .SelectMany(change => change.Items)
                 .Should().Within(10.Seconds()).Match(node => node.State == MeshNodeState.Active);
 
@@ -751,7 +751,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     {
         var query = "path:ACME/ProductLaunch/Todo/DefinePersona";
         var results = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         results.Should().HaveCount(1, "DefinePersona should exist");

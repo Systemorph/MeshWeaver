@@ -128,14 +128,14 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
     }
 
     /// <summary>
-    /// Folds the live <c>ObserveQuery</c> deltas for a thread's ThreadMessage
+    /// Folds the live <c>Query</c> deltas for a thread's ThreadMessage
     /// descendants into a running path-keyed snapshot, so a reactive assertion can
     /// match on the accumulated state (Initial may race the streaming writes).
     /// </summary>
     private IObservable<IReadOnlyDictionary<string, MeshNode>> AccumulateDescendants(
         IMeshService meshQuery, string threadPath)
         => meshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"path:{threadPath} scope:descendants nodeType:ThreadMessage"))
             .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset
                 or QueryChangeType.Added or QueryChangeType.Updated)

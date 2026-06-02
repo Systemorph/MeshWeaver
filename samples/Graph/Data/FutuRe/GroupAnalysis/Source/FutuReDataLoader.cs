@@ -271,7 +271,7 @@ public static class FutuReDataLoader
 
         var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         return meshQuery
-            .ObserveQuery<MeshNode>(
+            .Query<MeshNode>(
                 MeshQueryRequest.FromQuery(
                     $"nodeType:FutuRe/LineOfBusiness namespace:{buNamespace}/LineOfBusiness state:Active"))
             .Select(change => change.Items
@@ -292,7 +292,7 @@ public static class FutuReDataLoader
     {
         var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         return meshQuery
-            .ObserveQuery<MeshNode>(
+            .Query<MeshNode>(
                 MeshQueryRequest.FromQuery("nodeType:FutuRe/AmountType namespace:FutuRe/AmountType state:Active"))
             .Select(change => change.Items
                 .Select(ConvertToAmountType)
@@ -308,7 +308,7 @@ public static class FutuReDataLoader
     {
         var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         return meshQuery
-            .ObserveQuery<MeshNode>(
+            .Query<MeshNode>(
                 MeshQueryRequest.FromQuery("nodeType:FutuRe/Currency namespace:FutuRe/Currency state:Active"))
             .Select(change => change.Items
                 .Select(ConvertToCurrency)
@@ -324,7 +324,7 @@ public static class FutuReDataLoader
     {
         var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         return meshQuery
-            .ObserveQuery<MeshNode>(
+            .Query<MeshNode>(
                 MeshQueryRequest.FromQuery("nodeType:FutuRe/Country namespace:FutuRe/Country state:Active"))
             .Select(change => change.Items
                 .Select(ConvertToCountry)
@@ -341,7 +341,7 @@ public static class FutuReDataLoader
         var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
 
         return meshQuery
-            .ObserveQuery<MeshNode>(
+            .Query<MeshNode>(
                 MeshQueryRequest.FromQuery("nodeType:FutuRe/TransactionMapping namespace:FutuRe scope:descendants"))
             .Select(change => change.Items
                 .Select(ConvertToTransactionMapping)
@@ -356,7 +356,7 @@ public static class FutuReDataLoader
     {
         var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         return meshQuery
-            .ObserveQuery<MeshNode>(
+            .Query<MeshNode>(
                 MeshQueryRequest.FromQuery("nodeType:FutuRe/ExchangeRate namespace:FutuRe/ExchangeRate state:Active"))
             .Select(change => change.Items
                 .Select(ConvertToExchangeRate)
@@ -372,7 +372,7 @@ public static class FutuReDataLoader
     {
         var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         return meshQuery
-            .ObserveQuery<MeshNode>(
+            .Query<MeshNode>(
                 MeshQueryRequest.FromQuery("nodeType:FutuRe/BusinessUnit namespace:FutuRe state:Active"))
             .Select(change => change.Items
                 .Select(ConvertToBusinessUnit)
@@ -388,7 +388,7 @@ public static class FutuReDataLoader
         var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
 
         return meshQuery
-            .ObserveQuery<MeshNode>(
+            .Query<MeshNode>(
                 MeshQueryRequest.FromQuery("nodeType:FutuRe/LineOfBusiness namespace:FutuRe/LineOfBusiness state:Active"))
             .Select(change => change.Items
                 .Select(ConvertToLineOfBusiness)

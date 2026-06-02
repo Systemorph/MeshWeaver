@@ -81,7 +81,7 @@ public class ThreadUrlResolutionTest(PostgreSqlFixture fixture, ITestOutputHelpe
             // routing rule + AI type-registry entries that <c>Thread</c>
             // content needs for the polymorphic deserializer). Without
             // these, MCP search returns the row but PathResolutionService's
-            // ObserveQuery emits an unparseable <c>$type</c>-mismatched
+            // Query emits an unparseable <c>$type</c>-mismatched
             // payload and the merged Initial never lands.
             .AddAI();
     }

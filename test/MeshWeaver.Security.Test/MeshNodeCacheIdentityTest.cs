@@ -123,7 +123,7 @@ public class MeshNodeCacheIdentityTest(ITestOutputHelper output) : MonolithMeshT
         // Belt-and-braces: ensure the node was never persisted.
         TestUsers.DevLogin(Mesh);
         var probe = meshService
-            .ObserveQuery<MeshNode>(new MeshQueryRequest { Query = $"path:{nodePath}", Limit = 1 })
+            .Query<MeshNode>(new MeshQueryRequest { Query = $"path:{nodePath}", Limit = 1 })
             .Should().Within(5.Seconds()).Emit();
         probe.Items.Should().BeEmpty(
             "the forged create must not have left any node behind even partially");
@@ -227,7 +227,7 @@ public class MeshNodeCacheIdentityTest(ITestOutputHelper output) : MonolithMeshT
             try
             {
                 meshService
-                    .ObserveQuery<MeshNode>(new MeshQueryRequest { Query = $"path:{nodePath}", Limit = 1 })
+                    .Query<MeshNode>(new MeshQueryRequest { Query = $"path:{nodePath}", Limit = 1 })
                     .Take(1).Timeout(5.Seconds()).Wait();
             }
             catch (UnauthorizedAccessException ex)

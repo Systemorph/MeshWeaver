@@ -266,7 +266,7 @@ internal class MeshNodeCompilationService(
     /// Source-set discovery via the workspace SyncedQuery registry — one
     /// long-lived, cached, replayed <see cref="IObservable{T}"/> per
     /// <paramref name="selfPath"/>. The first call spins up a single
-    /// <see cref="IMeshQueryCore.ObserveQuery"/> per NodeType-resolved query
+    /// <see cref="IMeshQueryCore.Query"/> per NodeType-resolved query
     /// (union of <c>Sources</c> + <c>Tests</c>); subsequent compiles for the
     /// same NodeType hit the registry's <c>Replay(1).RefCount()</c> cache and
     /// skip the Initial re-fetch entirely. Live updates flow through too —
@@ -331,7 +331,7 @@ internal class MeshNodeCompilationService(
     /// <summary>
     /// Resolves the source set for a compile run. When the caller hands in a
     /// <paramref name="sourcesOverride"/> (the freshly-observed set from
-    /// <c>HandleCreateRelease</c>'s uncached <c>IMeshService.ObserveQuery</c>),
+    /// <c>HandleCreateRelease</c>'s uncached <c>IMeshService.Query</c>),
     /// use that — it's the authoritative post-update snapshot the trigger
     /// already evaluated. Otherwise fall back to the cached SyncedQuery.
     /// </summary>
@@ -363,7 +363,7 @@ internal class MeshNodeCompilationService(
         var matchedCodePaths = new List<string>();
 
         // Source discovery: prefer the caller-supplied freshly-observed sources
-        // (HandleCreateRelease's uncached IMeshService.ObserveQuery snapshot —
+        // (HandleCreateRelease's uncached IMeshService.Query snapshot —
         // authoritative for the just-modified Code node), falling back to the
         // workspace SyncedQuery registry's Replay(1) cache when no override is
         // supplied. Without the override, the .Take(1) on the cached observable

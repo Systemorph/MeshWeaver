@@ -235,7 +235,7 @@
 
             var query = $"nodeType:{ThreadNodeType.NodeType} createdBy:{userId}";
             _conversationSubscription = MeshQuery
-                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+                .Query<MeshNode>(MeshQueryRequest.FromQuery(query))
                 .Subscribe(change =>
                 {
                     var items = change.Items

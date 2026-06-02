@@ -273,7 +273,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var query = "nodeType:FutuRe/TransactionMapping namespace:FutuRe scope:descendants state:Active";
         Output.WriteLine($"Querying: {query}");
 
-        var results = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+        var results = meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         Output.WriteLine($"Found {results.Count} TransactionMapping nodes");
@@ -298,7 +298,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var query = "nodeType:FutuRe/AmountType namespace:FutuRe/AmountType state:Active";
         Output.WriteLine($"Querying: {query}");
 
-        var results = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+        var results = meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         Output.WriteLine($"Found {results.Count} AmountType nodes");
@@ -321,7 +321,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var query = "nodeType:FutuRe/Currency namespace:FutuRe/Currency state:Active";
         Output.WriteLine($"Querying: {query}");
 
-        var results = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+        var results = meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         Output.WriteLine($"Found {results.Count} Currency nodes");
@@ -344,7 +344,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var query = "nodeType:FutuRe/Country namespace:FutuRe/Country state:Active";
         Output.WriteLine($"Querying: {query}");
 
-        var results = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+        var results = meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         Output.WriteLine($"Found {results.Count} Country nodes");
@@ -367,7 +367,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var query = "nodeType:FutuRe/ExchangeRate namespace:FutuRe/ExchangeRate state:Active";
         Output.WriteLine($"Querying: {query}");
 
-        var results = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+        var results = meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         Output.WriteLine($"Found {results.Count} ExchangeRate nodes");
@@ -390,7 +390,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var query = "nodeType:FutuRe/LineOfBusiness namespace:FutuRe/LineOfBusiness state:Active";
         Output.WriteLine($"Querying: {query}");
 
-        var results = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+        var results = meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         Output.WriteLine($"Found {results.Count} LineOfBusiness nodes");
@@ -462,7 +462,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         // Execute the query and verify we get the 10 group-level LoBs
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        var results = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(hiddenQuery))
+        var results = meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(hiddenQuery))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
         Output.WriteLine($"Group query returned {results.Count} results");
         results.Count.Should().Be(10, "Should find all 10 group lines of business");
@@ -506,7 +506,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         // Execute the query and verify we get the 8 EuropeRe LoBs
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        var results = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(hiddenQuery))
+        var results = meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(hiddenQuery))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
         var names = results.Select(n => n.Name).ToList();
         Output.WriteLine($"EuropeRe query returned {results.Count} results: {string.Join(", ", names)}");
@@ -840,7 +840,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"EuropeRe Search query: {hiddenQuery}");
 
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        var results = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(hiddenQuery))
+        var results = meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(hiddenQuery))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
         Output.WriteLine($"EuropeRe Search returned {results.Count} results");
         results.Count.Should().BeGreaterThanOrEqualTo(2,
@@ -858,7 +858,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         var query = "namespace:FutuRe nodeType:NodeType state:Active";
-        var results = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+        var results = meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
         var ids = results.Select(n => n.Id).ToList();
 
@@ -884,7 +884,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         var query = "nodeType:FutuRe/BusinessUnit namespace:FutuRe state:Active";
-        var results = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+        var results = meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         Output.WriteLine($"Found {results.Count} BusinessUnits");
@@ -1179,7 +1179,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         var nodes = meshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("nodeType:ActivityLog sort:Start-desc limit:30 scope:descendants"))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:ActivityLog sort:Start-desc limit:30 scope:descendants"))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         var logs = nodes.Select(n => n.Content).OfType<ActivityLog>().ToList();

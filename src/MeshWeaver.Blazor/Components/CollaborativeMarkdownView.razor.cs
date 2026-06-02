@@ -185,7 +185,7 @@ public partial class CollaborativeMarkdownView
         var query = MeshQueryRequest.FromQuery(
             $"namespace:{BoundNodePath}/_Comment nodeType:Comment");
 
-        AddBinding(meshQuery.ObserveQuery<MeshNode>(query)
+        AddBinding(meshQuery.Query<MeshNode>(query)
             .Scan(new List<MeshNode>(), (list, change) =>
             {
                 if (change.ChangeType == QueryChangeType.Initial || change.ChangeType == QueryChangeType.Reset)

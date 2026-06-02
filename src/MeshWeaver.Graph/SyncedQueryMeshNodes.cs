@@ -21,7 +21,7 @@ namespace MeshWeaver.Graph;
 /// <para>The read pipeline (single subscription, shared by every consumer):</para>
 /// <list type="number">
 ///   <item>For each query in <see cref="Queries"/>: subscribe to
-///     <see cref="IMeshQueryCore.ObserveQuery{MeshNode}"/> with
+///     <see cref="IMeshQueryCore.Query{MeshNode}"/> with
 ///     <see cref="WellKnownUsers.System"/> identity (so the security pipeline
 ///     short-circuits and there's no recursion back through SecurityService).</item>
 ///   <item>A single <c>Scan</c> folds every query's
@@ -38,7 +38,7 @@ namespace MeshWeaver.Graph;
 /// </list>
 ///
 /// <para>Reads come from the MeshNode payloads carried by the query events;
-/// the upstream <see cref="IMeshQueryCore.ObserveQuery"/> pipeline already
+/// the upstream <see cref="IMeshQueryCore.Query"/> pipeline already
 /// mirrors per-hub change notifications into <c>Updated</c>/<c>Removed</c>
 /// events, so the snapshot stays current without per-node read subscriptions.
 /// Static-node providers (built-in agents, language models, embedded markdown)
@@ -76,7 +76,7 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
     /// Public constructor for a multi-query synced collection. The result
     /// is the <em>union</em> of every <paramref name="queries"/> entry's
     /// matched paths. Each query opens an independent
-    /// <see cref="IMeshQueryProvider.ObserveQuery"/> subscription; per-path
+    /// <see cref="IMeshQueryProvider.Query"/> subscription; per-path
     /// remote streams are de-duplicated by path before
     /// <c>CombineLatest</c>.
     /// </summary>
@@ -189,7 +189,7 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
     ///
     /// <list type="number">
     ///   <item>For each query, subscribe to
-    ///         <see cref="IMeshQueryCore.ObserveQuery"/>; merge every
+    ///         <see cref="IMeshQueryCore.Query"/>; merge every
     ///         per-query stream plus the
     ///         <see cref="_externalChanges"/> side-channel (synthetic
     ///         <see cref="NotifyDeleted"/> events) and
@@ -245,7 +245,7 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
         // synced query (`nodeType:AccessAssignment`) without an Autofac
         // cycle. Static-node providers are surfaced as a sibling
         // IMeshQueryProvider (StaticNodeQueryProvider) and merged at the
-        // top-level MeshQuery, so a single ObserveQuery returns persistence
+        // top-level MeshQuery, so a single Query returns persistence
         // + static union — no DI-marker fan-out, no per-provider gating.
         var queryCore = workspace.Hub.ServiceProvider.GetService<IMeshQueryCore>();
         var options = workspace.Hub.JsonSerializerOptions;
@@ -285,7 +285,7 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
             diagLogger?.LogDebug(
                 "[SyncedQuery] Opening upstream queries=[{Queries}] under userIdentity={UserIdentity}",
                 string.Join(" | ", queries), userIdentity);
-            // Dispatch lives in MeshQuery's IMeshQueryCore.ObserveQuery
+            // Dispatch lives in MeshQuery's IMeshQueryCore.Query
             // (Hosting layer — see git history on MeshQuery.cs): when
             // request.UserId is System, it routes to the provider's
             // unsecured IMeshQueryCore surface (validator-bypass for the
@@ -295,7 +295,7 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
             // validator chain for that user. Graph stays decoupled from
             // Hosting — we just pass userIdentity through and let the
             // dispatch happen at the consumer.
-            upstream = queryCore.ObserveQuery<MeshNode>(request, options).Do(change =>
+            upstream = queryCore.Query<MeshNode>(request, options).Do(change =>
                 diagLogger?.LogDebug(
                     "[SyncedQuery] queries=[{Queries}] change={Type} count={Count}",
                     string.Join(" | ", queries), change.ChangeType, change.Items?.Count ?? 0));
@@ -305,7 +305,7 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
         // delete via IMeshChangeFeed (the canonical post-delete dispatch in
         // <c>HandleDeleteNodeRequest</c>), translate it into a synthetic
         // Removed event for the path-set Scan. Synchronous reliability path
-        // on top of the upstream IMeshQueryProvider.ObserveQuery's Removed
+        // on top of the upstream IMeshQueryProvider.Query's Removed
         // event, which can be debounced/stalled by the persistence layer's
         // change-notifier and security-filter chain.
         var changeFeed = workspace.Hub.ServiceProvider.GetService<IMeshChangeFeed>();

@@ -174,7 +174,7 @@ public class CircuitAccessHandler : CircuitHandler
     /// <summary>
     /// Synchronous email → mesh User lookup via the hot
     /// <see cref="MeshWeaver.Blazor.Infrastructure.UserIdentityCache"/>. The cache
-    /// subscribes to <see cref="IMeshService.ObserveQuery{T}"/> at startup so the
+    /// subscribes to <see cref="IMeshService.Query{T}"/> at startup so the
     /// lookup never bridges back to <c>Task</c> — <c>await FirstAsync()</c> on a
     /// hub-touching observable deadlocks the hub pump.
     /// </summary>

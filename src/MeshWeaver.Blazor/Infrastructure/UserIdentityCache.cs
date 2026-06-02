@@ -10,7 +10,7 @@ namespace MeshWeaver.Blazor.Infrastructure;
 
 /// <summary>
 /// Hot, in-process index of mesh <c>User</c> nodes by email. Subscribes to
-/// <see cref="IMeshService.ObserveQuery{T}"/> at construction and maintains a
+/// <see cref="IMeshService.Query{T}"/> at construction and maintains a
 /// <see cref="ConcurrentDictionary{TKey, TValue}"/> snapshot so the user-context
 /// middleware can resolve <c>email → mesh user</c> synchronously without ever
 /// awaiting on a hub-touching observable (which would deadlock).
@@ -34,7 +34,7 @@ public sealed class UserIdentityCache : IDisposable
         // routed to the raw email ("No node found at 'rbuergi@systemorph.com'").
         // Drop the namespace constraint and fan out across user partitions.
         _subscription = mesh
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("nodeType:User"))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:User"))
             .Subscribe(
                 Apply,
                 ex => _logger.LogWarning(ex, "UserIdentityCache subscription failed"));

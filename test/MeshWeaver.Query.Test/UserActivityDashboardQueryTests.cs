@@ -68,7 +68,7 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
         }).Should().Emit();
 
         // Act: dashboard query scoped to namespace
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("source:activity namespace:af scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("source:activity namespace:af scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Assert: only the 2 nodes that have activity children
         results.Should().HaveCount(2);
@@ -88,7 +88,7 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
         }).Should().Emit();
 
         // Act: scoped to the test namespace
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("source:activity namespace:afEmpty scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("source:activity namespace:afEmpty scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Assert: no activity satellites => empty
         results.Should().BeEmpty();
@@ -117,7 +117,7 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
         }).Should().Emit();
 
         // Act: dashboard query scoped to namespace
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("source:accessed namespace:rv scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("source:accessed namespace:rv scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Assert: main nodes returned, satellites excluded
         results.Should().HaveCount(2, "both doc1 and doc2 are main Markdown nodes");
@@ -147,15 +147,15 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
         Output.WriteLine($"Thread created at: {threadPath}");
 
         // Act 1: nodeType:Thread with scope:descendants â€” should find threads
-        var byType = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Thread scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var byType = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Thread scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
         Output.WriteLine($"nodeType:Thread scope:descendants => {byType.Count} results");
 
         // Act 2: namespace query â€” direct _Thread namespace query
-        var byNamespace = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{contextPath}/_Thread nodeType:Thread")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var byNamespace = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{contextPath}/_Thread nodeType:Thread")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
         Output.WriteLine($"namespace:{contextPath}/_Thread nodeType:Thread => {byNamespace.Count} results");
 
         // Act 3: exact dashboard query (no path, no scope)
-        var dashboardQuery = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Thread sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var dashboardQuery = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Thread sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
         Output.WriteLine($"nodeType:Thread sort:LastModified-desc (dashboard) => {dashboardQuery.Count} results");
 
         // Assert: at least scope:descendants must find it
@@ -206,7 +206,7 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
         threadResponse.Message.Success.Should().BeTrue(threadResponse.Message.Error ?? "");
 
         // Act: exact dashboard query
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{ns} is:main context:search scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{ns} is:main context:search scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Assert: only main content nodes, no satellites
         results.Should().HaveCountGreaterThanOrEqualTo(2,

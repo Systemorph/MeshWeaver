@@ -189,7 +189,7 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
 
         // 1. Find sub-threads under the response message
         var subThreads = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{parentMsgPath} nodeType:{ThreadNodeType.NodeType}"))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{parentMsgPath} nodeType:{ThreadNodeType.NodeType}"))
             .Should().Match(c => c.Items.Count >= 1).Items;
         subThreads.Should().ContainSingle();
         subThreads[0].Path.Should().Be(subThreadPath);
@@ -204,7 +204,7 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
 
         // 3. Get sub-thread messages
         var messages = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{subThreadPath} nodeType:{ThreadMessageNodeType.NodeType}"))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{subThreadPath} nodeType:{ThreadMessageNodeType.NodeType}"))
             .Should().Match(c => c.Items.Count >= 2).Items;
         messages.Should().HaveCount(2);
 
@@ -334,7 +334,7 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
 
         // Verify: Sub-thread exists under response message
         var subThreads = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{threadPath}/{responseMsgId} nodeType:{ThreadNodeType.NodeType}"))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{threadPath}/{responseMsgId} nodeType:{ThreadNodeType.NodeType}"))
             .Should().Match(c => c.Items.Count >= 1).Items;
         subThreads.Should().ContainSingle();
 

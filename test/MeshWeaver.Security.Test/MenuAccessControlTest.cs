@@ -289,7 +289,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         var roles = meshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("namespace:Role nodeType:Role"))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:Role nodeType:Role"))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial && c.Items.Count >= 4).Items;
 
         Output.WriteLine($"Roles returned: {roles.Count}");
@@ -309,7 +309,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         var children = meshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{NodePath}"))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{NodePath}"))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         Output.WriteLine($"Children returned: {children.Count}");

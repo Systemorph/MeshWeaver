@@ -389,7 +389,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         final.UserMessageIds.Should().HaveCount(1);
 
         // Cross-check at the node level: count actual ThreadMessage assistant cells.
-        var msgNodes = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+        var msgNodes = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{threadPath} nodeType:{ThreadMessageNodeType.NodeType}"))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
         var responseCells = msgNodes

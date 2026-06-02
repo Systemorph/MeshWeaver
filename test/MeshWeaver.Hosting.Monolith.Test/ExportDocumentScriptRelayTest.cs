@@ -85,7 +85,7 @@ public class ExportDocumentScriptRelayTest(ITestOutputHelper output) : MonolithM
 
         // Step 2 — subscribe to the activity's own per-node MeshNode stream
         // (canonical "live single-node read") and wait for terminal status.
-        // ObserveQuery cannot be used here: Content on query rows is a
+        // Query cannot be used here: Content on query rows is a
         // snapshot taken at index time, never live (see
         // CqrsAndContentAccess.md → "Never read MeshNode.Content from a query
         // row"). The per-activity hub's workspace is the sole owner of the

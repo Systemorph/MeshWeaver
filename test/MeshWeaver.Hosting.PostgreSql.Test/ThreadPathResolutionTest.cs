@@ -253,13 +253,13 @@ public class ThreadPathResolutionTest
     /// adapter's direct <c>ReadAsync</c> finds it (existing
     /// <c>ThreadNode_StoredInThreadsTable_FoundByGetNodeAsync</c> proves this).
     /// The failure happens one layer up — at the query level
-    /// (<c>IMeshQueryCore.ObserveQuery</c>) that <c>PathResolutionService</c>
+    /// (<c>IMeshQueryCore.Query</c>) that <c>PathResolutionService</c>
     /// uses. The resolver builds a multi-value path query
     /// (<c>path:{full}|{ancestor1}|{ancestor2}</c>) and expects at least one
     /// exact match for the deepest path that exists.
     ///
     /// <para>This test pins that path-shape end-to-end against
-    /// <see cref="PostgreSqlMeshQuery.ObserveQuery"/> (the same provider the
+    /// <see cref="PostgreSqlMeshQuery.Query"/> (the same provider the
     /// resolver consumes). If it goes red, the production satellite-path
     /// resolution is broken; if it stays green, the resolver-level bug lies
     /// elsewhere (e.g. multi-provider aggregation, access-control filter).</para>
@@ -279,7 +279,7 @@ public class ThreadPathResolutionTest
 
         var (ds, adapter) = CreateSchema("testorg", partitionDef, ct);
 
-        // Grant Anonymous Read so the ObserveQuery isn't filtered out by RLS —
+        // Grant Anonymous Read so the Query isn't filtered out by RLS —
         // the prod bug exists independent of access control; we want to isolate
         // the path-resolution surface.
         _fixture.AccessControl.Grant("TestOrg", "Anonymous", "Read", isAllow: true, ct)
@@ -352,7 +352,7 @@ public class ThreadPathResolutionTest
             UserId = MeshWeaver.Mesh.Security.WellKnownUsers.System,
         };
         var singleSnapshot = query
-            .ObserveQuery<MeshNode>(singlePathRequest, _options)
+            .Query<MeshNode>(singlePathRequest, _options)
             .Should().Within(30.Seconds()).Emit();
         singleSnapshot.Items.Select(n => n.Path).Should().Contain(
             "TestOrg/_Thread/add-markus-kleiner-as-admin-c578",
@@ -366,7 +366,7 @@ public class ThreadPathResolutionTest
             UserId = MeshWeaver.Mesh.Security.WellKnownUsers.System,
         };
         var snapshot = query
-            .ObserveQuery<MeshNode>(systemRequest, _options)
+            .Query<MeshNode>(systemRequest, _options)
             .Should().Within(30.Seconds()).Emit();
 
         // The Initial emission MUST include the thread row — that's what makes
@@ -436,7 +436,7 @@ public class ThreadPathResolutionTest
         var anonRequest = MeshQueryRequest.FromQuery(
             "path:PrivateOrg/_Thread/secret-thread");
         var anonSnapshot = query
-            .ObserveQuery<MeshNode>(anonRequest, _options)
+            .Query<MeshNode>(anonRequest, _options)
             .Should().Within(30.Seconds()).Emit();
         anonSnapshot.Items.Should().BeEmpty(
             "Anonymous user without partition_access SHOULD be denied at the access " +
@@ -450,7 +450,7 @@ public class ThreadPathResolutionTest
             UserId = MeshWeaver.Mesh.Security.WellKnownUsers.System,
         };
         var systemSnapshot = query
-            .ObserveQuery<MeshNode>(systemRequest, _options)
+            .Query<MeshNode>(systemRequest, _options)
             .Should().Within(30.Seconds()).Emit();
         systemSnapshot.Items.Should().ContainSingle(n =>
             n.Path == "PrivateOrg/_Thread/secret-thread",
@@ -515,7 +515,7 @@ public class ThreadPathResolutionTest
             UserId = MeshWeaver.Mesh.Security.WellKnownUsers.System,
         };
         var snapshot = query
-            .ObserveQuery<MeshNode>(request, _options)
+            .Query<MeshNode>(request, _options)
             .Should().Within(30.Seconds()).Emit();
 
         // Exactly one row, from OrgA. If we got OrgB's t1 too, the fan-out

@@ -651,7 +651,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             .Select(d => d.Message)
             .Should().Within(TimeSpan.FromSeconds(30)).Emit();
         // Wait for compile to complete (status = Ok or Error) before returning.
-        // Live remote stream (GetMeshNodeStream(path)) â€” NOT ObserveQuery, which
+        // Live remote stream (GetMeshNodeStream(path)) â€” NOT Query, which
         // is index-lagged and can miss the post-compile tick (per the CQRS
         // feedback note + Doc/Architecture/CqrsAndContentAccess.md). Path is
         // known here, so the live stream is the right primitive.
@@ -698,7 +698,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
     /// <paramref name="knownReleases"/>. Reads <see cref="NodeTypeDefinition.LatestReleasePath"/>
     /// off the live <see cref="GetMeshNodeStream"/> â€” atomic with the post-compile
     /// status flip, so by the time CompilationStatus settles to Ok the new path
-    /// is already on the NodeType. Avoids the lagged <c>ObserveQuery</c> namespace
+    /// is already on the NodeType. Avoids the lagged <c>Query</c> namespace
     /// scan over <c>Release/*</c>.
     /// </summary>
     private string WaitForNewRelease(string nodeTypePath, HashSet<string> knownReleases)

@@ -204,7 +204,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         content.Type.Should().Be(ThreadMessageType.ExecutedInput);
 
         // Query child messages
-        var children = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+        var children = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
             $"namespace:{threadPath} nodeType:{ThreadMessageNodeType.NodeType}"))
             .Should().Match(c => c.Items.Count >= 1).Items;
 

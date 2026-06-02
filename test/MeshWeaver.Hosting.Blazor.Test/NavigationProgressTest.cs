@@ -58,7 +58,7 @@ public class NavigationProgressTest
         // Empty mesh query by default â€” node-loading path is best-effort.
         // Empty observable so the chain in LoadNodeWithPreRenderedHtml completes
         // with node = null (Catch falls through to Observable.Return(null)).
-        _meshQuery.ObserveQuery<MeshNode>(Arg.Any<MeshQueryRequest>(), Arg.Any<JsonSerializerOptions>())
+        _meshQuery.Query<MeshNode>(Arg.Any<MeshQueryRequest>(), Arg.Any<JsonSerializerOptions>())
             .Returns(System.Reactive.Linq.Observable.Empty<QueryResultChange<MeshNode>>());
     }
 

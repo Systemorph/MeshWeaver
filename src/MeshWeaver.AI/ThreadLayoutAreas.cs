@@ -418,7 +418,7 @@ public static class ThreadLayoutAreas
         }
 
         // Live observable of child Thread nodes (delegations) — auto-updates on add/remove.
-        var childrenStream = meshQuery.ObserveQuery<MeshNode>(
+        var childrenStream = meshQuery.Query<MeshNode>(
                 MeshQueryRequest.FromQuery($"namespace:{hubPath} nodeType:{ThreadNodeType.NodeType}"))
             .Select(change => (IReadOnlyList<MeshNode>)change.Items)
             .Catch<IReadOnlyList<MeshNode>, Exception>(_ => Observable.Return((IReadOnlyList<MeshNode>)Array.Empty<MeshNode>()));

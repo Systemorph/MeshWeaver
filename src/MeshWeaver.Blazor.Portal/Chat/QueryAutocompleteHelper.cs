@@ -7,7 +7,7 @@ namespace MeshWeaver.Blazor.Portal.Chat;
 
 /// <summary>
 /// Helper for <see cref="MeshNodeAutocomplete"/>: composes per-query
-/// <see cref="IMeshService.ObserveQuery{T}"/> streams into a single deduped
+/// <see cref="IMeshService.Query{T}"/> streams into a single deduped
 /// suggestion list. Pure reactive — caller subscribes to the observable.
 /// </summary>
 internal static class QueryAutocompleteHelper
@@ -30,7 +30,7 @@ internal static class QueryAutocompleteHelper
                 ? baseQuery
                 : $"{baseQuery} {userText}";
             return meshQuery
-                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(fullQuery))
+                .Query<MeshNode>(MeshQueryRequest.FromQuery(fullQuery))
                 .Take(1)
                 .Catch<QueryResultChange<MeshNode>, Exception>(
                     _ => Observable.Empty<QueryResultChange<MeshNode>>());

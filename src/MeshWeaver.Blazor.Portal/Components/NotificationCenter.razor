@@ -38,7 +38,7 @@
         // whose main entity (thread, approval, doc) they can read. Notification
         // node type routes to the `notifications` table via the satellite
         // mapping; the query hits that table directly.
-        subscription = MeshQuery.ObserveQuery<MeshNode>(
+        subscription = MeshQuery.Query<MeshNode>(
                 MeshQueryRequest.FromQuery("nodeType:Notification sort:CreatedAt-desc"))
             .Subscribe(change =>
             {

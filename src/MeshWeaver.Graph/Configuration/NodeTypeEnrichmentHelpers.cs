@@ -114,7 +114,7 @@ internal static class NodeTypeEnrichmentHelpers
             return Observable.Using(
                     () => (meshHub.ServiceProvider.GetService<AccessService>()?.ImpersonateAsSystem())
                           ?? System.Reactive.Disposables.Disposable.Empty,
-                    _ => queryCore.ObserveQuery<MeshNode>(probeRequest, meshHub.JsonSerializerOptions))
+                    _ => queryCore.Query<MeshNode>(probeRequest, meshHub.JsonSerializerOptions))
                 .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
                 .Take(1)
                 .Timeout(NodeTypeProbeTimeout)

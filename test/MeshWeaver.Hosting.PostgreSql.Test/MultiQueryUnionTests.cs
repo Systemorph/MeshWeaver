@@ -20,7 +20,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 ///   <item>Asserting both query branches' results appear in the snapshot.</item>
 ///   <item>Asserting a node matched by BOTH queries appears exactly once
 ///         (server-side <c>UNION</c> dedup).</item>
-///   <item>Driving <see cref="PostgreSqlMeshQuery.ObserveQuery{T}"/> with the
+///   <item>Driving <see cref="PostgreSqlMeshQuery.Query{T}"/> with the
 ///         multi-query request and verifying the live snapshot follows the
 ///         same union shape.</item>
 /// </list>
@@ -123,7 +123,7 @@ public class MultiQueryUnionTests
             "namespace:User/Roland nodeType:Agent",
         });
 
-        var initial = query.ObserveQuery<MeshNode>(request, _options)
+        var initial = query.Query<MeshNode>(request, _options)
             .Should().Within(30.Seconds()).Match(c => c.ChangeType == QueryChangeType.Initial);
 
         initial.Items.Select(n => n.Path).Should().BeEquivalentTo(new[]

@@ -61,7 +61,7 @@ public static class AgentView
                     if (meshQuery == null)
                         return Observable.Return(RenderError("Query service not available."));
 
-                    return meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Agent"))
+                    return meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Agent"))
                         .Select(change => BuildCatalogContent(change.Items.ToList()))
                         .Catch<UiControl, Exception>(_ => Observable.Return(BuildCatalogContent([])));
                 },

@@ -51,7 +51,7 @@ public class SatelliteRoutingExhaustiveTest
     /// One row per satellite suffix → table mapping. Each runs the same
     /// scenario: seed a node at <c>{partition}/{suffix}/{id}</c>, read by
     /// exact path, read by multi-value <c>path:A|B|C</c> via
-    /// <c>PostgreSqlMeshQuery.ObserveQuery</c>. Source of truth:
+    /// <c>PostgreSqlMeshQuery.Query</c>. Source of truth:
     /// <see cref="PartitionDefinition.StandardTableMappings"/>.
     /// </summary>
     public static TheoryData<string, string, string, string> SatelliteSuffixes =>
@@ -165,7 +165,7 @@ public class SatelliteRoutingExhaustiveTest
         var query = new PostgreSqlMeshQuery(adapter);
         var singleRequest = MeshQueryRequest.FromQuery($"path:{satPath}");
         var singleSnap = query
-            .ObserveQuery<MeshNode>(singleRequest, _options)
+            .Query<MeshNode>(singleRequest, _options)
             .Should().Within(30.Seconds()).Emit();
         singleSnap.Items.Select(n => n.Path).Should().Contain(satPath,
             $"single-value path query against {nodeType} satellite MUST find the row in testorg.{expectedTable}");
@@ -174,7 +174,7 @@ public class SatelliteRoutingExhaustiveTest
         var multiRequest = MeshQueryRequest.FromQuery(
             $"path:{satPath}|TestOrg/{suffix}|TestOrg");
         var multiSnap = query
-            .ObserveQuery<MeshNode>(multiRequest, _options)
+            .Query<MeshNode>(multiRequest, _options)
             .Should().Within(30.Seconds()).Emit();
         multiSnap.Items.Select(n => n.Path).Should().Contain(satPath,
             $"multi-value `path:A|B|C` MUST find the {nodeType} node — this is the exact " +
@@ -253,7 +253,7 @@ public class SatelliteRoutingExhaustiveTest
         // segments.
         var query = new PostgreSqlMeshQuery(adapter);
         var snap = query
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{bogusPath}"), _options)
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{bogusPath}"), _options)
             .Should().Within(30.Seconds()).Emit();
         snap.Items.Should().BeEmpty("no row exists at this path");
 
@@ -329,12 +329,12 @@ public class SatelliteRoutingExhaustiveTest
         //   4. NOT create or query a schema named after the NodeType.
         var query = new PostgreSqlMeshQuery(adapter);
 
-        // Emit() blocks for the first ObserveQuery snapshot and rethrows any
+        // Emit() blocks for the first Query snapshot and rethrows any
         // upstream error — so a clean emission IS the must-not-throw invariant:
         // nodeType:X query MUST resolve cleanly. It must NEVER produce a SQL
         // referencing `{nodeType}.{expectedTable}` or `{nodeType}.mesh_nodes` —
         // the schema name must come from the partition, not the NodeType.
-        query.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:{nodeTypeName}"), _options)
+        query.Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:{nodeTypeName}"), _options)
             .Should().Within(30.Seconds()).Emit();
         // (Result row presence is fan-out-dependent and not always testable
         // against a single per-schema adapter; the must-not-throw assertion

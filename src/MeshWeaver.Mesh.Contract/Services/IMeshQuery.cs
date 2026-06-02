@@ -65,7 +65,7 @@ public interface IMeshQuery
     /// <example>
     /// <code>
     /// var subscription = meshQuery
-    ///     .ObserveQuery&lt;MeshNode&gt;(MeshQueryRequest.FromQuery("path:ACME nodeType:Story scope:descendants"))
+    ///     .Query&lt;MeshNode&gt;(MeshQueryRequest.FromQuery("path:ACME nodeType:Story scope:descendants"))
     ///     .Subscribe(change =&gt;
     ///     {
     ///         Console.WriteLine($"Change: {change.ChangeType}, Items: {change.Items.Count}");
@@ -74,7 +74,7 @@ public interface IMeshQuery
     /// subscription.Dispose();
     /// </code>
     /// </example>
-    IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request);
+    IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request);
 
     /// <summary>
     /// Selects a single property value from a node at the given path.

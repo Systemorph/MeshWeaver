@@ -173,7 +173,7 @@ public class UserOnboardingServiceTests(ITestOutputHelper output) : MonolithMesh
         // internal IMeshQueryCore but the query string + result shape are identical).
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var found = meshService
-            .ObserveQuery<MeshNode>(
+            .Query<MeshNode>(
                 MeshQueryRequest.FromQuery(
                     $"nodeType:User content.email:{email} limit:1"))
             .Should().Within(10.Seconds())
@@ -215,7 +215,7 @@ public class UserOnboardingServiceTests(ITestOutputHelper output) : MonolithMesh
         // written under the {ghost} partition. If the gate had failed, the ghost
         // partition would exist and its activity node would show up here.
         var result = meshService
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("nodeType:UserActivity"))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:UserActivity"))
             .Should().Within(8.Seconds()).Match(_ => true);
         result.Items.Should().NotContain(
             n => n.Path != null && n.Path.StartsWith($"{ghost}/", StringComparison.Ordinal),
@@ -248,7 +248,7 @@ public class UserOnboardingServiceTests(ITestOutputHelper output) : MonolithMesh
         }
 
         var result = meshService
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"nodeType:UserActivity content.userId:{username}"))
             .Should().Within(15.Seconds()).Match(c => c.Items.Count > 0);
         result.Items.Should().NotBeEmpty(

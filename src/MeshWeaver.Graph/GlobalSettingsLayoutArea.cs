@@ -171,7 +171,7 @@ public static class GlobalSettingsLayoutArea
 
         stack = stack.WithView((h, _) =>
             meshService
-                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                .Query<MeshNode>(MeshQueryRequest.FromQuery(
                     $"namespace:{MeshDataSourceNodeType.SourcesNamespace} nodeType:{MeshDataSourceNodeType.NodeType}"))
                 .Select(change =>
                 {

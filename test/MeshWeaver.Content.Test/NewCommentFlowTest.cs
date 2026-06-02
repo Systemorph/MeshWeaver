@@ -142,7 +142,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"Retrieved comment: Author={retrievedComment.Author}, Text='{retrievedComment.Text}'");
 
         // Assert Ã¢â‚¬â€ node should appear in namespace: query (this is how ReadView finds comments)
-        var children = MeshQuery.ObserveQuery<MeshNode>(
+        var children = MeshQuery.Query<MeshNode>(
                 MeshQueryRequest.FromQuery($"namespace:{docPath} nodeType:{CommentNodeType.NodeType}"))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
@@ -419,7 +419,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         // for the catalog to surface the comment under the doc namespace.
         Output.WriteLine("5. Verifying via namespace: query...");
         var nsQuery = $"namespace:{docPath} nodeType:{CommentNodeType.NodeType}";
-        var found = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(nsQuery))
+        var found = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(nsQuery))
             .SelectMany(c => c.Items)
             .Where(n => n.Path == created.Path &&
                         n.Content is Comment cc &&

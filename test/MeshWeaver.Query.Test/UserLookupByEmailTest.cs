@@ -62,7 +62,7 @@ public class UserLookupByEmailTest : MonolithMeshTestBase
         MeshNode[] results;
         using (accessService.ImpersonateAsHub(Mesh))
         {
-            results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+            results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
                 .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items.ToArray();
         }
 
@@ -89,7 +89,7 @@ public class UserLookupByEmailTest : MonolithMeshTestBase
         MeshNode[] results;
         using (accessService.ImpersonateAsHub(Mesh))
         {
-            results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+            results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
                 .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items.ToArray();
         }
 
@@ -113,7 +113,7 @@ public class UserLookupByEmailTest : MonolithMeshTestBase
         MeshNode? meshUser;
         using (accessService.ImpersonateAsHub(Mesh))
         {
-            meshUser = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            meshUser = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
                     $"nodeType:User namespace:User content.email:{claimEmail} limit:1"))
                 .Should().Match(c => c.ChangeType == QueryChangeType.Initial)
                 .Items.FirstOrDefault();

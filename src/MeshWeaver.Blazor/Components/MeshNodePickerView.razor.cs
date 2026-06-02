@@ -158,7 +158,7 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
                 ? baseQuery
                 : $"{baseQuery} {userText}";
             return MeshQuery
-                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(fullQuery))
+                .Query<MeshNode>(MeshQueryRequest.FromQuery(fullQuery))
                 .Take(1)
                 .Select(c => (IReadOnlyList<MeshNode>)c.Items)
                 .Catch<IReadOnlyList<MeshNode>, Exception>(

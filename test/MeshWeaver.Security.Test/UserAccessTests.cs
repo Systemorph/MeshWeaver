@@ -240,7 +240,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         NodeFactory.CreateNode(new MeshNode("Doc2", "PublicArea") { Name = "Document 2", NodeType = "Group" }).Should().Emit();
         ClearAdminContext();
 
-        var children = MeshQuery.ObserveQuery<MeshNode>(new MeshQueryRequest { Query = "namespace:PublicArea", UserId = "" })
+        var children = MeshQuery.Query<MeshNode>(new MeshQueryRequest { Query = "namespace:PublicArea", UserId = "" })
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial && c.Items.Count(n => n.NodeType != "AccessAssignment") == 2).Items;
 
         var contentChildren = children.Where(n => n.NodeType != "AccessAssignment").ToList();
@@ -256,7 +256,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         NodeFactory.CreateNode(new MeshNode("Secret1", "PrivateArea") { Name = "Secret 1", NodeType = "Group" }).Should().Emit();
         ClearAdminContext();
 
-        var children = MeshQuery.ObserveQuery<MeshNode>(new MeshQueryRequest { Query = "namespace:PrivateArea", UserId = "" })
+        var children = MeshQuery.Query<MeshNode>(new MeshQueryRequest { Query = "namespace:PrivateArea", UserId = "" })
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         children.Should().BeEmpty();
@@ -269,7 +269,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         NodeFactory.CreateNode(new MeshNode("ClosedProject") { Name = "Closed Project", NodeType = "Group" }).Should().Emit();
         ClearAdminContext();
 
-        var rootChildren = MeshQuery.ObserveQuery<MeshNode>(new MeshQueryRequest { Query = "namespace:", UserId = "" })
+        var rootChildren = MeshQuery.Query<MeshNode>(new MeshQueryRequest { Query = "namespace:", UserId = "" })
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial && c.Items.Any(n => n.Id == "OpenProject")).Items;
 
         rootChildren.Should().Contain(n => n.Id == "OpenProject");
@@ -355,7 +355,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
             Query = "nodeType:Group namespace:",
             UserId = ""
         };
-        var results = MeshQuery.ObserveQuery<MeshNode>(request)
+        var results = MeshQuery.Query<MeshNode>(request)
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial && c.Items.Any(n => n.Name == "Systemorph")).Items;
 
         var nodeNames = results.OfType<MeshNode>().Select(n => n.Name).ToList();
@@ -387,7 +387,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         {
             Query = "nodeType:Group namespace:"
         };
-        var results = MeshQuery.ObserveQuery<MeshNode>(request)
+        var results = MeshQuery.Query<MeshNode>(request)
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial && c.Items.Any(n => n.Name == "MeshWeaver2")).Items;
 
         var nodeNames = results.OfType<MeshNode>().Select(n => n.Name).ToList();
@@ -408,11 +408,11 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         ClearAdminContext();
 
         var request = new MeshQueryRequest { Query = "path:Public scope:descendants", UserId = "" };
-        var publicResults = MeshQuery.ObserveQuery<MeshNode>(request)
+        var publicResults = MeshQuery.Query<MeshNode>(request)
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial && c.Items.Any(n => n.Path == "Public/PublicDoc")).Items;
 
         var restrictedRequest = new MeshQueryRequest { Query = "path:Private scope:descendants", UserId = "" };
-        var restrictedResults = MeshQuery.ObserveQuery<MeshNode>(restrictedRequest)
+        var restrictedResults = MeshQuery.Query<MeshNode>(restrictedRequest)
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         var publicNodePaths = publicResults.OfType<MeshNode>().Select(n => n.Path).ToList();
@@ -431,7 +431,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         ClearAdminContext();
 
         var request = new MeshQueryRequest { Query = "path:Secret scope:descendants", UserId = "QueryUser" };
-        var results = MeshQuery.ObserveQuery<MeshNode>(request)
+        var results = MeshQuery.Query<MeshNode>(request)
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial && c.Items.Any(n => n.Path == "Secret/SecretDoc")).Items;
 
         var nodePaths = results.OfType<MeshNode>().Select(n => n.Path).ToList();
@@ -468,7 +468,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
             Query = "nodeType:Code namespace:",
             UserId = WellKnownUsers.Public
         };
-        var results = MeshQuery.ObserveQuery<MeshNode>(request)
+        var results = MeshQuery.Query<MeshNode>(request)
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial && c.Items.Any(n => n.Name == "PublicOrg3")).Items;
 
         var nodeNames = results.OfType<MeshNode>().Select(n => n.Name).ToList();
@@ -505,7 +505,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         NodeFactory.CreateNode(new MeshNode("AliceProfile", "Profiles") { Name = "Alice Profile", NodeType = "Markdown" }).Should().Emit();
         ClearAdminContext();
 
-        var children = MeshQuery.ObserveQuery<MeshNode>(new MeshQueryRequest { Query = "namespace:Profiles", UserId = "" })
+        var children = MeshQuery.Query<MeshNode>(new MeshQueryRequest { Query = "namespace:Profiles", UserId = "" })
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial && c.Items.Any(n => n.Id == "AliceProfile")).Items;
 
         children.Should().Contain(n => n.Id == "AliceProfile");
@@ -527,9 +527,9 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         }).Should().Emit();
         ClearAdminContext();
 
-        var typeDef = MeshQuery.ObserveQuery<MeshNode>(new MeshQueryRequest { Query = "path:CustomType", UserId = "" })
+        var typeDef = MeshQuery.Query<MeshNode>(new MeshQueryRequest { Query = "path:CustomType", UserId = "" })
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial && c.Items.Count > 0).Items.FirstOrDefault();
-        var instance = MeshQuery.ObserveQuery<MeshNode>(new MeshQueryRequest { Query = "path:CustomInstance", UserId = "" })
+        var instance = MeshQuery.Query<MeshNode>(new MeshQueryRequest { Query = "path:CustomInstance", UserId = "" })
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items.FirstOrDefault();
 
         typeDef.Should().NotBeNull("NodeType definitions are readable with explicit Anonymous Viewer grant");
@@ -544,7 +544,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         NodeFactory.CreateNode(new MeshNode("Doc1", "SecretArea") { Name = "Secret Doc", NodeType = "Group" }).Should().Emit();
         ClearAdminContext();
 
-        var children = MeshQuery.ObserveQuery<MeshNode>(new MeshQueryRequest { Query = "namespace:SecretArea", UserId = "" })
+        var children = MeshQuery.Query<MeshNode>(new MeshQueryRequest { Query = "namespace:SecretArea", UserId = "" })
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         children.Should().BeEmpty();

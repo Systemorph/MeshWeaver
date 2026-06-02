@@ -76,7 +76,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     /// <summary>
-    /// Accumulate the live <c>ObserveQuery</c> deltas (Initial / Reset / Added /
+    /// Accumulate the live <c>Query</c> deltas (Initial / Reset / Added /
     /// Updated / Removed) into a running by-path result set and block until
     /// <paramref name="until"/> holds. Replaces the old
     /// <c>QueryAsync(...).ToListAsync()</c> snapshot for count-sensitive assertions
@@ -86,7 +86,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     private IReadOnlyList<MeshNode> QueryUntil(string query, Func<IReadOnlyList<MeshNode>, bool> until)
     {
         var byPath = new Dictionary<string, MeshNode>(StringComparer.Ordinal);
-        return MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+        return MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Scan((IReadOnlyList<MeshNode>)Array.Empty<MeshNode>(), (_, change) =>
             {
                 if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
@@ -119,7 +119,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
         Output.WriteLine($"Querying: {query}");
 
         var results = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         Output.WriteLine($"Found {results.Count} Todo items:");
@@ -165,13 +165,13 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
         // Query without nodeType filter
         var queryWithoutFilter = "path:ACME/ProductLaunch/Todo scope:subtree";
         var allResults = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(queryWithoutFilter))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(queryWithoutFilter))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Query with nodeType filter
         var queryWithFilter = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo scope:subtree";
         var filteredResults = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(queryWithFilter))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(queryWithFilter))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         Output.WriteLine($"Without filter: {allResults.Count}, With filter: {filteredResults.Count}");

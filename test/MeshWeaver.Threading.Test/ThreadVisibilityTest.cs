@@ -45,7 +45,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
         }).Should().Emit();
 
         // Query by path â€” should find it
-        var result = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+        var result = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
             $"path:User/{RolandId}/_Thread/test-thread-1"))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items.FirstOrDefault();
 
@@ -167,7 +167,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
 
         // Query with sort:LastModified-desc. Match the emission carrying BOTH
         // threads so its Items preserve the query's sort order.
-        var threads = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+        var threads = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
             "nodeType:Thread sort:LastModified-desc scope:descendants"))
             .Should().Match(c => c.Items.Any(t => t.Name == "Old thread")
                               && c.Items.Any(t => t.Name == "New thread")).Items.ToList();
@@ -192,7 +192,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     /// <summary>
-    /// Folds the live <c>ObserveQuery</c> deltas (Initial / Reset / Added / Updated /
+    /// Folds the live <c>Query</c> deltas (Initial / Reset / Added / Updated /
     /// Removed) into a running node map keyed by path, blocking until
     /// <paramref name="predicate"/> holds. Eventual-consistency safe: a node that
     /// arrives in a post-Initial <c>Added</c> emission still satisfies the wait.
@@ -201,7 +201,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
         string query, Func<System.Collections.Generic.IReadOnlyList<MeshNode>, bool> predicate)
     {
         var byPath = System.Collections.Immutable.ImmutableDictionary<string, MeshNode>.Empty;
-        return MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+        return MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Scan(byPath, (acc, change) =>
             {
                 if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)

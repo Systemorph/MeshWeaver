@@ -24,7 +24,7 @@ namespace MeshWeaver.AI;
 ///   batched ingestion keeps one output cell per round.
 /// - Pure helpers <see cref="FindUnprocessedUserMessages"/> and <see cref="PlanNextRound"/>
 ///   are the unit-testable core.
-/// - Hard rule: no await, no IMeshService.QueryAsync, no ObserveQuery, no client
+/// - Hard rule: no await, no IMeshService.QueryAsync, no Query, no client
 ///   SubmitMessageRequest. Only Hub.Post + RegisterCallback + workspace stream writes.
 /// </summary>
 internal static class ThreadSubmission

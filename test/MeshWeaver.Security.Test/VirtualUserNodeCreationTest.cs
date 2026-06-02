@@ -103,7 +103,7 @@ public class VirtualUserNodeCreationTest(ITestOutputHelper output) : MonolithMes
             meshService.CreateNode(node).Should().Emit();
 
             // Second call: VUser exists after creation — wait reactively for it to surface.
-            var existsAfter = meshService.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            var existsAfter = meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"path:VUser/{virtualUserId}"))
                 .Select(c => c.Items.Any())
                 .Should().Match(any => any);
@@ -115,7 +115,7 @@ public class VirtualUserNodeCreationTest(ITestOutputHelper output) : MonolithMes
     /// Checks if a node exists via the initial query snapshot.
     /// </summary>
     private static bool NodeExists(IMeshService meshService, string path)
-        => meshService.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}"))
+        => meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}"))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items.Count > 0;
 
     private IMessageHub CreatePortalHub()

@@ -480,7 +480,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 20000)]
     public void MeshWeaver_HasChildren()
     {
-        var children = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("namespace:MeshWeaver"))
+        var children = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:MeshWeaver"))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         children.Should().NotBeEmpty("MeshWeaver should have children");

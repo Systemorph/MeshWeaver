@@ -172,7 +172,7 @@
 
     protected override void OnInitialized()
     {
-        subscription = MeshQuery.ObserveQuery<MeshNode>(
+        subscription = MeshQuery.Query<MeshNode>(
                 MeshQueryRequest.FromQuery("nodeType:Notification sort:CreatedAt-desc"))
             .Subscribe(change =>
             {

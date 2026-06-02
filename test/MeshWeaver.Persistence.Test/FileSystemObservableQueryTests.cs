@@ -14,7 +14,7 @@ namespace MeshWeaver.Persistence.Test;
 
 /// <summary>
 /// Tests for ObservableQuery integration with FileSystemPersistenceService.
-/// Verifies that CRUD operations on file system persistence trigger ObserveQuery notifications.
+/// Verifies that CRUD operations on file system persistence trigger Query notifications.
 ///
 /// Each [Fact] uses a unique per-run namespace derived from <c>TestPartition</c> to avoid
 /// "Node already exists" collisions when the file-system persistence carries state across test
@@ -54,7 +54,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     {
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
             .Subscribe(change => receivedChanges.Add(change));
 
         WaitForChanges(receivedChanges, 1);
@@ -83,7 +83,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     {
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
             .Subscribe(change => receivedChanges.Add(change));
 
         WaitForChanges(receivedChanges, 1); // Initial
@@ -121,7 +121,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
 
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
             .Subscribe(change => receivedChanges.Add(change));
 
         WaitForChanges(receivedChanges, 1);
@@ -149,7 +149,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
 
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
             .Subscribe(change => receivedChanges.Add(change));
 
         WaitForChanges(receivedChanges, 1);
@@ -184,7 +184,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
 
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
             .Subscribe(change => receivedChanges.Add(change));
 
         WaitForChanges(receivedChanges, 1);
@@ -212,7 +212,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     {
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
             .Subscribe(change => receivedChanges.Add(change));
 
         WaitForChanges(receivedChanges, 1);
@@ -255,11 +255,11 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
         var changes2 = new List<QueryResultChange<MeshNode>>();
 
         var subscription1 = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
             .Subscribe(change => changes1.Add(change));
 
         var subscription2 = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter()))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter()))
             .Subscribe(change => changes2.Add(change));
 
         WaitForChanges(changes1, 1);
@@ -290,7 +290,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
 
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{orgPath}"))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{orgPath}"))
             .Subscribe(change => receivedChanges.Add(change));
 
         WaitForChanges(receivedChanges, 1);
@@ -325,7 +325,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
 
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{_ns}"))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{_ns}"))
             .Subscribe(change => receivedChanges.Add(change));
 
         WaitForChanges(receivedChanges, 1);
@@ -357,7 +357,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     {
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
             .Subscribe(change => receivedChanges.Add(change));
 
         WaitForChanges(receivedChanges, 1);
@@ -391,7 +391,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
 
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
             .Subscribe(change => receivedChanges.Add(change));
 
         WaitForChanges(receivedChanges, 1);
@@ -423,7 +423,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     {
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
             .Subscribe(change => receivedChanges.Add(change));
 
         WaitForChanges(receivedChanges, 1);
@@ -452,7 +452,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
 
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
         var subscription = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(QueryFilter("nodeType:Markdown")))
             .Subscribe(change => receivedChanges.Add(change));
 
         WaitForChanges(receivedChanges, 1);

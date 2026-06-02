@@ -28,7 +28,7 @@ namespace MeshWeaver.Content.Test;
 
 /// <summary>
 /// Integration tests for the commenting and reply workflow.
-/// Data verification uses IMeshService.ObserveQuery.
+/// Data verification uses IMeshService.Query.
 /// UI rendering verification uses GetRemoteStream / GetControlStream (layout client pattern).
 /// </summary>
 [Collection("SamplesGraphData")]
@@ -93,7 +93,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
     /// </summary>
     private IObservable<MeshNode> ObserveFirst(string query)
         => MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .SelectMany(c => c.Items);
 
     /// <summary>
@@ -116,7 +116,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
 
     /// <summary>
     /// Creates a reply under parent comment c1 (matching BuildReplyButton code path),
-    /// then verifies it via ObserveQuery.
+    /// then verifies it via Query.
     /// </summary>
     [Fact]
     public void CreateReply_UnderParentComment()
@@ -159,7 +159,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
     }
 
     /// <summary>
-    /// Full workflow: create comment â†’ create reply â†’ update reply text â†’ verify via ObserveQuery.
+    /// Full workflow: create comment â†’ create reply â†’ update reply text â†’ verify via Query.
     /// </summary>
     [Fact]
     public void FullWorkflow_Comment_Reply_Edit()
@@ -215,7 +215,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
             NodeFactory.UpdateNode(updatedReply).Should().Emit();
 
             var finalReply = MeshQuery
-                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{createdReply.Path}"))
+                .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{createdReply.Path}"))
                 .SelectMany(c => c.Items)
                 .Where(n => ((Comment)n.Content!).Text == "I agree!")
                 .Should()
@@ -233,7 +233,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
     }
 
     /// <summary>
-    /// Creates a comment, resolves it, and verifies the status change via ObserveQuery.
+    /// Creates a comment, resolves it, and verifies the status change via Query.
     /// Also verifies IsTopLevelComment detection.
     /// </summary>
     [Fact]
@@ -270,7 +270,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
             NodeFactory.UpdateNode(resolved).Should().Emit();
 
             var updated = MeshQuery
-                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{commentPath}"))
+                .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{commentPath}"))
                 .SelectMany(c => c.Items)
                 .Where(n => ((Comment)n.Content!).Status == CommentStatus.Resolved)
                 .Should()

@@ -81,7 +81,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         string query, Func<IReadOnlySet<string>, bool> predicate)
     {
         var paths = new HashSet<string>(StringComparer.Ordinal);
-        return MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+        return MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Scan((IReadOnlySet<string>)paths, (acc, change) =>
             {
                 var set = (HashSet<string>)acc;
@@ -114,9 +114,9 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         // Initialize TestData hub via ping
         client.Observe(new PingRequest(), o => o.WithTarget(testDataAddress)).Should().Within(20.Seconds()).Emit();
 
-        // Verify IMeshService finds the pre-seeded data — ObserveQuery is the live
+        // Verify IMeshService finds the pre-seeded data — Query is the live
         // fan-out feed; match the first snapshot that carries both org children.
-        var children = MeshQuery.ObserveQuery<MeshNode>($"namespace:{TestPartition}")
+        var children = MeshQuery.Query<MeshNode>($"namespace:{TestPartition}")
             .Should().Within(20.Seconds())
             .Match(c => c.Items.Any(n => n.Path == $"{TestPartition}/org1")
                 && c.Items.Any(n => n.Path == $"{TestPartition}/org2")).Items;
@@ -137,7 +137,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         client.Observe(new PingRequest(), o => o.WithTarget(orgAddress)).Should().Within(20.Seconds()).Emit();
 
         // Verify IMeshService finds the pre-seeded projects
-        var children = MeshQuery.ObserveQuery<MeshNode>($"namespace:{TestPartition}/org1")
+        var children = MeshQuery.Query<MeshNode>($"namespace:{TestPartition}/org1")
             .Should().Within(20.Seconds())
             .Match(c => c.Items.Any(n => n.Path == $"{TestPartition}/org1/proj1")
                 && c.Items.Any(n => n.Path == $"{TestPartition}/org1/proj2")).Items;
@@ -158,7 +158,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         client.Observe(new PingRequest(), o => o.WithTarget(projAddress)).Should().Within(20.Seconds()).Emit();
 
         // Verify IMeshService finds the pre-seeded items
-        var children = MeshQuery.ObserveQuery<MeshNode>($"namespace:{TestPartition}/org1/proj1")
+        var children = MeshQuery.Query<MeshNode>($"namespace:{TestPartition}/org1/proj1")
             .Should().Within(20.Seconds())
             .Match(c => c.Items.Any(n => n.Path == $"{TestPartition}/org1/proj1/item1")
                 && c.Items.Any(n => n.Path == $"{TestPartition}/org1/proj1/item2")).Items;
@@ -592,9 +592,9 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     [Fact(Timeout = 20000)]
     public void QueryAsync_NodeTypeOrg_ReturnsSpaces()
     {
-        // Act - query for all nodes with nodeType Space (ObserveQuery = live fan-out feed)
+        // Act - query for all nodes with nodeType Space (Query = live fan-out feed)
         var query = "nodeType:Space scope:descendants";
-        var nodes = MeshQuery.ObserveQuery<MeshNode>(query)
+        var nodes = MeshQuery.Query<MeshNode>(query)
             .Should().Within(20.Seconds())
             .Match(c => c.Items.Any(n => n.Path == $"{TestPartition}/org1")
                 && c.Items.Any(n => n.Path == $"{TestPartition}/org2")).Items;
@@ -639,7 +639,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     {
         // Act: Query for Code nodes under ACME/Project using scope:descendants
         var query = "path:ACME/Project nodeType:Code scope:descendants";
-        var nodes = MeshQuery.ObserveQuery<MeshNode>(query)
+        var nodes = MeshQuery.Query<MeshNode>(query)
             .Should().Within(20.Seconds())
             .Match(c => c.Items.Any()).Items;
 
@@ -661,7 +661,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         // Act: Query for Code nodes under ACME/Project using namespace: (1 level deep only).
         // Match the Initial snapshot (the legacy QueryAsync result) and assert it's empty.
         var query = "namespace:ACME/Project nodeType:Code";
-        var nodes = MeshQuery.ObserveQuery<MeshNode>(query)
+        var nodes = MeshQuery.Query<MeshNode>(query)
             .Should().Within(20.Seconds())
             .Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
@@ -682,7 +682,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     {
         // Act
         var query = "path:ACME/Project nodeType:Code scope:descendants";
-        var nodes = MeshQuery.ObserveQuery<MeshNode>(query)
+        var nodes = MeshQuery.Query<MeshNode>(query)
             .Should().Within(20.Seconds())
             .Match(c => c.Items.Any()).Items;
 
@@ -908,7 +908,7 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
     public void FileSystem_CodeConfiguration_LoadedFromChildMeshNodes()
     {
         // Act - get children of the Code path
-        var codeChildren = MeshQuery.ObserveQuery<MeshNode>("namespace:Type/Organizations/Source")
+        var codeChildren = MeshQuery.Query<MeshNode>("namespace:Type/Organizations/Source")
             .Should().Within(20.Seconds())
             .Match(c => c.Items.Any()).Items;
 
@@ -1007,7 +1007,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     public void Project_QueryAsync_ScopeDescendants_FindsCodeNodes()
     {
         var queryString = $"namespace:{ProjectNodeTypePath}/Source nodeType:Code";
-        var results = MeshQuery.ObserveQuery<MeshNode>(queryString)
+        var results = MeshQuery.Query<MeshNode>(queryString)
             .Should().Within(20.Seconds())
             .Match(c => c.Items.Any()).Items;
         Output.WriteLine($"Query '{queryString}' returned {results.Count} results");
@@ -1020,7 +1020,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     public void Todo_QueryAsync_FindsCodeNodes()
     {
         var queryString = $"namespace:{TodoNodeTypePath}/Source nodeType:Code";
-        var results = MeshQuery.ObserveQuery<MeshNode>(queryString)
+        var results = MeshQuery.Query<MeshNode>(queryString)
             .Should().Within(20.Seconds())
             .Match(c => c.Items.Any()).Items;
         Output.WriteLine($"Query '{queryString}' returned {results.Count} results");

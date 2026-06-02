@@ -102,7 +102,7 @@ public class SyncedQueryCrossSiloTest(ITestOutputHelper output)
     }
 
     [Fact(Timeout = 30000)]
-    public void UpdateNode_PropagatesToBothSilos_ViaUpstreamObserveQuery()
+    public void UpdateNode_PropagatesToBothSilos_ViaUpstreamQuery()
     {
         var siloA = CreateSilo("a-update");
         var siloB = CreateSilo("b-update");
@@ -124,11 +124,11 @@ public class SyncedQueryCrossSiloTest(ITestOutputHelper output)
 
         // Update via the standard write path — IMeshService.UpdateNode persists
         // through the same backing store both silos read from, and the upstream
-        // ObserveQuery emits Updated to every silo's synced pipeline.
+        // Query emits Updated to every silo's synced pipeline.
         var current = seed with { Name = "Updated" };
         NodeFactory.UpdateNode(current).Should().Emit();
 
-        // Both silos must observe the new value via their own ObserveQuery
+        // Both silos must observe the new value via their own Query
         // subscription — this is the cross-silo invariant.
         collA.Where(arr => arr.Any(n => n.Path == path && n.Name == "Updated"))
             .Should().Within(15.Seconds()).Emit();

@@ -497,7 +497,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
         return default;
     }
 
-    public IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request, JsonSerializerOptions options)
+    public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request, JsonSerializerOptions options)
     {
         // Self-filter: when the request only targets static-owned namespaces,
         // emit an empty Initial and exit — the static-node provider contributes
@@ -737,7 +737,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
     }
 
     /// <summary>
-    /// Per-item scoring for ObserveQuery initial emissions. Composes the same
+    /// Per-item scoring for Query initial emissions. Composes the same
     /// pieces <see cref="AutocompleteAsync(string, string, System.Text.Json.JsonSerializerOptions, MeshWeaver.Mesh.Services.AutocompleteMode, int, string, string, System.Threading.CancellationToken)"/> already uses — name-prefix bonus
     /// (100, scaled by length), name-substring bonus (50), path-substring
     /// bonus (30), <see cref="PathProximity.ComputeBoost"/> (max 40, decays

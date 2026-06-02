@@ -22,7 +22,7 @@ public static class AgentDetailsArea
         var agentName = ExtractAgentNameFromLayoutAreaId(host.Reference.Id);
 
         // Agent list ALWAYS through the synced GetQuery pipeline
-        // (AgentPickerProjection.ObserveAgents) — never IMeshService.ObserveQuery /
+        // (AgentPickerProjection.ObserveAgents) — never IMeshService.Query /
         // QueryAsync, those miss static-provider fan-out, dedup, and the Initial
         // gating that produces "empty Agent dropdown" bugs.
         var workspace = host.Hub.GetWorkspace();

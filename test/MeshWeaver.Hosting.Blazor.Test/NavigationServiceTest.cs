@@ -48,7 +48,7 @@ public class NavigationServiceTest
             .Returns(_creatableTypesProvider);
         _hubServiceProvider.GetService(typeof(IMeshQueryCore)).Returns(_meshQuery);
 
-        // Default stub for IMeshQueryCore.ObserveQuery — NavigationService now
+        // Default stub for IMeshQueryCore.Query — NavigationService now
         // requires a non-null MeshNode to settle Context (commit 8a6f76b10:
         // "null node emits NotFound immediately, never waits for timeout").
         // Without this stub, every test's LoadNodeWithPreRenderedHtml gets an
@@ -59,7 +59,7 @@ public class NavigationServiceTest
         // the LoadNodeWithPreRenderedHtml contract; individual tests override
         // for their specific scenario.
         _meshQuery
-            .ObserveQuery<MeshNode>(Arg.Any<MeshQueryRequest>(), Arg.Any<JsonSerializerOptions>())
+            .Query<MeshNode>(Arg.Any<MeshQueryRequest>(), Arg.Any<JsonSerializerOptions>())
             .Returns(call =>
             {
                 var req = call.Arg<MeshQueryRequest>();
@@ -655,7 +655,7 @@ public class NavigationServiceTest
             NodeType = "Thread",
             MainNode = MainNode
         };
-        _meshQuery.ObserveQuery<MeshNode>(Arg.Any<MeshQueryRequest>(), Arg.Any<JsonSerializerOptions>())
+        _meshQuery.Query<MeshNode>(Arg.Any<MeshQueryRequest>(), Arg.Any<JsonSerializerOptions>())
             .Returns(System.Reactive.Linq.Observable.Return(QueryChange(threadNode)));
 
         service.InitializeAsync();
@@ -689,7 +689,7 @@ public class NavigationServiceTest
             NodeType = "Group"
             // MainNode defaults to Path → "PartnerRe/AIConsulting"
         };
-        _meshQuery.ObserveQuery<MeshNode>(Arg.Any<MeshQueryRequest>(), Arg.Any<JsonSerializerOptions>())
+        _meshQuery.Query<MeshNode>(Arg.Any<MeshQueryRequest>(), Arg.Any<JsonSerializerOptions>())
             .Returns(System.Reactive.Linq.Observable.Return(QueryChange(mainNode)));
 
         service.InitializeAsync();
@@ -722,7 +722,7 @@ public class NavigationServiceTest
             NodeType = "Thread",
             MainNode = "PartnerRe/AIConsulting"
         };
-        _meshQuery.ObserveQuery<MeshNode>(Arg.Any<MeshQueryRequest>(), Arg.Any<JsonSerializerOptions>())
+        _meshQuery.Query<MeshNode>(Arg.Any<MeshQueryRequest>(), Arg.Any<JsonSerializerOptions>())
             .Returns(System.Reactive.Linq.Observable.Return(QueryChange(threadNode)));
 
         StubCreatableTypes("PartnerRe/AIConsulting",

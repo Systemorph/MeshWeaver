@@ -187,7 +187,7 @@ public static class ApprovalsView
         var approvalsDataId = $"inlineApprovals_{nodePath.Replace("/", "_")}";
         host.UpdateData(approvalsDataId, Array.Empty<LayoutAreaControl>());
 
-        meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+        meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{nodePath}/{ApprovalExtensions.ApprovalPartition} nodeType:{ApprovalNodeType.NodeType}"))
             .Scan(new List<MeshNode>(), (list, change) =>
             {

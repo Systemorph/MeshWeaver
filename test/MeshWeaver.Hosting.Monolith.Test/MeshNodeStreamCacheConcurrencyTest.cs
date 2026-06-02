@@ -25,7 +25,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 ///     return semantically equivalent observables (every subscriber sees the
 ///     same emissions).</item>
 ///   <item><b>Single upstream</b> — only ONE upstream
-///     <see cref="MeshWeaver.Mesh.Services.IMeshQueryCore.ObserveQuery"/>
+///     <see cref="MeshWeaver.Mesh.Services.IMeshQueryCore.Query"/>
 ///     subscription is opened per <c>id</c>, regardless of subscriber count
 ///     (the CAS-loser observable from the swap loop must not leak Connect).</item>
 ///   <item><b>Eventually consistent</b> — once a node matching the query

@@ -14,9 +14,9 @@ using MeshWeaver.Fixture;
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
 /// <summary>
-/// Tests that ObserveQuery correctly receives change notifications
+/// Tests that Query correctly receives change notifications
 /// through the full PostgreSQL LISTEN/NOTIFY pipeline:
-/// DB trigger â†’ pg_notify â†’ PostgreSqlChangeListener â†’ DataChangeNotifier â†’ ObserveQuery
+/// DB trigger â†’ pg_notify â†’ PostgreSqlChangeListener â†’ DataChangeNotifier â†’ Query
 /// </summary>
 [Collection("PostgreSqlIsolated")]
 public class ObserveQueryTests : IAsyncLifetime
@@ -63,7 +63,7 @@ public class ObserveQueryTests : IAsyncLifetime
         // row, so asserting "exactly one change" was a flake under load. The
         // contract this test pins is the SHAPE of the Initial emission, not
         // the absence of subsequent ones.
-        var initialChange = _query.ObserveQuery<MeshNode>(request, _options)
+        var initialChange = _query.Query<MeshNode>(request, _options)
             .Should().Within(10.Seconds()).Match(c => c.ChangeType == QueryChangeType.Initial);
 
         initialChange.Items.Should().HaveCount(1);
@@ -79,7 +79,7 @@ public class ObserveQueryTests : IAsyncLifetime
         var changes = new List<QueryResultChange<MeshNode>>();
         var request = MeshQueryRequest.FromQuery("namespace:ACME/Project");
 
-        using var sub = _query.ObserveQuery<MeshNode>(request, _options)
+        using var sub = _query.Query<MeshNode>(request, _options)
             .Subscribe(c => changes.Add(c));
 
         await WaitForChanges(changes, 1); // Initial
@@ -92,7 +92,7 @@ public class ObserveQueryTests : IAsyncLifetime
 
         // Assert
         var added = changes.FirstOrDefault(c => c.ChangeType == QueryChangeType.Added);
-        added.Should().NotBeNull("ObserveQuery should detect the added node via pg_notify");
+        added.Should().NotBeNull("Query should detect the added node via pg_notify");
         added!.Items.Should().ContainSingle(n => n.Id == "Story2");
     }
 
@@ -109,7 +109,7 @@ public class ObserveQueryTests : IAsyncLifetime
         var changes = new List<QueryResultChange<MeshNode>>();
         var request = MeshQueryRequest.FromQuery("namespace:ACME/Project");
 
-        using var sub = _query.ObserveQuery<MeshNode>(request, _options)
+        using var sub = _query.Query<MeshNode>(request, _options)
             .Subscribe(c => changes.Add(c));
 
         await WaitForChanges(changes, 1); // Initial
@@ -129,7 +129,7 @@ public class ObserveQueryTests : IAsyncLifetime
 
         // Assert
         var updated = changes.FirstOrDefault(c => c.ChangeType == QueryChangeType.Updated);
-        updated.Should().NotBeNull("ObserveQuery should detect the updated node via pg_notify");
+        updated.Should().NotBeNull("Query should detect the updated node via pg_notify");
         updated!.Items.Should().ContainSingle(n => n.Id == "Story1");
     }
 
@@ -143,7 +143,7 @@ public class ObserveQueryTests : IAsyncLifetime
         var changes = new List<QueryResultChange<MeshNode>>();
         var request = MeshQueryRequest.FromQuery("namespace:ACME/Project");
 
-        using var sub = _query.ObserveQuery<MeshNode>(request, _options)
+        using var sub = _query.Query<MeshNode>(request, _options)
             .Subscribe(c => changes.Add(c));
 
         await WaitForChanges(changes, 1); // Initial
@@ -156,7 +156,7 @@ public class ObserveQueryTests : IAsyncLifetime
 
         // Assert
         var removed = changes.FirstOrDefault(c => c.ChangeType == QueryChangeType.Removed);
-        removed.Should().NotBeNull("ObserveQuery should detect the deleted node via pg_notify");
+        removed.Should().NotBeNull("Query should detect the deleted node via pg_notify");
         removed!.Items.Should().ContainSingle(n => n.Id == "Story1");
     }
 
@@ -169,7 +169,7 @@ public class ObserveQueryTests : IAsyncLifetime
         var initialChanges = new List<QueryResultChange<MeshNode>>();
         var outOfScopeChanges = new List<QueryResultChange<MeshNode>>();
         var request = MeshQueryRequest.FromQuery("namespace:ACME/Project");
-        var stream = _query.ObserveQuery<MeshNode>(request, _options);
+        var stream = _query.Query<MeshNode>(request, _options);
 
         // Subscribe TWICE on the same stream:
         //   (a) capture the Initial emission for the in-scope sanity check
@@ -209,7 +209,7 @@ public class ObserveQueryTests : IAsyncLifetime
         var changes = new List<QueryResultChange<MeshNode>>();
         var request = MeshQueryRequest.FromQuery("namespace:ACME/Project");
 
-        using var sub = _query.ObserveQuery<MeshNode>(request, _options)
+        using var sub = _query.Query<MeshNode>(request, _options)
             .Subscribe(c => changes.Add(c));
 
         await WaitForChanges(changes, 1); // Initial (empty)
@@ -242,7 +242,7 @@ public class ObserveQueryTests : IAsyncLifetime
         // accumulator + polling-lambda enumeration would race with the
         // Subscribe handler's Add — guard both ends with the same lock so
         // enumeration takes a stable snapshot.
-        using var sub = _query.ObserveQuery<MeshNode>(request, _options)
+        using var sub = _query.Query<MeshNode>(request, _options)
             .Subscribe(c => { lock (changes) changes.Add(c); });
 
         await WaitForChanges(changes, 1); // Initial (empty)

@@ -17,7 +17,7 @@ namespace MeshWeaver.Hosting.Persistence.Query;
 /// <summary>
 /// Single top-level query fan-out. Aggregates every registered
 /// <see cref="IMeshQueryProvider"/> for both the secured surface
-/// (<see cref="ObserveQuery{T}(MeshQueryRequest)"/>) and the unsecured
+/// (<see cref="Query{T}(MeshQueryRequest)"/>) and the unsecured
 /// <see cref="IMeshQueryCore"/> surface (used by SyncedQueryMeshNodes /
 /// SecurityService to dodge the validator cycle). One boss for fan-out —
 /// per-adapter providers stay leaves.
@@ -256,11 +256,11 @@ public class MeshQuery : IMeshQueryCore
         return false;
     }
 
-    public IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request)
+    public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request)
     {
         var matched = SelectMatchingProviders(NamespacesForRequest(request));
         return MergeProviderObservables(
-                matched.Select(p => p.ObserveQuery<T>(request, Options)).ToList(),
+                matched.Select(p => p.Query<T>(request, Options)).ToList(),
                 request)
             // Push the upstream subscription onto the thread pool so the
             // calling hub's action block isn't blocked while providers open
@@ -430,7 +430,7 @@ public class MeshQuery : IMeshQueryCore
     ///     <c>_Access</c> walks, NodeType compile activities, framework
     ///     seeds).</item>
     ///   <item>Real user → <b>secured</b> fan-out: providers are invoked
-    ///     through the public <see cref="IMeshQueryProvider.ObserveQuery"/>
+    ///     through the public <see cref="IMeshQueryProvider.Query"/>
     ///     surface where <see cref="StorageAdapterMeshQueryProvider"/>
     ///     applies the per-result RLS validator chain for that user.
     ///     Per-user <c>workspace.GetQuery</c> calls route here so each
@@ -442,7 +442,7 @@ public class MeshQuery : IMeshQueryCore
     /// to know about the secured surface. Stamp <c>request.UserId</c> at
     /// the call site and the right surface lights up.</para>
     /// </summary>
-    IObservable<QueryResultChange<T>> IMeshQueryCore.ObserveQuery<T>(
+    IObservable<QueryResultChange<T>> IMeshQueryCore.Query<T>(
         MeshQueryRequest request,
         JsonSerializerOptions options)
     {
@@ -452,18 +452,18 @@ public class MeshQuery : IMeshQueryCore
         return MergeProviderObservables(
                 matched.Select(p => isSystem
                     ? (p is IMeshQueryCore core
-                        ? core.ObserveQuery<T>(request, options)
-                        : p.ObserveQuery<T>(request, options))
+                        ? core.Query<T>(request, options)
+                        : p.Query<T>(request, options))
                     // Real user: ALWAYS hit the secured provider surface
                     // (validators apply per-result RLS for request.UserId).
-                    : p.ObserveQuery<T>(request, options)).ToList(),
+                    : p.Query<T>(request, options)).ToList(),
                 request)
             .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default);
     }
 
     /// <summary>
     /// Centralised provider gating — every fan-out in this class
-    /// (<see cref="ObserveQuery{T}(MeshQueryRequest)"/>, the
+    /// (<see cref="Query{T}(MeshQueryRequest)"/>, the
     /// <see cref="IMeshQueryCore"/> surface, both <see cref="AutocompleteAsync(string, string, int, CancellationToken)"/>
     /// overloads, <see cref="SelectAsync{T}"/>) MUST go through this so a
     /// scoped query only subscribes / awaits providers that actually own
@@ -708,7 +708,7 @@ public class MeshQuery : IMeshQueryCore
     /// cross-provider tie-breaking matters: a PG hit with name-prefix score
     /// 100 must beat a static-catalog hit with score 0 for the same query.
     /// Putting the score sort in <c>ClipMergedInitial</c> ensures every
-    /// downstream consumer of <see cref="ObserveQuery{T}"/> /
+    /// downstream consumer of <see cref="Query{T}"/> /
     /// <see cref="MeshWeaver.Mesh.Services.IMeshQuery.QueryAsync"/> sees a single deterministic top-N regardless
     /// of which providers contributed.</para>
     /// </summary>

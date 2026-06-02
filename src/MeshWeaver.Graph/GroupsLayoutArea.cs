@@ -53,7 +53,7 @@ public static class GroupsLayoutArea
         var inheritedStream = meshQuery is null
             ? Observable.Return((IReadOnlyList<(GroupMembership Membership, string SourcePath)>)[])
             : meshQuery
-                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                .Query<MeshNode>(MeshQueryRequest.FromQuery(
                     $"path:{hubPath} nodeType:GroupMembership scope:ancestors"))
                 .Select(change => (IReadOnlyList<(GroupMembership Membership, string SourcePath)>)
                     (change.Items ?? [])
@@ -176,7 +176,7 @@ public static class GroupsLayoutArea
             return Observable.Return<UiControl?>(Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">No local memberships.</p>"));
 
         return meshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{nodePath} nodeType:GroupMembership"))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{nodePath} nodeType:GroupMembership"))
             .Select(change =>
             {
                 var nodes = change.Items;

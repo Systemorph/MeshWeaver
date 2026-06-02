@@ -62,7 +62,7 @@ public class SyncedQueryDataSourceTest(ITestOutputHelper output) : MonolithMeshT
     /// <summary>
     /// Source-side update propagates to every observer of the same per-node
     /// MeshNode stream — including the synced data source on the subscriber.
-    /// Verified by subscribing to the live <c>ObserveQuery</c> stream and
+    /// Verified by subscribing to the live <c>Query</c> stream and
     /// asserting on the matching emission.
     /// </summary>
     [Fact]
@@ -73,7 +73,7 @@ public class SyncedQueryDataSourceTest(ITestOutputHelper output) : MonolithMeshT
         // Subscribe to the live query stream — the assertion subscribes the cold
         // observable and waits for the matching emission.
         var queryStream = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{SubjectsNamespace} scope:subtree nodeType:Markdown"));
 
         // The create's emission only fires after the source per-node hub has
@@ -108,7 +108,7 @@ public class SyncedQueryDataSourceTest(ITestOutputHelper output) : MonolithMeshT
 
     /// <summary>
     /// The query result set tracks adds + removes — verified through the live
-    /// <c>ObserveQuery</c> stream the synced data source is built on. The
+    /// <c>Query</c> stream the synced data source is built on. The
     /// stream emits Initial (full set on subscribe) + per-delta Added/Removed
     /// for every subsequent change; we <c>Scan</c> them into a running path
     /// set so the predicate sees the cumulative state.
@@ -118,7 +118,7 @@ public class SyncedQueryDataSourceTest(ITestOutputHelper output) : MonolithMeshT
     {
         // Hot, accumulating view of the live path set.
         var pathSet = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{SubjectsNamespace} scope:subtree nodeType:Markdown"))
             .Scan(System.Collections.Immutable.ImmutableHashSet<string>.Empty,
                 (set, c) => c.ChangeType switch

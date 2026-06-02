@@ -59,7 +59,7 @@ public class NodeTypeReleaseTest(ITestOutputHelper output) : MonolithMeshTestBas
         }).Should().Emit();
 
         // 2. Wait for the kickoff compile to settle. Reading via the live
-        //    MeshNode stream is path-known and authoritative; ObserveQuery is
+        //    MeshNode stream is path-known and authoritative; Query is
         //    eventually consistent and would miss the post-compile tick.
         //    Cold Roslyn compile on CI Linux runners can take 60-90s; budget
         //    generously so we never race the slow path.

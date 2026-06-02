@@ -17,7 +17,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 /// <summary>
 /// Verifies the synced-query pipeline shape used by
 /// <see cref="MeshWeaver.Graph.SyncedQueryMeshNodes"/> works against PostgreSQL:
-/// <c>ObserveQuery</c> â†’ fold Initial / Added / Updated / Removed into a
+/// <c>Query</c> â†’ fold Initial / Added / Updated / Removed into a
 /// path â†’ <see cref="MeshNode"/> dictionary â†’ emit values. PG drives the
 /// Update / Delete events through pg_notify so we can verify the dict folds
 /// correctly without the in-memory race the MeshQueryEngine exhibits.
@@ -58,7 +58,7 @@ public class SyncedQueryPgTest : IAsyncLifetime
     private IObservable<IReadOnlyDictionary<string, MeshNode>> BuildSyncedCollection(string queryString)
     {
         return _query
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(queryString), _options)
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(queryString), _options)
             .Scan(
                 ImmutableDictionary<string, MeshNode>.Empty,
                 (dict, change) => change.ChangeType switch
@@ -130,7 +130,7 @@ public class SyncedQueryPgTest : IAsyncLifetime
     }
 
     /// <summary>
-    /// Diagnostic: capture every ObserveQuery emission for a delete to see
+    /// Diagnostic: capture every Query emission for a delete to see
     /// what the Removed event payload actually carries (Path? Id?). Tells
     /// us whether the dict-Remove is the bug or the upstream event itself.
     /// </summary>
@@ -156,14 +156,14 @@ public class SyncedQueryPgTest : IAsyncLifetime
         // The Removed predicate ignores the buffered Initial — only the
         // post-delete Removed event matches.
         var stream = _query
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("namespace:ACME/Project"), _options)
+            .Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:ACME/Project"), _options)
             .Replay(1)
             .RefCount();
 
         // Hold a keep-alive subscription for the whole test so RefCount never
         // drops to 0. Without it, waiting for Initial on one subscription and
         // then attaching the Removed subscription separately tears the upstream
-        // ObserveQuery down (RefCount 1→0) and reconnects it (0→1) — re-issuing
+        // Query down (RefCount 1→0) and reconnects it (0→1) — re-issuing
         // the PG LISTEN. If the delete's pg_notify races that reconnect gap the
         // Removed event is lost and the test times out at 15s. A single
         // persistent subscriber pins the LISTEN open from Initial through delete.
@@ -193,7 +193,7 @@ public class SyncedQueryPgTest : IAsyncLifetime
         await _fixture.StorageAdapter.DeleteAsync("ACME/Project/Story1", ct);
 
         var removed = await removedTask;
-        removed.Should().NotBeNull("PG ObserveQuery must emit Removed after delete");
+        removed.Should().NotBeNull("PG Query must emit Removed after delete");
         var removedItem = removed!.Items.SingleOrDefault();
         removedItem.Should().NotBeNull();
         removedItem!.Path.Should().Be("ACME/Project/Story1",
@@ -232,8 +232,8 @@ public class SyncedQueryPgTest : IAsyncLifetime
         WriteNode("S1", "ACME/Project", "Story");
         WriteNode("E1", "ACME/Epic", "Epic");
 
-        var unioned = _query.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("namespace:ACME/Project"), _options)
-            .Merge(_query.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("namespace:ACME/Epic"), _options))
+        var unioned = _query.Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:ACME/Project"), _options)
+            .Merge(_query.Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:ACME/Epic"), _options))
             .Scan(
                 ImmutableDictionary<string, MeshNode>.Empty,
                 (dict, change) => change.ChangeType switch

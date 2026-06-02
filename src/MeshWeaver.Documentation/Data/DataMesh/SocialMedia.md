@@ -170,7 +170,7 @@ public static IObservable<UiControl?> List(LayoutAreaHost host, RenderingContext
 {
     var meshService = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
     return meshService
-        .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("namespace:Doc/DataMesh/SocialMedia/Post"))
+        .Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:Doc/DataMesh/SocialMedia/Post"))
         .Scan(ImmutableDictionary<string, MeshNode>.Empty, ApplyChanges)
         .Select(dict => (UiControl?)BuildList(dict.Values.ToImmutableList()));
 }

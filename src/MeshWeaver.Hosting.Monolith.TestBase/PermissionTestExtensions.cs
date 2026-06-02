@@ -42,7 +42,7 @@ public static class PermissionTestExtensions
     /// <c>CreateNode</c> / <c>DeleteNode</c> on an AccessAssignment — the
     /// initial cached snapshot may not yet reflect the change because the
     /// synced query's <c>Added</c> / <c>Removed</c> event from
-    /// <see cref="IMeshQueryProvider.ObserveQuery"/> arrives asynchronously
+    /// <see cref="IMeshQueryProvider.Query"/> arrives asynchronously
     /// (debounced). Subscribers see every emission as the cache updates;
     /// the first one matching <paramref name="until"/> wins.</para>
     ///

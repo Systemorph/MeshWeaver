@@ -246,7 +246,7 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
     /// Synchronous email → mesh User node lookup via the hot
     /// <see cref="UserIdentityCache"/> hub-singleton (no await, no hub-touching
     /// observable bridging). Returns <c>null</c> until the cache has received
-    /// its first <c>ObserveQuery</c> emission.
+    /// its first <c>Query</c> emission.
     /// </summary>
     private MeshNode? TryLoadMeshUser(string email, IMessageHub hub)
     {

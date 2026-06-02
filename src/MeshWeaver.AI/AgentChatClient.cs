@@ -1010,13 +1010,13 @@ public class AgentChatClient : IAgentChat
 
     /// <summary>
     /// Returns an IObservable that emits once when agent initialization is complete.
-    /// Uses ObserveQuery (reactive) — no await, no blocking, no deadlock.
+    /// Uses Query (reactive) — no await, no blocking, no deadlock.
     /// Subscribe to this and chain the streaming loop after it emits.
     /// </summary>
     /// <summary>
     /// Returns an IObservable that emits the initialized AgentChatClient when agents are ready.
     /// Re-emits when agent definitions change (system prompt updates, new agents added).
-    /// Uses ObserveQuery (reactive) — no await, no blocking, no deadlock.
+    /// Uses Query (reactive) — no await, no blocking, no deadlock.
     /// </summary>
     /// <summary>
     /// Synchronously binds this chat client to the workspace's shared synced
@@ -1044,7 +1044,7 @@ public class AgentChatClient : IAgentChat
         // First-time init or context switch: subscribe to the SAME synced-query
         // pipe the chat picker UI uses (AgentPickerProjection.ObserveAgents/
         // ObserveModels). One source of truth — no separate "AgentChatClient
-        // does its own ObserveQuery" chain that drifted from the picker and
+        // does its own Query" chain that drifted from the picker and
         // produced "No suitable agent" even though the dropdown showed 9 of
         // them. The synced query runs on the workspace of THIS hub (the thread
         // hub passed in via the ctor's service provider), not the _Exec child

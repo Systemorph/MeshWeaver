@@ -269,7 +269,7 @@ public class PostgreSqlFixture : IAsyncLifetime
 /// partition schemas (acme/futur/contoso/…) and trigger pg_notify events
 /// on the same DataSource a LISTEN-based test is subscribed to. The
 /// listener then receives changes from those neighbour tests and
-/// ObserveQuery's "scope" filter — which guards on namespace prefix —
+/// Query's "scope" filter — which guards on namespace prefix —
 /// is challenged in ways the test was not designed for (e.g. extra
 /// emissions on rapid cross-namespace writes). Splitting these tests
 /// into their own collection gives them a clean container and a

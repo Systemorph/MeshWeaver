@@ -195,13 +195,13 @@ public class MeshOperations
         if (string.IsNullOrWhiteSpace(resolvedPath))
             return Observable.Return("Error: path is required.");
 
-        // Handle children query (path/*) — ObserveQuery emits a QueryResultChange whose
+        // Handle children query (path/*) — Query emits a QueryResultChange whose
         // Initial change contains every matching child in a single batch. Take(1) completes
         // the stream as soon as the first snapshot arrives; no await, no FromAsync bridge.
         if (resolvedPath.EndsWith("/*"))
         {
             var parentPath = resolvedPath[..^2];
-            return mesh.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{parentPath}"))
+            return mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{parentPath}"))
                 .Take(1)
                 .Select(change =>
                 {
@@ -271,10 +271,10 @@ public class MeshOperations
                 if (string.IsNullOrEmpty(compileError))
                     return Observable.Return($"Not found: {resolvedPath}");
 
-                // Live ObserveQuery — first emission carries the snapshot; the catalog
+                // Live Query — first emission carries the snapshot; the catalog
                 // is the source of truth here (the per-node hub is broken by
                 // definition, so live content is unreachable).
-                return mesh.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{resolvedPath}"))
+                return mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{resolvedPath}"))
                     .Select(c => c.Items.FirstOrDefault())
                     .Select(qn => qn is null
                         ? $"Not found: {resolvedPath}"
@@ -601,10 +601,10 @@ public class MeshOperations
             fullQuery = $"namespace:{resolvedBase} {cleanQuery}".Trim();
         }
 
-        // Snapshot semantics: Take(1) on ObserveQuery gives us the Initial change
+        // Snapshot semantics: Take(1) on Query gives us the Initial change
         // containing every match for this query in one batch — no async enumeration,
         // no FromAsync bridge.
-        return mesh.ObserveQuery<MeshNode>(new MeshQueryRequest { Query = fullQuery, Limit = 50 })
+        return mesh.Query<MeshNode>(new MeshQueryRequest { Query = fullQuery, Limit = 50 })
             .Take(1)
             .Select(change =>
             {
@@ -1438,7 +1438,7 @@ public class MeshOperations
 
     /// <summary>
     /// Copies a node and all its descendants to a target namespace. Delegates to
-    /// <see cref="NodeCopyHelper.CopyNodeTree"/> — fully reactive pipeline (ObserveQuery +
+    /// <see cref="NodeCopyHelper.CopyNodeTree"/> — fully reactive pipeline (Query +
     /// MeshNodeReference streams + CreateNode observables chained sequentially).
     /// </summary>
     public IObservable<string> Copy(string sourcePath, string targetNamespace, bool force = false)

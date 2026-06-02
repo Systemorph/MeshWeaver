@@ -300,14 +300,14 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
         return ordered.Take(limit).ToList();
     }
 
-    public IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request, JsonSerializerOptions options)
+    public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request, JsonSerializerOptions options)
     {
         // Static nodes are purely in-memory (no I/O) and never change.
         // Collect synchronously and return a completed Observable.Return — no async, no scheduler.
         var parsedQuery = _parser.Parse(request.Query);
         var items = CollectStaticResults<T>(parsedQuery, request.Context);
         _logger?.LogDebug(
-            "[StaticNodeQueryProvider] ObserveQuery query='{Query}' parsedPath='{Path}' parsedNodeType='{NodeType}' -> {Count} item(s)",
+            "[StaticNodeQueryProvider] Query query='{Query}' parsedPath='{Path}' parsedNodeType='{NodeType}' -> {Count} item(s)",
             request.Query, parsedQuery.Path ?? "(null)",
             (parsedQuery.Filter as MeshWeaver.Mesh.QueryComparison)?.Condition.Values is { } vs
                 ? string.Join("|", vs) : "(complex)",

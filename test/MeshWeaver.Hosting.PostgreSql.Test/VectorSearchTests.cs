@@ -17,7 +17,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 /// provider is registered, PostgreSqlMeshQuery routes through HNSW cosine
 /// similarity instead of the GenerateTextSearchClause ILIKE fallback. The
 /// search box (SearchHub), MCP `Search` tool, and agent `Search` tool all
-/// go through this path because they all call IMeshService.ObserveQuery /
+/// go through this path because they all call IMeshService.Query /
 /// QueryAsync.
 ///
 /// <para>Uses a deterministic stub embedding provider so the test doesn't

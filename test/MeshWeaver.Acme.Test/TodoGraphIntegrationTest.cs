@@ -156,7 +156,7 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     public void ProductLaunch_HasTaskChildren()
     {
         var children = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("namespace:ACME/ProductLaunch/Todo"))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:ACME/ProductLaunch/Todo"))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         children.Should().NotBeEmpty("ProductLaunch should have task children");

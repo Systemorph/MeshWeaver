@@ -97,7 +97,7 @@ public interface IMeshQueryProvider
     /// <example>
     /// <code>
     /// var subscription = meshQuery
-    ///     .ObserveQuery&lt;MeshNode&gt;(MeshQueryRequest.FromQuery("path:ACME nodeType:Story scope:descendants"), jsonOptions)
+    ///     .Query&lt;MeshNode&gt;(MeshQueryRequest.FromQuery("path:ACME nodeType:Story scope:descendants"), jsonOptions)
     ///     .Subscribe(change =&gt;
     ///     {
     ///         Console.WriteLine($"Change: {change.ChangeType}, Items: {change.Items.Count}");
@@ -106,7 +106,7 @@ public interface IMeshQueryProvider
     /// subscription.Dispose();
     /// </code>
     /// </example>
-    IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request, JsonSerializerOptions options);
+    IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request, JsonSerializerOptions options);
 
     /// <summary>
     /// 🚨 NEW unified surface — every provider returns a live snapshot of
@@ -121,11 +121,11 @@ public interface IMeshQueryProvider
     /// hosted-hub-handler pattern.
     /// </para>
     /// <para>Default implementation bridges to the legacy
-    /// <see cref="ObserveQuery{T}"/> for back-compat during the migration. Concrete
+    /// <see cref="Query{T}"/> for back-compat during the migration. Concrete
     /// providers should override to take the hosted-hub path.</para>
     /// </summary>
     IObservable<IReadOnlyList<QueryResult>> Query(MeshQueryRequest request, JsonSerializerOptions options)
-        => ObserveQuery<MeshNode>(request, options)
+        => Query<MeshNode>(request, options)
             .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset or QueryChangeType.Added or QueryChangeType.Updated)
             .Scan(
                 new Dictionary<string, QueryResult>(StringComparer.OrdinalIgnoreCase),

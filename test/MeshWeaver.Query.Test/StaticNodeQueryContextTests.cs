@@ -25,7 +25,7 @@ public class StaticNodeQueryContextTests(ITestOutputHelper output) : MonolithMes
     /// <see cref="QueryChangeType.Initial"/> emission carries the full snapshot.
     /// </summary>
     private IReadOnlyList<MeshNode> QueryNodes(string query)
-        => MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+        => MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Should().Within(System.TimeSpan.FromSeconds(30))
             .Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 

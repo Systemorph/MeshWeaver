@@ -26,7 +26,7 @@ namespace MeshWeaver.Blazor.Portal;
 /// assignments (<c>_Access/{user}_Access</c>, no partition prefix) are exempt.</para>
 ///
 /// <para><b>Deadlock-safe read.</b> The remaining-admin count comes from
-/// <see cref="IMeshService.ObserveQuery{T}"/> (the read-side query provider — a direct
+/// <see cref="IMeshService.Query{T}"/> (the read-side query provider — a direct
 /// store/DB read), NOT a <c>workspace.GetQuery</c> synced subscription: the validator runs
 /// inside the delete/update pipeline on the owning partition hub, and a synced query that
 /// round-tripped back to that same hub would deadlock (see
@@ -88,7 +88,7 @@ public sealed class SpaceAdminInvariantValidator(IMessageHub hub, ILogger<SpaceA
 
         // Count the OTHER non-denied Admin assignments remaining in {partition}/_Access.
         return meshService
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{partition}{AccessSegment} nodeType:{AccessAssignmentNodeType}"))
             .Where(change => change.ChangeType == QueryChangeType.Initial)
             .Take(1)

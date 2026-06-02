@@ -243,7 +243,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
         // partitions via DiscoverNewProvidersAsync during the query.
 
         // Static node read â€” no write before, catalog read is correct (no CQRS lag).
-        var parentNode = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{CommentC1Path}"))
+        var parentNode = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{CommentC1Path}"))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items.FirstOrDefault();
         parentNode.Should().NotBeNull("Parent comment c1 should exist");
         parentNode!.Id.Should().Be("c1");
@@ -255,7 +255,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
 
         // Static node read â€” no write before, catalog read is correct (no CQRS lag).
         // (Per-node hub routing for nested replies returns the parent c1, not reply1.)
-        var replyNode = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{ReplyPath}"))
+        var replyNode = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{ReplyPath}"))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items.FirstOrDefault();
         replyNode.Should().NotBeNull("Reply node should exist");
         replyNode!.Id.Should().Be("reply1", "Reply Id should be the local file name, not the full path");
@@ -266,7 +266,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
         Output.WriteLine($"Reply: Id={replyNode.Id}, Path={replyNode.Path}, Author={replyComment!.Author}");
 
         // Load children of c1 via subtree query
-        var children = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{CommentC1Path} scope:subtree"))
+        var children = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{CommentC1Path} scope:subtree"))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
         foreach (var child in children)
         {

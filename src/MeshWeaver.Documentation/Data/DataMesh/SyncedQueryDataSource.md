@@ -1,13 +1,13 @@
 ---
 Name: Synced Query Data Source
 Category: Documentation
-Description: Live, query-backed collections in a hub's workspace — populated and kept fresh by IMeshQueryProvider.ObserveQuery, no Observe round-trip from inside the hub.
+Description: Live, query-backed collections in a hub's workspace — populated and kept fresh by IMeshQueryProvider.Query, no Observe round-trip from inside the hub.
 Icon: /static/DocContent/DataMesh/DataConfiguration/icon.svg
 ---
 
 # Synced Query Data Source
 
-A *synced query data source* is a live collection that lives inside a hub's workspace and stays in sync with a mesh query. The framework subscribes to [`IMeshQueryProvider.ObserveQuery<T>`](xref:MeshWeaver.Mesh.Services.IMeshQueryProvider.ObserveQuery``1) when the hub starts, seeds the workspace's `EntityStore` with the initial result set, and continuously folds **Added / Updated / Removed** deltas into that same store via [`IDataChangeNotifier`](xref:MeshWeaver.Mesh.Services.IDataChangeNotifier).
+A *synced query data source* is a live collection that lives inside a hub's workspace and stays in sync with a mesh query. The framework subscribes to [`IMeshQueryProvider.Query<T>`](xref:MeshWeaver.Mesh.Services.IMeshQueryProvider.Query``1) when the hub starts, seeds the workspace's `EntityStore` with the initial result set, and continuously folds **Added / Updated / Removed** deltas into that same store via [`IDataChangeNotifier`](xref:MeshWeaver.Mesh.Services.IDataChangeNotifier).
 
 The payoff: hub-internal code — validators, layout areas, compile pipelines, access checks — reads its source data through the standard `workspace.GetStream<T>()` / `workspace.GetStream(new CollectionReference("name"))` surface. No `Observe` round-trip, no CQRS staleness lag, no `Observable.FromAsync` at every leaf. By the time the hub handles its first message, the synced collection is already populated.
 
@@ -19,10 +19,10 @@ The payoff: hub-internal code — validators, layout areas, compile pipelines, a
   </defs>
   <rect x="10" y="30" width="140" height="56" rx="10" fill="#1e88e5"/>
   <text x="80" y="55" text-anchor="middle" fill="#fff" font-weight="bold">IMeshQuery</text>
-  <text x="80" y="74" text-anchor="middle" fill="#fff" font-size="11">ObserveQuery&lt;MeshNode&gt;</text>
+  <text x="80" y="74" text-anchor="middle" fill="#fff" font-size="11">Query&lt;MeshNode&gt;</text>
   <rect x="10" y="110" width="140" height="56" rx="10" fill="#1e88e5"/>
   <text x="80" y="135" text-anchor="middle" fill="#fff" font-weight="bold">IMeshQuery</text>
-  <text x="80" y="154" text-anchor="middle" fill="#fff" font-size="11">ObserveQuery&lt;MeshNode&gt;</text>
+  <text x="80" y="154" text-anchor="middle" fill="#fff" font-size="11">Query&lt;MeshNode&gt;</text>
   <text x="80" y="196" text-anchor="middle" fill="currentColor" fill-opacity="0.55" font-size="11" font-style="italic">one per query string</text>
   <line x1="150" y1="58" x2="210" y2="130" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.5" marker-end="url(#arr)"/>
   <line x1="150" y1="138" x2="210" y2="145" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.5" marker-end="url(#arr)"/>
@@ -73,7 +73,7 @@ The data source is built on [`VirtualDataSource.WithVirtualType<T>`](xref:MeshWe
 
 **1. Subscribe to each mesh query**
 
-One [`IMeshQueryCore.ObserveQuery<MeshNode>`](xref:MeshWeaver.Mesh.Services.IMeshQueryCore.ObserveQuery``1) subscription per query string. Multi-query collections are fine — the result is their union. Each `QueryResultChange<MeshNode>` carries `Initial` / `Reset` / `Added` / `Updated` / `Removed` deltas together with the matching `MeshNode` payloads.
+One [`IMeshQueryCore.Query<MeshNode>`](xref:MeshWeaver.Mesh.Services.IMeshQueryCore.Query``1) subscription per query string. Multi-query collections are fine — the result is their union. Each `QueryResultChange<MeshNode>` carries `Initial` / `Reset` / `Added` / `Updated` / `Removed` deltas together with the matching `MeshNode` payloads.
 
 **2. Fold deltas into a path-keyed dictionary**
 
@@ -173,7 +173,7 @@ Because `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, ref)` cach
 
 ## Live updates without polling
 
-When any node is updated anywhere in the mesh, the change arrives in the synced collection through the upstream `IMeshQueryProvider.ObserveQuery` subscription. The query layer already mirrors per-hub change notifications into `Updated` / `Removed` events; the `Scan` folds those into the dictionary and re-emits the snapshot on the next tick.
+When any node is updated anywhere in the mesh, the change arrives in the synced collection through the upstream `IMeshQueryProvider.Query` subscription. The query layer already mirrors per-hub change notifications into `Updated` / `Removed` events; the `Scan` folds those into the dictionary and re-emits the snapshot on the next tick.
 
 There is no manual cache to invalidate — the query stream *is* the cache.
 

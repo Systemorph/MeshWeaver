@@ -33,7 +33,7 @@ public class ObservableQueryIntegrationTests(ITestOutputHelper output) : Monolit
 
     private IObservable<ImmutableList<QueryResultChange<MeshNode>>> ObserveAccumulated(string queryText)
         => Query
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(queryText))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(queryText))
             .Scan(ImmutableList<QueryResultChange<MeshNode>>.Empty, (acc, c) => acc.Add(c));
 
     [Fact]

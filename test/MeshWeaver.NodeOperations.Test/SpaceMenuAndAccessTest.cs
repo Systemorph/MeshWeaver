@@ -141,7 +141,7 @@ public class SpaceMenuAndAccessTest(ITestOutputHelper output) : MonolithMeshTest
             new MeshNode("Overview", spaceId) { Name = "Overview", NodeType = "Markdown" }).Should().Emit();
 
         var children = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{spaceId} is:main"))
             .Select(c => c.Items.ToList())
             .Should().Within(15.Seconds()).Match(items => items.Any(c => c.NodeType == "Markdown"

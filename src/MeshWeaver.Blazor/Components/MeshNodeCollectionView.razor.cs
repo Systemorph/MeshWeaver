@@ -48,7 +48,7 @@ public partial class MeshNodeCollectionView : BlazorView<MeshNodeCollectionContr
         foreach (var q in queries)
         {
             var query = q;
-            var sub = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+            var sub = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
                 .Subscribe(
                     change =>
                     {
