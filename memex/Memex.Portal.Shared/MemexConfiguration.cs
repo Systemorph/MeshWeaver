@@ -128,8 +128,10 @@ public static class MemexConfiguration
         if (emailOptions.Enabled)
         {
             services.AddSingleton<IEmailSender, GraphEmailSender>();
-            // Executive Assistant agent tool — read/write the signed-in user's own mailbox + calendar
-            // (booking, mail) via the same Graph app credential. Resolved by name from agent frontmatter.
+            // Executive Assistant: per-user JUST-IN-TIME delegated Graph access (the user consents to the
+            // EA touching THEIR OWN mailbox/calendar only when they first use the tool — no standing app
+            // permission). EaGraphAuth drives the consent/token flow; the plugin uses the per-user token.
+            services.AddHttpClient<Authentication.IEaGraphAuth, Authentication.EaGraphAuth>();
             services.AddSingleton<MeshWeaver.AI.Plugins.IAgentPlugin, ExecutiveAssistantPlugin>();
             // Notification triage runner — escalates in-app notifications to email/Teams per each
             // recipient's NotificationRules, via the cheap triage agent (only fires for users with rules).
