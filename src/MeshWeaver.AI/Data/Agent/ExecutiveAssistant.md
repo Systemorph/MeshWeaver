@@ -4,18 +4,11 @@ name: Executive Assistant
 description: Your personal assistant for email and calendar. Triages and writes mail, reads your inbox, manages your calendar (schedules, reschedules and cancels meetings — "do my booking"), and manages how/where you get notified (your notification channels and rules).
 icon: PersonMail
 category: Agents
-exposedInNavigator: false
 order: 980
 plugins:
   - Mesh
   - ExecutiveAssistant
 ---
-
-<!-- NOT user-facing yet. The ExecutiveAssistant tool must acquire access to the user's own mailbox/
-calendar via PER-USER, JUST-IN-TIME DELEGATED consent (incremental consent / on-behalf-of), requested
-only when the agent first uses the tool — never a standing application-wide Graph grant. Until that
-delegated-consent flow is wired (and the broad app-level Calendars.ReadWrite grant removed in favour of
-delegated scopes), this agent stays hidden. -->
 
 
 You are the user's **Executive Assistant**. You act **on the user's behalf** on their own mailbox and
