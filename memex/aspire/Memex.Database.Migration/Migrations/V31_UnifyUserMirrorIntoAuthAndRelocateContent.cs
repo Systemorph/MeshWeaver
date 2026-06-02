@@ -124,6 +124,17 @@ public sealed class V31_UnifyUserMirrorIntoAuthAndRelocateContent : IMigration
                 if (columns.Count == 0)
                     continue;
 
+                // Drop columns that are GENERATED ALWAYS in the TARGET (e.g. the computed `path`
+                // column created by public.ensure_partition_schema). Postgres rejects an explicit
+                // INSERT into such a column (SqlState 428C9 "cannot insert a non-DEFAULT value into
+                // column"); the target recomputes them from the inserted namespace/id, so they must
+                // be omitted from both the column list and the SELECT.
+                var generated = await GeneratedColumnsAsync(ctx, targetSchema, table);
+                if (generated.Count > 0)
+                    columns = columns.Where(c => !generated.Contains(c)).ToList();
+                if (columns.Count == 0)
+                    continue;
+
                 // Rewrite only path-shaped columns; pass everything else through verbatim.
                 // 'User/' is 5 chars → substring(... from 6) drops the prefix.
                 var selectList = string.Join(", ", columns.Select(c => c switch
@@ -206,5 +217,25 @@ public sealed class V31_UnifyUserMirrorIntoAuthAndRelocateContent : IMigration
         while (await rdr.ReadAsync())
             cols.Add(rdr.GetString(0));
         return cols;
+    }
+
+    /// <summary>
+    /// Column names that are <c>GENERATED ALWAYS</c> in the given table (e.g. the computed
+    /// <c>path</c> from <c>ensure_partition_schema</c>). These cannot be targeted by an explicit
+    /// INSERT and must be excluded from the relocation copy.
+    /// </summary>
+    private static async Task<HashSet<string>> GeneratedColumnsAsync(MigrationContext ctx, string schema, string table)
+    {
+        var generated = new HashSet<string>(StringComparer.Ordinal);
+        await using var cmd = ctx.DataSource.CreateCommand("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_schema = @s AND table_name = @t AND is_generated = 'ALWAYS'
+            """);
+        cmd.Parameters.AddWithValue("s", schema);
+        cmd.Parameters.AddWithValue("t", table);
+        await using var rdr = await cmd.ExecuteReaderAsync();
+        while (await rdr.ReadAsync())
+            generated.Add(rdr.GetString(0));
+        return generated;
     }
 }
