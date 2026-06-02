@@ -12,15 +12,25 @@ public enum EmailDirection
     Outbound
 }
 
-/// <summary>Triage state of an inbound <see cref="Email"/> in the admin inbox.</summary>
+/// <summary>
+/// Lifecycle state of an <see cref="Email"/>. Inbound mail uses New → Read → Archived (admin-inbox
+/// triage). Outbound mail uses New (queued by the agent) → Sending → Sent (or Failed) — drained by the
+/// mesh-driven <c>OutboundEmailSender</c>.
+/// </summary>
 public enum EmailStatus
 {
-    /// <summary>Newly received, not yet seen by an admin.</summary>
+    /// <summary>Inbound: newly received. Outbound: queued, awaiting send.</summary>
     New,
-    /// <summary>An admin has read it.</summary>
+    /// <summary>Inbound: an admin has read it.</summary>
     Read,
-    /// <summary>Filed away.</summary>
-    Archived
+    /// <summary>Inbound: filed away.</summary>
+    Archived,
+    /// <summary>Outbound: claimed by the sender (in flight) — guards against double-send.</summary>
+    Sending,
+    /// <summary>Outbound: delivered to Graph.</summary>
+    Sent,
+    /// <summary>Outbound: send failed (eligible for a later retry).</summary>
+    Failed
 }
 
 /// <summary>

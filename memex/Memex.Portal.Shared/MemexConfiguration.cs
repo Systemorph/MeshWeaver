@@ -142,6 +142,8 @@ public static class MemexConfiguration
             sp.GetRequiredService<GraphMail>(),
             sp.GetService<Microsoft.Extensions.Logging.ILogger<EmailInboundProcessor>>()));
         services.AddHostedService<GraphSubscriptionService>();
+        // Mesh-driven reply sender: drains agent-emitted Outbound Email nodes (Status=New) via Graph.
+        services.AddHostedService<OutboundEmailSender>();
 
         if (features.Ai.Clis.Copilot)
             services.AddCopilot(config =>
