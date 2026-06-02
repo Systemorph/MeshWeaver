@@ -126,7 +126,12 @@ public static class MemexConfiguration
             .Get<EmailOptions>() ?? new EmailOptions();
         services.AddSingleton(emailOptions);
         if (emailOptions.Enabled)
+        {
             services.AddSingleton<IEmailSender, GraphEmailSender>();
+            // Executive Assistant agent tool — read/write the signed-in user's own mailbox + calendar
+            // (booking, mail) via the same Graph app credential. Resolved by name from agent frontmatter.
+            services.AddSingleton<MeshWeaver.AI.Plugins.IAgentPlugin, ExecutiveAssistantPlugin>();
+        }
         else
             services.AddSingleton<IEmailSender, NoOpEmailSender>();
 
