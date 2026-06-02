@@ -22,6 +22,34 @@ There are three access patterns, each covering a distinct class of operation:
 | Update data | Message | `DataChangeRequest` → hub |
 
 ---
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 320" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="currentColor" fill-opacity=".55"/>
+    </marker>
+  </defs>
+  <rect x="20" y="10" width="210" height="56" rx="10" fill="#1e88e5"/>
+  <text x="125" y="32" font-family="sans-serif" font-size="13" font-weight="bold" text-anchor="middle" fill="#fff">IMeshQuery</text>
+  <text x="125" y="50" font-family="sans-serif" font-size="11" text-anchor="middle" fill="#fff">Reads / Queries</text>
+  <rect x="275" y="10" width="210" height="56" rx="10" fill="#43a047"/>
+  <text x="380" y="32" font-family="sans-serif" font-size="13" font-weight="bold" text-anchor="middle" fill="#fff">IMeshNodePersistence</text>
+  <text x="380" y="50" font-family="sans-serif" font-size="11" text-anchor="middle" fill="#fff">Create · Update · Delete</text>
+  <rect x="530" y="10" width="210" height="56" rx="10" fill="#f57c00"/>
+  <text x="635" y="32" font-family="sans-serif" font-size="13" font-weight="bold" text-anchor="middle" fill="#fff">Message Bus</text>
+  <text x="635" y="50" font-family="sans-serif" font-size="11" text-anchor="middle" fill="#fff">Move · DataChange</text>
+  <line x1="125" y1="66" x2="125" y2="118" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="380" y1="66" x2="380" y2="118" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="635" y1="66" x2="635" y2="118" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="20" y="118" width="720" height="64" rx="10" fill="#8e24aa"/>
+  <text x="380" y="143" font-family="sans-serif" font-size="13" font-weight="bold" text-anchor="middle" fill="#fff">Security &amp; Validation Layer</text>
+  <text x="380" y="162" font-family="sans-serif" font-size="11" text-anchor="middle" fill="#fff">INodeValidator · RLS policies · AccessContext · audit trail</text>
+  <line x1="380" y1="182" x2="380" y2="230" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="20" y="230" width="720" height="64" rx="10" fill="#26a69a"/>
+  <text x="380" y="255" font-family="sans-serif" font-size="13" font-weight="bold" text-anchor="middle" fill="#fff">Storage Backend</text>
+  <text x="380" y="274" font-family="sans-serif" font-size="11" text-anchor="middle" fill="#fff">IMeshStorage · IMeshCatalog  (internal — not accessible from app code)</text>
+</svg>
+
+*Three access patterns funnel through the security layer before reaching storage — direct storage access bypasses RLS and auditing.*
 
 ## 1. Reads — IMeshQuery
 

@@ -21,6 +21,63 @@ This guide explains how to stand up the Memex portal on a **private** Azure Kube
 
 The cluster has a single public surface: the portal on port 443. Everything else — the Kubernetes API server, Postgres, Grafana — stays private and reachable only over the P2S VPN.
 
+<svg viewBox="0 0 760 400" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+<defs>
+<marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+<path d="M0,0 L0,6 L8,3 z" fill="currentColor" fill-opacity=".6"/>
+</marker>
+</defs>
+<rect width="760" height="400" rx="12" fill="#111827" opacity=".0"/>
+<rect x="10" y="10" width="740" height="380" rx="10" fill="none" stroke="currentColor" stroke-opacity=".15" stroke-width="1"/>
+<text x="380" y="32" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-size="11" font-style="italic">Private AKS Cluster</text>
+<rect x="30" y="42" width="700" height="318" rx="8" fill="#1a2236" stroke="#334155" stroke-width="1"/>
+<rect x="50" y="62" width="200" height="72" rx="8" fill="#1e3a5f" stroke="#2563eb" stroke-width="1.5"/>
+<text x="150" y="90" text-anchor="middle" fill="#93c5fd" font-weight="bold">Internet / Users</text>
+<text x="150" y="110" text-anchor="middle" fill="#60a5fa" font-size="11">HTTPS :443 only</text>
+<text x="150" y="126" text-anchor="middle" fill="#60a5fa" font-size="11">External OIDC (Entra, Google)</text>
+<rect x="50" y="162" width="200" height="56" rx="8" fill="#1e3a5f" stroke="#2563eb" stroke-width="1.5"/>
+<text x="150" y="185" text-anchor="middle" fill="#93c5fd" font-weight="bold">nginx Ingress + TLS</text>
+<text x="150" y="203" text-anchor="middle" fill="#60a5fa" font-size="11">cert-manager / Let's Encrypt</text>
+<rect x="50" y="246" width="200" height="88" rx="8" fill="#1e3a5f" stroke="#2563eb" stroke-width="1.5"/>
+<text x="150" y="270" text-anchor="middle" fill="#93c5fd" font-weight="bold">Portal Pod</text>
+<text x="150" y="288" text-anchor="middle" fill="#60a5fa" font-size="11">Memex.Portal.Distributed</text>
+<text x="150" y="306" text-anchor="middle" fill="#60a5fa" font-size="11">Azure Files RWX (/data)</text>
+<rect x="290" y="62" width="200" height="72" rx="8" fill="#1e3a2f" stroke="#16a34a" stroke-width="1.5"/>
+<text x="390" y="90" text-anchor="middle" fill="#86efac" font-weight="bold">Postgres Flexible Server</text>
+<text x="390" y="110" text-anchor="middle" fill="#4ade80" font-size="11">VNet-injected · private IP</text>
+<text x="390" y="126" text-anchor="middle" fill="#4ade80" font-size="11">SSL · password auth</text>
+<rect x="290" y="162" width="200" height="72" rx="8" fill="#1e3a2f" stroke="#16a34a" stroke-width="1.5"/>
+<text x="390" y="190" text-anchor="middle" fill="#86efac" font-weight="bold">Grafana / Loki / Prometheus</text>
+<text x="390" y="210" text-anchor="middle" fill="#4ade80" font-size="11">monitoring namespace · ClusterIP</text>
+<text x="390" y="228" text-anchor="middle" fill="#4ade80" font-size="11">private · VPN only</text>
+<rect x="290" y="262" width="200" height="56" rx="8" fill="#2d1e3a" stroke="#9333ea" stroke-width="1.5"/>
+<text x="390" y="286" text-anchor="middle" fill="#d8b4fe" font-weight="bold">Private K8s API Server</text>
+<text x="390" y="304" text-anchor="middle" fill="#c084fc" font-size="11">kubectl · VPN only</text>
+<rect x="530" y="62" width="185" height="72" rx="8" fill="#3a2a1e" stroke="#ea580c" stroke-width="1.5"/>
+<text x="622" y="90" text-anchor="middle" fill="#fdba74" font-weight="bold">Shared ACR</text>
+<text x="622" y="110" text-anchor="middle" fill="#fb923c" font-size="11">meshweaver.azurecr.io</text>
+<text x="622" y="126" text-anchor="middle" fill="#fb923c" font-size="11">portal · migration images</text>
+<rect x="530" y="162" width="185" height="72" rx="8" fill="#3a2a1e" stroke="#ea580c" stroke-width="1.5"/>
+<text x="622" y="190" text-anchor="middle" fill="#fdba74" font-weight="bold">Key Vault</text>
+<text x="622" y="210" text-anchor="middle" fill="#fb923c" font-size="11">secrets · CSI add-on</text>
+<text x="622" y="228" text-anchor="middle" fill="#fb923c" font-size="11">PG conn · master key</text>
+<rect x="530" y="262" width="185" height="56" rx="8" fill="#1e2e3a" stroke="#0891b2" stroke-width="1.5"/>
+<text x="622" y="286" text-anchor="middle" fill="#67e8f9" font-weight="bold">P2S VPN Gateway</text>
+<text x="622" y="304" text-anchor="middle" fill="#22d3ee" font-size="11">operator admin access</text>
+<line x1="150" y1="134" x2="150" y2="162" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+<line x1="150" y1="218" x2="150" y2="246" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+<line x1="250" y1="98" x2="290" y2="98" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#arr)"/>
+<line x1="250" y1="290" x2="290" y2="290" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#arr)"/>
+<line x1="490" y1="98" x2="530" y2="98" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#arr)"/>
+<line x1="490" y1="196" x2="530" y2="196" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#arr)"/>
+<line x1="622" y1="318" x2="622" y2="334" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5"/>
+<line x1="390" y1="334" x2="622" y2="334" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5"/>
+<line x1="390" y1="318" x2="390" y2="334" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#arr)"/>
+<text x="380" y="375" text-anchor="middle" fill="currentColor" fill-opacity=".4" font-size="11">VPN admin path (kubectl + Grafana)</text>
+</svg>
+
+*Deployment topology: only the portal is public-facing; all data, admin, and observability stay on the private VNet, reachable only over the P2S VPN.*
+
 | Concern | Choice |
 |---|---|
 | Region | Single region close to your users |

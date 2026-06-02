@@ -28,6 +28,33 @@ Every business rules module in MeshWeaver follows the same structure:
 | **Layout Areas** | `IObservable<UiControl>` views bound to workspace streams | Re-render automatically when data changes |
 
 The layers are intentionally decoupled. The calculation engine has zero framework imports; the layout area knows nothing about persistence.
+<svg viewBox="0 0 760 260" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L0,7 L8,3.5 Z" fill="#90a4ae"/>
+    </marker>
+  </defs>
+  <rect x="20" y="80" width="180" height="100" rx="10" fill="#1565c0" stroke="none"/>
+  <text x="110" y="118" text-anchor="middle" fill="#fff" font-weight="bold" font-size="14">Domain Model</text>
+  <text x="110" y="140" text-anchor="middle" fill="#bbdefb" font-size="11">Immutable records</text>
+  <text x="110" y="156" text-anchor="middle" fill="#bbdefb" font-size="11">Cashflow · Layer · Result</text>
+  <rect x="290" y="80" width="180" height="100" rx="10" fill="#2e7d32" stroke="none"/>
+  <text x="380" y="118" text-anchor="middle" fill="#fff" font-weight="bold" font-size="14">Business Rules</text>
+  <text x="380" y="140" text-anchor="middle" fill="#c8e6c9" font-size="11">Pure static functions</text>
+  <text x="380" y="156" text-anchor="middle" fill="#c8e6c9" font-size="11">CessionEngine.CedeIntoLayer</text>
+  <rect x="560" y="80" width="180" height="100" rx="10" fill="#6a1b9a" stroke="none"/>
+  <text x="650" y="118" text-anchor="middle" fill="#fff" font-weight="bold" font-size="14">Layout Area</text>
+  <text x="650" y="140" text-anchor="middle" fill="#e1bee7" font-size="11">IObservable&lt;UiControl&gt;</text>
+  <text x="650" y="156" text-anchor="middle" fill="#e1bee7" font-size="11">CombineLatest → Chart</text>
+  <line x1="200" y1="130" x2="288" y2="130" stroke="#90a4ae" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="470" y1="130" x2="558" y2="130" stroke="#90a4ae" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="244" y="120" text-anchor="middle" fill="#90a4ae" font-size="11">typed data</text>
+  <text x="514" y="120" text-anchor="middle" fill="#90a4ae" font-size="11">results</text>
+  <rect x="120" y="210" width="520" height="36" rx="8" fill="none" stroke="#37474f" stroke-width="1.5" stroke-dasharray="5,3"/>
+  <text x="380" y="232" text-anchor="middle" fill="currentColor" fill-opacity="0.55" font-size="12">Workspace streams feed typed data; reactive subscriptions propagate changes end-to-end</text>
+</svg>
+
+*Three-layer pattern: immutable domain model feeds a pure calculation engine whose results are consumed by a reactive layout area.*
 
 ---
 

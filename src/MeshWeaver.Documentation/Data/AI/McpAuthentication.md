@@ -18,6 +18,36 @@ The MeshWeaver MCP endpoint (`/mcp`) uses bearer token authentication. Every MCP
 
 Tokens are personal. Each token is tied to a specific user, so all MCP operations run under that user's identity with full row-level security (RLS) enforced.
 
+<svg viewBox="0 0 760 160" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L8,3.5 L0,7 Z" fill="currentColor" fill-opacity=".55"/>
+    </marker>
+  </defs>
+  <rect x="0" y="50" width="155" height="60" rx="10" fill="#1e88e5"/>
+  <text x="77" y="77" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff" text-anchor="middle">1 — Generate Token</text>
+  <text x="77" y="95" font-family="sans-serif" font-size="11" fill="#fff" text-anchor="middle">Settings › API Tokens</text>
+  <line x1="155" y1="80" x2="193" y2="80" stroke="currentColor" stroke-opacity=".55" stroke-width="2" marker-end="url(#arr)"/>
+  <rect x="193" y="50" width="155" height="60" rx="10" fill="#5c6bc0"/>
+  <text x="270" y="77" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff" text-anchor="middle">2 — Configure Client</text>
+  <text x="270" y="95" font-family="sans-serif" font-size="11" fill="#fff" text-anchor="middle">Authorization: Bearer mw_…</text>
+  <line x1="348" y1="80" x2="386" y2="80" stroke="currentColor" stroke-opacity=".55" stroke-width="2" marker-end="url(#arr)"/>
+  <rect x="386" y="50" width="155" height="60" rx="10" fill="#43a047"/>
+  <text x="463" y="77" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff" text-anchor="middle">3 — Authenticate</text>
+  <text x="463" y="95" font-family="sans-serif" font-size="11" fill="#fff" text-anchor="middle">SHA-256 hash → ApiToken node</text>
+  <line x1="541" y1="80" x2="579" y2="80" stroke="currentColor" stroke-opacity=".55" stroke-width="2" marker-end="url(#arr)"/>
+  <rect x="579" y="50" width="155" height="60" rx="10" fill="#f57c00"/>
+  <text x="656" y="77" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff" text-anchor="middle">4 — Access MeshWeaver</text>
+  <text x="656" y="95" font-family="sans-serif" font-size="11" fill="#fff" text-anchor="middle">RLS enforced, user identity set</text>
+  <text x="77" y="140" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity=".45" text-anchor="middle">Portal UI / REST API</text>
+  <text x="270" y="140" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity=".45" text-anchor="middle">Claude Code / Cursor / curl</text>
+  <text x="463" y="140" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity=".45" text-anchor="middle">ApiTokenAuthenticationHandler</text>
+  <text x="656" y="140" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity=".45" text-anchor="middle">MCP tools + row-level security</text>
+  <text x="380" y="22" font-family="sans-serif" font-size="13" font-weight="bold" fill="currentColor" fill-opacity=".7" text-anchor="middle">Bearer Token Authentication Flow</text>
+</svg>
+
+*Four steps from token generation to authenticated MCP access.*
+
 ---
 
 ## Generating a Token

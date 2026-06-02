@@ -7,6 +7,41 @@ Icon: /static/DocContent/DataMesh/DataConfiguration/icon.svg
 
 MeshWeaver gives every hub its own data layer — locally owned collections, initial seed data, and live synchronization from related hubs. This guide walks through the three core configuration primitives and shows how they compose into a working cross-hub data pipeline.
 
+<svg viewBox="0 0 760 260" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="arr" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#1e88e5"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="760" height="260" rx="12" fill="#111827" opacity="0.6"/>
+  <rect x="30" y="30" width="280" height="200" rx="10" fill="#1e3a5f" stroke="#1e88e5" stroke-width="1.5"/>
+  <text x="170" y="58" text-anchor="middle" fill="#90caf9" font-size="14" font-weight="bold">Project Hub</text>
+  <rect x="55" y="72" width="230" height="50" rx="8" fill="#1565c0"/>
+  <text x="170" y="93" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold">AddSource</text>
+  <text x="170" y="112" text-anchor="middle" fill="#bbdefb" font-size="11">Registers Status collection</text>
+  <rect x="55" y="134" width="230" height="50" rx="8" fill="#0d47a1"/>
+  <text x="170" y="155" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold">WithInitialData</text>
+  <text x="170" y="174" text-anchor="middle" fill="#bbdefb" font-size="11">Seeds Planning, Active, Done…</text>
+  <rect x="55" y="196" width="230" height="22" rx="6" fill="#263238" stroke="#37474f" stroke-width="1"/>
+  <text x="170" y="212" text-anchor="middle" fill="#78909c" font-size="11">Status.All → persisted on first start</text>
+  <rect x="450" y="30" width="280" height="200" rx="10" fill="#1b3a2f" stroke="#43a047" stroke-width="1.5"/>
+  <text x="590" y="58" text-anchor="middle" fill="#a5d6a7" font-size="14" font-weight="bold">Todo Hub</text>
+  <rect x="475" y="72" width="230" height="50" rx="8" fill="#2e7d32"/>
+  <text x="590" y="93" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold">AddHubSource</text>
+  <text x="590" y="112" text-anchor="middle" fill="#c8e6c9" font-size="11">Live sync of Status from parent</text>
+  <rect x="475" y="134" width="230" height="50" rx="8" fill="#1b5e20"/>
+  <text x="590" y="155" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold">Status (synced)</text>
+  <text x="590" y="174" text-anchor="middle" fill="#c8e6c9" font-size="11">No ownership — read-only mirror</text>
+  <rect x="475" y="196" width="230" height="22" rx="6" fill="#263238" stroke="#37474f" stroke-width="1"/>
+  <text x="590" y="212" text-anchor="middle" fill="#78909c" font-size="11">Address: segments.Take(length − 2)</text>
+  <line x1="310" y1="130" x2="448" y2="130" stroke="#1e88e5" stroke-width="2" marker-end="url(#arr)"/>
+  <rect x="330" y="112" width="100" height="22" rx="6" fill="#1e3a5f" stroke="#1e88e5" stroke-width="1"/>
+  <text x="380" y="127" text-anchor="middle" fill="#90caf9" font-size="11" font-weight="bold">AddHubSource</text>
+  <text x="380" y="152" text-anchor="middle" fill="currentColor" fill-opacity="0.5" font-size="10">live subscription</text>
+</svg>
+
+*Cross-hub data pipeline: the Project Hub owns and seeds Status records; the Todo Hub pulls a live-synchronized copy via `AddHubSource`.*
+
 ## Core Primitives
 
 | API | Purpose |

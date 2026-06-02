@@ -17,6 +17,46 @@ Every built-in type — `Agent`, `LanguageModel`, `Thread` — follows the same 
 ## The Six Required Pieces
 
 A new node type needs **all six** of the following. The table below is a quick orientation; the sections that follow give the full detail.
+<svg viewBox="0 0 760 370" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#90a4ae" fill-opacity="0.7"/>
+    </marker>
+  </defs>
+  <rect width="760" height="370" rx="12" fill="#1a1a2e" fill-opacity="0.0"/>
+  <rect x="10" y="10" width="140" height="52" rx="10" fill="#1e88e5"/>
+  <text x="80" y="31" text-anchor="middle" font-family="sans-serif" font-size="11" font-weight="bold" fill="#fff">① Content Record</text>
+  <text x="80" y="47" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#bbdefb">ModelDefinition</text>
+  <rect x="190" y="10" width="160" height="52" rx="10" fill="#5c6bc0"/>
+  <text x="270" y="31" text-anchor="middle" font-family="sans-serif" font-size="11" font-weight="bold" fill="#fff">② NodeType Definition</text>
+  <text x="270" y="47" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#c5cae9">discriminator + meta-node</text>
+  <rect x="390" y="10" width="160" height="52" rx="10" fill="#8e24aa"/>
+  <text x="470" y="31" text-anchor="middle" font-family="sans-serif" font-size="11" font-weight="bold" fill="#fff">③ Add{Type} Extension</text>
+  <text x="470" y="47" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#e1bee7">partition + access + provider</text>
+  <rect x="590" y="10" width="160" height="52" rx="10" fill="#26a69a"/>
+  <text x="670" y="31" text-anchor="middle" font-family="sans-serif" font-size="11" font-weight="bold" fill="#fff">④ TypeRegistry Entry</text>
+  <text x="670" y="47" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#b2dfdb">$type → runtime type</text>
+  <line x1="150" y1="36" x2="188" y2="36" stroke="#90a4ae" stroke-opacity="0.7" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="350" y1="36" x2="388" y2="36" stroke="#90a4ae" stroke-opacity="0.7" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="550" y1="36" x2="588" y2="36" stroke="#90a4ae" stroke-opacity="0.7" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="260" y="155" width="240" height="60" rx="12" fill="#f57c00"/>
+  <text x="380" y="179" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">⑤ Module Entry Point</text>
+  <text x="380" y="198" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#fff3e0">AddAI() / AddGraph() umbrella</text>
+  <line x1="270" y1="62" x2="345" y2="154" stroke="#90a4ae" stroke-opacity="0.6" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="470" y1="62" x2="430" y2="154" stroke="#90a4ae" stroke-opacity="0.6" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="670" y1="62" x2="490" y2="154" stroke="#90a4ae" stroke-opacity="0.6" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="80" y1="62" x2="310" y2="154" stroke="#90a4ae" stroke-opacity="0.6" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="490" y="155" width="200" height="60" rx="12" fill="#43a047"/>
+  <text x="590" y="179" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">⑥ Static Node Provider</text>
+  <text x="590" y="198" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#c8e6c9">built-in instances (optional)</text>
+  <line x1="500" y1="36" x2="510" y2="155" stroke="#90a4ae" stroke-opacity="0.5" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arr)"/>
+  <rect x="280" y="285" width="200" height="60" rx="12" fill="#e53935"/>
+  <text x="380" y="309" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">MeshBuilder.Build()</text>
+  <text x="380" y="328" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#ffcdd2">type is live in the mesh</text>
+  <line x1="380" y1="215" x2="380" y2="283" stroke="#90a4ae" stroke-opacity="0.7" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="590" y1="215" x2="480" y2="283" stroke="#90a4ae" stroke-opacity="0.6" stroke-width="1.5" marker-end="url(#arr)"/>
+</svg>
+*Six pieces wired together: steps ①–④ feed the module entry point ⑤, the optional static provider ⑥ emits built-in instances, and MeshBuilder.Build() activates the type.*
 
 | # | What | Why it matters |
 |---|---|---|

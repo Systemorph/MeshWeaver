@@ -7,6 +7,60 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 MeshPlugin gives AI agents a clean, consistent API for navigating and modifying the mesh data graph. Every path argument supports the `@` shorthand prefix — `@graph/org1` resolves to `graph/org1`.
 
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 310" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="mp-arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="currentColor" fill-opacity=".55"/>
+    </marker>
+  </defs>
+  <rect x="1" y="1" width="758" height="308" rx="12" fill="none" stroke="currentColor" stroke-opacity=".15" stroke-width="1.5"/>
+  <text x="380" y="26" font-family="sans-serif" font-size="13" font-weight="600" fill="currentColor" fill-opacity=".75" text-anchor="middle">MeshPlugin — AI Agent API Surface</text>
+  <rect x="290" y="42" width="180" height="46" rx="10" fill="#1565c0"/>
+  <text x="380" y="61" font-family="sans-serif" font-size="12" font-weight="700" fill="#fff" text-anchor="middle">AI Agent</text>
+  <text x="380" y="78" font-family="sans-serif" font-size="10" fill="#bbdefb" text-anchor="middle">Claude / GPT / custom</text>
+  <line x1="160" y1="88" x2="290" y2="88" stroke="currentColor" stroke-opacity=".3" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="470" y1="88" x2="600" y2="88" stroke="currentColor" stroke-opacity=".3" stroke-width="1" stroke-dasharray="4,3"/>
+  <rect x="24" y="115" width="108" height="46" rx="9" fill="#1e88e5"/>
+  <text x="78" y="135" font-family="sans-serif" font-size="12" font-weight="700" fill="#fff" text-anchor="middle">Get</text>
+  <text x="78" y="151" font-family="sans-serif" font-size="10" fill="#bbdefb" text-anchor="middle">Read node / schema</text>
+  <rect x="150" y="115" width="108" height="46" rx="9" fill="#5c6bc0"/>
+  <text x="204" y="135" font-family="sans-serif" font-size="12" font-weight="700" fill="#fff" text-anchor="middle">Search</text>
+  <text x="204" y="151" font-family="sans-serif" font-size="10" fill="#e8eaf6" text-anchor="middle">Query the graph</text>
+  <rect x="276" y="115" width="108" height="46" rx="9" fill="#26a69a"/>
+  <text x="330" y="135" font-family="sans-serif" font-size="12" font-weight="700" fill="#fff" text-anchor="middle">NavigateTo</text>
+  <text x="330" y="151" font-family="sans-serif" font-size="10" fill="#b2dfdb" text-anchor="middle">Open in UI</text>
+  <rect x="402" y="115" width="108" height="46" rx="9" fill="#8e24aa"/>
+  <text x="456" y="135" font-family="sans-serif" font-size="12" font-weight="700" fill="#fff" text-anchor="middle">RenderArea</text>
+  <text x="456" y="151" font-family="sans-serif" font-size="10" fill="#e1bee7" text-anchor="middle">Embed live widget</text>
+  <rect x="528" y="115" width="108" height="46" rx="9" fill="#43a047"/>
+  <text x="582" y="135" font-family="sans-serif" font-size="12" font-weight="700" fill="#fff" text-anchor="middle">Create</text>
+  <text x="582" y="151" font-family="sans-serif" font-size="10" fill="#c8e6c9" text-anchor="middle">Add new node</text>
+  <rect x="654" y="115" width="82" height="46" rx="9" fill="#e53935"/>
+  <text x="695" y="135" font-family="sans-serif" font-size="12" font-weight="700" fill="#fff" text-anchor="middle">Update</text>
+  <text x="695" y="151" font-family="sans-serif" font-size="10" fill="#ffcdd2" text-anchor="middle">Replace / Delete</text>
+  <line x1="380" y1="88" x2="380" y2="115" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#mp-arrow)"/>
+  <line x1="78" y1="88" x2="78" y2="115" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#mp-arrow)"/>
+  <line x1="204" y1="88" x2="204" y2="115" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#mp-arrow)"/>
+  <line x1="456" y1="88" x2="456" y2="115" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#mp-arrow)"/>
+  <line x1="582" y1="88" x2="582" y2="115" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#mp-arrow)"/>
+  <line x1="695" y1="88" x2="695" y2="115" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#mp-arrow)"/>
+  <rect x="170" y="215" width="420" height="60" rx="10" fill="none" stroke="currentColor" stroke-opacity=".2" stroke-width="1.5"/>
+  <text x="380" y="238" font-family="sans-serif" font-size="11" font-weight="600" fill="currentColor" fill-opacity=".65" text-anchor="middle">Mesh Data Graph</text>
+  <text x="380" y="256" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity=".5" text-anchor="middle">Nodes  ·  Schemas  ·  Layout Areas  ·  Documentation</text>
+  <line x1="78" y1="161" x2="78" y2="240" stroke="currentColor" stroke-opacity=".25" stroke-width="1" stroke-dasharray="3,3"/>
+  <line x1="78" y1="240" x2="170" y2="240" stroke="currentColor" stroke-opacity=".25" stroke-width="1" stroke-dasharray="3,3"/>
+  <line x1="204" y1="161" x2="204" y2="240" stroke="currentColor" stroke-opacity=".25" stroke-width="1" stroke-dasharray="3,3"/>
+  <line x1="204" y1="240" x2="170" y2="240" stroke="currentColor" stroke-opacity=".25" stroke-width="1" stroke-dasharray="3,3"/>
+  <line x1="330" y1="161" x2="330" y2="215" stroke="currentColor" stroke-opacity=".25" stroke-width="1" stroke-dasharray="3,3"/>
+  <line x1="456" y1="161" x2="456" y2="215" stroke="currentColor" stroke-opacity=".25" stroke-width="1" stroke-dasharray="3,3"/>
+  <line x1="582" y1="161" x2="582" y2="240" stroke="currentColor" stroke-opacity=".25" stroke-width="1" stroke-dasharray="3,3"/>
+  <line x1="582" y1="240" x2="590" y2="240" stroke="currentColor" stroke-opacity=".25" stroke-width="1" stroke-dasharray="3,3"/>
+  <line x1="695" y1="161" x2="695" y2="240" stroke="currentColor" stroke-opacity=".25" stroke-width="1" stroke-dasharray="3,3"/>
+  <line x1="695" y1="240" x2="590" y2="240" stroke="currentColor" stroke-opacity=".25" stroke-width="1" stroke-dasharray="3,3"/>
+</svg>
+
+*Six tools give AI agents complete read, search, display, and write access to the mesh data graph.*
+
 ---
 
 ## Get

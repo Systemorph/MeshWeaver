@@ -11,6 +11,41 @@ Every activity state-transition in MeshWeaver — cancel, restart, or any `Reque
 
 > This page covers the **client side**: how callers request a transition. For the server side — the watcher that consumes the flip and drives the internal transition — see [Activity Control Plane](ActivityControlPlane).
 
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 260" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="currentColor" fill-opacity=".6"/>
+    </marker>
+  </defs>
+  <rect x="20" y="90" width="140" height="56" rx="10" fill="#5c6bc0"/>
+  <text x="90" y="114" font-family="sans-serif" font-size="12" fill="#fff" text-anchor="middle" font-weight="bold">Caller</text>
+  <text x="90" y="132" font-family="sans-serif" font-size="10" fill="#ddd" text-anchor="middle">hub.CancelActivity()</text>
+  <rect x="220" y="90" width="160" height="56" rx="10" fill="#1e88e5"/>
+  <text x="300" y="112" font-family="sans-serif" font-size="12" fill="#fff" text-anchor="middle" font-weight="bold">GetMeshNodeStream</text>
+  <text x="300" y="128" font-family="sans-serif" font-size="10" fill="#ddd" text-anchor="middle">.Update(RequestedStatus</text>
+  <text x="300" y="141" font-family="sans-serif" font-size="10" fill="#ddd" text-anchor="middle">= Cancelled)</text>
+  <rect x="450" y="20" width="150" height="50" rx="10" fill="#8e24aa"/>
+  <text x="525" y="41" font-family="sans-serif" font-size="12" fill="#fff" text-anchor="middle" font-weight="bold">Activity Hub</text>
+  <text x="525" y="57" font-family="sans-serif" font-size="10" fill="#ddd" text-anchor="middle">WatchControlPlane fires</text>
+  <rect x="450" y="100" width="150" height="50" rx="10" fill="#e53935"/>
+  <text x="525" y="121" font-family="sans-serif" font-size="12" fill="#fff" text-anchor="middle" font-weight="bold">CTS.Cancel()</text>
+  <text x="525" y="137" font-family="sans-serif" font-size="10" fill="#ddd" text-anchor="middle">running script throws</text>
+  <rect x="450" y="180" width="150" height="50" rx="10" fill="#43a047"/>
+  <text x="525" y="201" font-family="sans-serif" font-size="12" fill="#fff" text-anchor="middle" font-weight="bold">Status = Cancelled</text>
+  <text x="525" y="217" font-family="sans-serif" font-size="10" fill="#ddd" text-anchor="middle">stream ticks → UI updates</text>
+  <line x1="160" y1="118" x2="218" y2="118" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="380" y1="110" x2="448" y2="55" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="525" y1="70" x2="525" y2="98" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="525" y1="150" x2="525" y2="178" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="450" y1="205" x2="402" y2="205" stroke="currentColor" stroke-opacity=".4" stroke-width="1.2" stroke-dasharray="5,3" marker-end="url(#arr)"/>
+  <rect x="230" y="178" width="160" height="50" rx="10" fill="none" stroke="#26a69a" stroke-opacity=".7" stroke-width="1.5"/>
+  <text x="310" y="199" font-family="sans-serif" font-size="12" fill="#26a69a" text-anchor="middle" font-weight="bold">Observer / UI</text>
+  <text x="310" y="215" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity=".6" text-anchor="middle">GetRemoteStream.Subscribe</text>
+  <text x="390" y="204" font-family="sans-serif" font-size="9" fill="currentColor" fill-opacity=".5" text-anchor="middle">stream tick</text>
+</svg>
+
+*End-to-end activity cancellation: the caller writes `RequestedStatus`, the activity hub reacts, and the terminal state propagates back via the reactive stream.*
+
 ---
 
 ## Why a dedicated surface?

@@ -14,6 +14,44 @@ This mechanism works in two places:
 | Interactive markdown code cells | Package resolves before the kernel compiles the cell |
 
 Both routes go through the same `NuGetAssemblyResolver`. See also [NuGet Packages](NugetPackages) for the interactive-markdown side of the story.
+<svg viewBox="0 0 760 320" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L8,3.5 L0,7 Z" fill="currentColor" fill-opacity=".6"/>
+    </marker>
+  </defs>
+  <rect x="20" y="30" width="160" height="54" rx="10" fill="#1e88e5"/>
+  <text x="100" y="52" text-anchor="middle" fill="#fff" font-weight="bold">Source/*.cs</text>
+  <text x="100" y="70" text-anchor="middle" fill="#fff" font-size="11">#r "nuget:Pkg, 1.0"</text>
+  <rect x="20" y="130" width="160" height="54" rx="10" fill="#5c6bc0"/>
+  <text x="100" y="152" text-anchor="middle" fill="#fff" font-weight="bold">Interactive</text>
+  <text x="100" y="170" text-anchor="middle" fill="#fff" font-size="11">Markdown cell</text>
+  <line x1="180" y1="57" x2="278" y2="100" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="180" y1="157" x2="278" y2="115" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="280" y="80" width="180" height="60" rx="10" fill="#43a047"/>
+  <text x="370" y="105" text-anchor="middle" fill="#fff" font-weight="bold">NuGetAssembly</text>
+  <text x="370" y="123" text-anchor="middle" fill="#fff" font-weight="bold">Resolver</text>
+  <line x1="460" y1="110" x2="518" y2="80" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="460" y1="110" x2="518" y2="170" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="520" y="50" width="160" height="54" rx="10" fill="#f57c00"/>
+  <text x="600" y="72" text-anchor="middle" fill="#fff" font-weight="bold">In-Memory Cache</text>
+  <text x="600" y="90" text-anchor="middle" fill="#fff" font-size="11">(Id, VersionRange)</text>
+  <rect x="520" y="150" width="160" height="54" rx="10" fill="#26a69a"/>
+  <text x="600" y="172" text-anchor="middle" fill="#fff" font-weight="bold">NuGet Feed</text>
+  <text x="600" y="190" text-anchor="middle" fill="#fff" font-size="11">api.nuget.org</text>
+  <line x1="600" y1="204" x2="600" y2="238" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="520" y="240" width="160" height="54" rx="10" fill="#8e24aa"/>
+  <text x="600" y="262" text-anchor="middle" fill="#fff" font-weight="bold">Disk Package</text>
+  <text x="600" y="280" text-anchor="middle" fill="#fff" font-size="11">~/.nuget/packages</text>
+  <line x1="460" y1="110" x2="518" y2="267" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arr)"/>
+  <rect x="280" y="245" width="180" height="54" rx="10" fill="#e53935"/>
+  <text x="370" y="267" text-anchor="middle" fill="#fff" font-weight="bold">AssemblyLoad</text>
+  <text x="370" y="285" text-anchor="middle" fill="#fff" font-weight="bold">Context</text>
+  <line x1="520" y1="267" x2="462" y2="267" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="370" y="18" text-anchor="middle" fill="currentColor" fill-opacity=".55" font-size="12">NuGet resolution flow — dashed = cache hit skips feed</text>
+</svg>
+
+*NuGet assembly resolution: both Source files and interactive cells share one `NuGetAssemblyResolver`; resolved assemblies are loaded into a per-node `AssemblyLoadContext`.*
 
 ---
 

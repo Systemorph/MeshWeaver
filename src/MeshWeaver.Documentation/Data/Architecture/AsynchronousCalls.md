@@ -8,6 +8,64 @@ Description: "Patterns and hard rules for composing async work safely in hub han
 > **For GUI rendering, see [Data Binding](xref:GUI/DataBinding) — that is the authoritative pattern.** Layout areas declare bindings; the Blazor view subscribes via `GetRemoteStream<MeshNode, MeshNodeReference>`. The rules on this page cover hub-handler and service code, where you still need to compose async work safely.
 
 ---
+<svg viewBox="0 0 760 320" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#90a4ae"/>
+    </marker>
+    <marker id="arr-red" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#e53935"/>
+    </marker>
+    <marker id="arr-green" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#43a047"/>
+    </marker>
+  </defs>
+  <text x="190" y="22" text-anchor="middle" fill="#e53935" font-weight="bold" font-size="13">❌ await — DEADLOCK</text>
+  <text x="570" y="22" text-anchor="middle" fill="#43a047" font-weight="bold" font-size="13">✅ IObservable — Safe</text>
+  <line x1="380" y1="10" x2="380" y2="310" stroke="currentColor" stroke-opacity="0.2" stroke-width="1" stroke-dasharray="4,4"/>
+  <rect x="20" y="38" width="150" height="40" rx="10" fill="#1e88e5"/>
+  <text x="95" y="54" text-anchor="middle" fill="#fff" font-weight="bold">Hub ActionBlock</text>
+  <text x="95" y="70" text-anchor="middle" fill="#fff" font-size="11">(single-threaded)</text>
+  <rect x="20" y="108" width="150" height="36" rx="10" fill="#5c6bc0"/>
+  <text x="95" y="122" text-anchor="middle" fill="#fff">Handler runs</text>
+  <text x="95" y="138" text-anchor="middle" fill="#fff" font-size="11">await GetMeshNode(path)</text>
+  <line x1="95" y1="78" x2="95" y2="105" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="20" y="168" width="150" height="36" rx="10" fill="#7b1fa2"/>
+  <text x="95" y="184" text-anchor="middle" fill="#fff">ActionBlock</text>
+  <text x="95" y="200" text-anchor="middle" fill="#fff" font-size="11">BLOCKED — waiting</text>
+  <line x1="95" y1="144" x2="95" y2="165" stroke="#e53935" stroke-width="1.5" marker-end="url(#arr-red)"/>
+  <rect x="20" y="228" width="150" height="36" rx="10" fill="#546e7a"/>
+  <text x="95" y="244" text-anchor="middle" fill="#fff">Response arrives</text>
+  <text x="95" y="260" text-anchor="middle" fill="#fff" font-size="11">→ queued behind block</text>
+  <line x1="95" y1="204" x2="95" y2="225" stroke="#e53935" stroke-width="1.5" marker-end="url(#arr-red)"/>
+  <rect x="40" y="282" width="110" height="28" rx="8" fill="#b71c1c"/>
+  <text x="95" y="301" text-anchor="middle" fill="#fff" font-weight="bold">🔴 DEADLOCK</text>
+  <line x1="95" y1="264" x2="95" y2="279" stroke="#e53935" stroke-width="1.5" marker-end="url(#arr-red)"/>
+  <rect x="410" y="38" width="150" height="40" rx="10" fill="#1e88e5"/>
+  <text x="485" y="54" text-anchor="middle" fill="#fff" font-weight="bold">Hub ActionBlock</text>
+  <text x="485" y="70" text-anchor="middle" fill="#fff" font-size="11">(single-threaded)</text>
+  <rect x="410" y="108" width="150" height="36" rx="10" fill="#5c6bc0"/>
+  <text x="485" y="122" text-anchor="middle" fill="#fff">Handler runs</text>
+  <text x="485" y="138" text-anchor="middle" fill="#fff" font-size="11">hub.Observe(...)</text>
+  <line x1="485" y1="78" x2="485" y2="105" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="410" y="168" width="150" height="36" rx="10" fill="#26a69a"/>
+  <text x="485" y="184" text-anchor="middle" fill="#fff">Returns Processed()</text>
+  <text x="485" y="200" text-anchor="middle" fill="#fff" font-size="11">ActionBlock FREE</text>
+  <line x1="485" y1="144" x2="485" y2="165" stroke="#43a047" stroke-width="1.5" marker-end="url(#arr-green)"/>
+  <rect x="590" y="168" width="150" height="36" rx="10" fill="#f57c00"/>
+  <text x="665" y="184" text-anchor="middle" fill="#fff">Observable chain</text>
+  <text x="665" y="200" text-anchor="middle" fill="#fff" font-size="11">runs concurrently</text>
+  <line x1="560" y1="186" x2="593" y2="186" stroke="#43a047" stroke-width="1.5" marker-end="url(#arr-green)"/>
+  <rect x="590" y="228" width="150" height="36" rx="10" fill="#43a047"/>
+  <text x="665" y="244" text-anchor="middle" fill="#fff">Response arrives</text>
+  <text x="665" y="260" text-anchor="middle" fill="#fff" font-size="11">→ onNext fires</text>
+  <line x1="665" y1="204" x2="665" y2="225" stroke="#43a047" stroke-width="1.5" marker-end="url(#arr-green)"/>
+  <rect x="600" y="282" width="130" height="28" rx="8" fill="#1b5e20"/>
+  <text x="665" y="301" text-anchor="middle" fill="#fff" font-weight="bold">✅ No deadlock</text>
+  <line x1="665" y1="264" x2="665" y2="279" stroke="#43a047" stroke-width="1.5" marker-end="url(#arr-green)"/>
+</svg>
+
+*Hub ActionBlock threading: `await` blocks the single-threaded inbox so the response can never be processed — `IObservable` compose-and-subscribe returns immediately and lets the chain continue on a free thread.*
 
 ## 🚨🚨🚨 `await hub.GetMeshNode(...)` (or any hub round-trip) IS A 100% DEADLOCK 🚨🚨🚨
 

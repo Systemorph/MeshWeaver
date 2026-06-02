@@ -220,6 +220,81 @@ handoffs:
 
 ---
 
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 320" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#90a4ae"/>
+    </marker>
+    <marker id="arr-blue" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#1e88e5"/>
+    </marker>
+    <marker id="arr-orange" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#f57c00"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="760" height="320" rx="14" fill="currentColor" fill-opacity=".04"/>
+  <text x="190" y="30" text-anchor="middle" fill="currentColor" fill-opacity=".9" font-family="sans-serif" font-size="15" font-weight="700">Delegation</text>
+  <text x="570" y="30" text-anchor="middle" fill="currentColor" fill-opacity=".9" font-family="sans-serif" font-size="15" font-weight="700">Handoff</text>
+  <line x1="380" y1="10" x2="380" y2="310" stroke="currentColor" stroke-opacity=".15" stroke-width="1" stroke-dasharray="5 3"/>
+  <rect x="30" y="50" width="80" height="36" rx="10" fill="#5c6bc0"/>
+  <text x="70" y="73" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="13" font-weight="600">User</text>
+  <rect x="130" y="50" width="100" height="36" rx="10" fill="#1e88e5"/>
+  <text x="180" y="68" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="12" font-weight="600">Navigator</text>
+  <text x="180" y="81" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10">(Agent A)</text>
+  <rect x="255" y="50" width="100" height="36" rx="10" fill="#26a69a"/>
+  <text x="305" y="68" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="12" font-weight="600">Research</text>
+  <text x="305" y="81" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10">(Agent B)</text>
+  <line x1="110" y1="68" x2="128" y2="68" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="232" y1="61" x2="253" y2="61" stroke="#1e88e5" stroke-width="1.5" marker-end="url(#arr-blue)"/>
+  <text x="242" y="57" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-family="sans-serif" font-size="9">delegate</text>
+  <line x1="253" y1="75" x2="232" y2="75" stroke="#26a69a" stroke-width="1.5" stroke-dasharray="4 2" marker-end="url(#arr-blue)"/>
+  <text x="242" y="87" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-family="sans-serif" font-size="9">result</text>
+  <rect x="145" y="115" width="150" height="30" rx="8" fill="#1e88e5" fill-opacity=".15"/>
+  <text x="220" y="135" text-anchor="middle" fill="currentColor" fill-opacity=".7" font-family="sans-serif" font-size="11">Agent B runs in isolation</text>
+  <rect x="130" y="160" width="100" height="36" rx="10" fill="#1e88e5"/>
+  <text x="180" y="178" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="12" font-weight="600">Navigator</text>
+  <text x="180" y="191" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10">composes reply</text>
+  <line x1="180" y1="152" x2="180" y2="158" stroke="#90a4ae" stroke-width="1.5" stroke-dasharray="3 2"/>
+  <line x1="128" y1="178" x2="110" y2="178" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="119" y="172" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-family="sans-serif" font-size="9">reply</text>
+  <rect x="30" y="160" width="80" height="36" rx="10" fill="#5c6bc0"/>
+  <text x="70" y="183" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="13" font-weight="600">User</text>
+  <rect x="50" y="228" width="280" height="56" rx="10" fill="#1e88e5" fill-opacity=".08"/>
+  <text x="190" y="250" text-anchor="middle" fill="currentColor" fill-opacity=".6" font-family="sans-serif" font-size="11" font-weight="600">A stays in control</text>
+  <text x="190" y="266" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-family="sans-serif" font-size="11">B returns result; A synthesises the final reply</text>
+  <text x="190" y="282" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-family="sans-serif" font-size="11">Shared thread history: No</text>
+  <rect x="410" y="50" width="80" height="36" rx="10" fill="#5c6bc0"/>
+  <text x="450" y="73" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="13" font-weight="600">User</text>
+  <rect x="510" y="50" width="100" height="36" rx="10" fill="#f57c00"/>
+  <text x="560" y="68" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="12" font-weight="600">Navigator</text>
+  <text x="560" y="81" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10">(Agent A)</text>
+  <rect x="630" y="50" width="100" height="36" rx="10" fill="#e53935"/>
+  <text x="680" y="68" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="12" font-weight="600">Specialist</text>
+  <text x="680" y="81" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10">(Agent B)</text>
+  <line x1="490" y1="68" x2="508" y2="68" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="612" y1="61" x2="628" y2="61" stroke="#f57c00" stroke-width="1.5" marker-end="url(#arr-orange)"/>
+  <text x="620" y="57" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-family="sans-serif" font-size="9">handoff</text>
+  <rect x="520" y="115" width="100" height="30" rx="8" fill="#f57c00" fill-opacity=".2"/>
+  <text x="570" y="130" text-anchor="middle" fill="currentColor" fill-opacity=".6" font-family="sans-serif" font-size="11">A stops</text>
+  <rect x="630" y="115" width="100" height="30" rx="8" fill="#e53935" fill-opacity=".2"/>
+  <text x="680" y="130" text-anchor="middle" fill="currentColor" fill-opacity=".6" font-family="sans-serif" font-size="11">B takes over</text>
+  <rect x="630" y="160" width="100" height="36" rx="10" fill="#e53935"/>
+  <text x="680" y="178" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="12" font-weight="600">Specialist</text>
+  <text x="680" y="191" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10">owns thread</text>
+  <line x1="628" y1="178" x2="492" y2="178" stroke="#e53935" stroke-width="1.5" stroke-dasharray="4 2" marker-end="url(#arr-orange)"/>
+  <text x="560" y="173" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-family="sans-serif" font-size="9">replies directly</text>
+  <rect x="410" y="160" width="80" height="36" rx="10" fill="#5c6bc0"/>
+  <text x="450" y="183" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="13" font-weight="600">User</text>
+  <rect x="430" y="228" width="300" height="56" rx="10" fill="#e53935" fill-opacity=".08"/>
+  <text x="580" y="250" text-anchor="middle" fill="currentColor" fill-opacity=".6" font-family="sans-serif" font-size="11" font-weight="600">B owns the conversation</text>
+  <text x="580" y="266" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-family="sans-serif" font-size="11">Full thread history passed to B; A is done</text>
+  <text x="580" y="282" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-family="sans-serif" font-size="11">Shared thread history: Yes</text>
+</svg>
+
+*Delegation keeps the calling agent in control and waits for a sub-result; Handoff transfers full ownership of the conversation to the target agent.*
+
+---
+
 ### Choosing Between Delegation and Handoff
 
 | Scenario | Pattern | Why |

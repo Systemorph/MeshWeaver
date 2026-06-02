@@ -30,6 +30,49 @@ Apply Extensible Defaults whenever a feature has:
 
 ## The three layers
 
+<svg viewBox="0 0 760 340" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 Z" fill="currentColor" fill-opacity=".6"/>
+    </marker>
+  </defs>
+  <rect x="10" y="10" width="220" height="80" rx="10" fill="#1565c0"/>
+  <text x="120" y="36" text-anchor="middle" fill="#fff" font-weight="bold">Static Provider</text>
+  <text x="120" y="54" text-anchor="middle" fill="#bbdefb" font-size="11">IStaticNodeProvider</text>
+  <text x="120" y="72" text-anchor="middle" fill="#bbdefb" font-size="11">Built-in Agents · Models · Roles</text>
+  <rect x="270" y="10" width="220" height="80" rx="10" fill="#2e7d32"/>
+  <text x="380" y="36" text-anchor="middle" fill="#fff" font-weight="bold">User Extensions</text>
+  <text x="380" y="54" text-anchor="middle" fill="#c8e6c9" font-size="11">MeshNode created anywhere</text>
+  <text x="380" y="72" text-anchor="middle" fill="#c8e6c9" font-size="11">in the namespace hierarchy</text>
+  <line x1="120" y1="90" x2="120" y2="130" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="380" y1="90" x2="380" y2="130" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="122" y1="130" x2="368" y2="130" stroke="currentColor" stroke-opacity=".35" stroke-width="1"/>
+  <rect x="60" y="130" width="380" height="90" rx="10" fill="#6a1b9a"/>
+  <text x="250" y="155" text-anchor="middle" fill="#fff" font-weight="bold">Synced Query Union</text>
+  <text x="250" y="174" text-anchor="middle" fill="#e1bee7" font-size="11">① namespace:{root}  nodeType:{T}</text>
+  <text x="250" y="191" text-anchor="middle" fill="#e1bee7" font-size="11">② namespace:{currentPath}  scope:selfAndAncestors</text>
+  <text x="250" y="208" text-anchor="middle" fill="#e1bee7" font-size="11">③ namespace:{nodeTypePath}  scope:selfAndAncestors</text>
+  <line x1="250" y1="220" x2="250" y2="258" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="60" y="258" width="380" height="72" rx="10" fill="#00695c"/>
+  <text x="250" y="282" text-anchor="middle" fill="#fff" font-weight="bold">Per-hub Replicated Collection</text>
+  <text x="250" y="300" text-anchor="middle" fill="#b2dfdb" font-size="11">Replay(1).RefCount — first emit = built-ins (instant)</text>
+  <text x="250" y="317" text-anchor="middle" fill="#b2dfdb" font-size="11">User extensions stream in via IDataChangeNotifier</text>
+  <rect x="530" y="100" width="190" height="170" rx="10" fill="none" stroke="currentColor" stroke-opacity=".35" stroke-dasharray="5,4"/>
+  <text x="625" y="122" text-anchor="middle" fill="currentColor" fill-opacity=".7" font-size="11" font-weight="bold">Ancestor traversal</text>
+  <rect x="552" y="132" width="140" height="26" rx="6" fill="#37474f"/>
+  <text x="622" y="150" text-anchor="middle" fill="#cfd8dc" font-size="11">acme  (root)</text>
+  <rect x="564" y="168" width="116" height="26" rx="6" fill="#455a64"/>
+  <text x="622" y="186" text-anchor="middle" fill="#cfd8dc" font-size="11">acme/team</text>
+  <rect x="576" y="204" width="92" height="26" rx="6" fill="#546e7a"/>
+  <text x="622" y="222" text-anchor="middle" fill="#cfd8dc" font-size="11">acme/team/proj</text>
+  <line x1="622" y1="158" x2="622" y2="168" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="622" y1="194" x2="622" y2="204" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="622" y="255" text-anchor="middle" fill="currentColor" fill-opacity=".55" font-size="10">hub sees extensions</text>
+  <text x="622" y="268" text-anchor="middle" fill="currentColor" fill-opacity=".55" font-size="10">at all ancestor levels</text>
+</svg>
+
+*Built-in entities (static provider) and user-defined extensions (any namespace) merge into one per-hub synced collection; ancestor traversal surfaces extensions defined at any level of the hierarchy.*
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  Static Repo            (code-shipped — IStaticNodeProvider)│

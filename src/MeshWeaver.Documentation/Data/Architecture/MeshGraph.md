@@ -184,6 +184,50 @@ Insurance/
 
 # Hub Instantiation
 
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 300" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="harr" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#90caf9"/>
+    </marker>
+    <marker id="harr2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#a5d6a7"/>
+    </marker>
+  </defs>
+  <rect x="10" y="120" width="120" height="46" rx="10" fill="#1e88e5"/>
+  <text x="70" y="140" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="12" font-weight="700">URL Path</text>
+  <text x="70" y="156" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10">Insurance/Claims/…</text>
+  <line x1="130" y1="143" x2="158" y2="143" stroke="#90caf9" stroke-width="1.5" marker-end="url(#harr)"/>
+  <rect x="160" y="120" width="120" height="46" rx="10" fill="#1565c0"/>
+  <text x="220" y="140" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="12" font-weight="700">Resolve Node</text>
+  <text x="220" y="156" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10">storage lookup</text>
+  <line x1="280" y1="143" x2="308" y2="143" stroke="#90caf9" stroke-width="1.5" marker-end="url(#harr)"/>
+  <rect x="310" y="120" width="130" height="46" rx="10" fill="#6a1b9a"/>
+  <text x="375" y="140" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="12" font-weight="700">Find NodeType</text>
+  <text x="375" y="156" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10">follow nodeType field</text>
+  <line x1="440" y1="143" x2="468" y2="143" stroke="#90caf9" stroke-width="1.5" marker-end="url(#harr)"/>
+  <rect x="470" y="90" width="270" height="106" rx="12" fill="none" stroke="#43a047" stroke-opacity=".6" stroke-width="1.5"/>
+  <text x="605" y="112" text-anchor="middle" fill="#a5d6a7" font-family="sans-serif" font-size="12" font-weight="700">Build MessageHub</text>
+  <rect x="482" y="120" width="108" height="32" rx="8" fill="#2e7d32"/>
+  <text x="536" y="133" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10" font-weight="600">Data Sources</text>
+  <text x="536" y="146" text-anchor="middle" fill="#c8e6c9" font-family="sans-serif" font-size="9">schema + fields</text>
+  <rect x="600" y="120" width="128" height="32" rx="8" fill="#2e7d32"/>
+  <text x="664" y="133" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10" font-weight="600">Msg Handlers</text>
+  <text x="664" y="146" text-anchor="middle" fill="#c8e6c9" font-family="sans-serif" font-size="9">custom operations</text>
+  <rect x="482" y="158" width="108" height="32" rx="8" fill="#1b5e20"/>
+  <text x="536" y="171" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10" font-weight="600">View Defs</text>
+  <text x="536" y="184" text-anchor="middle" fill="#c8e6c9" font-family="sans-serif" font-size="9">layout areas</text>
+  <rect x="600" y="158" width="128" height="32" rx="8" fill="#1b5e20"/>
+  <text x="664" y="171" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10" font-weight="600">Child Hub Config</text>
+  <text x="664" y="184" text-anchor="middle" fill="#c8e6c9" font-family="sans-serif" font-size="9">nested paths</text>
+  <line x1="375" y1="166" x2="375" y2="240" stroke="#7986cb" stroke-width="1.2" stroke-opacity=".5" stroke-dasharray="4 3"/>
+  <rect x="310" y="240" width="130" height="46" rx="10" fill="#283593"/>
+  <text x="375" y="258" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="11" font-weight="600">Type/Claim</text>
+  <text x="375" y="273" text-anchor="middle" fill="#c5cae9" font-family="sans-serif" font-size="9">nodeType = "NodeType"</text>
+  <text x="375" y="108" text-anchor="middle" fill="#7986cb" font-family="sans-serif" font-size="9" font-style="italic">type node</text>
+</svg>
+
+*Path resolution: the platform walks from URL to node to type definition, then assembles a fully-configured MessageHub.*
+
 When the platform resolves a path, it follows a deterministic sequence:
 
 1. **Resolve the node** from the path (storage lookup or virtual template match).

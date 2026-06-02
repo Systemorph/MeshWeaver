@@ -6,6 +6,47 @@ Icon: /static/NodeTypeIcons/code.svg
 ---
 
 Layout areas are **named rendering slots** registered on a message hub. Each area pairs a name with a view function that produces UI controls. When a client requests an area, the hub runs the matching view function and streams the result — live updates included when the view returns an observable.
+<svg viewBox="0 0 760 260" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="currentColor" fill-opacity=".6"/>
+    </marker>
+  </defs>
+  <rect x="20" y="20" width="200" height="220" rx="10" fill="#1e2a3a" stroke="currentColor" stroke-opacity=".25" stroke-width="1.5"/>
+  <text x="120" y="45" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-size="11" font-weight="600" letter-spacing="1">NODE HUB A</text>
+  <rect x="40" y="55" width="160" height="38" rx="8" fill="#1e88e5"/>
+  <text x="120" y="70" text-anchor="middle" fill="#fff" font-weight="600">Overview</text>
+  <text x="120" y="85" text-anchor="middle" fill="#fff" font-size="11" fill-opacity=".85">WithView("Overview", …)</text>
+  <rect x="40" y="103" width="160" height="38" rx="8" fill="#26a69a"/>
+  <text x="120" y="118" text-anchor="middle" fill="#fff" font-weight="600">Content</text>
+  <text x="120" y="133" text-anchor="middle" fill="#fff" font-size="11" fill-opacity=".85">WithView("Content", …)</text>
+  <rect x="40" y="151" width="160" height="38" rx="8" fill="#5c6bc0"/>
+  <text x="120" y="166" text-anchor="middle" fill="#fff" font-weight="600">Edit</text>
+  <text x="120" y="181" text-anchor="middle" fill="#fff" font-size="11" fill-opacity=".85">WithView("Edit", …)</text>
+  <rect x="40" y="199" width="160" height="30" rx="8" fill="#e53935" fill-opacity=".85"/>
+  <text x="120" y="219" text-anchor="middle" fill="#fff" font-size="11">default → "Content"</text>
+  <rect x="280" y="20" width="200" height="220" rx="10" fill="#1e2a3a" stroke="currentColor" stroke-opacity=".25" stroke-width="1.5"/>
+  <text x="380" y="45" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-size="11" font-weight="600" letter-spacing="1">NODE HUB B</text>
+  <rect x="300" y="55" width="160" height="38" rx="8" fill="#1e88e5"/>
+  <text x="380" y="70" text-anchor="middle" fill="#fff" font-weight="600">Overview</text>
+  <text x="380" y="85" text-anchor="middle" fill="#fff" font-size="11" fill-opacity=".85">Splitter view</text>
+  <rect x="300" y="103" width="160" height="38" rx="8" fill="#26a69a"/>
+  <text x="380" y="118" text-anchor="middle" fill="#fff" font-weight="600">Thumbnail</text>
+  <text x="380" y="133" text-anchor="middle" fill="#fff" font-size="11" fill-opacity=".85">WithView("Thumbnail", …)</text>
+  <rect x="300" y="151" width="160" height="38" rx="8" fill="#f57c00"/>
+  <text x="380" y="166" text-anchor="middle" fill="#fff" font-weight="600">LayoutAreaControl</text>
+  <text x="380" y="181" text-anchor="middle" fill="#fff" font-size="11" fill-opacity=".85">embeds Hub A area</text>
+  <rect x="540" y="70" width="200" height="100" rx="10" fill="#1a2530" stroke="#1e88e5" stroke-opacity=".6" stroke-width="1.5"/>
+  <text x="640" y="95" text-anchor="middle" fill="currentColor" fill-opacity=".55" font-size="11" font-weight="600" letter-spacing="1">CLIENT</text>
+  <text x="640" y="118" text-anchor="middle" fill="currentColor" fill-opacity=".75" font-size="12">requests area</text>
+  <text x="640" y="137" text-anchor="middle" fill="currentColor" fill-opacity=".75" font-size="12">← streams UI controls</text>
+  <text x="640" y="155" text-anchor="middle" fill="currentColor" fill-opacity=".75" font-size="12">live-updating</text>
+  <line x1="460" y1="160" x2="535" y2="120" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="460" y1="75" x2="535" y2="100" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="200" y1="118" x2="295" y2="165" stroke="#f57c00" stroke-opacity=".8" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr)"/>
+  <text x="238" y="152" text-anchor="middle" fill="#f57c00" fill-opacity=".85" font-size="11">LayoutAreaControl</text>
+</svg>
+*Layout areas are named slots on each hub; `LayoutAreaControl` composes them across node boundaries by embedding one hub's area inside another.*
 
 # Registering Layout Areas
 

@@ -7,6 +7,71 @@ Icon: Lock
 
 MeshWeaver's `MessageHub` is built on the **Actor Model**: every hub owns a private, single-threaded action block, and messages are processed one at a time in arrival order. That guarantee eliminates races and removes the need for locks on hub-local state — but it comes with a non-negotiable rule: **never block the hub thread**.
 
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 280" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#90caf9"/>
+    </marker>
+    <marker id="arr2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#a5d6a7"/>
+    </marker>
+    <marker id="arr3" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#ffcc80"/>
+    </marker>
+  </defs>
+  <rect x="20" y="30" width="200" height="210" rx="12" fill="none" stroke="#1e88e5" stroke-opacity=".5" stroke-width="1.5"/>
+  <text x="120" y="55" text-anchor="middle" fill="#90caf9" font-family="sans-serif" font-size="13" font-weight="700">Hub A</text>
+  <rect x="40" y="65" width="160" height="22" rx="6" fill="#1e3a5f"/>
+  <text x="120" y="80" text-anchor="middle" fill="#90caf9" font-family="sans-serif" font-size="11">msg 1</text>
+  <rect x="40" y="92" width="160" height="22" rx="6" fill="#1e3a5f"/>
+  <text x="120" y="107" text-anchor="middle" fill="#90caf9" font-family="sans-serif" font-size="11">msg 2</text>
+  <rect x="40" y="119" width="160" height="22" rx="6" fill="#1e3a5f"/>
+  <text x="120" y="134" text-anchor="middle" fill="#90caf9" font-family="sans-serif" font-size="11">msg 3</text>
+  <line x1="120" y1="148" x2="120" y2="156" stroke="#90caf9" stroke-opacity=".4" stroke-width="1.5" stroke-dasharray="3 2"/>
+  <rect x="40" y="163" width="160" height="34" rx="8" fill="#1e88e5"/>
+  <text x="120" y="178" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="11" font-weight="600">Action Block</text>
+  <text x="120" y="193" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10">(single thread)</text>
+  <rect x="40" y="205" width="160" height="22" rx="6" fill="#1a3050"/>
+  <text x="120" y="220" text-anchor="middle" fill="#90caf9" font-family="sans-serif" font-size="10">private state (no locks)</text>
+  <rect x="280" y="30" width="200" height="210" rx="12" fill="none" stroke="#43a047" stroke-opacity=".5" stroke-width="1.5"/>
+  <text x="380" y="55" text-anchor="middle" fill="#a5d6a7" font-family="sans-serif" font-size="13" font-weight="700">Hub B</text>
+  <rect x="300" y="65" width="160" height="22" rx="6" fill="#1a3320"/>
+  <text x="380" y="80" text-anchor="middle" fill="#a5d6a7" font-family="sans-serif" font-size="11">msg 1</text>
+  <rect x="300" y="92" width="160" height="22" rx="6" fill="#1a3320"/>
+  <text x="380" y="107" text-anchor="middle" fill="#a5d6a7" font-family="sans-serif" font-size="11">msg 2</text>
+  <rect x="300" y="119" width="160" height="22" rx="6" fill="#1a3320"/>
+  <text x="380" y="134" text-anchor="middle" fill="#a5d6a7" font-family="sans-serif" font-size="11">msg 3</text>
+  <line x1="380" y1="148" x2="380" y2="156" stroke="#a5d6a7" stroke-opacity=".4" stroke-width="1.5" stroke-dasharray="3 2"/>
+  <rect x="300" y="163" width="160" height="34" rx="8" fill="#43a047"/>
+  <text x="380" y="178" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="11" font-weight="600">Action Block</text>
+  <text x="380" y="193" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10">(single thread)</text>
+  <rect x="300" y="205" width="160" height="22" rx="6" fill="#132b13"/>
+  <text x="380" y="220" text-anchor="middle" fill="#a5d6a7" font-family="sans-serif" font-size="10">private state (no locks)</text>
+  <rect x="540" y="30" width="200" height="210" rx="12" fill="none" stroke="#f57c00" stroke-opacity=".5" stroke-width="1.5"/>
+  <text x="640" y="55" text-anchor="middle" fill="#ffcc80" font-family="sans-serif" font-size="13" font-weight="700">Hub C</text>
+  <rect x="560" y="65" width="160" height="22" rx="6" fill="#2d1b00"/>
+  <text x="640" y="80" text-anchor="middle" fill="#ffcc80" font-family="sans-serif" font-size="11">msg 1</text>
+  <rect x="560" y="92" width="160" height="22" rx="6" fill="#2d1b00"/>
+  <text x="640" y="107" text-anchor="middle" fill="#ffcc80" font-family="sans-serif" font-size="11">msg 2</text>
+  <rect x="560" y="119" width="160" height="22" rx="6" fill="#2d1b00"/>
+  <text x="640" y="134" text-anchor="middle" fill="#ffcc80" font-family="sans-serif" font-size="11">msg 3</text>
+  <line x1="640" y1="148" x2="640" y2="156" stroke="#ffcc80" stroke-opacity=".4" stroke-width="1.5" stroke-dasharray="3 2"/>
+  <rect x="560" y="163" width="160" height="34" rx="8" fill="#f57c00"/>
+  <text x="640" y="178" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="11" font-weight="600">Action Block</text>
+  <text x="640" y="193" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10">(single thread)</text>
+  <rect x="560" y="205" width="160" height="22" rx="6" fill="#2b1500"/>
+  <text x="640" y="220" text-anchor="middle" fill="#ffcc80" font-family="sans-serif" font-size="10">private state (no locks)</text>
+  <path d="M220,100 C250,100 250,100 280,100" stroke="#90caf9" stroke-width="1.5" fill="none" marker-end="url(#arr)"/>
+  <text x="250" y="93" text-anchor="middle" fill="#90caf9" font-family="sans-serif" font-size="9">Observe</text>
+  <path d="M480,130 C510,130 510,130 540,130" stroke="#a5d6a7" stroke-width="1.5" fill="none" marker-end="url(#arr2)"/>
+  <text x="510" y="123" text-anchor="middle" fill="#a5d6a7" font-family="sans-serif" font-size="9">Observe</text>
+  <path d="M540,100 C510,100 510,100 480,100" stroke="#ffcc80" stroke-width="1.5" fill="none" marker-end="url(#arr3)"/>
+  <text x="510" y="93" text-anchor="middle" fill="#ffcc80" font-family="sans-serif" font-size="9">response</text>
+  <text x="380" y="260" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-family="sans-serif" font-size="12">Each hub drains its queue on one thread — cross-hub calls are async messages, never blocking calls.</text>
+</svg>
+
+*Each `MessageHub` is an isolated actor: one thread, one queue, private state. Inter-hub calls are non-blocking message passes.*
+
 ---
 
 ## Single-Threaded Processing

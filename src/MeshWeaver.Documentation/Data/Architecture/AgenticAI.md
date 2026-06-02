@@ -6,6 +6,67 @@ Icon: /static/DocContent/Architecture/AgenticAI/icon.svg
 ---
 
 MeshWeaver integrates AI agents as first-class citizens. Agents can query data, navigate structures, execute tasks, and collaborate with one another — all through the same unified mesh references that every other component uses.
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 400" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="ah" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 Z" fill="currentColor" fill-opacity=".55"/>
+    </marker>
+    <marker id="ahw" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 Z" fill="#fff" fill-opacity=".85"/>
+    </marker>
+  </defs>
+  <rect x="270" y="155" width="220" height="90" rx="12" fill="#1e88e5"/>
+  <text x="380" y="192" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="bold" fill="#fff">Mesh Graph</text>
+  <text x="380" y="212" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" fill-opacity=".85">Instructions · Schemas · Data</text>
+  <text x="380" y="230" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" fill-opacity=".85">Commands · Documentation</text>
+  <rect x="20" y="30" width="150" height="52" rx="10" fill="#5c6bc0"/>
+  <text x="95" y="52" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">Orchestrator</text>
+  <text x="95" y="70" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#fff" fill-opacity=".85">Standard Model</text>
+  <rect x="20" y="120" width="150" height="52" rx="10" fill="#43a047"/>
+  <text x="95" y="142" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">Researcher</text>
+  <text x="95" y="160" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#fff" fill-opacity=".85">Small LM</text>
+  <rect x="20" y="210" width="150" height="52" rx="10" fill="#f57c00"/>
+  <text x="95" y="232" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">Worker</text>
+  <text x="95" y="250" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#fff" fill-opacity=".85">CRUD · Execute</text>
+  <rect x="20" y="300" width="150" height="52" rx="10" fill="#8e24aa"/>
+  <text x="95" y="322" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">Custom Agent</text>
+  <text x="95" y="340" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#fff" fill-opacity=".85">Domain-Specific</text>
+  <line x1="170" y1="56" x2="270" y2="185" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="270" y1="180" x2="170" y2="145" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="170" y1="146" x2="270" y2="190" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="270" y1="195" x2="170" y2="235" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="170" y1="236" x2="270" y2="200" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="170" y1="325" x2="270" y2="220" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="270" y1="215" x2="170" y2="320" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#ah)"/>
+  <rect x="590" y="30" width="150" height="52" rx="10" fill="#26a69a"/>
+  <text x="665" y="52" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">Claude Code</text>
+  <text x="665" y="70" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#fff" fill-opacity=".85">GitHub Copilot</text>
+  <rect x="590" y="120" width="150" height="52" rx="10" fill="#26a69a"/>
+  <text x="665" y="142" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">MS Copilot</text>
+  <text x="665" y="160" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#fff" fill-opacity=".85">Snowflake · AWS</text>
+  <rect x="590" y="210" width="150" height="52" rx="10" fill="#e53935"/>
+  <text x="665" y="232" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">External MCP</text>
+  <text x="665" y="250" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#fff" fill-opacity=".85">Snowflake · GitHub</text>
+  <rect x="590" y="300" width="150" height="52" rx="10" fill="#e53935"/>
+  <text x="665" y="322" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">Databricks</text>
+  <text x="665" y="340" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#fff" fill-opacity=".85">Microsoft 365</text>
+  <line x1="590" y1="56" x2="490" y2="185" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="490" y1="180" x2="590" y2="145" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="590" y1="146" x2="490" y2="190" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="490" y1="195" x2="590" y2="235" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="490" y1="200" x2="590" y2="320" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="590" y1="230" x2="490" y2="200" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="590" y1="325" x2="490" y2="210" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="185" y="20" text-anchor="middle" font-family="sans-serif" font-size="11" fill="currentColor" fill-opacity=".55">Internal Agents</text>
+  <text x="575" y="20" text-anchor="middle" font-family="sans-serif" font-size="11" fill="currentColor" fill-opacity=".55">External AI / MCP</text>
+  <text x="380" y="380" text-anchor="middle" font-family="sans-serif" font-size="11" fill="currentColor" fill-opacity=".55">Bidirectional MCP</text>
+  <line x1="270" y1="245" x2="270" y2="350" stroke="currentColor" stroke-opacity=".25" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="490" y1="245" x2="490" y2="350" stroke="currentColor" stroke-opacity=".25" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="270" y1="350" x2="490" y2="350" stroke="currentColor" stroke-opacity=".25" stroke-width="1"/>
+  <text x="380" y="370" text-anchor="middle" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity=".4">MCP Server · MeshPlugin Tools</text>
+</svg>
+
+*The Mesh Graph is the central knowledge hub — internal agents discover context from it dynamically, and external AI systems connect to it via bidirectional MCP.*
 
 # Design Philosophy
 

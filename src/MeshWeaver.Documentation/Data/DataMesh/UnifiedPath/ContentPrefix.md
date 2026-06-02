@@ -6,6 +6,42 @@ Icon: /static/DocContent/DataMesh/UnifiedPath/ContentPrefix/icon.svg
 ---
 
 Content collections hold files — images, documents, markdown, code — associated with mesh nodes. The **collection prefix** syntax lets you embed or link to those files anywhere in the mesh by combining a collection name with a relative path.
+<svg viewBox="0 0 760 300" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="currentColor" fill-opacity="0.6"/>
+    </marker>
+  </defs>
+  <rect x="10" y="120" width="160" height="60" rx="10" fill="#1e88e5"/>
+  <text x="90" y="145" text-anchor="middle" fill="#fff" font-weight="bold">@@addr/prefix/path</text>
+  <text x="90" y="163" text-anchor="middle" fill="#fff" font-size="11">reference</text>
+  <line x1="170" y1="150" x2="235" y2="150" stroke="currentColor" stroke-opacity="0.6" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="237" y="120" width="130" height="60" rx="10" fill="#5c6bc0"/>
+  <text x="302" y="145" text-anchor="middle" fill="#fff" font-weight="bold">Prefix</text>
+  <text x="302" y="163" text-anchor="middle" fill="#fff" font-size="11">resolution</text>
+  <line x1="302" y1="120" x2="302" y2="80" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="302" y="72" text-anchor="middle" fill="currentColor" fill-opacity="0.65" font-size="11">reserved?</text>
+  <line x1="302" y1="55" x2="302" y2="30" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="237" y="5" width="130" height="44" rx="8" fill="#e53935"/>
+  <text x="302" y="24" text-anchor="middle" fill="#fff" font-weight="bold">Reserved</text>
+  <text x="302" y="41" text-anchor="middle" fill="#fff" font-size="11">data / schema / area…</text>
+  <text x="395" y="148" fill="currentColor" fill-opacity="0.55" font-size="11">not reserved</text>
+  <line x1="367" y1="150" x2="430" y2="150" stroke="currentColor" stroke-opacity="0.6" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="432" y="120" width="140" height="60" rx="10" fill="#43a047"/>
+  <text x="502" y="145" text-anchor="middle" fill="#fff" font-weight="bold">Collection</text>
+  <text x="502" y="163" text-anchor="middle" fill="#fff" font-size="11">user-registered name</text>
+  <line x1="572" y1="150" x2="635" y2="150" stroke="currentColor" stroke-opacity="0.6" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="637" y="105" width="110" height="44" rx="8" fill="#f57c00"/>
+  <text x="692" y="124" text-anchor="middle" fill="#fff" font-weight="bold">@@</text>
+  <text x="692" y="142" text-anchor="middle" fill="#fff" font-size="11">embed inline</text>
+  <rect x="637" y="162" width="110" height="44" rx="8" fill="#8e24aa"/>
+  <text x="692" y="181" text-anchor="middle" fill="#fff" font-weight="bold">@</text>
+  <text x="692" y="199" text-anchor="middle" fill="#fff" font-size="11">navigation link</text>
+  <line x1="572" y1="150" x2="620" y2="127" stroke="currentColor" stroke-opacity="0.4" stroke-width="1" marker-end="url(#arr)"/>
+  <line x1="572" y1="150" x2="620" y2="184" stroke="currentColor" stroke-opacity="0.4" stroke-width="1" marker-end="url(#arr)"/>
+  <text x="380" y="260" text-anchor="middle" fill="currentColor" fill-opacity="0.65" font-size="12">File resolved from collection, then rendered by extension (.svg → image, .md → markdown, …)</text>
+</svg>
+*Collection prefix resolution: the prefix after the address is checked against reserved keywords first; unknown prefixes route to user-registered collections, and the leading `@@` / `@` controls embed vs. link.*
 
 # How the Prefix Works
 

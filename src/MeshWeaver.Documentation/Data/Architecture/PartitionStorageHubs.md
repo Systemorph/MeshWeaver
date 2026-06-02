@@ -10,6 +10,64 @@ Every storage *table* in MeshWeaver is a single-threaded actor. Each `(schema, t
 The actor scheduler serialises every operation on a given table, but operations on *different* tables in the same schema run in parallel. Within a partition you get fine-grained, natural concurrency at no extra cost.
 
 A partition hub is a **queue with a TTL**, not a long-lived component tied to a partition's lifetime. It spawns on first use, runs the same standard handler configuration regardless of backend, and disposes itself after roughly five minutes of idle time. The next request re-spawns it from a cold cache.
+<svg viewBox="0 0 760 370" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="currentColor" fill-opacity="0.6"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="760" height="370" rx="6" fill="#111827"/>
+  <rect x="30" y="20" width="140" height="54" rx="10" fill="#5c6bc0"/>
+  <text x="100" y="44" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff">Caller Hub</text>
+  <text x="100" y="62" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#c5cae9">hub.Observe(req)</text>
+  <rect x="290" y="20" width="178" height="54" rx="10" fill="#26a69a"/>
+  <text x="379" y="42" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff">PartitionStorageRouter</text>
+  <text x="379" y="60" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#b2dfdb">singleton registry (no hub)</text>
+  <line x1="170" y1="47" x2="288" y2="47" stroke="currentColor" stroke-opacity="0.6" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="229" y="42" text-anchor="middle" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity="0.55">direct dispatch</text>
+  <rect x="580" y="20" width="150" height="54" rx="10" fill="#1565c0"/>
+  <text x="655" y="42" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">IPartitionStorage</text>
+  <text x="655" y="59" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#bbdefb">Provider (1…N)</text>
+  <line x1="468" y1="38" x2="578" y2="38" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="523" y="33" text-anchor="middle" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity="0.55">Matches / Resolve</text>
+  <text x="30" y="116" font-family="sans-serif" font-size="11" fill="currentColor" fill-opacity="0.55">acme schema</text>
+  <rect x="30" y="128" width="155" height="52" rx="10" fill="#1e88e5"/>
+  <text x="107" y="150" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">Hub: acme/mesh_nodes</text>
+  <text x="107" y="168" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#bbdefb">NpgsqlDataSource MaxPool=1</text>
+  <rect x="200" y="128" width="155" height="52" rx="10" fill="#1e88e5"/>
+  <text x="277" y="150" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">Hub: acme/threads</text>
+  <text x="277" y="168" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#bbdefb">NpgsqlDataSource MaxPool=1</text>
+  <rect x="370" y="128" width="155" height="52" rx="10" fill="#1e88e5"/>
+  <text x="447" y="150" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">Hub: acme/activities</text>
+  <text x="447" y="168" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#bbdefb">NpgsqlDataSource MaxPool=1</text>
+  <rect x="540" y="128" width="155" height="52" rx="10" fill="#1e88e5"/>
+  <text x="617" y="150" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">Hub: acme/access</text>
+  <text x="617" y="168" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#bbdefb">NpgsqlDataSource MaxPool=1</text>
+  <line x1="379" y1="74" x2="107" y2="127" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="379" y1="74" x2="277" y2="127" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="379" y1="74" x2="447" y2="127" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="379" y1="74" x2="617" y2="127" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="30" y="228" font-family="sans-serif" font-size="11" fill="currentColor" fill-opacity="0.55">rbuergi schema</text>
+  <rect x="30" y="240" width="155" height="52" rx="10" fill="#43a047"/>
+  <text x="107" y="262" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">Hub: rbuergi/mesh_nodes</text>
+  <text x="107" y="280" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#c8e6c9">NpgsqlDataSource MaxPool=1</text>
+  <rect x="200" y="240" width="155" height="52" rx="10" fill="#43a047"/>
+  <text x="277" y="262" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">Hub: rbuergi/threads</text>
+  <text x="277" y="280" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#c8e6c9">NpgsqlDataSource MaxPool=1</text>
+  <rect x="370" y="240" width="155" height="52" rx="10" fill="#43a047"/>
+  <text x="447" y="262" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">Hub: rbuergi/activities</text>
+  <text x="447" y="280" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#c8e6c9">NpgsqlDataSource MaxPool=1</text>
+  <rect x="540" y="240" width="155" height="52" rx="10" fill="#43a047"/>
+  <text x="617" y="262" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">Hub: rbuergi/access</text>
+  <text x="617" y="280" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#c8e6c9">NpgsqlDataSource MaxPool=1</text>
+  <line x1="379" y1="74" x2="107" y2="239" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arr)"/>
+  <line x1="379" y1="74" x2="277" y2="239" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arr)"/>
+  <line x1="379" y1="74" x2="447" y2="239" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arr)"/>
+  <line x1="379" y1="74" x2="617" y2="239" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arr)"/>
+  <text x="30" y="340" font-family="sans-serif" font-size="11" fill="currentColor" fill-opacity="0.5">5-min idle TTL per hub — spawns on first use, disposes on idle, bounded connections = schemas × tables</text>
+</svg>
+
+*Each `(schema, table)` pair gets its own single-threaded actor hub with a dedicated `NpgsqlDataSource(MaxPoolSize=1)`; the router is a registry, not a hub on the message path.*
 
 ---
 

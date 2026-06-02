@@ -21,6 +21,58 @@ Before writing a test, review the invariants every test must respect:
 | [Data Binding](xref:GUI/DataBinding) | Layout areas declare, views subscribe — tests assert against the subscription path |
 | [Test State Isolation](TestStateIsolation) | Required when tests share a cluster fixture or `ICollectionFixture<>` |
 
+<svg viewBox="0 0 760 260" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#90a4ae"/>
+    </marker>
+    <marker id="arr-green" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#43a047"/>
+    </marker>
+    <marker id="arr-red" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#e53935"/>
+    </marker>
+  </defs>
+  <text x="190" y="22" font-family="sans-serif" font-size="11" font-weight="bold" fill="currentColor" fill-opacity="0.55" text-anchor="middle">CORRECT — reactive stream read</text>
+  <rect x="10" y="34" width="120" height="40" rx="10" fill="#1e88e5"/>
+  <text x="70" y="58" font-family="sans-serif" font-size="12" fill="#fff" text-anchor="middle" font-weight="bold">Write / Mutate</text>
+  <text x="70" y="72" font-family="sans-serif" font-size="10" fill="#bbdefb" text-anchor="middle">.Should().Emit()</text>
+  <line x1="130" y1="54" x2="158" y2="54" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="160" y="34" width="130" height="40" rx="10" fill="#5c6bc0"/>
+  <text x="225" y="52" font-family="sans-serif" font-size="12" fill="#fff" text-anchor="middle" font-weight="bold">Owner-Hub Stream</text>
+  <text x="225" y="67" font-family="sans-serif" font-size="10" fill="#c5cae9" text-anchor="middle">GetMeshNodeStream(path)</text>
+  <line x1="290" y1="54" x2="318" y2="54" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="320" y="34" width="130" height="40" rx="10" fill="#43a047"/>
+  <text x="385" y="52" font-family="sans-serif" font-size="12" fill="#fff" text-anchor="middle" font-weight="bold">Reactive Assert</text>
+  <text x="385" y="67" font-family="sans-serif" font-size="10" fill="#c8e6c9" text-anchor="middle">.Should().Match(pred)</text>
+  <line x1="450" y1="54" x2="478" y2="54" stroke="#43a047" stroke-width="1.5" marker-end="url(#arr-green)"/>
+  <rect x="480" y="34" width="110" height="40" rx="10" fill="#26a69a"/>
+  <text x="535" y="52" font-family="sans-serif" font-size="12" fill="#fff" text-anchor="middle" font-weight="bold">Test Passes</text>
+  <text x="535" y="67" font-family="sans-serif" font-size="10" fill="#b2dfdb" text-anchor="middle">authoritative, live</text>
+  <line x1="70" y1="74" x2="70" y2="110" stroke="currentColor" stroke-opacity="0.2" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="595" y1="74" x2="595" y2="110" stroke="currentColor" stroke-opacity="0.2" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="70" y1="110" x2="595" y2="110" stroke="currentColor" stroke-opacity="0.2" stroke-width="1" stroke-dasharray="4,3"/>
+  <text x="190" y="142" font-family="sans-serif" font-size="11" font-weight="bold" fill="currentColor" fill-opacity="0.55" text-anchor="middle">WRONG — lagged query read</text>
+  <rect x="10" y="154" width="120" height="40" rx="10" fill="#1e88e5"/>
+  <text x="70" y="178" font-family="sans-serif" font-size="12" fill="#fff" text-anchor="middle" font-weight="bold">Write / Mutate</text>
+  <text x="70" y="192" font-family="sans-serif" font-size="10" fill="#bbdefb" text-anchor="middle">.Should().Emit()</text>
+  <line x1="130" y1="174" x2="158" y2="174" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="160" y="154" width="130" height="40" rx="10" fill="#b71c1c"/>
+  <text x="225" y="172" font-family="sans-serif" font-size="12" fill="#fff" text-anchor="middle" font-weight="bold">QueryAsync / Index</text>
+  <text x="225" y="187" font-family="sans-serif" font-size="10" fill="#ffcdd2" text-anchor="middle">eventually consistent</text>
+  <line x1="290" y1="174" x2="318" y2="174" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="320" y="154" width="130" height="40" rx="10" fill="#e53935"/>
+  <text x="385" y="172" font-family="sans-serif" font-size="12" fill="#fff" text-anchor="middle" font-weight="bold">Stale Emission</text>
+  <text x="385" y="187" font-family="sans-serif" font-size="10" fill="#ffcdd2" text-anchor="middle">old value from index</text>
+  <line x1="450" y1="174" x2="478" y2="174" stroke="#e53935" stroke-width="1.5" marker-end="url(#arr-red)"/>
+  <rect x="480" y="154" width="110" height="40" rx="10" fill="#e53935"/>
+  <text x="535" y="172" font-family="sans-serif" font-size="12" fill="#fff" text-anchor="middle" font-weight="bold">Flaky / False</text>
+  <text x="535" y="187" font-family="sans-serif" font-size="10" fill="#ffcdd2" text-anchor="middle">test lies or races</text>
+  <text x="380" y="240" font-family="sans-serif" font-size="11" fill="currentColor" fill-opacity="0.5" text-anchor="middle">Cold observable: the write and assertion both execute on .Should().Emit() / .Match() — never async/await</text>
+</svg>
+
+*Reactive test flow: writes subscribe via `.Should().Emit()`, reads assert on the authoritative owner-hub stream, never on the lagged query index.*
+
 ---
 
 ## The Golden Rules

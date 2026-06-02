@@ -7,6 +7,51 @@ Icon: /static/DocContent/Architecture/icon.svg
 
 Partitioned persistence routes every storage operation by the first segment of a node's path, giving each top-level domain strict isolation in its own PostgreSQL schema, Cosmos DB container, or file-system partition — while keeping the `IMeshStorage` and `IMeshQuery` interfaces completely unchanged for callers.
 
+<svg viewBox="0 0 760 370" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L8,3.5 L0,7 Z" fill="currentColor" fill-opacity="0.6"/>
+    </marker>
+  </defs>
+  <rect x="270" y="10" width="220" height="44" rx="10" fill="#1e88e5"/>
+  <text x="380" y="28" text-anchor="middle" fill="#fff" font-weight="bold">PersistenceService</text>
+  <text x="380" y="46" text-anchor="middle" fill="#ffffffbb" font-size="11">(scoped, caller-facing)</text>
+  <line x1="380" y1="54" x2="380" y2="86" stroke="currentColor" stroke-opacity="0.5" marker-end="url(#arr)"/>
+  <rect x="220" y="88" width="320" height="50" rx="10" fill="#5c6bc0"/>
+  <text x="380" y="108" text-anchor="middle" fill="#fff" font-weight="bold">RoutingPersistenceServiceCore</text>
+  <text x="380" y="126" text-anchor="middle" fill="#ffffffbb" font-size="11">Extract first path segment → choose partition</text>
+  <text x="155" y="122" text-anchor="middle" fill="currentColor" fill-opacity="0.55" font-size="11">node path:</text>
+  <rect x="58" y="108" width="180" height="30" rx="6" fill="none" stroke="currentColor" stroke-opacity="0.35"/>
+  <text x="148" y="128" text-anchor="middle" fill="currentColor" fill-opacity="0.8" font-size="12" font-style="italic">"ACME/Projects/Alpha"</text>
+  <text x="148" y="155" text-anchor="middle" fill="#f57c00" font-size="11">↓  first segment = "ACME"</text>
+  <line x1="300" y1="138" x2="175" y2="192" stroke="currentColor" stroke-opacity="0.4" marker-end="url(#arr)"/>
+  <line x1="380" y1="138" x2="380" y2="192" stroke="currentColor" stroke-opacity="0.4" marker-end="url(#arr)"/>
+  <line x1="460" y1="138" x2="585" y2="192" stroke="currentColor" stroke-opacity="0.4" marker-end="url(#arr)"/>
+  <rect x="58" y="194" width="234" height="48" rx="10" fill="#43a047"/>
+  <text x="175" y="214" text-anchor="middle" fill="#fff" font-weight="bold">ACME partition</text>
+  <text x="175" y="232" text-anchor="middle" fill="#ffffffcc" font-size="11">IStorageService + IMeshQueryProvider</text>
+  <rect x="263" y="194" width="234" height="48" rx="10" fill="#43a047"/>
+  <text x="380" y="214" text-anchor="middle" fill="#fff" font-weight="bold">Contoso partition</text>
+  <text x="380" y="232" text-anchor="middle" fill="#ffffffcc" font-size="11">IStorageService + IMeshQueryProvider</text>
+  <rect x="468" y="194" width="234" height="48" rx="10" fill="#26a69a"/>
+  <text x="585" y="214" text-anchor="middle" fill="#fff" font-weight="bold">… (auto-provisioned)</text>
+  <text x="585" y="232" text-anchor="middle" fill="#ffffffcc" font-size="11">first save triggers CreateSchema</text>
+  <line x1="175" y1="242" x2="175" y2="292" stroke="currentColor" stroke-opacity="0.4" marker-end="url(#arr)"/>
+  <line x1="380" y1="242" x2="380" y2="292" stroke="currentColor" stroke-opacity="0.4" marker-end="url(#arr)"/>
+  <line x1="585" y1="242" x2="585" y2="292" stroke="currentColor" stroke-opacity="0.4" marker-end="url(#arr)"/>
+  <rect x="58" y="294" width="234" height="48" rx="10" fill="#e53935"/>
+  <text x="175" y="314" text-anchor="middle" fill="#fff" font-weight="bold">PostgreSQL schema "acme"</text>
+  <text x="175" y="332" text-anchor="middle" fill="#ffffffcc" font-size="11">mesh_nodes + satellite tables</text>
+  <rect x="263" y="294" width="234" height="48" rx="10" fill="#8e24aa"/>
+  <text x="380" y="314" text-anchor="middle" fill="#fff" font-weight="bold">Cosmos "contoso-nodes"</text>
+  <text x="380" y="332" text-anchor="middle" fill="#ffffffcc" font-size="11">container pair per tenant</text>
+  <rect x="468" y="294" width="234" height="48" rx="10" fill="#f57c00"/>
+  <text x="585" y="314" text-anchor="middle" fill="#fff" font-weight="bold">File System ./data/…</text>
+  <text x="585" y="332" text-anchor="middle" fill="#ffffffcc" font-size="11">per-partition in-memory cache</text>
+</svg>
+
+*Routing layer: every call carries a node path; the first segment determines the partition; each partition owns its isolated backend store.*
+
 # Why Partitioning Exists
 
 In a multi-tenant or multi-domain mesh, data from different organizations must not bleed into one another. When `Cornerstone/Policy` and `Contoso/HR/Employee` coexist in the same mesh, their data needs to live in separate storage partitions:

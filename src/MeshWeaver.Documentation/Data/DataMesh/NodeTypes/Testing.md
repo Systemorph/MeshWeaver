@@ -13,6 +13,38 @@ This page covers two archetypes you'll write for every node type:
 | **Layout-area rendering** | The `Details`, `Thumbnail`, `Overview`, and other views render correctly for a real node instance. |
 | **Request/response** | A node-type-specific request is handled and produces the expected response — useful for simulations, computations, and any handler wired in via `config.WithHandler<TRequest>(...)`. |
 
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 220" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="currentColor" fill-opacity=".55"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="760" height="220" rx="12" fill="none" stroke="currentColor" stroke-opacity=".12" stroke-width="1"/>
+  <rect x="20" y="70" width="140" height="80" rx="10" fill="#5c6bc0"/>
+  <text x="90" y="103" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff">Test Class</text>
+  <text x="90" y="120" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" fill-opacity=".85">MonolithMesh</text>
+  <text x="90" y="136" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" fill-opacity=".85">TestBase</text>
+  <line x1="160" y1="110" x2="220" y2="110" stroke="currentColor" stroke-opacity=".55" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="220" y="70" width="140" height="80" rx="10" fill="#1e88e5"/>
+  <text x="290" y="103" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff">In-Process</text>
+  <text x="290" y="120" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" fill-opacity=".85">Monolith Mesh</text>
+  <text x="290" y="136" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" fill-opacity=".85">+ PingRequest</text>
+  <line x1="360" y1="110" x2="420" y2="110" stroke="currentColor" stroke-opacity=".55" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="420" y="70" width="140" height="80" rx="10" fill="#26a69a"/>
+  <text x="490" y="103" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff">Per-Node Hub</text>
+  <text x="490" y="120" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" fill-opacity=".85">Address routing</text>
+  <text x="490" y="136" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" fill-opacity=".85">+ type registration</text>
+  <line x1="560" y1="90" x2="620" y2="55" stroke="currentColor" stroke-opacity=".55" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="560" y1="130" x2="620" y2="165" stroke="currentColor" stroke-opacity=".55" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="620" y="20" width="120" height="52" rx="10" fill="#43a047"/>
+  <text x="680" y="44" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">Layout Area</text>
+  <text x="680" y="60" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" fill-opacity=".85">GetRemoteStream</text>
+  <rect x="620" y="148" width="120" height="52" rx="10" fill="#f57c00"/>
+  <text x="680" y="172" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">Request/Response</text>
+  <text x="680" y="188" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" fill-opacity=".85">AwaitResponse</text>
+</svg>
+*Integration test flow: a test class boots an in-process monolith mesh, routes to the per-node hub via a PingRequest, then exercises either layout-area rendering or request/response.*
+
 ---
 
 ## Test project layout

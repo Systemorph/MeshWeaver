@@ -9,6 +9,40 @@ order: 30
 Move a subtree of MeshNodes from one running MeshWeaver instance to another — no ZIP exports, no file uploads, no per-node back-and-forth. The most common use is **pushing from local dev to prod** so content you authored in `memex-local` appears at `https://memex.meshweaver.cloud` in a single command.
 
 ## What it does
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 300" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr-r" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#1e88e5"/>
+    </marker>
+    <marker id="arr-g" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#43a047"/>
+    </marker>
+    <marker id="arr-l" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="8 0, 0 3, 8 6" fill="#43a047"/>
+    </marker>
+  </defs>
+  <rect x="30" y="60" width="180" height="180" rx="12" fill="#1565c0" opacity="0.9"/>
+  <text x="120" y="92" font-family="sans-serif" font-size="14" font-weight="bold" fill="#fff" text-anchor="middle">Local Dev</text>
+  <text x="120" y="112" font-family="sans-serif" font-size="11" fill="#90caf9" text-anchor="middle">localhost:7122</text>
+  <rect x="55" y="130" width="130" height="32" rx="8" fill="#1e88e5"/>
+  <text x="120" y="151" font-family="sans-serif" font-size="11" fill="#fff" text-anchor="middle">mirror_to_remote</text>
+  <rect x="55" y="174" width="130" height="32" rx="8" fill="#1e88e5"/>
+  <text x="120" y="195" font-family="sans-serif" font-size="11" fill="#fff" text-anchor="middle">pull_from_remote</text>
+  <rect x="550" y="60" width="180" height="180" rx="12" fill="#1b5e20" opacity="0.9"/>
+  <text x="640" y="92" font-family="sans-serif" font-size="14" font-weight="bold" fill="#fff" text-anchor="middle">Prod Portal</text>
+  <text x="640" y="112" font-family="sans-serif" font-size="11" fill="#a5d6a7" text-anchor="middle">memex.meshweaver.cloud</text>
+  <rect x="575" y="130" width="130" height="32" rx="8" fill="#43a047"/>
+  <text x="640" y="151" font-family="sans-serif" font-size="11" fill="#fff" text-anchor="middle">StorageImporter</text>
+  <rect x="575" y="174" width="130" height="32" rx="8" fill="#43a047"/>
+  <text x="640" y="195" font-family="sans-serif" font-size="11" fill="#fff" text-anchor="middle">ApiToken auth</text>
+  <line x1="215" y1="146" x2="540" y2="146" stroke="#1e88e5" stroke-width="2" stroke-dasharray="6 3" marker-end="url(#arr-r)"/>
+  <text x="378" y="138" font-family="sans-serif" font-size="11" fill="#90caf9" text-anchor="middle">Push — outbound HTTPS</text>
+  <line x1="540" y1="190" x2="215" y2="190" stroke="#43a047" stroke-width="2" stroke-dasharray="6 3" marker-end="url(#arr-l)"/>
+  <text x="378" y="208" font-family="sans-serif" font-size="11" fill="#a5d6a7" text-anchor="middle">Pull — outbound HTTPS (local fetches prod)</text>
+  <text x="380" y="270" font-family="sans-serif" font-size="11" fill="currentColor" fill-opacity="0.55" text-anchor="middle">Both operations run server-side; Claude Code makes one MCP tool call regardless of subtree size.</text>
+</svg>
+
+*Push (`mirror_to_remote`) and Pull (`pull_from_remote`) both initiate outbound HTTPS from the local instance — no tunnel needed when targeting a public prod URL.*
 
 `MirrorToRemote` and `PullFromRemote` are MCP tools available on every MeshWeaver instance. Both execute entirely server-side: a 10 000-node migration is one MCP tool call from Claude Code's perspective, not 10 000.
 

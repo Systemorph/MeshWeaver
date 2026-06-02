@@ -6,6 +6,46 @@ Description: "How MeshQuery merges and ranks multi-provider results using per-pr
 # Query Result Scoring
 
 Every `path:` / `namespace:` / `nodeType:` / `source:` query in the mesh flows through `MeshQuery`. It fans out to every registered `IMeshQueryProvider`, collects their results, and emits a single sorted `QueryResultChange<T>` to the caller. This page explains how that merge orders results — the contract each provider must follow, and the sorting rules the aggregator applies.
+<svg viewBox="0 0 760 310" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+<defs>
+<marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+<path d="M0,0 L0,6 L8,3 z" fill="currentColor" fill-opacity=".6"/>
+</marker>
+</defs>
+<rect x="1" y="1" width="758" height="308" rx="10" fill="none" stroke="currentColor" stroke-opacity=".15" stroke-width="1"/>
+<rect x="30" y="120" width="130" height="48" rx="8" fill="#5c6bc0"/>
+<text x="95" y="140" text-anchor="middle" fill="#fff" font-weight="bold">MeshQuery</text>
+<text x="95" y="158" text-anchor="middle" fill="#fff" font-size="11">fan-out</text>
+<line x1="160" y1="144" x2="210" y2="84" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+<line x1="160" y1="144" x2="210" y2="144" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+<line x1="160" y1="144" x2="210" y2="204" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+<rect x="210" y="58" width="160" height="52" rx="8" fill="#1e88e5"/>
+<text x="290" y="79" text-anchor="middle" fill="#fff" font-weight="bold">PostgreSQL</text>
+<text x="290" y="97" text-anchor="middle" fill="#fff" font-size="11">prefix 100 · sub 50 · prox 40</text>
+<rect x="210" y="118" width="160" height="52" rx="8" fill="#26a69a"/>
+<text x="290" y="139" text-anchor="middle" fill="#fff" font-weight="bold">StaticNodeQuery</text>
+<text x="290" y="157" text-anchor="middle" fill="#fff" font-size="11">FuzzyScorer 0..1000 / 0</text>
+<rect x="210" y="178" width="160" height="52" rx="8" fill="#8e24aa"/>
+<text x="290" y="199" text-anchor="middle" fill="#fff" font-weight="bold">Custom Provider</text>
+<text x="290" y="217" text-anchor="middle" fill="#fff" font-size="11">Scores[ ] or null</text>
+<line x1="370" y1="84" x2="420" y2="144" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+<line x1="370" y1="144" x2="420" y2="144" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+<line x1="370" y1="204" x2="420" y2="164" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+<rect x="420" y="100" width="150" height="88" rx="8" fill="#f57c00"/>
+<text x="495" y="126" text-anchor="middle" fill="#fff" font-weight="bold">ClipMergedInitial</text>
+<text x="495" y="148" text-anchor="middle" fill="#fff" font-size="11">1. OrderBy (user intent)</text>
+<text x="495" y="164" text-anchor="middle" fill="#fff" font-size="11">2. Score desc</text>
+<text x="495" y="180" text-anchor="middle" fill="#fff" font-size="11">3. Insertion order</text>
+<line x1="570" y1="144" x2="620" y2="144" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+<rect x="620" y="100" width="118" height="88" rx="8" fill="#43a047"/>
+<text x="679" y="130" text-anchor="middle" fill="#fff" font-weight="bold">Sorted Results</text>
+<text x="679" y="150" text-anchor="middle" fill="#fff" font-size="11">Skip / Limit</text>
+<text x="679" y="168" text-anchor="middle" fill="#fff" font-size="11">select: projection</text>
+<text x="679" y="186" text-anchor="middle" fill="#fff" font-size="11">QueryResultChange</text>
+<text x="380" y="270" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-size="12">Each provider scores independently; ClipMergedInitial owns the cross-provider sort.</text>
+</svg>
+
+*Query fan-out, per-provider scoring, and aggregated sort pipeline.*
 
 ## Result Shape
 

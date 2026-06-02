@@ -17,6 +17,42 @@ MeshWeaver surfaces Roslyn's full language intelligence — diagnostics, hover, 
 | **Monaco editor in the portal** | `IMeshLanguageService` resolved from DI | Live squiggles on any `Code` node under a NodeType's `Source/` subtree |
 
 Behind all three sits one `IMeshLanguageService` interface with one in-process implementation: Roslyn's `CompletionService`, `QuickInfoService`, and a per-NodeType `AdhocWorkspace` built over the cached `CSharpCompilation` produced by `MeshNodeCompilationService`.
+<svg viewBox="0 0 760 370" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L8,3.5 L0,7 Z" fill="#90a4ae"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="760" height="370" rx="4" fill="#1a1a2e"/>
+  <rect x="30" y="20" width="170" height="52" rx="10" fill="#1e88e5"/>
+  <text x="115" y="41" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">Coder Agent</text>
+  <text x="115" y="58" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#bbdefb">Lsp plugin (opt-in)</text>
+  <rect x="295" y="20" width="170" height="52" rx="10" fill="#8e24aa"/>
+  <text x="380" y="41" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">MCP Clients</text>
+  <text x="380" y="58" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#e1bee7">Claude Code / external</text>
+  <rect x="560" y="20" width="170" height="52" rx="10" fill="#26a69a"/>
+  <text x="645" y="41" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">Monaco Editor</text>
+  <text x="645" y="58" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#b2dfdb">Portal Edit view</text>
+  <line x1="115" y1="72" x2="340" y2="128" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="380" y1="72" x2="380" y2="128" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="645" y1="72" x2="422" y2="128" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="175" y="130" width="410" height="68" rx="10" fill="#37474f"/>
+  <text x="380" y="154" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff">IMeshLanguageService</text>
+  <text x="380" y="172" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#cfd8dc">GetDiagnostics · GetHover · GetCompletions · CheckSpeculative</text>
+  <text x="380" y="188" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#90a4ae">all return IObservable&lt;T&gt;</text>
+  <line x1="380" y1="198" x2="380" y2="230" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="175" y="232" width="410" height="72" rx="10" fill="#455a64"/>
+  <text x="380" y="254" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff">MeshNodeLanguageService</text>
+  <text x="380" y="272" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#cfd8dc">AdhocWorkspace per NodeType (keyed by source-versions hash)</text>
+  <text x="380" y="288" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#cfd8dc">Roslyn CompletionService · QuickInfoService · CSharpCompilation</text>
+  <line x1="280" y1="304" x2="215" y2="330" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="480" y1="304" x2="545" y2="330" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="30" y="332" width="340" height="28" rx="8" fill="#1e88e5" fill-opacity="0.7"/>
+  <text x="200" y="351" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff">MeshNodeCompilationService</text>
+  <rect x="390" y="332" width="340" height="28" rx="8" fill="#f57c00" fill-opacity="0.8"/>
+  <text x="560" y="351" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff">SpeculativeCompilation</text>
+</svg>
+*Three consumers share one `IMeshLanguageService` backed by Roslyn — Coder pre-flight, MCP tools, and Monaco live squiggles all route through the same in-process pipeline.*
 
 ## Architecture
 

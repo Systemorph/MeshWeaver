@@ -13,6 +13,55 @@ The **Settings → Models** page is the user's single destination for wiring AI 
 
 The fundamental insight driving this design: API providers and CLI providers need **completely different layouts**. Rendering both as a key/endpoint form is wrong.
 
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 320" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L8,3.5 L0,7 Z" fill="currentColor" fill-opacity="0.6"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="760" height="320" rx="12" fill="none" stroke="currentColor" stroke-opacity="0.08"/>
+  <rect x="30" y="20" width="200" height="52" rx="10" fill="#5c6bc0"/>
+  <text x="130" y="42" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="700" fill="#fff" opacity="0.85">Settings → Models</text>
+  <text x="130" y="60" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" opacity="0.7">ProviderKind dispatch</text>
+  <line x1="130" y1="72" x2="130" y2="104" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="130" y1="104" x2="290" y2="104" stroke="currentColor" stroke-opacity="0.4" stroke-width="1.5"/>
+  <line x1="130" y1="104" x2="530" y2="104" stroke="currentColor" stroke-opacity="0.4" stroke-width="1.5"/>
+  <line x1="290" y1="104" x2="290" y2="128" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="530" y1="104" x2="530" y2="128" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="160" y="128" width="260" height="52" rx="10" fill="#1e88e5"/>
+  <text x="290" y="150" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="700" fill="#fff">API Provider</text>
+  <text x="290" y="168" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" opacity="0.8">Azure AI Foundry · Azure OpenAI · Anthropic · OpenAI</text>
+  <rect x="400" y="128" width="260" height="52" rx="10" fill="#43a047"/>
+  <text x="530" y="150" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="700" fill="#fff">CLI Provider</text>
+  <text x="530" y="168" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" opacity="0.8">Claude Code · GitHub Copilot</text>
+  <line x1="230" y1="180" x2="200" y2="210" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="290" y1="180" x2="290" y2="210" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="350" y1="180" x2="380" y2="210" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="108" y="210" width="184" height="48" rx="8" fill="#1565c0" opacity="0.9"/>
+  <text x="200" y="231" text-anchor="middle" font-family="sans-serif" font-size="11" font-weight="600" fill="#fff">Endpoint / Key form</text>
+  <text x="200" y="249" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#fff" opacity="0.75">saved &amp; validated</text>
+  <rect x="252" y="210" width="160" height="48" rx="8" fill="#1565c0" opacity="0.9"/>
+  <text x="332" y="231" text-anchor="middle" font-family="sans-serif" font-size="11" font-weight="600" fill="#fff">Fetch model list</text>
+  <text x="332" y="249" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#fff" opacity="0.75">IChatClientCatalog</text>
+  <line x1="290" y1="258" x2="290" y2="280" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="200" y="280" width="182" height="36" rx="8" fill="#0d47a1"/>
+  <text x="291" y="303" text-anchor="middle" font-family="sans-serif" font-size="11" font-weight="600" fill="#fff">Enable selected models</text>
+  <line x1="470" y1="180" x2="470" y2="210" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="530" y1="180" x2="530" y2="210" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="590" y1="180" x2="590" y2="210" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="392" y="210" width="156" height="48" rx="8" fill="#2e7d32" opacity="0.9"/>
+  <text x="470" y="231" text-anchor="middle" font-family="sans-serif" font-size="11" font-weight="600" fill="#fff">Check IsLoggedIn</text>
+  <text x="470" y="249" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#fff" opacity="0.75">IConnectStrategy</text>
+  <rect x="508" y="210" width="156" height="48" rx="8" fill="#2e7d32" opacity="0.9"/>
+  <text x="586" y="231" text-anchor="middle" font-family="sans-serif" font-size="11" font-weight="600" fill="#fff">CLI auth flow</text>
+  <text x="586" y="249" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#fff" opacity="0.75">ConnectSessionManager</text>
+  <line x1="530" y1="258" x2="530" y2="280" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="440" y="280" width="182" height="36" rx="8" fill="#1b5e20"/>
+  <text x="531" y="303" text-anchor="middle" font-family="sans-serif" font-size="11" font-weight="600" fill="#fff">Store encrypted token</text>
+</svg>
+
+*Two provider kinds — API providers add a key and pick models; CLI providers delegate to their own auth flow.*
+
 | Provider kind | Examples | What the card shows |
 |---|---|---|
 | **API** (bring-your-own-key) | Azure AI Foundry, Azure OpenAI, Anthropic, OpenAI | Endpoint / key form **+ a fetched list of models** to enable |

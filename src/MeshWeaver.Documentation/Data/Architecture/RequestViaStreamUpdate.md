@@ -12,6 +12,53 @@ The single rule: mutate the target node's state via `workspace.GetMeshNodeStream
 **Reads use the same stream.** Server-side, [`IMeshNodeStreamCache`](xref:Hosting/MeshNodeStreamCache) hands out a single shared stream per node. Client-side, the Blazor view holds an `ISynchronizationStream<MeshNode>` (see [GUI Data Binding](xref:GUI/DataBinding)). Read and write share one stream — there is no separate read API to keep in sync.
 
 **Why this is mandatory, not merely preferred.** Every recent "hub becomes unresponsive after the second operation" CI failure — CodeEditRecompile, NodeTypeRelease, LinkedInPullActions, ThreadAgentIntegration in run 26036857424 — traced back to bespoke request/response handlers racing the watcher: two concurrent activities, leaked callbacks, wedged hub. The stream-based pattern is race-free by construction.
+<svg viewBox="0 0 760 310" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+<defs>
+<marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+<path d="M0,0 L0,6 L8,3 z" fill="#90a4ae"/>
+</marker>
+<marker id="arr-blue" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+<path d="M0,0 L0,6 L8,3 z" fill="#1e88e5"/>
+</marker>
+<marker id="arr-green" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+<path d="M0,0 L0,6 L8,3 z" fill="#43a047"/>
+</marker>
+<marker id="arr-orange" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+<path d="M0,0 L0,6 L8,3 z" fill="#f57c00"/>
+</marker>
+</defs>
+<rect x="10" y="30" width="130" height="54" rx="10" fill="#1e88e5"/>
+<text x="75" y="53" text-anchor="middle" fill="#fff" font-weight="bold">Caller</text>
+<text x="75" y="71" text-anchor="middle" fill="#fff" font-size="11">any hub / UI</text>
+<rect x="10" y="220" width="130" height="54" rx="10" fill="#5c6bc0"/>
+<text x="75" y="243" text-anchor="middle" fill="#fff" font-weight="bold">Subscriber</text>
+<text x="75" y="261" text-anchor="middle" fill="#fff" font-size="11">other silos / clients</text>
+<rect x="305" y="120" width="150" height="60" rx="10" fill="#37474f"/>
+<text x="380" y="144" text-anchor="middle" fill="#fff" font-weight="bold">MeshNode</text>
+<text x="380" y="163" text-anchor="middle" fill="#fff" font-size="11">stream (shared)</text>
+<rect x="305" y="30" width="150" height="54" rx="10" fill="#26a69a"/>
+<text x="380" y="53" text-anchor="middle" fill="#fff" font-weight="bold">IMeshNodeStreamCache</text>
+<text x="380" y="71" text-anchor="middle" fill="#fff" font-size="11">one stream per node</text>
+<rect x="570" y="100" width="140" height="54" rx="10" fill="#e53935"/>
+<text x="640" y="122" text-anchor="middle" fill="#fff" font-weight="bold">Owning Hub</text>
+<text x="640" y="140" text-anchor="middle" fill="#fff" font-size="11">WatchSubmission watcher</text>
+<rect x="570" y="220" width="140" height="54" rx="10" fill="#f57c00"/>
+<text x="640" y="243" text-anchor="middle" fill="#fff" font-weight="bold">Worker</text>
+<text x="640" y="261" text-anchor="middle" fill="#fff" font-size="11">dispatch / side-effect</text>
+<line x1="140" y1="57" x2="304" y2="139" stroke="#1e88e5" stroke-width="1.5" marker-end="url(#arr-blue)"/>
+<text x="195" y="86" fill="#1e88e5" font-size="11" font-style="italic">stream.Update(…)</text>
+<line x1="380" y1="84" x2="380" y2="119" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+<text x="386" y="108" fill="currentColor" fill-opacity=".6" font-size="11">emits change</text>
+<line x1="455" y1="150" x2="569" y2="127" stroke="#e53935" stroke-width="1.5" marker-end="url(#arr)"/>
+<text x="483" y="131" fill="#e53935" font-size="11" font-style="italic">subscribe</text>
+<line x1="640" y1="154" x2="640" y2="219" stroke="#f57c00" stroke-width="1.5" marker-end="url(#arr-orange)"/>
+<text x="646" y="192" fill="#f57c00" font-size="11" font-style="italic">dispatch work</text>
+<line x1="569" y1="247" x2="456" y2="165" stroke="#43a047" stroke-width="1.5" marker-end="url(#arr-green)"/>
+<text x="489" y="222" fill="#43a047" font-size="11" font-style="italic">write-back result</text>
+<line x1="305" y1="165" x2="141" y2="247" stroke="#5c6bc0" stroke-width="1.5" marker-end="url(#arr)"/>
+<text x="160" y="210" fill="#5c6bc0" font-size="11" font-style="italic">propagate</text>
+</svg>
+*Stream-based mutation flow: caller writes via `stream.Update`, the owning hub's watcher dispatches work, the worker writes results back to the same node, and every subscriber (other silos, clients) receives the change automatically.*
 
 ---
 

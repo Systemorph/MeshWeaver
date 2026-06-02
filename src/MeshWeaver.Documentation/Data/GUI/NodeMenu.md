@@ -11,6 +11,49 @@ The portal's node context menu — the cube icon on every node — is fully data
 >
 > The old `IAsyncEnumerable` + `await foreach … yield break` contract took the **first** permission snapshot and locked it in — baking in whatever had propagated by first render (the access race behind the old `Menu_Editor_ShowsCreateItems` flake). See [Aggregating Providers](../../Architecture/AggregatingProviders).
 
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 310" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L8,3.5 L0,7 Z" fill="currentColor" fill-opacity=".55"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="760" height="310" fill="none"/>
+  <rect x="20" y="20" width="140" height="50" rx="10" fill="#1e88e5"/>
+  <text x="90" y="40" font-family="sans-serif" font-size="11" font-weight="bold" fill="#fff" text-anchor="middle">Default Provider</text>
+  <text x="90" y="56" font-family="sans-serif" font-size="10" fill="#cde" text-anchor="middle">AddDefaultMeshMenu()</text>
+  <rect x="20" y="100" width="140" height="50" rx="10" fill="#43a047"/>
+  <text x="90" y="120" font-family="sans-serif" font-size="11" font-weight="bold" fill="#fff" text-anchor="middle">Custom Provider A</text>
+  <text x="90" y="136" font-family="sans-serif" font-size="10" fill="#cec" text-anchor="middle">AddNodeMenuItems()</text>
+  <rect x="20" y="180" width="140" height="50" rx="10" fill="#5c6bc0"/>
+  <text x="90" y="200" font-family="sans-serif" font-size="11" font-weight="bold" fill="#fff" text-anchor="middle">Custom Provider B</text>
+  <text x="90" y="216" font-family="sans-serif" font-size="10" fill="#dde" text-anchor="middle">NodeMenuItemProvider</text>
+  <text x="90" y="260" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity=".5" text-anchor="middle">IObservable&lt;Items&gt;</text>
+  <text x="90" y="274" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity=".5" text-anchor="middle">re-emits on perm change</text>
+  <line x1="160" y1="45" x2="278" y2="128" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="160" y1="125" x2="278" y2="148" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="160" y1="205" x2="278" y2="168" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="280" y="108" width="150" height="80" rx="10" fill="#f57c00"/>
+  <text x="355" y="132" font-family="sans-serif" font-size="11" font-weight="bold" fill="#fff" text-anchor="middle">CombineLatest</text>
+  <text x="355" y="150" font-family="sans-serif" font-size="10" fill="#fee" text-anchor="middle">+ Permission filter</text>
+  <text x="355" y="166" font-family="sans-serif" font-size="10" fill="#fee" text-anchor="middle">in each .Select()</text>
+  <text x="355" y="182" font-family="sans-serif" font-size="10" fill="#fee" text-anchor="middle">RenderMenus renderer</text>
+  <line x1="430" y1="148" x2="498" y2="148" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="500" y="108" width="130" height="80" rx="10" fill="#26a69a"/>
+  <text x="565" y="135" font-family="sans-serif" font-size="11" font-weight="bold" fill="#fff" text-anchor="middle">ImmutableSortedSet</text>
+  <text x="565" y="153" font-family="sans-serif" font-size="10" fill="#cef" text-anchor="middle">merged &amp; ordered</text>
+  <text x="565" y="169" font-family="sans-serif" font-size="10" fill="#cef" text-anchor="middle">by Order property</text>
+  <text x="565" y="185" font-family="sans-serif" font-size="10" fill="#cef" text-anchor="middle">host.UpdateArea()</text>
+  <line x1="630" y1="148" x2="698" y2="148" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="700" y="108" width="44" height="80" rx="10" fill="#8e24aa"/>
+  <text x="722" y="143" font-family="sans-serif" font-size="10" font-weight="bold" fill="#fff" text-anchor="middle" transform="rotate(-90 722 148)">$Menu</text>
+  <line x1="722" y1="188" x2="722" y2="248" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="612" y="250" width="220" height="46" rx="10" fill="#37474f"/>
+  <text x="722" y="270" font-family="sans-serif" font-size="11" font-weight="bold" fill="#fff" text-anchor="middle">Portal LayoutAreaView</text>
+  <text x="722" y="286" font-family="sans-serif" font-size="10" fill="#b0bec5" text-anchor="middle">IMenuItemsProvider → PortalLayoutBase</text>
+</svg>
+
+*Reactive menu pipeline: multiple providers combine live into a permission-filtered, sorted menu pushed to the `$Menu` slot on every emission.*
+
 ---
 
 ## Default Menu Items

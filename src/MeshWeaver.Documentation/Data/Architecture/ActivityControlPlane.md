@@ -10,6 +10,35 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 In MeshWeaver, **every operation on an activity is a patch on the activity's content** — not a separate message type. The owning hub watches its own `MeshNodeReference` stream and reacts to property changes. This is the canonical pattern for any node type that has state-machine semantics: `Activity`, and any custom `NodeType` you build.
 
 If you find yourself reaching for `Cancel<X>Request`, `Pause<X>Request`, `Retry<X>Request`, or any verb-shaped message, **stop and use a property instead**.
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 260" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L8,3.5 L0,7 Z" fill="currentColor" fill-opacity=".55"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="760" height="260" rx="14" fill="#111827" opacity=".0"/>
+  <rect x="20" y="90" width="160" height="80" rx="10" fill="#1e3a5f" stroke="#1e88e5" stroke-width="1.5"/>
+  <text x="100" y="124" font-family="sans-serif" font-size="13" font-weight="600" fill="#90caf9" text-anchor="middle">User / UI / Agent</text>
+  <text x="100" y="143" font-family="sans-serif" font-size="11" fill="#90caf9" text-anchor="middle" opacity=".8">patches content</text>
+  <rect x="300" y="30" width="160" height="80" rx="10" fill="#1b3a1f" stroke="#43a047" stroke-width="1.5"/>
+  <text x="380" y="64" font-family="sans-serif" font-size="13" font-weight="600" fill="#a5d6a7" text-anchor="middle">Activity MeshNode</text>
+  <text x="380" y="83" font-family="sans-serif" font-size="11" fill="#a5d6a7" text-anchor="middle" opacity=".8">RequestedStatus = Cancelled</text>
+  <rect x="300" y="150" width="160" height="80" rx="10" fill="#3e2312" stroke="#f57c00" stroke-width="1.5"/>
+  <text x="380" y="184" font-family="sans-serif" font-size="13" font-weight="600" fill="#ffcc80" text-anchor="middle">Owning Hub</text>
+  <text x="380" y="203" font-family="sans-serif" font-size="11" fill="#ffcc80" text-anchor="middle" opacity=".8">WatchControlPlane reacts</text>
+  <rect x="580" y="90" width="160" height="80" rx="10" fill="#1e1b3a" stroke="#7c4dff" stroke-width="1.5"/>
+  <text x="660" y="124" font-family="sans-serif" font-size="13" font-weight="600" fill="#b39ddb" text-anchor="middle">Activity MeshNode</text>
+  <text x="660" y="143" font-family="sans-serif" font-size="11" fill="#b39ddb" text-anchor="middle" opacity=".8">Status = Cancelled</text>
+  <line x1="180" y1="130" x2="298" y2="80" stroke="#1e88e5" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr)"/>
+  <text x="232" y="93" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity=".55" text-anchor="middle">stream.Update</text>
+  <line x1="380" y1="110" x2="380" y2="148" stroke="#f57c00" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="393" y="135" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity=".55">owns stream</text>
+  <line x1="460" y1="190" x2="580" y2="145" stroke="#7c4dff" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="525" y="158" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity=".55" text-anchor="middle">writes Status</text>
+  <line x1="660" y1="90" x2="200" y2="130" stroke="currentColor" stroke-opacity=".25" stroke-width="1" stroke-dasharray="4,4" marker-end="url(#arr)"/>
+  <text x="440" y="103" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity=".40" text-anchor="middle">stream tick → observers</text>
+</svg>
+*Control plane flow: the caller patches `RequestedStatus`; the owning hub's `WatchControlPlane` reacts and writes `Status` back — no verb-shaped messages.*
 
 > ## 🚨 Absolute rule — long-running work belongs on its own hub
 >

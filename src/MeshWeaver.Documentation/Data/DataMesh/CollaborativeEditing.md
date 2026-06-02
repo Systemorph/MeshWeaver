@@ -10,6 +10,56 @@ Work together on documents in real time — comment on passages, propose edits a
 ---
 
 ## How It Works: Annotations as Satellite Entities
+<svg viewBox="0 0 760 340" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="currentColor" fill-opacity=".55"/>
+    </marker>
+  </defs>
+  <rect x="10" y="10" width="740" height="320" rx="12" fill="none" stroke="currentColor" stroke-opacity=".15" stroke-width="1"/>
+  <text x="380" y="32" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-size="11" font-weight="bold" letter-spacing="1">ANNOTATION ARCHITECTURE &amp; LOAD–EDIT–SAVE PIPELINE</text>
+  <rect x="300" y="48" width="160" height="56" rx="10" fill="#1e88e5"/>
+  <text x="380" y="72" text-anchor="middle" fill="#fff" font-weight="bold" font-size="13">Document Node</text>
+  <text x="380" y="91" text-anchor="middle" fill="#fff" font-size="11">(Markdown + inline markers)</text>
+  <line x1="200" y1="76" x2="298" y2="76" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="462" y1="76" x2="558" y2="76" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <rect x="40" y="48" width="160" height="56" rx="10" fill="#5c6bc0"/>
+  <text x="120" y="72" text-anchor="middle" fill="#fff" font-weight="bold" font-size="13">_Comment</text>
+  <text x="120" y="91" text-anchor="middle" fill="#fff" font-size="11">Comment satellite</text>
+  <rect x="560" y="48" width="160" height="56" rx="10" fill="#8e24aa"/>
+  <text x="640" y="72" text-anchor="middle" fill="#fff" font-weight="bold" font-size="13">_Tracking</text>
+  <text x="640" y="91" text-anchor="middle" fill="#fff" font-size="11">TrackedChange satellite</text>
+  <line x1="120" y1="104" x2="120" y2="144" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" stroke-dasharray="5,3"/>
+  <line x1="640" y1="104" x2="640" y2="144" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" stroke-dasharray="5,3"/>
+  <text x="120" y="138" text-anchor="middle" fill="currentColor" fill-opacity=".45" font-size="10">MarkerId links to marker</text>
+  <text x="640" y="138" text-anchor="middle" fill="currentColor" fill-opacity=".45" font-size="10">MarkerId links to marker</text>
+  <line x1="380" y1="104" x2="380" y2="164" stroke="currentColor" stroke-opacity=".35" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="395" y="138" fill="currentColor" fill-opacity=".45" font-size="10">pipeline</text>
+  <rect x="42" y="168" width="155" height="52" rx="8" fill="#26a69a"/>
+  <text x="120" y="190" text-anchor="middle" fill="#fff" font-weight="bold">1. Load</text>
+  <text x="120" y="208" text-anchor="middle" fill="#fff" font-size="11">Read markdown + markers</text>
+  <rect x="222" y="168" width="155" height="52" rx="8" fill="#43a047"/>
+  <text x="300" y="190" text-anchor="middle" fill="#fff" font-weight="bold">2. Separate</text>
+  <text x="300" y="208" text-anchor="middle" fill="#fff" font-size="11">Strip markers → clean text</text>
+  <rect x="402" y="168" width="155" height="52" rx="8" fill="#f57c00"/>
+  <text x="480" y="190" text-anchor="middle" fill="#fff" font-weight="bold">3. Edit</text>
+  <text x="480" y="208" text-anchor="middle" fill="#fff" font-size="11">User edits; overlays render</text>
+  <rect x="582" y="168" width="155" height="52" rx="8" fill="#e53935"/>
+  <text x="660" y="190" text-anchor="middle" fill="#fff" font-weight="bold">4. Save</text>
+  <text x="660" y="208" text-anchor="middle" fill="#fff" font-size="11">Shift positions + Reassemble</text>
+  <line x1="197" y1="194" x2="220" y2="194" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="377" y1="194" x2="400" y2="194" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="557" y1="194" x2="580" y2="194" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="120" y="254" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-size="11">storage</text>
+  <text x="300" y="254" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-size="11">AnnotationSyncService</text>
+  <text x="480" y="254" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-size="11">auto-save 500 ms throttle</text>
+  <text x="660" y="254" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-size="11">ComputePositionShifts()</text>
+  <line x1="660" y1="220" x2="660" y2="276" stroke="currentColor" stroke-opacity=".3" stroke-width="1.2" stroke-dasharray="4,3"/>
+  <line x1="660" y1="276" x2="42" y2="276" stroke="currentColor" stroke-opacity=".3" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+  <text x="380" y="293" text-anchor="middle" fill="currentColor" fill-opacity=".4" font-size="10">markers re-injected → saved back to Document Node</text>
+  <line x1="42" y1="276" x2="42" y2="220" stroke="currentColor" stroke-opacity=".3" stroke-width="1.2" stroke-dasharray="4,3"/>
+</svg>
+*Annotation satellite entities live beside the document; the four-step pipeline separates markers from editable text and reassembles them on save.*
 
 MeshWeaver stores annotations **beside** the document, not inside it. Every comment or tracked change is a satellite entity living in a dedicated partition next to the document node:
 

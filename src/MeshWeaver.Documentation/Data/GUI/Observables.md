@@ -6,6 +6,47 @@ Icon: /static/DocContent/GUI/Observables/icon.svg
 ---
 
 MeshWeaver draws a clean line between **static** views (rendered once and forgotten) and **dynamic** views (re-rendered every time an observable emits). Getting this distinction right is the foundation of an efficient, responsive UI.
+<svg viewBox="0 0 760 300" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="currentColor" fill-opacity="0.6"/>
+    </marker>
+    <marker id="arrow-blue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#1e88e5"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#43a047"/>
+    </marker>
+  </defs>
+  <text x="190" y="28" text-anchor="middle" fill="currentColor" fill-opacity="0.5" font-size="12" font-weight="bold" letter-spacing="1">STATIC VIEW</text>
+  <text x="570" y="28" text-anchor="middle" fill="currentColor" fill-opacity="0.5" font-size="12" font-weight="bold" letter-spacing="1">DYNAMIC VIEW</text>
+  <rect x="60" y="44" width="260" height="52" rx="10" fill="#5c6bc0"/>
+  <text x="190" y="65" text-anchor="middle" fill="#fff" font-weight="bold" font-size="13">Layout Area Loads</text>
+  <text x="190" y="84" text-anchor="middle" fill="#fff" fill-opacity="0.85" font-size="11">Controls computed once at render time</text>
+  <line x1="190" y1="96" x2="190" y2="126" stroke="#5c6bc0" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="60" y="126" width="260" height="52" rx="10" fill="#5c6bc0"/>
+  <text x="190" y="147" text-anchor="middle" fill="#fff" font-weight="bold" font-size="13">DOM Written Once</text>
+  <text x="190" y="166" text-anchor="middle" fill="#fff" fill-opacity="0.85" font-size="11">No subscription, no watcher registered</text>
+  <line x1="190" y1="178" x2="190" y2="208" stroke="#5c6bc0" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="60" y="208" width="260" height="52" rx="10" fill="#37474f"/>
+  <text x="190" y="229" text-anchor="middle" fill="#fff" font-weight="bold" font-size="13">Idle — never re-renders</text>
+  <text x="190" y="248" text-anchor="middle" fill="#fff" fill-opacity="0.7" font-size="11">Headers, labels, fixed buttons</text>
+  <rect x="440" y="44" width="260" height="52" rx="10" fill="#1e88e5"/>
+  <text x="570" y="65" text-anchor="middle" fill="#fff" font-weight="bold" font-size="13">Layout Area Mounts</text>
+  <text x="570" y="84" text-anchor="middle" fill="#fff" fill-opacity="0.85" font-size="11">Observable subscribed automatically</text>
+  <line x1="570" y1="96" x2="570" y2="126" stroke="#1e88e5" stroke-width="2" marker-end="url(#arrow-blue)"/>
+  <rect x="440" y="126" width="260" height="52" rx="10" fill="#f57c00"/>
+  <text x="570" y="147" text-anchor="middle" fill="#fff" font-weight="bold" font-size="13">Observable Emits</text>
+  <text x="570" y="166" text-anchor="middle" fill="#fff" fill-opacity="0.85" font-size="11">DistinctUntilChanged — skip no-ops</text>
+  <line x1="570" y1="178" x2="570" y2="208" stroke="#f57c00" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <rect x="440" y="208" width="260" height="52" rx="10" fill="#43a047"/>
+  <text x="570" y="229" text-anchor="middle" fill="#fff" font-weight="bold" font-size="13">Only That Area Re-renders</text>
+  <text x="570" y="248" text-anchor="middle" fill="#fff" fill-opacity="0.85" font-size="11">Rest of the page untouched</text>
+  <path d="M700 234 Q750 234 750 178 Q750 152 700 152" stroke="#43a047" stroke-width="1.5" stroke-dasharray="5,3" fill="none" marker-end="url(#arrow-green)"/>
+  <text x="756" y="197" text-anchor="middle" fill="#43a047" font-size="10" transform="rotate(-90,756,197)">next emit</text>
+  <line x1="320" y1="150" x2="440" y2="150" stroke="currentColor" stroke-opacity="0.2" stroke-width="1" stroke-dasharray="4,4"/>
+</svg>
+*Static views render once with no subscription overhead; dynamic views subscribe to an observable and surgically re-render only the affected area on each emission.*
 
 ---
 

@@ -15,6 +15,47 @@ MeshWeaver's NodeType system lets you define richly typed data models — comple
 
 Every NodeType lives in a folder under a namespace. Source code goes in `Source/` and xUnit tests in `Test/`. The JSON definition file sits at the same level as the folder it describes:
 
+<svg viewBox="0 0 760 300" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#90a4ae"/>
+    </marker>
+  </defs>
+  <rect x="20" y="20" width="160" height="260" rx="10" fill="#263238" stroke="#546e7a" stroke-width="1.5"/>
+  <text x="100" y="46" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#eceff1">Source/ Folder</text>
+  <rect x="34" y="58" width="132" height="30" rx="6" fill="#1e88e5"/>
+  <text x="100" y="78" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff">Content Record</text>
+  <rect x="34" y="98" width="132" height="30" rx="6" fill="#43a047"/>
+  <text x="100" y="118" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff">Reference Data</text>
+  <rect x="34" y="138" width="132" height="30" rx="6" fill="#f57c00"/>
+  <text x="100" y="158" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff">Layout Areas</text>
+  <rect x="34" y="178" width="132" height="30" rx="6" fill="#8e24aa"/>
+  <text x="100" y="198" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff">CSV Data Loader</text>
+  <rect x="34" y="218" width="132" height="30" rx="6" fill="#546e7a"/>
+  <text x="100" y="238" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff">Unit Tests</text>
+  <rect x="290" y="80" width="170" height="60" rx="10" fill="#37474f" stroke="#78909c" stroke-width="1.5"/>
+  <text x="375" y="106" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#eceff1">NodeType JSON</text>
+  <text x="375" y="126" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#b0bec5">Project.json</text>
+  <rect x="540" y="40" width="185" height="220" rx="10" fill="#1b2838" stroke="#546e7a" stroke-width="1.5"/>
+  <text x="632" y="68" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#eceff1">Runtime NodeType</text>
+  <rect x="555" y="78" width="155" height="26" rx="6" fill="#1e88e5"/>
+  <text x="632" y="96" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff">WithContentType&lt;T&gt;()</text>
+  <rect x="555" y="112" width="155" height="26" rx="6" fill="#43a047"/>
+  <text x="632" y="130" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff">AddData() + WithType&lt;T&gt;()</text>
+  <rect x="555" y="146" width="155" height="26" rx="6" fill="#f57c00"/>
+  <text x="632" y="164" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff">AddLayout() + Views</text>
+  <rect x="555" y="180" width="155" height="26" rx="6" fill="#8e24aa"/>
+  <text x="632" y="198" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff">WithInitialData(loader)</text>
+  <rect x="555" y="214" width="155" height="26" rx="6" fill="#26a69a"/>
+  <text x="632" y="232" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff">AddHubSource() (children)</text>
+  <line x1="180" y1="110" x2="285" y2="110" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="464" y1="110" x2="535" y2="110" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="220" y="103" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#b0bec5" fill-opacity="0.8">defines</text>
+  <text x="498" y="103" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#b0bec5" fill-opacity="0.8">wires</text>
+</svg>
+
+*Source files in `Source/` are compiled at startup; the JSON definition wires them into the running NodeType configuration.*
+
 ```
 samples/Graph/Data/
   ACME/

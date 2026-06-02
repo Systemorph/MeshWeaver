@@ -7,6 +7,52 @@ Icon: /static/DocContent/DataMesh/QuerySyntax/icon.svg
 
 MeshWeaver uses a GitHub-style query syntax — space-separated terms that combine field filters, text search, and structural qualifiers — to find, filter, and navigate nodes across the mesh.
 
+<svg viewBox="0 0 760 220" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L8,3.5 L0,7 Z" fill="currentColor" fill-opacity="0.55"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="760" height="220" rx="12" fill="none"/>
+  <text x="380" y="22" text-anchor="middle" font-size="14" font-weight="bold" fill="currentColor" fill-opacity="0.8">Query Term Building Blocks</text>
+  <rect x="20" y="40" width="140" height="54" rx="10" fill="#1e88e5"/>
+  <text x="90" y="63" text-anchor="middle" fill="#fff" font-weight="bold">Field Filter</text>
+  <text x="90" y="81" text-anchor="middle" fill="#fff" font-size="11">nodeType:Organization</text>
+  <rect x="20" y="112" width="140" height="54" rx="10" fill="#e53935"/>
+  <text x="90" y="135" text-anchor="middle" fill="#fff" font-weight="bold">Negation</text>
+  <text x="90" y="153" text-anchor="middle" fill="#fff" font-size="11">-status:Archived</text>
+  <rect x="200" y="40" width="140" height="54" rx="10" fill="#f57c00"/>
+  <text x="270" y="63" text-anchor="middle" fill="#fff" font-weight="bold">Wildcard / OR</text>
+  <text x="270" y="81" text-anchor="middle" fill="#fff" font-size="11">name:Acme*  |  a|b|c</text>
+  <rect x="200" y="112" width="140" height="54" rx="10" fill="#8e24aa"/>
+  <text x="270" y="135" text-anchor="middle" fill="#fff" font-weight="bold">Scope</text>
+  <text x="270" y="153" text-anchor="middle" fill="#fff" font-size="11">namespace:X scope:desc</text>
+  <rect x="380" y="40" width="140" height="54" rx="10" fill="#26a69a"/>
+  <text x="450" y="63" text-anchor="middle" fill="#fff" font-weight="bold">Sort / Limit</text>
+  <text x="450" y="81" text-anchor="middle" fill="#fff" font-size="11">sort:name-desc limit:10</text>
+  <rect x="380" y="112" width="140" height="54" rx="10" fill="#5c6bc0"/>
+  <text x="450" y="135" text-anchor="middle" fill="#fff" font-weight="bold">Text Search</text>
+  <text x="450" y="153" text-anchor="middle" fill="#fff" font-size="11">quarterly report</text>
+  <rect x="560" y="40" width="140" height="54" rx="10" fill="#43a047"/>
+  <text x="630" y="63" text-anchor="middle" fill="#fff" font-weight="bold">Projection</text>
+  <text x="630" y="81" text-anchor="middle" fill="#fff" font-size="11">select:name,nodeType</text>
+  <rect x="560" y="112" width="140" height="54" rx="10" fill="#0097a7"/>
+  <text x="630" y="135" text-anchor="middle" fill="#fff" font-weight="bold">Source</text>
+  <text x="630" y="153" text-anchor="middle" fill="#fff" font-size="11">source:activity</text>
+  <line x1="90" y1="94" x2="90" y2="112" stroke="currentColor" stroke-opacity="0.4" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="270" y1="94" x2="270" y2="112" stroke="currentColor" stroke-opacity="0.4" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="450" y1="94" x2="450" y2="112" stroke="currentColor" stroke-opacity="0.4" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="630" y1="94" x2="630" y2="112" stroke="currentColor" stroke-opacity="0.4" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="160" y1="139" x2="304" y2="175" stroke="currentColor" stroke-opacity="0.3" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="340" y1="139" x2="313" y2="175" stroke="currentColor" stroke-opacity="0.3" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="520" y1="139" x2="430" y2="175" stroke="currentColor" stroke-opacity="0.3" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="700" y1="139" x2="456" y2="175" stroke="currentColor" stroke-opacity="0.3" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="270" y="172" width="220" height="38" rx="10" fill="#37474f" stroke="currentColor" stroke-opacity="0.3" stroke-width="1"/>
+  <text x="380" y="195" text-anchor="middle" fill="#fff" font-size="13" font-weight="bold">Filtered Node Results</text>
+</svg>
+
+*All term types are space-separated and composable — each additional term narrows the result set.*
+
 ---
 
 ## Basic Syntax

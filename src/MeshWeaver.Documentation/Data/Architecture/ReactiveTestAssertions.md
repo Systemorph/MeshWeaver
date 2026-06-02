@@ -13,6 +13,63 @@ All test assertions flow through `MeshWeaver.Reactive.Assertions`, a FluentAsser
 
 For the surrounding test-writing rules, see [Writing Tests](WritingTests).
 
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 310" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="currentColor" fill-opacity=".6"/>
+    </marker>
+    <marker id="arr-red" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#e53935"/>
+    </marker>
+    <marker id="arr-grn" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#43a047"/>
+    </marker>
+  </defs>
+  <text x="380" y="24" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="currentColor" fill-opacity=".85">Blocking Reactive Assertion — Safe vs. Deadlock</text>
+  <rect x="10" y="44" width="740" height="118" rx="10" fill="none" stroke="#43a047" stroke-width="1.5" stroke-opacity=".45"/>
+  <text x="20" y="62" font-family="sans-serif" font-size="11" fill="#43a047" fill-opacity=".9" font-weight="bold">✓  void test method (safe)</text>
+  <rect x="30" y="72" width="130" height="38" rx="8" fill="#1e88e5"/>
+  <text x="95" y="87" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" font-weight="bold">void Test()</text>
+  <text x="95" y="101" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#fff">xUnit thread pool</text>
+  <line x1="160" y1="91" x2="208" y2="91" stroke="#43a047" stroke-width="1.5" marker-end="url(#arr-grn)"/>
+  <rect x="210" y="72" width="160" height="38" rx="8" fill="#5c6bc0"/>
+  <text x="290" y="87" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" font-weight="bold">.Should().Match(…)</text>
+  <text x="290" y="101" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#fff">Subscribe + ManualResetEvent</text>
+  <line x1="370" y1="91" x2="418" y2="91" stroke="#43a047" stroke-width="1.5" marker-end="url(#arr-grn)"/>
+  <rect x="420" y="72" width="150" height="38" rx="8" fill="#26a69a"/>
+  <text x="495" y="87" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" font-weight="bold">Hub delivers emission</text>
+  <text x="495" y="101" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#fff">on its action block</text>
+  <line x1="570" y1="91" x2="618" y2="91" stroke="#43a047" stroke-width="1.5" marker-end="url(#arr-grn)"/>
+  <rect x="620" y="72" width="118" height="38" rx="8" fill="#43a047"/>
+  <text x="679" y="87" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" font-weight="bold">Event set →</text>
+  <text x="679" y="101" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#fff">assertion passes</text>
+  <rect x="210" y="118" width="160" height="22" rx="6" fill="none" stroke="#43a047" stroke-width="1" stroke-opacity=".5" stroke-dasharray="4,3"/>
+  <text x="290" y="133" text-anchor="middle" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity=".65">blocks caller thread only</text>
+  <rect x="10" y="176" width="740" height="118" rx="10" fill="none" stroke="#e53935" stroke-width="1.5" stroke-opacity=".45"/>
+  <text x="20" y="194" font-family="sans-serif" font-size="11" fill="#e53935" fill-opacity=".9" font-weight="bold">✗  async Task method (deadlock)</text>
+  <rect x="30" y="204" width="130" height="38" rx="8" fill="#e53935"/>
+  <text x="95" y="219" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" font-weight="bold">async Task Test()</text>
+  <text x="95" y="233" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#fff">xUnit SynchronizationContext</text>
+  <line x1="160" y1="223" x2="208" y2="223" stroke="#e53935" stroke-width="1.5" marker-end="url(#arr-red)"/>
+  <rect x="210" y="204" width="160" height="38" rx="8" fill="#5c6bc0"/>
+  <text x="290" y="219" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" font-weight="bold">.Should().Match(…)</text>
+  <text x="290" y="233" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#fff">blocks the SyncContext thread</text>
+  <line x1="370" y1="223" x2="418" y2="223" stroke="#e53935" stroke-width="1.5" marker-end="url(#arr-red)"/>
+  <rect x="420" y="204" width="150" height="38" rx="8" fill="#8e24aa"/>
+  <text x="495" y="219" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" font-weight="bold">Hub continuation</text>
+  <text x="495" y="233" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#fff">queued on same context</text>
+  <line x1="570" y1="223" x2="618" y2="223" stroke="#e53935" stroke-width="1.5" marker-end="url(#arr-red)"/>
+  <rect x="620" y="204" width="118" height="38" rx="8" fill="#e53935"/>
+  <text x="679" y="219" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" font-weight="bold">DEADLOCK →</text>
+  <text x="679" y="233" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#fff">timeout</text>
+  <rect x="210" y="249" width="160" height="22" rx="6" fill="none" stroke="#e53935" stroke-width="1" stroke-opacity=".5" stroke-dasharray="4,3"/>
+  <text x="290" y="264" text-anchor="middle" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity=".65">context blocked, can't deliver</text>
+  <path d="M570 223 Q600 286 210 270 Q185 270 185 249" fill="none" stroke="#e53935" stroke-width="1.5" stroke-dasharray="5,3" stroke-opacity=".6" marker-end="url(#arr-red)"/>
+  <text x="390" y="302" text-anchor="middle" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity=".5" font-style="italic">hub queues behind the blocked context — emission never arrives</text>
+</svg>
+
+*Blocking assertions are safe only in `void` test methods: the hub delivers on its own action block while the test thread waits on `ManualResetEventSlim`. An `async Task` method captures xUnit's `SynchronizationContext` — the hub continuation queues behind the blocked context, causing a deadlock.*
+
 ---
 
 ## 1. The Observable Assertion Surface

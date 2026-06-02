@@ -11,6 +11,63 @@ MeshWeaver's storage layer routes reads and writes across multiple backends with
 
 This document explains how that routing works and how to implement the two contracts correctly.
 
+<svg viewBox="0 0 760 340" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+<defs>
+<marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+<path d="M0,0 L0,6 L8,3 z" fill="#90a4ae"/>
+</marker>
+<marker id="arr-ok" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+<path d="M0,0 L0,6 L8,3 z" fill="#43a047"/>
+</marker>
+<marker id="arr-null" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+<path d="M0,0 L0,6 L8,3 z" fill="#ef5350"/>
+</marker>
+</defs>
+<rect x="290" y="10" width="180" height="44" rx="10" fill="#1e88e5"/>
+<text x="380" y="37" text-anchor="middle" fill="#fff" font-weight="bold">PersistenceService</text>
+<text x="380" y="52" text-anchor="middle" fill="#fff" font-size="11">Read / Write / Delete / Fan-out</text>
+<line x1="380" y1="54" x2="380" y2="80" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+<rect x="60" y="80" width="150" height="40" rx="8" fill="#5c6bc0"/>
+<text x="135" y="105" text-anchor="middle" fill="#fff">Adapter 1</text>
+<rect x="305" y="80" width="150" height="40" rx="8" fill="#5c6bc0"/>
+<text x="380" y="105" text-anchor="middle" fill="#fff">Adapter 2</text>
+<rect x="550" y="80" width="150" height="40" rx="8" fill="#5c6bc0"/>
+<text x="625" y="105" text-anchor="middle" fill="#fff">Adapter N</text>
+<text x="258" y="103" text-anchor="middle" fill="currentColor" fill-opacity=".55" font-size="11">→ try</text>
+<text x="503" y="103" text-anchor="middle" fill="currentColor" fill-opacity=".55" font-size="11">→ try</text>
+<line x1="305" y1="100" x2="210" y2="100" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+<line x1="455" y1="100" x2="550" y2="100" stroke="#90a4ae" stroke-width="1.5" stroke-dasharray="5,3"/>
+<line x1="380" y1="80" x2="380" y2="80" stroke="#90a4ae" stroke-width="1.5"/>
+<line x1="135" y1="120" x2="135" y2="170" stroke="#43a047" stroke-width="1.5" marker-end="url(#arr-ok)"/>
+<text x="148" y="153" fill="#43a047" font-size="11">node (owned)</text>
+<line x1="380" y1="120" x2="380" y2="170" stroke="#ef5350" stroke-width="1.5" marker-end="url(#arr-null)"/>
+<text x="393" y="153" fill="#ef5350" font-size="11">null → skip</text>
+<line x1="625" y1="120" x2="625" y2="170" stroke="#ef5350" stroke-width="1.5" marker-end="url(#arr-null)"/>
+<text x="638" y="153" fill="#ef5350" font-size="11">null → error</text>
+<rect x="60" y="170" width="150" height="40" rx="8" fill="#43a047"/>
+<text x="135" y="195" text-anchor="middle" fill="#fff">Result returned</text>
+<rect x="305" y="170" width="150" height="40" rx="8" fill="#5c6bc0" fill-opacity=".35"/>
+<text x="380" y="190" text-anchor="middle" fill="currentColor" fill-opacity=".7">Adapter 2 not</text>
+<text x="380" y="206" text-anchor="middle" fill="currentColor" fill-opacity=".7">reached</text>
+<rect x="550" y="170" width="150" height="40" rx="8" fill="#e53935"/>
+<text x="625" y="195" text-anchor="middle" fill="#fff">"could not save"</text>
+<line x1="280" y1="80" x2="220" y2="100" stroke="none"/>
+<rect x="60" y="260" width="155" height="60" rx="8" fill="#26a69a" fill-opacity=".25" stroke="#26a69a" stroke-width="1.2"/>
+<text x="137" y="282" text-anchor="middle" fill="#26a69a" font-weight="bold" font-size="12">READ / WRITE</text>
+<text x="137" y="298" text-anchor="middle" fill="currentColor" fill-opacity=".7" font-size="11">Sequential (Concat)</text>
+<text x="137" y="312" text-anchor="middle" fill="currentColor" fill-opacity=".7" font-size="11">First non-null wins</text>
+<rect x="300" y="260" width="155" height="60" rx="8" fill="#f57c00" fill-opacity=".2" stroke="#f57c00" stroke-width="1.2"/>
+<text x="377" y="282" text-anchor="middle" fill="#f57c00" font-weight="bold" font-size="12">EXISTS / LIST</text>
+<text x="377" y="298" text-anchor="middle" fill="currentColor" fill-opacity=".7" font-size="11">Fan-out (all adapters)</text>
+<text x="377" y="312" text-anchor="middle" fill="currentColor" fill-opacity=".7" font-size="11">Results aggregated</text>
+<rect x="540" y="260" width="175" height="60" rx="8" fill="#8e24aa" fill-opacity=".2" stroke="#8e24aa" stroke-width="1.2"/>
+<text x="627" y="282" text-anchor="middle" fill="#8e24aa" font-weight="bold" font-size="12">READ-ONLY providers</text>
+<text x="627" y="298" text-anchor="middle" fill="currentColor" fill-opacity=".7" font-size="11">Skipped on Write</text>
+<text x="627" y="312" text-anchor="middle" fill="currentColor" fill-opacity=".7" font-size="11">IsReadOnly = true</text>
+</svg>
+
+*PersistenceService dispatches via try-then-claim for reads/writes (first non-null wins) and fans out across all adapters for existence/listing queries.*
+
 ---
 
 ## How Routing Works

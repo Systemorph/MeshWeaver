@@ -74,6 +74,62 @@ sequenceDiagram
 
 > **The baton is never absent during a piece's execution.** Application code can trust `AccessService.Context` to reflect the originating user — that's the whole point.
 
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 210" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L0,7 L8,3.5 z" fill="#90a4ae"/>
+    </marker>
+  </defs>
+  <rect width="760" height="210" rx="12" fill="#1a1f2e"/>
+  <text x="380" y="22" font-family="sans-serif" font-size="12" font-weight="bold" fill="#cfd8dc" text-anchor="middle" letter-spacing="1">IDENTITY BATON — 6-PHASE PROPAGATION</text>
+  <rect x="18" y="36" width="100" height="54" rx="8" fill="#1565c0"/>
+  <text x="68" y="58" font-family="sans-serif" font-size="11" font-weight="bold" fill="#fff" text-anchor="middle">Phase 1</text>
+  <text x="68" y="73" font-family="sans-serif" font-size="9.5" fill="#bbdefb" text-anchor="middle">Auth Middleware</text>
+  <text x="68" y="85" font-family="sans-serif" font-size="9" fill="#90caf9" text-anchor="middle">sets AsyncLocal</text>
+  <rect x="148" y="36" width="100" height="54" rx="8" fill="#283593"/>
+  <text x="198" y="58" font-family="sans-serif" font-size="11" font-weight="bold" fill="#fff" text-anchor="middle">Phase 2</text>
+  <text x="198" y="73" font-family="sans-serif" font-size="9.5" fill="#c5cae9" text-anchor="middle">PostPipeline</text>
+  <text x="198" y="85" font-family="sans-serif" font-size="9" fill="#9fa8da" text-anchor="middle">AsyncLocal→delivery</text>
+  <rect x="278" y="36" width="100" height="54" rx="8" fill="#4527a0"/>
+  <text x="328" y="58" font-family="sans-serif" font-size="11" font-weight="bold" fill="#fff" text-anchor="middle">Phase 3</text>
+  <text x="328" y="73" font-family="sans-serif" font-size="9.5" fill="#d1c4e9" text-anchor="middle">In-flight delivery</text>
+  <text x="328" y="85" font-family="sans-serif" font-size="9" fill="#b39ddb" text-anchor="middle">baton on message</text>
+  <rect x="408" y="36" width="100" height="54" rx="8" fill="#006064"/>
+  <text x="458" y="58" font-family="sans-serif" font-size="11" font-weight="bold" fill="#fff" text-anchor="middle">Phase 4</text>
+  <text x="458" y="73" font-family="sans-serif" font-size="9.5" fill="#b2ebf2" text-anchor="middle">Receiver dispatch</text>
+  <text x="458" y="85" font-family="sans-serif" font-size="9" fill="#80deea" text-anchor="middle">delivery→AsyncLocal</text>
+  <rect x="538" y="36" width="100" height="54" rx="8" fill="#1b5e20"/>
+  <text x="588" y="58" font-family="sans-serif" font-size="11" font-weight="bold" fill="#fff" text-anchor="middle">Phase 5</text>
+  <text x="588" y="73" font-family="sans-serif" font-size="9.5" fill="#c8e6c9" text-anchor="middle">Handler body</text>
+  <text x="588" y="85" font-family="sans-serif" font-size="9" fill="#a5d6a7" text-anchor="middle">runs under user</text>
+  <rect x="668" y="36" width="74" height="54" rx="8" fill="#e65100"/>
+  <text x="705" y="58" font-family="sans-serif" font-size="11" font-weight="bold" fill="#fff" text-anchor="middle">Phase 6</text>
+  <text x="705" y="73" font-family="sans-serif" font-size="9.5" fill="#ffe0b2" text-anchor="middle">Post / Rx</text>
+  <text x="705" y="85" font-family="sans-serif" font-size="9" fill="#ffcc80" text-anchor="middle">→ Phase 2 again</text>
+  <line x1="118" y1="63" x2="146" y2="63" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="248" y1="63" x2="276" y2="63" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="378" y1="63" x2="406" y2="63" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="508" y1="63" x2="536" y2="63" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="638" y1="63" x2="666" y2="63" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <path d="M705,90 L705,170 L198,170 L198,92" stroke="#e65100" stroke-width="1.5" fill="none" stroke-dasharray="5,3" marker-end="url(#arr)"/>
+  <text x="452" y="186" font-family="sans-serif" font-size="9" fill="#e65100" text-anchor="middle">loop: handler posts again → baton continues</text>
+  <rect x="18" y="115" width="724" height="38" rx="6" fill="none" stroke="#37474f" stroke-width="1" stroke-dasharray="4,3"/>
+  <text x="68" y="129" font-family="sans-serif" font-size="8.5" fill="#546e7a" text-anchor="middle">Blazor/API</text>
+  <text x="68" y="141" font-family="sans-serif" font-size="8.5" fill="#546e7a" text-anchor="middle">circuit entry</text>
+  <text x="198" y="129" font-family="sans-serif" font-size="8.5" fill="#546e7a" text-anchor="middle">hub.Post /</text>
+  <text x="198" y="141" font-family="sans-serif" font-size="8.5" fill="#546e7a" text-anchor="middle">meshService.*</text>
+  <text x="328" y="129" font-family="sans-serif" font-size="8.5" fill="#546e7a" text-anchor="middle">ActionBlock /</text>
+  <text x="328" y="141" font-family="sans-serif" font-size="8.5" fill="#546e7a" text-anchor="middle">grain / network</text>
+  <text x="458" y="129" font-family="sans-serif" font-size="8.5" fill="#546e7a" text-anchor="middle">NotifyAsync /</text>
+  <text x="458" y="141" font-family="sans-serif" font-size="8.5" fill="#546e7a" text-anchor="middle">HandleMessageAsync</text>
+  <text x="588" y="129" font-family="sans-serif" font-size="8.5" fill="#546e7a" text-anchor="middle">AccessService</text>
+  <text x="588" y="141" font-family="sans-serif" font-size="8.5" fill="#546e7a" text-anchor="middle">.Context = user</text>
+  <text x="705" y="129" font-family="sans-serif" font-size="8.5" fill="#546e7a" text-anchor="middle">CarryAccessContext</text>
+  <text x="705" y="141" font-family="sans-serif" font-size="8.5" fill="#546e7a" text-anchor="middle">wraps Rx hop</text>
+</svg>
+
+*The identity baton travels through six phases; Phase 6 loops back to Phase 2 whenever the handler posts further messages or starts reactive chains.*
+
 ---
 
 ## Security guarantees

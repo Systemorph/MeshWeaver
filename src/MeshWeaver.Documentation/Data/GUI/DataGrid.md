@@ -8,6 +8,51 @@ Icon: /static/DocContent/GUI/DataGrid/icon.svg
 `DataGridControl` renders any collection as a tabular layout with sortable, resizable columns. It supports pagination, virtual scrolling for large datasets, custom cell templates, and column-level formatting — all wired up with a fluent builder API.
 
 ---
+<svg viewBox="0 0 760 320" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="currentColor" fill-opacity=".55"/>
+    </marker>
+  </defs>
+  <rect x="1" y="1" width="758" height="318" rx="12" fill="none" stroke="currentColor" stroke-opacity=".15" stroke-width="1.5"/>
+  <rect x="24" y="20" width="712" height="52" rx="10" fill="#1e88e5"/>
+  <text x="380" y="40" text-anchor="middle" fill="#fff" font-size="14" font-weight="600">DataGridControl</text>
+  <text x="380" y="58" text-anchor="middle" fill="#bbdefb" font-size="11">collection data · sortable · resizable · pagination · virtual scrolling</text>
+  <line x1="156" y1="72" x2="156" y2="112" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="380" y1="72" x2="380" y2="112" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="604" y1="72" x2="604" y2="112" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="60" y="112" width="192" height="64" rx="10" fill="#43a047"/>
+  <text x="156" y="133" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">PropertyColumnControl</text>
+  <text x="156" y="150" text-anchor="middle" fill="#c8e6c9" font-size="11">type-safe · sortable</text>
+  <text x="156" y="166" text-anchor="middle" fill="#c8e6c9" font-size="11">format strings · editable</text>
+  <rect x="284" y="112" width="192" height="64" rx="10" fill="#8e24aa"/>
+  <text x="380" y="133" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">TemplateColumnControl</text>
+  <text x="380" y="150" text-anchor="middle" fill="#e1bee7" font-size="11">any UiControl per cell</text>
+  <text x="380" y="166" text-anchor="middle" fill="#e1bee7" font-size="11">buttons · badges · links</text>
+  <rect x="508" y="112" width="192" height="64" rx="10" fill="#5c6bc0"/>
+  <text x="604" y="133" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">Column Options</text>
+  <text x="604" y="150" text-anchor="middle" fill="#c5cae9" font-size="11">width · align · frozen</text>
+  <text x="604" y="166" text-anchor="middle" fill="#c5cae9" font-size="11">visible · filterable</text>
+  <line x1="380" y1="176" x2="380" y2="208" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="24" y="208" width="712" height="90" rx="10" fill="none" stroke="currentColor" stroke-opacity=".2" stroke-width="1.5"/>
+  <text x="380" y="228" text-anchor="middle" fill="currentColor" fill-opacity=".7" font-size="12" font-weight="600">Rendering Modes</text>
+  <rect x="44" y="238" width="148" height="44" rx="8" fill="#f57c00"/>
+  <text x="118" y="256" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">Pagination</text>
+  <text x="118" y="273" text-anchor="middle" fill="#ffe0b2" font-size="11">items per page · nav</text>
+  <rect x="208" y="238" width="148" height="44" rx="8" fill="#26a69a"/>
+  <text x="282" y="256" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">Virtual Scrolling</text>
+  <text x="282" y="273" text-anchor="middle" fill="#b2dfdb" font-size="11">windowed · fixed row height</text>
+  <rect x="372" y="238" width="148" height="44" rx="8" fill="#e53935"/>
+  <text x="446" y="256" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">Sorting &amp; Hover</text>
+  <text x="446" y="273" text-anchor="middle" fill="#ffcdd2" font-size="11">default sort col · highlight</text>
+  <rect x="536" y="238" width="180" height="44" rx="8" fill="#5c6bc0"/>
+  <text x="626" y="256" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">Empty / Loading</text>
+  <text x="626" y="273" text-anchor="middle" fill="#c5cae9" font-size="11">skeleton · empty content</text>
+</svg>
+
+*DataGridControl anatomy: column types and rendering mode options.*
+
+---
 
 # Basic Usage
 

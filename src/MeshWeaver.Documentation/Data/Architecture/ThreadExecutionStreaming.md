@@ -28,6 +28,34 @@ The writer, the layout area, and the Blazor view all touch the **same** per-mess
 
 ## Data flow
 
+<svg viewBox="0 0 760 220" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="currentColor" fill-opacity=".6"/>
+    </marker>
+  </defs>
+  <rect x="20" y="70" width="160" height="80" rx="10" fill="#1565c0"/>
+  <text x="100" y="104" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff">_Exec Hub</text>
+  <text x="100" y="122" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#bbdefb">(AI execution)</text>
+  <text x="100" y="139" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#90caf9">responseStream.Update()</text>
+  <rect x="290" y="70" width="180" height="80" rx="10" fill="#00695c"/>
+  <text x="380" y="100" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff">Owning Per-Node Hub</text>
+  <text x="380" y="118" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#b2dfdb">validates · persists</text>
+  <text x="380" y="135" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#b2dfdb">broadcasts patches</text>
+  <rect x="570" y="70" width="160" height="80" rx="10" fill="#6a1b9a"/>
+  <text x="650" y="104" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff">Blazor View</text>
+  <text x="650" y="122" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#e1bee7">GetRemoteStream</text>
+  <text x="650" y="139" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#ce93d8">re-renders on emit</text>
+  <line x1="180" y1="110" x2="288" y2="110" stroke="currentColor" stroke-opacity=".55" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="234" y="103" text-anchor="middle" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity=".65">RFC 7396 patch</text>
+  <line x1="470" y1="110" x2="568" y2="110" stroke="currentColor" stroke-opacity=".55" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="519" y="103" text-anchor="middle" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity=".65">sync broadcast</text>
+  <rect x="270" y="180" width="220" height="26" rx="6" fill="none" stroke="currentColor" stroke-opacity=".25" stroke-dasharray="4,3"/>
+  <text x="380" y="197" text-anchor="middle" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity=".55">layout area returns NodePath-bound control only</text>
+</svg>
+
+*Single source of truth: writer pushes deltas, owning hub serialises and broadcasts, Blazor view re-renders — no republishing.*
+
 ```
 _Exec hub ──responseStream.Update(...)──► owning per-node hub
                                               │

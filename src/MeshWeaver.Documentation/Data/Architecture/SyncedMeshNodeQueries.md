@@ -47,6 +47,70 @@ collection.Subscribe(snapshot =>
 | **Delete fast-path** | Deletes published via `IMeshChangeFeed` bypass the per-provider debounce and update the synced collection synchronously. Without this, cache-driven queries can stay stale after a delete for several seconds. |
 
 ---
+<svg viewBox="0 0 760 340" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L0,7 L8,3.5 Z" fill="#90a4ae"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="760" height="340" rx="12" fill="#1a1a2e" opacity="0.0"/>
+  <rect x="20" y="20" width="160" height="44" rx="10" fill="#1565c0"/>
+  <text x="100" y="39" text-anchor="middle" fill="#fff" font-weight="bold">workspace</text>
+  <text x="100" y="57" text-anchor="middle" fill="#cfd8dc" font-size="11">.GetQuery(id, queries…)</text>
+  <rect x="220" y="10" width="150" height="36" rx="8" fill="#283593"/>
+  <text x="295" y="24" text-anchor="middle" fill="#fff" font-weight="bold" font-size="12">Per-workspace cache</text>
+  <text x="295" y="40" text-anchor="middle" fill="#b0bec5" font-size="11">Replay(1).RefCount()</text>
+  <rect x="220" y="58" width="150" height="26" rx="8" fill="#283593"/>
+  <text x="295" y="75" text-anchor="middle" fill="#b0bec5" font-size="11">key → same IObservable</text>
+  <line x1="180" y1="42" x2="218" y2="42" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="410" y="10" width="150" height="36" rx="8" fill="#1b5e20"/>
+  <text x="485" y="24" text-anchor="middle" fill="#fff" font-weight="bold" font-size="12">StaticNodeQueryProvider</text>
+  <text x="485" y="40" text-anchor="middle" fill="#a5d6a7" font-size="11">Agents, Models, Docs…</text>
+  <rect x="410" y="58" width="150" height="36" rx="8" fill="#1b5e20"/>
+  <text x="485" y="72" text-anchor="middle" fill="#fff" font-weight="bold" font-size="12">PersistenceQueryProvider</text>
+  <text x="485" y="88" text-anchor="middle" fill="#a5d6a7" font-size="11">Postgres / In-Memory</text>
+  <rect x="410" y="106" width="150" height="36" rx="8" fill="#1b5e20"/>
+  <text x="485" y="120" text-anchor="middle" fill="#fff" font-weight="bold" font-size="12">…other providers</text>
+  <text x="485" y="136" text-anchor="middle" fill="#a5d6a7" font-size="11">IMeshQueryProvider [ ]</text>
+  <line x1="372" y1="42" x2="408" y2="28" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="372" y1="42" x2="408" y2="76" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="372" y1="42" x2="408" y2="124" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="600" y="10" width="145" height="36" rx="8" fill="#4a148c"/>
+  <text x="672" y="24" text-anchor="middle" fill="#fff" font-weight="bold" font-size="12">All-Initial gate</text>
+  <text x="672" y="40" text-anchor="middle" fill="#ce93d8" font-size="11">emit only when all ready</text>
+  <rect x="600" y="58" width="145" height="36" rx="8" fill="#4a148c"/>
+  <text x="672" y="72" text-anchor="middle" fill="#fff" font-weight="bold" font-size="12">Path-keyed dedup</text>
+  <text x="672" y="88" text-anchor="middle" fill="#ce93d8" font-size="11">1 node per MeshNode.Path</text>
+  <rect x="600" y="106" width="145" height="36" rx="8" fill="#4a148c"/>
+  <text x="672" y="120" text-anchor="middle" fill="#fff" font-weight="bold" font-size="12">Delete fast-path</text>
+  <text x="672" y="136" text-anchor="middle" fill="#ce93d8" font-size="11">sync on IMeshChangeFeed</text>
+  <line x1="562" y1="28" x2="598" y2="28" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="562" y1="76" x2="598" y2="76" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="562" y1="124" x2="598" y2="124" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="220" y="185" width="490" height="50" rx="10" fill="#b71c1c"/>
+  <text x="465" y="206" text-anchor="middle" fill="#fff" font-weight="bold" font-size="13">IObservable&lt;IEnumerable&lt;MeshNode&gt;&gt;</text>
+  <text x="465" y="226" text-anchor="middle" fill="#ffcdd2" font-size="11">complete snapshot on every change — no deltas, no merging in subscriber</text>
+  <line x1="672" y1="144" x2="672" y2="184" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="295" y1="86" x2="295" y2="184" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="20" y="260" width="220" height="60" rx="10" fill="#1565c0" opacity="0.75"/>
+  <text x="130" y="280" text-anchor="middle" fill="#fff" font-size="12">Subscriber A</text>
+  <text x="130" y="298" text-anchor="middle" fill="#b0bec5" font-size="11">UI dropdown / picker</text>
+  <text x="130" y="314" text-anchor="middle" fill="#b0bec5" font-size="11">replays cached snapshot</text>
+  <rect x="270" y="260" width="220" height="60" rx="10" fill="#1565c0" opacity="0.75"/>
+  <text x="380" y="280" text-anchor="middle" fill="#fff" font-size="12">Subscriber B</text>
+  <text x="380" y="298" text-anchor="middle" fill="#b0bec5" font-size="11">derived synced collection</text>
+  <text x="380" y="314" text-anchor="middle" fill="#b0bec5" font-size="11">same upstream — no extra wave</text>
+  <rect x="520" y="260" width="220" height="60" rx="10" fill="#1565c0" opacity="0.75"/>
+  <text x="630" y="280" text-anchor="middle" fill="#fff" font-size="12">Subscriber C</text>
+  <text x="630" y="298" text-anchor="middle" fill="#b0bec5" font-size="11">security / settings tab</text>
+  <text x="630" y="314" text-anchor="middle" fill="#b0bec5" font-size="11">no refresh counter needed</text>
+  <line x1="350" y1="237" x2="130" y2="258" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="465" y1="237" x2="380" y2="258" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="580" y1="237" x2="630" y2="258" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+</svg>
+*`workspace.GetQuery` fans out across all `IMeshQueryProvider` implementations, gates on every Initial event, deduplicates by path, and multicasts a complete snapshot to all subscribers via a single shared upstream.*
+
+---
 
 ## When to use it
 
