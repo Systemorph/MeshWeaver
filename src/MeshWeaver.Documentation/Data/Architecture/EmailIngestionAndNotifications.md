@@ -72,10 +72,13 @@ Key properties:
 
 ## 2. Ingest channels (extensible transport)
 
-Email is the first ingest channel; the pipeline below the transport is transport-agnostic
-(*inbound message → find-or-create thread → agent → reply*). Adding **Teams** means adding a transport
-adapter (a bot messaging endpoint / Graph Teams subscription) that produces the same `InboundMessage`
-shape and reuses `EmailInboundProcessor`'s find-or-create-thread core — not a second pipeline.
+The pipeline below the transport is transport-agnostic (*inbound message → find-or-create thread → agent
+→ reply*), so each channel is just an adapter onto it — not a second pipeline:
+
+- **Email** (this doc) — Graph mailbox subscription → `EmailInboundProcessor`.
+- **Teams** — a Bot Framework messaging endpoint → `TeamsInboundProcessor`, with the agent's reply read
+  back via the shared `ThreadFlow.ObserveResponses` and posted into the chat. See
+  **[TeamsBot.md](../AI/TeamsBot.md)** for setup (Azure Bot + Teams app), config, and security.
 
 ---
 
