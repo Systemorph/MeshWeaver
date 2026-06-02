@@ -72,15 +72,14 @@
 
         IObservable<IReadOnlyList<QuerySuggestion>> source = Options.Queries is { Length: > 0 }
             ? QueryAutocompleteHelper.LoadSuggestions(meshQuery, Options.Queries, searchText)
-            : meshQuery.AutocompleteAsync(
+            : meshQuery.Autocomplete(
                     basePath: Options.BasePath,
                     prefix: searchText ?? "",
                     mode: AutocompleteMode.RelevanceFirst,
                     limit: Options.Limit * 3)
-                .ToObservableSequence()
-                .Scan(System.Collections.Immutable.ImmutableList<QuerySuggestion>.Empty,
-                    (acc, s) => acc.Add(s))
-                .Select(acc => (IReadOnlyList<QuerySuggestion>)acc);
+                .Select(snapshot => (IReadOnlyList<QuerySuggestion>)snapshot
+                    .Select(r => new QuerySuggestion(r.Path, r.Name ?? "", r.NodeType, r.Score, r.Icon))
+                    .ToList());
 
         var limited = source.Select(list => (IReadOnlyList<QuerySuggestion>)list.Take(Options.Limit).ToArray());
 

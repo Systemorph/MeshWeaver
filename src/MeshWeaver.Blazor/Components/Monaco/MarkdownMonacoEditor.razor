@@ -96,8 +96,7 @@
         }
 
         return MeshQuery
-            .AutocompleteAsync("", query, CompletionLimit)
-            .ScanTopN(CompletionLimit, CompletionByScore)
+            .Autocomplete("", query, AutocompleteMode.PathFirst, CompletionLimit)
             .Select(snapshot => (IReadOnlyList<CompletionItem>)snapshot
                 .Select(s => new CompletionItem
                 {
@@ -112,8 +111,7 @@
 
     private IObservable<IReadOnlyList<CompletionItem>> BuildPathCompletions(string basePath, string prefix, string category)
         => MeshQuery!
-            .AutocompleteAsync(basePath, prefix, CompletionLimit)
-            .ScanTopN(CompletionLimit, CompletionByScore)
+            .Autocomplete(basePath, prefix, AutocompleteMode.PathFirst, CompletionLimit)
             .Select(snapshot => (IReadOnlyList<CompletionItem>)snapshot
                 .Select(s => new CompletionItem
                 {

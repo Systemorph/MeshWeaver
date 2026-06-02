@@ -111,10 +111,13 @@ internal sealed class SearchHub
                 var basePath = lastSlash >= 0 ? afterAt[..lastSlash] : "";
                 var prefix = lastSlash >= 0 ? afterAt[(lastSlash + 1)..] : afterAt;
 
-                await foreach (var s in meshService.AutocompleteAsync(
-                    basePath, prefix, AutocompleteMode.RelevanceFirst, req.MaxResults,
-                    req.ContextPath, context: "search", ct))
-                    await pending.Writer.WriteAsync(s, ct);
+                await meshService.Autocomplete(
+                        basePath, prefix, AutocompleteMode.RelevanceFirst, req.MaxResults,
+                        req.ContextPath, context: "search")
+                    .Take(1)
+                    .SelectMany(snapshot => snapshot.ToObservable())
+                    .ForEachAsync(r => pending.Writer.TryWrite(
+                        new QuerySuggestion(r.Path, r.Name ?? "", r.NodeType, r.Score, r.Icon)), ct);
             }
             else
             {

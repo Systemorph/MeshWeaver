@@ -105,8 +105,7 @@
         {
             var reference = query[1..];
             return MeshQuery
-                .AutocompleteAsync(BoundNamespace, reference, BoundMaxSuggestions)
-                .ScanTopN(BoundMaxSuggestions, SuggestionByScore)
+                .Autocomplete(BoundNamespace, reference, AutocompleteMode.PathFirst, BoundMaxSuggestions)
                 .Select(snapshot => (IReadOnlyList<CompletionItem>)snapshot
                     .Select(s => new CompletionItem
                     {

@@ -33,8 +33,8 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     /// snapshot may complete empty. Re-issue the snapshot on an interval until it surfaces a match — the
     /// sanctioned re-query pattern for snapshot sources that race eventual-consistency lag.
     /// </summary>
-    private IReadOnlyList<QueryResult> AutocompleteUntil(
-        string basePath, string prefix, Func<IReadOnlyList<QueryResult>, bool> predicate)
+    private IReadOnlyCollection<QueryResult> AutocompleteUntil(
+        string basePath, string prefix, Func<IReadOnlyCollection<QueryResult>, bool> predicate)
         => Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
             .SelectMany(_ => MeshQuery.Autocomplete(basePath, prefix, limit: 10))
             .Should().Match(predicate);
@@ -195,8 +195,8 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
         var suggestions = AutocompleteUntil("Systemorph/Marketing", "Email", r => r.Count >= 1);
 
         suggestions.Should().HaveCount(1);
-        suggestions[0].Name.Should().Be("Email Triage");
-        suggestions[0].Path.Should().Be("Systemorph/Marketing/ClaimsProcessing/EmailTriage");
+        suggestions.First().Name.Should().Be("Email Triage");
+        suggestions.First().Path.Should().Be("Systemorph/Marketing/ClaimsProcessing/EmailTriage");
     }
 
     [Fact]

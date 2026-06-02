@@ -76,7 +76,7 @@ internal sealed class ChatCompletionOrchestrator(
 
     /// <summary>
     /// Lists partitions for <c>@/</c> or <c>@/&lt;filter&gt;</c>. Backed by a
-    /// regular <see cref="MeshWeaver.Mesh.Services.IMeshQuery.QueryAsync"/> against
+    /// regular <c>Autocomplete</c> snapshot against
     /// <c>namespace:Admin/Partition</c> — each backend's <see cref="IMeshQueryProvider"/>
     /// answers from its own source of truth: Postgres queries
     /// <c>public.partitions</c>, in-memory / embedded / static return their
@@ -129,13 +129,12 @@ internal sealed class ChatCompletionOrchestrator(
 
     private IObservable<CompletionBatch> ProducePartitionDrillDown(string partition, string filter)
     {
-        return meshService.AutocompleteAsync(partition, filter, 20)
-            .ToObservableSequence()
-            .Select(s => SuggestionToItem(s, PartitionDrillDownPriority, "Items"))
-            .ToArray()
-            .Select(items =>
+        return meshService.Autocomplete(partition, filter, AutocompleteMode.PathFirst, 20)
+            .Select(snapshot =>
             {
-                var combined = new List<AutocompleteItem>(items);
+                var combined = snapshot
+                    .Select(s => SuggestionToItem(s, PartitionDrillDownPriority, "Items"))
+                    .ToList();
                 combined.AddRange(GetTagKeywords(partition, filter));
                 return (IReadOnlyList<AutocompleteItem>)combined;
             })
@@ -293,12 +292,12 @@ internal sealed class ChatCompletionOrchestrator(
 
         var searchText = reference.TrimStart('.', '/');
 
-        return meshService.AutocompleteAsync(
+        return meshService.Autocomplete(
                 partition, searchText, AutocompleteMode.RelevanceFirst, 20, currentNamespace)
-            .ToObservableSequence()
-            .Where(s => seenPaths.TryAdd(s.Path, 0))
-            .Select(s => SuggestionToItem(s, PartitionSearchPriority, "Partition"))
-            .ToArray()
+            .Select(snapshot => snapshot
+                .Where(s => seenPaths.TryAdd(s.Path, 0))
+                .Select(s => SuggestionToItem(s, PartitionSearchPriority, "Partition"))
+                .ToArray())
             .Where(items => items.Length > 0)
             .Select(items => new CompletionBatch("Partition", PartitionSearchPriority, items))
             .Timeout(ProducerInactivityTimeout)
@@ -480,12 +479,12 @@ internal sealed class ChatCompletionOrchestrator(
     }
 
     private static AutocompleteItem SuggestionToItem(
-        QuerySuggestion suggestion,
+        QueryResult suggestion,
         int basePriority,
         string category,
         bool isPartition = false)
     {
-        var label = suggestion.Name;
+        var label = suggestion.Name ?? suggestion.Path;
         var insertText = isPartition
             ? $"@/{suggestion.Path}/"  // Partitions get trailing slash for drill-down
             : $"@/{suggestion.Path}";  // Other items get absolute path

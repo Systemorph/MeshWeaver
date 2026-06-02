@@ -376,24 +376,24 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
             ({ } x, { } y) => Math.Min(x, y)
         };
 
-    public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
+    /// <summary>
+    /// Native reactive autocomplete. The PG execute-query (<c>_adapter.QueryNodesAsync</c> — the
+    /// <c>await foreach</c> over the npgsql reader) is the I/O leaf: it runs inside
+    /// <see cref="Observable.FromAsync{TResult}(Func{CancellationToken, Task{TResult}})"/> and is
+    /// pushed to <see cref="System.Reactive.Concurrency.TaskPoolScheduler"/> so the calling hub's
+    /// action block is never blocked. No <c>Task.Run</c> bridge (that was the deadlock), no
+    /// async-enumerable on the public surface. Emits one snapshot then completes.
+    /// </summary>
+    public IObservable<IReadOnlyCollection<QueryResult>> Autocomplete(
         string basePath,
         string prefix,
         JsonSerializerOptions options,
-        int limit = 10,
-        CancellationToken ct = default)
-        => AutocompleteAsync(basePath, prefix, options, AutocompleteMode.PathFirst, limit, null, null, ct);
-
-    public async IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
-        string basePath,
-        string prefix,
-        JsonSerializerOptions options,
-        AutocompleteMode mode,
+        AutocompleteMode mode = AutocompleteMode.RelevanceFirst,
         int limit = 10,
         string? contextPath = null,
-        string? context = null,
-        [EnumeratorCancellation] CancellationToken ct = default)
+        string? context = null)
     {
+        var providerName = ((IMeshQueryProvider)this).Name;
         var normalizedPrefix = (prefix ?? "").ToLowerInvariant();
 
         // Use ILIKE-based filter instead of plainto_tsquery for substring prefix matching.
@@ -415,62 +415,61 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
             Path: basePath,
             Scope: QueryScope.Descendants);
 
-        var suggestions = new List<QuerySuggestion>();
-
         var acUserId = _accessService?.Context?.ObjectId;
         var effectiveAutocompleteUserId = string.IsNullOrEmpty(acUserId) ? WellKnownUsers.Anonymous : acUserId;
 
-        await foreach (var node in _adapter.QueryNodesAsync(query, options, effectiveAutocompleteUserId, ct: ct))
-        {
-            // Skip node types excluded from autocomplete (configured via AddAutocompleteExcludedTypes)
-            if (_meshConfiguration?.AutocompleteExcludedNodeTypes.Contains(node.NodeType ?? "") == true)
-                continue;
-
-            // Context-based exclusion for autocomplete
-            if (context != null)
+        return Observable.FromAsync(async cancel =>
             {
-                if (_meshConfiguration?.IsExcludedFromContext(node.NodeType, context) == true)
-                    continue;
-                if (node.ExcludeFromContext?.Contains(context) == true)
-                    continue;
-            }
+                var suggestions = new List<QuerySuggestion>();
+                await foreach (var node in _adapter.QueryNodesAsync(query, options, effectiveAutocompleteUserId, ct: cancel))
+                {
+                    // Skip node types excluded from autocomplete (AddAutocompleteExcludedTypes)
+                    if (_meshConfiguration?.AutocompleteExcludedNodeTypes.Contains(node.NodeType ?? "") == true)
+                        continue;
+                    if (context != null)
+                    {
+                        if (_meshConfiguration?.IsExcludedFromContext(node.NodeType, context) == true) continue;
+                        if (node.ExcludeFromContext?.Contains(context) == true) continue;
+                    }
 
-            var name = node.Name ?? node.Id ?? node.Path ?? "";
-            double score = 0;
+                    var name = node.Name ?? node.Id ?? node.Path ?? "";
+                    double score = 0;
+                    if (name.StartsWith(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
+                        score = 100 - (name.Length - normalizedPrefix.Length);
+                    else if (name.Contains(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
+                        score = 50;
+                    else if ((node.Path ?? "").Contains(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
+                        score = 30;
 
-            if (name.StartsWith(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
-                score = 100 - (name.Length - normalizedPrefix.Length);
-            else if (name.Contains(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
-                score = 50;
-            else if ((node.Path ?? "").Contains(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
-                score = 30;
+                    score += PathProximity.ComputeBoost(contextPath, node.Path);
 
-            score += PathProximity.ComputeBoost(contextPath, node.Path);
+                    if (score > 0 || string.IsNullOrEmpty(normalizedPrefix))
+                        suggestions.Add(new QuerySuggestion(node.Path ?? "", name, node.NodeType, score, node.Icon));
+                }
 
-            if (score > 0 || string.IsNullOrEmpty(normalizedPrefix))
-                suggestions.Add(new QuerySuggestion(node.Path ?? "", name, node.NodeType, score, node.Icon));
-        }
+                IEnumerable<QuerySuggestion> ordered = mode switch
+                {
+                    AutocompleteMode.RelevanceFirst => suggestions
+                        .OrderByDescending(s => s.Score).ThenBy(s => s.Path.Length).ThenBy(s => s.Name),
+                    _ => suggestions
+                        .OrderBy(s => s.Path.Length).ThenByDescending(s => s.Score).ThenBy(s => s.Name)
+                };
 
-        IEnumerable<QuerySuggestion> ordered = mode switch
-        {
-            AutocompleteMode.RelevanceFirst => suggestions
-                .OrderByDescending(s => s.Score)
-                .ThenBy(s => s.Path.Length)
-                .ThenBy(s => s.Name),
-            _ => suggestions
-                .OrderBy(s => s.Path.Length)
-                .ThenByDescending(s => s.Score)
-                .ThenBy(s => s.Name)
-        };
-
-        foreach (var suggestion in ordered.Take(limit))
-        {
-            yield return suggestion;
-        }
+                return (IReadOnlyCollection<QueryResult>)ordered.Take(limit).Select(s => new QueryResult
+                {
+                    Path = s.Path,
+                    Name = s.Name,
+                    NodeType = s.NodeType,
+                    Icon = s.Icon,
+                    Score = s.Score,
+                    ProviderName = providerName,
+                }).ToList();
+            })
+            .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default);
     }
 
     /// <inheritdoc />
-    public async Task<T?> SelectAsync<T>(string path, string property, JsonSerializerOptions options, CancellationToken ct = default)
+    public IObservable<T?> Select<T>(string path, string property, JsonSerializerOptions options)
     {
         var query = new ParsedQuery(
             Filter: new QueryComparison(new QueryCondition("path", QueryOperator.Equal, [path])),
@@ -481,20 +480,18 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
         var acUserId = _accessService?.Context?.ObjectId;
         var effectiveSelectUserId = string.IsNullOrEmpty(acUserId) ? WellKnownUsers.Anonymous : acUserId;
 
-        await foreach (var node in _adapter.QueryNodesAsync(query, options, effectiveSelectUserId, ct: ct))
-        {
-            var prop = typeof(MeshNode).GetProperty(property);
-            if (prop == null)
+        // PG execute-query leaf wrapped in Observable.FromAsync + TaskPool — no ToTask on the surface.
+        return Observable.FromAsync<T?>(async cancel =>
+            {
+                await foreach (var node in _adapter.QueryNodesAsync(query, options, effectiveSelectUserId, ct: cancel))
+                {
+                    if (typeof(MeshNode).GetProperty(property)?.GetValue(node) is T typedValue)
+                        return typedValue;
+                    return default;
+                }
                 return default;
-
-            var value = prop.GetValue(node);
-            if (value is T typedValue)
-                return typedValue;
-
-            return default;
-        }
-
-        return default;
+            })
+            .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default);
     }
 
     public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request, JsonSerializerOptions options)
@@ -738,7 +735,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
 
     /// <summary>
     /// Per-item scoring for Query initial emissions. Composes the same
-    /// pieces <see cref="AutocompleteAsync(string, string, System.Text.Json.JsonSerializerOptions, MeshWeaver.Mesh.Services.AutocompleteMode, int, string, string, System.Threading.CancellationToken)"/> already uses — name-prefix bonus
+    /// pieces <see cref="Autocomplete"/> already uses — name-prefix bonus
     /// (100, scaled by length), name-substring bonus (50), path-substring
     /// bonus (30), <see cref="PathProximity.ComputeBoost"/> (max 40, decays
     /// with namespace distance from the requesting hub) — so cross-provider

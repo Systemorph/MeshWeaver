@@ -248,8 +248,8 @@ public class MeshOperations
     /// <para>If the NodeType MeshNode carries a recorded
     /// <see cref="Graph.Configuration.NodeTypeDefinition.CompilationError"/>,
     /// the catalog still has the node's stored definition
-    /// even though its hub is broken. We read it via
-    /// <see cref="MeshWeaver.Mesh.Services.IMeshQuery.QueryAsync"/> as the documented exception to
+    /// even though its hub is broken. We read it via a one-shot
+    /// <c>Query</c> snapshot as the documented exception to
     /// "queries are for sets only" (see <c>Doc/Architecture/CqrsAndContentAccess.md</c>):
     /// the live content is unreachable, the catalog snapshot is the best we
     /// have, and the wrapped response surfaces the compile error so callers

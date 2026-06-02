@@ -151,32 +151,21 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
     }
 
     /// <inheritdoc/>
-    public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
-        string basePath,
-        string prefix,
-        JsonSerializerOptions options,
-        int limit = 10,
-        CancellationToken ct = default)
-        => System.Linq.AsyncEnumerable.Empty<QuerySuggestion>();
+    /// <remarks>Autocomplete is a scoped, single-partition operation — the cross-schema
+    /// fan-out provider contributes nothing. The per-schema
+    /// <see cref="StorageAdapterMeshQueryProvider"/> (and <see cref="PostgreSqlMeshQuery"/>)
+    /// own it.</remarks>
+    public IObservable<IReadOnlyCollection<QueryResult>> Autocomplete(
+        string basePath, string prefix, JsonSerializerOptions options,
+        AutocompleteMode mode = AutocompleteMode.RelevanceFirst, int limit = 10,
+        string? contextPath = null, string? context = null)
+        => Observable.Return((IReadOnlyCollection<QueryResult>)Array.Empty<QueryResult>());
 
     /// <inheritdoc/>
-    public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
-        string basePath,
-        string prefix,
-        JsonSerializerOptions options,
-        AutocompleteMode mode,
-        int limit,
-        string? context,
-        string? userId,
-        CancellationToken ct = default)
-        => System.Linq.AsyncEnumerable.Empty<QuerySuggestion>();
-
-    /// <inheritdoc/>
-    /// <remarks>Single-path SelectAsync is a scoped operation — leave it to
+    /// <remarks>Single-path Select is a scoped operation — leave it to
     /// the per-schema <see cref="StorageAdapterMeshQueryProvider"/>.</remarks>
-    public Task<T?> SelectAsync<T>(
-        string path, string property, JsonSerializerOptions options, CancellationToken ct = default)
-        => Task.FromResult<T?>(default);
+    public IObservable<T?> Select<T>(string path, string property, JsonSerializerOptions options)
+        => Observable.Return<T?>(default);
 
     private ParsedQuery ParseFirst(MeshQueryRequest request)
     {

@@ -11,50 +11,6 @@ namespace MeshWeaver.Mesh.Services;
 public interface IMeshQuery
 {
     /// <summary>
-    /// Query nodes and partition objects with full-text search, filtering, and scoping.
-    /// Uses GitHub-style query syntax (e.g., "nodeType:Story status:Open laptop").
-    /// </summary>
-    /// <param name="request">Query request with filters, path, and options</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Matching objects (MeshNodes and partition objects)</returns>
-    IAsyncEnumerable<object> QueryAsync(MeshQueryRequest request, CancellationToken ct = default);
-
-    /// <summary>
-    /// Autocomplete query - given a namespace, find best matching subnodes.
-    /// Returns suggestions ordered by path length first (for path-based autocomplete).
-    /// </summary>
-    /// <param name="basePath">Base path to search from</param>
-    /// <param name="prefix">Prefix to match (partial name/path)</param>
-    /// <param name="limit">Maximum number of suggestions to return</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Suggestions ordered by path length, then score, then name</returns>
-    IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
-        string basePath,
-        string prefix,
-        int limit = 10,
-        CancellationToken ct = default);
-
-    /// <summary>
-    /// Autocomplete query with specified ordering mode.
-    /// </summary>
-    /// <param name="basePath">Base path to search from</param>
-    /// <param name="prefix">Prefix to match (partial name/path)</param>
-    /// <param name="mode">Ordering mode (PathFirst or RelevanceFirst)</param>
-    /// <param name="limit">Maximum number of suggestions to return</param>
-    /// <param name="contextPath">Context path for proximity-based scoring (null for no proximity boost)</param>
-    /// <param name="context">Context for visibility filtering (e.g., "search"). Nodes excluded from this context are hidden.</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Suggestions ordered according to mode</returns>
-    IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
-        string basePath,
-        string prefix,
-        AutocompleteMode mode,
-        int limit = 10,
-        string? contextPath = null,
-        string? context = null,
-        CancellationToken ct = default);
-
-    /// <summary>
     /// Creates an observable query that monitors data sources for changes and emits updates.
     /// The first emission contains the full initial result set (ChangeType = Initial).
     /// Subsequent emissions contain incremental changes (Added, Updated, Removed).
@@ -77,15 +33,14 @@ public interface IMeshQuery
     IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request);
 
     /// <summary>
-    /// Selects a single property value from a node at the given path.
-    /// Efficient way to get one property without loading the full Content blob.
+    /// Selects a single property value from a node at the given path (single-emission
+    /// observable). Efficient way to get one property without loading the full Content blob.
     /// </summary>
     /// <typeparam name="T">The expected property type.</typeparam>
     /// <param name="path">The node path.</param>
     /// <param name="property">The property name on MeshNode.</param>
-    /// <param name="ct">Cancellation token.</param>
     /// <returns>The property value, or default if node not found or property is null.</returns>
-    Task<T?> SelectAsync<T>(string path, string property, CancellationToken ct = default);
+    IObservable<T?> Select<T>(string path, string property);
 }
 
 /// <summary>

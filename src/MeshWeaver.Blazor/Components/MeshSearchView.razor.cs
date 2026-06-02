@@ -684,12 +684,11 @@ public partial class MeshSearchView : IDisposable
         }
 
         return MeshQuery
-            .AutocompleteAsync(basePath, namePrefix, AutocompleteMode.RelevanceFirst, CompletionLimit, BoundNamespace)
-            .ScanTopN(CompletionLimit, CompletionByScore)
+            .Autocomplete(basePath, namePrefix, AutocompleteMode.RelevanceFirst, CompletionLimit, BoundNamespace)
             .Select(snapshot => (IReadOnlyList<CompletionItem>)snapshot
                 .Select(s => new CompletionItem
                 {
-                    Label = s.Name,
+                    Label = s.Name ?? s.Path,
                     InsertText = $"@{s.Path}/",
                     Description = s.NodeType ?? "",
                     Path = s.Path,
