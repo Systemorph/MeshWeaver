@@ -25,11 +25,13 @@ namespace Memex.Portal.Shared.Email;
 /// unless <c>Email:Enabled</c>.</para>
 /// </summary>
 public sealed class OutboundEmailSender(
-    PortalApplication portalApp,
+    IServiceProvider rootServices,
+    IHostApplicationLifetime lifetime,
     EmailOptions options,
     ILogger<OutboundEmailSender>? logger = null) : IHostedService, IDisposable
 {
     private readonly CompositeDisposable subscriptions = new();
+    private IServiceScope? scope;
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -39,28 +41,47 @@ public sealed class OutboundEmailSender(
             return Task.CompletedTask;
         }
 
-        var hub = portalApp.Hub;
-        var sp = hub.ServiceProvider;
-        var query = sp.GetRequiredService<IMeshQueryCore>();
-        var meshService = sp.GetRequiredService<IMeshService>();
-        var accessService = sp.GetRequiredService<AccessService>();
-        var emailSender = sp.GetRequiredService<IEmailSender>();
-        var jsonOptions = hub.JsonSerializerOptions;
-
-        // Live query: any outbound mail awaiting send. Emits the current set on change.
-        subscriptions.Add(query
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                $"nodeType:{EmailNodeType.NodeType} content.direction:Outbound content.status:New"), jsonOptions)
-            .Select(change => change.Items)
-            .Subscribe(
-                items =>
-                {
-                    foreach (var node in items)
-                        Send(node, meshService, accessService, emailSender, jsonOptions);
-                },
-                ex => logger?.LogWarning(ex, "OutboundEmailSender: query failed")));
-
+        // Defer ALL mesh access until the host is fully started. The Orleans client and the mesh
+        // hub come up as hosted services too; touching the hub here (or constructing
+        // PortalApplication, whose ctor registers an Orleans stream) races that startup and NREs
+        // in OrleansRoutingService.RegisterStream / PersistentStreamProvider. ApplicationStarted
+        // fires once every hosted service (Orleans included) has started, so the mesh is ready.
+        lifetime.ApplicationStarted.Register(BeginWatching);
         return Task.CompletedTask;
+    }
+
+    private void BeginWatching()
+    {
+        try
+        {
+            // Resolve a fresh PortalApplication in its own scope now that the mesh is up — the
+            // instance DI built at host-construction time may have captured a not-yet-ready hub.
+            scope = rootServices.CreateScope();
+            var hub = scope.ServiceProvider.GetRequiredService<PortalApplication>().Hub;
+            var sp = hub.ServiceProvider;
+            var query = sp.GetRequiredService<IMeshQueryCore>();
+            var meshService = sp.GetRequiredService<IMeshService>();
+            var accessService = sp.GetRequiredService<AccessService>();
+            var emailSender = sp.GetRequiredService<IEmailSender>();
+            var jsonOptions = hub.JsonSerializerOptions;
+
+            // Live query: any outbound mail awaiting send. Emits the current set on change.
+            subscriptions.Add(query
+                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"nodeType:{EmailNodeType.NodeType} content.direction:Outbound content.status:New"), jsonOptions)
+                .Select(change => change.Items)
+                .Subscribe(
+                    items =>
+                    {
+                        foreach (var node in items)
+                            Send(node, meshService, accessService, emailSender, jsonOptions);
+                    },
+                    ex => logger?.LogWarning(ex, "OutboundEmailSender: query failed")));
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "OutboundEmailSender: failed to start watching outbound mail");
+        }
     }
 
     private void Send(

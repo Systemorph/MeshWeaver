@@ -20,17 +20,19 @@ public static class MemexHostingExtensions
     /// </summary>
     /// <param name="builder">The distributed application builder.</param>
     /// <param name="name">Resource name prefix (default <c>memex</c>). The portal resource takes this exact name.</param>
-    /// <param name="configure">Optional <see cref="MemexOptions"/> customization.</param>
+    /// <param name="configure">
+    /// Optional <see cref="MemexOptions"/> customization. Takes the default options and returns a
+    /// configured copy — chain the <c>With…</c> helpers or use a raw record <c>with</c> expression.
+    /// </param>
     public static IResourceBuilder<ContainerResource> AddMemex(
         this IDistributedApplicationBuilder builder,
         string name = "memex",
-        Action<MemexOptions>? configure = null)
+        Func<MemexOptions, MemexOptions>? configure = null)
     {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
 
-        var options = new MemexOptions();
-        configure?.Invoke(options);
+        var options = configure?.Invoke(new MemexOptions()) ?? new MemexOptions();
 
         var registry = options.ImageRegistry.TrimEnd('/');
         var tag = options.ImageTag;

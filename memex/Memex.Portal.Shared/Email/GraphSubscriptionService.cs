@@ -18,6 +18,7 @@ namespace Memex.Portal.Shared.Email;
 public sealed class GraphSubscriptionService(
     EmailOptions options,
     GraphMail graphMail,
+    IHostApplicationLifetime lifetime,
     ILogger<GraphSubscriptionService>? logger = null) : IHostedService, IDisposable
 {
     private static readonly TimeSpan RenewInterval = TimeSpan.FromHours(24);
@@ -32,9 +33,16 @@ public sealed class GraphSubscriptionService(
             return Task.CompletedTask;
         }
 
+        // Defer until the host is fully started: Graph validates the notificationUrl by POSTing a
+        // validationToken to it during subscription creation and expecting the echo within ~10s, so
+        // the webhook endpoint (/api/email on Kestrel) must already be listening — it is not yet
+        // during our StartAsync. ApplicationStarted fires once the server is accepting requests.
         var url = $"{options.WebhookBaseUrl.TrimEnd('/')}/api/email";
-        CreateOrRenew(url);
-        subscriptions.Add(Observable.Interval(RenewInterval).Subscribe(_ => CreateOrRenew(url)));
+        lifetime.ApplicationStarted.Register(() =>
+        {
+            CreateOrRenew(url);
+            subscriptions.Add(Observable.Interval(RenewInterval).Subscribe(_ => CreateOrRenew(url)));
+        });
         return Task.CompletedTask;
     }
 
