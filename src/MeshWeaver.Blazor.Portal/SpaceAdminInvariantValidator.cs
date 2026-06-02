@@ -58,6 +58,18 @@ public sealed class SpaceAdminInvariantValidator(IMessageHub hub, ILogger<SpaceA
             return Observable.Return(NodeValidationResult.Valid());
         var partition = path[..idx];
 
+        // The whole partition is going away: when this delete is part of a cascade rooted at
+        // the partition (or an ancestor of it), the space itself is being removed — keeping
+        // "at least one admin" is moot, and blocking here would make deleting a Space
+        // impossible (the cascade always reaches the creator's _Access/{user} admin
+        // assignment). Only enforce the invariant when the assignment is removed while its
+        // partition stays. A null cascade root (standalone ValidateDeleteRequest) is treated
+        // as "partition stays" — the safe default that still guards direct admin removal.
+        if (context.Operation == NodeOperation.Delete
+            && context.DeleteCascadeRootPath is { } root
+            && IsAtOrBelow(partition, root))
+            return Observable.Return(NodeValidationResult.Valid());
+
         // Does this operation actually REMOVE an admin?
         //  • Delete: the deleted node currently grants non-denied Admin.
         //  • Update: the PREVIOUS state granted Admin and the NEW state no longer does.
@@ -108,6 +120,15 @@ public sealed class SpaceAdminInvariantValidator(IMessageHub hub, ILogger<SpaceA
                 return Observable.Return(NodeValidationResult.Valid());
             });
     }
+
+    /// <summary>
+    /// True when <paramref name="path"/> is <paramref name="ancestor"/> itself or lives
+    /// beneath it — i.e. deleting <paramref name="ancestor"/> takes <paramref name="path"/>
+    /// with it. Case-insensitive to match the partition comparisons elsewhere.
+    /// </summary>
+    private static bool IsAtOrBelow(string path, string ancestor) =>
+        string.Equals(path, ancestor, StringComparison.OrdinalIgnoreCase)
+        || path.StartsWith(ancestor + "/", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// True when <paramref name="node"/>'s <see cref="AccessAssignment"/> content grants the

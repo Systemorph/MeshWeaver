@@ -31,8 +31,17 @@ namespace MeshWeaver.Mesh;
 /// </para>
 /// </summary>
 /// <param name="Path">Full path of the node to validate for deletion.</param>
+/// <param name="RootPath">
+/// Root of the cascade this validation belongs to — i.e. the original
+/// <see cref="DeleteNodeRequest.Path"/> when this node is being deleted as a descendant
+/// of a larger subtree (recursive delete fan-out). Null when the node is being deleted
+/// in isolation. Validators that enforce "must keep at least one X on a partition"
+/// invariants (e.g. the last-admin rule) use this to recognise that the whole partition
+/// is going away — deleting the last admin of a space is fine when the space itself is
+/// part of the same delete.
+/// </param>
 [RequiresPermission(Permission.Delete)]
-public sealed record ValidateDeleteRequest(string Path) : IRequest<ValidateDeleteResponse>;
+public sealed record ValidateDeleteRequest(string Path, string? RootPath = null) : IRequest<ValidateDeleteResponse>;
 
 /// <summary>
 /// Outcome of a <see cref="ValidateDeleteRequest"/>. Empty lists mean

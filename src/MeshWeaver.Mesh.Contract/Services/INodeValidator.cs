@@ -59,6 +59,17 @@ public record NodeValidationContext
     /// May be null for anonymous operations.
     /// </summary>
     public AccessContext? AccessContext { get; init; }
+
+    /// <summary>
+    /// For Delete operations, the root path of the cascade this node is being deleted as
+    /// part of — the original <c>DeleteNodeRequest.Path</c>. Equal to <see cref="Node"/>'s
+    /// path when the node is the delete root; an ancestor path when the node is a descendant
+    /// pulled in by a recursive delete; null when unknown (e.g. a standalone
+    /// <c>ValidateDeleteRequest</c> with no cascade context). Invariant validators use this
+    /// to tell "the whole partition is going away" apart from "this single node is being
+    /// removed while its partition stays".
+    /// </summary>
+    public string? DeleteCascadeRootPath { get; init; }
 }
 
 /// <summary>
