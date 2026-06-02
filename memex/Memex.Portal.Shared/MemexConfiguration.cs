@@ -478,7 +478,10 @@ public static class MemexConfiguration
                         .AddThreadsLayoutArea()
                         .AddApiTokensSettingsTab()
                         .AddModelsSettingsTab()
-                        .AddInvitationsSettingsTab();
+                        // Dedicated Admin menu (platform-wide GlobalSettings area), gated on root
+                        // Permission.All: Invitations + Inbox.
+                        .AddInvitationsSettingsTab()
+                        .AddInboxSettingsTab();
                 })
                 // Add activity tracking to record user access patterns via ActivityLogBundler
                 .AddActivityTracking();
