@@ -64,16 +64,14 @@ if (mode is "compose" or "compose-ha" or "kubernetes" or "kubernetes-ha")
                 .WithChartName("memex")
                 .WithChartDescription("MeshWeaver Memex portal — Azure-free Kubernetes self-host."));
 
-    builder.AddMemex("memex", o =>
-    {
-        o.Backend = "Filesystem";
+    builder.AddMemex("memex", o => o
+        .WithBackend("Filesystem")
         // Real, Postgres-backed cluster membership (never Localhost in prod). Works for a single
         // silo or HA; `ha` only drives replica count, not the membership provider.
-        o.OrleansClustering = "AdoNet";
-        o.IncludeAiClis = true;
-        o.ImageTag = builder.Configuration["Parameters:image-tag"] ?? "latest";
-        o.MasterKey = builder.Configuration["Parameters:key-protection-master-key"];
-    });
+        .WithOrleansClustering("AdoNet")
+        .WithAiClis()
+        .WithImage(tag: builder.Configuration["Parameters:image-tag"])
+        .WithMasterKey(builder.Configuration["Parameters:key-protection-master-key"]));
 
     builder.Build().Run();
     return;
