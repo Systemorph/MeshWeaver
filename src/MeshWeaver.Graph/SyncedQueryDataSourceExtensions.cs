@@ -10,7 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace MeshWeaver.Graph;
 
 /// <summary>
-/// Wires <see cref="IMeshQueryCore.ObserveQuery{T}"/> into a hub's data
+/// Wires <see cref="IMeshQueryCore.Query{T}"/> into a hub's data
 /// context as a synced collection of <see cref="MeshNode"/>s. Two pieces are
 /// registered together:
 ///
@@ -160,7 +160,7 @@ public static class SyncedQueryDataSourceExtensions
     /// and returns it.
     ///
     /// <para>The returned observable shares its upstream
-    /// <see cref="IMeshQueryProvider.ObserveQuery"/> subscriptions (one per
+    /// <see cref="IMeshQueryProvider.Query"/> subscriptions (one per
     /// query) via <c>Replay(1).RefCount()</c>: it starts syncing on the
     /// first subscriber and pauses when none remain. The registry entry
     /// persists for the lifetime of the workspace so subsequent
@@ -170,7 +170,7 @@ public static class SyncedQueryDataSourceExtensions
     /// <para>🚨 <b>Per-user RLS:</b> the synced query is cached by
     /// <c>(id, userId)</c>. Each user gets their own
     /// <see cref="SyncedQueryMeshNodes"/> instance which opens its upstream
-    /// <see cref="IMeshQueryProvider.ObserveQuery"/> under the caller's
+    /// <see cref="IMeshQueryProvider.Query"/> under the caller's
     /// identity — the secured surface of <c>MeshQuery</c> then
     /// applies per-result RLS validators at the source, so the cached
     /// snapshot only ever contains nodes that user has Read on.

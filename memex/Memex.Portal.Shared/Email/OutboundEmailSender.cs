@@ -67,7 +67,7 @@ public sealed class OutboundEmailSender(
 
             // Live query: any outbound mail awaiting send. Emits the current set on change.
             subscriptions.Add(query
-                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                .Query<MeshNode>(MeshQueryRequest.FromQuery(
                     $"nodeType:{EmailNodeType.NodeType} content.direction:Outbound content.status:New"), jsonOptions)
                 .Select(change => change.Items)
                 .Subscribe(

@@ -10,7 +10,7 @@ using Xunit;
 namespace MeshWeaver.Persistence.Test;
 
 /// <summary>
-/// Tests for the reactive ObserveQuery functionality used by ProjectViews.
+/// Tests for the reactive Query functionality used by ProjectViews.
 /// These tests verify that views update correctly when todos are created, updated, or deleted.
 /// Each test uses a unique base path to avoid "Node already exists" conflicts.
 /// </summary>
@@ -53,7 +53,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
 
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
         var subscription = Query
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"path:{basePath} nodeType:Markdown state:Active scope:subtree"))
             .Subscribe(change => receivedChanges.Add(change));
 
@@ -100,7 +100,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
 
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
         var subscription = Query
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"path:{basePath} nodeType:Markdown state:Active scope:subtree"))
             .Subscribe(change => receivedChanges.Add(change));
 
@@ -146,7 +146,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
 
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
         var subscription = Query
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"path:{basePath} nodeType:Markdown state:Active scope:subtree"))
             .Subscribe(change => receivedChanges.Add(change));
 
@@ -191,7 +191,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
 
         var deletedChanges = new List<QueryResultChange<MeshNode>>();
         var deletedSubscription = Query
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"path:{basePath} nodeType:Markdown state:Deleted scope:subtree"))
             .Subscribe(change => deletedChanges.Add(change));
 
@@ -247,12 +247,12 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
         var deletedChanges = new List<QueryResultChange<MeshNode>>();
 
         var activeSubscription = Query
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"path:{basePath} nodeType:Markdown state:Active scope:subtree"))
             .Subscribe(change => activeChanges.Add(change));
 
         var deletedSubscription = Query
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"path:{basePath} nodeType:Markdown state:Deleted scope:subtree"))
             .Subscribe(change => deletedChanges.Add(change));
 
@@ -325,7 +325,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
         var combinedResults = new List<(List<MeshNode> Active, List<MeshNode> Deleted)>();
 
         var activeStream = Query
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"path:{basePath} nodeType:Markdown state:Active scope:subtree"))
             .Scan(new List<MeshNode>(), (current, change) =>
             {
@@ -347,7 +347,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
             });
 
         var deletedStream = Query
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"path:{basePath} nodeType:Markdown state:Deleted scope:subtree"))
             .Scan(new List<MeshNode>(), (current, change) =>
             {

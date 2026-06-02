@@ -31,7 +31,7 @@ internal static class PartitionSettingsTab
 
         stack = stack.WithView((h, _) =>
             meshService
-                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                .Query<MeshNode>(MeshQueryRequest.FromQuery(
                     $"namespace:{PartitionNodeType.Namespace} nodeType:{PartitionNodeType.NodeType}"))
                 .Select(change =>
                 {

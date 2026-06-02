@@ -30,7 +30,7 @@ public class DevAuthController : ControllerBase
         // TODO(persistence-cull): framework boundary — review whether this should
         // route through UserIdentityCache (sync) instead of awaiting the observable.
         var change = await _meshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:User/{personId}"))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:User/{personId}"))
             .FirstAsync();
         var node = change.Items.FirstOrDefault();
         if (node?.NodeType != "User" || node.Content == null)

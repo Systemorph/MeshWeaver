@@ -33,7 +33,7 @@ public class FanOutQueryOrderingTests(ITestOutputHelper output) : MonolithMeshTe
     /// <see cref="QueryChangeType.Initial"/> emission carries the full snapshot.
     /// </summary>
     private IReadOnlyList<MeshNode> QueryNodes(string query)
-        => MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+        => MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
     [Fact(Timeout = 30000)]

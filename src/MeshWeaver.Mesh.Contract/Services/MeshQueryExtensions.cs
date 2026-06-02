@@ -7,9 +7,9 @@ namespace MeshWeaver.Mesh.Services;
 
 /// <summary>
 /// Extension methods for IMeshService / IMeshQueryProvider providing typed-result queries.
-/// All overloads compose on top of <see cref="IMeshService.ObserveQuery{T}"/> — there is no
+/// All overloads compose on top of <see cref="IMeshService.Query{T}"/> — there is no
 /// underlying <c>QueryAsync</c> interface method anymore. The Initial emission of
-/// <see cref="IMeshService.ObserveQuery{T}"/> is the legacy "QueryAsync" snapshot.
+/// <see cref="IMeshService.Query{T}"/> is the legacy "QueryAsync" snapshot.
 /// </summary>
 public static class MeshQueryExtensions
 {
@@ -20,35 +20,35 @@ public static class MeshQueryExtensions
     /// scoped to objects of type <typeparamref name="T"/>. Adds <c>$type</c> filter to the
     /// query so non-MeshNode payloads (partition objects) only show up when <c>T</c> matches.
     /// </summary>
-    public static IObservable<QueryResultChange<T>> ObserveQuery<T>(
+    public static IObservable<QueryResultChange<T>> Query<T>(
         this IMeshService meshQuery,
         MeshQueryRequest request,
         ITypeRegistry? typeRegistry = null)
     {
         var typeName = GetTypeName<T>(typeRegistry);
         var typedRequest = AddTypeFilter(request, typeName);
-        return meshQuery.ObserveQuery<T>(typedRequest);
+        return meshQuery.Query<T>(typedRequest);
     }
 
     /// <summary>
     /// Observe typed results from a query string.
     /// </summary>
-    public static IObservable<QueryResultChange<T>> ObserveQuery<T>(
+    public static IObservable<QueryResultChange<T>> Query<T>(
         this IMeshService meshQuery,
         string query,
         ITypeRegistry? typeRegistry = null)
-        => meshQuery.ObserveQuery<T>(MeshQueryRequest.FromQuery(query), typeRegistry);
+        => meshQuery.Query<T>(MeshQueryRequest.FromQuery(query), typeRegistry);
 
     /// <summary>
     /// Observe typed results from a query string with paging.
     /// </summary>
-    public static IObservable<QueryResultChange<T>> ObserveQuery<T>(
+    public static IObservable<QueryResultChange<T>> Query<T>(
         this IMeshService meshQuery,
         string query,
         int skip,
         int limit,
         ITypeRegistry? typeRegistry = null)
-        => meshQuery.ObserveQuery<T>(new MeshQueryRequest { Query = query, Skip = skip, Limit = limit }, typeRegistry);
+        => meshQuery.Query<T>(new MeshQueryRequest { Query = query, Skip = skip, Limit = limit }, typeRegistry);
 
     #endregion
 
@@ -57,7 +57,7 @@ public static class MeshQueryExtensions
     /// <summary>
     /// Observe typed results for a query against a raw provider (no security filter).
     /// </summary>
-    public static IObservable<QueryResultChange<T>> ObserveQuery<T>(
+    public static IObservable<QueryResultChange<T>> Query<T>(
         this IMeshQueryProvider meshQuery,
         MeshQueryRequest request,
         JsonSerializerOptions options,
@@ -65,7 +65,7 @@ public static class MeshQueryExtensions
     {
         var typeName = GetTypeName<T>(typeRegistry);
         var typedRequest = AddTypeFilter(request, typeName);
-        return meshQuery.ObserveQuery<T>(typedRequest, options);
+        return meshQuery.Query<T>(typedRequest, options);
     }
 
     #endregion

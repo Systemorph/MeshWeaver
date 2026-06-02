@@ -28,7 +28,7 @@ public class MultiQueryUnionEngineTests(ITestOutputHelper output) : MonolithMesh
     /// <see cref="QueryChangeType.Initial"/> emission carries the full snapshot.
     /// </summary>
     private IReadOnlyList<MeshNode> QueryNodes(MeshQueryRequest request)
-        => MeshQuery.ObserveQuery<MeshNode>(request)
+        => MeshQuery.Query<MeshNode>(request)
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
     [Fact]
@@ -74,7 +74,7 @@ public class MultiQueryUnionEngineTests(ITestOutputHelper output) : MonolithMesh
         NodeFactory.CreateNode(MeshNode.FromPath($"{p}_other/Y") with { Name = "Y", NodeType = "Markdown" }).Should().Emit();
 
         var initial = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQueries(new[]
+            .Query<MeshNode>(MeshQueryRequest.FromQueries(new[]
             {
                 $"path:{p} nodeType:Markdown scope:descendants",
                 $"path:{p}_other nodeType:Markdown scope:descendants",

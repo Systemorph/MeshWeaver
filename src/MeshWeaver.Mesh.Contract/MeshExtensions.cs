@@ -411,7 +411,7 @@ public static class MeshExtensions
                     // notification, response Post, version-history write, logging) which
                     // happen after the change-feed publish in the chain.
 
-                    // Live ObserveQuery delta is surfaced by the storage adapter's
+                    // Live Query delta is surfaced by the storage adapter's
                     // Changes feed (IStorageAdapter.Changes) from inside its Write —
                     // no separate notify path from this handler.
 
@@ -869,10 +869,10 @@ public static class MeshExtensions
         {
             // Non-recursive: only delete the root if it has no children. The
             // children-scope query with `select:path` projects each match to a
-            // dict — use `ObserveQuery<object>` so the projected items survive
+            // dict — use `Query<object>` so the projected items survive
             // the type filter (a `MeshNode` cast would drop every dict).
             return meshService
-                .ObserveQuery<object>(MeshQueryRequest.FromQuery(
+                .Query<object>(MeshQueryRequest.FromQuery(
                     $"namespace:{path} scope:children select:path",
                     MeshWeaver.Mesh.Security.WellKnownUsers.System))
                 .Take(1)
@@ -882,11 +882,11 @@ public static class MeshExtensions
 
         // Recursive: enumerate strict descendants via `scope:descendants`.
         // `select:path` projects each result to a dict (`{ "path": "..." }`),
-        // so ObserveQuery<object> is required — `ObserveQuery<MeshNode>` would
+        // so Query<object> is required — `Query<MeshNode>` would
         // silently drop every dict at the type filter. Root is added
         // explicitly so it is deleted last (after its subtree).
         return meshService
-            .ObserveQuery<object>(MeshQueryRequest.FromQuery(
+            .Query<object>(MeshQueryRequest.FromQuery(
                 $"namespace:{path} scope:descendants select:path",
                 MeshWeaver.Mesh.Security.WellKnownUsers.System))
             .Take(1)
@@ -1635,7 +1635,7 @@ public static class MeshExtensions
                     var (nodeToSave, _saved) = pair;
 
                     // Explicitly persist to the underlying IMeshStorage so a
-                    // subsequent ObserveQuery / persistence read sees the new
+                    // subsequent Query / persistence read sees the new
                     // value immediately. Without this the workspace stream is
                     // updated but persistence lags (debounced flush), causing
                     // ObserveQueryFreshnessTest-style stale reads.
@@ -2003,7 +2003,7 @@ public static class MeshExtensions
     /// <summary>
     /// Sync handler for MoveNodeRequest — Copy subtree to target, then reactively delete
     /// every source path. Composition is pure <see cref="IObservable{T}"/> end-to-end:
-    /// <c>CopyNode</c> → <c>ObserveQuery</c> (source subtree paths) → <c>storage.Delete</c>
+    /// <c>CopyNode</c> → <c>Query</c> (source subtree paths) → <c>storage.Delete</c>
     /// per path, with change notifications fired so the query catalog refreshes.
     /// No <c>await</c>, no recursive <c>DeleteNodeRequest</c> orchestration. Mirror shape
     /// of <see cref="HandleCopyNodeRequest"/>.
@@ -2024,7 +2024,7 @@ public static class MeshExtensions
         // Delete only fires after Copy succeeds (SelectMany short-circuits on copy error).
         meshService.CopyNode(sourcePath, targetPath, includeDescendants: true, includeSatellites: true)
             .SelectMany(copied =>
-                meshService.ObserveQuery<object>(MeshQueryRequest.FromQuery(
+                meshService.Query<object>(MeshQueryRequest.FromQuery(
                         $"path:{sourcePath} scope:subtree select:path"))
                     .Take(1)
                     .Timeout(TimeSpan.FromSeconds(15))
@@ -2080,7 +2080,7 @@ public static class MeshExtensions
 
     /// <summary>
     /// Sync handler for <see cref="CopyNodeRequest"/>. Implements copy as
-    /// <c>ObserveQuery</c> (initial set of source + subtree) → <c>Select(CreateNode)</c>
+    /// <c>Query</c> (initial set of source + subtree) → <c>Select(CreateNode)</c>
     /// for each, all in observable composition. No <c>await</c>, no persistence read,
     /// no remote MeshNodeReference subscription. Per <c>Doc/Architecture/AsynchronousCalls.md</c>.
     /// </summary>
@@ -2098,9 +2098,9 @@ public static class MeshExtensions
             sourcePath, targetPath, copyRequest.IncludeDescendants, copyRequest.IncludeSatellites);
 
         // Subtree query covers source + descendants + satellites (anything under sourcePath).
-        // ObserveQuery's first emission is the initial result set; we Take(1) and project each
+        // Query's first emission is the initial result set; we Take(1) and project each
         // node into a CreateNode call at the new target path.
-        meshService.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+        meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"path:{sourcePath} scope:subtree"))
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(15))

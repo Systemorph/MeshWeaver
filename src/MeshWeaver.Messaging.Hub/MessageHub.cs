@@ -506,7 +506,7 @@ public sealed class MessageHub : IMessageHub
         // 🚨 Systematic AccessContext propagation: stamp this hub's AccessService
         // AsyncLocal Context from the SENDER's delivery.AccessContext for the
         // duration of handling. Every downstream read (SecurityService probes,
-        // workspace.GetQuery, MeshService.ObserveQuery, validator chains) and
+        // workspace.GetQuery, MeshService.Query, validator chains) and
         // every Post made from inside the handler picks up the originating
         // user's identity through AsyncLocal automatically — no per-callsite
         // wiring, no per-handler delivery.AccessContext threading.

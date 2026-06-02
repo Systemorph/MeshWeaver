@@ -62,7 +62,7 @@ public sealed class NotificationTriageService(
             var jsonOptions = hub.JsonSerializerOptions;
 
             subscriptions.Add(query
-                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                .Query<MeshNode>(MeshQueryRequest.FromQuery(
                     $"nodeType:{NotificationNodeType.NodeType}"), jsonOptions)
                 .Select(change => change.Items)
                 .Subscribe(
@@ -97,7 +97,7 @@ public sealed class NotificationTriageService(
 
         // Cost gate: invoke the (cheap) triage agent ONLY when the recipient actually authored rules.
         // No rules → the in-app bell default stands, and we never spend a model call.
-        query.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+        query.Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"nodeType:{NotificationRuleNodeType.NodeType} " +
                 $"namespace:{recipient}/{NotificationRuleNodeType.UserSegment} limit:1"), jsonOptions)
             .Select(change => change.Items)

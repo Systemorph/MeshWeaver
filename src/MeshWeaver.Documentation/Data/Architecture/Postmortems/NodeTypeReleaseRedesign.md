@@ -201,7 +201,7 @@ public NodeTypeConfiguration? GetCachedConfiguration(string nodeTypePath) =>
 
 ```csharp
 private IObservable<Release?> GetActiveReleaseStream(string nodeTypePath) =>
-    meshService.ObserveQuery<MeshNode>(
+    meshService.Query<MeshNode>(
             MeshQueryRequest.FromQuery($"namespace:{nodeTypePath}/Release nodeType:Release"))
         .Select(change => change.Items
             .Select(n => n.Content as Release)

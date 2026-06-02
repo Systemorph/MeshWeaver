@@ -108,7 +108,7 @@ public record MeshSearchControl()
     public GridConfig? Grid { get; init; }
 
     /// <summary>
-    /// Whether to use ObserveQuery for reactive updates (default false).
+    /// Whether to use Query for reactive updates (default false).
     /// When true, results automatically update when underlying data changes.
     /// </summary>
     public object? ReactiveMode { get; init; }

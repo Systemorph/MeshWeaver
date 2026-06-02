@@ -308,7 +308,7 @@ public static class NodeTypeLayoutAreas
         // hangs) surface in test output instead of disappearing.
         var nodeTypesStream = meshQuery == null
             ? Observable.Return<IReadOnlyList<MeshNode>>(Array.Empty<MeshNode>())
-            : meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            : meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
                     $"path:{hubPath} nodeType:NodeType scope:descendants"))
                 .Select(change => (IReadOnlyList<MeshNode>)change.Items)
                 .Catch<IReadOnlyList<MeshNode>, Exception>(ex =>
@@ -322,7 +322,7 @@ public static class NodeTypeLayoutAreas
         // Live observable of Agent nodes under this namespace.
         var agentsStream = meshQuery == null
             ? Observable.Return<IReadOnlyList<MeshNode>>(Array.Empty<MeshNode>())
-            : meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            : meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
                     $"path:{hubPath} nodeType:Agent scope:descendants"))
                 .Select(change => (IReadOnlyList<MeshNode>)change.Items)
                 .Catch<IReadOnlyList<MeshNode>, Exception>(ex =>
@@ -549,7 +549,7 @@ public static class NodeTypeLayoutAreas
             try
             {
                 var stream = meshQuery
-                    .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(q))
+                    .Query<MeshNode>(MeshQueryRequest.FromQuery(q))
                     .Take(1)
                     .SelectMany(c => c.Items.ToObservable())
                     .ToAsyncEnumerableSequence(ct);
@@ -678,7 +678,7 @@ public static class NodeTypeLayoutAreas
         // table — releases are only the compile entries.
         var activityStream = meshQuery == null
             ? Observable.Return<IReadOnlyList<MeshNode>>(Array.Empty<MeshNode>())
-            : meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            : meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
                     $"namespace:{hubPath}/_activity nodeType:Activity"))
                 .Select(change => (IReadOnlyList<MeshNode>)change.Items)
                 .Catch<IReadOnlyList<MeshNode>, Exception>(_ =>
@@ -810,7 +810,7 @@ public static class NodeTypeLayoutAreas
         // IsUpToDate: combines own-node stream (CompiledSources) with live sources query.
         var meshService = host.Hub.ServiceProvider.GetService<IMeshService>();
         var nodeTypePath = host.Hub.Address.Path;
-        var sourcesObs = meshService?.ObserveQuery<MeshNode>(
+        var sourcesObs = meshService?.Query<MeshNode>(
             MeshQueryRequest.FromQuery($"namespace:{nodeTypePath}/Source nodeType:Code"))
             ?? Observable.Return(new QueryResultChange<MeshNode>());
         var isUpToDate = host.Workspace.GetMeshNodeStream()

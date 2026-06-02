@@ -31,11 +31,11 @@ internal class MeshNodeAutocompleteProvider(
         if (!string.IsNullOrWhiteSpace(query))
             queryString += $" name:{query}";
 
-        // Pure reactive: ObserveQuery emits the initial snapshot; project the first N children to
+        // Pure reactive: Query emits the initial snapshot; project the first N children to
         // AutocompleteItems. No await, no IAsyncEnumerable bridge — the old EnumerateAsync
         // round-tripped Observable → IAsyncEnumerable → Observable (via ToAsyncEnumerableSequence +
         // FromAsyncEnumerable) for nothing.
-        return meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(queryString))
+        return meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(queryString))
             .Take(1)
             .SelectMany(c => c.Items
                 .Take(DefaultMaxResults)

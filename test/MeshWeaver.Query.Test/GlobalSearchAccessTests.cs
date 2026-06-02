@@ -55,7 +55,7 @@ public class GlobalSearchAccessTests(ITestOutputHelper output) : MonolithMeshTes
         }).Should().Emit();
 
         // Act: search with context:search (like the top search bar)
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("scope:descendants context:search sort:LastModified-desc limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("scope:descendants context:search sort:LastModified-desc limit:50")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
         Output.WriteLine($"context:search returned {results.Count} results");
         foreach (var r in results.Take(20))
             Output.WriteLine($"  {r.Path} ({r.NodeType})");
@@ -96,7 +96,7 @@ public class GlobalSearchAccessTests(ITestOutputHelper output) : MonolithMeshTes
         }).Should().Emit();
 
         // Act: search with context:search (mimics the top search bar)
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("namespace:satCtx scope:descendants context:search sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:satCtx scope:descendants context:search sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
         Output.WriteLine($"context:search returned {results.Count} results");
         foreach (var r in results)
             Output.WriteLine($"  {r.Path} ({r.NodeType})");
@@ -191,7 +191,7 @@ public class GlobalSearchAccessTests(ITestOutputHelper output) : MonolithMeshTes
         }).Should().Emit();
 
         // Act: global search with is:main (the default for fan-out)
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("namespace:gbl is:main scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:gbl is:main scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Assert: only main content nodes
         results.Should().ContainSingle();
@@ -219,7 +219,7 @@ public class GlobalSearchAccessTests(ITestOutputHelper output) : MonolithMeshTes
         }).Should().Emit();
 
         // Act: text search for "Document" across all namespaces
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("Document is:main scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("Document is:main scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
         Output.WriteLine($"Global search 'Document': {results.Count} results");
 
         // Assert: should find nodes across namespaces

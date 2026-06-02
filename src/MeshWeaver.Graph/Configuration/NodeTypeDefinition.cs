@@ -221,7 +221,7 @@ public record NodeTypeDefinition
     /// the layout area) keep loading the last-known-good release until a fresh one ships.
     ///
     /// <para>Read this field instead of resolving the active release through a query —
-    /// the value is on the NodeType MeshNode itself, no <c>ObserveQuery</c> round-trip
+    /// the value is on the NodeType MeshNode itself, no <c>Query</c> round-trip
     /// required. See <c>Doc/Architecture/Postmortems/NodeTypeReleaseRedesign.md</c>.</para>
     /// </summary>
     public string? LatestReleasePath { get; init; }

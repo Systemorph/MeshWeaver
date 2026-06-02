@@ -31,7 +31,7 @@ public class RecentlyAccessedSearchTest(ITestOutputHelper output) : MonolithMesh
     /// <see cref="QueryChangeType.Initial"/> emission carries the full snapshot.
     /// </summary>
     private IReadOnlyList<MeshNode> QueryNodes(string query)
-        => MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+        => MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
     [Fact(Timeout = 30000)]
@@ -76,7 +76,7 @@ public class RecentlyAccessedSearchTest(ITestOutputHelper output) : MonolithMesh
         // Wait actively until all 3 distinct tracked nodes have surfaced — fold the
         // live query's deltas into a running path set rather than a fixed wait.
         var results = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 "source:accessed scope:descendants is:main sort:LastModified-desc context:search limit:10"))
             .Scan(ImmutableList<MeshNode>.Empty, (acc, c) =>
                 c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset

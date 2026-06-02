@@ -225,7 +225,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
     private void WaitForFilteredQuery(
         string query, Func<IReadOnlyList<MeshNode>, bool> until)
         => Mesh.ServiceProvider.GetRequiredService<IMeshService>()
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Should().Within(StepTimeout).Match(c => until(c.Items));
 
     [Fact(Timeout = 30000)]
@@ -345,7 +345,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
 
         // Query node as User2 (Editor on SharedOrg) — has read access
         LoginWithToken(_tokenUser2!);
-        var publicNode = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:SharedOrg/Public"))
+        var publicNode = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("path:SharedOrg/Public"))
             .Should().Within(StepTimeout)
             .Match(c => c.ChangeType == QueryChangeType.Initial && c.Items.Count > 0)
             .Items[0];
@@ -369,7 +369,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         updateResult2.Should().Contain("Updated");
 
         // Verify the update persisted
-        MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:SharedOrg/Public"))
+        MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("path:SharedOrg/Public"))
             .Should().Within(StepTimeout)
             .Match(c => c.Items.Any(n => n.Name == "Updated by User2"));
     }
@@ -383,7 +383,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
 
         // Query node as User2 (Admin on PrivateOrg) — has read access
         LoginWithToken(_tokenUser2!);
-        var secretNode = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:PrivateOrg/Secret"))
+        var secretNode = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("path:PrivateOrg/Secret"))
             .Should().Within(StepTimeout)
             .Match(c => c.ChangeType == QueryChangeType.Initial && c.Items.Count > 0)
             .Items[0];
@@ -400,7 +400,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
 
         // Verify name was NOT changed (check as User2 who has access)
         LoginWithToken(_tokenUser2!);
-        var reloaded = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:PrivateOrg/Secret"))
+        var reloaded = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("path:PrivateOrg/Secret"))
             .Should().Within(StepTimeout)
             .Match(c => c.ChangeType == QueryChangeType.Initial && c.Items.Count > 0)
             .Items[0];

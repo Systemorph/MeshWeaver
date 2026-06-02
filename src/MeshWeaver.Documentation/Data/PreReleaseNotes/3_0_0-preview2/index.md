@@ -34,7 +34,7 @@ Sanctioned exceptions are exactly two: the persistence boundary (`Observable.Fro
 
 ## CQRS Discipline — Reading a Node Correctly
 
-`QueryAsync` / `ObserveQuery` are eventually-consistent indexes — they lag after writes. preview2 establishes and enforces the canonical single-node read primitive:
+`QueryAsync` / `Query` are eventually-consistent indexes — they lag after writes. preview2 establishes and enforces the canonical single-node read primitive:
 
 ```csharp
 // Read or write a specific node (own, local, or remote — auto-dispatched)
@@ -164,12 +164,12 @@ A new first-class operation: **push or pull MeshNodes between MeshWeaver portals
 
 ## Synced Query Data Source
 
-`IMeshQueryProvider.ObserveQuery` is now wired into `VirtualDataSource`, giving the workspace a live, query-backed collection abstraction:
+`IMeshQueryProvider.Query` is now wired into `VirtualDataSource`, giving the workspace a live, query-backed collection abstraction:
 
 - **Auto-registered** Sources/Tests collections on every per-node hub.
 - **Synchronous delete-notification** path via the change-feed (`NotifyDeleted`).
 - **Name-keyed `workspace.GetQuery`** plus multi-query union.
-- **Distinct providers by Name**; `ObserveQuery` dedupes Initial and live changes by `MeshNode.Path`.
+- **Distinct providers by Name**; `Query` dedupes Initial and live changes by `MeshNode.Path`.
 
 This powers the new compile pipeline's source discovery and the side-menu Sources/Tests view.
 
@@ -288,7 +288,7 @@ Additional hardening in this release:
 
 1. **Replace `Task`-returning surfaces with `IObservable<T>`** in any code that calls `IMeshService` / `IMeshStorage` / `PermissionEvaluator` / navigation. The old async extensions are `[Obsolete]`. Subscribe to fire side effects.
 
-2. **Replace `QueryAsync(path:X)` / `ObserveQuery` single-node reads** with `workspace.GetMeshNodeStream(path)` (or `GetRemoteStream<MeshNode, MeshNodeReference>` for explicit cross-hub).
+2. **Replace `QueryAsync(path:X)` / `Query` single-node reads** with `workspace.GetMeshNodeStream(path)` (or `GetRemoteStream<MeshNode, MeshNodeReference>` for explicit cross-hub).
 
 3. **Replace bespoke `XxxRequest/XxxResponse` operation messages** that have inputs + progress + output with the activity-control-plane pattern: Code MeshNode template + form inputs + `RequestedStatus = Running` trigger.
 

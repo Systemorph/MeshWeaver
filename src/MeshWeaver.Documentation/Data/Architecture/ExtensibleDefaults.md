@@ -100,7 +100,7 @@ Apply Extensible Defaults whenever a feature has:
 
 `scope:selfAndAncestors` on queries (2) and (3) means a hub at `acme/team/proj` sees extensions defined at `acme/team/proj`, `acme/team`, `acme`, and the root — closest-wins behaviour is the caller's responsibility (the same convention used by AccessAssignment).
 
-The union is computed by [`MeshQueryEngine`](xref:MeshWeaver.Hosting.Persistence.Query.MeshQueryEngine) inside a single `IMeshQueryCore.ObserveQuery` call — see [Synced Query Data Source](../DataMesh/SyncedQueryDataSource) for the delta protocol. Static-provider nodes participate via [`StaticNodeQueryProvider`](xref:MeshWeaver.Hosting.Persistence.Query.StaticNodeQueryProvider), so a query against `namespace:Agent` returns built-in Agents without touching persistence.
+The union is computed by [`MeshQueryEngine`](xref:MeshWeaver.Hosting.Persistence.Query.MeshQueryEngine) inside a single `IMeshQueryCore.Query` call — see [Synced Query Data Source](../DataMesh/SyncedQueryDataSource) for the delta protocol. Static-provider nodes participate via [`StaticNodeQueryProvider`](xref:MeshWeaver.Hosting.Persistence.Query.StaticNodeQueryProvider), so a query against `namespace:Agent` returns built-in Agents without touching persistence.
 
 ---
 

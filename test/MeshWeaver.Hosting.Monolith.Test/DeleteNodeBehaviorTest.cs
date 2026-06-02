@@ -95,7 +95,7 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
         string query, Func<IReadOnlySet<string>, bool> predicate)
     {
         var paths = new HashSet<string>(StringComparer.Ordinal);
-        return MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+        return MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Scan((IReadOnlySet<string>)paths, (acc, change) =>
             {
                 var set = (HashSet<string>)acc;

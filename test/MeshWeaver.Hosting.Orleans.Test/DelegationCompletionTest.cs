@@ -95,7 +95,7 @@ public class DelegationCompletionTest(ITestOutputHelper output) : OrleansSharedT
         //    Reactive children-query poll — no await, no Task.Delay.
         var meshService = client.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Services.IMeshService>();
         var notificationQuery = $"path:{threadPath}/_Notification scope:children nodeType:Notification";
-        meshService.ObserveQuery<MeshNode>(new MeshQueryRequest { Query = notificationQuery })
+        meshService.Query<MeshNode>(new MeshQueryRequest { Query = notificationQuery })
             .Should().Within(20.Seconds()).Match(c => c.Items.Any(n =>
                 n.Content is MeshWeaver.Mesh.Notification notif && notif.TargetNodePath == threadPath));
         Output.WriteLine("Verified: completion notification appeared in user's bell");

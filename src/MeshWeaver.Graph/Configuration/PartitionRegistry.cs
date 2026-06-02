@@ -50,7 +50,7 @@ public sealed class PartitionRegistry
             // are added or updated at runtime (rare, but possible).
             var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
             return meshService
-                .ObserveQuery<MeshNode>(new MeshQueryRequest
+                .Query<MeshNode>(new MeshQueryRequest
                 {
                     Query = "namespace:Admin/Partition nodeType:Partition",
                     Skip = 0,

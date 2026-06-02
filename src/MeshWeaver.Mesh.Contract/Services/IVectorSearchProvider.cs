@@ -19,7 +19,7 @@ namespace MeshWeaver.Mesh.Services;
 /// <c>Search</c> MCP / agent tool via <c>MeshOperations.Search</c>: when this
 /// service is registered AND the query has bare-text content (not a purely
 /// structured field-filter), the search routes through here. Structured-only
-/// queries continue to use the regular <see cref="IMeshQueryCore.ObserveQuery"/>
+/// queries continue to use the regular <see cref="IMeshQueryCore.Query"/>
 /// path.</para>
 /// </summary>
 public interface IVectorSearchProvider

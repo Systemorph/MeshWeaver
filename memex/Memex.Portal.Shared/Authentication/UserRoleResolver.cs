@@ -22,7 +22,7 @@ namespace Memex.Portal.Shared.Authentication;
 /// <para>Resolution goes through the canonical synced-query API
 /// (<c>workspace.GetQuery</c>) — same path-keyed dedup + Initial gating + static
 /// provider fan-out as every other live mesh-node collection consumer in the
-/// codebase. Direct <c>IMeshQueryCore.ObserveQuery</c> calls from auth code
+/// codebase. Direct <c>IMeshQueryCore.Query</c> calls from auth code
 /// were a pedestrian-query antipattern (replaced 2026-05).</para>
 /// </summary>
 internal static class UserRoleResolver

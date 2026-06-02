@@ -70,7 +70,7 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
         Output.WriteLine($"Thread 2 at: {resp2.Message.Node?.Path}");
 
         // Act: query threads by creator across all partitions (the fixed dashboard query)
-        var myThreads = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:Thread content.CreatedBy:{AdminUserId} scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var myThreads = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:Thread content.CreatedBy:{AdminUserId} scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
         Output.WriteLine($"content.CreatedBy:{AdminUserId} scope:descendants => {myThreads.Count} threads");
 
         // Assert: both threads should be found across namespaces
@@ -101,10 +101,10 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
 
         // Act: old query (namespace:User/userId scope:descendants) â€” misses external threads
         var userNs = $"User/{AdminUserId}";
-        var oldQueryResults = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:Thread namespace:{userNs} scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var oldQueryResults = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:Thread namespace:{userNs} scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Act: new query (content.CreatedBy filter, scope:descendants for global search)
-        var newQueryResults = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:Thread content.CreatedBy:{AdminUserId} scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var newQueryResults = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:Thread content.CreatedBy:{AdminUserId} scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         Output.WriteLine($"Old query (namespace:{userNs}): {oldQueryResults.Count} threads");
         Output.WriteLine($"New query (content.CreatedBy): {newQueryResults.Count} threads");
@@ -132,7 +132,7 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
         }).Should().Emit();
 
         // Act: query for current user's threads
-        var myThreads = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:Thread content.CreatedBy:{AdminUserId} scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var myThreads = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:Thread content.CreatedBy:{AdminUserId} scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Assert: other user's thread should NOT appear
         myThreads.Should().NotContain(n => n.Path == threadPath,
@@ -174,7 +174,7 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
         }).Should().Emit();
 
         // Act: the dashboard activity feed query
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("source:activity scope:subtree is:main sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("source:activity scope:subtree is:main sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Assert: only nodes WITH activity should appear
         results.Should().HaveCountGreaterThanOrEqualTo(2,
@@ -216,7 +216,7 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
         }).Should().Emit();
 
         // Act: scoped to nsA only
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("source:activity namespace:nsA scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("source:activity namespace:nsA scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Assert: only nsA items
         results.Should().ContainSingle();

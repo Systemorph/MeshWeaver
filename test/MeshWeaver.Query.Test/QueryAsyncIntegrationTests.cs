@@ -27,11 +27,11 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     /// <see cref="QueryChangeType.Initial"/> emission carries the full snapshot.
     /// </summary>
     private IReadOnlyList<MeshNode> QueryNodes(string query)
-        => MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+        => MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
     private IReadOnlyList<MeshNode> QueryNodes(MeshQueryRequest request)
-        => MeshQuery.ObserveQuery<MeshNode>(request)
+        => MeshQuery.Query<MeshNode>(request)
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
     [Fact]

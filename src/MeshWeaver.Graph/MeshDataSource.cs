@@ -784,7 +784,7 @@ public static class MeshDataSourceExtensions
 
                 if (!force && meshService is not null)
                 {
-                    meshService.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                    meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
                             $"namespace:{hub.Address.Path}/Source nodeType:Code"))
                         .Take(1)
                         .Subscribe(sources =>
@@ -834,7 +834,7 @@ public static class MeshDataSourceExtensions
             hub.Address.Path, request.Id);
         // Ack first — the watcher's compile is async and the requester
         // shouldn't be blocked on Roslyn. Subscribers waiting for the Release
-        // MeshNode use ObserveQuery / GetMeshNodeStream on the Release
+        // MeshNode use Query / GetMeshNodeStream on the Release
         // namespace; that's the canonical "compile finished" signal.
         hub.Post(new CreateReleaseResponse(true),
             o => o.ResponseFor(request));
@@ -927,7 +927,7 @@ public static class MeshDataSourceExtensions
         var hubPath = hub.Address.Path;
         var partitionRoot = hub.Address.Segments.Length > 0 ? hub.Address.Segments[0] : hubPath;
 
-        meshService.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+        meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{hubPath}/Test nodeType:Code"))
             .Take(1)
             .Subscribe(queryResult =>

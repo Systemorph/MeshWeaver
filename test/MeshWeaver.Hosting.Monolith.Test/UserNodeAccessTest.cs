@@ -87,9 +87,9 @@ public class UserNodeAccessTest(ITestOutputHelper output) : MonolithMeshTestBase
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         accessService.SetCircuitContext(new AccessContext { ObjectId = "Bob", Name = "Bob" });
 
-        // ObserveQuery is the live change feed — match the first snapshot that
+        // Query is the live change feed — match the first snapshot that
         // surfaces the node (fan-out + security filter baked in).
-        MeshQuery.ObserveQuery<MeshNode>(new MeshQueryRequest { Query = "path:User/Alice" })
+        MeshQuery.Query<MeshNode>(new MeshQueryRequest { Query = "path:User/Alice" })
             .Should().Within(15.Seconds()).Match(c => c.Items.Any(),
                 "User nodes (User/Alice) should be readable by any authenticated user via INodeTypeAccessRule");
     }

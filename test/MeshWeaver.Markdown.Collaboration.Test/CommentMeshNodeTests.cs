@@ -908,7 +908,7 @@ public class CommentMeshNodeTests
     public void CommentWorkflow_ReplyDiscoverableViaNamespaceQuery()
     {
         // Simulates what CommentLayoutAreas.Overview does to find replies:
-        // meshQuery.ObserveQuery("namespace:{hubPath} nodeType:Comment")
+        // meshQuery.Query("namespace:{hubPath} nodeType:Comment")
         var docPath = "Doc/DataMesh/CollaborativeEditing";
         var commentPartition = "_Comment";
         var parentCommentPath = $"{docPath}/{commentPartition}/c1";

@@ -80,7 +80,7 @@ public interface IMeshService
     /// The first emission contains the full initial result set (ChangeType = Initial).
     /// Subsequent emissions contain incremental changes (Added, Updated, Removed).
     /// </summary>
-    IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request);
+    IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request);
 
     /// <summary>
     /// 🚨 NEW unified query surface — each registered <see cref="IMeshQueryProvider"/>

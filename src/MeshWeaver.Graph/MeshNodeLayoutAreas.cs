@@ -851,8 +851,8 @@ public static class MeshNodeLayoutAreas
 
         return host.Workspace.GetMeshNodeStream().SelectMany(node =>
         {
-            // NodeType children: ObserveQuery snapshot — listing observable, no await.
-            var children = meshQuery.ObserveQuery<MeshNode>(
+            // NodeType children: Query snapshot — listing observable, no await.
+            var children = meshQuery.Query<MeshNode>(
                     MeshQueryRequest.FromQuery($"namespace:{hubPath} nodeType:NodeType"))
                 .Take(1)
                 .Select(c => (IReadOnlyList<MeshNode>)c.Items)

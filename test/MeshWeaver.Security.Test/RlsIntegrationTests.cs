@@ -704,7 +704,7 @@ public class SecurePersistenceDecoratorTests(ITestOutputHelper output) : Monolit
         meshService.CreateNode(AssignmentNodeFactory.UserRole(userId, "Viewer", "secure/test")).Should().Emit();
 
         // Act - query the node (MeshQuery respects security)
-        var result = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{nodePath}"))
+        var result = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{nodePath}"))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial && c.Items.Count > 0).Items.FirstOrDefault();
 
         // Assert
@@ -731,7 +731,7 @@ public class SecurePersistenceDecoratorTests(ITestOutputHelper output) : Monolit
         // No permission assigned
 
         // Act - query the node (without any user having permission, the node still exists in persistence)
-        var result = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{nodePath}"))
+        var result = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{nodePath}"))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial && c.Items.Count > 0).Items.FirstOrDefault();
 
         // Assert - node exists in persistence (no user-scoped filtering via MeshQuery without UserId)
@@ -771,7 +771,7 @@ public class SecurePersistenceDecoratorTests(ITestOutputHelper output) : Monolit
         meshService.CreateNode(AssignmentNodeFactory.UserRole(userId, "Viewer", "filter/test/accessible")).Should().Emit();
 
         // Act - query children (MeshQuery returns all children; security filtering depends on context)
-        var children = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{parentPath}"))
+        var children = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{parentPath}"))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial && c.Items.Any(n => n.Name == "Accessible Node")).Items;
 
         // Assert - Both nodes should be returned since MeshQuery doesn't filter by user by default

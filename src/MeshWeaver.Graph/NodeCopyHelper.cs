@@ -54,11 +54,11 @@ public static class NodeCopyHelper
         logger ??= hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.NodeCopyHelper");
 
-        // Single ObserveQuery over the source subtree — emits source + every
+        // Single Query over the source subtree — emits source + every
         // descendant in one go. Take(1) snapshots the listing for the copy
         // operation; subsequent edits to the source don't follow.
         var sourceSubtree = meshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"path:{sourcePath} scope:subtree"))
             .Take(1)
             .Select(c => c.Items

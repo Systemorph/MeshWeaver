@@ -31,10 +31,10 @@ internal interface IMeshQueryCore
     /// Observe nodes matching a query without access control filtering.
     /// Emits Initial / Added / Updated / Removed deltas as the underlying
     /// data changes. Same shape as
-    /// <see cref="IMeshQueryProvider.ObserveQuery{T}(MeshQueryRequest, JsonSerializerOptions)"/>
+    /// <see cref="IMeshQueryProvider.Query{T}(MeshQueryRequest, JsonSerializerOptions)"/>
     /// — minus the security filter on the result set.
     /// </summary>
-    IObservable<QueryResultChange<T>> ObserveQuery<T>(
+    IObservable<QueryResultChange<T>> Query<T>(
         MeshQueryRequest request,
         JsonSerializerOptions options);
 }

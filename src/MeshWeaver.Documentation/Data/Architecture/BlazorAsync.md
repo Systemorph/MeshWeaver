@@ -149,7 +149,7 @@ When a view needs N independent results before rendering, replace `Task.WhenAll(
 private void LoadResults()
 {
     var observables = queries.Select(q => MeshQuery
-        .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(q))
+        .Query<MeshNode>(MeshQueryRequest.FromQuery(q))
         .Take(1)
         .Select(c => (IReadOnlyList<MeshNode>)c.Items)
         .Catch<IReadOnlyList<MeshNode>, Exception>(
@@ -239,7 +239,7 @@ private async IAsyncEnumerable<MyItem> StreamItems(string query,
     var channel = Channel.CreateUnbounded<MyItem>(
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
 
-    using var sub = MeshService.ObserveQuery<MyItem>(query)
+    using var sub = MeshService.Query<MyItem>(query)
         .SelectMany(c => c.Items)
         .Subscribe(
             item => channel.Writer.TryWrite(item),
@@ -259,7 +259,7 @@ The `await foreach` iterates a `ChannelReader` — that is not a hub round-trip 
 
 | ❌ Wrong | ✅ Right |
 |---|---|
-| `var x = await mesh.QueryAsync<T>("path:X").FirstOrDefaultAsync()` | `mesh.GetMeshNode(path).Subscribe(n => UpdateState(n))` for a known path; `mesh.ObserveQuery<T>(req).Subscribe(...)` for set queries |
+| `var x = await mesh.QueryAsync<T>("path:X").FirstOrDefaultAsync()` | `mesh.GetMeshNode(path).Subscribe(n => UpdateState(n))` for a known path; `mesh.Query<T>(req).Subscribe(...)` for set queries |
 | `var r = await Hub.AwaitResponse<R>(req)` | `Hub.Observe(req).Subscribe(r => …, ex => …)` |
 | `Hub.RegisterCallback(d, r => { … })` | `Hub.Observe(d).Subscribe(r => …, ex => …)` |
 | `var x = await stream.FirstAsync().ToTask()` | `stream.Take(1).Subscribe(x => UpdateState(x))` |
@@ -304,4 +304,4 @@ Everything else — every `await` whose right-hand side touches `IMessageHub`, `
 
 - [Asynchronous Calls](AsynchronousCalls) — the master doc on hub-handler deadlock semantics; this article specialises that to the Blazor surface.
 - [Blazor Data Binding](BlazorDataBinding) — how layout-area paths bind to Razor view fields, and the canonical view-side stream patterns.
-- [CQRS — Queries vs. Content Access](CqrsAndContentAccess) — when to use `QueryAsync` / `ObserveQuery` vs. `GetMeshNode` / `GetRemoteStream`.
+- [CQRS — Queries vs. Content Access](CqrsAndContentAccess) — when to use `QueryAsync` / `Query` vs. `GetMeshNode` / `GetRemoteStream`.

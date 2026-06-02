@@ -81,7 +81,7 @@ public sealed class EmailInboundProcessor(
             return Observable.Return(Unit.Default);
 
         // email → user: structured exact match through IMeshQueryCore.
-        return query.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+        return query.Query<MeshNode>(MeshQueryRequest.FromQuery(
                     $"nodeType:{UserNodeType.NodeType} content.email:{m.From} limit:1"),
                 hub.JsonSerializerOptions)
             .Take(1)
@@ -151,7 +151,7 @@ public sealed class EmailInboundProcessor(
         var safeSubject = SanitizeForQuery(subject);
         var q = $"{safeSubject} nodeType:{EmailNodeType.NodeType} namespace:{username}/{EmailNodeType.UserEmailSegment} limit:10";
         var jsonOptions = hub.JsonSerializerOptions;
-        return query.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(q), jsonOptions)
+        return query.Query<MeshNode>(MeshQueryRequest.FromQuery(q), jsonOptions)
             .Take(1)
             .Select(change => change.Items
                 .Select(n => EmailOf(n, jsonOptions))

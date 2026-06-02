@@ -406,7 +406,7 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     /// <summary>
-    /// Folds the live <see cref="IMeshService.ObserveQuery"/> stream for the MeshNode at
+    /// Folds the live <see cref="IMeshService.Query"/> stream for the MeshNode at
     /// <paramref name="path"/> into a single <c>MeshNode?</c> — Initial / Added / Updated /
     /// Removed events collapse via <c>.Scan</c>. Callers assert on the result with
     /// <c>.Should().Match(...)</c>, which blocks (≤ the assertion timeout) for the first
@@ -414,7 +414,7 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     /// <para>
     /// Required for ApiToken paths because those nodes are <c>IsSatelliteType</c> and have no
     /// per-node hub — the test base's <c>ReadNodeAsync</c> (and <c>GetMeshNodeStream(path)</c>)
-    /// would hang for 30s waiting for a route. The mesh-level <c>ObserveQuery</c> reads the
+    /// would hang for 30s waiting for a route. The mesh-level <c>Query</c> reads the
     /// authoritative persistence state through the same pipeline production <c>ApiTokenService</c>
     /// uses for its own reads, with live change-notifier deltas instead of a polling loop.
     /// </para>
@@ -423,7 +423,7 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         return meshService
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}", WellKnownUsers.System))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}", WellKnownUsers.System))
             .Scan((MeshNode?)null, (current, change) => change.ChangeType switch
             {
                 QueryChangeType.Initial or QueryChangeType.Reset =>

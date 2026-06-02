@@ -69,7 +69,7 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
     {
         LoginAsUnprivilegedUser();
 
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
             "path:User/Roland"))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
@@ -87,7 +87,7 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
     {
         LoginAsUnprivilegedUser();
 
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
             "path:Acme"))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
@@ -105,7 +105,7 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
     {
         LoginAsUnprivilegedUser();
 
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
             "nodeType:User"))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial && c.Items.Count >= 2).Items;
 
@@ -123,7 +123,7 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
     {
         LoginAsUnprivilegedUser();
 
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
             "nodeType:Space"))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial && c.Items.Count >= 1).Items;
 
@@ -152,7 +152,7 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Unprivileged user cannot see the org (partition access controls visibility)
         LoginAsUnprivilegedUser();
 
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
             "path:Globex"))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
@@ -179,7 +179,7 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         // The grant has landed; accumulate the live query deltas until the
         // Globex node surfaces (Initial may still race the synced-query update).
-        var resultsAfterGrant = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+        var resultsAfterGrant = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
             "path:Globex"))
             .Should().Match(c => c.Items.Count == 1).Items;
 

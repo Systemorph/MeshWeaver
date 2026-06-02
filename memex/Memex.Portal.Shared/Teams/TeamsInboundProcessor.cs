@@ -51,7 +51,7 @@ public sealed class TeamsInboundProcessor
         if (string.IsNullOrWhiteSpace(m.Text) || string.IsNullOrEmpty(m.AadObjectId))
             return Observable.Return(Unit.Default);
 
-        return query.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+        return query.Query<MeshNode>(MeshQueryRequest.FromQuery(
                     $"nodeType:{UserNodeType.NodeType} content.objectId:{m.AadObjectId} limit:1"), jsonOptions)
             .Take(1)
             .Select(change => change.Items.FirstOrDefault(n => n.State == MeshNodeState.Active))
@@ -112,7 +112,7 @@ public sealed class TeamsInboundProcessor
     }
 
     private IObservable<string?> FindThread(string conversationId) =>
-        query.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+        query.Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"nodeType:{TeamsConversationNodeType.NodeType} content.conversationId:{conversationId} limit:1"), jsonOptions)
             .Take(1)
             .Select(change => change.Items

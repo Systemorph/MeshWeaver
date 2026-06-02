@@ -87,7 +87,7 @@
     protected override void OnInitialized()
     {
         _personsSubscription = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("nodeType:User namespace:User"))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:User namespace:User"))
             .Subscribe(
                 change =>
                 {

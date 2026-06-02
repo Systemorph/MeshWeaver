@@ -14,17 +14,17 @@ using Xunit;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
-/// Pinpoints two ObserveQuery contracts that NodeCopyHelper relies on:
+/// Pinpoints two Query contracts that NodeCopyHelper relies on:
 ///
-/// 1. After CreateNode completes, an ObserveQuery for the just-created path
+/// 1. After CreateNode completes, an Query for the just-created path
 ///    must emit it in the initial result set. No "wait for index", no race.
 ///
-/// 2. After UpdateNode completes, an ObserveQuery covering the path must emit
+/// 2. After UpdateNode completes, an Query covering the path must emit
 ///    the LATEST content in its initial result set (not the pre-update copy
 ///    that some lagged read-side index might still hold).
 ///
 /// Failure modes these tests catch:
-/// - Stale catalog index: query lags behind writes → first ObserveQuery sees
+/// - Stale catalog index: query lags behind writes → first Query sees
 ///   nothing or sees the old content.
 /// - Provider eventual consistency: the provider rebuilds asynchronously and
 ///   the Initial emission is computed from a snapshot taken before the write.
@@ -47,7 +47,7 @@ public class ObserveQueryFreshnessTest(ITestOutputHelper output) : MonolithMeshT
             Content = MarkdownContent.Parse("Hello", "", path)
         }).Should().Emit();
 
-        var change = MeshService.ObserveQuery<MeshNode>(
+        var change = MeshService.Query<MeshNode>(
                 MeshQueryRequest.FromQuery($"path:{path}"))
             .Should().Within(5.Seconds())
             .Match(c => c.ChangeType == QueryChangeType.Initial);
@@ -75,13 +75,13 @@ public class ObserveQueryFreshnessTest(ITestOutputHelper output) : MonolithMeshT
             Content = MarkdownContent.Parse("second", "", path)
         }).Should().Emit();
 
-        var change = MeshService.ObserveQuery<MeshNode>(
+        var change = MeshService.Query<MeshNode>(
                 MeshQueryRequest.FromQuery($"path:{path}"))
             .Should().Within(5.Seconds())
             .Match(c => c.ChangeType == QueryChangeType.Initial);
 
         change.Items.Should().ContainSingle();
-        change.Items.Single().Name.Should().Be("v2", "ObserveQuery initial set must reflect the most recent UpdateNode");
+        change.Items.Single().Name.Should().Be("v2", "Query initial set must reflect the most recent UpdateNode");
         var content = change.Items.Single().Content as MarkdownContent;
         content.Should().NotBeNull();
         content!.Content.Should().Be("second");
@@ -109,7 +109,7 @@ public class ObserveQueryFreshnessTest(ITestOutputHelper output) : MonolithMeshT
             Content = MarkdownContent.Parse("b-second", "", $"{Ns}/B")
         }).Should().Emit();
 
-        var change = MeshService.ObserveQuery<MeshNode>(
+        var change = MeshService.Query<MeshNode>(
                 MeshQueryRequest.FromQuery($"path:{Ns} scope:descendants"))
             .Should().Within(5.Seconds())
             .Match(c => c.ChangeType == QueryChangeType.Initial
@@ -121,13 +121,13 @@ public class ObserveQueryFreshnessTest(ITestOutputHelper output) : MonolithMeshT
 
         byPath[$"{Ns}/A"].Name.Should().Be("v1-A", "A was not modified");
         byPath[$"{Ns}/B"].Name.Should().Be("v2-B",
-            "ObserveQuery descendants initial set must carry the post-UpdateNode content for B — " +
+            "Query descendants initial set must carry the post-UpdateNode content for B — " +
             "if it returns 'v1-B', the read-side index is lagging the writes (CQRS staleness bug).");
     }
 
     /// <summary>
     /// Regression test for the ObserveQueryInternal scheduler-capture deadlock:
-    /// before the Task.Run fix, subscribing ObserveQuery from within a hub-
+    /// before the Task.Run fix, subscribing Query from within a hub-
     /// reachable code path captured the Orleans TaskScheduler and the
     /// await-foreach continuation was posted back to a scheduler that was busy
     /// — the 2-second Timeout in SecurityService fired and menus showed as
@@ -144,7 +144,7 @@ public class ObserveQueryFreshnessTest(ITestOutputHelper output) : MonolithMeshT
         // .Where(...).Match() chains on the same stream see every event.
         // Without Replay, each chain creates a new cold subscription and misses
         // events that were emitted on a sibling subscription.
-        var hotChanges = MeshService.ObserveQuery<MeshNode>(
+        var hotChanges = MeshService.Query<MeshNode>(
             MeshQueryRequest.FromQuery($"namespace:{ns} nodeType:Markdown"))
             .Replay();
         using var conn = hotChanges.Connect();
@@ -180,7 +180,7 @@ public class ObserveQueryFreshnessTest(ITestOutputHelper output) : MonolithMeshT
             Content = MarkdownContent.Parse("original", "", path)
         }).Should().Emit();
 
-        var hotChanges = MeshService.ObserveQuery<MeshNode>(
+        var hotChanges = MeshService.Query<MeshNode>(
             MeshQueryRequest.FromQuery($"path:{path}"))
             .Replay();
         using var conn = hotChanges.Connect();
@@ -224,7 +224,7 @@ public class ObserveQueryFreshnessTest(ITestOutputHelper output) : MonolithMeshT
 
         // Hot subscription on the AccessAssignment-namespace query — same shape
         // as SecurityService.ObserveScopeAssignments uses internally.
-        var hot = MeshService.ObserveQuery<MeshNode>(
+        var hot = MeshService.Query<MeshNode>(
                 MeshQueryRequest.FromQuery($"namespace:{ns} nodeType:AccessAssignment"))
             .Replay();
         using var conn = hot.Connect();
@@ -274,7 +274,7 @@ public class ObserveQueryFreshnessTest(ITestOutputHelper output) : MonolithMeshT
             .Should().Emit();
 
         // THEN subscribe — Initial must reflect the prior write.
-        var initial = MeshService.ObserveQuery<MeshNode>(
+        var initial = MeshService.Query<MeshNode>(
                 MeshQueryRequest.FromQuery($"namespace:{ns} nodeType:AccessAssignment"))
             .Should().Within(5.Seconds())
             .Match(c => c.ChangeType == QueryChangeType.Initial

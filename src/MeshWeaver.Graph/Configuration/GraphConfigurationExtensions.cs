@@ -215,7 +215,7 @@ public static class GraphConfigurationExtensions
         var codeParentPath = $"{nodeTypePath}/{CodeNodeType.SourceSubNamespace}";
 
         meshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{codeParentPath} scope:subtree"))
             .Take(1).Timeout(TimeSpan.FromSeconds(30))
             .Select(change => change.Items

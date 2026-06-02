@@ -80,7 +80,7 @@ The stream provider receives the hub's [`IWorkspace`](xref:MeshWeaver.Data.IWork
 
 | Pattern | Stream provider expression |
 |---|---|
-| Mesh query mirror | `ws => provider.ObserveQuery<T>(MeshQueryRequest.FromQuery(q), opts).Select(c => c.Items)` — or just `WithMeshQuery<T>(q)`. |
+| Mesh query mirror | `ws => provider.Query<T>(MeshQueryRequest.FromQuery(q), opts).Select(c => c.Items)` — or just `WithMeshQuery<T>(q)`. |
 | Cross-hub subscription | `ws => ws.GetRemoteStream<TReduced, TRef>(siblingAddress, ref).Select(c => Project(c.Value))` |
 | Polled external API | `ws => Observable.Interval(TimeSpan.FromSeconds(30)).SelectMany(_ => Observable.FromAsync(FetchFromGitHub)).Select(items => (IEnumerable<T>)items)` |
 | Computed projection | `ws => ws.GetStream<RawA>().CombineLatest(ws.GetStream<RawB>(), Compose)` |

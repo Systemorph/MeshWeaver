@@ -70,7 +70,7 @@ public static class DeleteLayoutArea
     }
 
     private static IObservable<int> CountDescendants(IMeshService meshQuery, string nodePath) =>
-        meshQuery.ObserveQuery<MeshNode>(
+        meshQuery.Query<MeshNode>(
                 MeshQueryRequest.FromQuery($"path:{nodePath} scope:descendants"))
             .Take(1)
             .Select(c => c.Items.Count);

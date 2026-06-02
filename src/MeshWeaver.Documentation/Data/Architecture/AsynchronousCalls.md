@@ -134,7 +134,7 @@ The Task boundary belongs at the test edge (`.FirstAsync().ToTask(ct)`) or in fr
 
 - `hub.GetMeshNode(path)` — never awaited, always composed.
 - `hub.Observe(request, options)` — never awaited or `.ToTask()`'d in production; subscribe.
-- `meshService.QueryAsync(...)` — never inside hub-reachable code; use `meshService.ObserveQuery(...).Subscribe(...)`.
+- `meshService.QueryAsync(...)` — never inside hub-reachable code; use `meshService.Query(...).Subscribe(...)`.
 - `workspace.GetRemoteStream<T, TRef>(addr, ref)` — subscribe; never `.Take(1).ToTask()` to fake a fetch.
 
 ---
@@ -359,7 +359,7 @@ For a one-shot read in a handler or click action, post `GetDataRequest(new MeshN
 |---|---|
 | **Single node, live** (view re-renders on changes) | `workspace.GetMeshNodeStream(path)` / `GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReference())` — **stay subscribed** (no `.Take(1)`) |
 | **Single node, one-shot** (handler, helper, click) | `hub.Post(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path)))` + `RegisterCallback` |
-| **Set / listing, live** (dashboard, autocomplete) | `meshService.ObserveQuery<T>(MeshQueryRequest.FromQuery(...))` — emits initial set + deltas |
+| **Set / listing, live** (dashboard, autocomplete) | `meshService.Query<T>(MeshQueryRequest.FromQuery(...))` — emits initial set + deltas |
 | **Set / listing, one-shot** (MCP tool, CLI, HTTP endpoint) | `meshService.QueryAsync<T>(...)` — ONLY when the caller exits after the snapshot |
 
 Simple rule: **streams subscribe, requests fetch.** Don't `.Take(1)` a stream to fake a fetch.
@@ -459,25 +459,25 @@ return workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
 
 This is also how you **wait for work to finish** — subscribe until a field in the node's content flips to a completion state, then `.Take(1)`. No polling loop. No repeated queries.
 
-### Sets / listings — prefer `ObserveQuery`, not `QueryAsync`
+### Sets / listings — prefer `Query`, not `QueryAsync`
 
-Even when a query is the right idea (listings, filters, existence checks), **do not `await` the `IAsyncEnumerable<T>`** version — use `IMeshService.ObserveQuery<T>`. It returns `IObservable<QueryResultChange<T>>` with an initial full set and then incremental deltas, composing with `Select` / `Where` / `Subscribe` like every other mesh observable.
+Even when a query is the right idea (listings, filters, existence checks), **do not `await` the `IAsyncEnumerable<T>`** version — use `IMeshService.Query<T>`. It returns `IObservable<QueryResultChange<T>>` with an initial full set and then incremental deltas, composing with `Select` / `Where` / `Subscribe` like every other mesh observable.
 
-> **Even `ObserveQuery` is wrong inside a layout area for displaying values.** Declare a binding and let the Blazor view subscribe. See [Data Binding](xref:GUI/DataBinding). Backend rendering code should be fully synchronous and side-effect-free.
+> **Even `Query` is wrong inside a layout area for displaying values.** Declare a binding and let the Blazor view subscribe. See [Data Binding](xref:GUI/DataBinding). Backend rendering code should be fully synchronous and side-effect-free.
 
-**`QueryAsync` breaks the update flow.** It is a one-shot snapshot — the view freezes. If a row is added, removed, or mutated, the list doesn't change. `ObserveQuery` emits the initial set plus a delta for every subsequent change, so the downstream chain stays live.
+**`QueryAsync` breaks the update flow.** It is a one-shot snapshot — the view freezes. If a row is added, removed, or mutated, the list doesn't change. `Query` emits the initial set plus a delta for every subsequent change, so the downstream chain stays live.
 
 ```csharp
 // ❌ WRONG — IAsyncEnumerable + await — hub ActionBlock blocks on query pump.
 var items = await meshService.QueryAsync<MeshNode>("nodeType:Post").ToListAsync();
 
 // ✅ RIGHT — reactive, live, auto-updates on mesh changes.
-meshService.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Post"))
+meshService.Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Post"))
     .Select(change => change.Result)
     .Subscribe(nodes => { /* render, react */ });
 ```
 
-**Valid uses of `ObserveQuery`:**
+**Valid uses of `Query`:**
 
 - Listing children of a namespace (`path/*`)
 - Filtering by predicate across the mesh (`nodeType:X`, `name:*sales*`)
@@ -493,7 +493,7 @@ meshService.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Post"))
 - **Export / import CLI services** — pull-and-leave jobs that dump to disk.
 - **HTTP endpoints that render once and close** — e.g. a CSV download.
 
-Rule of thumb: **if any downstream code re-renders or re-computes when data changes, you need `ObserveQuery`.** `QueryAsync` is only safe when the caller serialises the snapshot and walks away.
+Rule of thumb: **if any downstream code re-renders or re-computes when data changes, you need `Query`.** `QueryAsync` is only safe when the caller serialises the snapshot and walks away.
 
 ---
 
@@ -822,7 +822,7 @@ public partial class MyView : ComponentBase, IDisposable
         _sub?.Dispose();
         _suggestions.Clear();
 
-        _sub = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+        _sub = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Subscribe(change =>
             {
                 ApplyChange(change);
@@ -841,7 +841,7 @@ The view binds to `_suggestions` directly — no callback that returns `Task<T[]
 
 | ❌ Wrong | ✅ Right |
 |---|---|
-| `var x = await mesh.QueryAsync(...).ToListAsync()` | `mesh.ObserveQuery<T>(req).Subscribe(c => ApplyChange(c))` |
+| `var x = await mesh.QueryAsync(...).ToListAsync()` | `mesh.Query<T>(req).Subscribe(c => ApplyChange(c))` |
 | `await Hub.AwaitResponse<R>(req, ...)` | `Hub.Observe(req).Subscribe(r => UpdateState(r.Message), ex => …)` |
 | `Hub.RegisterCallback(delivery, r => { … })` | `Hub.Observe(delivery).Subscribe(r => …, ex => …)` |
 | `var n = await mesh.GetMeshNodeStream(p).Take(1).ToTask()` | live = `mesh.GetMeshNodeStream(p).Subscribe(n => UpdateState(n))`; one-shot = `Hub.GetMeshNode(p).Subscribe(n => …)` |
@@ -856,12 +856,12 @@ The view binds to `_suggestions` directly — no callback that returns `Task<T[]
 
 ---
 
-## 🚨 Copy / recursive subtree operations — `ObserveQuery` + `.Select(CreateNode)`
+## 🚨 Copy / recursive subtree operations — `Query` + `.Select(CreateNode)`
 
 Recursive node operations (Copy, and Move which is Copy + Delete) must stay in the observable world end to end. **Never** read source content via `GetRemoteStream<MeshNode, MeshNodeReference>` for this — the remote stream subscribes to the owning per-node hub, which may not be activated yet for newly-created nodes, and the subscription waits indefinitely. **Never** `await meshService.QueryAsync(...)` either.
 
 ```csharp
-meshService.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
         $"path:{sourcePath} scope:subtree"))
     .Take(1)
     .Timeout(TimeSpan.FromSeconds(15))

@@ -50,7 +50,7 @@ public static class RunningActivitiesStripe
         var activitiesNamespace = $"{partitionRoot}/_Activity";
 
         return meshService
-            .ObserveQuery<MeshNode>(new MeshQueryRequest
+            .Query<MeshNode>(new MeshQueryRequest
             {
                 Query = $"namespace:{activitiesNamespace} nodeType:Activity",
                 Skip = 0,

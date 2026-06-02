@@ -136,7 +136,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     }
 
     /// <summary>
-    /// Reactive path-set fold: subscribes to <c>ObserveQuery</c> and folds the live
+    /// Reactive path-set fold: subscribes to <c>Query</c> and folds the live
     /// deltas (Initial / Reset / Added / Updated / Removed) into a running path set,
     /// surfacing it as an observable so tests assert with <c>.Should().Match(predicate)</c>
     /// instead of awaiting a Task.
@@ -144,7 +144,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     private IObservable<IReadOnlySet<string>> ObserveQueryPathSet(string query)
     {
         var paths = new HashSet<string>(StringComparer.Ordinal);
-        return MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+        return MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Scan((IReadOnlySet<string>)paths, (_, change) =>
             {
                 if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
@@ -189,7 +189,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     public void ChildTodos_CanBeEnumeratedViaQuery()
     {
         var todos = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("namespace:ACME/ProductLaunch/Todo"))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:ACME/ProductLaunch/Todo"))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         todos.Should().NotBeEmpty("Should have child Todo nodes");
@@ -536,9 +536,9 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         var activeQuery = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo state:Active scope:subtree";
 
         // Capture the initial active set + the original todo from the same
-        // ObserveQuery subscription â€” initial emission is the full snapshot.
+        // Query subscription â€” initial emission is the full snapshot.
         var initialItems = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(activeQuery))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(activeQuery))
             .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
             .Select(c => c.Items)
             .Should().Emit();
@@ -550,7 +550,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         var deletedNode = originalNode! with { State = MeshNodeState.Deleted };
         NodeFactory.UpdateNode(deletedNode).Should().Emit();
 
-        // Wait for the catalog to reflect the state change â€” ObserveQuery emits a
+        // Wait for the catalog to reflect the state change â€” Query emits a
         // Removed/Updated delta when DefinePersona stops matching state:Active.
         var paths = ObserveQueryPathSet(activeQuery)
             .Should().Within(60.Seconds()).Match(set => !set.Contains(todoPath));
@@ -571,9 +571,9 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         var activeQuery = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo state:Active scope:subtree";
         var deletedQuery = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo state:Deleted scope:subtree";
 
-        // Capture original from the live active set (set query â€” ObserveQuery is correct).
+        // Capture original from the live active set (set query â€” Query is correct).
         var initialActive = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(activeQuery))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(activeQuery))
             .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
             .Select(c => c.Items)
             .Should().Emit();

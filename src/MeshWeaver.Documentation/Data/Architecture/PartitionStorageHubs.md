@@ -91,7 +91,7 @@ A single-threaded actor per table solves it once. The dispatcher serialises, the
 
 ```
    IPartitionStorageProvider (per backend, e.g. PostgreSqlPartitionStorageProvider):
-   - At startup: ObserveQuery("namespace:Admin/Partition nodeType:Partition")
+   - At startup: Query("namespace:Admin/Partition nodeType:Partition")
                  → Dictionary<firstSegment, PartitionDefinition>. Kept live.
    - Matches(fullPath) = first segment ∈ dictionary
    - CreateAdapterForTable(def, table) → IStorageAdapter bound to (schema, table)
@@ -202,7 +202,7 @@ The partition hub is keyed by `Address("storage/{schema}/{table}")`. Same `(sche
 | First storage call for `(schema, table)` | Router resolves provider via `Matches`, calls `CreateAdapterForTable`, spawns hub at `storage/{schema}/{table}` with standard config, starts 5-min idle timer |
 | Subsequent calls | Re-uses the live hub; resets its idle timer |
 | 5 minutes idle | Hub disposes itself; adapter disposes; underlying connection closes; entry removed from router dict |
-| Partition definition changes (e.g. schema rename) | Provider's internal partition dictionary updates via its `ObserveQuery` subscription; future `Matches` calls reflect the change. Existing hubs are not actively destroyed — they idle out and the new definition takes effect on next spawn. |
+| Partition definition changes (e.g. schema rename) | Provider's internal partition dictionary updates via its `Query` subscription; future `Matches` calls reflect the change. Existing hubs are not actively destroyed — they idle out and the new definition takes effect on next spawn. |
 | Silo shutdown | All live partition hubs disposed via parent-hub disposal chain |
 
 > A partition hub's resources never outlive the partition. There is no LRU cache — the registry stream is the single source of truth.
@@ -235,7 +235,7 @@ public interface IPartitionStorageProvider
 
     /// First-match-wins. fullPath is the candidate node path. Postgres
     /// implementation: extract first segment, check it against the live
-    /// partition dictionary (populated via ObserveQuery on Admin/Partition/*
+    /// partition dictionary (populated via Query on Admin/Partition/*
     /// at startup). Static providers: exact / prefix match on first segment.
     bool Matches(string fullPath);
 

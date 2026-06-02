@@ -6,7 +6,7 @@ using MeshWeaver.Reactive;
 namespace MeshWeaver.Mesh;
 
 /// <summary>
-/// Test-only sanctioned bridge from <see cref="IMeshService.ObserveQuery{T}"/> back to
+/// Test-only sanctioned bridge from <see cref="IMeshService.Query{T}"/> back to
 /// <see cref="IAsyncEnumerable{T}"/> at the test boundary. Production code MUST NOT use these —
 /// it composes <c>IObservable&lt;T&gt;</c> end-to-end per
 /// <c>Doc/Architecture/AsynchronousCalls.md</c>. Tests are allowed to bridge because
@@ -15,7 +15,7 @@ namespace MeshWeaver.Mesh;
 public static class IMeshQueryTestExtensions
 {
     /// <summary>
-    /// Legacy <c>QueryAsync</c> shape for tests: subscribes to <see cref="IMeshService.ObserveQuery{T}"/>,
+    /// Legacy <c>QueryAsync</c> shape for tests: subscribes to <see cref="IMeshService.Query{T}"/>,
     /// takes the Initial emission, flattens its items as <c>IAsyncEnumerable&lt;object&gt;</c>.
     /// Uses <c>object</c> as the type parameter so <c>select:</c>-projected
     /// dictionaries (and other non-MeshNode payloads) survive the generic cast.
@@ -24,7 +24,7 @@ public static class IMeshQueryTestExtensions
         this IMeshService svc,
         MeshQueryRequest request,
         CancellationToken ct = default)
-        => svc.ObserveQuery<object>(request)
+        => svc.Query<object>(request)
             .Take(1)
             .SelectMany(c => c.Items.ToObservable())
             .ToAsyncEnumerableSequence(ct);
@@ -36,7 +36,7 @@ public static class IMeshQueryTestExtensions
         this IMeshService svc,
         MeshQueryRequest request,
         CancellationToken ct = default)
-        => svc.ObserveQuery<T>(request)
+        => svc.Query<T>(request)
             .Take(1)
             .SelectMany(c => c.Items.ToObservable())
             .ToAsyncEnumerableSequence(ct);

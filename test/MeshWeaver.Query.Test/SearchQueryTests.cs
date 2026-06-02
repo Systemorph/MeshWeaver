@@ -38,7 +38,7 @@ public class SearchQueryTests : MonolithMeshTestBase
     /// the first <see cref="QueryChangeType.Initial"/> emission carries the full snapshot.
     /// </summary>
     private MeshNode[] Query(MeshQueryRequest request)
-        => MeshQuery.ObserveQuery<MeshNode>(request)
+        => MeshQuery.Query<MeshNode>(request)
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items.ToArray();
 
     /// <summary>
@@ -46,7 +46,7 @@ public class SearchQueryTests : MonolithMeshTestBase
     /// used by <c>select:</c> projection tests, whose rows are dictionaries, not MeshNodes.
     /// </summary>
     private object[] QueryObjects(MeshQueryRequest request)
-        => MeshQuery.ObserveQuery<object>(request)
+        => MeshQuery.Query<object>(request)
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items.ToArray();
 
     public SearchQueryTests(ITestOutputHelper output) : base(output)

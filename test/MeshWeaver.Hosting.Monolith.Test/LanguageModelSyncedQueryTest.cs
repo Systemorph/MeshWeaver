@@ -22,7 +22,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 ///
 /// <para>🚨 This test calls the EXACT same workspace.GetQuery API the
 /// chat view subscribes to, with the EXACT same query strings. No
-/// re-implementing the merge with IMeshService.ObserveQuery, no detours
+/// re-implementing the merge with IMeshService.Query, no detours
 /// through QueryAsync. If the dropdown is broken in production, this
 /// test should fail too — and vice versa.</para>
 ///
@@ -158,7 +158,7 @@ public class LanguageModelSyncedQueryTest : MonolithMeshTestBase
     {
         // The chat view re-subscribes when the context path changes. The
         // synced-query registry must reuse the SAME upstream observable for
-        // the same id — otherwise we leak upstream IMeshQueryProvider.ObserveQuery
+        // the same id — otherwise we leak upstream IMeshQueryProvider.Query
         // subscriptions. With per-user RLS wrapping (2026-05-22), the outward
         // observable is a Defer wrapper that varies per call site, but it
         // delegates to the SAME cached SyncedQueryMeshNodes upstream

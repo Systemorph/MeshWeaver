@@ -64,7 +64,7 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
         Output.WriteLine($"Thread B: {threadB}");
 
         // Act: query nodeType:Thread without namespace â€” should fan out to all _Thread tables
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Thread sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Thread sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         Output.WriteLine($"nodeType:Thread => {results.Count} results: [{string.Join(", ", results.Select(r => r.Path))}]");
 
@@ -92,7 +92,7 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
         resp2.Message.Success.Should().BeTrue(resp2.Message.Error ?? "");
 
         // Act: query with explicit namespace â€” should only return threads from NsX
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("namespace:NsX nodeType:Thread sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:NsX nodeType:Thread sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         Output.WriteLine($"namespace:NsX nodeType:Thread => {results.Count} results");
 
@@ -139,7 +139,7 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
         NodeFactory.CreateNode(commentB).Should().Emit();
 
         // Act: query nodeType:Comment without namespace
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Comment sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Comment sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         Output.WriteLine($"nodeType:Comment => {results.Count} results: [{string.Join(", ", results.Select(r => r.Path))}]");
 

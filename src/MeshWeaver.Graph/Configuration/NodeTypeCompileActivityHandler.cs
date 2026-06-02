@@ -181,7 +181,7 @@ internal static class NodeTypeCompileActivityHandler
                     LastCompilationActivityPath = activityPath
                 }, logger, parentPath, "Compiling");
 
-                // Fetch sources via UNCACHED IMeshService.ObserveQuery — when it
+                // Fetch sources via UNCACHED IMeshService.Query — when it
                 // emits, the result is the post-write fresh source set. The
                 // cached SyncedQuery's Replay(1) can return the pre-update V1
                 // snapshot when this compile fires immediately after a source
@@ -190,7 +190,7 @@ internal static class NodeTypeCompileActivityHandler
                 // buffer yet). Repro:
                 // CodeEditRecompileTest.CodeEdit_ExplicitRelease_IsUpToDate_RecompilesOnSourceChange.
                 //
-                // 5s Timeout + null-fallback: ObserveQuery's MergeProviderObservables
+                // 5s Timeout + null-fallback: Query's MergeProviderObservables
                 // gates the merged Initial on every provider emitting Initial — when
                 // one provider's emission stalls (storage adapter's async enumeration
                 // blocked by security-service init, source MeshNode not yet visible
@@ -199,13 +199,13 @@ internal static class NodeTypeCompileActivityHandler
                 // CompileAndGetConfigurations resolve sources via its cached
                 // SyncedQuery (workspace.GetQuery in GetSourceCollection), which
                 // takes a different aggregation path and works even when
-                // ObserveQuery's merge is stalled. The V1→V2 freshness regression
+                // Query's merge is stalled. The V1→V2 freshness regression
                 // the override was added for only surfaces when a source edit
                 // happens within the same compile cycle; the kickoff-driven first
                 // 🚨 Source-read freshness: read each source MeshNode via the
                 // per-path live stream (workspace.GetMeshNodeStream(path)),
-                // NOT via the index-backed ObserveQuery. The previous flow
-                // (meshService.ObserveQuery → IMeshQueryProvider) is gated on
+                // NOT via the index-backed Query. The previous flow
+                // (meshService.Query → IMeshQueryProvider) is gated on
                 // a Replay(1) per provider plus query-merge bookkeeping and
                 // can return PRE-UPDATE source MeshNodes for a window after
                 // a source edit lands on the owning code hub.

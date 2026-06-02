@@ -20,7 +20,7 @@ namespace MeshWeaver.Persistence.Test;
 
 /// <summary>
 /// Tests for FileSystemChangeWatcher that monitors external file changes
-/// and publishes notifications to ObserveQuery.
+/// and publishes notifications to Query.
 /// </summary>
 [Collection("FileSystemWatcherTests")]
 public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMeshTestBase(output)

@@ -60,7 +60,7 @@ public class InvitationServiceTests(ITestOutputHelper output) : MonolithMeshTest
 
         // Same shape as the onboarding gate's lookup — routes nodeType:Invitation to Admin.
         var found = MeshSvc
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"nodeType:Invitation content.email:{email} limit:1"))
             .Should().Within(10.Seconds())
             .Match(c => c.Items.Count > 0);
@@ -82,7 +82,7 @@ public class InvitationServiceTests(ITestOutputHelper output) : MonolithMeshTest
             Service.CreateInvitation(email, "admin", null).Should().Emit();
 
         // Wait for visibility, then the pending invitation is found.
-        MeshSvc.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+        MeshSvc.Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"nodeType:Invitation content.email:{email} limit:1"))
             .Should().Within(10.Seconds()).Match(c => c.Items.Count > 0);
 

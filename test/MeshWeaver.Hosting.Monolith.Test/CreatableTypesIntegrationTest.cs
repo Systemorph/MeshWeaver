@@ -464,7 +464,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
 
     /// <summary>
     /// Executes type picker queries the same way MeshNodePickerView.LoadResultsAsync does.
-    /// Each query's Initial snapshot off ObserveQuery is the legacy QueryAsync result.
+    /// Each query's Initial snapshot off Query is the legacy QueryAsync result.
     /// </summary>
     private List<MeshNode> ExecuteTypePickerQueries(
         List<string> typeQueries, IMeshService meshQuery)
@@ -472,7 +472,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         var allResults = new List<MeshNode>();
         foreach (var query in typeQueries)
         {
-            var results = meshQuery.ObserveQuery<MeshNode>(query)
+            var results = meshQuery.Query<MeshNode>(query)
                 .Should().Within(20.Seconds())
                 .Match(c => c.ChangeType == QueryChangeType.Initial).Items;
             Output.WriteLine($"Query '{query}' => {results.Count} results: [{string.Join(", ", results.Select(r => r.Path))}]");
@@ -976,17 +976,17 @@ public class CreatableTypesFileSystemTest : MonolithMeshTestBase
     public void FileSystem_VerifyDataStructure()
     {
         // No InitializeAsync needed - FileSystemPersistenceService uses lazy loading.
-        // ObserveQuery is the live fan-out feed; match the first snapshot that
+        // Query is the live fan-out feed; match the first snapshot that
         // surfaces each path.
-        MeshQuery.ObserveQuery<MeshNode>("path:ACME/Project")
+        MeshQuery.Query<MeshNode>("path:ACME/Project")
             .Should().Within(20.Seconds()).Match(c => c.Items.Any(n => n.Path == "ACME/Project"),
                 "ACME/Project should exist in sample data");
 
-        MeshQuery.ObserveQuery<MeshNode>("path:ACME/Project/Todo")
+        MeshQuery.Query<MeshNode>("path:ACME/Project/Todo")
             .Should().Within(20.Seconds()).Match(c => c.Items.Any(n => n.Path == "ACME/Project/Todo"),
                 "ACME/Project/Todo should exist in sample data");
 
-        MeshQuery.ObserveQuery<MeshNode>("path:ACME/ProductLaunch")
+        MeshQuery.Query<MeshNode>("path:ACME/ProductLaunch")
             .Should().Within(20.Seconds()).Match(c => c.Items.Any(n => n.Path == "ACME/ProductLaunch"),
                 "ACME/ProductLaunch should exist in sample data");
     }
@@ -995,7 +995,7 @@ public class CreatableTypesFileSystemTest : MonolithMeshTestBase
     public void FileSystem_GetChildrenOfACMEProject_ShouldIncludeTodo()
     {
         // Get children of ACME/Project - uses lazy loading
-        var children = MeshQuery.ObserveQuery<MeshNode>("namespace:ACME/Project")
+        var children = MeshQuery.Query<MeshNode>("namespace:ACME/Project")
             .Should().Within(20.Seconds())
             .Match(c => c.Items.Any(n => n.Path == "ACME/Project/Todo")).Items;
 
@@ -1015,7 +1015,7 @@ public class CreatableTypesFileSystemTest : MonolithMeshTestBase
     {
         // This is the exact query used by GetCreatableTypesAsync
         var query = "namespace:ACME/Project nodeType:NodeType";
-        var results = MeshQuery.ObserveQuery<MeshNode>(query)
+        var results = MeshQuery.Query<MeshNode>(query)
             .Should().Within(20.Seconds())
             .Match(c => c.Items.Any(n => n.Path == "ACME/Project/Todo")).Items;
 

@@ -274,7 +274,7 @@ Anything that reads `nodeType:LanguageModel` (or any synced collection of MeshNo
 The short version:
 
 - `workspace.GetQuery(id, "namespace:Foo nodeType:Foo")` — gives you provider fan-out (including static nodes), all-Initial gating, path-keyed dedup, and workspace-level caching.
-- **Do not** roll your own merge with `IMeshService.ObserveQuery` — you lose every one of those properties. Most notably, `IMeshQueryCore.ObserveQuery` does NOT see static-node-provider entries; your dropdown will be silently empty even though MCP shows 9 nodes.
+- **Do not** roll your own merge with `IMeshService.Query` — you lose every one of those properties. Most notably, `IMeshQueryCore.Query` does NOT see static-node-provider entries; your dropdown will be silently empty even though MCP shows 9 nodes.
 
 ---
 

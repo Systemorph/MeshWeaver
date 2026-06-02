@@ -35,7 +35,7 @@ public class CatalogFallbackTests(ITestOutputHelper output) : MonolithMeshTestBa
         }).Should().Emit();
 
         // Act - query for organizations using standard query (simulating fallback)
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:org nodeType:Markdown scope:descendants limit:20")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("path:org nodeType:Markdown scope:descendants limit:20")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Assert - should return actual nodes when no activity
         results.Should().HaveCount(2);
@@ -60,7 +60,7 @@ public class CatalogFallbackTests(ITestOutputHelper output) : MonolithMeshTestBa
         }).Should().Emit();
 
         // Act - source:activity returns main content nodes (not satellites)
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("source:activity namespace:org scope:descendants")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("source:activity namespace:org scope:descendants")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Assert - returns the main node, not the Activity satellite
         results.Should().ContainSingle();
@@ -95,7 +95,7 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
         }).Should().Emit();
 
         // Act - query with filter for name containing "Corp" using wildcard operator
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:org nodeType:Markdown name:*Corp* scope:descendants limit:20")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("path:org nodeType:Markdown name:*Corp* scope:descendants limit:20")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Assert - should only return Acme Corporation
         results.Should().ContainSingle();
@@ -118,7 +118,7 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
         }).Should().Emit();
 
         // Act - text search for "financial" with descendants scope
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:doc nodeType:Markdown financial scope:descendants limit:20")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("path:doc nodeType:Markdown financial scope:descendants limit:20")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Assert
         results.Should().ContainSingle();
@@ -139,13 +139,13 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
         }
 
         // Act - first page (3 items) with descendants scope
-        var firstPage = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:item nodeType:Markdown scope:descendants limit:3")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var firstPage = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("path:item nodeType:Markdown scope:descendants limit:3")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Load more (6 items total)
-        var secondPage = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:item nodeType:Markdown scope:descendants limit:6")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var secondPage = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("path:item nodeType:Markdown scope:descendants limit:6")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Load all (10 items)
-        var allItems = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:item nodeType:Markdown scope:descendants limit:100")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var allItems = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("path:item nodeType:Markdown scope:descendants limit:100")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Assert
         firstPage.Should().HaveCount(3);
@@ -169,7 +169,7 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
         // Act - request limit+1 to detect if there are more
         var limit = 3;
         var queryLimit = limit + 1;
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:test nodeType:Markdown scope:descendants limit:{queryLimit}")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:test nodeType:Markdown scope:descendants limit:{queryLimit}")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         var hasMore = results.Count > limit;
         if (hasMore)
@@ -203,7 +203,7 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
         }).Should().Emit();
 
         // Act - query for Code nodes only
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:data nodeType:Code scope:descendants limit:20")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("path:data nodeType:Code scope:descendants limit:20")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Assert - should return only Code nodes, not the Markdown
         results.Should().HaveCount(2);
@@ -246,7 +246,7 @@ public class SourceActivityQueryTests(ITestOutputHelper output) : MonolithMeshTe
         }).Should().Emit();
 
         // Act
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("source:activity scope:descendants")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("source:activity scope:descendants")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Assert - returns main content node, not Activity satellites
         results.Should().ContainSingle();
@@ -275,7 +275,7 @@ public class SourceActivityQueryTests(ITestOutputHelper output) : MonolithMeshTe
         }
 
         // Act
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("source:activity scope:descendants limit:3")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("source:activity scope:descendants limit:3")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Assert - only main nodes returned, respects limit
         results.Should().HaveCount(3);
@@ -312,7 +312,7 @@ public class SourceActivityQueryTests(ITestOutputHelper output) : MonolithMeshTe
         }).Should().Emit();
 
         // Act - filter by namespace
-        var results = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("source:activity namespace:projA scope:descendants")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
+        var results = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("source:activity namespace:projA scope:descendants")).Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
 
         // Assert - returns only the main node under projA
         results.Should().ContainSingle();

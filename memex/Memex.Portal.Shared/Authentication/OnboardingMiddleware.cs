@@ -29,7 +29,7 @@ namespace Memex.Portal.Shared.Authentication;
 /// API from <c>SyncedMeshNodeQueries.md</c>). The synced layer bypasses RLS internally
 /// (System identity), dedupes by path, gates on Initial, and includes static-node
 /// providers — same guarantees as <c>ApiTokenService.GetTokensForUser</c> and
-/// <c>AgentChatClient.Initialize</c>. Direct <c>IMeshQueryCore.ObserveQuery</c> calls
+/// <c>AgentChatClient.Initialize</c>. Direct <c>IMeshQueryCore.Query</c> calls
 /// from application code are pedestrian queries and were forbidden in 2026-05.</para>
 ///
 /// <para>Internally the lookup is a reactive observable chain
@@ -195,7 +195,7 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
     /// internally — so this RLS-bypassing lookup uses exactly the same machinery
     /// as every other "live mesh node set" consumer in the codebase
     /// (<c>ApiTokenService.GetTokensForUser</c>, <c>AgentChatClient</c>, etc.).
-    /// Direct <c>IMeshQueryCore.ObserveQuery</c> here was a pedestrian-query
+    /// Direct <c>IMeshQueryCore.Query</c> here was a pedestrian-query
     /// antipattern — replaced 2026-05 per <c>SyncedMeshNodeQueries.md</c>.
     ///
     /// <para>Returns <see cref="IObservable{T}"/> rather than <see cref="Task{T}"/>

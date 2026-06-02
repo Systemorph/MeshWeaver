@@ -161,7 +161,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         var activityNamespace = $"{typePath}/_Activity";
         await Task.Delay(TimeSpan.FromSeconds(15), ct);
         var firstSnapshot = await SiloMeshService
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{activityNamespace} scope:subtree"))
             .FirstAsync()
             .ToTask(ct);
@@ -182,7 +182,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
             .FirstAsync().ToTask(ct);
         await Task.Delay(TimeSpan.FromSeconds(8), ct);
         var secondSnapshot = await SiloMeshService
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{activityNamespace} scope:subtree"))
             .FirstAsync()
             .ToTask(ct);
@@ -293,7 +293,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         // notified with proper error". A terminal status — never the
         // intermediate Compiling — is the contract for "notified".
         // 🚨 Use GetMeshNodeStream (per-node MeshNodeReference reducer) instead of
-        // ObserveQuery — query rows carry stale Content by design (feedback_query_content_stale.md),
+        // Query — query rows carry stale Content by design (feedback_query_content_stale.md),
         // so the polling loop's `node.Content as NodeTypeDefinition` cast saw the
         // pre-trigger snapshot forever and `settledDef` stayed null. The per-node
         // hub's reducer refreshes Content on every write.
@@ -331,7 +331,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
             // Success path — activity rows + Release node should also exist.
             var activityNamespace = $"{typePath}/_Activity";
             var snapshot = await SiloMeshService
-                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                .Query<MeshNode>(MeshQueryRequest.FromQuery(
                     $"namespace:{activityNamespace} scope:subtree"))
                 .FirstAsync()
                 .ToTask(ct);
@@ -351,12 +351,12 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         // window between, assert it didn't change. Endless messages would
         // bump the version every cycle.
         var versionSnap1 = await SiloMeshService
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{typePath}"))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{typePath}"))
             .FirstAsync().ToTask(ct);
         var version1 = versionSnap1.Items.FirstOrDefault()?.Version ?? -1;
         await Task.Delay(TimeSpan.FromSeconds(3), ct);
         var versionSnap2 = await SiloMeshService
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{typePath}"))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{typePath}"))
             .FirstAsync().ToTask(ct);
         var version2 = versionSnap2.Items.FirstOrDefault()?.Version ?? -1;
 
@@ -444,7 +444,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
 
         var activityNamespace = $"{typePath}/_Activity";
         var snapshot = await SiloMeshService
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{activityNamespace} scope:subtree"))
             .FirstAsync()
             .ToTask(ct);

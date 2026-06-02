@@ -29,7 +29,7 @@ public static class ChildrenQueryExtensions
         if (!query.Contains("namespace:"))
             query = $"namespace:{hubPath} {query}";
 
-        return meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+        return meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Select(c => (IReadOnlyList<MeshNode>)c.Items);
     }
 

@@ -24,7 +24,7 @@ namespace MeshWeaver.Query.Test;
 /// <see cref="SyncedQueryDataSourceExtensions.GetQuery(IWorkspace, object, string)"/>).
 ///
 /// <para>
-/// Pipeline contract: from <see cref="IMeshQueryProvider.ObserveQuery"/> →
+/// Pipeline contract: from <see cref="IMeshQueryProvider.Query"/> →
 /// scan into a running path set → <c>DistinctUntilChanged</c> with
 /// element equality on the set → resolve per-path remote streams →
 /// <c>CombineLatest</c>. <c>Switch</c> when the path set changes —
@@ -354,7 +354,7 @@ public class SyncedQueryTest(ITestOutputHelper output)
     /// called with N&gt;1 queries, the FIRST emission downstream
     /// (<c>.Take(1)</c>) MUST contain the union of every query's Initial
     /// result set — never a partial one driven by whichever upstream
-    /// <c>ObserveQuery</c> happened to emit first.
+    /// <c>Query</c> happened to emit first.
     ///
     /// <para>The original failure mode (caught by
     /// <c>MeshNodeCompilationIntegrationTest.CompileWithMultipleSourceLocationsPullsInExternalCode</c>):
@@ -446,7 +446,7 @@ public class SyncedQueryTest(ITestOutputHelper output)
     /// <para>
     /// The bug: the compile pipeline's <c>workspace.GetQuery(id, queries)</c>
     /// re-fetch ran a <c>.Take(1)</c> after the source update and got the
-    /// pre-update snapshot — the upstream <see cref="IMeshQueryCore.ObserveQuery"/>
+    /// pre-update snapshot — the upstream <see cref="IMeshQueryCore.Query"/>
     /// hadn't emitted the post-update <c>Updated</c> event by the time the
     /// gated Scan fired its first downstream emission. Net effect: V2 compile
     /// silently consumed V1 source, produced an assembly that looked like V1,

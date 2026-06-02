@@ -90,7 +90,7 @@ public class UserActivityTrackingTests(ITestOutputHelper output) : MonolithMeshT
         // No node with a '@'-shaped path should ever materialise — the handler
         // logs a warning and returns. Negative assertion: flatten the live
         // query's items and assert nothing matching arrives within the window.
-        MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("nodeType:UserActivity"))
+        MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:UserActivity"))
             .SelectMany(c => c.Items)
             .Where(n => n.Path != null && n.Path.Contains('@'))
             .Should().NotEmit(within: TimeSpan.FromSeconds(2),
@@ -138,7 +138,7 @@ public class UserActivityTrackingTests(ITestOutputHelper output) : MonolithMeshT
         // After settling, exactly one record per (user, encodedPath) — concurrent
         // tracks merge into the same record's AccessCount, not duplicate records.
         var all = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{user}/_UserActivity nodeType:UserActivity"))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
         all.Should().HaveCount(1,
@@ -184,7 +184,7 @@ public class UserActivityTrackingTests(ITestOutputHelper output) : MonolithMeshT
     /// </summary>
     private MeshNode? PollForFirst(string query)
         => MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(query))
             .Scan(ImmutableList<MeshNode>.Empty, (acc, c) =>
                 c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset
                     ? c.Items.ToImmutableList()

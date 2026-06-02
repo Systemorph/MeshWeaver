@@ -304,7 +304,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             }).Should().Emit();
 
             // Read back via the live query (access-filtered for the owner).
-            var node = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+            var node = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"path:{threadPath}"))
                 .Should().Match(c => c.Items.Count >= 1).Items.FirstOrDefault();
 

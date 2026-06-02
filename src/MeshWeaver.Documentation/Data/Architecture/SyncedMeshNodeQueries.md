@@ -10,7 +10,7 @@ icon: /static/NodeTypeIcons/document.svg
 
 `workspace.GetQuery(id, params string[] queries)` is the single correct way to consume a live collection of `MeshNode`s in MeshWeaver. Every chat dropdown, catalog, picker, and security stream you'll write goes through it.
 
-Get this wrong and you spend an afternoon debugging "the dropdown is empty even though MCP search returns 9 results" — that's a real bug we hit twice in one day, both times because someone replaced `workspace.GetQuery` with `IMeshService.ObserveQuery`. This page explains what the API gives you for free, when to reach for it, and exactly how it breaks when bypassed.
+Get this wrong and you spend an afternoon debugging "the dropdown is empty even though MCP search returns 9 results" — that's a real bug we hit twice in one day, both times because someone replaced `workspace.GetQuery` with `IMeshService.Query`. This page explains what the API gives you for free, when to reach for it, and exactly how it breaks when bypassed.
 
 ---
 
@@ -42,7 +42,7 @@ collection.Subscribe(snapshot =>
 |---|---|
 | **Path-keyed dedup** | Each node appears exactly once, keyed by `MeshNode.Path`. Overlapping queries never produce duplicate rows. |
 | **All-Initial gating** | The snapshot only emits once *every* underlying query has produced its first `Initial` event. You never see partial state; empty-snapshot filtering in your subscriber is unnecessary. |
-| **Provider fan-out** | Every `IMeshQueryProvider` registered on the hub contributes — including `StaticNodeQueryProvider`, which surfaces built-in agents, language models, embedded markdown, and similar. **This is the property that broke when someone used `IMeshQueryCore.ObserveQuery` directly** — `Core` only invokes the in-memory provider, silently hiding all static nodes. |
+| **Provider fan-out** | Every `IMeshQueryProvider` registered on the hub contributes — including `StaticNodeQueryProvider`, which surfaces built-in agents, language models, embedded markdown, and similar. **This is the property that broke when someone used `IMeshQueryCore.Query` directly** — `Core` only invokes the in-memory provider, silently hiding all static nodes. |
 | **`Replay(1).RefCount()` sharing** | The first subscriber triggers upstream per-query subscriptions; later subscribers replay the cached snapshot instantly. All subscribers going away pauses the upstream. The cache key makes `workspace.GetQuery(id)` idempotent — same observable instance on every re-mount. |
 | **Delete fast-path** | Deletes published via `IMeshChangeFeed` bypass the per-provider debounce and update the synced collection synchronously. Without this, cache-driven queries can stay stale after a delete for several seconds. |
 
@@ -122,7 +122,7 @@ collection.Subscribe(snapshot =>
 | Read a specific node by path (especially after a write) | `workspace.GetMeshNodeStream(path)` — see [CqrsAndContentAccess](CqrsAndContentAccess.md) |
 | Autocomplete / prefix search | `IMeshService.AutocompleteAsync` |
 
-> **The rule of thumb:** if you would otherwise call `IMeshService.ObserveQuery` and manually merge multiple query streams' `QueryResultChange<T>` events into a path-keyed dictionary — stop. That is exactly what `GetQuery` does, correctly, already. Using `ObserveQuery` directly for this purpose is **always** a bug because:
+> **The rule of thumb:** if you would otherwise call `IMeshService.Query` and manually merge multiple query streams' `QueryResultChange<T>` events into a path-keyed dictionary — stop. That is exactly what `GetQuery` does, correctly, already. Using `Query` directly for this purpose is **always** a bug because:
 >
 > - You'll forget to gate on every per-query Initial → the dropdown flashes empty before the slowest query finishes.
 > - You'll re-implement the path-keyed merge slightly differently → duplicates when two queries overlap.
@@ -234,7 +234,7 @@ var outcome = await service.RevokeToken(newPath);   // GetMeshNodeStream(newPath
 
 ## Testing
 
-For any code that consumes `workspace.GetQuery`, write an integration test with `MonolithMeshTestBase` that exercises the **same** `workspace.GetQuery` call. Do **not** roll a custom test harness with `IMeshService.ObserveQuery` — that bypasses the exact code path under test.
+For any code that consumes `workspace.GetQuery`, write an integration test with `MonolithMeshTestBase` that exercises the **same** `workspace.GetQuery` call. Do **not** roll a custom test harness with `IMeshService.Query` — that bypasses the exact code path under test.
 
 Canonical example: `test/MeshWeaver.Hosting.Monolith.Test/LanguageModelSyncedQueryTest.cs`.
 
@@ -274,10 +274,10 @@ public class FooSyncedQueryTest : MonolithMeshTestBase
 ## What NOT to do
 
 ```csharp
-// 🛑 Don't roll your own with IMeshService.ObserveQuery
+// 🛑 Don't roll your own with IMeshService.Query
 foreach (var q in queries)
 {
-    MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(q))
+    MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(q))
         .Subscribe(change => MergeIntoMyDictionary(change));
 }
 // Loses provider fan-out, all-Initial gating, dedup, and the workspace

@@ -296,7 +296,7 @@ public static class VersionLayoutArea
 
         // Read the activity-log node via one-shot GetDataRequest — true request/response,
         // no SubscribeRequest+immediate-unsubscribe. Single-node-by-path content reads
-        // MUST NOT use ObserveQuery (read-side index lags); see
+        // MUST NOT use Query (read-side index lags); see
         // Doc/Architecture/AsynchronousCalls.md "Never use QueryAsync to obtain a MeshNode".
         hub.GetMeshNode(activityNodePath, TimeSpan.FromSeconds(15))
             .SelectMany(activityNode =>

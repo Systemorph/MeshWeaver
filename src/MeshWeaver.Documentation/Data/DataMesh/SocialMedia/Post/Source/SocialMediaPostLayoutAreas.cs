@@ -66,7 +66,7 @@ public static class SocialMediaPostLayoutAreas
     {
         var meshService = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         var postsStream = meshService
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("namespace:Doc/DataMesh/SocialMedia/Post"))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:Doc/DataMesh/SocialMedia/Post"))
             .Scan(ImmutableDictionary<string, MeshNode>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase), ApplyChanges);
 
         return postsStream.Select(dict => (UiControl?)BuildList(dict.Values.ToImmutableList()));

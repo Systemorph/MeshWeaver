@@ -170,8 +170,8 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
         Output.WriteLine($"Delegation: path={delegateCall.DelegationPath}, success={delegateCall.IsSuccess}");
 
         // 7. Verify the Markdown node was created by the Create tool.
-        // Use the silo's workspace-side MeshNodeStream (NOT ObserveQuery) — per
-        // `feedback_cqrs_no_query_for_content.md`: ObserveQuery is eventually-
+        // Use the silo's workspace-side MeshNodeStream (NOT Query) — per
+        // `feedback_cqrs_no_query_for_content.md`: Query is eventually-
         // consistent against an in-memory index that's separate from the
         // storage adapter's commit. After 27 in-flight DataChangeRequests
         // stack up on the response message hub during delegation streaming,

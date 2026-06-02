@@ -83,7 +83,7 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
             .StartWith(0L)
             .SelectMany(_ => ReadNode($"{TestPartition}/del2parent")
                 .SelectMany(parent => MeshQuery
-                    .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{TestPartition}/del2parent"))
+                    .Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{TestPartition}/del2parent"))
                     .Where(c => c.ChangeType == QueryChangeType.Initial)
                     .Take(1)
                     .Select(c => (parent, count: c.Items.Count))))
@@ -149,7 +149,7 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
         kept.Should().NotBeNull("sibling node should not be affected");
 
         // Subtree existence: query is appropriate here (set, not specific content read)
-        var deleted = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+        var deleted = MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"path:{TestPartition}/del4parent/delete scope:subtree"))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
         deleted.Should().BeEmpty("target subtree should be fully deleted");
