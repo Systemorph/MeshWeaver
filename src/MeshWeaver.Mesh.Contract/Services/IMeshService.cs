@@ -51,29 +51,7 @@ public interface IMeshService
     IObservable<MeshNode> CopyNode(string sourcePath, string targetPath,
         bool includeDescendants = true, bool includeSatellites = false);
 
-    // === Query ===
-
-    /// <summary>
-    /// Autocomplete query - given a namespace, find best matching subnodes.
-    /// Returns suggestions ordered by path length first (for path-based autocomplete).
-    /// </summary>
-    IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
-        string basePath,
-        string prefix,
-        int limit = 10,
-        CancellationToken ct = default);
-
-    /// <summary>
-    /// Autocomplete query with specified ordering mode.
-    /// </summary>
-    IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
-        string basePath,
-        string prefix,
-        AutocompleteMode mode,
-        int limit = 10,
-        string? contextPath = null,
-        string? context = null,
-        CancellationToken ct = default);
+    // === Query (IObservable only — no async surface) ===
 
     /// <summary>
     /// Creates an observable query that monitors data sources for changes and emits updates.
@@ -83,22 +61,22 @@ public interface IMeshService
     IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request);
 
     /// <summary>
-    /// 🚨 NEW unified query surface — each registered <see cref="IMeshQueryProvider"/>
-    /// emits a snapshot of <see cref="QueryResult"/> rows; the aggregator combines
+    /// Unified query surface — each registered <see cref="IMeshQueryProvider"/>
+    /// emits a LIVE snapshot of <see cref="QueryResult"/> rows; the aggregator combines
     /// via <see cref="System.Reactive.Linq.Observable.CombineLatest{TSource}(IEnumerable{IObservable{TSource}})"/>,
-    /// dedupes by <see cref="QueryResult.Path"/>, and orders by score.
-    /// Providers run async I/O inside hosted hubs they own — the call here never
-    /// touches the mesh hub's action block.
+    /// dedupes by <see cref="QueryResult.Path"/>, and orders by score. Each emission is the
+    /// full current result set (updates until disposed). Providers run their I/O leaf inside
+    /// the IIoPool — the call here never blocks the mesh hub's action block.
     /// </summary>
-    IObservable<IReadOnlyList<QueryResult>> Query(MeshQueryRequest request);
+    IObservable<IReadOnlyCollection<QueryResult>> Query(MeshQueryRequest request);
 
     /// <summary>
-    /// 🚨 NEW unified autocomplete surface — same shape as <see cref="Query"/>
+    /// Unified autocomplete surface — same shape as <see cref="Query"/>
     /// but each provider's stream is wrapped with <c>.StartWith(empty)</c> so
     /// partial autocomplete results render immediately without waiting for slow
-    /// providers.
+    /// providers. Live snapshot set; updates until disposed.
     /// </summary>
-    IObservable<IReadOnlyList<QueryResult>> Autocomplete(
+    IObservable<IReadOnlyCollection<QueryResult>> Autocomplete(
         string basePath, string prefix,
         AutocompleteMode mode = AutocompleteMode.RelevanceFirst,
         int limit = 10,
@@ -106,10 +84,10 @@ public interface IMeshService
         string? context = null);
 
     /// <summary>
-    /// Selects a single property value from a node at the given path.
-    /// Efficient way to get one property without loading the full Content blob.
+    /// Selects a single property value from a node at the given path (single-emission
+    /// observable). Efficient way to get one property without loading the full Content blob.
     /// </summary>
-    Task<T?> SelectAsync<T>(string path, string property, CancellationToken ct = default);
+    IObservable<T?> Select<T>(string path, string property);
 
     /// <summary>
     /// Looks up a MeshNode at the exact path and emits its PreRenderedHtml.

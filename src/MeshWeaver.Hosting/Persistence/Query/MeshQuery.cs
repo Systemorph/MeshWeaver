@@ -71,173 +71,6 @@ public class MeshQuery : IMeshQueryCore
         return combined;
     }
 
-    public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
-        string basePath,
-        string prefix,
-        int limit = 10,
-        CancellationToken ct = default)
-    {
-        var matched = SelectMatchingProviders(NamespacesForBasePath(basePath));
-        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<MeshQuery>();
-        return MergeAutocompleteStreams(
-            matched.Select(p => p.AutocompleteAsync(basePath, prefix, Options, limit, ct)),
-            limit,
-            applyBoost: null,
-            logger,
-            ct);
-    }
-
-    public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
-        string basePath,
-        string prefix,
-        AutocompleteMode mode,
-        int limit = 10,
-        string? contextPath = null,
-        string? context = null,
-        CancellationToken ct = default)
-    {
-        var matched = SelectMatchingProviders(NamespacesForBasePath(basePath));
-        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<MeshQuery>();
-        Func<QuerySuggestion, QuerySuggestion>? boost = string.IsNullOrEmpty(contextPath)
-            ? null
-            : s => ApplyProximityBoost(s, contextPath, prefix);
-        return MergeAutocompleteStreams(
-            matched.Select(p => p.AutocompleteAsync(basePath, prefix, Options, mode, limit, contextPath, context, ct)),
-            limit,
-            applyBoost: boost,
-            logger,
-            ct);
-    }
-
-    /// <summary>
-    /// Reactive autocomplete fan-out — every per-provider <see cref="IAsyncEnumerable{QuerySuggestion}"/>
-    /// is bridged to <see cref="IObservable{QuerySuggestion}"/> via
-    /// <see cref="ObservableTopNExtensions.ToObservableSequence{T}(IAsyncEnumerable{T})"/>,
-    /// merged with <see cref="Observable.Merge{TSource}(IEnumerable{IObservable{TSource}})"/>,
-    /// path-deduped + satellite-filtered, and finally folded into a single sorted
-    /// snapshot via Subscribe-driven state. NO <c>await</c> in the body — the only
-    /// await lives in <see cref="ObservableTopNExtensions.ToAsyncEnumerableSequence{T}(IObservable{T}, CancellationToken)"/>,
-    /// the canonical bridge from observable to async-enumerable on the public surface.
-    /// </summary>
-    private static IAsyncEnumerable<QuerySuggestion> MergeAutocompleteStreams(
-        IEnumerable<IAsyncEnumerable<QuerySuggestion>> sources,
-        int limit,
-        Func<QuerySuggestion, QuerySuggestion>? applyBoost,
-        Microsoft.Extensions.Logging.ILogger? logger,
-        CancellationToken ct)
-    {
-        var streams = sources.Select(s => s.ToObservableSequence()).ToList();
-        var merged = streams.Count switch
-        {
-            0 => Observable.Empty<QuerySuggestion>(),
-            1 => streams[0],
-            _ => Observable.Merge(streams),
-        };
-
-        // Single fold: dedup by path + satellite filter + optional boost into a
-        // ConcurrentBag/Dictionary (already thread-safe — Merge can OnNext from
-        // any provider thread). On OnCompleted the bag is sorted + clipped to
-        // limit; the snapshot is replayed as OnNext events to the downstream
-        // observable, which then bridges back to IAsyncEnumerable.
-        return Observable.Create<QuerySuggestion>((Func<IObserver<QuerySuggestion>, IDisposable>)(observer =>
-        {
-            var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
-            var bag = new ConcurrentBag<QuerySuggestion>();
-            return merged.Subscribe(
-                s =>
-                {
-                    if (IsSatellitePath(s.Path)) return;
-                    if (string.IsNullOrEmpty(s.Path) || !seen.TryAdd(s.Path, 0)) return;
-                    bag.Add(applyBoost is null ? s : applyBoost(s));
-                },
-                ex => logger?.LogDebug(ex, "MeshQuery autocomplete merge faulted"),
-                () =>
-                {
-                    foreach (var x in bag
-                        .OrderByDescending(s => s.Score)
-                        .ThenBy(s => s.Path.Length)
-                        .ThenBy(s => s.Name)
-                        .Take(limit))
-                    {
-                        observer.OnNext(x);
-                    }
-                    observer.OnCompleted();
-                });
-        })).ToAsyncEnumerableSequence(ct);
-    }
-
-    /// <summary>
-    /// Applies proximity-based scoring boost to a suggestion based on its distance from contextPath.
-    /// Closer items get higher scores. Shorter paths win when scores are tied.
-    /// </summary>
-    private static QuerySuggestion ApplyProximityBoost(QuerySuggestion suggestion, string? contextPath, string? prefix)
-    {
-        if (string.IsNullOrEmpty(contextPath))
-            return suggestion;
-
-        var boost = 0.0;
-        var path = suggestion.Path;
-
-        // Direct child of context: highest boost. Deeper descendants decay so they
-        // don't outrank the context node itself (or its siblings) — see
-        // LocalFirst_ChildrenOfContextScoreHigherThanDistant.
-        if (path.StartsWith(contextPath + "/", StringComparison.OrdinalIgnoreCase))
-        {
-            var relative = path[(contextPath.Length + 1)..];
-            var relativeDepth = relative.Count(c => c == '/'); // 0 = direct child
-            boost = relativeDepth switch
-            {
-                0 => 2000, // direct child
-                1 => 900,  // grandchild — below sibling boost so sibling wins on ties
-                _ => 600   // great-grandchild and deeper
-            };
-        }
-        // Sibling: shares parent (also covers `path == contextPath`, since path starts with parent+"/")
-        else if (!string.IsNullOrEmpty(contextPath))
-        {
-            var contextParent = contextPath.LastIndexOf('/');
-            if (contextParent > 0)
-            {
-                var parent = contextPath[..contextParent];
-                if (path.StartsWith(parent + "/", StringComparison.OrdinalIgnoreCase))
-                    boost = 1000; // sibling or cousin (or the context node itself)
-            }
-        }
-
-        // Shared prefix segments bonus
-        if (boost == 0)
-        {
-            var contextSegments = contextPath.Split('/');
-            var pathSegments = path.Split('/');
-            var shared = 0;
-            for (var i = 0; i < Math.Min(contextSegments.Length, pathSegments.Length); i++)
-            {
-                if (contextSegments[i].Equals(pathSegments[i], StringComparison.OrdinalIgnoreCase))
-                    shared++;
-                else
-                    break;
-            }
-            if (shared >= 2)
-                boost = 500;
-        }
-
-        // Path length penalty: prefer shorter paths (fewer segments)
-        var segmentCount = path.Count(c => c == '/') + 1;
-        boost -= segmentCount * 50;
-
-        // Exact name match bonus
-        if (!string.IsNullOrEmpty(prefix))
-        {
-            var name = suggestion.Name;
-            if (name.Equals(prefix, StringComparison.OrdinalIgnoreCase))
-                boost += 1000;
-            else if (name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                boost += 500;
-        }
-
-        return suggestion with { Score = suggestion.Score + boost };
-    }
-
     /// <summary>
     /// Checks if a path is a satellite node path (contains /_Prefix/ segments).
     /// Satellite prefixes start with underscore: _Thread, _Comment, _Activity, _Access, etc.
@@ -277,11 +110,11 @@ public class MeshQuery : IMeshQueryCore
     /// their async I/O inside their own hosted hubs — the call here never
     /// touches the mesh hub's action block.
     /// </summary>
-    public IObservable<IReadOnlyList<QueryResult>> Query(MeshQueryRequest request)
+    public IObservable<IReadOnlyCollection<QueryResult>> Query(MeshQueryRequest request)
     {
         var matched = SelectMatchingProviders(NamespacesForRequest(request));
         if (matched.Count == 0)
-            return Observable.Return((IReadOnlyList<QueryResult>)Array.Empty<QueryResult>());
+            return Observable.Return((IReadOnlyCollection<QueryResult>)Array.Empty<QueryResult>());
         var streams = matched.Select(p => p.Query(request, Options)).ToList();
         return Observable.CombineLatest(streams)
             .Select(snapshots => MergeSnapshots(snapshots))
@@ -297,7 +130,7 @@ public class MeshQuery : IMeshQueryCore
     /// emits as soon as ANY provider produces. Slow providers don't gate the
     /// UI — partial autocomplete suggestions render immediately.
     /// </summary>
-    public IObservable<IReadOnlyList<QueryResult>> Autocomplete(
+    public IObservable<IReadOnlyCollection<QueryResult>> Autocomplete(
         string basePath, string prefix,
         AutocompleteMode mode = AutocompleteMode.RelevanceFirst,
         int limit = 10,
@@ -306,8 +139,8 @@ public class MeshQuery : IMeshQueryCore
     {
         var matched = SelectMatchingProviders(NamespacesForBasePath(basePath));
         if (matched.Count == 0)
-            return Observable.Return((IReadOnlyList<QueryResult>)Array.Empty<QueryResult>());
-        IReadOnlyList<QueryResult> empty = Array.Empty<QueryResult>();
+            return Observable.Return((IReadOnlyCollection<QueryResult>)Array.Empty<QueryResult>());
+        IReadOnlyCollection<QueryResult> empty = Array.Empty<QueryResult>();
         var streams = matched.Select(p => p
             .Autocomplete(basePath, prefix, Options, mode, limit, contextPath, context)
             .StartWith(empty));
@@ -315,7 +148,7 @@ public class MeshQuery : IMeshQueryCore
             .Select(snapshots => MergeAutocompleteSnapshots(snapshots, limit, contextPath, prefix));
     }
 
-    private static IReadOnlyList<QueryResult> MergeSnapshots(IList<IReadOnlyList<QueryResult>> snapshots)
+    private static IReadOnlyCollection<QueryResult> MergeSnapshots(IList<IReadOnlyCollection<QueryResult>> snapshots)
     {
         var byPath = new Dictionary<string, QueryResult>(StringComparer.OrdinalIgnoreCase);
         foreach (var snapshot in snapshots)
@@ -335,8 +168,8 @@ public class MeshQuery : IMeshQueryCore
             .ToList();
     }
 
-    private static IReadOnlyList<QueryResult> MergeAutocompleteSnapshots(
-        IList<IReadOnlyList<QueryResult>> snapshots, int limit, string? contextPath, string? prefix)
+    private static IReadOnlyCollection<QueryResult> MergeAutocompleteSnapshots(
+        IList<IReadOnlyCollection<QueryResult>> snapshots, int limit, string? contextPath, string? prefix)
     {
         var byPath = new Dictionary<string, QueryResult>(StringComparer.OrdinalIgnoreCase);
         foreach (var snapshot in snapshots)
@@ -464,8 +297,8 @@ public class MeshQuery : IMeshQueryCore
     /// <summary>
     /// Centralised provider gating — every fan-out in this class
     /// (<see cref="Query{T}(MeshQueryRequest)"/>, the
-    /// <see cref="IMeshQueryCore"/> surface, both <see cref="AutocompleteAsync(string, string, int, CancellationToken)"/>
-    /// overloads, <see cref="SelectAsync{T}"/>) MUST go through this so a
+    /// <see cref="IMeshQueryCore"/> surface, <see cref="Autocomplete"/>,
+    /// <see cref="Select{T}"/>) MUST go through this so a
     /// scoped query only subscribes / awaits providers that actually own
     /// (or claim) the partition. For a single-node-by-path lookup this
     /// typically resolves to ONE provider; the merge then waits on exactly
@@ -708,8 +541,7 @@ public class MeshQuery : IMeshQueryCore
     /// cross-provider tie-breaking matters: a PG hit with name-prefix score
     /// 100 must beat a static-catalog hit with score 0 for the same query.
     /// Putting the score sort in <c>ClipMergedInitial</c> ensures every
-    /// downstream consumer of <see cref="Query{T}"/> /
-    /// <see cref="MeshWeaver.Mesh.Services.IMeshQuery.QueryAsync"/> sees a single deterministic top-N regardless
+    /// downstream consumer of <see cref="Query{T}"/> sees a single deterministic top-N regardless
     /// of which providers contributed.</para>
     /// </summary>
     private static QueryResultChange<T> ClipMergedInitial<T>(
@@ -818,20 +650,16 @@ public class MeshQuery : IMeshQueryCore
         return true;
     }
 
-    public Task<T?> SelectAsync<T>(string path, string property, CancellationToken ct = default)
+    public IObservable<T?> Select<T>(string path, string property)
     {
         var matched = SelectMatchingProviders(NamespacesForBasePath(path));
-        // Merge each provider's Task<T?> via Observable.FromAsync, take the first
-        // non-null. No Task.WhenAll, no captured-scheduler awaits — the public
-        // Task surface is built from the observable's first non-null emission via
-        // FirstOrDefaultAsync (the framework primitive that bridges IObservable
-        // → Task without forcing ConfigureAwait gymnastics on caller code).
+        // Merge each provider's single-emission Select observable, take the first
+        // non-null. Stays reactive end-to-end — no Task bridge, no ToTask.
         return matched
-            .Select(p => Observable.FromAsync(token => p.SelectAsync<T>(path, property, Options, token)))
+            .Select(p => p.Select<T>(path, property, Options))
             .Merge()
             .Where(r => r is not null)
-            .FirstOrDefaultAsync()
-            .ToTask(ct);
+            .FirstOrDefaultAsync();
     }
 
 }

@@ -185,36 +185,20 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
         }
     }
 
-    public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
-        string basePath, string prefix, JsonSerializerOptions options,
-        int limit = 10, CancellationToken ct = default)
-        => AutocompleteAsync(basePath, prefix, options, AutocompleteMode.PathFirst, limit, null, null, ct);
-
-    public async IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
-        string basePath, string prefix, JsonSerializerOptions options,
-        AutocompleteMode mode, int limit = 10, string? contextPath = null,
-        string? context = null, [EnumeratorCancellation] CancellationToken ct = default)
-    {
-        // Legacy async-enumerable surface — delegates to the fully synchronous computation.
-        foreach (var suggestion in ComputeSuggestions(basePath, prefix, mode, limit, contextPath, context))
-            yield return suggestion;
-        await Task.CompletedTask; // async-iterator shape only; the work is fully synchronous
-    }
-
     /// <summary>
     /// Reactive autocomplete — <b>fully synchronous</b>. The static catalog is purely in-memory and
     /// never performs I/O, so it builds the snapshot and <c>Observable.Return</c>s it (no
-    /// <c>Task.Run</c>, no <c>await</c>) instead of inheriting the default async-bridge. This is the
-    /// "in-memory never async" rule in action — see
-    /// <c>Doc/Architecture/AggregatingProviders.md</c> → "The async boundary lives at the I/O edge".
+    /// <c>Task.Run</c>, no <c>await</c>, no async-enumerable). This is the "in-memory never async"
+    /// rule in action — see <c>Doc/Architecture/AggregatingProviders.md</c> → "The async boundary
+    /// lives at the I/O edge".
     /// </summary>
-    public IObservable<IReadOnlyList<QueryResult>> Autocomplete(
+    public IObservable<IReadOnlyCollection<QueryResult>> Autocomplete(
         string basePath, string prefix, JsonSerializerOptions options,
         AutocompleteMode mode = AutocompleteMode.RelevanceFirst, int limit = 10,
         string? contextPath = null, string? context = null)
     {
         var providerName = ((IMeshQueryProvider)this).Name;
-        var rows = (IReadOnlyList<QueryResult>)ComputeSuggestions(basePath, prefix, mode, limit, contextPath, context)
+        var rows = (IReadOnlyCollection<QueryResult>)ComputeSuggestions(basePath, prefix, mode, limit, contextPath, context)
             .Select(s => new QueryResult
             {
                 Path = s.Path,
@@ -229,10 +213,8 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
     }
 
     /// <summary>
-    /// Synchronous suggestion computation shared by the legacy async-enumerable
-    /// <see cref="AutocompleteAsync(string,string,JsonSerializerOptions,AutocompleteMode,int,string?,string?,CancellationToken)"/>
-    /// and the reactive <see cref="Autocomplete"/> override. Pure in-memory scan + score + order —
-    /// no I/O, so no async.
+    /// Synchronous suggestion computation backing the reactive <see cref="Autocomplete"/> override.
+    /// Pure in-memory scan + score + order — no I/O, so no async.
     /// </summary>
     private IReadOnlyList<QuerySuggestion> ComputeSuggestions(
         string basePath, string prefix, AutocompleteMode mode, int limit,
@@ -487,23 +469,15 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
         };
     }
 
-    public Task<T?> SelectAsync<T>(string path, string property, JsonSerializerOptions options, CancellationToken ct = default)
+    public IObservable<T?> Select<T>(string path, string property, JsonSerializerOptions options)
     {
+        // Pure in-memory — no I/O, so a single completed Observable.Return.
+        T? result = default;
         var node = _allNodes.FirstOrDefault(n =>
             string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase));
-
-        if (node == null)
-            return Task.FromResult<T?>(default);
-
-        var prop = typeof(MeshNode).GetProperty(property);
-        if (prop == null)
-            return Task.FromResult<T?>(default);
-
-        var value = prop.GetValue(node);
-        if (value is T typedValue)
-            return Task.FromResult<T?>(typedValue);
-
-        return Task.FromResult<T?>(default);
+        if (node != null && typeof(MeshNode).GetProperty(property)?.GetValue(node) is T typedValue)
+            result = typedValue;
+        return Observable.Return(result);
     }
 
     /// <summary>

@@ -697,52 +697,33 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             .All(r => r.IsValid);
     }
 
-    /// <inheritdoc />
-    public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
-        string basePath,
-        string prefix,
-        JsonSerializerOptions options,
-        int limit = 10,
-        CancellationToken ct = default)
-        => AutocompleteAsync(basePath, prefix, options, null, AutocompleteMode.PathFirst, limit, null, null, ct);
-
-    /// <inheritdoc />
-    public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
-        string basePath,
-        string prefix,
-        JsonSerializerOptions options,
-        AutocompleteMode mode,
-        int limit = 10,
-        string? contextPath = null,
-        string? context = null,
-        CancellationToken ct = default)
-        => AutocompleteAsync(basePath, prefix, options, null, mode, limit, contextPath, context, ct);
-
     /// <summary>
-    /// Autocomplete with user ID for access control filtering.
+    /// Native reactive autocomplete. A thin scoring layer over <see cref="QueryCoreAsync"/>: the
+    /// per-query scope walk (over <see cref="IStorageAdapter.ListChildPaths"/> / <c>Read</c>, all
+    /// already <see cref="IObservable{T}"/>) is the I/O leaf — bridged once via
+    /// <see cref="Observable.FromAsync{TResult}(Func{CancellationToken, Task{TResult}})"/> and pushed
+    /// to <see cref="System.Reactive.Concurrency.TaskPoolScheduler"/> so the calling hub's action
+    /// block is never blocked. No <c>Task.Run</c> bridge (that was the deadlock), no async-enumerable
+    /// on the public surface. Emits a single snapshot then completes.
     /// </summary>
-    public async IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
+    public IObservable<IReadOnlyCollection<QueryResult>> Autocomplete(
         string basePath,
         string prefix,
         JsonSerializerOptions options,
-        string? userId,
-        AutocompleteMode mode,
+        AutocompleteMode mode = AutocompleteMode.RelevanceFirst,
         int limit = 10,
         string? contextPath = null,
-        string? context = null,
-        [EnumeratorCancellation] CancellationToken ct = default)
+        string? context = null)
     {
+        var providerName = ((IMeshQueryProvider)this).Name;
         var normalizedPath = NormalizePath(basePath);
         var normalizedPrefix = prefix ?? "";
 
-        var suggestions = new List<QuerySuggestion>();
-
         // Per-adapter autocomplete is a thin scoring layer over the QUERY
         // stream — autocomplete never reads nodes by path itself, never
-        // re-walks the adapter. The query path (FindMatchingNodesAsync via
-        // QueryCoreAsync) handles the scope walk inside this adapter and
-        // returns fully-populated MeshNodes; here we just score them against
-        // the prefix.
+        // re-walks the adapter. The query path (QueryCoreAsync) handles the
+        // scope walk inside this adapter and returns fully-populated MeshNodes;
+        // here we just score them against the prefix.
         //
         // Empty basePath: walk this adapter's full subtree from the root —
         // the per-adapter is its own boss for "find anything matching prefix"
@@ -758,113 +739,102 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             Query = queryString,
             Context = context,
             ContextPath = contextPath,
-            UserId = userId,
+            UserId = null,
             // Over-fetch so the scorer can pick the best matches; the request
-            // limit is enforced post-scoring below.
-            //
-            // Empty basePath means "match anywhere across this adapter" —
-            // contains-match / substring search needs to see the FULL subtree
-            // because the matcher can't push the prefix down to the FS scan.
-            // 100 was tripping AutocompleteIconTests.Autocomplete_ContainsMatch_FindsBySubstring
-            // when "Marketing" landed past the first 100 in FS enum order, so
-            // "arke" returned 0 even though "Mar" (prefix) returned Marketing.
-            // Cap higher for empty basePath; the scoped case still pays for
-            // accuracy at small cost since basePath narrows the walk.
+            // limit is enforced post-scoring below. Empty basePath means "match
+            // anywhere across this adapter" — contains/substring search needs the
+            // FULL subtree because the matcher can't push the prefix into the scan.
             Limit = string.IsNullOrEmpty(normalizedPath)
                 ? Math.Max(limit * 50, 1000)
                 : Math.Max(limit * 5, 100),
         };
 
-        await foreach (var obj in QueryCoreAsync(queryRequest, options, ct))
-        {
-            if (obj is not MeshNode node) continue;
-            // Skip node types excluded from autocomplete (configured via AddAutocompleteExcludedTypes)
-            if (meshConfiguration?.AutocompleteExcludedNodeTypes.Contains(node.NodeType ?? "") == true)
-                continue;
-
-            // Context-based exclusion for autocomplete
-            if (context != null && IsExcludedByContext(node, context))
-                continue;
-
-            var name = node.Name ?? node.Id ?? node.Path ?? "";
-            var path = node.Path ?? "";
-
-            // Calculate match score based on prefix match (check both name and path).
-            // Every comparison flows through StringComparison.OrdinalIgnoreCase —
-            // no lowercased copies, no per-char ToLowerInvariant.
-            double score = 0;
-
-            if (string.IsNullOrEmpty(normalizedPrefix))
+        return Observable.FromAsync(async cancel =>
             {
-                // Empty prefix = list-all-children at basePath. Every node
-                // would match via the StartsWith("") branch below; the
-                // name-length term then favors children whose Name happens
-                // to be shorter than the parent's (e.g. "LaunchEvent"
-                // < "TaskFlow Product Launch"), pushing grandchildren above
-                // their parents in the ordered result. Bypass the name
-                // scoring and rank purely by depth so parents are always
-                // visited before descendants (repro:
-                // AutocompleteMultiSourceTest.ShorterPathsWin_ParentBeforeGrandchild).
-                score = 100 - (path.Count(c => c == '/') * 10);
-            }
-            // Name matches (higher priority)
-            else if (name.StartsWith(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
-            {
-                score = 100 - (name.Length - normalizedPrefix.Length); // Exact prefix match, shorter is better
-            }
-            else if (name.Contains(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
-            {
-                score = 50 - (name.IndexOf(normalizedPrefix, StringComparison.OrdinalIgnoreCase)); // Contains match
-            }
-            // Path matches (lower priority than name)
-            else if (path.Contains(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
-            {
-                score = 30 - (path.IndexOf(normalizedPrefix, StringComparison.OrdinalIgnoreCase) * 0.1); // Path contains match
-            }
-            else if (FuzzyMatch(name, normalizedPrefix))
-            {
-                score = 25; // Fuzzy match on name
-            }
+                var suggestions = new List<QuerySuggestion>();
+                await foreach (var obj in QueryCoreAsync(queryRequest, options, cancel))
+                {
+                    if (obj is not MeshNode node) continue;
+                    // Skip node types excluded from autocomplete (AddAutocompleteExcludedTypes)
+                    if (meshConfiguration?.AutocompleteExcludedNodeTypes.Contains(node.NodeType ?? "") == true)
+                        continue;
+                    if (context != null && IsExcludedByContext(node, context))
+                        continue;
 
-            // Path-depth penalty for non-empty prefixes too: every additional
-            // segment subtracts 1 so a parent's name match beats a deeper
-            // descendant's name match of equal strength.
-            if (!string.IsNullOrEmpty(normalizedPrefix))
-                score -= path.Count(c => c == '/');
+                    var name = node.Name ?? node.Id ?? node.Path ?? "";
+                    var path = node.Path ?? "";
 
-            score += PathProximity.ComputeBoost(contextPath, node.Path);
+                    // Match score: every comparison flows through OrdinalIgnoreCase —
+                    // no lowercased copies.
+                    double score = 0;
 
-            if (score > 0)
-            {
-                suggestions.Add(new QuerySuggestion(node.Path ?? "", name, node.NodeType, score, node.Icon));
-            }
-        }
+                    if (string.IsNullOrEmpty(normalizedPrefix))
+                    {
+                        // Empty prefix = list-all-children at basePath. Rank purely by
+                        // depth so parents are always visited before descendants (repro:
+                        // AutocompleteMultiSourceTest.ShorterPathsWin_ParentBeforeGrandchild).
+                        score = 100 - (path.Count(c => c == '/') * 10);
+                    }
+                    else if (name.StartsWith(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
+                    {
+                        score = 100 - (name.Length - normalizedPrefix.Length); // shorter prefix match wins
+                    }
+                    else if (name.Contains(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
+                    {
+                        score = 50 - (name.IndexOf(normalizedPrefix, StringComparison.OrdinalIgnoreCase));
+                    }
+                    else if (path.Contains(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
+                    {
+                        score = 30 - (path.IndexOf(normalizedPrefix, StringComparison.OrdinalIgnoreCase) * 0.1);
+                    }
+                    else if (FuzzyMatch(name, normalizedPrefix))
+                    {
+                        score = 25;
+                    }
 
-        // Order based on mode
-        IEnumerable<QuerySuggestion> ordered = mode switch
-        {
-            // PathFirst: path length first, then score, then name (for path-based autocomplete like @references)
-            AutocompleteMode.PathFirst => suggestions
-                .OrderBy(s => s.Path.Length)
-                .ThenByDescending(s => s.Score)
-                .ThenBy(s => s.Name),
+                    // Path-depth penalty for non-empty prefixes too: a parent's name
+                    // match beats a deeper descendant's name match of equal strength.
+                    if (!string.IsNullOrEmpty(normalizedPrefix))
+                        score -= path.Count(c => c == '/');
 
-            // RelevanceFirst: score first (name match > path match > other), then path length, then name (for node selection)
-            AutocompleteMode.RelevanceFirst => suggestions
-                .OrderByDescending(s => s.Score)
-                .ThenBy(s => s.Path.Length)
-                .ThenBy(s => s.Name),
+                    score += PathProximity.ComputeBoost(contextPath, node.Path);
 
-            _ => suggestions
-                .OrderBy(s => s.Path.Length)
-                .ThenByDescending(s => s.Score)
-                .ThenBy(s => s.Name)
-        };
+                    if (score > 0)
+                        suggestions.Add(new QuerySuggestion(node.Path ?? "", name, node.NodeType, score, node.Icon));
+                }
 
-        foreach (var suggestion in ordered.Take(limit))
-        {
-            yield return suggestion;
-        }
+                IEnumerable<QuerySuggestion> ordered = mode switch
+                {
+                    // PathFirst: path length first, then score, then name (path-based @refs)
+                    AutocompleteMode.PathFirst => suggestions
+                        .OrderBy(s => s.Path.Length)
+                        .ThenByDescending(s => s.Score)
+                        .ThenBy(s => s.Name),
+                    // RelevanceFirst: score first, then path length, then name (node selection)
+                    AutocompleteMode.RelevanceFirst => suggestions
+                        .OrderByDescending(s => s.Score)
+                        .ThenBy(s => s.Path.Length)
+                        .ThenBy(s => s.Name),
+                    _ => suggestions
+                        .OrderBy(s => s.Path.Length)
+                        .ThenByDescending(s => s.Score)
+                        .ThenBy(s => s.Name)
+                };
+
+                return (IReadOnlyCollection<QueryResult>)ordered
+                    .Take(limit)
+                    .Select(s => new QueryResult
+                    {
+                        Path = s.Path,
+                        Name = s.Name,
+                        NodeType = s.NodeType,
+                        Icon = s.Icon,
+                        Score = s.Score,
+                        ProviderName = providerName,
+                    })
+                    .ToList();
+            })
+            .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default);
     }
 
     /// <summary>
@@ -955,23 +925,16 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     }
 
     /// <inheritdoc />
-    public async Task<T?> SelectAsync<T>(string path, string property, JsonSerializerOptions options, CancellationToken ct = default)
-    {
-        // SelectAsync<T> contract is Task by design; bridge once at the call site.
-        var node = await persistence.Read(path, options).FirstAsync().ToTask(ct);
-        if (node == null)
-            return default;
-
-        var prop = typeof(MeshNode).GetProperty(property);
-        if (prop == null)
-            return default;
-
-        var value = prop.GetValue(node);
-        if (value is T typedValue)
-            return typedValue;
-
-        return default;
-    }
+    public IObservable<T?> Select<T>(string path, string property, JsonSerializerOptions options)
+        // persistence.Read is already IObservable — stay reactive end-to-end, no ToTask.
+        => persistence.Read(path, options)
+            .Take(1)
+            .Select(node =>
+            {
+                if (node != null && typeof(MeshNode).GetProperty(property)?.GetValue(node) is T typedValue)
+                    return typedValue;
+                return default;
+            });
 
     /// <inheritdoc cref="IMeshQueryCore.Query{T}"/>
     IObservable<QueryResultChange<T>> IMeshQueryCore.Query<T>(MeshQueryRequest request, JsonSerializerOptions options)

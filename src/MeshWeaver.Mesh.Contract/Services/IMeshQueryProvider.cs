@@ -47,45 +47,6 @@ public interface IMeshQueryProvider
     bool Matches(IReadOnlyList<string> queryNamespaces);
 
     /// <summary>
-    /// Autocomplete query - given a namespace, find best matching subnodes.
-    /// Returns suggestions ordered by path length first (for path-based autocomplete).
-    /// </summary>
-    /// <param name="basePath">Base path to search from</param>
-    /// <param name="prefix">Prefix to match (partial name/path)</param>
-    /// <param name="options">JSON serializer options for type polymorphism</param>
-    /// <param name="limit">Maximum number of suggestions to return</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Suggestions ordered by path length, then score, then name</returns>
-    IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
-        string basePath,
-        string prefix,
-        JsonSerializerOptions options,
-        int limit = 10,
-        CancellationToken ct = default);
-
-    /// <summary>
-    /// Autocomplete query with specified ordering mode.
-    /// </summary>
-    /// <param name="basePath">Base path to search from</param>
-    /// <param name="prefix">Prefix to match (partial name/path)</param>
-    /// <param name="options">JSON serializer options for type polymorphism</param>
-    /// <param name="mode">Ordering mode (PathFirst or RelevanceFirst)</param>
-    /// <param name="limit">Maximum number of suggestions to return</param>
-    /// <param name="contextPath">Context path for proximity-based scoring (null for no proximity boost)</param>
-    /// <param name="context">Context for visibility filtering (e.g., "search"). Nodes excluded from this context are hidden.</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Suggestions ordered according to mode</returns>
-    IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
-        string basePath,
-        string prefix,
-        JsonSerializerOptions options,
-        AutocompleteMode mode,
-        int limit = 10,
-        string? contextPath = null,
-        string? context = null,
-        CancellationToken ct = default);
-
-    /// <summary>
     /// Creates an observable query that monitors data sources for changes and emits updates.
     /// The first emission contains the full initial result set (ChangeType = Initial).
     /// Subsequent emissions contain incremental changes (Added, Updated, Removed).
@@ -124,7 +85,7 @@ public interface IMeshQueryProvider
     /// <see cref="Query{T}"/> for back-compat during the migration. Concrete
     /// providers should override to take the hosted-hub path.</para>
     /// </summary>
-    IObservable<IReadOnlyList<QueryResult>> Query(MeshQueryRequest request, JsonSerializerOptions options)
+    IObservable<IReadOnlyCollection<QueryResult>> Query(MeshQueryRequest request, JsonSerializerOptions options)
         => Query<MeshNode>(request, options)
             .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset or QueryChangeType.Added or QueryChangeType.Updated)
             .Scan(
@@ -142,56 +103,28 @@ public interface IMeshQueryProvider
                     }
                     return acc;
                 })
-            .Select(d => (IReadOnlyList<QueryResult>)d.Values.ToList());
+            .Select(d => (IReadOnlyCollection<QueryResult>)d.Values.ToList());
 
     /// <summary>
-    /// 🚨 NEW unified autocomplete surface — same snapshot semantics as
-    /// <see cref="Query"/>. Aggregator wraps each provider's stream with
-    /// <c>.StartWith(empty)</c> so <c>CombineLatest</c> emits partial results as
-    /// soon as ANY provider produces (slow providers don't gate the UI).
-    /// <para>Default impl bridges to the legacy
-    /// <see cref="AutocompleteAsync(string, string, JsonSerializerOptions, AutocompleteMode, int, string?, string?, CancellationToken)"/>
-    /// by draining the async-enumerable into a single snapshot list.</para>
+    /// Unified autocomplete surface — a LIVE snapshot observable of <see cref="QueryResult"/>
+    /// rows (each emission is the full current suggestion list). No async surface: a provider
+    /// backed by external storage runs its I/O leaf inside the <c>IIoPool</c> (the PG provider's
+    /// <c>ToArrayAsync</c> over the npgsql reader) and bridges to this observable; in-memory
+    /// providers project synchronously via <c>IEnumerable.ToObservable()</c>. The aggregator
+    /// wraps each provider's stream with <c>.StartWith(empty)</c> so <c>CombineLatest</c> emits
+    /// as soon as ANY provider produces. Score (incl. vector similarity) rides on
+    /// <see cref="QueryResult.Score"/>.
     /// </summary>
-    IObservable<IReadOnlyList<QueryResult>> Autocomplete(
+    IObservable<IReadOnlyCollection<QueryResult>> Autocomplete(
         string basePath, string prefix, JsonSerializerOptions options,
         AutocompleteMode mode = AutocompleteMode.RelevanceFirst,
         int limit = 10,
         string? contextPath = null,
-        string? context = null)
-    {
-        return System.Reactive.Linq.Observable.Create<IReadOnlyList<QueryResult>>(observer =>
-        {
-            var cts = new CancellationTokenSource();
-            _ = System.Threading.Tasks.Task.Run(async () =>
-            {
-                try
-                {
-                    var rows = new List<QueryResult>();
-                    await foreach (var s in AutocompleteAsync(basePath, prefix, options, mode, limit, contextPath, context, cts.Token))
-                    {
-                        rows.Add(new QueryResult
-                        {
-                            Path = s.Path,
-                            Name = s.Name,
-                            NodeType = s.NodeType,
-                            Icon = s.Icon,
-                            Score = s.Score,
-                            ProviderName = Name,
-                        });
-                    }
-                    observer.OnNext(rows);
-                    observer.OnCompleted();
-                }
-                catch (OperationCanceledException) { observer.OnCompleted(); }
-                catch (Exception ex) { observer.OnError(ex); }
-            }, cts.Token);
-            return System.Reactive.Disposables.Disposable.Create(() => cts.Cancel());
-        });
-    }
+        string? context = null);
 
     /// <summary>
-    /// Selects a single property value from a node at the given path.
+    /// Selects a single property value from a node at the given path (single-emission
+    /// observable). The provider's I/O leaf runs in the IIoPool and bridges to this observable.
     /// </summary>
-    Task<T?> SelectAsync<T>(string path, string property, JsonSerializerOptions options, CancellationToken ct = default);
+    IObservable<T?> Select<T>(string path, string property, JsonSerializerOptions options);
 }

@@ -173,16 +173,7 @@ internal sealed class MeshService(
                 });
         }).CarryAccessContext(hub.ServiceProvider);
 
-    // === Query (delegated to MeshQuery) ===
-
-    public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
-        string basePath, string prefix, int limit = 10, CancellationToken ct = default)
-        => _query.AutocompleteAsync(basePath, prefix, limit, ct);
-
-    public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
-        string basePath, string prefix, AutocompleteMode mode, int limit = 10,
-        string? contextPath = null, string? context = null, CancellationToken ct = default)
-        => _query.AutocompleteAsync(basePath, prefix, mode, limit, contextPath, context, ct);
+    // === Query (delegated to MeshQuery — IObservable only) ===
 
     public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request)
     {
@@ -213,10 +204,10 @@ internal sealed class MeshService(
         return _query.Query<T>(request);
     }
 
-    public Task<T?> SelectAsync<T>(string path, string property, CancellationToken ct = default)
-        => _query.SelectAsync<T>(path, property, ct);
+    public IObservable<T?> Select<T>(string path, string property)
+        => _query.Select<T>(path, property);
 
-    public IObservable<IReadOnlyList<QueryResult>> Query(MeshQueryRequest request)
+    public IObservable<IReadOnlyCollection<QueryResult>> Query(MeshQueryRequest request)
     {
         // Same identity-stamp guard as Query — without it scoped DI
         // consumers (Blazor circuits, MCP children) would hit the singleton
@@ -230,7 +221,7 @@ internal sealed class MeshService(
         return _query.Query(request);
     }
 
-    public IObservable<IReadOnlyList<QueryResult>> Autocomplete(
+    public IObservable<IReadOnlyCollection<QueryResult>> Autocomplete(
         string basePath, string prefix,
         AutocompleteMode mode = AutocompleteMode.RelevanceFirst,
         int limit = 10,

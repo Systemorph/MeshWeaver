@@ -81,4 +81,36 @@ public static class IMeshQueryTestExtensions
         ITypeRegistry? typeRegistry = null,
         CancellationToken ct = default)
         => svc.QueryAsync<T>(new MeshQueryRequest { Query = query, Skip = skip, Limit = limit }, ct);
+
+    /// <summary>
+    /// Legacy <c>AutocompleteAsync</c> shape for tests: subscribes to the live
+    /// <see cref="IMeshService.Autocomplete"/> snapshot observable, takes the first snapshot,
+    /// and flattens it as <c>IAsyncEnumerable&lt;QuerySuggestion&gt;</c>. Sanctioned test-boundary
+    /// bridge only — production composes the observable end-to-end.
+    /// </summary>
+    public static IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
+        this IMeshService svc,
+        string basePath,
+        string prefix,
+        AutocompleteMode mode,
+        int limit = 10,
+        string? contextPath = null,
+        string? context = null,
+        CancellationToken ct = default)
+        => svc.Autocomplete(basePath, prefix, mode, limit, contextPath, context)
+            .Take(1)
+            .SelectMany(snapshot => snapshot.ToObservable())
+            .Select(r => new QuerySuggestion(r.Path, r.Name ?? "", r.NodeType, r.Score, r.Icon))
+            .ToAsyncEnumerableSequence(ct);
+
+    /// <summary>
+    /// Simple <c>AutocompleteAsync</c> overload (PathFirst mode) for tests.
+    /// </summary>
+    public static IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
+        this IMeshService svc,
+        string basePath,
+        string prefix,
+        int limit = 10,
+        CancellationToken ct = default)
+        => svc.AutocompleteAsync(basePath, prefix, AutocompleteMode.PathFirst, limit, null, null, ct);
 }
