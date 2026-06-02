@@ -115,7 +115,12 @@ public sealed class TeamsClient : ITeamsClient
                 ["client_secret"] = _options.AppPassword!,
                 ["scope"] = ConnectorScope
             };
-            using var resp = await _http.PostAsync(BotLoginTokenUrl, new FormUrlEncodedContent(form), ct);
+            // Single-tenant bots acquire the connector token from their OWN tenant authority; the legacy
+            // botframework.com authority is for (now-deprecated) multi-tenant bots.
+            var tokenUrl = string.IsNullOrEmpty(_options.TenantId)
+                ? BotLoginTokenUrl
+                : $"https://login.microsoftonline.com/{_options.TenantId}/oauth2/v2.0/token";
+            using var resp = await _http.PostAsync(tokenUrl, new FormUrlEncodedContent(form), ct);
             var body = await resp.Content.ReadAsStringAsync(ct);
             if (!resp.IsSuccessStatusCode) { _logger?.LogWarning("Teams: connector token {Status}", (int)resp.StatusCode); return null; }
             using var doc = JsonDocument.Parse(body);
