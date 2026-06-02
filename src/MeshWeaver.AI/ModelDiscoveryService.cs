@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
@@ -36,23 +35,19 @@ namespace MeshWeaver.AI;
 /// </list>
 /// </para>
 ///
-/// <para>🚨 Cache invariant: an empty snapshot is NOT cached. RLS may
-/// filter the synced query to zero rows for a caller that lacks Read
-/// permission — caching that empty result would freeze the caller out
-/// even after their permissions change. On every first-empty emission
-/// the per-key entry is evicted so the next call re-evaluates.</para>
+/// <para>No materialised observable cache: every call rebuilds the
+/// composition over <see cref="BuildSynced"/>, whose underlying
+/// <c>workspace.GetQuery(id, …)</c> is itself cached by id
+/// (<c>Replay(1).RefCount()</c> upstream). Rebuilding the
+/// <c>CombineLatest</c> wrapper is cheap and always reflects live state —
+/// no stale empties to evict, so no <c>Invalidate</c> needed. RLS is
+/// applied per-subscription at the source: a caller without Read sees an
+/// empty snapshot without affecting any other caller.</para>
 /// </summary>
 public sealed class ModelDiscoveryService
 {
     private readonly IMessageHub meshHub;
     private readonly ILogger<ModelDiscoveryService>? logger;
-
-    // Three caches, all keyed by string. (a) by single node path,
-    // (b) by single node path (the path whose ancestors we walked),
-    // (c) by composite "{nodePath}|{nodeTypePath}".
-    private readonly ConcurrentDictionary<string, IObservable<IReadOnlyList<MeshNode>>> byNode = new();
-    private readonly ConcurrentDictionary<string, IObservable<IReadOnlyList<MeshNode>>> byNodeHierarchy = new();
-    private readonly ConcurrentDictionary<string, IObservable<IReadOnlyList<MeshNode>>> byEffective = new();
 
     public ModelDiscoveryService(IMessageHub meshHub)
     {
@@ -65,18 +60,16 @@ public sealed class ModelDiscoveryService
     /// (a) Live snapshot of every <c>LanguageModel</c> + <c>ModelProvider</c>
     /// node declared directly under <paramref name="nodePath"/>'s
     /// <c>_Provider</c> satellite subtree. Empty for nodes that haven't
-    /// configured any provider. Cached on first non-empty emission.
+    /// configured any provider.
     /// </summary>
     public IObservable<IReadOnlyList<MeshNode>> GetModelsAtNode(string nodePath)
     {
         if (string.IsNullOrEmpty(nodePath))
-            return byNode.GetOrAdd("<root>", _ =>
-                BuildSynced("root",
-                    $"namespace:{ModelProviderNodeType.RootNamespace} nodeType:{TypeFilter} scope:descendants"));
+            return BuildSynced("root",
+                $"namespace:{ModelProviderNodeType.RootNamespace} nodeType:{TypeFilter} scope:descendants");
 
-        return byNode.GetOrAdd(nodePath, p =>
-            BuildSynced($"node@{p}",
-                $"namespace:{p}/{ModelProviderNodeType.RootNamespace} nodeType:{TypeFilter} scope:descendants"));
+        return BuildSynced($"node@{nodePath}",
+            $"namespace:{nodePath}/{ModelProviderNodeType.RootNamespace} nodeType:{TypeFilter} scope:descendants");
     }
 
     /// <summary>
@@ -89,22 +82,17 @@ public sealed class ModelDiscoveryService
     /// </summary>
     public IObservable<IReadOnlyList<MeshNode>> GetModelsForNodeHierarchy(string nodePath)
     {
-        var key = string.IsNullOrEmpty(nodePath) ? "<root>" : nodePath;
-        return byNodeHierarchy.GetOrAdd(key, _ =>
-        {
-            var streams = EnumerateAncestors(nodePath)
-                .Select(GetModelsAtNode)
-                .ToArray();
-            if (streams.Length == 0)
-                return Observable.Return((IReadOnlyList<MeshNode>)Array.Empty<MeshNode>());
-            return Observable.CombineLatest(streams)
-                .Select(levels => (IReadOnlyList<MeshNode>)
-                    levels.SelectMany(l => l)
-                          .GroupBy(n => n.Path, StringComparer.Ordinal)
-                          .Select(g => g.First())
-                          .ToList())
-                .Replay(1).RefCount();
-        });
+        var streams = EnumerateAncestors(nodePath)
+            .Select(GetModelsAtNode)
+            .ToArray();
+        if (streams.Length == 0)
+            return Observable.Return((IReadOnlyList<MeshNode>)Array.Empty<MeshNode>());
+        return Observable.CombineLatest(streams)
+            .Select(levels => (IReadOnlyList<MeshNode>)
+                levels.SelectMany(l => l)
+                      .GroupBy(n => n.Path, StringComparer.Ordinal)
+                      .Select(g => g.First())
+                      .ToList());
     }
 
     /// <summary>
@@ -115,34 +103,15 @@ public sealed class ModelDiscoveryService
     /// </summary>
     public IObservable<IReadOnlyList<MeshNode>> GetEffectiveModels(string nodePath, string? nodeTypePath = null)
     {
-        var key = $"{nodePath}|{nodeTypePath ?? ""}";
-        return byEffective.GetOrAdd(key, _ =>
-        {
-            var fromNs = GetModelsForNodeHierarchy(nodePath);
-            var fromNt = !string.IsNullOrEmpty(nodeTypePath)
-                ? GetModelsForNodeHierarchy(nodeTypePath)
-                : Observable.Return((IReadOnlyList<MeshNode>)Array.Empty<MeshNode>());
-            return fromNs.CombineLatest(fromNt, (a, b) => (IReadOnlyList<MeshNode>)
-                    a.Concat(b)
-                     .GroupBy(n => n.Path, StringComparer.Ordinal)
-                     .Select(g => g.First())
-                     .ToList())
-                .Replay(1).RefCount();
-        });
-    }
-
-    /// <summary>
-    /// Forcibly drops any cached observables for <paramref name="anyPath"/>
-    /// (and its derivatives). Callers wire this to writes (provider
-    /// CRUD) so stale empties from a pre-access state don't pin the
-    /// view after permissions change.
-    /// </summary>
-    public void Invalidate(string anyPath)
-    {
-        byNode.TryRemove(anyPath, out _);
-        byNodeHierarchy.TryRemove(anyPath, out _);
-        foreach (var key in byEffective.Keys.Where(k => k.StartsWith(anyPath, StringComparison.Ordinal)).ToArray())
-            byEffective.TryRemove(key, out _);
+        var fromNs = GetModelsForNodeHierarchy(nodePath);
+        var fromNt = !string.IsNullOrEmpty(nodeTypePath)
+            ? GetModelsForNodeHierarchy(nodeTypePath)
+            : Observable.Return((IReadOnlyList<MeshNode>)Array.Empty<MeshNode>());
+        return fromNs.CombineLatest(fromNt, (a, b) => (IReadOnlyList<MeshNode>)
+            a.Concat(b)
+             .GroupBy(n => n.Path, StringComparer.Ordinal)
+             .Select(g => g.First())
+             .ToList());
     }
 
     private const string TypeFilter = LanguageModelNodeType.NodeType + "|" + ModelProviderNodeType.NodeType;
@@ -150,20 +119,11 @@ public sealed class ModelDiscoveryService
     private IObservable<IReadOnlyList<MeshNode>> BuildSynced(string id, params string[] queries)
     {
         var workspace = meshHub.GetWorkspace();
+        // workspace.GetQuery is cached by id (Replay(1).RefCount upstream), so
+        // re-projecting per call is cheap and always reflects live state.
         return workspace.GetQuery($"discovery:{id}", queries)
-            .Select(s => (IReadOnlyList<MeshNode>)s.ToList())
-            .Replay(1).RefCount();
+            .Select(s => (IReadOnlyList<MeshNode>)s.ToList());
     }
-
-    // Note on access-aware caching: the synced query inside BuildSynced
-    // runs through the workspace's IDataChangeNotifier pipeline which is
-    // already RLS-aware on a per-subscription basis. Each call site is a
-    // separate subscriber; an RLS-denied caller sees an empty snapshot
-    // without poisoning the per-node cache (the cache holds the
-    // Replay(1).RefCount handle, not a pre-filtered projection). For
-    // the strong form of "cache only when we have access" — i.e. evict
-    // the entry on persistent empties — call <see cref="Invalidate"/>
-    // explicitly from the write paths that change permission state.
 
     private static IEnumerable<string> EnumerateAncestors(string path)
     {
