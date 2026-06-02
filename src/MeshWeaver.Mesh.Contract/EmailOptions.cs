@@ -8,7 +8,7 @@ namespace MeshWeaver.Mesh;
 /// <para>The reference implementation sends via Microsoft Graph <c>/sendMail</c> using the
 /// <c>Mail.Send</c> <b>application</b> permission. That permission requires tenant-admin consent on
 /// the app registration and a real (licensed or shared) mailbox named by
-/// <see cref="NoReplyAddress"/> that the app is allowed to send as. In production prefer
+/// <see cref="MailboxAddress"/> that the app is allowed to send as. In production prefer
 /// <see cref="UseManagedIdentity"/> and grant the managed identity the <c>Mail.Send</c> app role.</para>
 /// </summary>
 public sealed record EmailOptions
@@ -19,7 +19,7 @@ public sealed record EmailOptions
     public bool Enabled { get; init; }
 
     /// <summary>The mailbox to send as (e.g. <c>no-reply@yourtenant.com</c>).</summary>
-    public string NoReplyAddress { get; init; } = "";
+    public string MailboxAddress { get; init; } = "";
 
     /// <summary>Entra tenant id (client-credentials flow). Unused when <see cref="UseManagedIdentity"/>.</summary>
     public string TenantId { get; init; } = "";

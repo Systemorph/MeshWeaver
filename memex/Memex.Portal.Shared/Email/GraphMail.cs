@@ -42,20 +42,20 @@ public sealed class GraphMail
     private GraphServiceClient Client => _graph.Value;
 
     /// <summary>The mailbox the portal sends/receives as (e.g. <c>memex@systemorph.com</c>).</summary>
-    public string Mailbox => _options.NoReplyAddress;
+    public string Mailbox => _options.MailboxAddress;
 
     /// <summary>The Graph resource path for the mailbox inbox messages (app-only — no <c>/me</c>).</summary>
-    public string InboxResource => $"users/{_options.NoReplyAddress}/mailFolders('inbox')/messages";
+    public string InboxResource => $"users/{_options.MailboxAddress}/mailFolders('inbox')/messages";
 
     public IObservable<Message?> GetMessage(string messageId) =>
-        _http.Invoke(ct => Client.Users[_options.NoReplyAddress].Messages[messageId].GetAsync(r =>
+        _http.Invoke(ct => Client.Users[_options.MailboxAddress].Messages[messageId].GetAsync(r =>
             r.QueryParameters.Select =
                 ["from", "subject", "body", "conversationId", "internetMessageId", "toRecipients", "isRead"], ct));
 
     public IObservable<Unit> MarkRead(string messageId) =>
         _http.Invoke(async ct =>
         {
-            await Client.Users[_options.NoReplyAddress].Messages[messageId]
+            await Client.Users[_options.MailboxAddress].Messages[messageId]
                 .PatchAsync(new Message { IsRead = true }, cancellationToken: ct);
             return Unit.Default;
         });
