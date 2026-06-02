@@ -42,6 +42,8 @@ public static class GraphConfigurationExtensions
                 .AddGroupMembershipType()
                 .AddApprovalType()
                 .AddNotificationType()
+                .AddNotificationRuleType()
+                .AddNotificationChannelType()
                 .AddInvitationType()
                 .AddEmailType()
                 .AddActivityType()
