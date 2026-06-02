@@ -11,6 +11,43 @@ A *synced query data source* is a live collection that lives inside a hub's work
 
 The payoff: hub-internal code — validators, layout areas, compile pipelines, access checks — reads its source data through the standard `workspace.GetStream<T>()` / `workspace.GetStream(new CollectionReference("name"))` surface. No `Observe` round-trip, no CQRS staleness lag, no `Observable.FromAsync` at every leaf. By the time the hub handles its first message, the synced collection is already populated.
 
+<svg viewBox="0 0 760 310" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L8,3.5 L0,7 Z" fill="currentColor" fill-opacity="0.6"/>
+    </marker>
+  </defs>
+  <rect x="10" y="30" width="140" height="56" rx="10" fill="#1e88e5"/>
+  <text x="80" y="55" text-anchor="middle" fill="#fff" font-weight="bold">IMeshQuery</text>
+  <text x="80" y="74" text-anchor="middle" fill="#fff" font-size="11">ObserveQuery&lt;MeshNode&gt;</text>
+  <rect x="10" y="110" width="140" height="56" rx="10" fill="#1e88e5"/>
+  <text x="80" y="135" text-anchor="middle" fill="#fff" font-weight="bold">IMeshQuery</text>
+  <text x="80" y="154" text-anchor="middle" fill="#fff" font-size="11">ObserveQuery&lt;MeshNode&gt;</text>
+  <text x="80" y="196" text-anchor="middle" fill="currentColor" fill-opacity="0.55" font-size="11" font-style="italic">one per query string</text>
+  <line x1="150" y1="58" x2="210" y2="130" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="150" y1="138" x2="210" y2="145" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="215" y="105" width="160" height="80" rx="10" fill="#5c6bc0"/>
+  <text x="295" y="130" text-anchor="middle" fill="#fff" font-weight="bold">Scan / Fold</text>
+  <text x="295" y="150" text-anchor="middle" fill="#fff" font-size="11">ImmutableDictionary</text>
+  <text x="295" y="167" text-anchor="middle" fill="#fff" font-size="11">keyed by Path</text>
+  <line x1="375" y1="145" x2="435" y2="145" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="440" y="105" width="150" height="80" rx="10" fill="#43a047"/>
+  <text x="515" y="130" text-anchor="middle" fill="#fff" font-weight="bold">Initial Gate</text>
+  <text x="515" y="150" text-anchor="middle" fill="#fff" font-size="11">suppress until all</text>
+  <text x="515" y="167" text-anchor="middle" fill="#fff" font-size="11">queries fire Initial</text>
+  <line x1="590" y1="145" x2="650" y2="145" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="655" y="105" width="95" height="80" rx="10" fill="#f57c00"/>
+  <text x="703" y="140" text-anchor="middle" fill="#fff" font-weight="bold">Hub</text>
+  <text x="703" y="158" text-anchor="middle" fill="#fff" font-size="11">Workspace</text>
+  <rect x="235" y="228" width="120" height="38" rx="8" fill="#e53935"/>
+  <text x="295" y="244" text-anchor="middle" fill="#fff" font-size="11" font-weight="bold">Added / Updated</text>
+  <text x="295" y="259" text-anchor="middle" fill="#fff" font-size="11">/ Removed deltas</text>
+  <line x1="295" y1="228" x2="295" y2="188" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arr)"/>
+  <text x="380" y="280" text-anchor="middle" fill="currentColor" fill-opacity="0.55" font-size="11">re-emits full snapshot on every change</text>
+</svg>
+
+*Synced query data source pipeline: mesh queries fold into a path-keyed dictionary, gated until all Initial events arrive, then emit live snapshots into the hub workspace.*
+
 ---
 
 ## When to use it

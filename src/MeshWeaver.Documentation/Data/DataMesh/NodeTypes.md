@@ -9,6 +9,71 @@ A **node type** is a first-class citizen of the mesh: it is itself a `MeshNode` 
 > A data node's `nodeType` field is the **path** to the type node that defines its shape. The Settings → Metadata panel links straight to it.
 
 Node types are compiled on demand from `Source/*.cs` files. You never redeploy the portal to add or change one — the runtime compiles, caches, and versions the assembly for you.
+<svg viewBox="0 0 760 300" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="nt-arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#90a4ae"/>
+    </marker>
+    <marker id="nt-arrow-blue" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#1e88e5"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="760" height="300" rx="12" fill="#1a2030" opacity="0.6"/>
+  <rect x="20" y="40" width="155" height="110" rx="10" fill="#1e2a3a" stroke="#5c6bc0" stroke-width="1.5"/>
+  <rect x="20" y="40" width="155" height="34" rx="10" fill="#5c6bc0"/>
+  <rect x="20" y="62" width="155" height="12" fill="#5c6bc0"/>
+  <text x="97" y="62" text-anchor="middle" fill="#fff" font-weight="bold" font-size="13">Source/*.cs</text>
+  <text x="38" y="96" fill="#b0bec5" font-size="11">C# record  (content)</text>
+  <text x="38" y="112" fill="#b0bec5" font-size="11">Layout areas</text>
+  <text x="38" y="128" fill="#b0bec5" font-size="11">#r "nuget:…"</text>
+  <rect x="20" y="180" width="155" height="80" rx="10" fill="#1e2a3a" stroke="#5c6bc0" stroke-width="1.5"/>
+  <rect x="20" y="180" width="155" height="34" rx="10" fill="#5c6bc0"/>
+  <rect x="20" y="202" width="155" height="12" fill="#5c6bc0"/>
+  <text x="97" y="202" text-anchor="middle" fill="#fff" font-weight="bold" font-size="13">NodeType JSON</text>
+  <text x="38" y="236" fill="#b0bec5" font-size="11">NodeTypeDefinition</text>
+  <text x="38" y="252" fill="#b0bec5" font-size="11">name, icon, CSV data…</text>
+  <line x1="97" y1="152" x2="97" y2="178" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#nt-arrow)"/>
+  <rect x="250" y="100" width="160" height="100" rx="10" fill="#1b3a1e" stroke="#43a047" stroke-width="2"/>
+  <rect x="250" y="100" width="160" height="34" rx="10" fill="#43a047"/>
+  <rect x="250" y="122" width="160" height="12" fill="#43a047"/>
+  <text x="330" y="122" text-anchor="middle" fill="#fff" font-weight="bold" font-size="13">Runtime Compiler</text>
+  <text x="268" y="158" fill="#b0bec5" font-size="11">Roslyn compile</text>
+  <text x="268" y="174" fill="#b0bec5" font-size="11">cache + version</text>
+  <text x="268" y="190" fill="#b0bec5" font-size="11">no redeploy needed</text>
+  <line x1="176" y1="95" x2="248" y2="140" stroke="#90a4ae" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#nt-arrow)"/>
+  <line x1="176" y1="220" x2="248" y2="160" stroke="#90a4ae" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#nt-arrow)"/>
+  <rect x="480" y="40" width="260" height="60" rx="10" fill="#1e3050" stroke="#1e88e5" stroke-width="2"/>
+  <rect x="480" y="40" width="260" height="34" rx="10" fill="#1e88e5"/>
+  <rect x="480" y="62" width="260" height="12" fill="#1e88e5"/>
+  <text x="610" y="62" text-anchor="middle" fill="#fff" font-weight="bold" font-size="13">NodeType MeshNode</text>
+  <text x="498" y="90" fill="#b0bec5" font-size="11">nodeType: "NodeType"  ·  Content: NodeTypeDefinition</text>
+  <line x1="412" y1="150" x2="478" y2="70" stroke="#1e88e5" stroke-width="2" marker-end="url(#nt-arrow-blue)"/>
+  <rect x="480" y="130" width="120" height="50" rx="8" fill="#1e2540" stroke="#26a69a" stroke-width="1.5"/>
+  <rect x="480" y="130" width="120" height="28" rx="8" fill="#26a69a"/>
+  <rect x="480" y="146" width="120" height="12" fill="#26a69a"/>
+  <text x="540" y="150" text-anchor="middle" fill="#fff" font-weight="bold" font-size="12">Typed Content</text>
+  <text x="495" y="173" fill="#b0bec5" font-size="11">C# record ↔ JSON</text>
+  <rect x="480" y="200" width="120" height="50" rx="8" fill="#1e2540" stroke="#f57c00" stroke-width="1.5"/>
+  <rect x="480" y="200" width="120" height="28" rx="8" fill="#f57c00"/>
+  <rect x="480" y="216" width="120" height="12" fill="#f57c00"/>
+  <text x="540" y="220" text-anchor="middle" fill="#fff" font-weight="bold" font-size="12">Layout Areas</text>
+  <text x="495" y="243" fill="#b0bec5" font-size="11">C# views in Blazor</text>
+  <rect x="620" y="130" width="120" height="50" rx="8" fill="#1e2540" stroke="#8e24aa" stroke-width="1.5"/>
+  <rect x="620" y="130" width="120" height="28" rx="8" fill="#8e24aa"/>
+  <rect x="620" y="146" width="120" height="12" fill="#8e24aa"/>
+  <text x="680" y="150" text-anchor="middle" fill="#fff" font-weight="bold" font-size="12">Reference Data</text>
+  <text x="635" y="173" fill="#b0bec5" font-size="11">CSV seed + NuGet</text>
+  <rect x="620" y="200" width="120" height="50" rx="8" fill="#1e2540" stroke="#e53935" stroke-width="1.5"/>
+  <rect x="620" y="200" width="120" height="28" rx="8" fill="#e53935"/>
+  <rect x="620" y="216" width="120" height="12" fill="#e53935"/>
+  <text x="680" y="220" text-anchor="middle" fill="#fff" font-weight="bold" font-size="12">Data Nodes</text>
+  <text x="635" y="243" fill="#b0bec5" font-size="11">nodeType: path/to/type</text>
+  <line x1="610" y1="102" x2="540" y2="128" stroke="#90a4ae" stroke-width="1.2" marker-end="url(#nt-arrow)"/>
+  <line x1="610" y1="102" x2="540" y2="198" stroke="#90a4ae" stroke-width="1.2" marker-end="url(#nt-arrow)"/>
+  <line x1="610" y1="102" x2="680" y2="128" stroke="#90a4ae" stroke-width="1.2" marker-end="url(#nt-arrow)"/>
+  <line x1="610" y1="102" x2="680" y2="198" stroke="#90a4ae" stroke-width="1.2" marker-end="url(#nt-arrow)"/>
+</svg>
+*A node type lives in the mesh as a `MeshNode`, compiled on demand from its `Source/*.cs` files — no redeploy required. It gives every data node a typed content record, C# layout areas, and optional reference data.*
 
 ---
 

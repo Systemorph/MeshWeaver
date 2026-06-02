@@ -7,6 +7,57 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 Every piece of live data in MeshWeaver is accessed through a **workspace reference** — a typed lens over the underlying `EntityStore`. A reference describes *what* you want; the framework does the work of subscribing, reducing, serializing, and keeping values in sync. Custom reference types let you add new lenses with full write-back support.
 
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 340" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="currentColor" fill-opacity=".55"/>
+    </marker>
+    <marker id="arr-rev" markerWidth="8" markerHeight="8" refX="1" refY="3" orient="auto">
+      <path d="M8,0 L8,6 L0,3 z" fill="#f57c00" fill-opacity=".85"/>
+    </marker>
+  </defs>
+  <rect x="290" y="10" width="180" height="44" rx="10" fill="#1e88e5"/>
+  <text x="380" y="37" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff">EntityStore</text>
+  <line x1="310" y1="54" x2="180" y2="98" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="380" y1="54" x2="380" y2="98" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="450" y1="54" x2="580" y2="98" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="90" y="98" width="180" height="44" rx="10" fill="#43a047"/>
+  <text x="180" y="121" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#fff">CollectionReference</text>
+  <text x="180" y="136" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#c8e6c9">→ InstanceCollection</text>
+  <rect x="290" y="98" width="180" height="44" rx="10" fill="#5c6bc0"/>
+  <text x="380" y="121" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#fff">CollectionsReference</text>
+  <text x="380" y="136" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#c5cae9">→ EntityStore (subset)</text>
+  <rect x="490" y="98" width="180" height="44" rx="10" fill="#8e24aa"/>
+  <text x="580" y="121" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#fff">JsonPointerReference</text>
+  <text x="580" y="136" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#e1bee7">→ JsonElement</text>
+  <line x1="140" y1="142" x2="100" y2="186" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="180" y1="142" x2="180" y2="186" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="220" y1="142" x2="260" y2="186" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="20" y="186" width="150" height="44" rx="10" fill="#26a69a"/>
+  <text x="95" y="208" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#fff">EntityReference</text>
+  <text x="95" y="223" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#b2dfdb">→ object (by id+coll)</text>
+  <rect x="185" y="186" width="150" height="44" rx="10" fill="#26a69a"/>
+  <text x="260" y="208" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#fff">InstanceReference</text>
+  <text x="260" y="223" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#b2dfdb">→ object (by id)</text>
+  <rect x="95" y="186" width="76" height="44" rx="0" fill="none"/>
+  <rect x="355" y="186" width="150" height="44" rx="10" fill="#1e88e5"/>
+  <text x="430" y="208" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#fff">MeshNodeReference</text>
+  <text x="430" y="223" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#bbdefb">→ MeshNode</text>
+  <line x1="180" y1="142" x2="430" y2="186" stroke="currentColor" stroke-opacity=".35" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="20" y="270" width="340" height="50" rx="10" fill="none" stroke="currentColor" stroke-opacity=".25" stroke-dasharray="5,4"/>
+  <text x="190" y="289" text-anchor="middle" font-family="sans-serif" font-size="11" fill="currentColor" fill-opacity=".65">Subscriber Hub</text>
+  <text x="190" y="308" text-anchor="middle" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity=".5">stream.Update(fn) → SetCurrent → PatchDataChangeRequest</text>
+  <rect x="400" y="270" width="340" height="50" rx="10" fill="none" stroke="#f57c00" stroke-opacity=".5" stroke-dasharray="5,4"/>
+  <text x="570" y="289" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#f57c00" fill-opacity=".85">Owner Hub</text>
+  <text x="570" y="308" text-anchor="middle" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity=".5">PatchFunction → broadcast reconciled state</text>
+  <line x1="360" y1="292" x2="400" y2="292" stroke="#f57c00" stroke-opacity=".75" stroke-width="2" marker-end="url(#arr-rev)"/>
+  <line x1="400" y1="302" x2="360" y2="302" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="380" y="286" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#f57c00" fill-opacity=".8">write</text>
+  <text x="380" y="316" text-anchor="middle" font-family="sans-serif" font-size="9" fill="currentColor" fill-opacity=".5">sync</text>
+</svg>
+
+*Workspace reference reduction hierarchy (top) and bidirectional owner-subscriber sync (bottom).*
+
 ---
 
 ## Built-in Reference Types

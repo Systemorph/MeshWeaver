@@ -6,6 +6,34 @@ Icon: /static/DocContent/GUI/ContainerControl/Tabs/icon.svg
 ---
 
 The **Tabs** control groups related content into labelled panels that the user can switch between. Rather than stacking everything vertically, tabs let you present multiple sections in the same screen area — keeping layouts compact and navigation intuitive.
+<svg viewBox="0 0 760 260" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="tab-arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#90a4ae"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="760" height="260" rx="12" fill="#1a2030" opacity="0.6"/>
+  <text x="380" y="28" text-anchor="middle" fill="currentColor" fill-opacity="0.5" font-size="12" font-style="italic">Controls.Tabs — one container, multiple switchable panels</text>
+  <rect x="40" y="44" width="680" height="196" rx="10" fill="#1e2a3a" stroke="#5c6bc0" stroke-width="1.5"/>
+  <rect x="40" y="44" width="140" height="38" rx="8" fill="#1e88e5"/>
+  <text x="110" y="68" text-anchor="middle" fill="#fff" font-weight="bold" font-size="13">General</text>
+  <rect x="184" y="44" width="130" height="38" rx="8" fill="#1e2a3a" stroke="#5c6bc0" stroke-width="1"/>
+  <text x="249" y="68" text-anchor="middle" fill="currentColor" fill-opacity="0.6" font-size="13">Advanced</text>
+  <rect x="318" y="44" width="110" height="38" rx="8" fill="#1e2a3a" stroke="#5c6bc0" stroke-width="1"/>
+  <text x="373" y="68" text-anchor="middle" fill="currentColor" fill-opacity="0.6" font-size="13">About</text>
+  <line x1="40" y1="82" x2="720" y2="82" stroke="#5c6bc0" stroke-width="1.5"/>
+  <rect x="56" y="96" width="648" height="128" rx="8" fill="#111827" stroke="#1e88e5" stroke-width="1"/>
+  <text x="380" y="126" text-anchor="middle" fill="currentColor" fill-opacity="0.4" font-size="11">Active panel content (General)</text>
+  <rect x="100" y="140" width="160" height="34" rx="6" fill="#1e2a3a" stroke="#1e88e5" stroke-width="1"/>
+  <text x="180" y="162" text-anchor="middle" fill="#b0bec5" font-size="11">Text field: Name</text>
+  <rect x="280" y="140" width="160" height="34" rx="6" fill="#1e2a3a" stroke="#1e88e5" stroke-width="1"/>
+  <text x="360" y="162" text-anchor="middle" fill="#b0bec5" font-size="11">Dropdown: Region</text>
+  <rect x="460" y="140" width="160" height="34" rx="6" fill="#1e2a3a" stroke="#1e88e5" stroke-width="1"/>
+  <text x="540" y="162" text-anchor="middle" fill="#b0bec5" font-size="11">Toggle: Active</text>
+  <text x="56" y="216" fill="currentColor" fill-opacity="0.35" font-size="11" font-style="italic">Advanced and About panels hidden — rendered only when their tab is activated</text>
+</svg>
+
+*A Tabs container with three labeled tabs; the active tab (General) displays its panel while the others remain hidden.*
 
 ---
 

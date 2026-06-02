@@ -7,6 +7,40 @@ Icon: /static/DocContent/DataMesh/UnifiedPath/icon.svg
 
 Unified Path gives you a single, consistent way to **reference** or **embed** anything in your MeshWeaver application — images, markdown files, layout areas, data schemas, and more — using a compact `@` notation that works in markdown, autocomplete, and agent tool calls.
 
+<svg viewBox="0 0 760 260" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="currentColor" fill-opacity=".55"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="760" height="260" rx="12" fill="currentColor" fill-opacity=".04"/>
+  <text x="380" y="26" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="currentColor" fill-opacity=".7">Unified Path Anatomy</text>
+  <text x="380" y="52" text-anchor="middle" font-family="sans-serif" font-size="15" font-weight="bold" fill="#fff" fill-opacity=".9" letter-spacing="1">@address / prefix / path</text>
+  <rect x="40" y="72" width="180" height="44" rx="10" fill="#1e88e5"/>
+  <text x="130" y="89" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">address</text>
+  <text x="130" y="107" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" fill-opacity=".85">MeshNode path</text>
+  <rect x="290" y="72" width="180" height="44" rx="10" fill="#43a047"/>
+  <text x="380" y="89" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">prefix</text>
+  <text x="380" y="107" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" fill-opacity=".85">reserved keyword or collection</text>
+  <rect x="540" y="72" width="180" height="44" rx="10" fill="#f57c00"/>
+  <text x="630" y="89" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">path</text>
+  <text x="630" y="107" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" fill-opacity=".85">specific resource</text>
+  <line x1="220" y1="94" x2="286" y2="94" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="470" y1="94" x2="536" y2="94" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="40" y="148" width="320" height="88" rx="10" fill="currentColor" fill-opacity=".07" stroke="#1e88e5" stroke-opacity=".5" stroke-width="1.2"/>
+  <text x="200" y="168" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#1e88e5">@ — Hyperlink (navigate)</text>
+  <text x="200" y="188" text-anchor="middle" font-family="sans-serif" font-size="11" fill="currentColor" fill-opacity=".75">@Doc/DataMesh/QuerySyntax</text>
+  <text x="200" y="206" text-anchor="middle" font-family="sans-serif" font-size="11" fill="currentColor" fill-opacity=".55">Opens the target node in the browser</text>
+  <text x="200" y="224" text-anchor="middle" font-family="sans-serif" font-size="11" fill="currentColor" fill-opacity=".55">Works in markdown links and autocomplete</text>
+  <rect x="400" y="148" width="320" height="88" rx="10" fill="currentColor" fill-opacity=".07" stroke="#f57c00" stroke-opacity=".5" stroke-width="1.2"/>
+  <text x="560" y="168" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#f57c00">@@ — Embed (render inline)</text>
+  <text x="560" y="188" text-anchor="middle" font-family="sans-serif" font-size="11" fill="currentColor" fill-opacity=".75">@@content/logo.svg</text>
+  <text x="560" y="206" text-anchor="middle" font-family="sans-serif" font-size="11" fill="currentColor" fill-opacity=".55">Renders content directly in the page</text>
+  <text x="560" y="224" text-anchor="middle" font-family="sans-serif" font-size="11" fill="currentColor" fill-opacity=".55">Images, markdown, layout areas, data</text>
+</svg>
+
+*Unified Path anatomy: every `@` or `@@` reference is composed of an address, a prefix, and a resource path.*
+
 ---
 
 # Path Resolution

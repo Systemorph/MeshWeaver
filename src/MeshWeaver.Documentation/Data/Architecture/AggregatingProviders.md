@@ -24,6 +24,67 @@ Both shapes are **`IObservable`-first**. Neither uses `IAsyncEnumerable` / `awai
 
 > The autocomplete chain (`IAutocompleteProvider.GetItems`) is the canonical **streaming** example; the node-menu chain (`INodeMenuProvider.GetItems`) is the canonical **reactive-snapshot-set** example. Same DI registration shape (`TryAddEnumerable`), different emission granularity.
 
+<svg viewBox="0 0 760 310" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="currentColor" fill-opacity=".6"/>
+    </marker>
+  </defs>
+  <text x="190" y="22" text-anchor="middle" font-size="12" font-weight="bold" fill="currentColor" fill-opacity=".5">STREAMING</text>
+  <text x="570" y="22" text-anchor="middle" font-size="12" font-weight="bold" fill="currentColor" fill-opacity=".5">REACTIVE SNAPSHOT-SET</text>
+  <rect x="20" y="35" width="130" height="36" rx="8" fill="#1e88e5"/>
+  <text x="85" y="49" text-anchor="middle" fill="#fff" font-size="11">Provider A</text>
+  <text x="85" y="63" text-anchor="middle" fill="#fff" font-size="10">IObservable&lt;TItem&gt;</text>
+  <rect x="20" y="85" width="130" height="36" rx="8" fill="#1e88e5"/>
+  <text x="85" y="99" text-anchor="middle" fill="#fff" font-size="11">Provider B</text>
+  <text x="85" y="113" text-anchor="middle" fill="#fff" font-size="10">IObservable&lt;TItem&gt;</text>
+  <rect x="20" y="135" width="130" height="36" rx="8" fill="#1e88e5"/>
+  <text x="85" y="149" text-anchor="middle" fill="#fff" font-size="11">Provider C</text>
+  <text x="85" y="163" text-anchor="middle" fill="#fff" font-size="10">IObservable&lt;TItem&gt;</text>
+  <line x1="150" y1="53" x2="195" y2="108" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="150" y1="103" x2="195" y2="108" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="150" y1="153" x2="195" y2="112" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="196" y="80" width="120" height="54" rx="10" fill="#5c6bc0"/>
+  <text x="256" y="101" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold">Merge()</text>
+  <text x="256" y="119" text-anchor="middle" fill="#fff" font-size="10">ScanTopN</text>
+  <line x1="316" y1="107" x2="355" y2="107" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="356" y="80" width="130" height="54" rx="10" fill="#43a047"/>
+  <text x="421" y="101" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold">Consumer</text>
+  <text x="421" y="119" text-anchor="middle" fill="#fff" font-size="10">repaints item-by-item</text>
+  <text x="210" y="172" text-anchor="middle" font-size="10" fill="currentColor" fill-opacity=".5">items trickle in — fast providers</text>
+  <text x="210" y="184" text-anchor="middle" font-size="10" fill="currentColor" fill-opacity=".5">don't wait for slow ones</text>
+  <rect x="400" y="35" width="130" height="36" rx="8" fill="#f57c00"/>
+  <text x="465" y="49" text-anchor="middle" fill="#fff" font-size="11">Provider A</text>
+  <text x="465" y="63" text-anchor="middle" fill="#fff" font-size="10">IObservable&lt;Collection&gt;</text>
+  <rect x="400" y="85" width="130" height="36" rx="8" fill="#f57c00"/>
+  <text x="465" y="99" text-anchor="middle" fill="#fff" font-size="11">Provider B</text>
+  <text x="465" y="113" text-anchor="middle" fill="#fff" font-size="10">IObservable&lt;Collection&gt;</text>
+  <rect x="400" y="135" width="130" height="36" rx="8" fill="#f57c00"/>
+  <text x="465" y="149" text-anchor="middle" fill="#fff" font-size="11">Provider C</text>
+  <text x="465" y="163" text-anchor="middle" fill="#fff" font-size="10">IObservable&lt;Collection&gt;</text>
+  <line x1="530" y1="53" x2="568" y2="108" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="530" y1="103" x2="568" y2="108" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="530" y1="153" x2="568" y2="112" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="568" y="80" width="126" height="54" rx="10" fill="#8e24aa"/>
+  <text x="631" y="101" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold">CombineLatest()</text>
+  <text x="631" y="119" text-anchor="middle" fill="#fff" font-size="10">ImmutableSortedSet</text>
+  <line x1="694" y1="107" x2="730" y2="107" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="731" y="80" width="10" height="54" rx="5" fill="#43a047"/>
+  <text x="736" y="220" text-anchor="middle" fill="currentColor" fill-opacity=".5" font-size="10" transform="rotate(-90 736 220)">re-renders</text>
+  <text x="590" y="172" text-anchor="middle" font-size="10" fill="currentColor" fill-opacity=".5">each emission = full set;</text>
+  <text x="590" y="184" text-anchor="middle" font-size="10" fill="currentColor" fill-opacity=".5">re-emits on any input change</text>
+  <line x1="380" y1="35" x2="380" y2="200" stroke="currentColor" stroke-opacity=".2" stroke-width="1" stroke-dasharray="4,4"/>
+  <rect x="400" y="210" width="130" height="30" rx="8" fill="#26a69a"/>
+  <text x="465" y="230" text-anchor="middle" fill="#fff" font-size="11">TryAddEnumerable</text>
+  <rect x="20" y="210" width="130" height="30" rx="8" fill="#26a69a"/>
+  <text x="85" y="230" text-anchor="middle" fill="#fff" font-size="11">TryAddEnumerable</text>
+  <text x="190" y="265" text-anchor="middle" font-size="11" fill="currentColor" fill-opacity=".55">Same DI registration shape</text>
+  <text x="570" y="265" text-anchor="middle" font-size="11" fill="currentColor" fill-opacity=".55">Same DI registration shape</text>
+  <text x="380" y="295" text-anchor="middle" font-size="11" fill="currentColor" fill-opacity=".4">Pick by emission granularity: item-by-item vs full-set-per-change</text>
+</svg>
+
+*Two aggregation shapes — same DI registration, different emission granularity and aggregation operator.*
+
 ---
 
 ## The async boundary lives at the I/O edge

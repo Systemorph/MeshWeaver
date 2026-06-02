@@ -7,6 +7,90 @@ Icon: /static/DocContent/Architecture/UserInterface/AvailableControls/icon.svg
 
 MeshWeaver's UI is built from a library of composable controls defined entirely in C# on the server. The browser renders whatever the server describes — there is no client-side component code to write. Every control is created through the `Controls` factory class and composed into trees that update reactively as your data changes.
 
+<svg viewBox="0 0 760 340" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="12">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="currentColor" fill-opacity="0.55"/>
+    </marker>
+  </defs>
+  <rect x="300" y="8" width="160" height="36" rx="10" fill="#1e88e5"/>
+  <text x="380" y="31" text-anchor="middle" fill="#fff" font-weight="bold" font-size="13">Controls factory</text>
+  <line x1="380" y1="44" x2="100" y2="92" stroke="currentColor" stroke-opacity="0.45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="380" y1="44" x2="248" y2="92" stroke="currentColor" stroke-opacity="0.45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="380" y1="44" x2="380" y2="92" stroke="currentColor" stroke-opacity="0.45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="380" y1="44" x2="512" y2="92" stroke="currentColor" stroke-opacity="0.45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="380" y1="44" x2="660" y2="92" stroke="currentColor" stroke-opacity="0.45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="20" y="92" width="160" height="34" rx="8" fill="#5c6bc0"/>
+  <text x="100" y="114" text-anchor="middle" fill="#fff" font-weight="bold">Layout</text>
+  <rect x="168" y="92" width="160" height="34" rx="8" fill="#43a047"/>
+  <text x="248" y="114" text-anchor="middle" fill="#fff" font-weight="bold">Input</text>
+  <rect x="300" y="92" width="160" height="34" rx="8" fill="#1e88e5"/>
+  <text x="380" y="114" text-anchor="middle" fill="#fff" font-weight="bold">Display</text>
+  <rect x="432" y="92" width="160" height="34" rx="8" fill="#f57c00"/>
+  <text x="512" y="114" text-anchor="middle" fill="#fff" font-weight="bold">Action</text>
+  <rect x="580" y="92" width="160" height="34" rx="8" fill="#8e24aa"/>
+  <text x="660" y="114" text-anchor="middle" fill="#fff" font-weight="bold">Navigation</text>
+  <line x1="100" y1="126" x2="56" y2="168" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
+  <line x1="100" y1="126" x2="100" y2="168" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
+  <line x1="100" y1="126" x2="144" y2="168" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
+  <rect x="14" y="168" width="84" height="28" rx="6" fill="#5c6bc0" fill-opacity="0.7"/>
+  <text x="56" y="187" text-anchor="middle" fill="#fff" font-size="11">Stack</text>
+  <rect x="58" y="168" width="84" height="28" rx="6" fill="#5c6bc0" fill-opacity="0.7"/>
+  <text x="100" y="187" text-anchor="middle" fill="#fff" font-size="11">Grid</text>
+  <rect x="102" y="168" width="84" height="28" rx="6" fill="#5c6bc0" fill-opacity="0.7"/>
+  <text x="144" y="187" text-anchor="middle" fill="#fff" font-size="11">LayoutArea</text>
+  <line x1="248" y1="126" x2="204" y2="168" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
+  <line x1="248" y1="126" x2="248" y2="168" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
+  <line x1="248" y1="126" x2="292" y2="168" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
+  <rect x="162" y="168" width="84" height="28" rx="6" fill="#43a047" fill-opacity="0.7"/>
+  <text x="204" y="187" text-anchor="middle" fill="#fff" font-size="11">TextField</text>
+  <rect x="206" y="168" width="84" height="28" rx="6" fill="#43a047" fill-opacity="0.7"/>
+  <text x="248" y="187" text-anchor="middle" fill="#fff" font-size="11">Select</text>
+  <rect x="250" y="168" width="84" height="28" rx="6" fill="#43a047" fill-opacity="0.7"/>
+  <text x="292" y="187" text-anchor="middle" fill="#fff" font-size="11">DatePicker</text>
+  <line x1="380" y1="126" x2="336" y2="168" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
+  <line x1="380" y1="126" x2="380" y2="168" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
+  <line x1="380" y1="126" x2="424" y2="168" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
+  <rect x="294" y="168" width="84" height="28" rx="6" fill="#1e88e5" fill-opacity="0.7"/>
+  <text x="336" y="187" text-anchor="middle" fill="#fff" font-size="11">Text</text>
+  <rect x="338" y="168" width="84" height="28" rx="6" fill="#1e88e5" fill-opacity="0.7"/>
+  <text x="380" y="187" text-anchor="middle" fill="#fff" font-size="11">DataGrid</text>
+  <rect x="382" y="168" width="84" height="28" rx="6" fill="#1e88e5" fill-opacity="0.7"/>
+  <text x="424" y="187" text-anchor="middle" fill="#fff" font-size="11">Chart</text>
+  <line x1="512" y1="126" x2="468" y2="168" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
+  <line x1="512" y1="126" x2="512" y2="168" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
+  <line x1="512" y1="126" x2="556" y2="168" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
+  <rect x="426" y="168" width="84" height="28" rx="6" fill="#f57c00" fill-opacity="0.7"/>
+  <text x="468" y="187" text-anchor="middle" fill="#fff" font-size="11">Button</text>
+  <rect x="470" y="168" width="84" height="28" rx="6" fill="#f57c00" fill-opacity="0.7"/>
+  <text x="512" y="187" text-anchor="middle" fill="#fff" font-size="11">IconButton</text>
+  <rect x="514" y="168" width="84" height="28" rx="6" fill="#f57c00" fill-opacity="0.7"/>
+  <text x="556" y="187" text-anchor="middle" fill="#fff" font-size="11">Menu</text>
+  <line x1="660" y1="126" x2="616" y2="168" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
+  <line x1="660" y1="126" x2="660" y2="168" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
+  <line x1="660" y1="126" x2="704" y2="168" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
+  <rect x="574" y="168" width="84" height="28" rx="6" fill="#8e24aa" fill-opacity="0.7"/>
+  <text x="616" y="187" text-anchor="middle" fill="#fff" font-size="11">Tabs</text>
+  <rect x="618" y="168" width="84" height="28" rx="6" fill="#8e24aa" fill-opacity="0.7"/>
+  <text x="660" y="187" text-anchor="middle" fill="#fff" font-size="11">Breadcrumb</text>
+  <rect x="662" y="168" width="84" height="28" rx="6" fill="#8e24aa" fill-opacity="0.7"/>
+  <text x="704" y="187" text-anchor="middle" fill="#fff" font-size="11">Link</text>
+  <line x1="380" y1="228" x2="248" y2="266" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
+  <line x1="380" y1="228" x2="380" y2="266" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
+  <line x1="380" y1="228" x2="512" y2="266" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.2" marker-end="url(#arr)"/>
+  <rect x="270" y="228" width="220" height="28" rx="8" fill="#26a69a"/>
+  <text x="380" y="247" text-anchor="middle" fill="#fff" font-weight="bold">Container + Utility</text>
+  <rect x="162" y="266" width="172" height="28" rx="6" fill="#26a69a" fill-opacity="0.7"/>
+  <text x="248" y="285" text-anchor="middle" fill="#fff" font-size="11">Dialog · EditForm · ExpansionPanel</text>
+  <rect x="294" y="266" width="172" height="28" rx="6" fill="#26a69a" fill-opacity="0.7"/>
+  <text x="380" y="285" text-anchor="middle" fill="#fff" font-size="11">Card · Spinner · Alert</text>
+  <rect x="426" y="266" width="172" height="28" rx="6" fill="#26a69a" fill-opacity="0.7"/>
+  <text x="512" y="285" text-anchor="middle" fill="#fff" font-size="11">Divider · Checkbox · Number</text>
+  <line x1="380" y1="44" x2="380" y2="228" stroke="currentColor" stroke-opacity="0.2" stroke-width="1" stroke-dasharray="4 3"/>
+</svg>
+
+*Control taxonomy — all controls are created via `Controls.*` and compose into reactive UI trees.*
+
 ---
 
 ## Layout Controls

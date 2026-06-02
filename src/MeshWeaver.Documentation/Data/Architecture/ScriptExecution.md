@@ -13,6 +13,57 @@ This page covers three things:
 2. **How to emit progress** — so subscribers see live updates as work unfolds.
 3. **The architecture** — how the host hub stays responsive while a script runs.
 
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 340" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L8,3.5 L0,7 Z" fill="#90a4ae"/>
+    </marker>
+    <marker id="arr-b" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L8,3.5 L0,7 Z" fill="#42a5f5"/>
+    </marker>
+    <marker id="arr-g" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L8,3.5 L0,7 Z" fill="#66bb6a"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="760" height="340" rx="12" fill="#1a1f2e"/>
+  <rect x="16" y="12" width="140" height="44" rx="8" fill="#1e88e5"/>
+  <text x="86" y="30" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" font-weight="600">Code Node</text>
+  <text x="86" y="46" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#bbdefb">ExecuteScriptRequest</text>
+  <rect x="16" y="76" width="140" height="44" rx="8" fill="#5c6bc0"/>
+  <text x="86" y="94" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" font-weight="600">App Code</text>
+  <text x="86" y="110" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#c5cae9">SubmitCodeRequest</text>
+  <rect x="16" y="140" width="140" height="44" rx="8" fill="#8e24aa"/>
+  <text x="86" y="158" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" font-weight="600">MCP Agent</text>
+  <text x="86" y="174" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#e1bee7">execute_script</text>
+  <line x1="156" y1="34" x2="268" y2="106" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="156" y1="98" x2="268" y2="116" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="156" y1="162" x2="268" y2="126" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="268" y="62" width="180" height="130" rx="10" fill="#263238" stroke="#42a5f5" stroke-width="1.5"/>
+  <text x="358" y="82" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#42a5f5" font-weight="700">Activity Hub</text>
+  <text x="358" y="100" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#90a4ae">KernelContainer forwarder</text>
+  <rect x="286" y="110" width="144" height="28" rx="6" fill="#1a237e" opacity="0.8"/>
+  <text x="358" y="129" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#90caf9">ActivityLog content</text>
+  <rect x="286" y="146" width="144" height="28" rx="6" fill="#1a237e" opacity="0.8"/>
+  <text x="358" y="165" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#90caf9">Status: Running / Done</text>
+  <line x1="448" y1="127" x2="540" y2="127" stroke="#42a5f5" stroke-width="1.5" marker-end="url(#arr-b)"/>
+  <text x="494" y="119" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#90a4ae">forward</text>
+  <rect x="540" y="62" width="196" height="130" rx="10" fill="#263238" stroke="#f57c00" stroke-width="1.5"/>
+  <text x="638" y="82" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#f57c00" font-weight="700">Executor Hub</text>
+  <text x="638" y="100" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#90a4ae">KernelExecutor child hub</text>
+  <rect x="557" y="110" width="160" height="28" rx="6" fill="#1b0000" opacity="0.8"/>
+  <text x="637" y="129" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#ffcc80">Roslyn kernel runs script</text>
+  <rect x="557" y="146" width="160" height="28" rx="6" fill="#1b0000" opacity="0.8"/>
+  <text x="637" y="165" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#ffcc80">Log · Mesh · Ct globals</text>
+  <line x1="540" y1="155" x2="448" y2="155" stroke="#f57c00" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="494" y="171" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#90a4ae">DataChangeRequest</text>
+  <rect x="268" y="234" width="180" height="44" rx="8" fill="#26a69a"/>
+  <text x="358" y="252" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" font-weight="600">Subscriber</text>
+  <text x="358" y="268" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#b2dfdb">GetRemoteStream(MeshNodeRef)</text>
+  <line x1="358" y1="192" x2="358" y2="234" stroke="#66bb6a" stroke-width="1.5" marker-end="url(#arr-g)"/>
+  <text x="388" y="220" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#90a4ae">live ticks</text>
+  <text x="380" y="310" text-anchor="middle" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity="0.5" font-style="italic">All entry points converge on the Activity hub; the Executor child hub runs scripts off-thread and pushes incremental snapshots back.</text>
+</svg>
+*Script execution architecture: three entry points converge on the Activity hub, which delegates to a child Executor hub and streams progress snapshots back to subscribers.*
 > **Lifting an existing operation onto script execution?** Read *[Activity Control Plane → Operations as scripts](ActivityControlPlane#operations-as-scripts--the-canonical-shape-for-export-import-compile-)* first. That section is the canonical shape for export, import, compile, mirror, and similar operations: form-bound inputs via `JsonPointerReference` → patch `RequestedStatus = Running` → activity-driven progress → result panel subscribes to the same activity. This page documents the lower-level mechanics; that page documents the user-facing pattern.
 
 ---

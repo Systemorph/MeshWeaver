@@ -15,6 +15,57 @@ Tags:
 ---
 
 MeshWeaver applies CQRS at every layer: **queries** route through a read-side index optimised for fan-out search; **reads** of a specific node go directly to the owning hub for authoritative, lag-free state; **writes** are RFC 7396 JSON-merge patches applied by that same hub; and **operations** are named request types that keep implementation details private. Picking the wrong channel produces subtle consistency bugs — stale content, lost updates, or silent overwrites. This page tells you exactly which channel to use, when, and why.
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 310" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#90a4ae"/>
+    </marker>
+    <marker id="arr-blue" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#1e88e5"/>
+    </marker>
+    <marker id="arr-green" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#43a047"/>
+    </marker>
+    <marker id="arr-orange" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#f57c00"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="760" height="310" rx="12" fill="#1a1f2e"/>
+  <rect x="20" y="20" width="160" height="60" rx="10" fill="#5c6bc0"/>
+  <text x="100" y="46" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff" text-anchor="middle">Caller</text>
+  <text x="100" y="63" font-family="sans-serif" font-size="11" fill="#c5cae9" text-anchor="middle">hub / Blazor view</text>
+  <rect x="20" y="130" width="160" height="60" rx="10" fill="#37474f"/>
+  <text x="100" y="156" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff" text-anchor="middle">Read-side Index</text>
+  <text x="100" y="173" font-family="sans-serif" font-size="11" fill="#b0bec5" text-anchor="middle">ObserveQuery / QueryAsync</text>
+  <text x="100" y="188" font-family="sans-serif" font-size="10" fill="#78909c" text-anchor="middle">eventually consistent</text>
+  <rect x="20" y="230" width="160" height="55" rx="10" fill="#1b5e20" stroke="#43a047" stroke-width="1.5"/>
+  <text x="100" y="254" font-family="sans-serif" font-size="11" fill="#a5d6a7" text-anchor="middle">Sets / shell projections</text>
+  <text x="100" y="270" font-family="sans-serif" font-size="10" fill="#81c784" text-anchor="middle">path · name · nodeType · version</text>
+  <line x1="100" y1="190" x2="100" y2="228" stroke="#43a047" stroke-width="1.5" marker-end="url(#arr-green)" stroke-dasharray="4,3"/>
+  <text x="108" y="213" font-family="sans-serif" font-size="10" fill="#81c784">project only</text>
+  <rect x="300" y="110" width="180" height="90" rx="10" fill="#0d47a1" stroke="#1e88e5" stroke-width="2"/>
+  <text x="390" y="136" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff" text-anchor="middle">Owning Hub</text>
+  <text x="390" y="153" font-family="sans-serif" font-size="11" fill="#90caf9" text-anchor="middle">per-node actor</text>
+  <text x="390" y="170" font-family="sans-serif" font-size="11" fill="#90caf9" text-anchor="middle">authoritative state</text>
+  <text x="390" y="187" font-family="sans-serif" font-size="10" fill="#64b5f6" text-anchor="middle">GetMeshNodeStream</text>
+  <rect x="560" y="110" width="170" height="60" rx="10" fill="#4a148c" stroke="#8e24aa" stroke-width="1.5"/>
+  <text x="645" y="136" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff" text-anchor="middle">Persistence</text>
+  <text x="645" y="153" font-family="sans-serif" font-size="11" fill="#ce93d8" text-anchor="middle">Postgres / Cosmos / Memory</text>
+  <rect x="560" y="220" width="170" height="55" rx="10" fill="#bf360c" stroke="#f57c00" stroke-width="1.5"/>
+  <text x="645" y="244" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff" text-anchor="middle">Patch Write</text>
+  <text x="645" y="261" font-family="sans-serif" font-size="11" fill="#ffcc80" text-anchor="middle">RFC 7396 JSON-merge patch</text>
+  <line x1="180" y1="42" x2="297" y2="140" stroke="#37474f" stroke-width="1.5" marker-end="url(#arr)" stroke-dasharray="5,3"/>
+  <text x="215" y="83" font-family="sans-serif" font-size="10" fill="#78909c" transform="rotate(-28,215,83)">ObserveQuery</text>
+  <line x1="180" y1="50" x2="298" y2="145" stroke="#1e88e5" stroke-width="2" marker-end="url(#arr-blue)"/>
+  <text x="207" y="74" font-family="sans-serif" font-size="10" fill="#64b5f6" transform="rotate(-28,207,74)">GetMeshNodeStream</text>
+  <line x1="100" y1="80" x2="100" y2="128" stroke="#37474f" stroke-width="1.5" marker-end="url(#arr)" stroke-dasharray="5,3"/>
+  <line x1="480" y1="155" x2="558" y2="143" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="495" y="143" font-family="sans-serif" font-size="10" fill="#90a4ae">index sync</text>
+  <line x1="558" y1="155" x2="482" y2="155" stroke="#1e88e5" stroke-width="1.5" marker-end="url(#arr-blue)"/>
+  <line x1="480" y1="170" x2="558" y2="232" stroke="#f57c00" stroke-width="2" marker-end="url(#arr-orange)"/>
+  <text x="490" y="212" font-family="sans-serif" font-size="10" fill="#ffb74d" transform="rotate(30,490,212)">PatchDataChangeRequest</text>
+  <text x="380" y="295" font-family="sans-serif" font-size="11" fill="#90a4ae" text-anchor="middle" font-style="italic">Queries find sets (eventually consistent); GetMeshNodeStream reads a single node's live content from its owning hub.</text>
+</svg>
 
 ## The five primitives at a glance
 

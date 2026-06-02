@@ -19,6 +19,46 @@ The **`ExecuteScript`** MCP tool runs the C# code stored in an executable `Code`
 
 > **Side effects are committed.** Calls to `mesh.CreateNode`, `mesh.UpdateNode`, and blob writes all happen before `ExecuteScript` returns.
 
+<svg viewBox="0 0 760 220" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L8,3.5 L0,7 Z" fill="#90a4ae"/>
+    </marker>
+    <marker id="arr-rev" markerWidth="8" markerHeight="8" refX="1" refY="3.5" orient="auto">
+      <path d="M8,0 L0,3.5 L8,7 Z" fill="#90a4ae"/>
+    </marker>
+  </defs>
+  <rect x="10" y="70" width="130" height="56" rx="10" fill="#1e88e5"/>
+  <text x="75" y="94" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff" text-anchor="middle">MCP Client</text>
+  <text x="75" y="112" font-family="sans-serif" font-size="11" fill="#bbdefb" text-anchor="middle">Claude / Cursor</text>
+  <rect x="205" y="70" width="140" height="56" rx="10" fill="#5c6bc0"/>
+  <text x="275" y="94" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff" text-anchor="middle">ExecuteScript</text>
+  <text x="275" y="112" font-family="sans-serif" font-size="11" fill="#c5cae9" text-anchor="middle">MCP Tool</text>
+  <rect x="405" y="10" width="140" height="56" rx="10" fill="#43a047"/>
+  <text x="475" y="34" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff" text-anchor="middle">Code MeshNode</text>
+  <text x="475" y="52" font-family="sans-serif" font-size="11" fill="#c8e6c9" text-anchor="middle">isExecutable: true</text>
+  <rect x="405" y="130" width="140" height="56" rx="10" fill="#f57c00"/>
+  <text x="475" y="154" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff" text-anchor="middle">Kernel</text>
+  <text x="475" y="172" font-family="sans-serif" font-size="11" fill="#ffe0b2" text-anchor="middle">DotNet.Interactive</text>
+  <rect x="610" y="70" width="130" height="56" rx="10" fill="#8e24aa"/>
+  <text x="675" y="94" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff" text-anchor="middle">ActivityLog</text>
+  <text x="675" y="112" font-family="sans-serif" font-size="11" fill="#e1bee7" text-anchor="middle">live progress</text>
+  <line x1="140" y1="98" x2="203" y2="98" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="171" y="92" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity="0.6" text-anchor="middle">call</text>
+  <line x1="345" y1="88" x2="403" y2="45" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="370" y="60" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity="0.6" text-anchor="middle">fetch code</text>
+  <line x1="475" y1="66" x2="475" y2="128" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="493" y="104" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity="0.6">submit</text>
+  <line x1="545" y1="155" x2="608" y2="108" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="590" y="145" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity="0.6" text-anchor="middle">log entries</text>
+  <line x1="405" y1="160" x2="345" y2="108" stroke="#90a4ae" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr-rev)"/>
+  <text x="358" y="148" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity="0.6" text-anchor="middle">status</text>
+  <line x1="205" y1="108" x2="143" y2="108" stroke="#90a4ae" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr-rev)"/>
+  <text x="174" y="122" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity="0.6" text-anchor="middle">response</text>
+</svg>
+
+*`ExecuteScript` flow: the MCP client calls the tool, which fetches and submits the Code node's C# to the kernel; the kernel streams log entries to an ActivityLog node and returns the final status.*
+
 ## When to use it
 
 Not every task calls for `ExecuteScript`. A quick decision table:

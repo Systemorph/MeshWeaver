@@ -7,6 +7,53 @@ Icon: /static/DocContent/DataMesh/CRUD/icon.svg
 
 MeshWeaver models data mutations as reactive messages flowing through a typed workspace. Rather than imperative method calls, you describe *what changed* and the workspace propagates the delta to every subscriber automatically — no polling, no manual refresh.
 
+<svg viewBox="0 0 760 260" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="crud-arrow" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L0,7 L8,3.5 Z" fill="#90a4ae"/>
+    </marker>
+    <marker id="crud-arrow-fan" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L0,7 L8,3.5 Z" fill="#43a047"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="760" height="260" rx="12" fill="#1a1f2e" opacity="0.7"/>
+  <rect x="20" y="100" width="110" height="60" rx="10" fill="#1e88e5"/>
+  <text x="75" y="126" text-anchor="middle" fill="#fff" font-weight="bold">Client</text>
+  <text x="75" y="144" text-anchor="middle" fill="#fff" font-size="11">DataChangeRequest</text>
+  <rect x="180" y="100" width="110" height="60" rx="10" fill="#e53935"/>
+  <text x="235" y="126" text-anchor="middle" fill="#fff" font-weight="bold">Access</text>
+  <text x="235" y="144" text-anchor="middle" fill="#fff" font-size="11">Control</text>
+  <rect x="340" y="100" width="110" height="60" rx="10" fill="#f57c00"/>
+  <text x="395" y="126" text-anchor="middle" fill="#fff" font-weight="bold">Validator</text>
+  <text x="395" y="144" text-anchor="middle" fill="#fff" font-size="11">Business Rules</text>
+  <rect x="500" y="100" width="110" height="60" rx="10" fill="#5c6bc0"/>
+  <text x="555" y="126" text-anchor="middle" fill="#fff" font-weight="bold">Workspace</text>
+  <text x="555" y="144" text-anchor="middle" fill="#fff" font-size="11">EntityStore</text>
+  <rect x="660" y="100" width="80" height="60" rx="10" fill="#26a69a"/>
+  <text x="700" y="126" text-anchor="middle" fill="#fff" font-weight="bold">Storage</text>
+  <text x="700" y="144" text-anchor="middle" fill="#fff" font-size="11">Persist</text>
+  <line x1="130" y1="130" x2="178" y2="130" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#crud-arrow)"/>
+  <line x1="290" y1="130" x2="338" y2="130" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#crud-arrow)"/>
+  <line x1="450" y1="130" x2="498" y2="130" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#crud-arrow)"/>
+  <line x1="610" y1="130" x2="658" y2="130" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#crud-arrow)"/>
+  <text x="154" y="122" text-anchor="middle" fill="#90a4ae" font-size="10" opacity="0.8">check</text>
+  <text x="314" y="122" text-anchor="middle" fill="#90a4ae" font-size="10" opacity="0.8">validate</text>
+  <text x="474" y="122" text-anchor="middle" fill="#90a4ae" font-size="10" opacity="0.8">apply</text>
+  <text x="634" y="122" text-anchor="middle" fill="#90a4ae" font-size="10" opacity="0.8">persist</text>
+  <rect x="430" y="195" width="100" height="40" rx="8" fill="#43a047" opacity="0.9"/>
+  <text x="480" y="220" text-anchor="middle" fill="#fff" font-size="12">Subscriber A</text>
+  <rect x="560" y="195" width="100" height="40" rx="8" fill="#43a047" opacity="0.9"/>
+  <text x="610" y="220" text-anchor="middle" fill="#fff" font-size="12">Subscriber B</text>
+  <rect x="300" y="195" width="100" height="40" rx="8" fill="#43a047" opacity="0.9"/>
+  <text x="350" y="220" text-anchor="middle" fill="#fff" font-size="12">Subscriber C</text>
+  <line x1="555" y1="160" x2="480" y2="195" stroke="#43a047" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#crud-arrow-fan)"/>
+  <line x1="555" y1="160" x2="610" y2="195" stroke="#43a047" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#crud-arrow-fan)"/>
+  <line x1="555" y1="160" x2="350" y2="195" stroke="#43a047" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#crud-arrow-fan)"/>
+  <text x="380" y="186" text-anchor="middle" fill="#43a047" font-size="10" opacity="0.9">real-time fan-out</text>
+</svg>
+
+*CRUD pipeline: every mutation passes through Access Control and Validation before reaching the Workspace, which persists the change and fans it out to all subscribers in real time.*
+
 ---
 
 # Data Model

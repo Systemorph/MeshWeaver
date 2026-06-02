@@ -6,6 +6,51 @@ Icon: /static/DocContent/Architecture/UserInterface/icon.svg
 ---
 
 MeshWeaver generates UI where the data lives. Instead of shipping large datasets to clients and rendering them in the browser, computations happen server-side and only the rendered components stream across the wire. The result is dramatically lower network traffic and real-time interactivity without sacrificing data security.
+<svg viewBox="0 0 760 220" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#90a4ae"/>
+    </marker>
+    <marker id="arr-b" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#5c6bc0"/>
+    </marker>
+  </defs>
+  <rect x="20" y="30" width="180" height="160" rx="12" fill="#1e3a5f" stroke="#1e88e5" stroke-width="1.5"/>
+  <text x="110" y="55" text-anchor="middle" fill="#1e88e5" font-weight="bold" font-size="14">MessageHub</text>
+  <rect x="38" y="68" width="144" height="32" rx="6" fill="#1565c0"/>
+  <text x="110" y="88" text-anchor="middle" fill="#fff">Controls Language</text>
+  <rect x="38" y="110" width="144" height="32" rx="6" fill="#1565c0"/>
+  <text x="110" y="130" text-anchor="middle" fill="#fff">Data &amp; Logic</text>
+  <rect x="38" y="152" width="144" height="28" rx="6" fill="#1565c0"/>
+  <text x="110" y="170" text-anchor="middle" fill="#fff">Event Handlers</text>
+  <rect x="290" y="30" width="180" height="160" rx="12" fill="#1a3a2a" stroke="#43a047" stroke-width="1.5"/>
+  <text x="380" y="55" text-anchor="middle" fill="#43a047" font-weight="bold" font-size="14">Portal</text>
+  <rect x="308" y="68" width="144" height="32" rx="6" fill="#2e7d32"/>
+  <text x="380" y="88" text-anchor="middle" fill="#fff">ISyncStream</text>
+  <rect x="308" y="110" width="144" height="32" rx="6" fill="#2e7d32"/>
+  <text x="380" y="130" text-anchor="middle" fill="#fff">HTML Renderer</text>
+  <rect x="308" y="152" width="144" height="28" rx="6" fill="#2e7d32"/>
+  <text x="380" y="170" text-anchor="middle" fill="#fff">Event Forwarder</text>
+  <rect x="560" y="30" width="180" height="160" rx="12" fill="#2d1b00" stroke="#f57c00" stroke-width="1.5"/>
+  <text x="650" y="55" text-anchor="middle" fill="#f57c00" font-weight="bold" font-size="14">Browser</text>
+  <rect x="578" y="68" width="144" height="32" rx="6" fill="#e65100"/>
+  <text x="650" y="88" text-anchor="middle" fill="#fff">HTML View</text>
+  <rect x="578" y="110" width="144" height="32" rx="6" fill="#e65100"/>
+  <text x="650" y="130" text-anchor="middle" fill="#fff">Thin Renderer</text>
+  <rect x="578" y="152" width="144" height="28" rx="6" fill="#e65100"/>
+  <text x="650" y="170" text-anchor="middle" fill="#fff">User Events</text>
+  <line x1="200" y1="95" x2="288" y2="95" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="244" y="89" text-anchor="middle" fill="currentColor" fill-opacity=".6" font-size="11">JSON stream</text>
+  <line x1="470" y1="95" x2="558" y2="95" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="514" y="89" text-anchor="middle" fill="currentColor" fill-opacity=".6" font-size="11">HTML</text>
+  <line x1="558" y1="165" x2="470" y2="165" stroke="#5c6bc0" stroke-width="1.5" marker-end="url(#arr-b)"/>
+  <text x="514" y="159" text-anchor="middle" fill="#7986cb" font-size="11">OnClick/Change</text>
+  <line x1="288" y1="165" x2="200" y2="165" stroke="#5c6bc0" stroke-width="1.5" marker-end="url(#arr-b)"/>
+  <text x="244" y="159" text-anchor="middle" fill="#7986cb" font-size="11">ClickedEvent</text>
+  <text x="380" y="215" text-anchor="middle" fill="currentColor" fill-opacity=".45" font-size="11">JSON Patch travels from Hub → Portal → Browser; user events flow back in reverse</text>
+</svg>
+
+*Server-side rendering pipeline: computation and data stay in the Hub; only rendered components and JSON patches travel to the browser.*
 
 ## The Data Compression Principle
 

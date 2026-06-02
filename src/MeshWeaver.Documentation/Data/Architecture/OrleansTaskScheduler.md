@@ -30,6 +30,49 @@ The rule is simple:
 | **Root grain hub** — the hub whose address matches the Orleans grain key | The grain's own scheduler. Orleans needs continuations on this scheduler to attribute work to the grain. |
 | **Every other hub** — hosted hubs, per-node hubs, `_Exec`, kernel hubs, broadcast hubs | `TaskScheduler.Default` (thread pool). Each is its own actor with its own independent scheduler. |
 
+<svg viewBox="0 0 760 320" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L0,7 L8,3.5 Z" fill="currentColor" fill-opacity="0.55"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="760" height="320" rx="12" fill="#1a1a2e" fill-opacity="0.5"/>
+  <rect x="30" y="20" width="700" height="80" rx="10" fill="#1565c0" fill-opacity="0.9"/>
+  <text x="380" y="48" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff">Orleans Grain</text>
+  <rect x="60" y="58" width="300" height="34" rx="8" fill="#0d47a1"/>
+  <text x="210" y="78" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#fff">Root Grain Hub</text>
+  <rect x="400" y="58" width="300" height="34" rx="8" fill="#1976d2" fill-opacity="0.8"/>
+  <text x="550" y="72" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#e3f2fd">ActionBlock (MaxDOP=1)</text>
+  <text x="550" y="86" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#90caf9">TaskScheduler = grain scheduler</text>
+  <line x1="380" y1="100" x2="160" y2="148" stroke="currentColor" stroke-opacity="0.4" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="380" y1="100" x2="380" y2="148" stroke="currentColor" stroke-opacity="0.4" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="380" y1="100" x2="600" y2="148" stroke="currentColor" stroke-opacity="0.4" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="60" y="148" width="200" height="60" rx="10" fill="#2e7d32"/>
+  <text x="160" y="170" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">Hosted Hub</text>
+  <text x="160" y="186" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#a5d6a7">TaskScheduler.Default</text>
+  <rect x="60" y="220" width="200" height="60" rx="10" fill="#1b5e20" fill-opacity="0.85"/>
+  <text x="160" y="243" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#c8e6c9">ActionBlock (MaxDOP=1)</text>
+  <text x="160" y="259" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#81c784">thread-pool thread</text>
+  <rect x="280" y="148" width="200" height="60" rx="10" fill="#6a1b9a"/>
+  <text x="380" y="170" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">Per-Node / _Exec Hub</text>
+  <text x="380" y="186" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#e1bee7">TaskScheduler.Default</text>
+  <rect x="280" y="220" width="200" height="60" rx="10" fill="#4a148c" fill-opacity="0.85"/>
+  <text x="380" y="243" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#e1bee7">ActionBlock (MaxDOP=1)</text>
+  <text x="380" y="259" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#ce93d8">thread-pool thread</text>
+  <rect x="500" y="148" width="200" height="60" rx="10" fill="#e65100"/>
+  <text x="600" y="170" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">Kernel Hub</text>
+  <text x="600" y="186" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#ffe0b2">TaskScheduler.Default</text>
+  <rect x="500" y="220" width="200" height="60" rx="10" fill="#bf360c" fill-opacity="0.85"/>
+  <text x="600" y="243" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#ffe0b2">ActionBlock (MaxDOP=1)</text>
+  <text x="600" y="259" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#ffcc80">thread-pool thread</text>
+  <line x1="160" y1="208" x2="160" y2="220" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="380" y1="208" x2="380" y2="220" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="600" y1="208" x2="600" y2="220" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="380" y="302" text-anchor="middle" font-family="sans-serif" font-size="11" fill="currentColor" fill-opacity="0.55">Each child hub runs on its own independent thread-pool slot — no shared scheduler, no cross-hub deadlock.</text>
+</svg>
+
+*Hub scheduler topology: the root grain hub stays on the Orleans grain scheduler; every child hub gets its own independent `TaskScheduler.Default` action block.*
+
 ## Why the root grain hub uses the grain scheduler
 
 Orleans installs a per-grain `TaskScheduler` so that everything happening "inside the grain" runs on a single, grain-affined thread. This affinity gives Orleans several important guarantees:

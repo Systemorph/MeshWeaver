@@ -15,6 +15,45 @@ Tags:
 
 When you change code in `Memex.Portal.Distributed` (or any project it references — `MeshWeaver.AI`, `MeshWeaver.Graph`, `MeshWeaver.Hosting.Orleans`, …), you have **three** ways to apply the change without touching the whole Aspire stack:
 
+<svg viewBox="0 0 760 340" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L0,7 L8,3.5 Z" fill="#90a4ae"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="760" height="340" rx="10" fill="#1a1e2e" opacity="0.7"/>
+  <text x="380" y="26" text-anchor="middle" fill="currentColor" fill-opacity="0.5" font-size="12">Aspire Stack — what each restart option touches</text>
+  <rect x="20" y="38" width="720" height="56" rx="10" fill="#263238" stroke="#455a64" stroke-width="1.5"/>
+  <text x="380" y="60" text-anchor="middle" fill="#b0bec5" font-size="11" font-weight="bold">Memex.AppHost  (aspire run)</text>
+  <text x="380" y="80" text-anchor="middle" fill="#78909c" font-size="11">Orchestrator — restart only when AppHost wiring changes  ·  cost: 30–60 s</text>
+  <rect x="40" y="110" width="210" height="54" rx="10" fill="#1b3a4b" stroke="#0288d1" stroke-width="1.5"/>
+  <text x="145" y="133" text-anchor="middle" fill="#81d4fa" font-size="12" font-weight="bold">Postgres container</text>
+  <text x="145" y="152" text-anchor="middle" fill="#4fc3f7" font-size="11">Survives all 3 options</text>
+  <rect x="275" y="110" width="210" height="54" rx="10" fill="#1b3a4b" stroke="#0288d1" stroke-width="1.5"/>
+  <text x="380" y="133" text-anchor="middle" fill="#81d4fa" font-size="12" font-weight="bold">Blob storage container</text>
+  <text x="380" y="152" text-anchor="middle" fill="#4fc3f7" font-size="11">Survives all 3 options</text>
+  <rect x="510" y="110" width="210" height="54" rx="10" fill="#1b3a4b" stroke="#0288d1" stroke-width="1.5"/>
+  <text x="615" y="133" text-anchor="middle" fill="#81d4fa" font-size="12" font-weight="bold">Dashboard / OTLP</text>
+  <text x="615" y="152" text-anchor="middle" fill="#4fc3f7" font-size="11">Survives all 3 options</text>
+  <rect x="220" y="192" width="320" height="60" rx="10" fill="#1b2e1b" stroke="#66bb6a" stroke-width="2"/>
+  <text x="380" y="217" text-anchor="middle" fill="#a5d6a7" font-size="13" font-weight="bold">Memex.Portal.Distributed</text>
+  <text x="380" y="238" text-anchor="middle" fill="#81c784" font-size="11">Hub state · AI workers · SignalR sessions</text>
+  <line x1="145" y1="164" x2="320" y2="192" stroke="#455a64" stroke-opacity="0.5" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arr)"/>
+  <line x1="380" y1="164" x2="380" y2="192" stroke="#455a64" stroke-opacity="0.5" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arr)"/>
+  <line x1="615" y1="164" x2="440" y2="192" stroke="#455a64" stroke-opacity="0.5" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arr)"/>
+  <rect x="30" y="278" width="210" height="48" rx="8" fill="#1a2744" stroke="#1e88e5" stroke-width="1.5"/>
+  <text x="135" y="299" text-anchor="middle" fill="#90caf9" font-size="12" font-weight="bold">① dotnet watch</text>
+  <text x="135" y="317" text-anchor="middle" fill="#64b5f6" font-size="10">Auto file-save · seconds</text>
+  <rect x="275" y="278" width="210" height="48" rx="8" fill="#1f2a1a" stroke="#66bb6a" stroke-width="1.5"/>
+  <text x="380" y="299" text-anchor="middle" fill="#a5d6a7" font-size="12" font-weight="bold">② Dashboard restart</text>
+  <text x="380" y="317" text-anchor="middle" fill="#81c784" font-size="10">Resources → ⋯ → Restart · ~10 s</text>
+  <rect x="520" y="278" width="210" height="48" rx="8" fill="#2a1f1a" stroke="#f57c00" stroke-width="1.5"/>
+  <text x="625" y="299" text-anchor="middle" fill="#ffb74d" font-size="12" font-weight="bold">③ Stop-Process</text>
+  <text x="625" y="317" text-anchor="middle" fill="#ffa726" font-size="10">Kill &amp; Aspire auto-restarts · ~5 s</text>
+</svg>
+
+*All three options restart only `Memex.Portal.Distributed`; containers, dashboard, and OTLP collector stay up.*
+
 | Approach | Typical cost | When to use |
 |---|---|---|
 | `dotnet watch --project memex/aspire/Memex.AppHost` | Seconds | Default. File save triggers a per-resource restart automatically. |

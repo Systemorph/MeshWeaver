@@ -6,6 +6,33 @@ Icon: /static/DocContent/GUI/ContainerControl/Splitter/icon.svg
 ---
 
 The `Splitter` control divides the UI into two or more panes separated by a draggable divider. Users can resize panes interactively, collapse them out of the way, or lock them to a fixed size — all through a clean fluent API.
+<svg viewBox="0 0 760 220" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="currentColor" fill-opacity="0.55"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="760" height="220" rx="10" fill="none" stroke="currentColor" stroke-opacity="0.15" stroke-width="1"/>
+  <text x="380" y="22" text-anchor="middle" fill="currentColor" fill-opacity="0.5" font-size="11" font-weight="600" letter-spacing="1">SPLITTER — HORIZONTAL (outer)</text>
+  <rect x="20" y="34" width="160" height="166" rx="8" fill="#1e88e5"/>
+  <text x="100" y="112" text-anchor="middle" fill="#fff" font-weight="600">File Explorer</text>
+  <text x="100" y="130" text-anchor="middle" fill="#fff" font-size="11" fill-opacity="0.8">250px · collapsible</text>
+  <line x1="185" y1="34" x2="185" y2="200" stroke="currentColor" stroke-opacity="0.45" stroke-width="3" stroke-dasharray="4,3"/>
+  <rect x="186" y="92" width="12" height="36" rx="3" fill="currentColor" fill-opacity="0.22"/>
+  <rect x="200" y="34" width="540" height="166" rx="8" fill="none" stroke="currentColor" stroke-opacity="0.18" stroke-width="1.5"/>
+  <text x="470" y="22" text-anchor="middle" fill="currentColor" fill-opacity="0" font-size="1"/>
+  <text x="340" y="52" text-anchor="middle" fill="currentColor" fill-opacity="0.45" font-size="11" font-weight="600" letter-spacing="1">SPLITTER — VERTICAL (inner)</text>
+  <rect x="208" y="60" width="524" height="82" rx="8" fill="#43a047"/>
+  <text x="470" y="96" text-anchor="middle" fill="#fff" font-weight="600">Editor</text>
+  <text x="470" y="114" text-anchor="middle" fill="#fff" font-size="11" fill-opacity="0.8">70% · resizable</text>
+  <line x1="208" y1="147" x2="732" y2="147" stroke="currentColor" stroke-opacity="0.45" stroke-width="3" stroke-dasharray="4,3"/>
+  <rect x="446" y="142" width="48" height="12" rx="3" fill="currentColor" fill-opacity="0.22"/>
+  <rect x="208" y="153" width="524" height="40" rx="8" fill="#5c6bc0"/>
+  <text x="470" y="178" text-anchor="middle" fill="#fff" font-weight="600">Terminal</text>
+  <text x="470" y="192" text-anchor="middle" fill="#fff" font-size="10" fill-opacity="0.8">30% · collapsible</text>
+</svg>
+
+*Nested splitters: a horizontal outer splitter with a file explorer pane and a vertical inner splitter holding editor and terminal.*
 
 ---
 

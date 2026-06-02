@@ -9,6 +9,68 @@ When a test sends a message through Orleans, the silo's `RoutingGrain` must be a
 
 ---
 
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 340" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="#90a4ae"/>
+    </marker>
+    <marker id="arr-ok" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="#43a047"/>
+    </marker>
+    <marker id="arr-err" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="#e53935"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="760" height="340" rx="14" fill="#1a1a2e" stroke="none"/>
+  <rect x="16" y="16" width="340" height="308" rx="10" fill="#0d2137" stroke="#37474f" stroke-width="1.2"/>
+  <text x="186" y="40" font-family="sans-serif" font-size="13" font-weight="bold" fill="#90caf9" text-anchor="middle">Test Process</text>
+  <rect x="404" y="16" width="340" height="308" rx="10" fill="#0d2137" stroke="#37474f" stroke-width="1.2"/>
+  <text x="574" y="40" font-family="sans-serif" font-size="13" font-weight="bold" fill="#90caf9" text-anchor="middle">Orleans Silo</text>
+  <rect x="36" y="56" width="152" height="50" rx="8" fill="#37474f" stroke="#546e7a" stroke-width="1"/>
+  <text x="112" y="77" font-family="sans-serif" font-size="11" fill="#cfd8dc" text-anchor="middle">ClientMesh</text>
+  <text x="112" y="93" font-family="sans-serif" font-size="10" fill="#78909c" text-anchor="middle" font-style="italic">mesh/{guid}</text>
+  <rect x="36" y="148" width="152" height="50" rx="8" fill="#e53935" stroke="#c62828" stroke-width="1"/>
+  <text x="112" y="169" font-family="sans-serif" font-size="11" fill="#fff" text-anchor="middle" font-weight="bold">Mesh-Type Hub</text>
+  <text x="112" y="185" font-family="sans-serif" font-size="10" fill="#ffcdd2" text-anchor="middle" font-style="italic">mesh/{guid} — NOT registered</text>
+  <rect x="36" y="246" width="152" height="50" rx="8" fill="#43a047" stroke="#2e7d32" stroke-width="1"/>
+  <text x="112" y="267" font-family="sans-serif" font-size="11" fill="#fff" text-anchor="middle" font-weight="bold">Registered Hub</text>
+  <text x="112" y="283" font-family="sans-serif" font-size="10" fill="#c8e6c9" text-anchor="middle" font-style="italic">client/{id} + RegisterStream</text>
+  <rect x="424" y="56" width="152" height="50" rx="8" fill="#1e3a5f" stroke="#37474f" stroke-width="1"/>
+  <text x="500" y="77" font-family="sans-serif" font-size="11" fill="#cfd8dc" text-anchor="middle">Target Grain</text>
+  <text x="500" y="93" font-family="sans-serif" font-size="10" fill="#78909c" text-anchor="middle" font-style="italic">e.g. MeshNodeGrain</text>
+  <rect x="424" y="148" width="152" height="50" rx="8" fill="#1e3a5f" stroke="#37474f" stroke-width="1"/>
+  <text x="500" y="169" font-family="sans-serif" font-size="11" fill="#cfd8dc" text-anchor="middle">RoutingGrain</text>
+  <text x="500" y="185" font-family="sans-serif" font-size="10" fill="#78909c" text-anchor="middle" font-style="italic">pathResolver.ResolvePath(…)</text>
+  <rect x="424" y="246" width="152" height="50" rx="8" fill="#1e3a5f" stroke="#37474f" stroke-width="1"/>
+  <text x="500" y="267" font-family="sans-serif" font-size="11" fill="#cfd8dc" text-anchor="middle">Memory Stream</text>
+  <text x="500" y="283" font-family="sans-serif" font-size="10" fill="#78909c" text-anchor="middle" font-style="italic">keyed by client/{id}</text>
+  <line x1="188" y1="81" x2="424" y2="81" stroke="#90a4ae" stroke-width="1.4" stroke-dasharray="5,3" marker-end="url(#arr)"/>
+  <text x="306" y="74" font-family="sans-serif" font-size="10" fill="#90a4ae" text-anchor="middle">request</text>
+  <line x1="424" y1="173" x2="188" y2="173" stroke="#e53935" stroke-width="1.4" marker-end="url(#arr-err)"/>
+  <text x="306" y="165" font-family="sans-serif" font-size="10" fill="#e53935" text-anchor="middle">response → mesh/{guid}</text>
+  <line x1="500" y1="106" x2="500" y2="148" stroke="#90a4ae" stroke-width="1.4" marker-end="url(#arr)"/>
+  <line x1="500" y1="198" x2="500" y2="198" stroke="none"/>
+  <text x="370" y="207" font-family="sans-serif" font-size="11" fill="#ef9a9a" text-anchor="middle" font-weight="bold">✗  NotFound — null</text>
+  <line x1="424" y1="173" x2="368" y2="173" stroke="#e53935" stroke-width="1.4"/>
+  <line x1="368" y1="173" x2="368" y2="198" stroke="#e53935" stroke-width="1.4" stroke-dasharray="4,3"/>
+  <text x="352" y="216" font-family="sans-serif" font-size="10" fill="#ef9a9a" text-anchor="middle">silent drop</text>
+  <line x1="188" y1="271" x2="424" y2="271" stroke="#90a4ae" stroke-width="1.4" stroke-dasharray="5,3" marker-end="url(#arr)"/>
+  <text x="306" y="264" font-family="sans-serif" font-size="10" fill="#90a4ae" text-anchor="middle">request</text>
+  <line x1="500" y1="246" x2="500" y2="221" stroke="none"/>
+  <line x1="576" y1="271" x2="576" y2="271" stroke="none"/>
+  <line x1="500" y1="198" x2="500" y2="246" stroke="#43a047" stroke-width="1.4" marker-end="url(#arr-ok)"/>
+  <text x="530" y="228" font-family="sans-serif" font-size="10" fill="#43a047" text-anchor="start">resolves</text>
+  <line x1="424" y1="271" x2="500" y2="173" stroke="none"/>
+  <line x1="424" y1="296" x2="188" y2="296" stroke="#43a047" stroke-width="1.4" marker-end="url(#arr-ok)"/>
+  <line x1="500" y1="296" x2="424" y2="296" stroke="#43a047" stroke-width="1.4"/>
+  <line x1="500" y1="271" x2="500" y2="296" stroke="#43a047" stroke-width="1.4" stroke-dasharray="4,3"/>
+  <text x="306" y="313" font-family="sans-serif" font-size="10" fill="#a5d6a7" text-anchor="middle">✓  response via memory stream → registered hub</text>
+</svg>
+
+*Response routing: unregistered `mesh/{guid}` hubs produce a silent `NotFound`; `client/{id}` hubs registered with `RegisterStream` receive responses via the Orleans memory stream.*
+
+---
+
 ## The Core Rule
 
 > **Never use `mesh/{guid}` addresses as routable targets in tests.**

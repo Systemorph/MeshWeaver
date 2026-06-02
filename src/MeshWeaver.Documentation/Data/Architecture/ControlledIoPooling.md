@@ -27,6 +27,66 @@ Postgres already solved this: `Observable.FromAsync(work, Scheduler.Default)` pu
 
 ---
 
+<svg viewBox="0 0 760 340" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="currentColor" fill-opacity=".6"/>
+    </marker>
+  </defs>
+  <rect x="20" y="40" width="130" height="60" rx="10" fill="#1565c0"/>
+  <text x="85" y="65" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#fff" font-weight="bold">Hub</text>
+  <text x="85" y="82" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#bbdefb">(single-threaded</text>
+  <text x="85" y="96" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#bbdefb">turn scheduler)</text>
+  <rect x="20" y="160" width="130" height="60" rx="10" fill="#1565c0"/>
+  <text x="85" y="185" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#fff" font-weight="bold">Hub</text>
+  <text x="85" y="202" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#bbdefb">(single-threaded</text>
+  <text x="85" y="216" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#bbdefb">turn scheduler)</text>
+  <rect x="20" y="270" width="130" height="44" rx="10" fill="#37474f"/>
+  <text x="85" y="288" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#cfd8dc">more hubs</text>
+  <text x="85" y="305" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#cfd8dc">(N per process)</text>
+  <line x1="155" y1="70" x2="230" y2="128" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="155" y1="190" x2="230" y2="148" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="155" y1="292" x2="230" y2="165" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="230" y="110" width="140" height="70" rx="10" fill="#6a1b9a"/>
+  <text x="300" y="133" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#fff" font-weight="bold">IIoPool</text>
+  <text x="300" y="150" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#e1bee7">SemaphoreSlim</text>
+  <text x="300" y="165" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#e1bee7">concurrency gate</text>
+  <line x1="370" y1="145" x2="420" y2="100" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="370" y1="145" x2="420" y2="145" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="370" y1="145" x2="420" y2="195" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="420" y="65" width="140" height="50" rx="10" fill="#00695c"/>
+  <text x="490" y="85" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#fff" font-weight="bold">ThreadPool worker</text>
+  <text x="490" y="102" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#b2dfdb">Invoke (async)</text>
+  <rect x="420" y="120" width="140" height="50" rx="10" fill="#00695c"/>
+  <text x="490" y="140" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#fff" font-weight="bold">ThreadPool worker</text>
+  <text x="490" y="157" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#b2dfdb">InvokeBlocking (CPU)</text>
+  <rect x="420" y="175" width="140" height="50" rx="10" fill="#00695c"/>
+  <text x="490" y="195" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#fff" font-weight="bold">ThreadPool worker</text>
+  <text x="490" y="212" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#b2dfdb">InvokeStream</text>
+  <line x1="560" y1="90" x2="605" y2="90" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="560" y1="145" x2="605" y2="145" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="560" y1="200" x2="605" y2="200" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="605" y="60" width="130" height="50" rx="10" fill="#e65100"/>
+  <text x="670" y="80" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#fff" font-weight="bold">HTTP / Blob</text>
+  <text x="670" y="97" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#ffe0b2">cap: 16 / 32</text>
+  <rect x="605" y="118" width="130" height="50" rx="10" fill="#bf360c"/>
+  <text x="670" y="137" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#fff" font-weight="bold">Compile / Process</text>
+  <text x="670" y="154" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#ffe0b2">cap: nCPU / 4</text>
+  <rect x="605" y="175" width="130" height="50" rx="10" fill="#4e342e"/>
+  <text x="670" y="194" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#fff" font-weight="bold">FileSystem</text>
+  <text x="670" y="211" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#d7ccc8">cap: nCPU</text>
+  <text x="85" y="16" text-anchor="middle" font-family="sans-serif" font-size="11" fill="currentColor" fill-opacity=".55">Hubs (actor model)</text>
+  <text x="300" y="16" text-anchor="middle" font-family="sans-serif" font-size="11" fill="currentColor" fill-opacity=".55">Pool gate</text>
+  <text x="490" y="16" text-anchor="middle" font-family="sans-serif" font-size="11" fill="currentColor" fill-opacity=".55">ThreadPool</text>
+  <text x="670" y="16" text-anchor="middle" font-family="sans-serif" font-size="11" fill="currentColor" fill-opacity=".55">I/O resources</text>
+  <rect x="20" y="245" width="130" height="4" rx="2" fill="currentColor" fill-opacity=".15"/>
+  <line x1="150" y1="145" x2="230" y2="145" stroke="currentColor" stroke-opacity=".15" stroke-dasharray="4,3" stroke-width="1"/>
+</svg>
+
+*IIoPool routes all I/O leaves off the hub scheduler onto bounded ThreadPool workers, with per-resource concurrency caps.*
+
+---
+
 ## 🚨 The rule: never raw `Observable.FromAsync` at an I/O leaf
 
 **Every genuine async/blocking I/O leaf goes through `IIoPool`.** Writing `Observable.FromAsync(ct => SomeIoAsync(ct))` directly at an I/O edge is forbidden.

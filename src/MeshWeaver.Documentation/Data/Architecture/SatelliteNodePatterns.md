@@ -10,6 +10,45 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 A **satellite node** is any node whose `MainNode` points to a parent node. Threads and their messages, documents and their comments, approvals, activities — all follow this shape. The pattern gives each child its own hub, its own persistence, and a well-defined ownership boundary.
 
 This page covers the invariants that every satellite type must respect, the pitfalls that are easy to hit, and reference examples from the two canonical implementations: Thread/ThreadMessage and Comment/Reply.
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 340" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L0,7 L8,3.5 Z" fill="currentColor" fill-opacity=".55"/>
+    </marker>
+  </defs>
+  <rect x="290" y="14" width="180" height="52" rx="10" fill="#1e88e5"/>
+  <text x="380" y="36" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff" text-anchor="middle">Parent Node</text>
+  <text x="380" y="53" font-family="sans-serif" font-size="11" fill="#e3f2fd" text-anchor="middle">User/alice/_Thread/chat-1</text>
+  <rect x="290" y="82" width="180" height="30" rx="6" fill="#1565c0" fill-opacity=".7"/>
+  <text x="380" y="102" font-family="sans-serif" font-size="11" fill="#fff" text-anchor="middle">Hub · Workspace · Persistence</text>
+  <line x1="380" y1="112" x2="160" y2="160" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="380" y1="112" x2="380" y2="160" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="380" y1="112" x2="600" y2="160" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="60" y="160" width="200" height="52" rx="10" fill="#43a047"/>
+  <text x="160" y="181" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff" text-anchor="middle">Satellite Node</text>
+  <text x="160" y="198" font-family="sans-serif" font-size="10" fill="#e8f5e9" text-anchor="middle">…/chat-1/msg1  (ThreadMessage)</text>
+  <rect x="280" y="160" width="200" height="52" rx="10" fill="#43a047"/>
+  <text x="380" y="181" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff" text-anchor="middle">Satellite Node</text>
+  <text x="380" y="198" font-family="sans-serif" font-size="10" fill="#e8f5e9" text-anchor="middle">…/chat-1/msg2  (ThreadMessage)</text>
+  <rect x="500" y="160" width="200" height="52" rx="10" fill="#43a047"/>
+  <text x="600" y="181" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff" text-anchor="middle">Satellite Node</text>
+  <text x="600" y="198" font-family="sans-serif" font-size="10" fill="#e8f5e9" text-anchor="middle">…/chat-1/msg3  (ThreadMessage)</text>
+  <rect x="60" y="224" width="200" height="28" rx="6" fill="#2e7d32" fill-opacity=".7"/>
+  <text x="160" y="242" font-family="sans-serif" font-size="11" fill="#fff" text-anchor="middle">Hub · Workspace · Persistence</text>
+  <rect x="280" y="224" width="200" height="28" rx="6" fill="#2e7d32" fill-opacity=".7"/>
+  <text x="380" y="242" font-family="sans-serif" font-size="11" fill="#fff" text-anchor="middle">Hub · Workspace · Persistence</text>
+  <rect x="500" y="224" width="200" height="28" rx="6" fill="#2e7d32" fill-opacity=".7"/>
+  <text x="600" y="242" font-family="sans-serif" font-size="11" fill="#fff" text-anchor="middle">Hub · Workspace · Persistence</text>
+  <rect x="20" y="284" width="320" height="42" rx="8" fill="none" stroke="#f57c00" stroke-width="1.5" stroke-opacity=".7"/>
+  <text x="180" y="302" font-family="sans-serif" font-size="11" fill="#f57c00" fill-opacity=".9" text-anchor="middle">threads table</text>
+  <text x="180" y="318" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity=".6" text-anchor="middle">path contains _Thread → routed here</text>
+  <rect x="360" y="284" width="380" height="42" rx="8" fill="none" stroke="#8e24aa" stroke-width="1.5" stroke-opacity=".7"/>
+  <text x="550" y="302" font-family="sans-serif" font-size="11" fill="#8e24aa" fill-opacity=".9" text-anchor="middle">comments table</text>
+  <text x="550" y="318" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity=".6" text-anchor="middle">path contains _Comment → routed here</text>
+  <text x="380" y="10" font-family="sans-serif" font-size="13" font-weight="bold" fill="currentColor" fill-opacity=".75" text-anchor="middle"></text>
+</svg>
+
+*Each satellite node owns its own hub, workspace, and persistence; path-segment routing maps the whole subtree to the correct PostgreSQL table.*
 
 ---
 

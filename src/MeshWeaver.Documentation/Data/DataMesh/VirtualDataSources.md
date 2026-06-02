@@ -10,6 +10,35 @@ Icon: /static/DocContent/DataMesh/DataConfiguration/icon.svg
 A *virtual data source* bridges the reactive world of `IObservable<T>` and the workspace's `EntityStore`. Instead of seeding data from a static snapshot or a persistence read, the hub subscribes to a live stream — and every emission is folded directly into the workspace. Code inside the hub reads the result through the standard `workspace.GetStream<T>()` API, with no idea whether the backing data came from a database or a computed reactive pipeline.
 
 The infrastructure lives in [`VirtualDataSource`](xref:MeshWeaver.Data.VirtualDataSource), built on [`VirtualTypeSource<T>`](xref:MeshWeaver.Data.VirtualTypeSource`1). Two registration helpers ship with it:
+<svg viewBox="0 0 760 200" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+<defs>
+<marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+<path d="M0,0 L0,6 L8,3 z" fill="#90a4ae"/>
+</marker>
+</defs>
+<rect x="10" y="60" width="160" height="80" rx="10" fill="#1565c0" opacity="0.92"/>
+<text x="90" y="96" text-anchor="middle" fill="#fff" font-weight="bold">Stream Provider</text>
+<text x="90" y="114" text-anchor="middle" fill="#bbdefb" font-size="11">IObservable&lt;IEnumerable&lt;T&gt;&gt;</text>
+<rect x="300" y="40" width="160" height="120" rx="10" fill="#1b5e20" opacity="0.92"/>
+<text x="380" y="80" text-anchor="middle" fill="#fff" font-weight="bold">Virtual</text>
+<text x="380" y="98" text-anchor="middle" fill="#fff" font-weight="bold">Data Source</text>
+<text x="380" y="120" text-anchor="middle" fill="#a5d6a7" font-size="11">stream.Update(...)</text>
+<text x="380" y="138" text-anchor="middle" fill="#a5d6a7" font-size="11">Replay(1).RefCount()</text>
+<rect x="585" y="20" width="160" height="55" rx="10" fill="#4a148c" opacity="0.9"/>
+<text x="665" y="44" text-anchor="middle" fill="#fff" font-weight="bold">EntityStore</text>
+<text x="665" y="62" text-anchor="middle" fill="#ce93d8" font-size="11">workspace cache</text>
+<rect x="585" y="125" width="160" height="55" rx="10" fill="#e65100" opacity="0.9"/>
+<text x="665" y="149" text-anchor="middle" fill="#fff" font-weight="bold">Consumers</text>
+<text x="665" y="167" text-anchor="middle" fill="#ffcc80" font-size="11">workspace.GetStream&lt;T&gt;()</text>
+<line x1="170" y1="100" x2="298" y2="100" stroke="#90a4ae" stroke-width="2" marker-end="url(#arr)"/>
+<text x="234" y="94" text-anchor="middle" fill="currentColor" fill-opacity="0.6" font-size="11">subscribe</text>
+<line x1="460" y1="75" x2="583" y2="55" stroke="#90a4ae" stroke-width="2" marker-end="url(#arr)"/>
+<text x="522" y="58" text-anchor="middle" fill="currentColor" fill-opacity="0.6" font-size="11">fold emissions</text>
+<line x1="460" y1="125" x2="583" y2="148" stroke="#90a4ae" stroke-width="2" marker-end="url(#arr)"/>
+<text x="522" y="148" text-anchor="middle" fill="currentColor" fill-opacity="0.6" font-size="11">latest snapshot</text>
+<line x1="665" y1="75" x2="665" y2="123" stroke="#90a4ae" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arr)"/>
+</svg>
+*Virtual data source pipeline: a live observable stream is folded into the workspace's EntityStore, where hub consumers read it via the standard `GetStream<T>()` API.*
 
 | Helper | Use when |
 |---|---|

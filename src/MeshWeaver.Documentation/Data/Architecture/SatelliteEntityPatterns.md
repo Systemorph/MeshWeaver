@@ -6,6 +6,44 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 ---
 
 Satellite entities — Comments, Threads, Tracked Changes — are secondary nodes that live under a primary content node. They share a consistent set of patterns for data modeling, handler implementation, access control, and reactive testing. This page is the canonical reference for all three.
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 320" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <polygon points="0 0, 8 3.5, 0 7" fill="#90a4ae"/>
+    </marker>
+    <marker id="arr-blue" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <polygon points="0 0, 8 3.5, 0 7" fill="#1e88e5"/>
+    </marker>
+  </defs>
+  <rect x="270" y="20" width="220" height="64" rx="10" fill="#1e88e5"/>
+  <text x="380" y="46" font-family="sans-serif" font-size="14" font-weight="bold" fill="#fff" text-anchor="middle">Content Node</text>
+  <text x="380" y="66" font-family="sans-serif" font-size="11" fill="#bbdefb" text-anchor="middle">Doc/MyDoc  ·  PartnerRe/AiConsulting</text>
+  <rect x="20" y="168" width="180" height="72" rx="10" fill="#5c6bc0"/>
+  <text x="110" y="192" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff" text-anchor="middle">Thread</text>
+  <text x="110" y="210" font-family="sans-serif" font-size="10" fill="#c5cae9" text-anchor="middle">ns: Doc/MyDoc/_Thread</text>
+  <text x="110" y="226" font-family="sans-serif" font-size="10" fill="#c5cae9" text-anchor="middle">Messages: ImmutableList&lt;string&gt;</text>
+  <rect x="290" y="168" width="180" height="72" rx="10" fill="#43a047"/>
+  <text x="380" y="192" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff" text-anchor="middle">Comment</text>
+  <text x="380" y="210" font-family="sans-serif" font-size="10" fill="#c8e6c9" text-anchor="middle">ns: Doc/MyDoc/_Comment</text>
+  <text x="380" y="226" font-family="sans-serif" font-size="10" fill="#c8e6c9" text-anchor="middle">Replies: ImmutableList&lt;string&gt;</text>
+  <rect x="560" y="168" width="180" height="72" rx="10" fill="#f57c00"/>
+  <text x="650" y="192" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff" text-anchor="middle">TrackedChange</text>
+  <text x="650" y="210" font-family="sans-serif" font-size="10" fill="#ffe0b2" text-anchor="middle">ns: Doc/MyDoc/_Tracking</text>
+  <text x="650" y="226" font-family="sans-serif" font-size="10" fill="#ffe0b2" text-anchor="middle">MainNode → content path</text>
+  <line x1="380" y1="84" x2="180" y2="168" stroke="#90a4ae" stroke-width="1.5" stroke-opacity="0.6" marker-end="url(#arr)"/>
+  <line x1="380" y1="84" x2="380" y2="168" stroke="#90a4ae" stroke-width="1.5" stroke-opacity="0.6" marker-end="url(#arr)"/>
+  <line x1="380" y1="84" x2="580" y2="168" stroke="#90a4ae" stroke-width="1.5" stroke-opacity="0.6" marker-end="url(#arr)"/>
+  <text x="230" y="138" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity="0.55" text-anchor="middle">owns</text>
+  <text x="368" y="138" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity="0.55" text-anchor="middle">owns</text>
+  <text x="520" y="138" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity="0.55" text-anchor="middle">owns</text>
+  <line x1="110" y1="240" x2="340" y2="46" stroke="#1e88e5" stroke-width="1" stroke-dasharray="4 3" stroke-opacity="0.7" marker-end="url(#arr-blue)"/>
+  <line x1="380" y1="240" x2="382" y2="84" stroke="#1e88e5" stroke-width="1" stroke-dasharray="4 3" stroke-opacity="0.7" marker-end="url(#arr-blue)"/>
+  <line x1="650" y1="240" x2="420" y2="84" stroke="#1e88e5" stroke-width="1" stroke-dasharray="4 3" stroke-opacity="0.7" marker-end="url(#arr-blue)"/>
+  <text x="190" y="290" font-family="sans-serif" font-size="10" fill="#1e88e5" fill-opacity="0.75" text-anchor="middle">MainNode = content path</text>
+  <text x="380" y="302" font-family="sans-serif" font-size="10" fill="#1e88e5" fill-opacity="0.75" text-anchor="middle">MainNode = content path</text>
+  <text x="570" y="290" font-family="sans-serif" font-size="10" fill="#1e88e5" fill-opacity="0.75" text-anchor="middle">MainNode = content path</text>
+</svg>
+*Satellite nodes live under a content node (solid arrows = ownership by namespace path); each satellite sets `MainNode` back to the content node (dashed arrows) so access control resolves correctly.*
 
 ## Data Model: Parent Tracks Children
 

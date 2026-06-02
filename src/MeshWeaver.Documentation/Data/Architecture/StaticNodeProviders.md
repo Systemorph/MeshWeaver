@@ -7,6 +7,50 @@ Description: "How the IStaticNodeProvider pattern surfaces non-persisted built-i
 
 The mesh ships with a stable set of built-in `MeshNode`s — NodeType definitions (`Markdown`, `Agent`, `Code`, …), platform agents, language-model definitions, embedded documentation, partition meta-nodes. None of these live in persistence. They are declared at configuration time and surfaced uniformly through a single, lightweight abstraction: `IStaticNodeProvider`.
 
+<svg viewBox="0 0 760 300" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+<defs>
+<marker id="arr" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+<polygon points="0 0,8 3,0 6" fill="#90a4ae"/>
+</marker>
+</defs>
+<rect x="0" y="0" width="760" height="300" rx="12" fill="#1a1f2e" opacity="1"/>
+<text x="380" y="26" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#cfd8dc" opacity="0.85">Static Node Provider Architecture</text>
+<rect x="20" y="48" width="160" height="54" rx="10" fill="#1e88e5"/>
+<text x="100" y="70" text-anchor="middle" font-family="sans-serif" font-size="11" font-weight="bold" fill="#fff">StaticMeshNode</text>
+<text x="100" y="86" text-anchor="middle" font-family="sans-serif" font-size="11" font-weight="bold" fill="#fff">ListProvider</text>
+<text x="100" y="100" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#bbdefb">(AddMeshNodes)</text>
+<rect x="20" y="118" width="160" height="54" rx="10" fill="#43a047"/>
+<text x="100" y="140" text-anchor="middle" font-family="sans-serif" font-size="11" font-weight="bold" fill="#fff">BuiltInAgent</text>
+<text x="100" y="156" text-anchor="middle" font-family="sans-serif" font-size="11" font-weight="bold" fill="#fff">Provider</text>
+<text x="100" y="170" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#c8e6c9">(platform agents)</text>
+<rect x="20" y="188" width="160" height="54" rx="10" fill="#8e24aa"/>
+<text x="100" y="210" text-anchor="middle" font-family="sans-serif" font-size="11" font-weight="bold" fill="#fff">DefaultPartition</text>
+<text x="100" y="226" text-anchor="middle" font-family="sans-serif" font-size="11" font-weight="bold" fill="#fff">Provider</text>
+<text x="100" y="240" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#e1bee7">(meta-nodes)</text>
+<text x="20" y="275" text-anchor="start" font-family="sans-serif" font-size="10" fill="#90a4ae" opacity="0.7">+ MyBuiltInsProvider, …</text>
+<text x="200" y="69" text-anchor="middle" font-family="sans-serif" font-size="20" fill="#90a4ae" opacity="0.6">}</text>
+<text x="198" y="146" text-anchor="middle" font-family="sans-serif" font-size="20" fill="#90a4ae" opacity="0.6">}</text>
+<text x="198" y="220" text-anchor="middle" font-family="sans-serif" font-size="20" fill="#90a4ae" opacity="0.6">}</text>
+<text x="210" y="160" text-anchor="start" font-family="sans-serif" font-size="10" fill="#90a4ae" opacity="0.7">IStaticNodeProvider</text>
+<text x="210" y="172" text-anchor="start" font-family="sans-serif" font-size="10" fill="#90a4ae" opacity="0.7">(DI singletons)</text>
+<line x1="185" y1="75" x2="295" y2="130" stroke="#90a4ae" stroke-opacity="0.5" stroke-width="1.5" marker-end="url(#arr)"/>
+<line x1="185" y1="145" x2="295" y2="145" stroke="#90a4ae" stroke-opacity="0.5" stroke-width="1.5" marker-end="url(#arr)"/>
+<line x1="185" y1="215" x2="295" y2="160" stroke="#90a4ae" stroke-opacity="0.5" stroke-width="1.5" marker-end="url(#arr)"/>
+<rect x="300" y="105" width="180" height="80" rx="10" fill="#f57c00"/>
+<text x="390" y="135" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">StaticNodeProvider</text>
+<text x="390" y="151" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff">Extensions</text>
+<text x="390" y="168" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#ffe0b2">FindStaticNode / EnumerateStaticNodes</text>
+<line x1="484" y1="125" x2="570" y2="90" stroke="#90a4ae" stroke-opacity="0.5" stroke-width="1.5" marker-end="url(#arr)"/>
+<line x1="484" y1="165" x2="570" y2="200" stroke="#90a4ae" stroke-opacity="0.5" stroke-width="1.5" marker-end="url(#arr)"/>
+<rect x="575" y="55" width="160" height="54" rx="10" fill="#26a69a"/>
+<text x="655" y="78" text-anchor="middle" font-family="sans-serif" font-size="11" font-weight="bold" fill="#fff">EnrichWithNodeType</text>
+<text x="655" y="95" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#b2dfdb">(node activation)</text>
+<rect x="575" y="170" width="160" height="54" rx="10" fill="#5c6bc0"/>
+<text x="655" y="193" text-anchor="middle" font-family="sans-serif" font-size="11" font-weight="bold" fill="#fff">Application code</text>
+<text x="655" y="210" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#c5cae9">&amp; other consumers</text>
+</svg>
+*Multiple `IStaticNodeProvider` singletons are fanned out through two extension-method helpers; all consumers read through these — there is no central dictionary.*
+
 ## The contract
 
 ```csharp

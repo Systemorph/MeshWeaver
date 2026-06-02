@@ -10,6 +10,70 @@ Icon: /static/DocContent/Architecture/icon.svg
 
 This page is the deep companion to [Partitioned Persistence](xref:Architecture/PartitionedPersistence). That doc covers the routing layer that sits in front of the database; this one covers what is actually in the database.
 
+<svg viewBox="0 0 760 440" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="12">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L8,3.5 L0,7 Z" fill="currentColor" fill-opacity="0.6"/>
+    </marker>
+    <marker id="arr2" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L8,3.5 L0,7 Z" fill="#f57c00" fill-opacity="0.9"/>
+    </marker>
+  </defs>
+  <rect x="270" y="8" width="220" height="40" rx="10" fill="#1e88e5"/>
+  <text x="380" y="24" text-anchor="middle" fill="#fff" font-weight="bold" font-size="13">Mesh Node Write</text>
+  <text x="380" y="40" text-anchor="middle" fill="#ffffffbb" font-size="11">e.g. ACME/Project/Foo/_Access/G1</text>
+  <line x1="380" y1="48" x2="380" y2="78" stroke="currentColor" stroke-opacity="0.5" marker-end="url(#arr)"/>
+  <rect x="250" y="80" width="260" height="40" rx="10" fill="#5c6bc0"/>
+  <text x="380" y="96" text-anchor="middle" fill="#fff" font-weight="bold">Path Segment Routing</text>
+  <text x="380" y="112" text-anchor="middle" fill="#ffffffbb" font-size="11">first segment → schema  |  path suffix → table</text>
+  <line x1="200" y1="120" x2="130" y2="155" stroke="currentColor" stroke-opacity="0.5" marker-end="url(#arr)"/>
+  <line x1="380" y1="120" x2="380" y2="155" stroke="currentColor" stroke-opacity="0.5" marker-end="url(#arr)"/>
+  <line x1="560" y1="120" x2="630" y2="155" stroke="currentColor" stroke-opacity="0.5" marker-end="url(#arr)"/>
+  <rect x="20" y="157" width="200" height="40" rx="10" fill="#43a047"/>
+  <text x="120" y="173" text-anchor="middle" fill="#fff" font-weight="bold">acme schema</text>
+  <text x="120" y="189" text-anchor="middle" fill="#ffffffbb" font-size="11">path starts with ACME/…</text>
+  <rect x="270" y="157" width="220" height="40" rx="10" fill="#43a047"/>
+  <text x="380" y="173" text-anchor="middle" fill="#fff" font-weight="bold">user schema</text>
+  <text x="380" y="189" text-anchor="middle" fill="#ffffffbb" font-size="11">path starts with User/…</text>
+  <rect x="530" y="157" width="200" height="40" rx="10" fill="#43a047"/>
+  <text x="630" y="173" text-anchor="middle" fill="#fff" font-weight="bold">dav schema</text>
+  <text x="630" y="189" text-anchor="middle" fill="#ffffffbb" font-size="11">path starts with DAV/…</text>
+  <line x1="120" y1="197" x2="120" y2="225" stroke="currentColor" stroke-opacity="0.5" marker-end="url(#arr)"/>
+  <line x1="380" y1="197" x2="380" y2="225" stroke="currentColor" stroke-opacity="0.5" marker-end="url(#arr)"/>
+  <rect x="20" y="227" width="200" height="100" rx="10" fill="#263238" stroke="currentColor" stroke-opacity="0.25"/>
+  <text x="120" y="246" text-anchor="middle" fill="#ffffffcc" font-weight="bold" font-size="11">Satellite Tables</text>
+  <rect x="32" y="253" width="176" height="16" rx="5" fill="#1e88e5" fill-opacity="0.7"/>
+  <text x="120" y="265" text-anchor="middle" fill="#fff" font-size="10">access  ← _Access/ suffix</text>
+  <rect x="32" y="273" width="176" height="16" rx="5" fill="#8e24aa" fill-opacity="0.7"/>
+  <text x="120" y="285" text-anchor="middle" fill="#fff" font-size="10">threads ← _Thread/_ThreadMessage</text>
+  <rect x="32" y="293" width="176" height="16" rx="5" fill="#f57c00" fill-opacity="0.7"/>
+  <text x="120" y="305" text-anchor="middle" fill="#fff" font-size="10">annotations ← _Comment/_Approval</text>
+  <text x="120" y="322" text-anchor="middle" fill="#ffffffaa" font-size="10">+ activities / code / mesh_nodes</text>
+  <rect x="270" y="227" width="220" height="100" rx="10" fill="#263238" stroke="currentColor" stroke-opacity="0.25"/>
+  <text x="380" y="246" text-anchor="middle" fill="#ffffffcc" font-weight="bold" font-size="11">Satellite Tables</text>
+  <rect x="282" y="253" width="196" height="16" rx="5" fill="#1e88e5" fill-opacity="0.7"/>
+  <text x="380" y="265" text-anchor="middle" fill="#fff" font-size="10">access  ← _Access/ suffix</text>
+  <rect x="282" y="273" width="196" height="16" rx="5" fill="#8e24aa" fill-opacity="0.7"/>
+  <text x="380" y="285" text-anchor="middle" fill="#fff" font-size="10">threads ← _Thread/_ThreadMessage</text>
+  <rect x="282" y="293" width="196" height="16" rx="5" fill="#f57c00" fill-opacity="0.7"/>
+  <text x="380" y="305" text-anchor="middle" fill="#fff" font-size="10">annotations ← _Comment/_Approval</text>
+  <text x="380" y="322" text-anchor="middle" fill="#ffffffaa" font-size="10">+ activities / code / mesh_nodes</text>
+  <line x1="120" y1="327" x2="120" y2="358" stroke="#f57c00" stroke-opacity="0.8" marker-end="url(#arr2)"/>
+  <line x1="380" y1="327" x2="380" y2="358" stroke="#f57c00" stroke-opacity="0.8" marker-end="url(#arr2)"/>
+  <rect x="140" y="360" width="480" height="66" rx="10" fill="#37474f" stroke="currentColor" stroke-opacity="0.3"/>
+  <text x="380" y="378" text-anchor="middle" fill="#ffffffdd" font-weight="bold" font-size="12">public schema — Two-Gate Access Check</text>
+  <rect x="152" y="385" width="210" height="32" rx="8" fill="#e53935" fill-opacity="0.8"/>
+  <text x="257" y="399" text-anchor="middle" fill="#fff" font-size="11" font-weight="bold">Gate 1: partition_access</text>
+  <text x="257" y="412" text-anchor="middle" fill="#ffffffcc" font-size="10">user has ANY access to partition?</text>
+  <rect x="378" y="385" width="230" height="32" rx="8" fill="#e53935" fill-opacity="0.8"/>
+  <text x="493" y="399" text-anchor="middle" fill="#fff" font-size="11" font-weight="bold">Gate 2: user_effective_permissions</text>
+  <text x="493" y="412" text-anchor="middle" fill="#ffffffcc" font-size="10">longest-prefix match on node path</text>
+  <line x1="362" y1="401" x2="378" y2="401" stroke="#fff" stroke-opacity="0.5" stroke-dasharray="3,3"/>
+  <text x="370" y="398" text-anchor="middle" fill="#ffffffaa" font-size="10">+</text>
+</svg>
+
+*Per-partition schema layout: path segment selects the Postgres schema, path suffix routes to the satellite table, and reads require passing both public-schema gates.*
+
 ---
 
 ## Per-partition schema model

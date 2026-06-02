@@ -6,6 +6,59 @@ Icon: /static/DocContent/DataMesh/SatelliteEntities/icon.svg
 ---
 
 Every primary node can carry a family of related records — comments, approval decisions, access grants, discussion threads — without polluting the main node hierarchy. These are **satellite entities**: secondary data elements that attach to a primary node through a reserved `_SubNamespace/` prefix.
+<svg viewBox="0 0 760 300" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="12">
+  <defs>
+    <marker id="se-arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#90a4ae"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="760" height="300" rx="12" fill="#1a2030" opacity="0.6"/>
+  <rect x="240" y="18" width="280" height="50" rx="10" fill="#1e88e5"/>
+  <text x="380" y="39" text-anchor="middle" fill="#fff" font-weight="bold" font-size="14">Primary Node</text>
+  <text x="380" y="57" text-anchor="middle" fill="#bbdefb" font-size="11">ACME/Projects/Alpha</text>
+  <line x1="282" y1="68" x2="90" y2="178" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#se-arrow)" stroke-opacity="0.7"/>
+  <line x1="318" y1="68" x2="198" y2="178" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#se-arrow)" stroke-opacity="0.7"/>
+  <line x1="354" y1="68" x2="306" y2="178" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#se-arrow)" stroke-opacity="0.7"/>
+  <line x1="380" y1="68" x2="414" y2="178" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#se-arrow)" stroke-opacity="0.7"/>
+  <line x1="406" y1="68" x2="522" y2="178" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#se-arrow)" stroke-opacity="0.7"/>
+  <line x1="442" y1="68" x2="630" y2="178" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#se-arrow)" stroke-opacity="0.7"/>
+  <line x1="468" y1="68" x2="706" y2="178" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#se-arrow)" stroke-opacity="0.7"/>
+  <rect x="28" y="178" width="126" height="58" rx="8" fill="#43a047"/>
+  <text x="91" y="196" text-anchor="middle" fill="#fff" font-weight="bold" font-size="12">_Access</text>
+  <text x="91" y="212" text-anchor="middle" fill="#c8e6c9" font-size="10">AccessAssignment</text>
+  <text x="91" y="228" text-anchor="middle" fill="#a5d6a7" font-size="10">→ access</text>
+  <rect x="136" y="178" width="126" height="58" rx="8" fill="#8e24aa"/>
+  <text x="199" y="196" text-anchor="middle" fill="#fff" font-weight="bold" font-size="12">_Comment</text>
+  <text x="199" y="212" text-anchor="middle" fill="#e1bee7" font-size="10">Comment</text>
+  <text x="199" y="228" text-anchor="middle" fill="#ce93d8" font-size="10">→ comments</text>
+  <rect x="244" y="178" width="126" height="58" rx="8" fill="#5c6bc0"/>
+  <text x="307" y="196" text-anchor="middle" fill="#fff" font-weight="bold" font-size="12">_Tracking</text>
+  <text x="307" y="212" text-anchor="middle" fill="#c5cae9" font-size="10">TrackedChange</text>
+  <text x="307" y="228" text-anchor="middle" fill="#9fa8da" font-size="10">→ tracking</text>
+  <rect x="352" y="178" width="126" height="58" rx="8" fill="#f57c00"/>
+  <text x="415" y="196" text-anchor="middle" fill="#fff" font-weight="bold" font-size="12">_Approval</text>
+  <text x="415" y="212" text-anchor="middle" fill="#ffe0b2" font-size="10">Approval</text>
+  <text x="415" y="228" text-anchor="middle" fill="#ffcc80" font-size="10">→ approvals</text>
+  <rect x="460" y="178" width="126" height="58" rx="8" fill="#26a69a"/>
+  <text x="523" y="196" text-anchor="middle" fill="#fff" font-weight="bold" font-size="12">_Thread</text>
+  <text x="523" y="212" text-anchor="middle" fill="#b2dfdb" font-size="10">Thread</text>
+  <text x="523" y="228" text-anchor="middle" fill="#80cbc4" font-size="10">→ threads</text>
+  <rect x="568" y="178" width="126" height="58" rx="8" fill="#e53935"/>
+  <text x="631" y="196" text-anchor="middle" fill="#fff" font-weight="bold" font-size="12">_Activity</text>
+  <text x="631" y="212" text-anchor="middle" fill="#ffcdd2" font-size="10">Activity</text>
+  <text x="631" y="228" text-anchor="middle" fill="#ef9a9a" font-size="10">→ activities</text>
+  <rect x="640" y="178" width="112" height="58" rx="8" fill="#546e7a"/>
+  <text x="696" y="196" text-anchor="middle" fill="#fff" font-weight="bold" font-size="11">_UserActivity</text>
+  <text x="696" y="212" text-anchor="middle" fill="#cfd8dc" font-size="10">UserActivity</text>
+  <text x="696" y="228" text-anchor="middle" fill="#b0bec5" font-size="10">→ user_activities</text>
+  <text x="91" y="264" text-anchor="middle" fill="#e0e0e0" font-size="10">MainNode =</text>
+  <text x="91" y="276" text-anchor="middle" fill="#90caf9" font-size="10">ACME/Projects/Alpha</text>
+  <text x="415" y="264" text-anchor="middle" fill="#e0e0e0" font-size="10">MainNode =</text>
+  <text x="415" y="276" text-anchor="middle" fill="#90caf9" font-size="10">ACME/Projects/Alpha</text>
+  <text x="631" y="264" text-anchor="middle" fill="#e0e0e0" font-size="10">MainNode =</text>
+  <text x="631" y="276" text-anchor="middle" fill="#90caf9" font-size="10">ACME/Projects/Alpha</text>
+</svg>
+*Each satellite sub-namespace routes to its own PostgreSQL table; all satellites carry `MainNode` pointing back to the primary node.*
 
 # What Are Satellite Entities?
 

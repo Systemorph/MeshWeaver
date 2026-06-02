@@ -14,6 +14,48 @@ No central registry. No `IConfiguration` sidecar. No per-user `MemoryCache` to i
 
 ---
 
+<svg viewBox="0 0 760 400" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 Z" fill="currentColor" fill-opacity=".6"/>
+    </marker>
+  </defs>
+  <rect x="10" y="10" width="230" height="106" rx="10" fill="#1565c0"/>
+  <text x="125" y="34" text-anchor="middle" fill="#fff" font-weight="bold">System (_Provider/)</text>
+  <text x="125" y="54" text-anchor="middle" fill="#bbdefb" font-size="11">_Provider/Anthropic  (ModelProvider)</text>
+  <text x="125" y="70" text-anchor="middle" fill="#bbdefb" font-size="11">  claude-opus-4-7   (LanguageModel)</text>
+  <text x="125" y="86" text-anchor="middle" fill="#bbdefb" font-size="11">  claude-sonnet-4-6  (LanguageModel)</text>
+  <text x="125" y="104" text-anchor="middle" fill="#90caf9" font-size="10">read-only · IConfiguration key</text>
+  <rect x="265" y="10" width="225" height="106" rx="10" fill="#2e7d32"/>
+  <text x="377" y="34" text-anchor="middle" fill="#fff" font-weight="bold">User (rbuergi/_Provider/)</text>
+  <text x="377" y="54" text-anchor="middle" fill="#c8e6c9" font-size="11">rbuergi/_Provider/Anthropic</text>
+  <text x="377" y="70" text-anchor="middle" fill="#c8e6c9" font-size="11">  claude-opus-4-7</text>
+  <text x="377" y="88" text-anchor="middle" fill="#c8e6c9" font-size="11">ApiKey = personal sk-ant-…</text>
+  <text x="377" y="104" text-anchor="middle" fill="#a5d6a7" font-size="10">Permission.Api · owner only</text>
+  <rect x="515" y="10" width="225" height="106" rx="10" fill="#6a1b9a"/>
+  <text x="627" y="34" text-anchor="middle" fill="#fff" font-weight="bold">Org (acme/_Provider/)</text>
+  <text x="627" y="54" text-anchor="middle" fill="#e1bee7" font-size="11">acme/_Provider/AzureFoundry</text>
+  <text x="627" y="70" text-anchor="middle" fill="#e1bee7" font-size="11">  gpt-4o  (LanguageModel)</text>
+  <text x="627" y="88" text-anchor="middle" fill="#e1bee7" font-size="11">  Endpoint = azure-gateway</text>
+  <text x="627" y="104" text-anchor="middle" fill="#ce93d8" font-size="10">Permission.Api · org partition</text>
+  <line x1="125" y1="116" x2="125" y2="160" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="377" y1="116" x2="377" y2="160" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="627" y1="116" x2="627" y2="160" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="60" y="160" width="620" height="76" rx="10" fill="#e65100"/>
+  <text x="370" y="184" text-anchor="middle" fill="#fff" font-weight="bold">Picker Query Union  (AgentPickerProjection)</text>
+  <text x="370" y="204" text-anchor="middle" fill="#ffe0b2" font-size="11">namespace:_Provider · namespace:{currentPath}/_Provider · namespace:{nodeTypePath}/_Provider</text>
+  <text x="370" y="220" text-anchor="middle" fill="#ffe0b2" font-size="11">nodeType:LanguageModel|ModelProvider  scope:descendants   (identical filter, vary namespace)</text>
+  <line x1="370" y1="236" x2="370" y2="278" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="110" y="278" width="500" height="56" rx="10" fill="#00695c"/>
+  <text x="360" y="301" text-anchor="middle" fill="#fff" font-weight="bold">ChatClientCredentialResolver</text>
+  <text x="360" y="320" text-anchor="middle" fill="#b2dfdb" font-size="11">Priority: explicit ProviderRef → conventional _Provider/{P} → ApiKeySecretRef → IOptions fallback</text>
+  <line x1="360" y1="334" x2="360" y2="372" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="160" y="372" width="400" height="22" rx="8" fill="#37474f"/>
+  <text x="360" y="387" text-anchor="middle" fill="#cfd8dc" font-size="11">IChatClient  (resolved, ready to call)</text>
+</svg>
+
+*Three credential scopes (system, user, org) merge via a unioned synced query; the credential resolver follows a four-step priority chain to produce a ready IChatClient.*
+
 ## Path layout
 
 The `_Provider` satellite follows the same convention as `_Access`, `_Thread`, and `_Comment`. Wherever a MeshNode can live, that node can have a `_Provider` subtree alongside it.

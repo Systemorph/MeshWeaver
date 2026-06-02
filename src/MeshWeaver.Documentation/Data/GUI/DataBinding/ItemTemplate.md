@@ -6,6 +6,43 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 ---
 
 `ItemTemplateControl` is MeshWeaver's declarative for-each renderer. Give it a collection and a view template, and it stamps out one copy of that template per item — reactively, keeping the DOM in sync as the collection changes.
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 300" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="currentColor" fill-opacity=".6"/>
+    </marker>
+  </defs>
+  <rect x="20" y="30" width="148" height="46" rx="10" fill="#1e88e5"/>
+  <text x="94" y="49" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#fff">1. Static Collection</text>
+  <text x="94" y="66" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#cce" fill-opacity=".85">T[] / IEnumerable&lt;T&gt;</text>
+  <rect x="20" y="102" width="148" height="46" rx="10" fill="#43a047"/>
+  <text x="94" y="121" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#fff">2. Observable Stream</text>
+  <text x="94" y="138" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#cec" fill-opacity=".85">IObservable&lt;IEnumerable&lt;T&gt;&gt;</text>
+  <rect x="20" y="174" width="148" height="46" rx="10" fill="#8e24aa"/>
+  <text x="94" y="193" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#fff">3. Template.Bind</text>
+  <text x="94" y="210" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#e8d" fill-opacity=".85">Nested parent + children</text>
+  <rect x="20" y="246" width="148" height="46" rx="10" fill="#f57c00"/>
+  <text x="94" y="265" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#fff">4. Workspace Stream</text>
+  <text x="94" y="282" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fed" fill-opacity=".85">GetStream&lt;T&gt;() TypeSource</text>
+  <line x1="168" y1="53" x2="268" y2="140" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="168" y1="125" x2="268" y2="148" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="168" y1="197" x2="268" y2="158" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="168" y1="269" x2="268" y2="170" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <rect x="272" y="120" width="156" height="60" rx="10" fill="#26a69a"/>
+  <text x="350" y="145" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#fff" font-weight="bold">BindMany</text>
+  <text x="350" y="163" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#cfe" fill-opacity=".9">ItemTemplateControl</text>
+  <line x1="428" y1="150" x2="524" y2="112" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="428" y1="150" x2="524" y2="188" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <rect x="528" y="82" width="156" height="52" rx="10" fill="#5c6bc0"/>
+  <text x="606" y="103" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#fff">TemplateBuilderVisitor</text>
+  <text x="606" y="120" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#ddf" fill-opacity=".85">Compile expression tree</text>
+  <rect x="528" y="162" width="156" height="52" rx="10" fill="#e53935"/>
+  <text x="606" y="183" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#fff">ItemTemplate.razor</text>
+  <text x="606" y="200" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fdd" fill-opacity=".85">Render one copy per item</text>
+  <line x1="606" y1="134" x2="606" y2="162" stroke="currentColor" stroke-opacity=".35" stroke-width="1.5" marker-end="url(#arrow)"/>
+</svg>
+
+*Four data-supply patterns converge into `BindMany` → `ItemTemplateControl`, which compiles the expression tree and stamps one rendered copy per item.*
 
 # Usage Patterns
 

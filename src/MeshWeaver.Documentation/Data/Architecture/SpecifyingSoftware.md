@@ -20,6 +20,46 @@ Tags:
 Software specifications are hard to get right. Traditional approaches produce static mockups — polished documents that describe intent but offer no way to validate it. When the gap between specification and implementation widens, costly rework follows.
 
 This article lays out a more effective approach: specifications that are **iterative, practical, and tightly coupled to the actual implementation**.
+<svg viewBox="0 0 760 260" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arrowB" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#90a4ae"/>
+    </marker>
+    <marker id="arrowG" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#43a047"/>
+    </marker>
+  </defs>
+  <text x="160" y="22" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="currentColor" fill-opacity="0.55">Static Approach</text>
+  <rect x="30" y="34" width="120" height="44" rx="10" fill="#455a64"/>
+  <text x="90" y="56" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff">Specification</text>
+  <text x="90" y="72" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#cfd8dc">(written once)</text>
+  <line x1="150" y1="56" x2="196" y2="56" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arrowB)"/>
+  <rect x="196" y="34" width="120" height="44" rx="10" fill="#455a64"/>
+  <text x="256" y="56" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff">Development</text>
+  <text x="256" y="72" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#cfd8dc">(code drifts away)</text>
+  <line x1="316" y1="56" x2="362" y2="56" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arrowB)"/>
+  <rect x="362" y="34" width="120" height="44" rx="10" fill="#b71c1c"/>
+  <text x="422" y="56" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff">Rework</text>
+  <text x="422" y="72" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#ffcdd2">(costly divergence)</text>
+  <line x1="0" y1="110" x2="760" y2="110" stroke="currentColor" stroke-opacity="0.15" stroke-width="1"/>
+  <text x="420" y="132" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="currentColor" fill-opacity="0.55">Living Specification Approach</text>
+  <rect x="30" y="148" width="130" height="52" rx="10" fill="#1565c0"/>
+  <text x="95" y="170" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff">Specification</text>
+  <text x="95" y="186" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#bbdefb">iterative artefact</text>
+  <line x1="160" y1="174" x2="206" y2="174" stroke="#43a047" stroke-width="2" marker-end="url(#arrowG)"/>
+  <rect x="206" y="148" width="130" height="52" rx="10" fill="#2e7d32"/>
+  <text x="271" y="170" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff">Development</text>
+  <text x="271" y="186" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#c8e6c9">code + examples</text>
+  <line x1="336" y1="174" x2="382" y2="174" stroke="#43a047" stroke-width="2" marker-end="url(#arrowG)"/>
+  <rect x="382" y="148" width="130" height="52" rx="10" fill="#e65100"/>
+  <text x="447" y="170" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff">Validation</text>
+  <text x="447" y="186" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#ffe0b2">executable tests</text>
+  <line x1="447" y1="200" x2="447" y2="228" stroke="#43a047" stroke-width="2"/>
+  <line x1="447" y1="228" x2="95" y2="228" stroke="#43a047" stroke-width="2"/>
+  <line x1="95" y1="228" x2="95" y2="200" stroke="#43a047" stroke-width="2" marker-end="url(#arrowG)"/>
+  <text x="271" y="248" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#43a047">feedback refines the spec continuously</text>
+</svg>
+*Static specs diverge silently; living specifications close the loop — validation feeds back into the spec on every iteration.*
 
 ## The Problem with Static Specs
 

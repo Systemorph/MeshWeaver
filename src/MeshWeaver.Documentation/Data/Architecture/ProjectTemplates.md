@@ -222,6 +222,47 @@ The DevLogin page is active only when `ASPNETCORE_ENVIRONMENT=Development`. In p
 | **Scaling** | Single process | Orleans clustering, Azure Container Apps |
 | **Primary use case** | Local development, demos | Staging, production |
 | **Run command** | `dotnet run --project MyProject.Portal.Monolith` | `dotnet run --project aspire/MyProject.AppHost` |
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 320" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="currentColor" fill-opacity=".55"/>
+    </marker>
+  </defs>
+  <text x="185" y="22" text-anchor="middle" font-size="14" font-weight="bold" fill="currentColor" fill-opacity=".85">Monolith</text>
+  <text x="575" y="22" text-anchor="middle" font-size="14" font-weight="bold" fill="currentColor" fill-opacity=".85">Distributed (Aspire)</text>
+  <rect x="20" y="34" width="330" height="260" rx="12" fill="none" stroke="currentColor" stroke-opacity=".25" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <rect x="410" y="34" width="330" height="260" rx="12" fill="none" stroke="currentColor" stroke-opacity=".25" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <rect x="85" y="50" width="200" height="38" rx="8" fill="#1e88e5"/>
+  <text x="185" y="74" text-anchor="middle" fill="#fff" font-weight="bold">Portal.Monolith</text>
+  <rect x="85" y="112" width="200" height="38" rx="8" fill="#5c6bc0"/>
+  <text x="185" y="136" text-anchor="middle" fill="#fff" font-weight="bold">Portal.Shared</text>
+  <rect x="85" y="174" width="200" height="38" rx="8" fill="#43a047"/>
+  <text x="185" y="198" text-anchor="middle" fill="#fff" font-weight="bold">samples/Graph/Data/</text>
+  <rect x="110" y="236" width="70" height="34" rx="7" fill="#26a69a"/>
+  <text x="145" y="258" text-anchor="middle" fill="#fff" font-size="11">Filesystem</text>
+  <rect x="195" y="236" width="70" height="34" rx="7" fill="#26a69a"/>
+  <text x="230" y="258" text-anchor="middle" fill="#fff" font-size="11">In-memory</text>
+  <line x1="185" y1="88" x2="185" y2="112" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="185" y1="150" x2="185" y2="174" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="155" y1="212" x2="145" y2="236" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="215" y1="212" x2="230" y2="236" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="450" y="50" width="160" height="34" rx="8" fill="#f57c00"/>
+  <text x="530" y="72" text-anchor="middle" fill="#fff" font-weight="bold">AppHost (Aspire)</text>
+  <rect x="450" y="112" width="160" height="34" rx="8" fill="#1e88e5"/>
+  <text x="530" y="134" text-anchor="middle" fill="#fff" font-weight="bold">Portal.Distributed</text>
+  <rect x="450" y="164" width="160" height="34" rx="8" fill="#5c6bc0"/>
+  <text x="530" y="186" text-anchor="middle" fill="#fff" font-weight="bold">Portal.Shared</text>
+  <rect x="430" y="222" width="90" height="34" rx="7" fill="#8e24aa"/>
+  <text x="475" y="244" text-anchor="middle" fill="#fff" font-size="11">Orleans Silo</text>
+  <rect x="535" y="222" width="90" height="34" rx="7" fill="#e53935"/>
+  <text x="580" y="240" text-anchor="middle" fill="#fff" font-size="11">PostgreSQL</text>
+  <text x="580" y="252" text-anchor="middle" fill="#fff" font-size="10">+ pgvector</text>
+  <line x1="530" y1="84" x2="530" y2="112" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="530" y1="146" x2="530" y2="164" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="490" y1="198" x2="475" y2="222" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="570" y1="198" x2="580" y2="222" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+</svg>
+*Both modes share `Portal.Shared` — identical UI, auth, and business logic. Switch from monolith to distributed by changing the run command.*
 
 Start with the monolith during development — it has no external dependencies and restarts in seconds. When you need persistence, full-text search, vector search, or multi-instance scaling, switch to distributed mode. Both share the same `MyProject.Portal.Shared` project, so all UI, configuration, and business logic is identical across the two modes.
 

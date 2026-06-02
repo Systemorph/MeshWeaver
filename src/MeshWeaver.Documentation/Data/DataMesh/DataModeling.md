@@ -20,6 +20,53 @@ MeshWeaver data models are plain C# records that layer three concerns:
 | **Lookup values** | Static reference-data records | Provide dropdowns, ordering, and rich metadata |
 
 The diagram below shows how a `Todo` entity references `Category` and `Priority` dimension data, both hosted in the same or a parent hub.
+<svg viewBox="0 0 760 260" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="dm-arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#90a4ae"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="760" height="260" rx="12" fill="#1a2030" opacity="0.6"/>
+  <rect x="30" y="30" width="200" height="200" rx="10" fill="#1e3a5f" stroke="#1e88e5" stroke-width="1.5"/>
+  <rect x="30" y="30" width="200" height="36" rx="10" fill="#1e88e5"/>
+  <rect x="30" y="54" width="200" height="12" fill="#1e88e5"/>
+  <text x="130" y="54" text-anchor="middle" fill="#fff" font-weight="bold" font-size="14">C# Record</text>
+  <text x="50" y="88" fill="#90caf9" font-size="12" font-weight="bold">Layer 1 — Shape</text>
+  <text x="50" y="105" fill="#cfd8dc" font-size="11">string Id</text>
+  <text x="50" y="120" fill="#cfd8dc" font-size="11">string Title</text>
+  <text x="50" y="135" fill="#cfd8dc" font-size="11">DateTime? DueDate</text>
+  <text x="50" y="162" fill="#80cbc4" font-size="12" font-weight="bold">Layer 2 — Behavior</text>
+  <text x="50" y="178" fill="#cfd8dc" font-size="11">[Key]  [Required]</text>
+  <text x="50" y="193" fill="#cfd8dc" font-size="11">[Markdown]  [Dimension&lt;T&gt;]</text>
+  <text x="50" y="209" fill="#cfd8dc" font-size="11">[Browsable(false)]</text>
+  <rect x="290" y="30" width="200" height="100" rx="10" fill="#1b3a2a" stroke="#43a047" stroke-width="1.5"/>
+  <rect x="290" y="30" width="200" height="36" rx="10" fill="#43a047"/>
+  <rect x="290" y="54" width="200" height="12" fill="#43a047"/>
+  <text x="390" y="54" text-anchor="middle" fill="#fff" font-weight="bold" font-size="14">Category</text>
+  <text x="310" y="88" fill="#cfd8dc" font-size="11">string Id  [Key]</text>
+  <text x="310" y="103" fill="#cfd8dc" font-size="11">string Name, Emoji</text>
+  <text x="310" y="118" fill="#cfd8dc" font-size="11">int Order</text>
+  <rect x="290" y="160" width="200" height="100" rx="10" fill="#3a1f2a" stroke="#e53935" stroke-width="1.5"/>
+  <rect x="290" y="160" width="200" height="36" rx="10" fill="#e53935"/>
+  <rect x="290" y="184" width="200" height="12" fill="#e53935"/>
+  <text x="390" y="184" text-anchor="middle" fill="#fff" font-weight="bold" font-size="14">Priority</text>
+  <text x="310" y="218" fill="#cfd8dc" font-size="11">string Id  [Key]</text>
+  <text x="310" y="233" fill="#cfd8dc" font-size="11">string Name, Emoji</text>
+  <text x="310" y="248" fill="#cfd8dc" font-size="11">int Order  +GetById()</text>
+  <rect x="550" y="90" width="180" height="80" rx="10" fill="#1e2a3a" stroke="#5c6bc0" stroke-width="1.5"/>
+  <rect x="550" y="90" width="180" height="36" rx="10" fill="#5c6bc0"/>
+  <rect x="550" y="114" width="180" height="12" fill="#5c6bc0"/>
+  <text x="640" y="114" text-anchor="middle" fill="#fff" font-weight="bold" font-size="14">Layer 3 — Lookup</text>
+  <text x="568" y="148" fill="#cfd8dc" font-size="11">static readonly All</text>
+  <text x="568" y="163" fill="#cfd8dc" font-size="11">WithInitialData(T.All)</text>
+  <line x1="230" y1="100" x2="288" y2="82" stroke="#90a4ae" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#dm-arrow)"/>
+  <text x="252" y="93" fill="#90a4ae" font-size="10">[Dimension]</text>
+  <line x1="230" y1="165" x2="288" y2="200" stroke="#90a4ae" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#dm-arrow)"/>
+  <text x="244" y="197" fill="#90a4ae" font-size="10">[Dimension]</text>
+  <line x1="490" y1="80" x2="548" y2="118" stroke="#90a4ae" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#dm-arrow)"/>
+  <line x1="490" y1="200" x2="548" y2="148" stroke="#90a4ae" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#dm-arrow)"/>
+</svg>
+*The three modeling layers: record properties carry shape, attributes drive framework behavior, and static reference-data records supply lookup values via `[Dimension<T>]`.*
 
 ```mermaid
 classDiagram

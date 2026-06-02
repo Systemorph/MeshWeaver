@@ -16,6 +16,69 @@ The fix has two halves, and **both are required**:
 
 Skip either half and the failures move around but never go away.
 
+<svg viewBox="0 0 760 370" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L0,7 L8,3.5 Z" fill="currentColor" fill-opacity=".6"/>
+    </marker>
+    <marker id="arr-green" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L0,7 L8,3.5 Z" fill="#43a047"/>
+    </marker>
+    <marker id="arr-red" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L0,7 L8,3.5 Z" fill="#e53935"/>
+    </marker>
+  </defs>
+  <text x="380" y="22" text-anchor="middle" font-size="15" font-weight="bold" fill="currentColor">Shared-Fixture Test Isolation — Two Required Halves</text>
+  <rect x="20" y="38" width="720" height="62" rx="10" fill="#1e3a5f" stroke="#1e88e5" stroke-width="1.5"/>
+  <text x="380" y="57" text-anchor="middle" font-size="12" fill="#90caf9">Shared Cluster Fixture  (Orleans TestCluster / ICollectionFixture — one silo, lifetime = test collection)</text>
+  <rect x="60" y="68" width="180" height="24" rx="6" fill="#1e88e5"/>
+  <text x="150" y="85" text-anchor="middle" fill="#fff" font-size="12">IStaticNodeProvider</text>
+  <rect x="300" y="68" width="160" height="24" rx="6" fill="#5c6bc0"/>
+  <text x="380" y="85" text-anchor="middle" fill="#fff" font-size="12">Persistence (per-cluster)</text>
+  <rect x="520" y="68" width="180" height="24" rx="6" fill="#26a69a"/>
+  <text x="610" y="85" text-anchor="middle" fill="#fff" font-size="12">Routing Service</text>
+  <text x="190" y="130" text-anchor="middle" font-size="12" font-weight="bold" fill="#e53935">✗  Without fix</text>
+  <rect x="40" y="140" width="300" height="120" rx="8" fill="none" stroke="#e53935" stroke-width="1.2" stroke-dasharray="5,3"/>
+  <rect x="60" y="155" width="120" height="32" rx="8" fill="#b71c1c"/>
+  <text x="120" y="176" text-anchor="middle" fill="#fff" font-size="12">Test A runs</text>
+  <rect x="200" y="155" width="120" height="32" rx="8" fill="#b71c1c"/>
+  <text x="260" y="176" text-anchor="middle" fill="#fff" font-size="12">Test B runs</text>
+  <line x1="180" y1="171" x2="198" y2="171" stroke="#e53935" stroke-width="1.5" marker-end="url(#arr-red)"/>
+  <rect x="60" y="205" width="260" height="42" rx="6" fill="#4a1010"/>
+  <text x="190" y="222" text-anchor="middle" fill="#ff8a80" font-size="11">Stale grain state / wrong content</text>
+  <text x="190" y="238" text-anchor="middle" fill="#ff8a80" font-size="11">"No route found" / MeshConfiguration pollution</text>
+  <text x="560" y="130" text-anchor="middle" font-size="12" font-weight="bold" fill="#43a047">✓  With both halves</text>
+  <rect x="420" y="140" width="320" height="120" rx="8" fill="none" stroke="#43a047" stroke-width="1.2" stroke-dasharray="5,3"/>
+  <rect x="435" y="155" width="130" height="32" rx="8" fill="#1b5e20"/>
+  <text x="500" y="168" text-anchor="middle" fill="#fff" font-size="11">Test A runs</text>
+  <text x="500" y="181" text-anchor="middle" fill="#a5d6a7" font-size="10">creates nodes → tracked</text>
+  <rect x="435" y="205" width="130" height="30" rx="8" fill="#33691e"/>
+  <text x="500" y="225" text-anchor="middle" fill="#fff" font-size="11">DisposeAsync()</text>
+  <line x1="500" y1="187" x2="500" y2="203" stroke="#43a047" stroke-width="1.5" marker-end="url(#arr-green)"/>
+  <line x1="565" y1="171" x2="583" y2="171" stroke="#43a047" stroke-width="1.5" marker-end="url(#arr-green)"/>
+  <rect x="585" y="155" width="135" height="32" rx="8" fill="#1b5e20"/>
+  <text x="653" y="168" text-anchor="middle" fill="#fff" font-size="11">Test B runs</text>
+  <text x="653" y="181" text-anchor="middle" fill="#a5d6a7" font-size="10">fresh routing + seed</text>
+  <rect x="585" y="205" width="135" height="30" rx="8" fill="#33691e"/>
+  <text x="653" y="225" text-anchor="middle" fill="#fff" font-size="11">DisposeAsync()</text>
+  <line x1="653" y1="187" x2="653" y2="203" stroke="#43a047" stroke-width="1.5" marker-end="url(#arr-green)"/>
+  <line x1="20" y1="278" x2="740" y2="278" stroke="currentColor" stroke-opacity=".2"/>
+  <rect x="40" y="292" width="200" height="58" rx="8" fill="#263238"/>
+  <text x="140" y="310" text-anchor="middle" fill="#80cbc4" font-size="12" font-weight="bold">Half 1 — Static Seed</text>
+  <text x="140" y="327" text-anchor="middle" fill="currentColor" fill-opacity=".7" font-size="11">IStaticNodeProvider</text>
+  <text x="140" y="342" text-anchor="middle" fill="currentColor" fill-opacity=".7" font-size="11">read-only, queried each activation</text>
+  <rect x="280" y="292" width="200" height="58" rx="8" fill="#263238"/>
+  <text x="380" y="310" text-anchor="middle" fill="#80cbc4" font-size="12" font-weight="bold">Half 2 — Hub Disposal</text>
+  <text x="380" y="327" text-anchor="middle" fill="currentColor" fill-opacity=".7" font-size="11">DisposeAsync() per test</text>
+  <text x="380" y="342" text-anchor="middle" fill="currentColor" fill-opacity=".7" font-size="11">DeactivateOnIdle → clean routing</text>
+  <rect x="520" y="292" width="200" height="58" rx="8" fill="#263238"/>
+  <text x="620" y="310" text-anchor="middle" fill="#80cbc4" font-size="12" font-weight="bold">Complement</text>
+  <text x="620" y="327" text-anchor="middle" fill="currentColor" fill-opacity=".7" font-size="11">Path uniquification (Guid suffix)</text>
+  <text x="620" y="342" text-anchor="middle" fill="currentColor" fill-opacity=".7" font-size="11">useful, but not a substitute</text>
+</svg>
+
+*The shared cluster fixture lives across the whole test collection; both halves are required to keep each test seeing a clean slate.*
+
 ---
 
 ## Why `AddMeshNodes` Is Wrong for Shared Fixtures

@@ -7,6 +7,65 @@ Description: "Practical playbook for using IObservable<T> with Subscribe in Blaz
 > **TL;DR** Every mesh / hub call returns `IObservable<T>`. You `Subscribe(...)` to it — never `await`, never `.ToTask()`, never `.FirstAsync().ToTask()`, never `.FirstOrDefaultAsync()`. State updates from your Subscribe callback always go through `InvokeAsync(...)` so they run on the Blazor circuit's dispatcher.
 
 This is the companion article to [Asynchronous Calls](AsynchronousCalls), which covers deadlock semantics in hub-handler code. This page is the practical playbook for Blazor components, layout-area views, and click-action handlers.
+<svg viewBox="0 0 760 320" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L8,3.5 L0,7 Z" fill="#888"/>
+    </marker>
+    <marker id="arr-red" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L8,3.5 L0,7 Z" fill="#e53935"/>
+    </marker>
+    <marker id="arr-green" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L8,3.5 L0,7 Z" fill="#43a047"/>
+    </marker>
+  </defs>
+  <text x="190" y="22" text-anchor="middle" fill="#e53935" font-weight="bold" font-size="14">❌ await (wrong)</text>
+  <text x="570" y="22" text-anchor="middle" fill="#43a047" font-weight="bold" font-size="14">✅ Subscribe (correct)</text>
+  <line x1="380" y1="10" x2="380" y2="310" stroke="currentColor" stroke-opacity=".25" stroke-dasharray="6,4"/>
+  <rect x="30" y="35" width="150" height="36" rx="8" fill="#5c6bc0"/>
+  <text x="105" y="58" text-anchor="middle" fill="#fff">Blazor Component</text>
+  <rect x="230" y="35" width="130" height="36" rx="8" fill="#1e88e5"/>
+  <text x="295" y="58" text-anchor="middle" fill="#fff">Mesh Hub</text>
+  <line x1="180" y1="53" x2="230" y2="53" stroke="#e53935" stroke-width="1.5" marker-end="url(#arr-red)"/>
+  <text x="205" y="47" text-anchor="middle" fill="#e53935" font-size="11">await</text>
+  <rect x="30" y="100" width="150" height="36" rx="8" fill="#5c6bc0" opacity=".5"/>
+  <text x="105" y="119" text-anchor="middle" fill="#fff" opacity=".8">Dispatcher</text>
+  <text x="105" y="133" text-anchor="middle" fill="#fff" opacity=".8">blocked / waiting</text>
+  <rect x="230" y="100" width="130" height="36" rx="8" fill="#1e88e5" opacity=".5"/>
+  <text x="295" y="119" text-anchor="middle" fill="#fff" opacity=".8">Response needs</text>
+  <text x="295" y="133" text-anchor="middle" fill="#fff" opacity=".8">dispatcher ←</text>
+  <line x1="295" y1="71" x2="295" y2="100" stroke="#e53935" stroke-width="1.5" marker-end="url(#arr-red)"/>
+  <line x1="230" y1="118" x2="180" y2="118" stroke="#e53935" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arr-red)"/>
+  <rect x="80" y="165" width="230" height="36" rx="8" fill="#e53935" opacity=".85"/>
+  <text x="195" y="188" text-anchor="middle" fill="#fff" font-weight="bold">DEADLOCK</text>
+  <line x1="105" y1="136" x2="155" y2="165" stroke="#e53935" stroke-width="1.5" marker-end="url(#arr-red)"/>
+  <line x1="295" y1="136" x2="245" y2="165" stroke="#e53935" stroke-width="1.5" marker-end="url(#arr-red)"/>
+  <rect x="410" y="35" width="150" height="36" rx="8" fill="#5c6bc0"/>
+  <text x="485" y="58" text-anchor="middle" fill="#fff">Blazor Component</text>
+  <rect x="595" y="35" width="130" height="36" rx="8" fill="#1e88e5"/>
+  <text x="660" y="58" text-anchor="middle" fill="#fff">Mesh Hub</text>
+  <line x1="560" y1="53" x2="595" y2="53" stroke="#43a047" stroke-width="1.5" marker-end="url(#arr-green)"/>
+  <text x="578" y="47" text-anchor="middle" fill="#43a047" font-size="11">Subscribe</text>
+  <rect x="410" y="100" width="150" height="36" rx="8" fill="#5c6bc0"/>
+  <text x="485" y="118" text-anchor="middle" fill="#fff">Dispatcher</text>
+  <text x="485" y="132" text-anchor="middle" fill="#fff">free — renders</text>
+  <rect x="595" y="100" width="130" height="36" rx="8" fill="#1e88e5"/>
+  <text x="660" y="118" text-anchor="middle" fill="#fff">emits value</text>
+  <text x="660" y="132" text-anchor="middle" fill="#fff">on change</text>
+  <line x1="595" y1="118" x2="560" y2="118" stroke="#43a047" stroke-width="1.5" marker-end="url(#arr-green)"/>
+  <text x="578" y="113" text-anchor="middle" fill="#43a047" font-size="11">callback</text>
+  <rect x="430" y="165" width="210" height="36" rx="8" fill="#26a69a"/>
+  <text x="535" y="183" text-anchor="middle" fill="#fff">InvokeAsync(StateHasChanged)</text>
+  <text x="535" y="197" text-anchor="middle" fill="#fff" font-size="11">— re-renders on every emission</text>
+  <line x1="485" y1="136" x2="500" y2="165" stroke="#43a047" stroke-width="1.5" marker-end="url(#arr-green)"/>
+  <line x1="660" y1="136" x2="620" y2="165" stroke="#43a047" stroke-width="1.5" marker-end="url(#arr-green)"/>
+  <rect x="430" y="230" width="210" height="36" rx="8" fill="#43a047"/>
+  <text x="535" y="249" text-anchor="middle" fill="#fff" font-weight="bold">Live, reactive UI</text>
+  <text x="535" y="263" text-anchor="middle" fill="#fff" font-size="11">updates on every change</text>
+  <line x1="535" y1="201" x2="535" y2="230" stroke="#43a047" stroke-width="1.5" marker-end="url(#arr-green)"/>
+</svg>
+
+*`await` blocks the Blazor dispatcher waiting for the hub — which needs the dispatcher to deliver the response — causing deadlock. `Subscribe` keeps the dispatcher free; the hub pushes values into the callback, which calls `InvokeAsync(StateHasChanged)` to re-render.*
 
 ---
 

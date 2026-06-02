@@ -14,6 +14,58 @@ MeshWeaver provides four built-in operations for transferring node subtrees betw
 | **Copy** | Duplicates a node and all its descendants to a new namespace |
 | **Move** | Relocates a node and its entire subtree to a new path |
 
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 300" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="currentColor" fill-opacity="0.55"/>
+    </marker>
+    <marker id="arr-blue" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#1e88e5"/>
+    </marker>
+    <marker id="arr-green" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#43a047"/>
+    </marker>
+    <marker id="arr-orange" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#f57c00"/>
+    </marker>
+    <marker id="arr-purple" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#8e24aa"/>
+    </marker>
+  </defs>
+  <rect x="285" y="90" width="190" height="120" rx="12" fill="#1565c0" fill-opacity="0.9"/>
+  <text x="380" y="118" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff">Mesh Node Subtree</text>
+  <rect x="305" y="130" width="60" height="26" rx="5" fill="#fff" fill-opacity="0.15"/>
+  <text x="335" y="148" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff">root</text>
+  <rect x="295" y="168" width="50" height="22" rx="5" fill="#fff" fill-opacity="0.15"/>
+  <text x="320" y="184" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#fff">child1</text>
+  <rect x="355" y="168" width="50" height="22" rx="5" fill="#fff" fill-opacity="0.15"/>
+  <text x="380" y="184" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#fff">child2</text>
+  <line x1="335" y1="156" x2="320" y2="168" stroke="#fff" stroke-opacity="0.4" stroke-width="1"/>
+  <line x1="335" y1="156" x2="380" y2="168" stroke="#fff" stroke-opacity="0.4" stroke-width="1"/>
+  <rect x="22" y="30" width="130" height="56" rx="10" fill="#43a047"/>
+  <text x="87" y="55" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff">Export</text>
+  <text x="87" y="74" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#c8e6c9">ZIP (.md/.cs/.json)</text>
+  <line x1="152" y1="58" x2="280" y2="120" stroke="#43a047" stroke-width="1.8" marker-end="url(#arr-green)" stroke-dasharray="none"/>
+  <rect x="22" y="214" width="130" height="56" rx="10" fill="#1e88e5"/>
+  <text x="87" y="239" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff">Import</text>
+  <text x="87" y="258" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#bbdefb">File / Folder / ZIP</text>
+  <line x1="152" y1="242" x2="280" y2="180" stroke="#1e88e5" stroke-width="1.8" marker-end="url(#arr-blue)"/>
+  <rect x="608" y="30" width="130" height="56" rx="10" fill="#f57c00"/>
+  <text x="673" y="55" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff">Copy</text>
+  <text x="673" y="74" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#ffe0b2">→ new namespace</text>
+  <line x1="480" y1="120" x2="604" y2="58" stroke="#f57c00" stroke-width="1.8" marker-end="url(#arr-orange)"/>
+  <rect x="608" y="214" width="130" height="56" rx="10" fill="#8e24aa"/>
+  <text x="673" y="239" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff">Move</text>
+  <text x="673" y="258" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#e1bee7">→ new path</text>
+  <line x1="480" y1="180" x2="604" y2="242" stroke="#8e24aa" stroke-width="1.8" marker-end="url(#arr-purple)"/>
+  <text x="138" y="148" text-anchor="middle" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity="0.55" font-style="italic">reads from</text>
+  <text x="138" y="162" text-anchor="middle" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity="0.55" font-style="italic">writes to</text>
+  <text x="620" y="148" text-anchor="middle" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity="0.55" font-style="italic">duplicates</text>
+  <text x="620" y="162" text-anchor="middle" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity="0.55" font-style="italic">relocates</text>
+</svg>
+
+*The four node operations and how they relate to a mesh node subtree: Export serialises to files, Import reads files into the mesh, Copy duplicates to a new namespace, and Move relocates the entire subtree.*
+
 ---
 
 # Export

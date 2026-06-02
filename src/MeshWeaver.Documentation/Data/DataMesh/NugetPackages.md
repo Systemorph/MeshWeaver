@@ -24,6 +24,42 @@ When MeshWeaver renders a cell like this, it:
 4. Compiles and runs the remaining code against the augmented reference set.
 
 The return value flows back as a `ReturnValueProduced` event and is rendered into the `--render` area.
+<svg viewBox="0 0 760 200" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="np-arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#90a4ae"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="760" height="200" rx="12" fill="#1a2030" opacity="0.6"/>
+  <rect x="20" y="60" width="130" height="80" rx="10" fill="#1e3a5f" stroke="#1e88e5" stroke-width="1.5"/>
+  <rect x="20" y="60" width="130" height="34" rx="10" fill="#1e88e5"/>
+  <rect x="20" y="80" width="130" height="14" fill="#1e88e5"/>
+  <text x="85" y="82" text-anchor="middle" fill="#fff" font-weight="bold" font-size="13">Code Cell</text>
+  <text x="85" y="108" text-anchor="middle" fill="#cfd8dc" font-size="11">#r "nuget:Pkg, 1.0"</text>
+  <text x="85" y="124" text-anchor="middle" fill="#cfd8dc" font-size="11">+ C# source</text>
+  <rect x="195" y="60" width="130" height="80" rx="10" fill="#1b3a2a" stroke="#43a047" stroke-width="1.5"/>
+  <rect x="195" y="60" width="130" height="34" rx="10" fill="#43a047"/>
+  <rect x="195" y="80" width="130" height="14" fill="#43a047"/>
+  <text x="260" y="82" text-anchor="middle" fill="#fff" font-weight="bold" font-size="13">CSharpKernel</text>
+  <text x="260" y="108" text-anchor="middle" fill="#cfd8dc" font-size="11">SubmitCode</text>
+  <text x="260" y="124" text-anchor="middle" fill="#cfd8dc" font-size="11">command</text>
+  <rect x="375" y="60" width="150" height="80" rx="10" fill="#2a1e3a" stroke="#8e24aa" stroke-width="1.5"/>
+  <rect x="375" y="60" width="150" height="34" rx="10" fill="#8e24aa"/>
+  <rect x="375" y="80" width="150" height="14" fill="#8e24aa"/>
+  <text x="450" y="82" text-anchor="middle" fill="#fff" font-weight="bold" font-size="13">NuGet Restore</text>
+  <text x="450" y="108" text-anchor="middle" fill="#cfd8dc" font-size="11">api.nuget.org</text>
+  <text x="450" y="124" text-anchor="middle" fill="#cfd8dc" font-size="11">+ local cache</text>
+  <rect x="565" y="60" width="175" height="80" rx="10" fill="#1e2a3a" stroke="#f57c00" stroke-width="1.5"/>
+  <rect x="565" y="60" width="175" height="34" rx="10" fill="#f57c00"/>
+  <rect x="565" y="80" width="175" height="14" fill="#f57c00"/>
+  <text x="652" y="82" text-anchor="middle" fill="#fff" font-weight="bold" font-size="13">Result</text>
+  <text x="652" y="108" text-anchor="middle" fill="#cfd8dc" font-size="11">AddAssemblyReferences</text>
+  <text x="652" y="124" text-anchor="middle" fill="#cfd8dc" font-size="11">ReturnValueProduced</text>
+  <line x1="150" y1="100" x2="193" y2="100" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#np-arrow)"/>
+  <line x1="325" y1="100" x2="373" y2="100" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#np-arrow)"/>
+  <line x1="525" y1="100" x2="563" y2="100" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#np-arrow)"/>
+</svg>
+*NuGet resolution pipeline: the `#r` directive triggers an in-process restore; resolved assemblies are added to the kernel's references before the remaining code compiles and runs.*
 
 ## Pinning versions
 

@@ -21,6 +21,39 @@ A NodeType is itself a mesh node (with `nodeType: "NodeType"`). It acts as a reu
 
 When a user navigates to a node whose `nodeType` points at your definition, the framework compiles the content record, applies the configuration expression, and mounts the resulting layout areas — all dynamically, without a deploy.
 
+<svg viewBox="0 0 760 200" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#90a4ae"/>
+    </marker>
+  </defs>
+  <rect x="20" y="60" width="150" height="80" rx="10" fill="#1e88e5" stroke="#1565c0" stroke-width="1.5"/>
+  <text x="95" y="92" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff">NodeType</text>
+  <text x="95" y="112" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#bbdefb">content schema</text>
+  <text x="95" y="128" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#bbdefb">configuration lambda</text>
+  <rect x="234" y="60" width="150" height="80" rx="10" fill="#37474f" stroke="#546e7a" stroke-width="1.5"/>
+  <text x="309" y="92" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#eceff1">Compile</text>
+  <text x="309" y="112" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#b0bec5">C# record → assembly</text>
+  <text x="309" y="128" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#b0bec5">cached + invalidated</text>
+  <rect x="448" y="60" width="150" height="80" rx="10" fill="#43a047" stroke="#2e7d32" stroke-width="1.5"/>
+  <text x="523" y="92" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff">Instance Hub</text>
+  <text x="523" y="112" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#c8e6c9">layout areas wired</text>
+  <text x="523" y="128" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#c8e6c9">WithContentType applied</text>
+  <rect x="622" y="60" width="118" height="80" rx="10" fill="#f57c00" stroke="#e65100" stroke-width="1.5"/>
+  <text x="681" y="92" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff">UI Views</text>
+  <text x="681" y="112" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#ffe0b2">Details · Catalog</text>
+  <text x="681" y="128" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#ffe0b2">Thumbnail · Settings</text>
+  <line x1="170" y1="100" x2="229" y2="100" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="384" y1="100" x2="443" y2="100" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="598" y1="100" x2="617" y2="100" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="201" y="90" text-anchor="middle" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity="0.55">first use</text>
+  <text x="414" y="90" text-anchor="middle" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity="0.55">activate</text>
+  <text x="607" y="90" text-anchor="middle" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity="0.55">mount</text>
+  <text x="380" y="175" text-anchor="middle" font-family="sans-serif" font-size="11" fill="currentColor" fill-opacity="0.5">Every instance hub is activated on demand — no restart required when the NodeType definition changes.</text>
+</svg>
+
+*NodeType lifecycle: definition compiled on first activation, hub wired from the configuration lambda, views mounted for every instance.*
+
 ---
 
 ## NodeType Structure

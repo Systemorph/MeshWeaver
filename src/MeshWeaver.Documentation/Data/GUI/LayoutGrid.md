@@ -23,6 +23,65 @@ Responsive design lets you write **one layout** that adapts to all of them.
 
 ---
 
+<svg viewBox="0 0 760 310" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif">
+<defs>
+<marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+<path d="M0,0 L0,6 L8,3 z" fill="#90a4ae"/>
+</marker>
+</defs>
+<rect width="760" height="310" rx="12" fill="#0d1117" opacity="0"/>
+<text x="380" y="26" text-anchor="middle" font-size="13" font-weight="bold" fill="currentColor" fill-opacity=".75">Breakpoint Cascade — 12-Column Grid</text>
+<rect x="10" y="40" width="130" height="56" rx="8" fill="#1e88e5"/>
+<text x="75" y="63" text-anchor="middle" font-size="11" font-weight="bold" fill="#fff">xs</text>
+<text x="75" y="79" text-anchor="middle" font-size="10" fill="#cfe8ff">&lt; 600 px</text>
+<rect x="160" y="40" width="130" height="56" rx="8" fill="#43a047"/>
+<text x="225" y="63" text-anchor="middle" font-size="11" font-weight="bold" fill="#fff">sm</text>
+<text x="225" y="79" text-anchor="middle" font-size="10" fill="#c8e6c9">≥ 600 px</text>
+<rect x="310" y="40" width="130" height="56" rx="8" fill="#f57c00"/>
+<text x="375" y="63" text-anchor="middle" font-size="11" font-weight="bold" fill="#fff">md</text>
+<text x="375" y="79" text-anchor="middle" font-size="10" fill="#ffe0b2">≥ 960 px</text>
+<rect x="460" y="40" width="130" height="56" rx="8" fill="#8e24aa"/>
+<text x="525" y="63" text-anchor="middle" font-size="11" font-weight="bold" fill="#fff">lg</text>
+<text x="525" y="79" text-anchor="middle" font-size="10" fill="#e1bee7">≥ 1280 px</text>
+<rect x="610" y="40" width="130" height="56" rx="8" fill="#5c6bc0"/>
+<text x="675" y="63" text-anchor="middle" font-size="11" font-weight="bold" fill="#fff">xl</text>
+<text x="675" y="79" text-anchor="middle" font-size="10" fill="#c5cae9">≥ 1920 px</text>
+<line x1="140" y1="68" x2="158" y2="68" stroke="#90a4ae" stroke-opacity=".6" stroke-width="1.5" marker-end="url(#arr)"/>
+<line x1="290" y1="68" x2="308" y2="68" stroke="#90a4ae" stroke-opacity=".6" stroke-width="1.5" marker-end="url(#arr)"/>
+<line x1="440" y1="68" x2="458" y2="68" stroke="#90a4ae" stroke-opacity=".6" stroke-width="1.5" marker-end="url(#arr)"/>
+<line x1="590" y1="68" x2="608" y2="68" stroke="#90a4ae" stroke-opacity=".6" stroke-width="1.5" marker-end="url(#arr)"/>
+<text x="380" y="120" text-anchor="middle" font-size="11" fill="currentColor" fill-opacity=".55">settings cascade upward — unset breakpoints inherit from the next smaller one</text>
+<text x="10" y="150" font-size="11" fill="currentColor" fill-opacity=".6">Example: .WithXs(12) .WithSm(6) .WithLg(3)</text>
+<rect x="10" y="162" width="110" height="38" rx="6" fill="#1e88e5" opacity=".9"/>
+<text x="65" y="186" text-anchor="middle" font-size="11" fill="#fff">xs: 12 cols</text>
+<rect x="130" y="162" width="110" height="38" rx="6" fill="#43a047" opacity=".9"/>
+<text x="185" y="186" text-anchor="middle" font-size="11" fill="#fff">sm: 6 cols</text>
+<rect x="250" y="162" width="110" height="38" rx="6" fill="#f57c00" opacity=".9"/>
+<text x="305" y="186" text-anchor="middle" font-size="11" fill="#fff">md: 6 cols ↑</text>
+<rect x="370" y="162" width="110" height="38" rx="6" fill="#8e24aa" opacity=".9"/>
+<text x="425" y="186" text-anchor="middle" font-size="11" fill="#fff">lg: 3 cols</text>
+<rect x="490" y="162" width="110" height="38" rx="6" fill="#5c6bc0" opacity=".9"/>
+<text x="545" y="186" text-anchor="middle" font-size="11" fill="#fff">xl: 3 cols ↑</text>
+<text x="665" y="182" font-size="10" fill="currentColor" fill-opacity=".5">↑ inherited</text>
+<text x="10" y="225" font-size="11" fill="currentColor" fill-opacity=".6">12-column row — items wrap when column total exceeds 12</text>
+<rect x="10" y="238" width="360" height="34" rx="6" fill="#1565c0" opacity=".85"/>
+<text x="190" y="259" text-anchor="middle" font-size="11" fill="#fff">Item A — 6 cols</text>
+<rect x="375" y="238" width="360" height="34" rx="6" fill="#1565c0" opacity=".65"/>
+<text x="555" y="259" text-anchor="middle" font-size="11" fill="#fff">Item B — 6 cols</text>
+<rect x="10" y="278" width="117" height="26" rx="6" fill="#1976d2" opacity=".85"/>
+<text x="68" y="295" text-anchor="middle" font-size="10" fill="#fff">4 cols</text>
+<rect x="132" y="278" width="117" height="26" rx="6" fill="#1976d2" opacity=".85"/>
+<text x="190" y="295" text-anchor="middle" font-size="10" fill="#fff">4 cols</text>
+<rect x="254" y="278" width="117" height="26" rx="6" fill="#1976d2" opacity=".85"/>
+<text x="312" y="295" text-anchor="middle" font-size="10" fill="#fff">4 cols</text>
+<line x1="375" y1="285" x2="735" y2="285" stroke="currentColor" stroke-opacity=".18" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="555" y="296" text-anchor="middle" font-size="10" fill="currentColor" fill-opacity=".4">(next row begins here)</text>
+</svg>
+
+*Breakpoints cascade upward through xs → sm → md → lg → xl; unset breakpoints inherit the nearest smaller value.*
+
+---
+
 # The 12-Column System
 
 `LayoutGrid` divides the available width into **12 equal columns**. Each item declares how many columns it occupies. The columns always add up to 12 per row; items that overflow wrap to the next row automatically.

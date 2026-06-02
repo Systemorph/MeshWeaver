@@ -54,6 +54,47 @@ Fifteen call sites that read content via the lagged query path were migrated. `G
 
 Operations with inputs, multi-step progress, and an output (export, import, compile, mirror, deploy) now follow a single architectural pattern instead of bespoke `XxxRequest/XxxResponse` pairs.
 
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 260" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="currentColor" fill-opacity=".55"/>
+    </marker>
+    <marker id="arr-cancel" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#f57c00"/>
+    </marker>
+    <marker id="arr-ok" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#43a047"/>
+    </marker>
+    <marker id="arr-err" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#e53935"/>
+    </marker>
+  </defs>
+  <rect x="20" y="100" width="110" height="44" rx="10" fill="#5c6bc0"/>
+  <text x="75" y="127" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="14" font-weight="700">Idle</text>
+  <rect x="310" y="100" width="140" height="44" rx="10" fill="#1e88e5"/>
+  <text x="380" y="127" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="14" font-weight="700">Running</text>
+  <rect x="580" y="30" width="150" height="44" rx="10" fill="#43a047"/>
+  <text x="655" y="57" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="13" font-weight="700">Completed</text>
+  <rect x="580" y="100" width="150" height="44" rx="10" fill="#f57c00"/>
+  <text x="655" y="127" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="13" font-weight="700">Cancelled</text>
+  <rect x="580" y="170" width="150" height="44" rx="10" fill="#e53935"/>
+  <text x="655" y="197" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="13" font-weight="700">Error</text>
+  <line x1="130" y1="122" x2="308" y2="122" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="218" y="113" text-anchor="middle" fill="currentColor" fill-opacity=".65" font-family="sans-serif" font-size="11">RequestedStatus = Running</text>
+  <line x1="450" y1="107" x2="578" y2="58" stroke="#43a047" stroke-width="1.5" marker-end="url(#arr-ok)"/>
+  <text x="532" y="78" text-anchor="middle" fill="#43a047" fill-opacity=".85" font-family="sans-serif" font-size="11">success</text>
+  <line x1="450" y1="122" x2="578" y2="122" stroke="#f57c00" stroke-width="1.5" marker-end="url(#arr-cancel)"/>
+  <text x="513" y="115" text-anchor="middle" fill="#f57c00" fill-opacity=".85" font-family="sans-serif" font-size="11">RequestedStatus = Cancelled</text>
+  <line x1="450" y1="137" x2="578" y2="185" stroke="#e53935" stroke-width="1.5" marker-end="url(#arr-err)"/>
+  <text x="532" y="172" text-anchor="middle" fill="#e53935" fill-opacity=".85" font-family="sans-serif" font-size="11">exception</text>
+  <rect x="290" y="195" width="180" height="36" rx="8" fill="none" stroke="currentColor" stroke-opacity=".25" stroke-width="1" stroke-dasharray="5 3"/>
+  <text x="380" y="210" text-anchor="middle" fill="currentColor" fill-opacity=".55" font-family="sans-serif" font-size="11">ActivityLog MeshNode</text>
+  <text x="380" y="224" text-anchor="middle" fill="currentColor" fill-opacity=".4" font-family="sans-serif" font-size="10">streams per-step progress</text>
+  <line x1="380" y1="144" x2="380" y2="194" stroke="currentColor" stroke-opacity=".3" stroke-width="1" stroke-dasharray="4 3"/>
+</svg>
+
+*The Activity Control Plane state machine: a single `RequestedStatus` field triggers transitions; the owning hub's `WatchControlPlane` reacts and updates `Status`.*
+
 - **State-machine semantics** live in node properties: `Status` + `RequestedStatus`. Cancelling is `RequestedStatus = Cancelled` — no `CancelXRequest` message.
 - **`ActivityLog` MeshNode** is created at dispatch and streams per-step progress. Sync responses inline the log; async ones return a path to it.
 - The kernel emits `Progress` to the `ActivityLog` feed via `ILogger` — no global state.

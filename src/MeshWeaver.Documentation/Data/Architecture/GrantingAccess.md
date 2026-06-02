@@ -10,6 +10,50 @@ Permissions in MeshWeaver are **data** — they live as `AccessAssignment` MeshN
 
 This page walks through the field anatomy and provides copy-paste recipes for the most common scenarios.
 
+<svg viewBox="0 0 760 320" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="currentColor" fill-opacity=".55"/>
+    </marker>
+  </defs>
+  <rect x="20" y="20" width="160" height="44" rx="10" fill="#1e88e5"/>
+  <text x="100" y="38" text-anchor="middle" fill="#fff" font-weight="bold">rbuergi/</text>
+  <text x="100" y="56" text-anchor="middle" fill="#fff" font-size="11">Partition root</text>
+  <rect x="20" y="120" width="160" height="44" rx="10" fill="#5c6bc0"/>
+  <text x="100" y="138" text-anchor="middle" fill="#fff" font-weight="bold">rbuergi/_Access/</text>
+  <text x="100" y="156" text-anchor="middle" fill="#fff" font-size="11">Satellite namespace</text>
+  <line x1="100" y1="64" x2="100" y2="120" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="108" y="97" fill="currentColor" fill-opacity=".6" font-size="11">/_Access segment</text>
+  <rect x="20" y="220" width="160" height="64" rx="10" fill="#8e24aa"/>
+  <text x="100" y="240" text-anchor="middle" fill="#fff" font-weight="bold">AccessAssignment</text>
+  <text x="100" y="256" text-anchor="middle" fill="#fff" font-size="11">accessObject: rbuergi</text>
+  <text x="100" y="272" text-anchor="middle" fill="#fff" font-size="11">mainNode: rbuergi</text>
+  <text x="100" y="288" text-anchor="middle" fill="#fff" font-size="11">roles: [Admin]</text>
+  <line x1="100" y1="164" x2="100" y2="220" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="108" y="197" fill="currentColor" fill-opacity=".6" font-size="11">MeshNode at {id}</text>
+  <rect x="300" y="120" width="180" height="64" rx="10" fill="#26a69a"/>
+  <text x="390" y="140" text-anchor="middle" fill="#fff" font-weight="bold">PermissionEvaluator</text>
+  <text x="390" y="158" text-anchor="middle" fill="#fff" font-size="11">synced query on</text>
+  <text x="390" y="174" text-anchor="middle" fill="#fff" font-size="11">nodeType:AccessAssignment</text>
+  <line x1="180" y1="248" x2="300" y2="160" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="225" y="192" fill="currentColor" fill-opacity=".6" font-size="11" transform="rotate(-25,225,192)">~1s pickup</text>
+  <rect x="300" y="240" width="180" height="44" rx="10" fill="#43a047"/>
+  <text x="390" y="258" text-anchor="middle" fill="#fff" font-weight="bold">Postgres triggers</text>
+  <text x="390" y="276" text-anchor="middle" fill="#fff" font-size="11">rebuild effective perms</text>
+  <line x1="390" y1="184" x2="390" y2="240" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="560" y="120" width="160" height="64" rx="10" fill="#f57c00"/>
+  <text x="640" y="140" text-anchor="middle" fill="#fff" font-weight="bold">SatelliteAccessRule</text>
+  <text x="640" y="158" text-anchor="middle" fill="#fff" font-size="11">checks mainNode</text>
+  <text x="640" y="174" text-anchor="middle" fill="#fff" font-size="11">to scope permission</text>
+  <line x1="480" y1="152" x2="560" y2="152" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="560" y="240" width="160" height="44" rx="10" fill="#e53935"/>
+  <text x="640" y="258" text-anchor="middle" fill="#fff" font-weight="bold">user_effective_permissions</text>
+  <text x="640" y="276" text-anchor="middle" fill="#fff" font-size="11">ready for read requests</text>
+  <line x1="480" y1="270" x2="560" y2="262" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5" marker-end="url(#arr)"/>
+</svg>
+
+*AccessAssignment nodes live in `_Access` satellite namespaces; `PermissionEvaluator` picks them up via a synced query and Postgres triggers rebuild effective permissions automatically.*
+
 ---
 
 ## Anatomy of an AccessAssignment

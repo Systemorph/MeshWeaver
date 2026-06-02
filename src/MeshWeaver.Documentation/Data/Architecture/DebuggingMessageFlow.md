@@ -7,6 +7,52 @@ Description: "Step-by-step guide to diagnosing hub-handler hangs using structure
 
 When a hub handler looks like a deadlock — a test times out, a response never arrives — resist the urge to bisect blindly or rerun the test two or three times to see if it sticks. The framework already emits a structured trace at `Trace` level. Turn it on, run **once**, grep, fix.
 
+<svg viewBox="0 0 760 310" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L0,7 L8,3.5 Z" fill="#90a4ae"/>
+    </marker>
+    <marker id="arr-blue" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L0,7 L8,3.5 Z" fill="#1e88e5"/>
+    </marker>
+    <marker id="arr-green" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L0,7 L8,3.5 Z" fill="#43a047"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="760" height="310" rx="10" fill="#1a1e2e" opacity="0.7"/>
+  <rect x="40" y="30" width="130" height="44" rx="10" fill="#1e88e5"/>
+  <text x="105" y="56" text-anchor="middle" fill="#fff" font-weight="bold">Hub A</text>
+  <rect x="590" y="30" width="130" height="44" rx="10" fill="#5c6bc0"/>
+  <text x="655" y="56" text-anchor="middle" fill="#fff" font-weight="bold">Hub B</text>
+  <line x1="105" y1="74" x2="105" y2="270" stroke="#1e88e5" stroke-opacity="0.35" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <line x1="655" y1="74" x2="655" y2="270" stroke="#5c6bc0" stroke-opacity="0.35" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <rect x="250" y="22" width="260" height="20" rx="4" fill="none"/>
+  <text x="380" y="21" text-anchor="middle" fill="currentColor" fill-opacity="0.45" font-size="11">MESSAGE_FLOW trace tags</text>
+  <rect x="80" y="88" width="170" height="22" rx="5" fill="#1e3a5f">
+    <title>Unpacking message at Hub A (outbound)</title>
+  </rect>
+  <text x="165" y="103" text-anchor="middle" fill="#90caf9" font-size="11">Unpacking message …</text>
+  <line x1="170" y1="130" x2="638" y2="130" stroke="#1e88e5" stroke-width="2" marker-end="url(#arr-blue)"/>
+  <text x="380" y="123" text-anchor="middle" fill="#90caf9" font-size="11">Request</text>
+  <rect x="248" y="133" width="264" height="18" rx="4" fill="none"/>
+  <text x="380" y="146" text-anchor="middle" fill="#90a4ae" font-size="10">ROUTING_TO_HIERARCHICAL → HIERARCHICAL_ROUTING_RESULT</text>
+  <rect x="510" y="160" width="200" height="22" rx="5" fill="#2e1f5e">
+    <title>Hub B unpacks and routes locally</title>
+  </rect>
+  <text x="610" y="175" text-anchor="middle" fill="#b39ddb" font-size="11">Unpacking … (Hub B)</text>
+  <rect x="510" y="188" width="200" height="22" rx="5" fill="#2e1f5e"/>
+  <text x="610" y="203" text-anchor="middle" fill="#b39ddb" font-size="11">ROUTING_TO_LOCAL_EXECUTION</text>
+  <rect x="510" y="216" width="200" height="22" rx="5" fill="#1b3a2a"/>
+  <text x="610" y="231" text-anchor="middle" fill="#a5d6a7" font-size="11">handler executes ✓</text>
+  <line x1="638" y1="248" x2="122" y2="248" stroke="#43a047" stroke-width="2" marker-end="url(#arr-green)"/>
+  <text x="380" y="241" text-anchor="middle" fill="#a5d6a7" font-size="11">Response (ResponseFor)</text>
+  <rect x="50" y="256" width="200" height="22" rx="5" fill="#1b3a2a"/>
+  <text x="150" y="271" text-anchor="middle" fill="#a5d6a7" font-size="11">RegisterCallback fires → completes</text>
+  <text x="380" y="298" text-anchor="middle" fill="currentColor" fill-opacity="0.38" font-size="11">Hang diagnosis: find the last MESSAGE_FLOW: tag that fired and check what follows</text>
+</svg>
+
+*Healthy request-response trace: Hub A routes the request through the hierarchy to Hub B, which executes the handler and sends the response back.*
+
 ---
 
 ## Log Levels — Edit the Test appsettings, Not the Source

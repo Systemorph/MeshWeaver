@@ -13,6 +13,70 @@ Description: "Declare, open, and bypass hub initialization gates that defer inbo
 > The condition must be expressible as a non-blocking observable emission.
 
 ---
+<svg viewBox="0 0 760 310" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="currentColor" fill-opacity=".6"/>
+    </marker>
+    <marker id="arr-grn" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#43a047"/>
+    </marker>
+    <marker id="arr-red" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#e53935"/>
+    </marker>
+  </defs>
+  <text x="380" y="22" text-anchor="middle" font-size="14" font-weight="bold" fill="currentColor" fill-opacity=".85">Hub Initialization Gate — Message Flow</text>
+  <rect x="10" y="40" width="110" height="46" rx="10" fill="#5c6bc0"/>
+  <text x="65" y="59" text-anchor="middle" fill="#fff" font-size="12">Inbound</text>
+  <text x="65" y="76" text-anchor="middle" fill="#fff" font-size="12">Messages</text>
+  <line x1="120" y1="63" x2="158" y2="63" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="158" y="40" width="120" height="46" rx="10" fill="#f57c00"/>
+  <text x="218" y="59" text-anchor="middle" fill="#fff" font-size="12">Gate</text>
+  <text x="218" y="76" text-anchor="middle" fill="#fff" font-size="12">(closed)</text>
+  <rect x="158" y="100" width="120" height="46" rx="10" fill="#455a64"/>
+  <text x="218" y="119" text-anchor="middle" fill="#fff" font-size="12">Delivery</text>
+  <text x="218" y="136" text-anchor="middle" fill="#fff" font-size="12">Queue</text>
+  <line x1="218" y1="86" x2="218" y2="100" stroke="#e53935" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arr-red)"/>
+  <text x="236" y="96" fill="#e53935" font-size="11">queued</text>
+  <rect x="420" y="40" width="130" height="46" rx="10" fill="#1e88e5"/>
+  <text x="485" y="59" text-anchor="middle" fill="#fff" font-size="12">persistence /</text>
+  <text x="485" y="76" text-anchor="middle" fill="#fff" font-size="12">IObservable</text>
+  <line x1="550" y1="63" x2="598" y2="63" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="598" y="40" width="130" height="46" rx="10" fill="#26a69a"/>
+  <text x="663" y="59" text-anchor="middle" fill="#fff" font-size="12">Initialize()</text>
+  <text x="663" y="76" text-anchor="middle" fill="#fff" font-size="12">.Select(…)</text>
+  <path d="M663,86 L663,175 L280,175" stroke="#43a047" stroke-width="1.8" fill="none" stroke-dasharray="5,3" marker-end="url(#arr-grn)"/>
+  <text x="560" y="168" fill="#43a047" font-size="11">OpenGate(name)</text>
+  <rect x="158" y="155" width="120" height="46" rx="10" fill="#43a047"/>
+  <text x="218" y="175" text-anchor="middle" fill="#fff" font-size="12">Gate</text>
+  <text x="218" y="192" text-anchor="middle" fill="#fff" font-size="12">(open)</text>
+  <path d="M218,146 L218,155" stroke="#43a047" stroke-width="1.8" fill="none" marker-end="url(#arr-grn)"/>
+  <line x1="278" y1="178" x2="340" y2="178" stroke="#43a047" stroke-width="1.5" marker-end="url(#arr-grn)"/>
+  <rect x="340" y="155" width="120" height="46" rx="10" fill="#8e24aa"/>
+  <text x="400" y="175" text-anchor="middle" fill="#fff" font-size="12">Hub Action</text>
+  <text x="400" y="192" text-anchor="middle" fill="#fff" font-size="12">Block</text>
+  <line x1="520" y1="178" x2="458" y2="178" stroke="#43a047" stroke-width="1.5" marker-end="url(#arr-grn)"/>
+  <rect x="520" y="155" width="130" height="46" rx="10" fill="#26a69a"/>
+  <text x="585" y="175" text-anchor="middle" fill="#fff" font-size="12">InstanceCollection</text>
+  <text x="585" y="192" text-anchor="middle" fill="#fff" font-size="12">delivered</text>
+  <rect x="340" y="100" width="120" height="38" rx="10" fill="#37474f" stroke="#43a047" stroke-width="1.2" stroke-dasharray="4,3"/>
+  <text x="400" y="115" text-anchor="middle" fill="#fff" font-size="11">Bypass predicate</text>
+  <text x="400" y="130" text-anchor="middle" fill="#e0e0e0" font-size="11">e.g. CreateNodeRequest</text>
+  <path d="M278,63 L340,63 L340,100" stroke="currentColor" stroke-opacity=".45" stroke-width="1.4" fill="none" marker-end="url(#arr)"/>
+  <text x="305" y="57" fill="currentColor" fill-opacity=".6" font-size="11">let-through</text>
+  <line x1="400" y1="138" x2="400" y2="155" stroke="currentColor" stroke-opacity=".45" stroke-width="1.4" marker-end="url(#arr)"/>
+  <rect x="50" y="240" width="18" height="14" rx="3" fill="#f57c00"/>
+  <text x="74" y="252" fill="currentColor" fill-opacity=".7" font-size="11">Gate closed — messages queue</text>
+  <rect x="50" y="262" width="18" height="14" rx="3" fill="#43a047"/>
+  <text x="74" y="274" fill="currentColor" fill-opacity=".7" font-size="11">Gate open — queue drains in order</text>
+  <rect x="300" y="240" width="18" height="14" rx="3" fill="#37474f" stroke="#43a047" stroke-width="1.2" stroke-dasharray="3,2"/>
+  <text x="324" y="252" fill="currentColor" fill-opacity=".7" font-size="11">Bypass predicate (always let through)</text>
+  <path d="M300,269 L318,269" stroke="#43a047" stroke-width="1.8" fill="none" stroke-dasharray="5,3" marker-end="url(#arr-grn)"/>
+  <text x="324" y="274" fill="currentColor" fill-opacity=".7" font-size="11">OpenGate() call from reactive .Select()</text>
+</svg>
+*Initialization gate lifecycle: inbound messages queue while the gate is closed; a reactive observable emits, `OpenGate` is called inside `.Select`, and the queue drains through the hub action block. Messages matching the bypass predicate skip the queue entirely.*
+
+---
 
 ## What is a gate?
 

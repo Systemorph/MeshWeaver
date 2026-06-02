@@ -6,6 +6,51 @@ Icon: /static/DocContent/GUI/Attributes/icon.svg
 ---
 
 The Editor control reads standard .NET attributes on your record properties and automatically adjusts how each field is labelled, validated, hidden, or rendered. You annotate the data model once and every form that binds to it picks up the behaviour — no per-field UI code required.
+<svg viewBox="0 0 760 320" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="currentColor" fill-opacity=".6"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="760" height="320" rx="14" fill="none"/>
+  <text x="380" y="26" text-anchor="middle" font-size="14" font-weight="bold" fill="currentColor" fill-opacity=".75">Attribute → Editor Field Rendering Pipeline</text>
+  <rect x="20" y="50" width="160" height="220" rx="10" fill="#1e1e2e" stroke="currentColor" stroke-opacity=".25" stroke-width="1.2"/>
+  <text x="100" y="72" text-anchor="middle" font-size="12" font-weight="bold" fill="#90caf9">Data Model</text>
+  <rect x="32" y="82" width="136" height="28" rx="6" fill="#1565c0"/>
+  <text x="100" y="101" text-anchor="middle" fill="#fff" font-size="11">[DisplayName]</text>
+  <rect x="32" y="116" width="136" height="28" rx="6" fill="#1565c0"/>
+  <text x="100" y="135" text-anchor="middle" fill="#fff" font-size="11">[Description]</text>
+  <rect x="32" y="150" width="136" height="28" rx="6" fill="#1565c0"/>
+  <text x="100" y="169" text-anchor="middle" fill="#fff" font-size="11">[Browsable(false)]</text>
+  <rect x="32" y="186" width="136" height="28" rx="6" fill="#2e7d32"/>
+  <text x="100" y="205" text-anchor="middle" fill="#fff" font-size="11">[Required]  [Range]</text>
+  <rect x="32" y="220" width="136" height="28" rx="6" fill="#2e7d32"/>
+  <text x="100" y="239" text-anchor="middle" fill="#fff" font-size="11">[Editable(false)]</text>
+  <rect x="32" y="254" width="136" height="28" rx="6" fill="#6a1a9a"/>
+  <text x="100" y="268" text-anchor="middle" fill="#fff" font-size="10">[UiControl&lt;T&gt;]</text>
+  <text x="100" y="280" text-anchor="middle" fill="#fff" font-size="10">[Dimension&lt;T&gt;]</text>
+  <rect x="290" y="50" width="180" height="62" rx="10" fill="#37474f" stroke="currentColor" stroke-opacity=".25" stroke-width="1.2"/>
+  <text x="380" y="73" text-anchor="middle" font-size="12" font-weight="bold" fill="#b0bec5">Editor Control</text>
+  <text x="380" y="91" text-anchor="middle" font-size="11" fill="#90a4ae">reads attributes at render time</text>
+  <text x="380" y="107" text-anchor="middle" font-size="11" fill="#90a4ae">applies behaviour per property</text>
+  <line x1="196" y1="160" x2="286" y2="100" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="530" y="50" width="210" height="220" rx="10" fill="#1e1e2e" stroke="currentColor" stroke-opacity=".25" stroke-width="1.2"/>
+  <text x="635" y="72" text-anchor="middle" font-size="12" font-weight="bold" fill="#90caf9">Rendered Form Field</text>
+  <rect x="542" y="82" width="186" height="28" rx="6" fill="#1565c0"/>
+  <text x="635" y="101" text-anchor="middle" fill="#fff" font-size="11">Custom label / help text</text>
+  <rect x="542" y="116" width="186" height="28" rx="6" fill="#37474f"/>
+  <text x="635" y="135" text-anchor="middle" fill="#b0bec5" font-size="11">Field hidden entirely</text>
+  <rect x="542" y="150" width="186" height="28" rx="6" fill="#2e7d32"/>
+  <text x="635" y="169" text-anchor="middle" fill="#fff" font-size="11">Inline validation errors</text>
+  <rect x="542" y="184" width="186" height="28" rx="6" fill="#37474f"/>
+  <text x="635" y="203" text-anchor="middle" fill="#b0bec5" font-size="11">Read-only display</text>
+  <rect x="542" y="218" width="186" height="28" rx="6" fill="#6a1a9a"/>
+  <text x="635" y="237" text-anchor="middle" fill="#fff" font-size="11">Custom control / dropdown</text>
+  <line x1="474" y1="100" x2="526" y2="130" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="380" y="285" text-anchor="middle" font-size="11" fill="currentColor" fill-opacity=".5">type-to-control defaults apply when no override is present</text>
+</svg>
+
+*Attributes on the data model are read once by the Editor at render time and map directly to visual field behaviour.*
 
 ---
 

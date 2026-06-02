@@ -6,6 +6,64 @@ Icon: /static/DocContent/Architecture/DataVersioning/icon.svg
 ---
 
 MeshWeaver takes a pragmatic stance on data versioning: rather than imposing a single strategy across all backends, it delegates to each store's native capabilities wherever they exist. The result is richer history, lower application complexity, and better performance than any cross-cutting shim could deliver.
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 300" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
+  <defs>
+    <marker id="dv-arr" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="currentColor" fill-opacity="0.5"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="760" height="300" rx="12" fill="#1a1a2e" opacity="0.01"/>
+  <text x="380" y="28" font-family="sans-serif" font-size="13" font-weight="bold" fill="currentColor" fill-opacity="0.7" text-anchor="middle">Versioning Strategy by Backend</text>
+  <rect x="20" y="45" width="163" height="220" rx="10" fill="#1565c0"/>
+  <text x="101" y="70" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff" text-anchor="middle">Snowflake</text>
+  <rect x="34" y="80" width="135" height="22" rx="5" fill="#0d47a1"/>
+  <text x="101" y="95" font-family="sans-serif" font-size="11" fill="#fff" text-anchor="middle">Time Travel</text>
+  <text x="101" y="122" font-family="sans-serif" font-size="10" fill="#90caf9" text-anchor="middle">Retention: 1–90 days</text>
+  <text x="101" y="140" font-family="sans-serif" font-size="10" fill="#90caf9" text-anchor="middle">Zero-copy clones</text>
+  <text x="101" y="158" font-family="sans-serif" font-size="10" fill="#90caf9" text-anchor="middle">AT(TIMESTAMP =&gt; …)</text>
+  <text x="101" y="176" font-family="sans-serif" font-size="10" fill="#90caf9" text-anchor="middle">Fail-safe 7 days</text>
+  <rect x="34" y="222" width="135" height="28" rx="5" fill="#1e88e5"/>
+  <text x="101" y="240" font-family="sans-serif" font-size="10" fill="#fff" text-anchor="middle">✦ Native — zero app</text>
+  <text x="101" y="253" font-family="sans-serif" font-size="10" fill="#fff" text-anchor="middle">code required</text>
+  <rect x="199" y="45" width="163" height="220" rx="10" fill="#2e7d32"/>
+  <text x="280" y="70" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff" text-anchor="middle">SQL Server</text>
+  <rect x="213" y="80" width="135" height="22" rx="5" fill="#1b5e20"/>
+  <text x="280" y="95" font-family="sans-serif" font-size="11" fill="#fff" text-anchor="middle">Temporal Tables</text>
+  <text x="280" y="122" font-family="sans-serif" font-size="10" fill="#a5d6a7" text-anchor="middle">Retention: unlimited</text>
+  <text x="280" y="140" font-family="sans-serif" font-size="10" fill="#a5d6a7" text-anchor="middle">Row-level history</text>
+  <text x="280" y="158" font-family="sans-serif" font-size="10" fill="#a5d6a7" text-anchor="middle">FOR SYSTEM_TIME AS OF</text>
+  <text x="280" y="176" font-family="sans-serif" font-size="10" fill="#a5d6a7" text-anchor="middle">Auto on UPDATE/DELETE</text>
+  <rect x="213" y="222" width="135" height="28" rx="5" fill="#43a047"/>
+  <text x="280" y="240" font-family="sans-serif" font-size="10" fill="#fff" text-anchor="middle">✦ Native — zero app</text>
+  <text x="280" y="253" font-family="sans-serif" font-size="10" fill="#fff" text-anchor="middle">code required</text>
+  <rect x="378" y="45" width="163" height="220" rx="10" fill="#6a1b9a"/>
+  <text x="459" y="70" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff" text-anchor="middle">Cosmos DB</text>
+  <rect x="392" y="80" width="135" height="22" rx="5" fill="#4a148c"/>
+  <text x="459" y="95" font-family="sans-serif" font-size="11" fill="#fff" text-anchor="middle">Manual Versioning</text>
+  <text x="459" y="122" font-family="sans-serif" font-size="10" fill="#ce93d8" text-anchor="middle">Retention: unlimited</text>
+  <text x="459" y="140" font-family="sans-serif" font-size="10" fill="#ce93d8" text-anchor="middle">Explicit snapshots</text>
+  <text x="459" y="158" font-family="sans-serif" font-size="10" fill="#ce93d8" text-anchor="middle">path@V{n} pattern</text>
+  <text x="459" y="176" font-family="sans-serif" font-size="10" fill="#ce93d8" text-anchor="middle">Version in document id</text>
+  <rect x="392" y="222" width="135" height="28" rx="5" fill="#8e24aa"/>
+  <text x="459" y="240" font-family="sans-serif" font-size="10" fill="#fff" text-anchor="middle">✦ App-managed —</text>
+  <text x="459" y="253" font-family="sans-serif" font-size="10" fill="#fff" text-anchor="middle">explicit SaveVersion</text>
+  <rect x="557" y="45" width="163" height="220" rx="10" fill="#e65100"/>
+  <text x="638" y="70" font-family="sans-serif" font-size="12" font-weight="bold" fill="#fff" text-anchor="middle">Blob Storage</text>
+  <rect x="571" y="80" width="135" height="22" rx="5" fill="#bf360c"/>
+  <text x="638" y="95" font-family="sans-serif" font-size="11" fill="#fff" text-anchor="middle">Manual / Native</text>
+  <text x="638" y="122" font-family="sans-serif" font-size="10" fill="#ffcc80" text-anchor="middle">Configurable retention</text>
+  <text x="638" y="140" font-family="sans-serif" font-size="10" fill="#ffcc80" text-anchor="middle">Folder-per-entity</text>
+  <text x="638" y="158" font-family="sans-serif" font-size="10" fill="#ffcc80" text-anchor="middle">current.json pointer</text>
+  <text x="638" y="176" font-family="sans-serif" font-size="10" fill="#ffcc80" text-anchor="middle">Azure blob versioning</text>
+  <rect x="571" y="222" width="135" height="28" rx="5" fill="#f57c00"/>
+  <text x="638" y="240" font-family="sans-serif" font-size="10" fill="#fff" text-anchor="middle">✦ App-managed or</text>
+  <text x="638" y="253" font-family="sans-serif" font-size="10" fill="#fff" text-anchor="middle">storage-native</text>
+  <line x1="183" y1="155" x2="199" y2="155" stroke="currentColor" stroke-opacity="0.3" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="362" y1="155" x2="378" y2="155" stroke="currentColor" stroke-opacity="0.3" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="541" y1="155" x2="557" y2="155" stroke="currentColor" stroke-opacity="0.3" stroke-width="1" stroke-dasharray="4,3"/>
+</svg>
+
+*Four versioning strategies — native time-travel on the left, explicit path-based snapshots on the right.*
 
 ## Choosing a Strategy
 

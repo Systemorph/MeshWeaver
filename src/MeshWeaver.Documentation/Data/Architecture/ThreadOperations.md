@@ -7,6 +7,61 @@ Description: "Canonical IMessageHub extension surface for creating, submitting, 
 
 Every thread mutation in MeshWeaver — creating a thread, submitting a message, resubmitting, deleting, marking done, or recording a failure — is handled by extension methods on `IMessageHub` defined in `src/MeshWeaver.AI/HubThreadExtensions.cs`. Tests, GUI, and agents all call these methods. **There is no other public entry point.**
 
+<svg viewBox="0 0 760 300" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L0,7 L8,3.5 Z" fill="#90a4ae"/>
+    </marker>
+    <marker id="arr-blue" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L0,7 L8,3.5 Z" fill="#1e88e5"/>
+    </marker>
+    <marker id="arr-green" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L0,7 L8,3.5 Z" fill="#43a047"/>
+    </marker>
+  </defs>
+  <rect width="760" height="300" rx="12" fill="#1a1a2e" opacity="0.55"/>
+  <rect x="20" y="28" width="110" height="44" rx="8" fill="#5c6bc0"/>
+  <text x="75" y="46" text-anchor="middle" fill="#fff" font-weight="bold">hub.</text>
+  <text x="75" y="63" text-anchor="middle" fill="#fff">SubmitMessage</text>
+  <rect x="20" y="108" width="110" height="44" rx="8" fill="#5c6bc0"/>
+  <text x="75" y="126" text-anchor="middle" fill="#fff" font-weight="bold">hub.</text>
+  <text x="75" y="143" text-anchor="middle" fill="#fff">StartThread</text>
+  <rect x="20" y="188" width="110" height="44" rx="8" fill="#5c6bc0"/>
+  <text x="75" y="206" text-anchor="middle" fill="#fff" font-weight="bold">hub.</text>
+  <text x="75" y="223" text-anchor="middle" fill="#fff">ResubmitMessage</text>
+  <text x="75" y="270" text-anchor="middle" fill="currentColor" fill-opacity="0.55" font-size="11">IMessageHub extensions</text>
+  <line x1="130" y1="50" x2="188" y2="125" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="130" y1="130" x2="188" y2="133" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="130" y1="210" x2="188" y2="143" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="193" y="105" width="150" height="54" rx="10" fill="#26a69a"/>
+  <text x="268" y="126" text-anchor="middle" fill="#fff" font-weight="bold">stream.Update()</text>
+  <text x="268" y="143" text-anchor="middle" fill="#fff" font-size="11">PendingUserMessages</text>
+  <text x="268" y="157" text-anchor="middle" fill="#fff" font-size="11">on MeshThread node</text>
+  <line x1="343" y1="132" x2="400" y2="132" stroke="#1e88e5" stroke-width="2" marker-end="url(#arr-blue)"/>
+  <text x="371" y="122" text-anchor="middle" fill="#1e88e5" font-size="11">reacts</text>
+  <rect x="405" y="105" width="140" height="54" rx="10" fill="#f57c00"/>
+  <text x="475" y="126" text-anchor="middle" fill="#fff" font-weight="bold">Submission</text>
+  <text x="475" y="143" text-anchor="middle" fill="#fff" font-weight="bold">Watcher</text>
+  <text x="475" y="158" text-anchor="middle" fill="#fff" font-size="11">drains queue → Executing</text>
+  <line x1="545" y1="132" x2="600" y2="132" stroke="#43a047" stroke-width="2" marker-end="url(#arr-green)"/>
+  <text x="572" y="122" text-anchor="middle" fill="#43a047" font-size="11">invokes</text>
+  <rect x="605" y="105" width="135" height="54" rx="10" fill="#1e88e5"/>
+  <text x="672" y="126" text-anchor="middle" fill="#fff" font-weight="bold">ThreadExecution</text>
+  <text x="672" y="143" text-anchor="middle" fill="#fff" font-size="11">.ExecuteMessageAsync</text>
+  <text x="672" y="158" text-anchor="middle" fill="#fff" font-size="11">streams response cell</text>
+  <line x1="672" y1="159" x2="672" y2="218" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="605" y="222" width="135" height="40" rx="8" fill="#43a047"/>
+  <text x="672" y="239" text-anchor="middle" fill="#fff" font-weight="bold">Status → Idle</text>
+  <text x="672" y="254" text-anchor="middle" fill="#fff" font-size="11">observable ticks</text>
+  <line x1="605" y1="242" x2="348" y2="242" stroke="#90a4ae" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#arr)"/>
+  <text x="476" y="237" text-anchor="middle" fill="currentColor" fill-opacity="0.55" font-size="11">GetMeshNodeStream fires</text>
+  <rect x="193" y="218" width="150" height="40" rx="8" fill="#8e24aa"/>
+  <text x="268" y="235" text-anchor="middle" fill="#fff" font-weight="bold">Observers notified</text>
+  <text x="268" y="251" text-anchor="middle" fill="#fff" font-size="11">GUI · tests · agents</text>
+</svg>
+
+*Thread lifecycle: hub extension methods write `PendingUserMessages` via `stream.Update`; the submission watcher reacts, runs the execution, and notifies all observers when done.*
+
 ## Why a single surface?
 
 Before this consolidation, tests hand-rolled `new SubmitContext { … }` bags while GUI code called the same `ThreadSubmission.Submit` static — but each callsite chose its own field combination, so the test surface silently drifted from what the GUI actually did. Three design principles drove the unification:

@@ -9,6 +9,59 @@ Description: "Why static collection and cache fields are forbidden in MeshWeaver
 
 This is an absolute architectural invariant — equal in weight to "nothing async ever" and "`GetMeshNodeStream().Update()` is the only mutation API". It is enforced at build time by **`NoStaticCollectionsTest`** (in `MeshWeaver.PathResolution.Test`), which reflects over every `MeshWeaver.*` assembly and fails the build on any static mutable-collection field not recorded in the classified allow-list. The allow-list is the single source of truth for permitted static state; this document explains the categories and shows you what to do instead.
 
+<svg viewBox="0 0 760 310" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#888"/>
+    </marker>
+    <marker id="arr-red" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#e53935"/>
+    </marker>
+    <marker id="arr-green" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#43a047"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="760" height="310" rx="12" fill="#1a1a2e" opacity="0.85"/>
+  <text x="190" y="28" text-anchor="middle" font-size="14" font-weight="bold" fill="#e53935">❌  Static (FORBIDDEN)</text>
+  <text x="570" y="28" text-anchor="middle" font-size="14" font-weight="bold" fill="#43a047">✅  Instance-scoped (REQUIRED)</text>
+  <line x1="380" y1="10" x2="380" y2="300" stroke="currentColor" stroke-opacity="0.2" stroke-dasharray="6,4"/>
+  <rect x="20" y="40" width="320" height="52" rx="8" fill="#b71c1c" fill-opacity="0.35" stroke="#e53935" stroke-width="1.2"/>
+  <text x="180" y="61" text-anchor="middle" fill="#ef9a9a" font-weight="bold">static ConcurrentDictionary&lt;…&gt;</text>
+  <text x="180" y="81" text-anchor="middle" fill="#ef9a9a" font-size="11">process lifetime · shared by ALL meshes</text>
+  <rect x="20" y="122" width="140" height="44" rx="8" fill="#1e3a5f" stroke="#5c6bc0" stroke-width="1.2"/>
+  <text x="90" y="140" text-anchor="middle" fill="#c5cae9" font-weight="bold">Test mesh A</text>
+  <text x="90" y="158" text-anchor="middle" fill="#9fa8da" font-size="11">writes key "X"</text>
+  <rect x="200" y="122" width="140" height="44" rx="8" fill="#1e3a5f" stroke="#5c6bc0" stroke-width="1.2"/>
+  <text x="270" y="140" text-anchor="middle" fill="#c5cae9" font-weight="bold">Test mesh B</text>
+  <text x="270" y="158" text-anchor="middle" fill="#ef9a9a" font-size="11">sees stale "X" ← BLEED</text>
+  <line x1="90" y1="92" x2="90" y2="122" stroke="#e53935" stroke-width="1.5" marker-end="url(#arr-red)"/>
+  <line x1="270" y1="92" x2="270" y2="122" stroke="#e53935" stroke-width="1.5" marker-end="url(#arr-red)"/>
+  <rect x="30" y="200" width="300" height="40" rx="8" fill="#4a1515" stroke="#e53935" stroke-width="1" stroke-dasharray="5,3"/>
+  <text x="180" y="218" text-anchor="middle" fill="#ef9a9a" font-size="12">Prod: tenant A's data visible in tenant B</text>
+  <text x="180" y="234" text-anchor="middle" fill="#ef9a9a" font-size="11">Requires Clear() → proves the bug exists</text>
+  <rect x="400" y="40" width="340" height="52" rx="8" fill="#1b5e20" fill-opacity="0.35" stroke="#43a047" stroke-width="1.2"/>
+  <text x="570" y="61" text-anchor="middle" fill="#a5d6a7" font-weight="bold">class NodeTypeRepository  { dict = new(); }</text>
+  <text x="570" y="81" text-anchor="middle" fill="#a5d6a7" font-size="11">AddSingleton → lifetime IS the mesh</text>
+  <rect x="410" y="122" width="145" height="55" rx="8" fill="#0d3321" stroke="#43a047" stroke-width="1.2"/>
+  <text x="482" y="141" text-anchor="middle" fill="#c8e6c9" font-weight="bold">Mesh A</text>
+  <text x="482" y="157" text-anchor="middle" fill="#a5d6a7" font-size="11">own instance</text>
+  <text x="482" y="171" text-anchor="middle" fill="#a5d6a7" font-size="11">disposed on teardown</text>
+  <rect x="595" y="122" width="145" height="55" rx="8" fill="#0d3321" stroke="#43a047" stroke-width="1.2"/>
+  <text x="667" y="141" text-anchor="middle" fill="#c8e6c9" font-weight="bold">Mesh B</text>
+  <text x="667" y="157" text-anchor="middle" fill="#a5d6a7" font-size="11">own instance</text>
+  <text x="667" y="171" text-anchor="middle" fill="#a5d6a7" font-size="11">disposed on teardown</text>
+  <line x1="482" y1="92" x2="482" y2="122" stroke="#43a047" stroke-width="1.5" marker-end="url(#arr-green)"/>
+  <line x1="667" y1="92" x2="667" y2="122" stroke="#43a047" stroke-width="1.5" marker-end="url(#arr-green)"/>
+  <rect x="415" y="205" width="325" height="40" rx="8" fill="#0d3321" stroke="#43a047" stroke-width="1" stroke-dasharray="5,3"/>
+  <text x="577" y="222" text-anchor="middle" fill="#a5d6a7" font-size="12">No bleed · No Clear() · Safe parallel tests</text>
+  <text x="577" y="238" text-anchor="middle" fill="#a5d6a7" font-size="11">Each partition gets its own isolated cache</text>
+  <line x1="425" y1="177" x2="425" y2="205" stroke="#43a047" stroke-width="1" stroke-opacity="0.6" marker-end="url(#arr-green)"/>
+  <line x1="725" y1="177" x2="725" y2="205" stroke="#43a047" stroke-width="1" stroke-opacity="0.6" marker-end="url(#arr-green)"/>
+  <text x="380" y="295" text-anchor="middle" fill="currentColor" fill-opacity="0.45" font-size="11">Process boundary</text>
+</svg>
+
+*Static fields outlive every mesh instance and bleed across tests and partitions; instance singletons registered in `MeshBuilder` are isolated to their own mesh lifetime.*
+
 ---
 
 ## Why static state is dangerous here
