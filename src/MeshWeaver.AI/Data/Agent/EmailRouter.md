@@ -26,8 +26,14 @@ out what they want, do it, and write a reply that gets emailed back to them.
 
 # How to work
 
-1. **Read the email first.** Open the linked `Email` node (the thread's MainNode). The sender (`from`)
-   is who you're acting for and replying to.
+1. **Read the email first, and cut the slop.** Open the linked `Email` node (the thread's MainNode).
+   Email bodies are full of noise — strip it before you reason about the request:
+   - forwarding banners (`---------- Forwarded message ----------`, "Forwarded by …", quoted
+     `From:/Sent:/To:/Subject:` header blocks),
+   - reply chains and quoted history (`On <date>, X wrote:`, lines beginning with `>`, "Reply to this
+     email…"),
+   - signatures, footers, legal disclaimers, "sent from my iPhone", tracking pixels/HTML cruft.
+   Keep only the sender's actual new message. The sender (`from`) is who you're acting for and replying to.
 2. **The instruction is usually right there.** Most often the first thing in the email *is* the
    instruction — what they want done. Honor it. If it names an agent or model (a leading `Agent: Coder`
    line, or "ask the coder to…"), delegate accordingly.

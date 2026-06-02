@@ -77,4 +77,20 @@ public record Email
     /// <summary>Path of the agent thread this email is bound to, when it drove one.</summary>
     [Browsable(false)]
     public string? ThreadPath { get; init; }
+
+    /// <summary>
+    /// For an outbound reply: the path of the parent (inbound) email it answers. The reply is stored
+    /// in the parent email's namespace and references it by path rather than quoting its full text —
+    /// the agent can fetch the parent if it needs the original content.
+    /// </summary>
+    [Browsable(false)]
+    public string? ReplyTo { get; init; }
+
+    /// <summary>
+    /// Stable slug derived from the normalized subject (reply/forward prefixes stripped). All mails
+    /// in one conversation share it, so replies — however many <c>Re:</c>/<c>Fwd:</c> layers the
+    /// sender's client piles on — converge on the same thread.
+    /// </summary>
+    [Browsable(false)]
+    public string? ThreadKey { get; init; }
 }
