@@ -27,12 +27,14 @@ public static class UserActivityLayoutAreas
     // writes the name; the content pane observes the key and swaps the MeshSearch.
     private const string CatalogTabStateKey = "ownerCatalogTab";
     private const string TabThreads = "Threads";
+    private const string TabSpaces = "Spaces";
     private const string TabMyItems = "My Items";
     private const string TabLastRead = "Last Read";
     private const string TabLastEdited = "Last Edited";
-    // Threads first → it is the default tab shown on load. Pinned is NOT a tab; it has its
-    // own always-visible section above the tab bar (see BuildOwnerDashboard).
-    private static readonly string[] CatalogTabs = { TabThreads, TabMyItems, TabLastRead, TabLastEdited };
+    // Threads first → it is the default tab shown on load. Spaces second so the user can see
+    // (and explicitly create) the spaces they belong to. Pinned is NOT a tab; it has its own
+    // always-visible section above the tab bar (see BuildOwnerDashboard).
+    private static readonly string[] CatalogTabs = { TabThreads, TabSpaces, TabMyItems, TabLastRead, TabLastEdited };
 
     /// <summary>
     /// Adds the Activity view to the User node's layout.
@@ -229,6 +231,7 @@ public static class UserActivityLayoutAreas
 
         UiControl content = selected switch
         {
+            TabSpaces => BuildSpaces(),
             // My Items live in the user's own partition (rbuergi.* post-v10), not
             // under the User/-prefixed dashboard path — pass nodeOwnerId.
             TabMyItems => BuildChildren(nodeOwnerId),
@@ -422,6 +425,37 @@ public static class UserActivityLayoutAreas
             .WithReactiveMode(true)
             .WithCreateNodeType("Thread")
             .WithCreateNamespace(nodePath);
+    }
+
+    /// <summary>
+    /// Spaces the user belongs to — every <c>Space</c> node the viewer can read (the
+    /// SecurityService filters the query to the partitions they have access to). The
+    /// "New space" affordance routes to the standard create form pre-set to
+    /// <c>type=Space</c>; because <c>Space</c>'s <c>NodeTypeDefinition.DefaultNamespace</c>
+    /// is empty, the node is created top-level, which is the ONLY sanctioned way to make a
+    /// new partition — <see cref="MeshWeaver.Mesh.Services.IPartitionStorageProvider"/>
+    /// schemas are never created implicitly by an arbitrary write (see
+    /// <c>PartitionWriteGuardValidator</c>). Creating the Space runs
+    /// <c>SpaceTopLevelValidator</c> (provisions the schema) + <c>SpacePostCreationHandler</c>
+    /// (registers the partition, grants the creator Admin).
+    /// </summary>
+    private static UiControl BuildSpaces()
+    {
+        return Controls.MeshSearch
+            .WithTitle("Spaces")
+            .WithHiddenQuery("nodeType:Space is:main sort:LastModified-desc")
+            .WithShowSearchBox(false)
+            .WithShowEmptyMessage(true)
+            .WithRenderMode(MeshSearchRenderMode.Flat)
+            .WithCollapsibleSections(false)
+            .WithSectionCounts(false)
+            .WithMaxColumns(4)
+            .WithItemLimit(50)
+            .WithMaxRows(3)
+            .WithReactiveMode(true)
+            // Explicit, top-level Space creation only — never implicit. type=Space resolves
+            // DefaultNamespace="" → the create form submits a top-level node.
+            .WithCreateHref("/create?type=Space");
     }
 
     /// <summary>

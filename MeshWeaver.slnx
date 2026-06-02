@@ -109,6 +109,7 @@
     <File Path="test/Directory.Packages.props" />
     <Project Path="src/MeshWeaver.Hosting.Monolith.TestBase/MeshWeaver.Hosting.Monolith.TestBase.csproj" />
     <Project Path="test/MeshWeaver.AI.Test/MeshWeaver.AI.Test.csproj" />
+    <Project Path="test/MeshWeaver.AI.Test.FakeCli/MeshWeaver.AI.Test.FakeCli.csproj" />
     <Project Path="test/MeshWeaver.BusinessRules.Test/MeshWeaver.BusinessRules.Test.csproj" />
     <Project Path="test/MeshWeaver.Content.Test/MeshWeaver.Content.Test.csproj" />
     <Project Path="test/MeshWeaver.ContentCollections.Test/MeshWeaver.ContentCollections.Test.csproj" />

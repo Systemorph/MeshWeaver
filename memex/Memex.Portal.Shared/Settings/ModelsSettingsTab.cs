@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.AI;
+using MeshWeaver.AI.Connect;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
@@ -17,10 +18,22 @@ namespace Memex.Portal.Shared.Settings;
 
 /// <summary>
 /// Settings tab for managing AI <c>ModelProvider</c> credentials.
-/// Mirrors <see cref="ApiTokensSettingsTab"/>'s reactive shape — entries are
-/// stored as MeshNodes under the owner's namespace (the User's partition
-/// when viewed from the user settings page, any node's namespace when
-/// viewed from that node's settings).
+///
+/// <para>Two provider <b>kinds</b> render deliberately different cards
+/// (<see cref="ProviderKind"/>):</para>
+/// <list type="bullet">
+///   <item><b>API</b> (Azure AI Foundry, Azure OpenAI, Anthropic, OpenAI) — an
+///         endpoint/key form plus a checkable list of models to enable.</item>
+///   <item><b>CLI</b> (Claude Code, GitHub Copilot) — no model list; a login
+///         status dot plus a Connect button that delegates to the CLI's native
+///         login (paste-code for Claude, device-flow for Copilot). The inline
+///         card is a NotConnected → Connecting → Connected/Error state machine
+///         driven by <see cref="ConnectSessionManager"/>.</item>
+/// </list>
+///
+/// <para>Entries are stored as MeshNodes under the owner's namespace (the
+/// User's partition from the user settings page, any node's namespace from that
+/// node's settings).</para>
 /// </summary>
 public static class ModelsSettingsTab
 {
@@ -47,16 +60,12 @@ public static class ModelsSettingsTab
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
         var userId = accessService?.Context?.ObjectId ?? "";
 
-        // Owner path: the MeshNode whose settings we're viewing, falling back
-        // to the user's partition when this tab is rendered from the user's
-        // own settings page (node==null). This matches the user's intent of
-        // "under user namespace OR any other node's namespace".
         var ownerPath = !string.IsNullOrEmpty(node?.Path) ? node!.Path : userId;
 
         stack = stack.WithView(Controls.H2("Models").WithStyle("margin: 0 0 8px 0;"));
         stack = stack.WithView(Controls.Html(
             "<p style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-bottom: 16px;\">" +
-            "Enter your own AI provider credentials. Each provider auto-creates the standard model nodes you can pick in chat. " +
+            "Bring your own AI provider credentials, or connect a co-hosted CLI with your subscription. " +
             "Keys never leave your namespace.</p>"));
 
         if (string.IsNullOrEmpty(ownerPath))
@@ -66,116 +75,40 @@ public static class ModelsSettingsTab
             return stack;
         }
 
-        const string createDataId = "modelProviderCreate";
         const string resultDataId = "modelProviderResult";
 
-        // Build dropdown options from the live LanguageModelCatalogOptions —
-        // each provider package self-registers via its AddXxxCatalog
-        // extension (no central registry). Keyless providers (Copilot /
-        // ClaudeCode use other auth) are filtered out for the BYO-key UX.
         var catalogOptions = host.Hub.ServiceProvider.GetService<LanguageModelCatalogOptions>();
-        var providerOptions = catalogOptions?.Sources
-            .Where(s => s.RequiresApiKey)
-            .OrderBy(s => s.Order)
-            .ToList()
+        var allSources = catalogOptions?.Sources.OrderBy(s => s.Order).ToList()
             ?? new List<LanguageModelCatalogSource>();
+        var apiSources = allSources.Where(s => s.Kind == ProviderKind.Api).ToList();
+        var cliSources = allSources.Where(s => s.Kind == ProviderKind.Cli).ToList();
 
-        host.UpdateData(createDataId, new Dictionary<string, object?>
+        // ── API providers — key/endpoint form + model list ───────────────────
+        if (apiSources.Count > 0)
         {
-            ["provider"] = providerOptions.FirstOrDefault()?.ProviderName ?? "",
-            ["label"] = "",
-            ["apiKey"] = "",
-            ["endpoint"] = ""
-        });
+            stack = stack.WithView(Controls.Html(
+                "<h3 style=\"margin: 8px 0; font-size: 1rem;\">API providers</h3>" +
+                "<p style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-bottom: 12px;\">" +
+                "Add a key (and endpoint, for Azure), then choose which models to enable.</p>"));
 
-        var createSection = Controls.Stack.WithWidth("100%")
-            .WithStyle("padding: 16px; background: var(--neutral-layer-2); border-radius: 8px; gap: 12px; margin-bottom: 24px;");
-        createSection = createSection.WithView(
-            Controls.Html("<h3 style=\"margin: 0 0 8px 0; font-size: 1rem;\">Add Provider</h3>"));
+            foreach (var src in apiSources)
+                stack = stack.WithView(BuildApiCard(host, src, providerService, ownerPath, resultDataId));
+        }
 
-        var formRow1 = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithStyle("gap: 12px; align-items: flex-end; flex-wrap: wrap;");
-
-        var providerOptionsArray = providerOptions
-            .Select(p => new Option<string>(p.ProviderName, p.EffectiveLabel))
-            .Cast<Option>()
-            .ToArray();
-        var providerSelect = new SelectControl(new JsonPointerReference("provider"), providerOptionsArray)
+        // ── CLI providers — login status + connect (no model list) ────────────
+        var sessionManager = host.Hub.ServiceProvider.GetService<ConnectSessionManager>();
+        if (cliSources.Count > 0)
         {
-            Label = "Provider",
-            DataContext = LayoutAreaReference.GetDataPointer(createDataId),
-        }.WithWidth("200px");
-        formRow1 = formRow1.WithView(providerSelect);
+            stack = stack.WithView(Controls.Html(
+                "<h3 style=\"margin: 24px 0 8px 0; font-size: 1rem;\">CLI providers</h3>" +
+                "<p style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-bottom: 12px;\">" +
+                "Log in with your subscription — no key, no model list.</p>"));
 
-        formRow1 = formRow1.WithView(new TextFieldControl(new JsonPointerReference("label"))
-        {
-            Label = "Label (optional)",
-            Placeholder = "e.g. Roland's personal key",
-            DataContext = LayoutAreaReference.GetDataPointer(createDataId)
-        }.WithWidth("260px"));
+            foreach (var src in cliSources)
+                stack = stack.WithView(BuildCliCard(host, src, sessionManager, providerService, ownerPath, userId, resultDataId));
+        }
 
-        var formRow2 = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithStyle("gap: 12px; align-items: flex-end; flex-wrap: wrap;");
-
-        formRow2 = formRow2.WithView(new TextFieldControl(new JsonPointerReference("apiKey"))
-        {
-            Label = "API Key",
-            Placeholder = "sk-ant-… / sk-… (paste here)",
-            DataContext = LayoutAreaReference.GetDataPointer(createDataId)
-        }.WithWidth("420px"));
-
-        formRow2 = formRow2.WithView(new TextFieldControl(new JsonPointerReference("endpoint"))
-        {
-            Label = "Endpoint (optional)",
-            Placeholder = "leave blank for provider default",
-            DataContext = LayoutAreaReference.GetDataPointer(createDataId)
-        }.WithWidth("280px"));
-
-        formRow2 = formRow2.WithView(Controls.Button("Save Provider")
-            .WithAppearance(Appearance.Accent)
-            .WithClickAction(ctx =>
-            {
-                ctx.Host.UpdateData(resultDataId,
-                    "<p style=\"padding: 8px 12px; color: var(--neutral-foreground-hint);\">Saving…</p>");
-
-                ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(createDataId)
-                    .Take(1)
-                    .Subscribe(data =>
-                    {
-                        var providerName = data?.GetValueOrDefault("provider")?.ToString()?.Trim() ?? "";
-                        var apiKey = data?.GetValueOrDefault("apiKey")?.ToString()?.Trim() ?? "";
-                        var label = data?.GetValueOrDefault("label")?.ToString()?.Trim();
-                        var endpoint = data?.GetValueOrDefault("endpoint")?.ToString()?.Trim();
-                        if (string.IsNullOrEmpty(label)) label = null;
-                        if (string.IsNullOrEmpty(endpoint)) endpoint = null;
-
-                        if (string.IsNullOrEmpty(providerName))
-                        {
-                            ctx.Host.UpdateData(resultDataId, ErrorHtml("Please choose a provider."));
-                            return;
-                        }
-                        if (string.IsNullOrEmpty(apiKey))
-                        {
-                            ctx.Host.UpdateData(resultDataId, ErrorHtml("API key is required."));
-                            return;
-                        }
-
-                        providerService.CreateProvider(ownerPath, providerName, apiKey, label, endpoint)
-                            .Subscribe(
-                                result => ctx.Host.UpdateData(resultDataId, SuccessHtml(
-                                    $"Saved {Esc(providerName)} — {result.ModelNodes.Count} model(s) ready.")),
-                                ex => ctx.Host.UpdateData(resultDataId, ErrorHtml(ex.Message)));
-                    });
-                return Task.CompletedTask;
-            }));
-
-        createSection = createSection.WithView(formRow1);
-        createSection = createSection.WithView(formRow2);
-        stack = stack.WithView(createSection);
-
-        // Result area (live HTML for save outcomes).
+        // Result area (live HTML for save / connect outcomes).
         stack = stack.WithView((h, _) =>
             h.Stream.GetDataStream<string>(resultDataId)
                 .Select(html => string.IsNullOrEmpty(html)
@@ -183,22 +116,18 @@ public static class ModelsSettingsTab
                     : (UiControl?)Controls.Stack.WithWidth("100%").WithView(Controls.Html(html)))
                 .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
 
+        // ── Configured providers ──────────────────────────────────────────────
         stack = stack.WithView(
-            Controls.Html("<h3 style=\"margin: 0 0 12px 0; font-size: 1rem;\">Configured Providers</h3>"));
+            Controls.Html("<h3 style=\"margin: 24px 0 12px 0; font-size: 1rem;\">Configured Providers</h3>"));
 
         stack = stack.WithView((h, _) =>
             providerService.GetProvidersForOwner(ownerPath)
                 .Select(providers => providers.Count == 0
                     ? (UiControl?)Controls.Html(
-                        "<p style=\"color: var(--neutral-foreground-hint);\">No providers configured yet. Add one above.</p>")
+                        "<p style=\"color: var(--neutral-foreground-hint);\">No providers configured yet.</p>")
                     : BuildProviderList(providers, providerService, resultDataId)));
 
-        // ── Active models (provider selection) ────────────────────────────
-        // Fan out ALL models the user can see via workspace.GetQuery — public
-        // LanguageModel nodes surface regardless of provider Api-gating — group
-        // by provider, and let the user toggle which providers feed their chat.
-        // Toggling persists ModelProviderSelection; AgentChatClient + the
-        // ChatClientCredentialResolver react (use-without-see handles org keys).
+        // ── Active models (provider selection) ────────────────────────────────
         stack = stack.WithView(Controls.Html(
             "<h3 style=\"margin: 24px 0 8px 0; font-size: 1rem;\">Active models</h3>" +
             "<p style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-bottom: 12px;\">" +
@@ -221,10 +150,385 @@ public static class ModelsSettingsTab
         return stack;
     }
 
-    /// <summary>
-    /// Renders the fanned-out models grouped by provider, each row toggling
-    /// that provider's membership in the owner's <c>ModelProviderSelection</c>.
-    /// </summary>
+    // ════════════════════════════════════════════════════════════════════════
+    //  API card — endpoint/key form + checkable model list
+    // ════════════════════════════════════════════════════════════════════════
+
+    private static UiControl BuildApiCard(
+        LayoutAreaHost host,
+        LanguageModelCatalogSource src,
+        ModelProviderService providerService,
+        string ownerPath,
+        string resultDataId)
+    {
+        var formDataId = $"apiForm:{src.ProviderName}";
+        // Azure providers take an endpoint; others just a key.
+        var needsEndpoint = src.ProviderName.StartsWith("Azure", StringComparison.OrdinalIgnoreCase)
+            || !string.IsNullOrEmpty(src.DefaultEndpoint);
+
+        host.UpdateData(formDataId, new Dictionary<string, object?>
+        {
+            ["apiKey"] = "",
+            ["endpoint"] = src.DefaultEndpoint ?? "",
+        });
+
+        var card = Controls.Stack.WithWidth("100%")
+            .WithStyle("padding: 16px; border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; gap: 12px; margin-bottom: 12px;");
+
+        card = card.WithView(Controls.Html(
+            $"<div style=\"display:flex; align-items:center; gap:8px;\">" +
+            $"<strong style=\"font-size:0.95rem;\">{Esc(src.EffectiveLabel)}</strong>" +
+            $"<span style=\"font-size:0.7rem; padding:1px 6px; border-radius:4px; background:var(--neutral-layer-3); color:var(--neutral-foreground-hint);\">API</span>" +
+            $"</div>"));
+
+        var formRow = Controls.Stack.WithOrientation(Orientation.Horizontal)
+            .WithStyle("gap: 12px; align-items: flex-end; flex-wrap: wrap;");
+
+        if (needsEndpoint)
+        {
+            formRow = formRow.WithView(new TextFieldControl(new JsonPointerReference("endpoint"))
+            {
+                Label = "Endpoint",
+                Placeholder = "https://….services.ai.azure.com",
+                DataContext = LayoutAreaReference.GetDataPointer(formDataId)
+            }.WithWidth("320px"));
+        }
+
+        formRow = formRow.WithView(new TextFieldControl(new JsonPointerReference("apiKey"))
+        {
+            Label = "API key",
+            Placeholder = "paste key here",
+            DataContext = LayoutAreaReference.GetDataPointer(formDataId)
+        }.WithWidth("320px"));
+
+        var providerName = src.ProviderName;
+        formRow = formRow.WithView(Controls.Button("Save")
+            .WithAppearance(Appearance.Accent)
+            .WithClickAction(ctx =>
+            {
+                ctx.Host.UpdateData(resultDataId, PendingHtml($"Saving {providerName}…"));
+                ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formDataId)
+                    .Take(1)
+                    .Subscribe(data =>
+                    {
+                        var apiKey = data?.GetValueOrDefault("apiKey")?.ToString()?.Trim() ?? "";
+                        var endpoint = data?.GetValueOrDefault("endpoint")?.ToString()?.Trim();
+                        if (string.IsNullOrEmpty(endpoint)) endpoint = null;
+                        if (string.IsNullOrEmpty(apiKey))
+                        {
+                            ctx.Host.UpdateData(resultDataId, ErrorHtml("API key is required."));
+                            return;
+                        }
+                        providerService.CreateProvider(ownerPath, providerName, apiKey, label: null, endpointOverride: endpoint)
+                            .Subscribe(
+                                result => ctx.Host.UpdateData(resultDataId, SuccessHtml(
+                                    $"Saved {Esc(providerName)} — {result.ModelNodes.Count} model(s) ready.")),
+                                ex => ctx.Host.UpdateData(resultDataId, ErrorHtml(ex.Message)));
+                    });
+                return Task.CompletedTask;
+            }));
+
+        card = card.WithView(formRow);
+
+        // Checkable model list — the provider's default model ids (the resolver
+        // enables/selects them via the Active-models selection below). Shown so
+        // the user sees what models the saved key unlocks.
+        var modelIds = src.EffectiveModelIds;
+        if (modelIds.Length > 0)
+        {
+            var modelsHtml = "Models &nbsp;" + string.Join(" &nbsp; ",
+                modelIds.Select(m => $"<span style=\"font-size:0.8rem;\">☑ {Esc(m)}</span>"));
+            card = card.WithView(Controls.Html(
+                $"<div style=\"font-size:0.85rem; color:var(--neutral-foreground-hint);\">{modelsHtml}</div>"));
+        }
+
+        return card;
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  CLI card — login status + connect (state machine, no model list)
+    // ════════════════════════════════════════════════════════════════════════
+
+    private static UiControl BuildCliCard(
+        LayoutAreaHost host,
+        LanguageModelCatalogSource src,
+        ConnectSessionManager? sessionManager,
+        ModelProviderService providerService,
+        string ownerPath,
+        string userId,
+        string resultDataId)
+    {
+        var provider = src.ProviderName.Equals("Copilot", StringComparison.OrdinalIgnoreCase)
+            ? ConnectProvider.Copilot
+            : ConnectProvider.ClaudeCode;
+        var stateDataId = $"cliState:{src.ProviderName}";
+
+        var card = Controls.Stack.WithWidth("100%")
+            .WithStyle("padding: 16px; border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; gap: 12px; margin-bottom: 12px;");
+
+        card = card.WithView(Controls.Html(
+            $"<div style=\"display:flex; align-items:center; gap:8px;\">" +
+            $"<strong style=\"font-size:0.95rem;\">{Esc(src.EffectiveLabel)}</strong>" +
+            $"<span style=\"font-size:0.7rem; padding:1px 6px; border-radius:4px; background:var(--neutral-layer-3); color:var(--neutral-foreground-hint);\">CLI</span>" +
+            $"</div>"));
+
+        if (sessionManager is null || !sessionManager.Supports(provider))
+        {
+            card = card.WithView(Controls.Html(
+                "<p style=\"font-size:0.85rem; color:var(--neutral-foreground-hint);\">" +
+                "Connect is not available in this deployment.</p>"));
+            return card;
+        }
+
+        // Initial state: NotConnected unless the CLI reports an existing login.
+        // The card databinds to a per-provider state stream that the Connect /
+        // Disconnect buttons drive.
+        host.UpdateData(stateDataId, RenderCliBody(provider, new ConnectStatus.NotConnected(), src, stateDataId, sessionManager, ownerPath, userId, resultDataId));
+
+        // Probe IsLoggedIn once on render; flip to a Connected affordance when true.
+        var configDir = ResolveConfigDir(host, userId, provider);
+        sessionManager.IsLoggedIn(provider, configDir)
+            .Take(1)
+            .Subscribe(loggedIn =>
+            {
+                if (loggedIn)
+                    host.UpdateData(stateDataId, RenderConnectedBody(src, provider, stateDataId, sessionManager, ownerPath, userId, resultDataId, loginName: null));
+            });
+
+        // Render the live state body.
+        card = card.WithView((h, _) =>
+            h.Stream.GetDataStream<UiControl>(stateDataId)
+                .StartWith((UiControl)Controls.Html("<p style=\"color:var(--neutral-foreground-hint);\">…</p>")));
+
+        return card;
+    }
+
+    /// <summary>The NotConnected body — status dot + Connect button.</summary>
+    private static UiControl RenderCliBody(
+        ConnectProvider provider,
+        ConnectStatus status,
+        LanguageModelCatalogSource src,
+        string stateDataId,
+        ConnectSessionManager sessionManager,
+        string ownerPath,
+        string userId,
+        string resultDataId)
+    {
+        var body = Controls.Stack.WithWidth("100%").WithStyle("gap: 8px;");
+        body = body.WithView(Controls.Html(
+            "<div style=\"display:flex; align-items:center; gap:8px; font-size:0.85rem;\">" +
+            "<span style=\"color:#9ca3af;\">●</span> Not connected — uses your subscription</div>"));
+
+        body = body.WithView(Controls.Button($"Connect {src.EffectiveLabel}")
+            .WithAppearance(Appearance.Accent)
+            .WithClickAction(ctx =>
+            {
+                var host = ctx.Host;
+                var configDir = ResolveConfigDir(host, userId, provider);
+                host.UpdateData(stateDataId, ConnectingPlaceholder());
+                sessionManager.StartConnect(ownerPath, provider, configDir)
+                    .Subscribe(
+                        st => host.UpdateData(stateDataId, RenderConnectingOrTerminal(
+                            provider, st, src, stateDataId, sessionManager, ownerPath, userId, resultDataId)),
+                        ex => host.UpdateData(stateDataId, RenderError(provider, src, ex.Message, stateDataId, sessionManager, ownerPath, userId, resultDataId)));
+                return Task.CompletedTask;
+            }));
+        return body;
+    }
+
+    /// <summary>Branch on the live <see cref="ConnectStatus"/> coming back from StartConnect / SubmitCode.</summary>
+    private static UiControl RenderConnectingOrTerminal(
+        ConnectProvider provider,
+        ConnectStatus status,
+        LanguageModelCatalogSource src,
+        string stateDataId,
+        ConnectSessionManager sessionManager,
+        string ownerPath,
+        string userId,
+        string resultDataId)
+    {
+        return status switch
+        {
+            ConnectStatus.Connecting c => RenderConnecting(provider, c.Challenge, src, stateDataId, sessionManager, ownerPath, userId, resultDataId),
+            ConnectStatus.Connected ok => RenderConnectedBody(src, provider, stateDataId, sessionManager, ownerPath, userId, resultDataId, loginName: null),
+            ConnectStatus.Error err => RenderError(provider, src, err.Reason, stateDataId, sessionManager, ownerPath, userId, resultDataId),
+            _ => RenderCliBody(provider, status, src, stateDataId, sessionManager, ownerPath, userId, resultDataId),
+        };
+    }
+
+    /// <summary>Connecting body — auth URL + (Claude) a paste-code field / (Copilot) the device code.</summary>
+    private static UiControl RenderConnecting(
+        ConnectProvider provider,
+        ConnectChallenge challenge,
+        LanguageModelCatalogSource src,
+        string stateDataId,
+        ConnectSessionManager sessionManager,
+        string ownerPath,
+        string userId,
+        string resultDataId)
+    {
+        var body = Controls.Stack.WithWidth("100%").WithStyle("gap: 8px;");
+        body = body.WithView(Controls.Html(
+            "<div style=\"display:flex; align-items:center; gap:8px; font-size:0.85rem;\">" +
+            "<span style=\"color:#f59e0b;\">●</span> Connecting…</div>"));
+
+        if (challenge.RequiresPastedCode)
+        {
+            // Claude paste-code flow.
+            body = body.WithView(Controls.Html(
+                "<div style=\"font-size:0.85rem;\">1&nbsp; Authorize in your browser:<br/>" +
+                $"<a href=\"{Esc(challenge.VerificationUrl)}\" target=\"_blank\" rel=\"noopener\" " +
+                $"style=\"word-break:break-all;\">{Esc(challenge.VerificationUrl)}</a></div>" +
+                "<div style=\"font-size:0.85rem; margin-top:6px;\">2&nbsp; Paste the code Claude shows:</div>"));
+
+            var codeDataId = $"cliCode:{src.ProviderName}";
+            body = body.WithView(BuildPasteCodeRow(provider, src, codeDataId, stateDataId, sessionManager, ownerPath, userId, resultDataId));
+        }
+        else
+        {
+            // Copilot device-code flow — auto-poll, nothing to paste.
+            var codeBlock = string.IsNullOrEmpty(challenge.UserCode)
+                ? ""
+                : $"<div style=\"font-size:1.2rem; font-family:monospace; padding:6px 12px; border:1px dashed var(--neutral-stroke-rest); border-radius:6px; display:inline-block; margin:6px 0;\">{Esc(challenge.UserCode!)}</div>";
+            body = body.WithView(Controls.Html(
+                $"<div style=\"font-size:0.85rem;\">Enter this code at " +
+                $"<a href=\"{Esc(challenge.VerificationUrl)}\" target=\"_blank\" rel=\"noopener\">{Esc(challenge.VerificationUrl)}</a></div>" +
+                codeBlock +
+                "<div style=\"font-size:0.8rem; color:var(--neutral-foreground-hint);\">⏳ auto-checking…</div>"));
+        }
+
+        body = body.WithView(Controls.Button("Cancel")
+            .WithAppearance(Appearance.Outline)
+            .WithClickAction(ctx =>
+            {
+                sessionManager.Cancel(ownerPath, provider);
+                ctx.Host.UpdateData(stateDataId, RenderCliBody(provider, new ConnectStatus.NotConnected(), src, stateDataId, sessionManager, ownerPath, userId, resultDataId));
+                return Task.CompletedTask;
+            }));
+        return body;
+    }
+
+    private static UiControl BuildPasteCodeRow(
+        ConnectProvider provider,
+        LanguageModelCatalogSource src,
+        string codeDataId,
+        string stateDataId,
+        ConnectSessionManager sessionManager,
+        string ownerPath,
+        string userId,
+        string resultDataId)
+    {
+        var row = Controls.Stack.WithOrientation(Orientation.Horizontal)
+            .WithStyle("gap: 8px; align-items: flex-end;");
+        row = row.WithView(new TextFieldControl(new JsonPointerReference("code"))
+        {
+            Label = "Code",
+            Placeholder = "paste here",
+            DataContext = LayoutAreaReference.GetDataPointer(codeDataId)
+        }.WithWidth("280px"));
+
+        row = row.WithView(Controls.Button("Submit")
+            .WithAppearance(Appearance.Accent)
+            .WithClickAction(ctx =>
+            {
+                var host = ctx.Host;
+                host.Stream.GetDataStream<Dictionary<string, object?>>(codeDataId)
+                    .Take(1)
+                    .Subscribe(data =>
+                    {
+                        var code = data?.GetValueOrDefault("code")?.ToString()?.Trim() ?? "";
+                        if (string.IsNullOrEmpty(code))
+                        {
+                            host.UpdateData(resultDataId, ErrorHtml("Please paste the code Claude showed."));
+                            return;
+                        }
+                        sessionManager.SubmitCode(ownerPath, provider, code)
+                            .Subscribe(
+                                st => host.UpdateData(stateDataId, RenderConnectingOrTerminal(
+                                    provider, st, src, stateDataId, sessionManager, ownerPath, userId, resultDataId)),
+                                ex => host.UpdateData(stateDataId, RenderError(provider, src, ex.Message, stateDataId, sessionManager, ownerPath, userId, resultDataId)));
+                    });
+                return Task.CompletedTask;
+            }));
+        return row;
+    }
+
+    private static UiControl RenderConnectedBody(
+        LanguageModelCatalogSource src,
+        ConnectProvider provider,
+        string stateDataId,
+        ConnectSessionManager sessionManager,
+        string ownerPath,
+        string userId,
+        string resultDataId,
+        string? loginName)
+    {
+        var body = Controls.Stack.WithOrientation(Orientation.Horizontal)
+            .WithStyle("gap: 16px; align-items: center;");
+        var who = string.IsNullOrEmpty(loginName) ? "" : $" as {Esc(loginName)}";
+        body = body.WithView(Controls.Html(
+            "<div style=\"flex:1; display:flex; align-items:center; gap:8px; font-size:0.85rem;\">" +
+            $"<span style=\"color:#22c55e;\">✓</span> Connected{who}</div>"));
+
+        body = body.WithView(Controls.Button("Disconnect")
+            .WithAppearance(Appearance.Outline)
+            .WithClickAction(ctx =>
+            {
+                sessionManager.Cancel(ownerPath, provider);
+                // Remove the stored provider node so the next render shows NotConnected.
+                var providerService = ctx.Host.Hub.ServiceProvider.GetRequiredService<ModelProviderService>();
+                providerService.DeleteProvider($"{ownerPath}/{ModelProviderNodeType.RootNamespace}/{src.ProviderName}")
+                    .Subscribe(
+                        _ => ctx.Host.UpdateData(stateDataId, RenderCliBody(provider, new ConnectStatus.NotConnected(), src, stateDataId, sessionManager, ownerPath, userId, resultDataId)),
+                        ex => ctx.Host.UpdateData(resultDataId, ErrorHtml(ex.Message)));
+                return Task.CompletedTask;
+            }));
+        return body;
+    }
+
+    private static UiControl RenderError(
+        ConnectProvider provider,
+        LanguageModelCatalogSource src,
+        string reason,
+        string stateDataId,
+        ConnectSessionManager sessionManager,
+        string ownerPath,
+        string userId,
+        string resultDataId)
+    {
+        var body = Controls.Stack.WithWidth("100%").WithStyle("gap: 8px;");
+        body = body.WithView(Controls.Html(
+            $"<div style=\"font-size:0.85rem; color:#f87171;\">● {Esc(reason)}</div>"));
+        body = body.WithView(Controls.Button("Retry")
+            .WithAppearance(Appearance.Accent)
+            .WithClickAction(ctx =>
+            {
+                ctx.Host.UpdateData(stateDataId, RenderCliBody(provider, new ConnectStatus.NotConnected(), src, stateDataId, sessionManager, ownerPath, userId, resultDataId));
+                return Task.CompletedTask;
+            }));
+        return body;
+    }
+
+    private static UiControl ConnectingPlaceholder() =>
+        Controls.Html("<p style=\"font-size:0.85rem; color:var(--neutral-foreground-hint);\">● Connecting…</p>");
+
+    private static string? ResolveConfigDir(LayoutAreaHost host, string userId, ConnectProvider provider)
+    {
+        if (string.IsNullOrEmpty(userId)) return null;
+        if (provider == ConnectProvider.ClaudeCode)
+        {
+            var cfg = host.Hub.ServiceProvider
+                .GetService<Microsoft.Extensions.Options.IOptions<MeshWeaver.AI.ClaudeCode.ClaudeCodeConfiguration>>()?.Value;
+            var root = cfg?.ConfigDirRoot?.TrimEnd('/', '\\');
+            return !string.IsNullOrEmpty(root) ? System.IO.Path.Combine(root, userId, ".claude") : null;
+        }
+        return null;
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  Active-models selection (unchanged behaviour)
+    // ════════════════════════════════════════════════════════════════════════
+
     private static UiControl BuildModelSelectionList(
         IReadOnlyList<MeshNode> modelNodes,
         ImmutableArray<string> selected,

@@ -120,6 +120,32 @@ public interface IPartitionStorageProvider
         => System.Threading.Tasks.Task.CompletedTask;
 
     /// <summary>
+    /// Read-only existence probe — the counterpart to
+    /// <see cref="EnsurePartitionProvisionedAsync"/> that NEVER creates anything.
+    /// Emits exactly one value and completes: <c>true</c> when this provider knows the
+    /// partition's backing store exists, <c>false</c> when it knows it definitively does
+    /// NOT, and <c>null</c> when it cannot tell (e.g. InMemory has no per-partition store,
+    /// or a transient probe failure). Reactive surface — any actual I/O (the Postgres
+    /// schema probe) stays at the IO boundary inside the implementation; consumers compose
+    /// it with the rest of the validation chain, no <c>await</c>.
+    ///
+    /// <para>Used by the write guard that enforces <b>"no partition, no write"</b>:
+    /// a normal user write whose top-level partition does not already exist is
+    /// rejected rather than silently provisioning a new space (implicit space
+    /// creation is forbidden — spaces are created explicitly via the <c>Space</c>
+    /// node type). Because a wrong <c>false</c> would block legitimate writes, the
+    /// guard rejects ONLY on a definitive <c>false</c> and treats <c>null</c> as
+    /// "allow"; providers must therefore emit <c>null</c> — never a guessed
+    /// <c>false</c> — whenever they are unsure.</para>
+    ///
+    /// <para>Default emits <c>null</c>: providers with no per-partition backing store
+    /// (InMemory, FileSystem, EmbeddedResource, StaticNode) can't answer and defer
+    /// to others; the Postgres provider answers from its schema-existence cache.</para>
+    /// </summary>
+    IObservable<bool?> PartitionExists(string @namespace)
+        => System.Reactive.Linq.Observable.Return<bool?>(null);
+
+    /// <summary>
     /// Contexts this partition opts into. Consumers iterating
     /// partitions for a given context (search, autocomplete, browse)
     /// skip every partition that doesn't include the context. The

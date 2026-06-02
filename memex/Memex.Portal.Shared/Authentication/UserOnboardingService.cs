@@ -20,28 +20,23 @@ namespace Memex.Portal.Shared.Authentication;
 /// publishing thread and deadlock under load.
 /// See <c>Doc/Architecture/AsynchronousCalls.md</c>.</para>
 ///
-/// <para><b>Two rows, one onboarding write:</b>
-/// <list type="number">
-///   <item>Per-user partition root — <c>{username}.mesh_nodes</c> at
-///         <c>(namespace='', id={username})</c>. This is what <c>/{username}</c>
-///         resolves to via the standard partition router; renders the User layout
-///         (Activity area) from <see cref="MeshWeaver.Graph.Configuration.UserNodeType"/>'s
-///         HubConfiguration. The per-user Postgres schema is created lazily on
-///         this first write by the path-routing adapter (calls
-///         <c>public.ensure_partition_schema</c>); no explicit
-///         <c>Admin/Partition</c> catalog entry needed.</item>
-///   <item>User-catalog mirror — <c>user.mesh_nodes</c> at
-///         <c>(namespace='User', id={username})</c>. The login flow runs
-///         <c>nodeType:User content.email:X</c> and scans the <c>user</c> schema.
-///         Without this mirror, the catalog query finds nothing and every signed-in
-///         user bounces back to <c>/onboarding</c>.</item>
-/// </list>
-/// </para>
+/// <para><b>One row, one write:</b> the per-user partition root —
+/// <c>{username}.mesh_nodes</c> at <c>(namespace='', id={username})</c>. This is what
+/// <c>/{username}</c> resolves to via the standard partition router; it renders the User
+/// layout (Activity area) from <see cref="MeshWeaver.Graph.Configuration.UserNodeType"/>'s
+/// HubConfiguration. The per-user Postgres schema is created lazily on this first write by
+/// the path-routing adapter (<c>public.ensure_partition_schema</c>); no explicit
+/// <c>Admin/Partition</c> catalog entry is needed.</para>
 ///
-/// <para>Sequencing is expressed reactively via <c>SelectMany</c>: the
-/// catalog-mirror subscribe is triggered by the partition-root emission. The
-/// partition-root is the canonical row (V27 mirror trigger copies User rows from
-/// the per-user partition into <c>auth.mesh_nodes</c> automatically).</para>
+/// <para><b>Login finds the user via the Auth mirror, not a second write.</b> The login flow
+/// runs <c>nodeType:User</c> (routed to the <c>Auth</c> partition by
+/// <c>UserNodeType.AddQueryRoutingRule</c>); the V27 trigger
+/// <c>mirror_access_object_to_auth_schema</c> copies this partition-root User row into
+/// <c>auth.mesh_nodes</c> automatically. There is therefore NO separate
+/// <c>(namespace='User', id={username})</c> catalog-mirror write — that legacy write routed
+/// to an unregistered <c>User</c> first-segment and lazily provisioned a stray <c>user</c>
+/// schema distinct from <c>auth</c> (cleaned up + dropped by migration V31). Non-system writes
+/// into the <c>User</c>/<c>Auth</c> mirror are blocked by <c>PartitionWriteGuardValidator</c>.</para>
 /// </summary>
 public sealed class UserOnboardingService(
     IMeshService meshService,
@@ -82,39 +77,28 @@ public sealed class UserOnboardingService(
             Content = userContent,
         };
 
-        var userCatalogMirror = new MeshNode(username, "User")
-        {
-            Name = fullDisplayName,
-            NodeType = "User",
-            State = MeshNodeState.Active,
-            Icon = avatarIcon,
-            Content = userContent,
-        };
-
-        // SelectMany sequences the two writes — partition-root first (auto-creates
-        // the per-user schema via ensure_partition_schema), then the catalog mirror.
-        // The outer observable emits ONLY the partition-root node (the canonical
-        // identity) so callers can treat the return value as `the User node`.
+        // Single write: the partition-root User node at (namespace='', id={username}).
+        // The per-user Postgres schema is auto-created on this first write
+        // (ensure_partition_schema), and the V27 auth-mirror trigger copies this User row
+        // into auth.mesh_nodes automatically — so login's `nodeType:User` lookup (routed to
+        // the Auth partition) finds it WITHOUT a separate catalog-mirror write.
         //
-        // Wrap in Observable.Using + ImpersonateAsSystem so the whole onboarding
-        // chain runs as the System identity (Permission.All unconditionally).
-        // Reason: the new user does not yet exist, the partition root they
-        // would own doesn't yet exist either, and the caller (signed-in admin
-        // OR the user-being-onboarded themselves during first-login) can't
-        // have Create permission on a brand-new top-level partition. This is
-        // the canonical "infrastructure operation" use case ImpersonateAsSystem
-        // was built for — explicitly documented in AccessService.cs.
+        // The old `new MeshNode(username, "User")` catalog-mirror write is GONE: it routed
+        // to the unregistered `User` first-segment and lazily provisioned a stray `user`
+        // schema separate from `auth` (migration V31 unifies that back into `auth` and drops
+        // it). Writes into the User/Auth mirror by non-system callers are now blocked by
+        // PartitionWriteGuardValidator; onboarding stays clean by simply not writing there.
+        //
+        // Wrap in Observable.Using + ImpersonateAsSystem so onboarding runs as the System
+        // identity (Permission.All): the new user / their brand-new partition root don't
+        // exist yet, so neither the signed-in admin nor the user-being-onboarded can hold
+        // Create on it — the canonical infrastructure-write case (see AccessService.cs).
         return Observable.Using(
             () => accessService.ImpersonateAsSystem(),
             _ => meshService.CreateNode(partitionRootNode)
                 .Do(__ => logger?.LogInformation(
                     "Onboarding: wrote partition-root User '{Username}' to {Schema}.mesh_nodes",
-                    username, username.ToLowerInvariant()))
-                .SelectMany(rootNode => meshService.CreateNode(userCatalogMirror)
-                    .Do(__ => logger?.LogInformation(
-                        "Onboarding: wrote login-catalog mirror at user.mesh_nodes (namespace=User, id={Username})",
-                        username))
-                    .Select(__ => rootNode)))
+                    username, username.ToLowerInvariant())))
             // Best-effort: once the user node exists, generate an inline-SVG avatar in the
             // background (the configurable utility model, via IIconGenerator → NodeInitializer)
             // and stamp it onto the node's Icon — exactly like thread auto-naming runs AFTER a

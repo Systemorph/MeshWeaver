@@ -43,6 +43,11 @@ public static class SecurityServiceExtensions
             .ConfigureServices(services =>
             {
                 services.AddScoped<INodeValidator, RlsNodeValidator>();
+                // Structural partition guard: blocks writes into the system-managed
+                // User/Auth mirror and prevents implicit space creation ("no partition,
+                // no write"). Runs alongside RlsNodeValidator — a rejection here wins
+                // even when RLS would grant (validators AND-compose).
+                services.AddScoped<INodeValidator, PartitionWriteGuardValidator>();
                 return services;
             })
             // Mesh hub: needed wherever code calls hub.CheckPermission on the

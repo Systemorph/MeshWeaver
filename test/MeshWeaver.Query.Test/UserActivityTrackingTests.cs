@@ -5,8 +5,10 @@ using System.Reactive.Linq;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Query.Test;
@@ -46,6 +48,11 @@ public class UserActivityTrackingTests(ITestOutputHelper output) : MonolithMeshT
     {
         const string user = "alice";
         const string nodePath = "alice/MyDoc";
+
+        // ONBOARD-FIRST gate (HandleTrackActivity, commit 981a86c9e): the first-time
+        // create is skipped unless the user's partition root already exists. Production
+        // always has it (onboarding ran first); reproduce that precondition here.
+        OnboardPartitionRoot(user);
 
         Mesh.Post(new TrackActivityRequest(
             NodePath: nodePath,
@@ -107,6 +114,11 @@ public class UserActivityTrackingTests(ITestOutputHelper output) : MonolithMeshT
         const string user = "charlie";
         const string nodePath = "charlie/doc";
 
+        // ONBOARD-FIRST gate (HandleTrackActivity, commit 981a86c9e): activity tracking
+        // never creates a partition ahead of onboarding. Seed the partition root so the
+        // gate lets the concurrent creates through (production state when activity flows).
+        OnboardPartitionRoot(user);
+
         // Fire 5 requests for the SAME path. Under the buggy probe-and-fork
         // shape, all 5 see the path-not-found probe before any of them succeeds
         // in writing → all 5 attempt CreateNode → 4 throw "Node already exists".
@@ -131,6 +143,37 @@ public class UserActivityTrackingTests(ITestOutputHelper output) : MonolithMeshT
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial).Items;
         all.Should().HaveCount(1,
             "concurrent tracks for the same path must coalesce into one record, not race-create duplicates");
+    }
+
+    /// <summary>
+    /// Writes the user's partition-root <c>User</c> node (path = <c>{user}</c>, empty
+    /// namespace) and waits until it is readable. <see cref="MeshWeaver.Graph.MeshNodeExtensions"/>'s
+    /// <c>HandleTrackActivity</c> gate probes this root before its first-time create — absent
+    /// root means the identity isn't onboarded and the activity write is skipped. Production
+    /// onboarding (<c>UserOnboardingService.CreateUser</c>) always lands this row before any
+    /// activity flows; these tests reproduce that precondition.
+    /// </summary>
+    private void OnboardPartitionRoot(string user)
+    {
+        // User-node creation is restricted to portal/own-scope identities (the
+        // UserNodeType portal-create rule). Impersonate as the user so the
+        // RlsNodeValidator own-scope bypass (nodePath == userId) lets the
+        // partition-root create through — the shape production hits when the user
+        // owns their just-created partition. The activity posted afterwards is then
+        // an own-scope write under {user}/_UserActivity, also allowed.
+        Mesh.ServiceProvider.GetRequiredService<AccessService>()
+            .SetCircuitContext(new AccessContext { ObjectId = user, Name = user });
+
+        NodeFactory.CreateNode(new MeshNode(user)
+        {
+            NodeType = "User",
+            Name = user,
+            State = MeshNodeState.Active,
+        }).Should().Emit();
+
+        // The gate reads the root from storage; wait for the owner-hub round-trip to
+        // confirm persistence before posting activity so the create branch isn't skipped.
+        ReadNode(user).Should().Match(n => n is { State: MeshNodeState.Active });
     }
 
     /// <summary>

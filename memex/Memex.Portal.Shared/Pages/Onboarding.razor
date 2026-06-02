@@ -16,6 +16,7 @@
 @using Microsoft.Extensions.Options
 @inject AccessService AccessService
 @inject UserOnboardingService OnboardingService
+@inject InvitationService InvitationService
 @inject PortalApplication PortalApplication
 @inject NavigationManager Navigation
 @inject CircuitAccessHandler CircuitAccessHandler
@@ -40,11 +41,12 @@ else if (registrationClosed)
         <div class="onboarding-card">
             <div class="onboarding-header">
                 <FluentIcon Value="@(new Icons.Regular.Size24.PersonAdd())" />
-                <h1>Registration Closed</h1>
+                <h1>@(invitationRequired ? "Invitation Required" : "Registration Closed")</h1>
             </div>
             <FluentMessageBar Intent="@MessageIntent.Info" Style="margin-top: 1rem;">
-                Registration is closed. Please contact your administrator to have an
-                account created for you.
+                @(invitationRequired
+                    ? "This portal is invitation-only and your email has not been invited. Please contact your administrator to request an invitation."
+                    : "Registration is closed. Please contact your administrator to have an account created for you.")
             </FluentMessageBar>
         </div>
     </div>
@@ -126,6 +128,7 @@ else
     private bool checkCompleted;
     private bool existingUserFound;
     private bool registrationClosed;
+    private bool invitationRequired;
 
     // Holds the subscriptions from OnInitialized (existing-user lookup) and
     // HandleSubmit (the dual-write pipeline). Disposed when the page tears
@@ -162,25 +165,40 @@ else
             $"onboarding:byEmail:{email}",
             $"nodeType:User namespace:User content.email:{email} limit:1");
 
-        // Closed-registration: if self-onboarding is disabled we also need the
-        // first-user-bootstrap signal up front, so we can render the "registration
-        // closed" message instead of the form for non-first users (the real gate
-        // still lives at the CreateUser call in HandleSubmit). When open we skip
-        // the extra query entirely — same single-query path as before.
+        // Closed-registration: when registration would be closed (self-onboarding
+        // disabled OR invitation-only) we need the first-user-bootstrap signal up
+        // front so we can render the "registration closed" / "invitation required"
+        // message instead of the form for non-first users (the real gate still lives
+        // at the CreateUser call in HandleSubmit). In invitation-only mode we also
+        // need to know whether this email has a Pending invitation so an invited user
+        // sees the form. When fully open we skip both extra queries.
         var allowSelfOnboarding = Features.Value.Onboarding.AllowSelfOnboarding;
-        var firstUserQuery = allowSelfOnboarding
-            ? Observable.Return(Enumerable.Empty<MeshNode>())
-            : workspace.GetQuery("onboarding:firstUserCheck", "namespace:User limit:1");
+        var invitationOnly = Features.Value.Onboarding.InvitationOnly;
+        var needFirstUser = !allowSelfOnboarding || invitationOnly;
+
+        var firstUserQuery = needFirstUser
+            ? workspace.GetQuery("onboarding:firstUserCheck", "namespace:User limit:1")
+            : Observable.Return(Enumerable.Empty<MeshNode>());
+        var inviteQuery = invitationOnly
+            ? workspace.GetQuery(
+                $"onboarding:invite:{email}",
+                $"nodeType:Invitation content.email:{email}")
+            : Observable.Return(Enumerable.Empty<MeshNode>());
+
+        var jsonOptions = workspace.Hub.JsonSerializerOptions;
 
         subscriptions.Add(
-            Observable.CombineLatest(byEmailQuery, firstUserQuery,
-                    (byEmail, all) => (byEmail, all))
+            Observable.CombineLatest(byEmailQuery, firstUserQuery, inviteQuery,
+                    (byEmail, all, invites) => (byEmail, all, invites))
                 .Take(1)
                 .Subscribe(
                     checks => OnExistingUserCheckCompleted(
                         email,
                         checks.byEmail.FirstOrDefault(),
-                        isFirstUser: !checks.all.Any()),
+                        isFirstUser: !checks.all.Any(),
+                        invited: checks.invites.Any(n =>
+                            InvitationService.TryGetInvitation(n, jsonOptions)
+                                is { Status: InvitationStatus.Pending })),
                     ex =>
                     {
                         Logger.LogWarning(ex,
@@ -189,7 +207,7 @@ else
                     }));
     }
 
-    private void OnExistingUserCheckCompleted(string email, MeshNode? existing, bool isFirstUser)
+    private void OnExistingUserCheckCompleted(string email, MeshNode? existing, bool isFirstUser, bool invited)
     {
         if (existing is { State: MeshNodeState.Active })
         {
@@ -215,14 +233,32 @@ else
         }
         else
         {
-            // No existing account for this email. If self-onboarding is closed and
-            // this is NOT the first-user bootstrap, show the closed message rather
-            // than the profile form. First user always passes (becomes platform
+            // No existing account for this email. Decide whether to show the profile
+            // form or a closed message. First user always passes (becomes platform
             // admin) so the deployment never locks out.
-            var closed = !Features.Value.Onboarding.AllowSelfOnboarding && !isFirstUser;
+            //
+            // Invitation-only takes precedence: the gate is "has a Pending invitation"
+            // regardless of AllowSelfOnboarding. Otherwise fall back to the
+            // self-onboarding toggle. The real security gate still lives at the
+            // CreateUser call in HandleSubmit; this only controls messaging.
+            var onboarding = Features.Value.Onboarding;
+            bool closed;
+            bool needsInvitation;
+            if (onboarding.InvitationOnly)
+            {
+                closed = !invited && !isFirstUser;
+                needsInvitation = closed;
+            }
+            else
+            {
+                closed = !onboarding.AllowSelfOnboarding && !isFirstUser;
+                needsInvitation = false;
+            }
+
             InvokeAsync(() =>
             {
                 registrationClosed = closed;
+                invitationRequired = needsInvitation;
                 checkCompleted = true;
                 StateHasChanged();
             });
@@ -275,6 +311,12 @@ else
         var emailQuery = workspace.GetQuery(
             $"onboarding:email:{email}",
             $"nodeType:User content.email:{email}");
+        // Invitation-only allowlist: a Pending Invitation matching this verified email
+        // unlocks onboarding and is flipped to Accepted on success.
+        var inviteQuery = workspace.GetQuery(
+            $"onboarding:invite:{email}",
+            $"nodeType:Invitation content.email:{email}");
+        var jsonOptions = workspace.Hub.JsonSerializerOptions;
 
         // Observable.Using holds ImpersonateAsHub's IDisposable for the entire
         // subscription lifetime so every meshService.CreateNode call inside the
@@ -283,8 +325,8 @@ else
         var pipeline = Observable.Using(
             () => AccessService!.ImpersonateAsHub(PortalApplication!.Hub),
             _ => Observable
-                .CombineLatest(firstUserQuery, usernameQuery, emailQuery,
-                    (all, byName, byMail) => (all, byName, byMail))
+                .CombineLatest(firstUserQuery, usernameQuery, emailQuery, inviteQuery,
+                    (all, byName, byMail, invites) => (all, byName, byMail, invites))
                 .Take(1)
                 .SelectMany(checks =>
                 {
@@ -300,28 +342,49 @@ else
                             "Please sign in with that account."));
 
                     var isFirstUser = !checks.all.Any();
+                    var onboarding = Features.Value.Onboarding;
 
-                    // Closed-registration gate. When the operator disables
-                    // self-onboarding (Features:Onboarding:AllowSelfOnboarding=false)
-                    // we refuse to materialise the user — EXCEPT for the first-user
-                    // bootstrap (zero existing User nodes), which must always succeed
-                    // or the platform locks out with no administrator. The security
-                    // boundary is here (gating the CreateUser call), not the UI: the
-                    // page is the only caller that orchestrates CreateUser, and it
-                    // already knows isFirstUser from the synced firstUserQuery above.
-                    if (!Features.Value.Onboarding.AllowSelfOnboarding && !isFirstUser)
+                    // Pending invitation for this verified email, if any.
+                    var pendingInviteNode = checks.invites.FirstOrDefault(n =>
+                        InvitationService.TryGetInvitation(n, jsonOptions)
+                            is { Status: InvitationStatus.Pending });
+
+                    // Closed-registration gate. The security boundary is HERE (gating
+                    // the CreateUser call), not the UI: the page is the only caller that
+                    // orchestrates CreateUser. The first-user bootstrap (zero existing
+                    // User nodes) always succeeds or the platform locks out with no admin.
+                    //
+                    // Invitation-only takes precedence: when on, onboarding requires a
+                    // Pending invitation (regardless of AllowSelfOnboarding). Otherwise
+                    // fall back to the self-onboarding toggle.
+                    if (onboarding.InvitationOnly)
+                    {
+                        if (!isFirstUser && pendingInviteNode is null)
+                            return Observable.Throw<MeshNode>(new InvalidOperationException(
+                                "This portal is invitation-only and your email has not been " +
+                                "invited. Please contact your administrator for an invitation."));
+                    }
+                    else if (!onboarding.AllowSelfOnboarding && !isFirstUser)
+                    {
                         return Observable.Throw<MeshNode>(new InvalidOperationException(
                             "Registration is closed. Please contact your administrator " +
                             "to have an account created for you."));
+                    }
 
                     // Dual-write (3 rows) → self-AccessAssignment → optional
-                    // platform-Admin grant. All four steps are sequenced via
-                    // SelectMany so error / cancellation flows through one chain.
+                    // platform-Admin grant → mark the invitation Accepted. All steps are
+                    // sequenced via SelectMany so error / cancellation flows through one chain.
                     return OnboardingService.CreateUser(request)
                         .SelectMany(rootNode => OnboardingService.GrantSelfAdmin(username)
                             .Select(_ => rootNode))
                         .SelectMany(rootNode => isFirstUser
                             ? OnboardingService.GrantPlatformAdmin(username).Select(_ => rootNode)
+                            : Observable.Return(rootNode))
+                        .SelectMany(rootNode => pendingInviteNode is not null
+                            ? InvitationService.MarkAccepted(
+                                    pendingInviteNode,
+                                    InvitationService.TryGetInvitation(pendingInviteNode, jsonOptions)!)
+                                .Select(_ => rootNode)
                             : Observable.Return(rootNode));
                 }));
 

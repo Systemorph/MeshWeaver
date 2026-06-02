@@ -93,6 +93,7 @@
     <PackageVersion Include="Microsoft.Extensions.Logging.ApplicationInsights" Version="2.23.0" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Configuration" Version="10.0.7" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.7" />
+    <PackageVersion Include="Microsoft.Graph" Version="6.1.0" />
     <PackageVersion Include="Microsoft.Identity.Web" Version="4.9.0" />
     <PackageVersion Include="Microsoft.Identity.Web.Ui" Version="4.9.0" />
     <PackageVersion Include="Microsoft.Orleans.BroadcastChannel" Version="10.1.0" />

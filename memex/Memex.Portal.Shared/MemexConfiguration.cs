@@ -1,6 +1,7 @@
 ﻿using System.IdentityModel.Tokens.Jwt;
 using Memex.Portal.Shared.Api;
 using Memex.Portal.Shared.Authentication;
+using Memex.Portal.Shared.Email;
 using Memex.Portal.Shared.Settings;
 using Memex.Portal.Shared.Social;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -88,6 +89,8 @@ public static class MemexConfiguration
         // Onboarding service — pulls the three-row dual-write out of
         // Onboarding.razor so it's unit-testable end-to-end.
         services.AddScoped<Memex.Portal.Shared.Authentication.UserOnboardingService>();
+        // Invitation service — reads/writes Invitation nodes for invitation-only onboarding.
+        services.AddScoped<Memex.Portal.Shared.Authentication.InvitationService>();
 
         // Configure Radzen
         services.AddRadzenServices();
@@ -113,6 +116,19 @@ public static class MemexConfiguration
         // than re-reading the configuration section ad hoc.
         services.Configure<MemexFeatureOptions>(
             builder.Configuration.GetSection(MemexFeatureOptions.SectionName));
+
+        // System email (Microsoft Graph /sendMail). Disabled by default → NoOp sender so
+        // local dev and tests never send. When Email:Enabled=true, GraphEmailSender sends as
+        // the configured no-reply mailbox using the Mail.Send application permission. Backs the
+        // invitation flow (admin Invitations settings tab).
+        var emailOptions = builder.Configuration
+            .GetSection(EmailOptions.SectionName)
+            .Get<EmailOptions>() ?? new EmailOptions();
+        services.AddSingleton(emailOptions);
+        if (emailOptions.Enabled)
+            services.AddSingleton<IEmailSender, GraphEmailSender>();
+        else
+            services.AddSingleton<IEmailSender, NoOpEmailSender>();
 
         if (features.Ai.Clis.Copilot)
             services.AddCopilot(config =>
@@ -149,6 +165,20 @@ public static class MemexConfiguration
         // ModelProviderService backs the Models settings tab — users store
         // their own AI provider credentials as MeshNodes in their namespace.
         services.AddSingleton<Memex.Portal.Shared.Models.ModelProviderService>();
+
+        // Per-user CLI Connect (Settings → Models, CLI providers). The
+        // ConnectSessionManager is a mesh-scoped singleton holding the live
+        // login Process between "show URL" and "paste code" (instance dict,
+        // 5-min timeout). Each gated CLI registers its IConnectStrategy. The
+        // captured token is persisted as an encrypted ModelProvider via the
+        // ConnectTokenSink (seam over ModelProviderService, so the AI layer
+        // never references the portal assembly).
+        services.AddSingleton<MeshWeaver.AI.Connect.IConnectTokenSink, Memex.Portal.Shared.Models.ConnectTokenSink>();
+        services.AddSingleton<MeshWeaver.AI.Connect.ConnectSessionManager>();
+        if (features.Ai.Clis.ClaudeCode)
+            services.AddSingleton<MeshWeaver.AI.Connect.IConnectStrategy, MeshWeaver.AI.Connect.ClaudeConnectStrategy>();
+        if (features.Ai.Clis.Copilot)
+            services.AddSingleton<MeshWeaver.AI.Connect.IConnectStrategy, MeshWeaver.AI.Copilot.CopilotConnectStrategy>();
 
         // Social publishing — minimal registration for the LinkedIn connect + pull endpoints.
         // (The full hosted-service pipeline is gated behind AddSocialPublishing which needs
@@ -432,7 +462,8 @@ public static class MemexConfiguration
                         .AddDefaultLayoutAreas()
                         .AddThreadsLayoutArea()
                         .AddApiTokensSettingsTab()
-                        .AddModelsSettingsTab();
+                        .AddModelsSettingsTab()
+                        .AddInvitationsSettingsTab();
                 })
                 // Add activity tracking to record user access patterns via ActivityLogBundler
                 .AddActivityTracking();
