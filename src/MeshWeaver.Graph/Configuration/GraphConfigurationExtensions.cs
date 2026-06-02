@@ -48,6 +48,7 @@ public static class GraphConfigurationExtensions
                 .AddEmailType()
                 .AddEaCredentialType()
                 .AddTeamsConversationType()
+                .AddGraphSubscriptionType()
                 .AddActivityType()
                 .AddUserActivityType()
                 .AddKernel()

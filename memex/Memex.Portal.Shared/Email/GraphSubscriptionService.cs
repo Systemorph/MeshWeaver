@@ -1,21 +1,29 @@
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
-using MeshWeaver.Mesh;
+using MeshWeaver.Blazor.Infrastructure;    // PortalApplication
+using MeshWeaver.Data;                       // IWorkspace, GetWorkspace, GetMeshNodeStream
+using MeshWeaver.Graph.Configuration;        // GraphSubscriptionNodeType
+using MeshWeaver.Mesh;                        // EmailOptions, GraphSubscriptionState, MeshNode
+using MeshWeaver.Mesh.Security;               // ImpersonateAsSystem
+using MeshWeaver.Mesh.Services;               // IMeshService
+using MeshWeaver.Messaging;                   // AccessService
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace Memex.Portal.Shared.Email;
 
 /// <summary>
-/// Keeps a Microsoft Graph change-notification subscription alive on the mailbox inbox so inbound mail
-/// is delivered to <c>/api/email</c>. Creates it on startup and renews on a timer (messages
-/// subscriptions cap at ~3 days); deletes it on shutdown. Self-skips unless
-/// <c>Email:Enabled &amp;&amp; Email:InboundEnabled</c> and a <see cref="EmailOptions.WebhookBaseUrl"/> is set.
-///
-/// <para>Reactive end-to-end: the Graph calls are <see cref="GraphMail"/>'s pooled observables; this
-/// only Subscribes (the <see cref="IHostedService"/> boundary is Task-based by contract).</para>
+/// Keeps a Microsoft Graph change-notification subscription alive on the mailbox inbox so inbound mail is
+/// delivered to <c>/api/email</c>. The subscription id is <b>persisted as a <see cref="GraphSubscriptionState"/>
+/// node</b> (<c>Admin/_GraphSubscription/inbox</c>): on startup we read it and <b>renew/reuse</b> the
+/// existing subscription rather than creating a new one — so a portal restart no longer leaves a duplicate
+/// subscription behind (which would deliver every inbound email more than once). Renewed on a timer
+/// (messages subscriptions cap at ~3 days). Self-skips unless <c>Email:Enabled &amp;&amp; Email:InboundEnabled</c>
+/// and a <see cref="EmailOptions.WebhookBaseUrl"/> is set.
 /// </summary>
 public sealed class GraphSubscriptionService(
+    IServiceProvider rootServices,
     EmailOptions options,
     GraphMail graphMail,
     IHostApplicationLifetime lifetime,
@@ -23,7 +31,12 @@ public sealed class GraphSubscriptionService(
 {
     private static readonly TimeSpan RenewInterval = TimeSpan.FromHours(24);
     private readonly CompositeDisposable subscriptions = new();
+    private IServiceScope? scope;
+    private IWorkspace? workspace;
+    private IMeshService? meshService;
+    private AccessService? access;
     private string? subscriptionId;
+    private bool nodeExists;
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -33,17 +46,44 @@ public sealed class GraphSubscriptionService(
             return Task.CompletedTask;
         }
 
-        // Defer until the host is fully started: Graph validates the notificationUrl by POSTing a
-        // validationToken to it during subscription creation and expecting the echo within ~10s, so
-        // the webhook endpoint (/api/email on Kestrel) must already be listening — it is not yet
-        // during our StartAsync. ApplicationStarted fires once the server is accepting requests.
+        // Defer until the host is fully started: Graph validates the notificationUrl synchronously during
+        // subscription creation, so the webhook endpoint must already be listening; and reading the
+        // persisted state needs the mesh up. ApplicationStarted covers both.
         var url = $"{options.WebhookBaseUrl.TrimEnd('/')}/api/email";
-        lifetime.ApplicationStarted.Register(() =>
-        {
-            CreateOrRenew(url);
-            subscriptions.Add(Observable.Interval(RenewInterval).Subscribe(_ => CreateOrRenew(url)));
-        });
+        lifetime.ApplicationStarted.Register(() => Begin(url));
         return Task.CompletedTask;
+    }
+
+    private void Begin(string url)
+    {
+        try
+        {
+            scope = rootServices.CreateScope();
+            var hub = scope.ServiceProvider.GetRequiredService<PortalApplication>().Hub;
+            workspace = hub.GetWorkspace();
+            meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+            access = hub.ServiceProvider.GetRequiredService<AccessService>();
+
+            // Read the persisted subscription id so we RENEW the existing one instead of creating another.
+            workspace.GetMeshNodeStream(GraphSubscriptionNodeType.InboxPath)
+                .Select(n => n?.Content as GraphSubscriptionState)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(15))
+                .Subscribe(
+                    state =>
+                    {
+                        nodeExists = state is not null;
+                        subscriptionId = state?.SubscriptionId;
+                        CreateOrRenew(url);
+                    },
+                    _ => CreateOrRenew(url));   // no stored state (or read timed out) → create fresh
+
+            subscriptions.Add(Observable.Interval(RenewInterval).Subscribe(_ => CreateOrRenew(url)));
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "EmailSubscription: failed to start");
+        }
     }
 
     private void CreateOrRenew(string url)
@@ -51,23 +91,54 @@ public sealed class GraphSubscriptionService(
         var expiration = DateTimeOffset.UtcNow.AddDays(2);
         if (subscriptionId is { } id)
             graphMail.RenewSubscription(id, expiration).Subscribe(
-                _ => logger?.LogInformation("EmailSubscription: renewed {Id}", id),
-                ex => { logger?.LogWarning(ex, "EmailSubscription: renew failed — recreating"); subscriptionId = null; Create(url, expiration); });
+                _ => { logger?.LogInformation("EmailSubscription: renewed {Id}", id); Persist(id, url, expiration); },
+                ex =>
+                {
+                    // Stale id (expired / deleted server-side) → forget it and create a fresh one.
+                    logger?.LogWarning(ex, "EmailSubscription: renew failed — recreating");
+                    subscriptionId = null;
+                    Create(url, expiration);
+                });
         else
             Create(url, expiration);
     }
 
     private void Create(string url, DateTimeOffset expiration) =>
         graphMail.CreateInboxSubscription(url, options.SubscriptionClientState, expiration).Subscribe(
-            sub => { subscriptionId = sub?.Id; logger?.LogInformation("EmailSubscription: created {Id} → {Url}", subscriptionId, url); },
+            sub =>
+            {
+                subscriptionId = sub?.Id;
+                logger?.LogInformation("EmailSubscription: created {Id} -> {Url}", subscriptionId, url);
+                Persist(subscriptionId, url, expiration);
+            },
             ex => logger?.LogWarning(ex, "EmailSubscription: create failed for {Url}", url));
 
-    public Task StopAsync(CancellationToken cancellationToken)
+    /// <summary>Persist the live subscription id/expiry so the next restart renews it instead of duplicating.</summary>
+    private void Persist(string? subId, string url, DateTimeOffset expiration)
     {
-        if (subscriptionId is { } id)
-            graphMail.DeleteSubscription(id).Subscribe(_ => { }, _ => { });
-        return Task.CompletedTask;
+        if (meshService is null || access is null || string.IsNullOrEmpty(subId)) return;
+        var node = new MeshNode(GraphSubscriptionNodeType.NodeType, GraphSubscriptionNodeType.InboxPath)
+        {
+            Name = "Graph Subscription",
+            Content = new GraphSubscriptionState
+            {
+                SubscriptionId = subId,
+                Resource = graphMail.InboxResource,
+                NotificationUrl = url,
+                ExpiresAt = expiration
+            }
+        };
+        using (access.ImpersonateAsSystem())
+            (nodeExists ? meshService.UpdateNode(node) : meshService.CreateNode(node)).Subscribe(
+                _ => nodeExists = true,
+                ex => logger?.LogWarning(ex, "EmailSubscription: failed to persist subscription state"));
     }
 
-    public void Dispose() => subscriptions.Dispose();
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public void Dispose()
+    {
+        subscriptions.Dispose();
+        scope?.Dispose();
+    }
 }
