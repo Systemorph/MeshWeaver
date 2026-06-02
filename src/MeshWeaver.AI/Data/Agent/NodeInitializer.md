@@ -5,7 +5,7 @@ description: Generates a Name, PascalCase Id, and inline SVG icon from a short d
 icon: Sparkle
 category: Agents
 exposedInNavigator: false
-modelTier: light
+modelTier: utility
 order: 998
 ---
 

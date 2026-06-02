@@ -5,7 +5,7 @@ description: Writes a short 1-2 sentence description for a knowledge-graph node 
 icon: Sparkle
 category: Agents
 exposedInNavigator: false
-modelTier: light
+modelTier: utility
 order: 997
 ---
 

@@ -1,3 +1,4 @@
+using System;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using MeshWeaver.Mesh;
@@ -45,7 +46,8 @@ namespace Memex.Portal.Shared.Authentication;
 public sealed class UserOnboardingService(
     IMeshService meshService,
     AccessService accessService,
-    ILogger<UserOnboardingService>? logger = null)
+    ILogger<UserOnboardingService>? logger = null,
+    IIconGenerator? iconGenerator = null)
 {
     /// <summary>
     /// Drives the full dual-write. Returns a cold observable that, on Subscribe,
@@ -112,7 +114,41 @@ public sealed class UserOnboardingService(
                     .Do(__ => logger?.LogInformation(
                         "Onboarding: wrote login-catalog mirror at user.mesh_nodes (namespace=User, id={Username})",
                         username))
-                    .Select(__ => rootNode)));
+                    .Select(__ => rootNode)))
+            // Best-effort: once the user node exists, generate an inline-SVG avatar in the
+            // background (the configurable utility model, via IIconGenerator → NodeInitializer)
+            // and stamp it onto the node's Icon — exactly like thread auto-naming runs AFTER a
+            // thread is created. Skipped when the user supplied an avatar or no generator is wired.
+            .Do(rootNode => MaybeGenerateAvatar(rootNode, fullDisplayName, avatarIcon));
+    }
+
+    /// <summary>
+    /// Fire-and-forget avatar generation for a freshly-created User node. Reuses the existing
+    /// <see cref="IIconGenerator"/> (the <c>NodeInitializer</c> agent on the configurable utility
+    /// model) to produce an inline SVG, then writes it to the node's <see cref="MeshNode.Icon"/>
+    /// as System (the brand-new partition root has no usable caller identity on this background
+    /// callback). Best-effort: bounded by a timeout and swallows failures so a missing/un-configured
+    /// utility model never blocks onboarding — the user simply keeps the initials fallback avatar.
+    /// </summary>
+    private void MaybeGenerateAvatar(MeshNode userNode, string displayName, string? providedIcon)
+    {
+        if (iconGenerator is null || !string.IsNullOrWhiteSpace(providedIcon))
+            return;
+
+        iconGenerator
+            .GenerateSvgAsync(displayName, $"A friendly, minimal circular profile avatar for {displayName}")
+            .Timeout(TimeSpan.FromSeconds(45))
+            .Subscribe(
+                svg =>
+                {
+                    using (accessService.ImpersonateAsSystem())
+                        meshService.UpdateNode(userNode with { Icon = svg })
+                            .Subscribe(
+                                _ => logger?.LogInformation("Onboarding: generated avatar for '{User}'", userNode.Id),
+                                ex => logger?.LogWarning(ex, "Onboarding: avatar Icon write failed for '{User}'", userNode.Id));
+                },
+                ex => logger?.LogInformation(
+                    ex, "Onboarding: avatar generation skipped for '{User}' (no utility model or error)", userNode.Id));
     }
 
     /// <summary>
