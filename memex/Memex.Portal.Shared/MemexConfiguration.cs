@@ -130,6 +130,19 @@ public static class MemexConfiguration
         else
             services.AddSingleton<IEmailSender, NoOpEmailSender>();
 
+        // Inbound email→agent channel (intake). Mail is treated as a chat device: each inbound email
+        // finds-or-creates a conversation thread and appends its latest message (referencing the email
+        // by path). The Graph subscription self-skips unless Email:Enabled && Email:InboundEnabled.
+        services.AddSingleton<GraphMail>(sp => new GraphMail(
+            sp.GetRequiredService<EmailOptions>(),
+            sp.GetRequiredService<PortalApplication>().Hub.ServiceProvider
+                .GetService<MeshWeaver.Mesh.Threading.IoPoolRegistry>()));
+        services.AddSingleton<EmailInboundProcessor>(sp => new EmailInboundProcessor(
+            sp.GetRequiredService<PortalApplication>().Hub,
+            sp.GetRequiredService<GraphMail>(),
+            sp.GetService<Microsoft.Extensions.Logging.ILogger<EmailInboundProcessor>>()));
+        services.AddHostedService<GraphSubscriptionService>();
+
         if (features.Ai.Clis.Copilot)
             services.AddCopilot(config =>
                 builder.Configuration.GetSection("Copilot").Bind(config));

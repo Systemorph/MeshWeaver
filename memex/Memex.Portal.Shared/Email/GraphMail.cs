@@ -21,18 +21,25 @@ namespace Memex.Portal.Shared.Email;
 public sealed class GraphMail
 {
     private readonly EmailOptions _options;
-    private readonly GraphServiceClient _graph;
+    private readonly Lazy<GraphServiceClient> _graph;
     private readonly IIoPool _http;
 
     public GraphMail(EmailOptions options, IoPoolRegistry? ioPools = null)
     {
         _options = options;
-        TokenCredential credential = options.UseManagedIdentity
-            ? new DefaultAzureCredential()
-            : new ClientSecretCredential(options.TenantId, options.ClientId, options.ClientSecret);
-        _graph = new GraphServiceClient(credential, ["https://graph.microsoft.com/.default"]);
+        // Built lazily so the type is constructible without valid creds (unit tests that exercise
+        // only the routing never touch Graph; the credential would otherwise throw on empty values).
+        _graph = new Lazy<GraphServiceClient>(() =>
+        {
+            TokenCredential credential = options.UseManagedIdentity
+                ? new DefaultAzureCredential()
+                : new ClientSecretCredential(options.TenantId, options.ClientId, options.ClientSecret);
+            return new GraphServiceClient(credential, ["https://graph.microsoft.com/.default"]);
+        });
         _http = ioPools?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
     }
+
+    private GraphServiceClient Client => _graph.Value;
 
     /// <summary>The mailbox the portal sends/receives as (e.g. <c>memex@systemorph.com</c>).</summary>
     public string Mailbox => _options.NoReplyAddress;
@@ -41,21 +48,21 @@ public sealed class GraphMail
     public string InboxResource => $"users/{_options.NoReplyAddress}/mailFolders('inbox')/messages";
 
     public IObservable<Message?> GetMessage(string messageId) =>
-        _http.Invoke(ct => _graph.Users[_options.NoReplyAddress].Messages[messageId].GetAsync(r =>
+        _http.Invoke(ct => Client.Users[_options.NoReplyAddress].Messages[messageId].GetAsync(r =>
             r.QueryParameters.Select =
                 ["from", "subject", "body", "conversationId", "internetMessageId", "toRecipients", "isRead"], ct));
 
     public IObservable<Unit> MarkRead(string messageId) =>
         _http.Invoke(async ct =>
         {
-            await _graph.Users[_options.NoReplyAddress].Messages[messageId]
+            await Client.Users[_options.NoReplyAddress].Messages[messageId]
                 .PatchAsync(new Message { IsRead = true }, cancellationToken: ct);
             return Unit.Default;
         });
 
     public IObservable<Subscription?> CreateInboxSubscription(
         string notificationUrl, string clientState, DateTimeOffset expiration) =>
-        _http.Invoke(ct => _graph.Subscriptions.PostAsync(new Subscription
+        _http.Invoke(ct => Client.Subscriptions.PostAsync(new Subscription
         {
             ChangeType = "created",
             NotificationUrl = notificationUrl,
@@ -65,12 +72,12 @@ public sealed class GraphMail
         }, cancellationToken: ct));
 
     public IObservable<SubscriptionCollectionResponse?> ListSubscriptions() =>
-        _http.Invoke(ct => _graph.Subscriptions.GetAsync(cancellationToken: ct));
+        _http.Invoke(ct => Client.Subscriptions.GetAsync(cancellationToken: ct));
 
     public IObservable<Unit> RenewSubscription(string subscriptionId, DateTimeOffset expiration) =>
         _http.Invoke(async ct =>
         {
-            await _graph.Subscriptions[subscriptionId]
+            await Client.Subscriptions[subscriptionId]
                 .PatchAsync(new Subscription { ExpirationDateTime = expiration }, cancellationToken: ct);
             return Unit.Default;
         });
@@ -78,7 +85,7 @@ public sealed class GraphMail
     public IObservable<Unit> DeleteSubscription(string subscriptionId) =>
         _http.Invoke(async ct =>
         {
-            await _graph.Subscriptions[subscriptionId].DeleteAsync(cancellationToken: ct);
+            await Client.Subscriptions[subscriptionId].DeleteAsync(cancellationToken: ct);
             return Unit.Default;
         });
 }

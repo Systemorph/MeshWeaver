@@ -76,6 +76,7 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
         "/mcp",
         "/signin-",
         "/bootstrap",
+        "/api/email",
     };
 
     public async Task InvokeAsync(HttpContext context)

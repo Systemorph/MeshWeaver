@@ -2,6 +2,7 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using MeshWeaver.Mesh;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 
@@ -17,6 +18,7 @@ namespace Memex.Portal.Shared.Email;
 /// <see cref="EmailInboundProcessor"/> via a fire-and-forget Subscribe, return 202 immediately).</para>
 /// </summary>
 [ApiController]
+[AllowAnonymous]
 [Route("api/email")]
 public sealed class EmailWebhookController(
     EmailInboundProcessor processor,
