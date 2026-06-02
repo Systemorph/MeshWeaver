@@ -57,7 +57,9 @@ public static class HubThreadExtensions
         string? createdBy = null,
         string? authorName = null,
         Action<MeshNode>? onCreated = null,
-        Action<string>? onError = null)
+        Action<string>? onError = null,
+        string? mainNode = null,
+        string? speakingId = null)
     {
         ArgumentNullException.ThrowIfNull(hub);
         if (string.IsNullOrEmpty(namespacePath))
@@ -66,7 +68,11 @@ public static class HubThreadExtensions
             return;
         }
 
-        var threadNode = ThreadNodeType.BuildThreadNode(namespacePath, userText, createdBy);
+        var threadNode = ThreadNodeType.BuildThreadNode(namespacePath, userText, createdBy, speakingId);
+        // Optional: point the thread at an existing node (e.g. an inbound Email) as its MainNode,
+        // so the agent's context is that node and consumers can navigate thread → source.
+        if (!string.IsNullOrEmpty(mainNode))
+            threadNode = threadNode with { MainNode = mainNode };
         var firstMessageId = Guid.NewGuid().ToString("N")[..8];
         var firstMessage = ThreadInput.CreateUserMessage(
             userText,

@@ -43,6 +43,7 @@ public static class GraphConfigurationExtensions
                 .AddApprovalType()
                 .AddNotificationType()
                 .AddInvitationType()
+                .AddEmailType()
                 .AddActivityType()
                 .AddUserActivityType()
                 .AddKernel()

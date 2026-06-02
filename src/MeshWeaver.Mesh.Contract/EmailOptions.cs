@@ -35,4 +35,19 @@ public sealed record EmailOptions
     /// instead of a client secret. Grant the identity the <c>Mail.Send</c> app role.
     /// </summary>
     public bool UseManagedIdentity { get; init; }
+
+    // --- Inbound (email-as-agent channel) -----------------------------------
+
+    /// <summary>
+    /// When true, the portal subscribes to the mailbox inbox (Microsoft Graph change notifications)
+    /// and routes inbound mail to agent threads (known users) or the admin inbox (everyone else).
+    /// Requires the <c>Mail.ReadWrite</c> application permission and a public <see cref="WebhookBaseUrl"/>.
+    /// </summary>
+    public bool InboundEnabled { get; init; }
+
+    /// <summary>Public base URL Graph calls back for notifications (e.g. <c>https://memex.systemorph.com</c>); the webhook is <c>{WebhookBaseUrl}/api/email</c>.</summary>
+    public string WebhookBaseUrl { get; init; } = "";
+
+    /// <summary>Shared secret echoed by Graph on every notification; the webhook rejects mismatches. Generate a random value per deployment.</summary>
+    public string SubscriptionClientState { get; init; } = "";
 }

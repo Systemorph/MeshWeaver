@@ -97,9 +97,10 @@ public static class ThreadNodeType
     /// <param name="contextPath">The namespace/context path (e.g., "User/Roland")</param>
     /// <param name="messageText">First message text — used for name and speaking ID</param>
     /// <param name="createdBy">User ID who creates the thread</param>
-    public static MeshNode BuildThreadNode(string contextPath, string messageText, string? createdBy = null)
+    public static MeshNode BuildThreadNode(string contextPath, string messageText, string? createdBy = null,
+        string? speakingId = null)
     {
-        var speakingId = GenerateSpeakingId(messageText);
+        speakingId ??= GenerateSpeakingId(messageText);
         // Add _Thread partition for top-level threads. Sub-threads (delegations)
         // live directly under the parent response message — no nested _Thread.
         var ns = string.IsNullOrEmpty(contextPath)
