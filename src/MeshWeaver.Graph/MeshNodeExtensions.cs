@@ -1,6 +1,5 @@
 ﻿using System.ComponentModel;
 using System.Reactive.Linq;
-using System.Runtime.CompilerServices;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Domain;
@@ -11,7 +10,6 @@ using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -132,24 +130,6 @@ public static class MeshNodeExtensions
             .WithHandler<TrackActivityRequest>(HandleTrackActivity);
     }
 
-    // Per-workspace cache of activity stream handles. The handle (and its underlying
-    // RemoteStream subscription) stays warm for ActivityStreamCacheTtl after each touch
-    // — repeat tracks for the same activity path skip the per-node-hub cold-subscribe
-    // round-trip. Keyed by IWorkspace via ConditionalWeakTable so caches GC with their
-    // workspace and we don't pin dead hubs in long-lived test processes.
-    private static readonly ConditionalWeakTable<IWorkspace, IMemoryCache> _activityStreamCaches = new();
-    private static readonly TimeSpan ActivityStreamCacheTtl = TimeSpan.FromMinutes(5);
-
-    private static MeshNodeStreamHandle GetCachedActivityStream(IWorkspace workspace, string path)
-    {
-        var cache = _activityStreamCaches.GetValue(workspace, _ => new MemoryCache(new MemoryCacheOptions()));
-        return cache.GetOrCreate(path, entry =>
-        {
-            entry.SlidingExpiration = ActivityStreamCacheTtl;
-            return workspace.GetMeshNodeStream(path);
-        })!;
-    }
-
     private static IMessageDelivery HandleTrackActivity(
         IMessageHub hub,
         IMessageDelivery<TrackActivityRequest> delivery)
@@ -192,9 +172,12 @@ public static class MeshNodeExtensions
             "TrackActivity ENTER: userId={UserId} activityPath={Path} type={ActivityType}",
             req.UserId, activityPath, req.ActivityType);
 
-        var stream = GetCachedActivityStream(workspace, activityPath);
+        // workspace.GetMeshNodeStream is itself backed by the process-wide
+        // IMeshNodeStreamCache (MeshNodeStreamCache.cs) — repeat tracks for the
+        // same activity path reuse the warm handle without a second cache layer.
+        var stream = workspace.GetMeshNodeStream(activityPath);
 
-        // Read latest from the cached RemoteStream → fold into new record → write.
+        // Read latest from the stream → fold into new record → write.
         // The probe's two miss-modes:
         //   1. Per-node hub doesn't exist yet (first-ever track for this path):
         //      routing returns DeliveryFailureException("No node found at ...")

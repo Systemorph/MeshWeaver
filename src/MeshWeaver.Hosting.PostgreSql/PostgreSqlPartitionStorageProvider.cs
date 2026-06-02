@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Reactive.Linq;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.Logging;
@@ -185,6 +186,40 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
             Versioned = true,
         };
         return EnsureSchemaAsync(def, ct);
+    }
+
+    /// <summary>
+    /// Read-only existence probe (see <see cref="IPartitionStorageProvider.PartitionExistsAsync"/>).
+    /// Answers from <see cref="PgPartitionCache"/> — never creates a schema. Maps the
+    /// cached <see cref="PartitionState"/> to the tri-state contract:
+    /// <list type="bullet">
+    ///   <item><see cref="PartitionState.Exists"/> → <c>true</c> (schema present).</item>
+    ///   <item><see cref="PartitionState.PendingCreate"/> → <c>false</c> (probe ran,
+    ///     <c>information_schema.schemata</c> has no matching schema — the partition
+    ///     genuinely does not exist; lazy-create would otherwise materialise it).</item>
+    ///   <item><see cref="PartitionState.Absent"/> → <c>null</c> (the probe itself
+    ///     failed; indeterminate, so the guard must NOT reject on it).</item>
+    /// </list>
+    /// The probe resolves the schema by <c>lower(namespace)</c>, which is exact for
+    /// user/space partitions (schema == lower(id)); the namespace≠schema system
+    /// partitions (the <c>_Access</c>/<c>_Activity</c>/… globals) are exempted by the
+    /// guard before it ever calls this, and the named system schemas
+    /// (admin/auth/portal/kernel/doc) resolve correctly by lower-case match.
+    /// </summary>
+    public IObservable<bool?> PartitionExists(string @namespace)
+    {
+        if (string.IsNullOrEmpty(@namespace)) return Observable.Return<bool?>(null);
+        // GetOrProbe is already reactive: it emits the cached state or, on a miss, fires the
+        // information_schema probe (Observable.FromAsync inside PgPartitionCache) and emits when
+        // it lands. The async I/O therefore stays at the IO boundary; we just project the state.
+        return _cache.GetOrProbe(@namespace)
+            .Take(1)
+            .Select(state => state switch
+            {
+                PartitionState.Exists => (bool?)true,
+                PartitionState.PendingCreate => false,
+                _ => (bool?)null,
+            });
     }
 
     /// <summary>

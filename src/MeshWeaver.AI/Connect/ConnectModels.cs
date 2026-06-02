@@ -26,10 +26,17 @@ public abstract record ConnectStatus
 {
     private ConnectStatus() { }
 
-    public sealed record Pending(ConnectChallenge Challenge) : ConnectStatus;
-    public sealed record Succeeded(string ProviderNodePath, string KeyFingerprint) : ConnectStatus;
-    public sealed record Failed(string Reason) : ConnectStatus;
-    public sealed record Cancelled : ConnectStatus;
+    /// <summary>No live session — the card renders the NotConnected / Connect button branch.</summary>
+    public sealed record NotConnected : ConnectStatus;
+
+    /// <summary>A login is in flight: the challenge URL (+ code) is shown.</summary>
+    public sealed record Connecting(ConnectChallenge Challenge) : ConnectStatus;
+
+    /// <summary>Login completed and the token was stored as a <c>ModelProvider</c>.</summary>
+    public sealed record Connected(string ProviderNodePath, string KeyFingerprint) : ConnectStatus;
+
+    /// <summary>The login failed / timed out / was cancelled.</summary>
+    public sealed record Error(string Reason) : ConnectStatus;
 }
 
 /// <summary>
@@ -66,17 +73,49 @@ public sealed class ConnectSession : IDisposable
 }
 
 /// <summary>
-/// Per-provider native-login driver. <see cref="Begin"/> starts the CLI's own login and emits a
-/// <see cref="ConnectChallenge"/> once the URL (and any user code) is known; <see cref="Complete"/>
-/// drives it to completion — writing the pasted code to stdin (Claude) or polling auth status
-/// (Copilot) — and emits the captured raw token exactly once. Both return cold observables; the
-/// session manager subscribes.
+/// Per-provider native-login driver.
+///
+/// <para><see cref="IsLoggedIn"/> is the cheap, always-run probe each CLI card calls on render —
+/// it inspects the user's CLI config dir (Claude's <c>.credentials.json</c> / Copilot's SDK auth
+/// state) and decides whether to show the Connected state or the Connect button.</para>
+///
+/// <para><see cref="StartConnect"/> begins the CLI's own login and emits a
+/// <see cref="ConnectChallenge"/> once the URL (and any user code) is known.
+/// <see cref="CompleteConnect"/> drives it to completion — writing the pasted code to stdin
+/// (Claude, <see cref="RequiresPastedCode"/> <c>true</c>) or polling auth status (Copilot,
+/// <c>false</c>) — and emits the captured raw token exactly once. Both return cold observables;
+/// the session manager subscribes. <c>Observable.FromAsync</c> is used only at the subprocess /
+/// SDK boundary (per the "nothing async ever" rule).</para>
 /// </summary>
 public interface IConnectStrategy
 {
+    /// <summary>Which CLI this strategy logs in.</summary>
     ConnectProvider Provider { get; }
 
-    IObservable<ConnectChallenge> Begin(ConnectSession session, string ownerPath);
+    /// <summary>
+    /// True when the flow expects a code to be pasted back into the portal (Claude Code), false
+    /// when it completes by polling the CLI's auth status (Copilot device-flow). Drives whether the
+    /// inline card renders a paste field or an auto-polling device-code block.
+    /// </summary>
+    bool RequiresPastedCode { get; }
 
-    IObservable<string> Complete(ConnectSession session, string? pastedCode);
+    /// <summary>
+    /// Cheap login-status probe for the given user CLI config dir. Cold; the card subscribes on
+    /// render and shows the Connected state (true) or the Connect button (false).
+    /// </summary>
+    IObservable<bool> IsLoggedIn(string? userConfigDir);
+
+    /// <summary>
+    /// Start the CLI's native login under <paramref name="session"/> and emit the
+    /// <see cref="ConnectChallenge"/> (auth URL, optional device code) once known. Stashes the live
+    /// process / SDK client on the session so <see cref="CompleteConnect"/> can drive it.
+    /// </summary>
+    IObservable<ConnectChallenge> StartConnect(ConnectSession session, string ownerPath);
+
+    /// <summary>
+    /// Complete the login — paste <paramref name="pastedCode"/> to the process's stdin (Claude) or
+    /// poll the device-flow auth status (Copilot, <paramref name="pastedCode"/> ignored) — and emit
+    /// the captured raw token exactly once.
+    /// </summary>
+    IObservable<string> CompleteConnect(ConnectSession session, string? pastedCode);
 }

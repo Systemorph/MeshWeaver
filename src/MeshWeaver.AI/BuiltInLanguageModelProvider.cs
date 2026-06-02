@@ -254,7 +254,8 @@ public record LanguageModelCatalogSource(
     string? DisplayLabel = null,
     string? DefaultEndpoint = null,
     ImmutableArray<string> DefaultModelIds = default,
-    bool RequiresApiKey = true)
+    bool RequiresApiKey = true,
+    ProviderKind Kind = ProviderKind.Api)
 {
     /// <summary>Effective display label — falls back to <see cref="ProviderName"/> when not supplied.</summary>
     public string EffectiveLabel => DisplayLabel ?? ProviderName;
@@ -262,4 +263,26 @@ public record LanguageModelCatalogSource(
     /// <summary>Defensive default for <see cref="DefaultModelIds"/> — record syntax can leave it uninitialised.</summary>
     public ImmutableArray<string> EffectiveModelIds =>
         DefaultModelIds.IsDefault ? ImmutableArray<string>.Empty : DefaultModelIds;
+}
+
+/// <summary>
+/// How a provider authenticates and what the Settings → Models card renders for it.
+///
+/// <list type="bullet">
+///   <item><see cref="Api"/> — bring-your-own-key (Azure AI Foundry, Azure OpenAI,
+///         Anthropic, OpenAI). The card shows an endpoint/key form plus a fetched,
+///         checkable list of models to enable.</item>
+///   <item><see cref="Cli"/> — co-hosted, subscription-based CLI (Claude Code,
+///         GitHub Copilot). No model list; the card shows a login status dot plus a
+///         Connect button that delegates to the CLI's native login (paste-code for
+///         Claude, device-flow for Copilot).</item>
+/// </list>
+/// </summary>
+public enum ProviderKind
+{
+    /// <summary>Bring-your-own-key provider — endpoint/key form + model list.</summary>
+    Api,
+
+    /// <summary>Co-hosted CLI provider — login status + Connect, no model list.</summary>
+    Cli,
 }

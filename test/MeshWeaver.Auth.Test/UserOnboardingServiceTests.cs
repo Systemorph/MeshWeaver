@@ -57,11 +57,11 @@ public class UserOnboardingServiceTests(ITestOutputHelper output) : MonolithMesh
             .SetCircuitContext(new AccessContext { ObjectId = userId, Name = userId });
 
     /// <summary>
-    /// The service emits the partition-root MeshNode AND persists both
-    /// rows (a/b) such that subsequent reads find them at the expected paths.
+    /// The service emits the partition-root MeshNode and persists exactly that one row
+    /// (no User/Auth mirror write); subsequent reads find it at the bare <c>{username}</c> path.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public void CreateUser_WritesBothRows()
+    public void CreateUser_WritesPartitionRootOnly_NoUserMirror()
     {
         var username = $"obtest-{Guid.NewGuid():N}".ToLowerInvariant()[..16];
 
@@ -99,24 +99,26 @@ public class UserOnboardingServiceTests(ITestOutputHelper output) : MonolithMesh
         partitionRoot!.NodeType.Should().Be("User");
         partitionRoot.Namespace.Should().BeNullOrEmpty();
 
-        // (b) User-catalog mirror — path = "User/{username}", ns = "User"
+        // (b) NO User-catalog mirror is written anymore. The legacy
+        // `new MeshNode(username, "User")` write routed to the unregistered `User`
+        // first-segment and lazily provisioned a stray `user` schema; it is gone.
+        // Login now resolves `nodeType:User` via the Auth partition (fed by the V27
+        // mirror trigger from this partition-root write) — see CreateUser_LoginQueryFindsUserByEmail.
         var catalogMirror = ReadNode($"User/{username}").Should().Emit();
-        catalogMirror.Should().NotBeNull(
-            "user-catalog mirror at user.mesh_nodes (ns=User) is what the login " +
-            "query `nodeType:User content.email:X` scans — without it, every signed-in user " +
-            "bounces back to /onboarding");
-        catalogMirror!.NodeType.Should().Be("User");
-        catalogMirror.Namespace.Should().Be("User");
+        catalogMirror.Should().BeNull(
+            "onboarding must NOT write into the User/Auth mirror partition — the per-user " +
+            "partition root is the single onboarding write; the auth mirror is maintained by the trigger");
 
-        // No Admin/Partition catalog entry is emitted anymore — the path-routing
+        // No Admin/Partition catalog entry is emitted either — the path-routing
         // adapter's PendingCreate branch creates the per-user schema lazily on
         // the first write to {username}/... (see PostgreSqlPathRoutingAdapter.cs).
     }
 
     /// <summary>
     /// Login query (the actual one used by <c>OnboardingMiddleware.FindUserByEmail</c>)
-    /// must find the just-created user by email. This is the contract that the
-    /// catalog-mirror row (b) exists for.
+    /// must find the just-created user by email. With the User-catalog mirror write removed,
+    /// this is now served by the partition-root User node directly (the query is
+    /// namespace-agnostic; in prod the Auth mirror trigger also surfaces it in the Auth schema).
     /// </summary>
     [Fact(Timeout = 30000)]
     public void CreateUser_LoginQueryFindsUserByEmail()

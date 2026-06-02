@@ -53,6 +53,21 @@ public sealed record OnboardingFeatureOptions
     /// existing "no existing User nodes" detection in the onboarding flow.</para>
     /// </summary>
     public bool AllowSelfOnboarding { get; init; } = true;
+
+    /// <summary>
+    /// When <c>true</c>, onboarding is allowed ONLY for an email that has an outstanding
+    /// (<see cref="MeshWeaver.Mesh.InvitationStatus.Pending"/>) <see cref="MeshWeaver.Mesh.Invitation"/>.
+    /// An admin issues invitations from the "Invitations" settings tab; the invited person is
+    /// emailed and, when they sign in via the IdP, the verified email is matched against an
+    /// outstanding invitation. Any non-invited email is refused at the onboarding gate.
+    ///
+    /// <para>Independent of <see cref="AllowSelfOnboarding"/>: when invitation-only is on it is the
+    /// binding gate (an invited email onboards even if self-onboarding is also disabled). The
+    /// <b>first-user bootstrap exception</b> still applies — a brand-new deployment with zero
+    /// existing User nodes always lets the very first user onboard so the platform never locks out.
+    /// Default <c>false</c> preserves current behaviour.</para>
+    /// </summary>
+    public bool InvitationOnly { get; init; } = false;
 }
 
 /// <summary>

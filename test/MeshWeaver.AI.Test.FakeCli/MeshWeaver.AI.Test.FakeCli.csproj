@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    A deterministic, dependency-free fake of a CLI login (claude setup-token /
+    copilot login) for ConnectStrategy tests. It prints an auth URL on stdout,
+    reads a pasted code from stdin, then prints a token — exactly the shape the
+    paste-code IConnectStrategy drives. No external CLI, no quota, no TTY needed,
+    so it runs the same on Windows and in Linux CI. The ConnectStrategy points
+    at the built executable via ClaudeConnectOptions.FileName.
+
+    Lives under test/ but is NOT a test project — strip the xUnit / Test.Sdk
+    package + the Reactive.Assertions reference that test/Directory.Build.props
+    injects, and keep our own top-level Program.cs as the entry point.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>false</IsTestProject>
+    <Nullable>enable</Nullable>
+    <VSTestLogger></VSTestLogger>
+  </PropertyGroup>
+
+  <!-- Drop everything test/Directory.Build.props injected — this is a plain console exe. -->
+  <ItemGroup>
+    <PackageReference Remove="Microsoft.NET.Test.Sdk" />
+    <PackageReference Remove="xunit.v3" />
+    <PackageReference Remove="xunit.runner.visualstudio" />
+    <PackageReference Remove="xunit.v3.runner.console" />
+    <ProjectReference Remove="$(MSBuildThisFileDirectory)..\src\MeshWeaver.Reactive.Assertions\MeshWeaver.Reactive.Assertions.csproj" />
+    <Using Remove="MeshWeaver.Reactive.Assertions" />
+    <Using Remove="Xunit.ITestOutputHelper" />
+  </ItemGroup>
+</Project>

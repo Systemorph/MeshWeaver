@@ -30,7 +30,8 @@ public static class CopilotExtensions
             DisplayLabel: "GitHub Copilot",
             DefaultEndpoint: null,
             DefaultModelIds: ImmutableArray<string>.Empty,   // retrieved live from the CLI — never hard-coded
-            RequiresApiKey: false));
+            RequiresApiKey: false,
+            Kind: ProviderKind.Cli));
         return builder;
     }
 

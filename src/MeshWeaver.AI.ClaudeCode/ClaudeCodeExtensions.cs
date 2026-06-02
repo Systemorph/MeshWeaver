@@ -29,7 +29,8 @@ public static class ClaudeCodeExtensions
             DisplayLabel: "Claude Code (my subscription)",
             DefaultEndpoint: null,
             DefaultModelIds: ImmutableArray.Create("sonnet", "opus", "haiku"),
-            RequiresApiKey: true));
+            RequiresApiKey: true,
+            Kind: ProviderKind.Cli));
         return builder;
     }
 

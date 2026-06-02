@@ -118,7 +118,9 @@ public static class ModelProviderNodeType
         // Treated as a regular content type. Permission gating happens in
         // CreateNodePermissionAttribute.GetPermissionForNodeType → Permission.Api.
         IsSatelliteType = false,
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        // Creatable: an admin can author a ModelProvider node directly in a space
+        // (e.g. Systemorph/_Provider/AzureFoundry). Still hidden from search.
+        ExcludeFromContext = new HashSet<string> { "search" },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<ModelProviderConfiguration>())

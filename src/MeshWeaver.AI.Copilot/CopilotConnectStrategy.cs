@@ -1,0 +1,233 @@
+using System.Diagnostics;
+using System.Reactive.Linq;
+using System.Text.RegularExpressions;
+using GitHub.Copilot.SDK;
+using MeshWeaver.AI.Connect;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+
+namespace MeshWeaver.AI.Copilot;
+
+/// <summary>
+/// Drives GitHub Copilot's device-flow login for the per-user Connect flow.
+///
+/// <para><b>Mechanism (probed 2026-06-01, GitHub.Copilot.SDK 1.0.0-beta.3):</b> the SDK exposes
+/// <c>GetAuthStatusAsync()</c> → <c>GetAuthStatusResponse { IsAuthenticated, Login, AuthType }</c>
+/// (the reliable login-status probe used by <see cref="IsLoggedIn"/>), but it exposes <b>no</b>
+/// device-flow / sign-in method — it expects an already-authenticated host (a GitHub token via the
+/// <c>GitHubToken</c> option or <c>UseLoggedInUser</c> reading the host's <c>gh</c>/Copilot CLI
+/// auth). So the device-code flow itself has to be driven by the <c>copilot</c> CLI subprocess,
+/// which (like <c>claude setup-token</c>) renders an interactive UI and is <b>TTY-gated</b> — it
+/// won't emit a scrapeable device code over a redirected pipe.</para>
+///
+/// <para>This strategy therefore implements the device-flow shape: <see cref="StartConnect"/> spawns
+/// the configured login command and scrapes the <c>github.com/login/device</c> URL + the
+/// <c>XXXX-XXXX</c> user code; <see cref="CompleteConnect"/> auto-polls
+/// <c>GetAuthStatusAsync().IsAuthenticated</c> until the user finishes in the browser, then returns
+/// the captured GitHub token. With the default <c>copilot</c> command the device-code scrape will
+/// NOT work headlessly until a PTY wrapper lands; the login-status probe (the part the spec asks for
+/// on every render) DOES work via the SDK.</para>
+///
+/// <para>TODO(copilot-pty): the Copilot CLI device-login is TTY-gated; wrap the spawn in a
+/// pseudo-terminal so the device code becomes scrapeable, OR adopt a real device-flow API if a
+/// future SDK exposes one. The token captured here is whatever the CLI persists to the host's
+/// Copilot auth; <see cref="CopilotConnectOptions.TokenEnvironmentVariable"/> lets a test inject it.
+/// Real-CLI E2E gated behind <c>CLAUDE_CONNECT_E2E=1</c>.</para>
+/// </summary>
+public sealed class CopilotConnectStrategy : IConnectStrategy
+{
+    private readonly IServiceProvider services;
+    private readonly ILogger<CopilotConnectStrategy>? logger;
+
+    public CopilotConnectStrategy(IServiceProvider services)
+    {
+        this.services = services;
+        logger = services.GetService<ILoggerFactory>()?.CreateLogger<CopilotConnectStrategy>();
+    }
+
+    public ConnectProvider Provider => ConnectProvider.Copilot;
+
+    /// <summary>Copilot is device-flow — nothing to paste; the manager auto-polls to completion.</summary>
+    public bool RequiresPastedCode => false;
+
+    private CopilotConnectOptions Options =>
+        services.GetService<IOptions<CopilotConnectOptions>>()?.Value ?? new CopilotConnectOptions();
+
+    private CopilotConfiguration CopilotConfig =>
+        services.GetService<IOptions<CopilotConfiguration>>()?.Value ?? new CopilotConfiguration();
+
+    /// <summary>
+    /// Cheap login-status probe — starts the SDK client (under the user's Copilot home if isolated)
+    /// and reads <c>GetAuthStatusAsync().IsAuthenticated</c>. This is the genuinely
+    /// headless-confirmable part of the Copilot flow.
+    /// </summary>
+    public IObservable<bool> IsLoggedIn(string? userConfigDir)
+        => Observable.FromAsync(ct => GetIsAuthenticatedAsync(userConfigDir, ct));
+
+    public IObservable<ConnectChallenge> StartConnect(ConnectSession session, string ownerPath)
+    {
+        var options = Options;
+        return Observable.FromAsync(ct => SpawnAndScrapeDeviceCodeAsync(session, options, ct));
+    }
+
+    public IObservable<string> CompleteConnect(ConnectSession session, string? pastedCode)
+    {
+        var options = Options;
+        return Observable.FromAsync(ct => PollUntilAuthenticatedAsync(session, options, ct));
+    }
+
+    // ── SDK / subprocess boundary (the only place Task lives) ────────────────────────────────────
+
+    private async Task<bool> GetIsAuthenticatedAsync(string? userConfigDir, CancellationToken ct)
+    {
+        try
+        {
+            await using var client = BuildClient(userConfigDir);
+            await client.StartAsync(ct).ConfigureAwait(false);
+            var status = await client.GetAuthStatusAsync(ct).ConfigureAwait(false);
+            return status?.IsAuthenticated == true;
+        }
+        catch (Exception ex)
+        {
+            logger?.LogDebug(ex, "Copilot IsLoggedIn probe failed for {Dir}", userConfigDir);
+            return false;
+        }
+    }
+
+    private CopilotClient BuildClient(string? userConfigDir)
+    {
+        var cfg = CopilotConfig;
+        var options = new CopilotClientOptions { AutoStart = true, UseLoggedInUser = true };
+        if (!string.IsNullOrEmpty(cfg.CliPath)) options.CliPath = cfg.CliPath;
+        if (!string.IsNullOrEmpty(cfg.CliUrl)) options.CliUrl = cfg.CliUrl;
+        if (cfg.Port.HasValue) options.Port = cfg.Port.Value;
+        if (!string.IsNullOrEmpty(userConfigDir)) options.CopilotHome = userConfigDir;
+        return new CopilotClient(options);
+    }
+
+    private async Task<ConnectChallenge> SpawnAndScrapeDeviceCodeAsync(
+        ConnectSession session, CopilotConnectOptions options, CancellationToken ct)
+    {
+        var process = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = options.FileName,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            },
+            EnableRaisingEvents = true,
+        };
+        foreach (var a in options.Arguments) process.StartInfo.ArgumentList.Add(a);
+        if (!string.IsNullOrEmpty(session.ConfigDir))
+            process.StartInfo.Environment["COPILOT_HOME"] = session.ConfigDir;
+
+        var lines = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var gate = new SemaphoreSlim(0);
+        void Add(string l) { lines.Enqueue(l); gate.Release(); }
+        process.OutputDataReceived += (_, e) => { if (e.Data != null) Add(e.Data); };
+        process.ErrorDataReceived += (_, e) => { if (e.Data != null) Add(e.Data); };
+
+        process.Start();
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+        session.Process = process;
+
+        var urlRegex = new Regex(options.DeviceUrlPattern, RegexOptions.Compiled);
+        var codeRegex = new Regex(options.UserCodePattern, RegexOptions.Compiled);
+        string? url = null, code = null;
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(options.DeviceCodeTimeout);
+        try
+        {
+            while (!timeoutCts.IsCancellationRequested && (url is null || code is null))
+            {
+                while (lines.TryDequeue(out var line))
+                {
+                    if (url is null) { var mu = urlRegex.Match(line); if (mu.Success) url = (mu.Groups.Count > 1 && mu.Groups[1].Success ? mu.Groups[1].Value : mu.Value).Trim(); }
+                    if (code is null) { var mc = codeRegex.Match(line); if (mc.Success) code = (mc.Groups.Count > 1 && mc.Groups[1].Success ? mc.Groups[1].Value : mc.Value).Trim(); }
+                }
+                if (url != null && code != null) break;
+                if (process.HasExited && lines.IsEmpty)
+                    throw new InvalidOperationException(
+                        "copilot login exited before emitting a device code. On a non-TTY stdout it emits nothing — see TODO(copilot-pty).");
+                await gate.WaitAsync(timeoutCts.Token).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) { /* fall through */ }
+
+        if (url is null)
+            throw new TimeoutException(
+                "Timed out waiting for the Copilot device code. The CLI needs a real terminal (PTY) — see TODO(copilot-pty).");
+
+        logger?.LogInformation("Copilot Connect surfaced device code for session {Session}", session.SessionId);
+        return new ConnectChallenge(session.SessionId, ConnectProvider.Copilot, url, UserCode: code, RequiresPastedCode: false);
+    }
+
+    private async Task<string> PollUntilAuthenticatedAsync(
+        ConnectSession session, CopilotConnectOptions options, CancellationToken ct)
+    {
+        // A test injects the captured token via an env var so the device-flow shape is exercised
+        // end-to-end without a real GitHub round-trip.
+        if (!string.IsNullOrEmpty(options.TokenEnvironmentVariable))
+        {
+            var injected = Environment.GetEnvironmentVariable(options.TokenEnvironmentVariable);
+            if (!string.IsNullOrEmpty(injected)) return injected!;
+        }
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(options.PollTimeout);
+        await using var client = BuildClient(session.ConfigDir);
+        await client.StartAsync(timeoutCts.Token).ConfigureAwait(false);
+
+        while (!timeoutCts.IsCancellationRequested)
+        {
+            try
+            {
+                var status = await client.GetAuthStatusAsync(timeoutCts.Token).ConfigureAwait(false);
+                if (status?.IsAuthenticated == true)
+                {
+                    // SDK 1.0.0-beta.3 surfaces no raw token. Use the host env if present, else a
+                    // stable marker so the stored ModelProvider records that Copilot is connected
+                    // (the factory authenticates via UseLoggedInUser against the host CLI auth).
+                    var token = Environment.GetEnvironmentVariable("GITHUB_TOKEN")
+                        ?? Environment.GetEnvironmentVariable("GH_TOKEN")
+                        ?? $"copilot-oauth:{status.Login ?? "connected"}";
+                    logger?.LogInformation("Copilot authenticated as {Login} for session {Session}", status.Login, session.SessionId);
+                    return token;
+                }
+            }
+            catch (OperationCanceledException) { break; }
+            catch (Exception ex) { logger?.LogDebug(ex, "Copilot poll iteration failed; retrying"); }
+            await Task.Delay(options.PollInterval, timeoutCts.Token).ConfigureAwait(false);
+        }
+        throw new TimeoutException("Timed out waiting for Copilot device-flow authentication.");
+    }
+}
+
+/// <summary>Tunables for <see cref="CopilotConnectStrategy"/> — overridable by deployment / test.</summary>
+public sealed class CopilotConnectOptions
+{
+    /// <summary>Login command to spawn. Defaults to the <c>copilot</c> CLI.</summary>
+    public string FileName { get; set; } = "copilot";
+
+    /// <summary>Arguments to the login command (e.g. a login subcommand).</summary>
+    public IReadOnlyList<string> Arguments { get; set; } = Array.Empty<string>();
+
+    /// <summary>Regex extracting the verification URL (default <c>github.com/login/device</c>).</summary>
+    public string DeviceUrlPattern { get; set; } = @"(https?://\S*github\.com/login/device\S*)";
+
+    /// <summary>Regex extracting the user device code (default <c>XXXX-XXXX</c>).</summary>
+    public string UserCodePattern { get; set; } = @"\b([A-Z0-9]{4}-[A-Z0-9]{4})\b";
+
+    /// <summary>An env var a test sets to inject the captured token, short-circuiting the poll.</summary>
+    public string? TokenEnvironmentVariable { get; set; }
+
+    public TimeSpan DeviceCodeTimeout { get; set; } = TimeSpan.FromSeconds(30);
+    public TimeSpan PollTimeout { get; set; } = TimeSpan.FromMinutes(4);
+    public TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(3);
+}
