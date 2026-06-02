@@ -114,7 +114,7 @@ internal sealed class SearchHub
                 await meshService.Autocomplete(
                         basePath, prefix, AutocompleteMode.RelevanceFirst, req.MaxResults,
                         req.ContextPath, context: "search")
-                    .Take(1)
+                    .TakeLast(1)
                     .SelectMany(snapshot => snapshot.ToObservable())
                     .ForEachAsync(r => pending.Writer.TryWrite(
                         new QuerySuggestion(r.Path, r.Name ?? "", r.NodeType, r.Score, r.Icon)), ct);
