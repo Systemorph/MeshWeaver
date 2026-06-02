@@ -116,7 +116,7 @@ builder
 
 ## Credential resolution
 
-`ChatClientCredentialResolver` is a top-level singleton on the mesh hub. It consumes the same `workspace.GetQuery` cache the picker uses, follows `ModelDefinition.ProviderRef` to the parent `ModelProvider`, and returns the credential.
+`ChatClientCredentialResolver` is a top-level singleton on the mesh hub. Each `Resolve` reads live from the same `workspace.GetQuery` cache the picker uses (no materialised dictionary of node content), follows `ModelDefinition.ProviderRef` to the parent `ModelProvider`, and returns the credential.
 
 Resolution proceeds in this order:
 
@@ -127,7 +127,7 @@ Resolution proceeds in this order:
 | 3 | **`ModelDefinition.ApiKeySecretRef` / `Endpoint`** | Pre-`_Provider` layouts that put the key directly on the `LanguageModel` node |
 | 4 | **`CredentialResolution.Missing`** | Factory falls back to its own `IOptions<XxxConfiguration>` binding |
 
-`ChatClientCredentialResolver.WatchPartition(userPath)` extends the subscription to a specific user or org partition. The fixture and chat pipeline call this once per active partition.
+`ChatClientCredentialResolver.WatchPartition(userPath)` widens the live read to include a specific user or org partition's `_Provider` subtree. The fixture and chat pipeline call this once per active partition (idempotent; records the path only — no node content is cached).
 
 ---
 
@@ -148,7 +148,7 @@ service.GetEffectiveModels(
     nodeTypePath: "acme/Underwriting/Project");
 ```
 
-Each layer is a `Replay(1).RefCount` stream cached per key. Writes invalidate via `service.Invalidate(path)`. RLS is per-subscription — denied callers see an empty result without poisoning other callers' caches.
+Each layer is rebuilt on demand over the workspace's per-id `GetQuery` cache (`Replay(1).RefCount` upstream), so every call reflects live state — no materialised observable cache, hence nothing to invalidate. RLS is per-subscription — denied callers see an empty result without affecting other callers.
 
 ---
 
