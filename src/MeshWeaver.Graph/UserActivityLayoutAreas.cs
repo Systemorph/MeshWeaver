@@ -373,9 +373,10 @@ public static class UserActivityLayoutAreas
             .WithCollapsibleSections(false)
             .WithSectionCounts(false)
             .WithItemArea(PinLayoutArea.PinnedThumbnailArea)
-            .WithMaxColumns(6)
+            .WithMaxColumns(4)
+            .WithGridSpacing(20)
             .WithItemLimit(24)
-            .WithMaxRows(1)
+            .WithMaxRows(2)
             .WithReactiveMode(true);
     }
 
