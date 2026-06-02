@@ -136,6 +136,7 @@ var migrations = new IMigration[]
     new V27_RenameUserSchemaToAuthAndMirrorApiTokens(),
     new V28_RenameOrganizationToSpace(),
     new V29_PinDocsForExistingUsers(),
+    new V30_EnsurePartitionSchemaStoredProc(),
 };
 
 var ctx = new MigrationContext(dataSource, connectionString, options, logger, initResult.IsFreshDb);

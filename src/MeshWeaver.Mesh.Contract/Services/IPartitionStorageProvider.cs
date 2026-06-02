@@ -104,6 +104,22 @@ public interface IPartitionStorageProvider
     IStorageAdapter CreateAdapterForTable(PartitionDefinition def, string table) => Adapter;
 
     /// <summary>
+    /// Eagerly provisions whatever backing store a top-level partition needs
+    /// (e.g. the Postgres schema + tables) BEFORE any read- or write-shaped touch,
+    /// so a brand-new partition root never hits a "relation does not exist" race.
+    /// Idempotent. Called under the caller's identity (wrap in
+    /// <c>ImpersonateAsSystem()</c> for brand-new partition roots the caller can't
+    /// yet own).
+    ///
+    /// <para>Default is a no-op: providers whose storage needs no per-partition
+    /// provisioning (InMemory, FileSystem, EmbeddedResource, StaticNode) do nothing;
+    /// the Postgres provider routes to <c>public.ensure_partition_schema</c>.</para>
+    /// </summary>
+    System.Threading.Tasks.Task EnsurePartitionProvisionedAsync(
+        string @namespace, System.Threading.CancellationToken ct = default)
+        => System.Threading.Tasks.Task.CompletedTask;
+
+    /// <summary>
     /// Contexts this partition opts into. Consumers iterating
     /// partitions for a given context (search, autocomplete, browse)
     /// skip every partition that doesn't include the context. The
