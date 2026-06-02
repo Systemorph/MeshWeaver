@@ -1013,7 +1013,8 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         // Count how many layout-area divs are present
         var layoutAreaCount = System.Text.RegularExpressions.Regex.Matches(html, @"class='layout-area'").Count;
         Output.WriteLine($"Found {layoutAreaCount} layout-area divs in rendered HTML");
-        layoutAreaCount.Should().Be(2, "There should be exactly 2 layout-area divs for the two code blocks");
+        layoutAreaCount.Should().Be(3, "one layout-area div per --render block — the doc has three " +
+            "(HelloWorld, HelloWorld2, InteractiveMdDemo); the mermaid block yields none");
     }
 
     /// <summary>
