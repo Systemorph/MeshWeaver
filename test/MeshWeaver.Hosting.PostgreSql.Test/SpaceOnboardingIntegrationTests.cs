@@ -229,6 +229,85 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
     }
 
     /// <summary>
+    /// 🚨 Regression guard for the "half-provisioned partition" bug found on the prod
+    /// Systemorph space (2026-06-02): the <c>systemorph</c> Postgres schema EXISTED
+    /// (present in <c>information_schema.schemata</c>) but had NO tables — no
+    /// <c>mesh_nodes</c>, no root node. In that state every attempt to create the Space
+    /// failed and the space was invisible.
+    ///
+    /// <para>Root cause: <c>PgPartitionCache.Probe</c> keys partition existence on
+    /// <c>information_schema.schemata</c> (schema-present) ALONE, so a bare schema probes
+    /// as <see cref="PartitionState.Exists"/>. The create existence-check
+    /// (<c>HandleCreateNodeRequest</c> → <c>persistence.Read(path)</c>) then queries
+    /// <c>{schema}.mesh_nodes</c>, which doesn't exist → Postgres <c>42P01</c>. That read
+    /// runs BEFORE <see cref="SpaceTopLevelValidator"/> can provision the tables, so the
+    /// create can never self-heal.</para>
+    ///
+    /// <para>Expected: creating the Space over a pre-existing bare schema must HEAL the
+    /// partition — provision <c>mesh_nodes</c> + satellites, write the root node, and grant
+    /// the creator Admin — exactly like the clean-slate case.</para>
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public void CreateSpace_OverPreExistingBareSchema_HealsAndGrantsCreatorAdmin()
+    {
+        var spaceId = $"pg9d_bare_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var workspace = Mesh.GetWorkspace();
+        var ct = TestContext.Current.CancellationToken;
+
+        // Arrange: reproduce the prod state — the partition schema exists but is bare
+        // (no mesh_nodes table, no root node). A plain CREATE SCHEMA, no ensure_partition_schema.
+        CreateBareSchemaAsync(spaceId, ct).ToObservable()
+            .Should().Within(20.Seconds()).Emit();
+        var bareTables = GetTablesAsync(spaceId, ct).ToObservable()
+            .Should().Within(20.Seconds()).Emit();
+        bareTables.Should().NotContain("mesh_nodes",
+            "precondition: the schema must exist but be bare (no mesh_nodes) to reproduce the half-provisioned state");
+
+        // Act: create the top-level Space via the real CreateNodeRequest path.
+        var created = meshService.CreateNode(new MeshNode(spaceId)
+        {
+            NodeType = SpaceNodeType.NodeType,
+            Name = spaceId,
+            State = MeshNodeState.Active,
+            Content = new Space { Name = spaceId },
+        }).Should().Within(45.Seconds()).Emit();
+        created.Should().NotBeNull("creating a Space over a pre-existing bare schema must heal it, not fail");
+        created.Path.Should().Be(spaceId);
+
+        // (a) The previously-bare schema must now carry mesh_nodes + the _Access satellite.
+        var tables = GetTablesAsync(spaceId, ct).ToObservable()
+            .Should().Within(30.Seconds()).Emit();
+        tables.Should().Contain("mesh_nodes",
+            "the create path must provision the primary table even when the schema pre-existed");
+        tables.Should().Contain("access",
+            "the _Access satellite must exist so the creator-admin grant can land");
+
+        // (b) The creator must still be granted Admin at {id}/_Access.
+        var grantPath = $"{spaceId}/_Access/{TestUsers.Admin.ObjectId}_Access";
+        var grant = workspace.GetMeshNodeStream(grantPath)
+            .Where(n => n is not null).Take(1).Timeout(20.Seconds())
+            .Catch<MeshNode?, TimeoutException>(_ => Observable.Return<MeshNode?>(null))
+            .Should().Within(30.Seconds()).Emit();
+        grant.Should().NotBeNull(
+            "creating a Space over a pre-existing bare schema must still grant the creator Admin");
+        var assignment = grant!.Content.Should().BeOfType<AccessAssignment>().Subject;
+        assignment.AccessObject.Should().Be(TestUsers.Admin.ObjectId);
+        assignment.Roles.Should().Contain(r => r.Role == Role.Admin.Id && !r.Denied,
+            "the creator must be granted the Admin role on the healed Space");
+    }
+
+    private async Task<int> CreateBareSchemaAsync(string schema, CancellationToken ct)
+    {
+        // CREATE SCHEMA only — deliberately NOT ensure_partition_schema, so the schema
+        // exists with zero tables (the prod half-provisioned state).
+        await using var cmd = _fixture.DataSource.CreateCommand(
+            $"CREATE SCHEMA IF NOT EXISTS \"{schema}\"");
+        await cmd.ExecuteNonQueryAsync(ct);
+        return 0;
+    }
+
+    /// <summary>
     /// Top-level invariant: a Space IS a partition root, so creating one with a
     /// non-empty namespace must be rejected server-side with a clear error.
     /// </summary>

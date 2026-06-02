@@ -132,7 +132,10 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Arrange
         var userId = "TestUser";
         var threadContent = new MeshThread();
-        var threadPath = $"User/{userId}/{Guid.NewGuid()}";
+        // Threads are own-scope satellites under the user mirror: the {namespace}/_Thread/{id}
+        // shape is the one PartitionWriteGuardValidator exempts (everything else under the
+        // User/ mirror is platform-only). Bare User/{user}/{id} content nodes are now rejected.
+        var threadPath = $"User/{userId}/{ThreadNodeType.ThreadPartition}/{Guid.NewGuid()}";
         var node = new MeshNode(threadPath)
         {
             Name = "Test Thread",
@@ -157,7 +160,10 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         var userId = "TestUser";
 
         var threadContent = new MeshThread();
-        var threadPath = $"User/{userId}/{Guid.NewGuid()}";
+        // Threads are own-scope satellites under the user mirror: the {namespace}/_Thread/{id}
+        // shape is the one PartitionWriteGuardValidator exempts (everything else under the
+        // User/ mirror is platform-only). Bare User/{user}/{id} content nodes are now rejected.
+        var threadPath = $"User/{userId}/{ThreadNodeType.ThreadPartition}/{Guid.NewGuid()}";
         var threadNode = new MeshNode(threadPath)
         {
             Name = "Thread with Child Messages",
@@ -213,7 +219,10 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Arrange
         var userId = "TestUser";
         var threadContent = new MeshThread();
-        var threadPath = $"User/{userId}/{Guid.NewGuid()}";
+        // Threads are own-scope satellites under the user mirror: the {namespace}/_Thread/{id}
+        // shape is the one PartitionWriteGuardValidator exempts (everything else under the
+        // User/ mirror is platform-only). Bare User/{user}/{id} content nodes are now rejected.
+        var threadPath = $"User/{userId}/{ThreadNodeType.ThreadPartition}/{Guid.NewGuid()}";
         var node = new MeshNode(threadPath)
         {
             Name = "Retrievable Thread",
@@ -457,7 +466,10 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     {
         // Arrange
         var userId = "TestUser";
-        var threadPath = $"User/{userId}/{Guid.NewGuid()}";
+        // Threads are own-scope satellites under the user mirror: the {namespace}/_Thread/{id}
+        // shape is the one PartitionWriteGuardValidator exempts (everything else under the
+        // User/ mirror is platform-only). Bare User/{user}/{id} content nodes are now rejected.
+        var threadPath = $"User/{userId}/{ThreadNodeType.ThreadPartition}/{Guid.NewGuid()}";
 
         // Create thread first
         var threadNode = new MeshNode(threadPath)

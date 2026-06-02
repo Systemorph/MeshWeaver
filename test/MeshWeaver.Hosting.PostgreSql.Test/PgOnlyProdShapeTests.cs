@@ -48,7 +48,7 @@ public class PgOnlyProdShapeTests(PostgreSqlFixture fixture, ITestOutputHelper o
     }
 
     [Fact(Timeout = 60000)]
-    public void Write_AccessAssignment_LazyCreatesSchema()
+    public void Write_AccessAssignment_IntoProvisionedPartition()
     {
         var ns = $"pg9a_lazy_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
         var path = $"{ns}/_Access/grant1";
@@ -69,11 +69,19 @@ public class PgOnlyProdShapeTests(PostgreSqlFixture fixture, ITestOutputHelper o
             State = MeshNodeState.Active,
         };
 
+        // Provision the partition first — the same way ACME's schema exists ahead of any write
+        // (partitions are configured/provisioned, never created implicitly on first content
+        // write — that's the "no partition, no write" guard). EnsurePartitionProvisionedAsync
+        // runs the ensure_partition_schema DDL directly; it is NOT a node write, so there's no
+        // identity to impersonate. Then the logged-in admin writes the grant with his OWN
+        // rights — exactly the production flow once the space exists.
+        ProvisionPartition(ns);
+
         var saved = meshService.CreateNode(node)
             .Should().Within(30.Seconds()).Emit();
 
         saved.Should().NotBeNull(
-            "PG provider's lazy-create policy must accept the first write to an unknown namespace's _Access satellite");
+            "writing the _Access satellite into the provisioned partition must succeed as the user");
 
         var workspace = Mesh.GetWorkspace();
         var readBack = workspace.GetMeshNodeStream(path)
@@ -81,8 +89,21 @@ public class PgOnlyProdShapeTests(PostgreSqlFixture fixture, ITestOutputHelper o
             .Catch<MeshNode?, TimeoutException>(_ => Observable.Return<MeshNode?>(null))
             .Should().Within(30.Seconds()).Emit();
 
-        readBack.Should().NotBeNull("read-back after lazy schema-create must succeed");
+        readBack.Should().NotBeNull("read-back from the provisioned partition's _Access table must succeed");
         readBack!.Path.Should().Be(path);
+    }
+
+    /// <summary>
+    /// Provision a brand-new top-level partition the platform way: run each storage provider's
+    /// <see cref="IPartitionStorageProvider.EnsurePartitionProvisionedAsync"/> (the PG provider
+    /// routes to the <c>ensure_partition_schema</c> DDL; non-PG providers are no-ops). This is
+    /// the schema-creation step a Space performs before its root write — after it, the partition
+    /// exists and ordinary user writes route into it without tripping the write guard.
+    /// </summary>
+    private void ProvisionPartition(string ns)
+    {
+        foreach (var provider in Mesh.ServiceProvider.GetServices<IPartitionStorageProvider>())
+            provider.EnsurePartitionProvisionedAsync(ns).GetAwaiter().GetResult();
     }
 
     [Fact(Timeout = 60000)]
@@ -97,6 +118,12 @@ public class PgOnlyProdShapeTests(PostgreSqlFixture fixture, ITestOutputHelper o
             Name = "Item 1",
             State = MeshNodeState.Active,
         };
+
+        // Provision the org partition (schema) first, then the logged-in admin creates the Todo
+        // with his own rights — a user with access creating content needs no System
+        // impersonation; the partition just has to exist (the guard only forbids implicit
+        // partition creation, not authorized content writes). See ProvisionPartition.
+        ProvisionPartition(org);
 
         var saved = meshService.CreateNode(node).Should().Within(30.Seconds()).Emit();
         saved.Should().NotBeNull();

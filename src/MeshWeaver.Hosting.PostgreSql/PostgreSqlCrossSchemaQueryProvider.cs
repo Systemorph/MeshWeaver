@@ -59,6 +59,12 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
     /// </summary>
     private static readonly HashSet<string> ExcludedSchemas = new(StringComparer.OrdinalIgnoreCase)
     {
+        // 'auth' is the central auth-lookup MIRROR (User/Group/Role/VUser/ApiToken replicated
+        // there by the mesh_node_mirror_access_objects trigger). It must NOT participate in
+        // cross-schema fan-out or every access object would surface twice — once from its
+        // canonical partition and once from the auth mirror. Auth/onboarding middleware query
+        // the 'auth' schema directly instead.
+        "auth",
         "admin", "portal", "kernel",
         "_access", "_address_", "_graph", "_settings", "_tracking", "_thread", "_source", "_test",
         "source", "test",

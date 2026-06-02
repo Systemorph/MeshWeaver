@@ -129,6 +129,18 @@ public static class PostgreSqlSchemaInitializer
             await conn.ReloadTypesAsync();
         }
 
+        // Step 2.5: Create the access-object → auth mirror trigger FUNCTION before any
+        // partition DDL runs. The per-partition DDL (GetVersionedPartitionDdl) installs the
+        // `mesh_node_mirror_access_objects` trigger ONLY IF this function already exists
+        // (guarded `EXISTS (SELECT 1 FROM pg_proc …)`). Historically the function was created
+        // only by the V27 *repair* migration — which MigrationRunner SKIPS on fresh DBs — so
+        // fresh deployments never installed the trigger and `auth` stayed empty. Creating it
+        // here (always-run path) makes the guard pass on every DB, fresh or not.
+        await using (var cmd = dataSource.CreateCommand(GetAuthMirrorFunctionScript()))
+        {
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+
         // Step 3: Run the full schema script (tables, indexes, triggers).
         await using (var cmd = dataSource.CreateCommand(GetSchemaScript(options)))
         {
@@ -214,6 +226,66 @@ public static class PostgreSqlSchemaInitializer
             $ensure_partition_schema$ LANGUAGE plpgsql;
             """;
     }
+
+    /// <summary>
+    /// DDL for <c>public.mirror_access_object_to_auth_schema()</c> — the AFTER
+    /// INSERT/UPDATE/DELETE trigger function that mirrors every access-object node
+    /// (<c>User</c>, <c>Group</c>, <c>Role</c>, <c>VUser</c>, <c>ApiToken</c>) from a
+    /// partition's <c>mesh_nodes</c> into the central <c>auth.mesh_nodes</c> lookup mirror.
+    /// The per-partition DDL (<see cref="GetVersionedPartitionDdl"/>) installs the trigger
+    /// that calls this function — but only when this function already exists, so it must be
+    /// created on the always-run init path (and by the V32 repair for legacy partitions).
+    ///
+    /// <para><b>Fail-safe.</b> If the <c>auth</c> mirror table isn't provisioned yet
+    /// (<c>to_regclass('"auth".mesh_nodes') IS NULL</c>) the function is a no-op — a missing
+    /// mirror must NEVER fail the originating write on every partition. (V27's original body
+    /// lacked this guard and relied on <c>auth</c> always existing.)</para>
+    ///
+    /// <para><b>Single-sourced.</b> <see cref="InitializeAsync"/> runs this, and the
+    /// <c>V32_RepairAuthMirrorTriggerAndBackfill</c> migration calls it for legacy DBs whose
+    /// partitions predate the trigger. Idempotent (<c>CREATE OR REPLACE</c>).</para>
+    /// </summary>
+    public static string GetAuthMirrorFunctionScript() => """
+        CREATE OR REPLACE FUNCTION public.mirror_access_object_to_auth_schema()
+        RETURNS TRIGGER AS $auth_mirror$
+        BEGIN
+            -- Fail-safe: never break the originating write if the auth mirror
+            -- table isn't provisioned yet.
+            IF to_regclass('"auth".mesh_nodes') IS NULL THEN
+                RETURN COALESCE(NEW, OLD);
+            END IF;
+
+            IF TG_OP = 'DELETE' THEN
+                IF OLD.node_type IN ('User','Group','Role','VUser','ApiToken') THEN
+                    DELETE FROM "auth".mesh_nodes
+                     WHERE namespace = OLD.namespace AND id = OLD.id;
+                END IF;
+                RETURN OLD;
+            END IF;
+
+            IF NEW.node_type IN ('User','Group','Role','VUser','ApiToken') THEN
+                INSERT INTO "auth".mesh_nodes
+                    (namespace, id, name, node_type, category, icon, display_order,
+                     last_modified, version, state, content, desired_id, main_node)
+                VALUES (NEW.namespace, NEW.id, NEW.name, NEW.node_type, NEW.category, NEW.icon, NEW.display_order,
+                        NEW.last_modified, NEW.version, NEW.state, NEW.content, NEW.desired_id, NEW.main_node)
+                ON CONFLICT (namespace, id) DO UPDATE SET
+                    name = EXCLUDED.name,
+                    node_type = EXCLUDED.node_type,
+                    category = EXCLUDED.category,
+                    icon = EXCLUDED.icon,
+                    display_order = EXCLUDED.display_order,
+                    last_modified = EXCLUDED.last_modified,
+                    version = EXCLUDED.version,
+                    state = EXCLUDED.state,
+                    content = EXCLUDED.content,
+                    desired_id = EXCLUDED.desired_id,
+                    main_node = EXCLUDED.main_node;
+            END IF;
+            RETURN NEW;
+        END;
+        $auth_mirror$ LANGUAGE plpgsql;
+        """;
 
     /// <summary>
     /// Acquires a Postgres session-level advisory lock keyed by

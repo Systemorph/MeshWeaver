@@ -98,6 +98,14 @@ public class ConnectStrategyTest : AITestBase
         var owner = $"user-{Guid.NewGuid():N}";
         var configDir = Path.Combine(Path.GetTempPath(), $"connect-test-{Guid.NewGuid():N}", ".claude");
 
+        // Establish the owner's partition root first. The connect flow writes the credential
+        // node at {owner}/_Provider/ClaudeCode; in production the owner is the logged-in user
+        // whose partition already exists. Without a partition root the synthetic owner has no
+        // resolvable hub, so single-node reads of the satellite (GetMeshNodeStream, line ~135)
+        // time out even though the partition query already surfaces the node.
+        NodeFactory.CreateNode(new MeshNode(owner) { Name = owner, NodeType = "Markdown" })
+            .Should().Within(10.Seconds()).Emit();
+
         // 1. Not logged in initially (no credentials file).
         var loggedInBefore = await Manager.IsLoggedIn(ConnectProvider.ClaudeCode, configDir).FirstAsync().ToTask(ct);
         loggedInBefore.Should().BeFalse();

@@ -50,10 +50,15 @@ namespace MeshWeaver.Graph.Security;
 ///
 /// <para><b>Fails open on rule 2.</b> Existence is probed via
 /// <see cref="IPartitionStorageProvider.PartitionExists"/>, which emits <c>null</c>
-/// when it cannot tell. This guard rejects for non-existence ONLY on a definitive
-/// <c>false</c> from a provider; an indeterminate / transient result allows the write so a
-/// probe hiccup can never wedge legitimate writes to a real space. Rule 1 (the mirror
-/// block) is pure path+identity logic and always enforced.</para>
+/// when it cannot tell. Each provider only knows its own store, so the probes are combined
+/// as a global OR: <b>any</b> provider answering <c>true</c> allows the write, and the guard
+/// rejects for non-existence ONLY when <b>every</b> provider definitively answers <c>false</c>
+/// (the partition is confirmed absent in all stores). A mix of <c>false</c> and <c>null</c> —
+/// e.g. Postgres says "not my schema" while the filesystem provider that actually owns the
+/// partition can't tell — is indeterminate and allows the write, so a non-owning provider can
+/// never veto a partition another provider owns, and a probe hiccup can never wedge legitimate
+/// writes to a real space. Rule 1 (the mirror block) is pure path+identity logic and always
+/// enforced.</para>
 /// </summary>
 public sealed class PartitionWriteGuardValidator : INodeValidator
 {
@@ -172,10 +177,19 @@ public sealed class PartitionWriteGuardValidator : INodeValidator
             .Take(1)
             .Select(results =>
             {
+                // Existence is a global OR across providers: each provider only knows its OWN
+                // store, so a single `false` means "not in MY store", NOT "doesn't exist
+                // anywhere". A non-owning provider must never veto a partition another provider
+                // owns — e.g. the Postgres provider returns `false` for the filesystem-backed
+                // ACME partition, while the FileSystem provider (which actually has it) can't
+                // give a definitive answer and returns `null`. So:
+                //   • any `true`            → the partition exists somewhere   → allow
+                //   • EVERY provider `false`→ confirmed absent in every store  → reject
+                //   • anything else (some `null`, none `true`) → indeterminate → allow (fail open)
                 if (results.Any(r => r == true))
                     return NodeValidationResult.Valid();
 
-                if (results.Any(r => r == false))
+                if (results.Count > 0 && results.All(r => r == false))
                 {
                     _logger.LogWarning(
                         "PartitionWriteGuard: blocked implicit creation of partition '{Partition}' by {User} at {Path}",
@@ -187,7 +201,7 @@ public sealed class PartitionWriteGuardValidator : INodeValidator
                         NodeRejectionReason.InvalidPath);
                 }
 
-                // All indeterminate → allow.
+                // Mixed (some provider unsure) or all indeterminate → allow.
                 return NodeValidationResult.Valid();
             });
     }

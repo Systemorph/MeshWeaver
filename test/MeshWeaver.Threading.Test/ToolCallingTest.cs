@@ -27,7 +27,10 @@ namespace MeshWeaver.Threading.Test;
 /// </summary>
 public class ToolCallingTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private const string ContextPath = "User/Roland";
+    // The auto-admin login is ObjectId "Roland", so "Roland" is the caller's own partition —
+    // PartitionWriteGuardValidator exempts own-partition writes. "User/Roland" would be a bare
+    // content write into the system-managed User mirror, which the guard now rejects.
+    private const string ContextPath = "Roland";
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)

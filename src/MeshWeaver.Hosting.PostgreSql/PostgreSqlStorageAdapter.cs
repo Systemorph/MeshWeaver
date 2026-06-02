@@ -110,18 +110,37 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         var (ns, id) = SplitPath(normalizedPath);
 
         var table = ResolveTable(normalizedPath);
-        await using var cmd = _dataSource.CreateCommand(
-            $"SELECT id, namespace, name, description, node_type, category, icon, display_order, " +
-            $"last_modified, version, state, content, desired_id, main_node " +
-            $"FROM {table} WHERE namespace = $1 AND id = $2");
-        cmd.Parameters.AddWithValue(ns);
-        cmd.Parameters.AddWithValue(id);
+        try
+        {
+            await using var cmd = _dataSource.CreateCommand(
+                $"SELECT id, namespace, name, description, node_type, category, icon, display_order, " +
+                $"last_modified, version, state, content, desired_id, main_node " +
+                $"FROM {table} WHERE namespace = $1 AND id = $2");
+            cmd.Parameters.AddWithValue(ns);
+            cmd.Parameters.AddWithValue(id);
 
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        if (!await reader.ReadAsync(ct))
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            if (!await reader.ReadAsync(ct))
+                return null;
+
+            return ReadMeshNode(reader, options);
+        }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UndefinedTable)
+        {
+            // Half-provisioned partition: the schema exists (so PgPartitionCache.Probe
+            // reported Exists on information_schema.schemata and routed us here) but its
+            // mesh_nodes / satellite table was never created. There is no node to read →
+            // null, NOT an error. Without this guard the create existence-check
+            // (HandleCreateNodeRequest → persistence.Read) faults with 42P01 BEFORE
+            // SpaceTopLevelValidator can provision the tables, so a top-level Space can
+            // never be (re)created over a bare schema — the prod Systemorph-space bug
+            // (2026-06-02): `systemorph` schema present, zero tables, space invisible.
+            _logger?.LogDebug(ex,
+                "Read on {Table} for '{Path}' hit undefined_table (42P01); treating as no node " +
+                "(bare/half-provisioned partition).",
+                table, normalizedPath);
             return null;
-
-        return ReadMeshNode(reader, options);
+        }
     }
 
     /// <summary>

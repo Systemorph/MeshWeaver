@@ -71,8 +71,16 @@ public class ModelsSettingsTabRenderTest : MonolithMeshTestBase
     public void Models_Tab_Splits_ApiList_Vs_CliConnect()
     {
         // Render against the test user's own partition node (auto-admin login → Permission.Api).
-        var userId = "rbuergi@systemorph.com";
+        // The auto-admin's ObjectId is "Roland", so "Roland" is the user's own partition — and
+        // it must actually have a node: the Settings layout area subscribes to the node hub at
+        // this address, and an empty address errors "No node found". (The email form
+        // "rbuergi@systemorph.com" also can't be an address — '@' is the address host
+        // separator.) Seed the node first; the own-partition write is allowed by the guard.
+        var userId = "Roland";
         var nodeAddress = new Address(userId);
+
+        NodeFactory.CreateNode(new MeshNode(userId) { Name = "Roland", NodeType = "Markdown" })
+            .Should().Within(10.Seconds()).Emit();
 
         var workspace = Mesh.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.SettingsArea) { Id = ModelsSettingsTab.TabId };
@@ -88,13 +96,17 @@ public class ModelsSettingsTabRenderTest : MonolithMeshTestBase
             .Should().Within(40.Seconds())
             .Match(_ => true);
 
-        // CLI card: a Connect button is present, and the [CLI] badge.
+        // CLI card: a Connect button is present, and the [CLI] badge. The store is raw JSON
+        // (GetRawText) and the layout serializer HTML-escapes angle brackets, so the badge
+        // markup `<span …>CLI</span>` appears as `> CLI <` — match that escaped form,
+        // not the literal `>CLI<`. The `>…<` anchoring still distinguishes the badge
+        // from the "CLI providers" section header.
         storeJson.Should().Contain("Connect Claude Code", "the CLI provider shows a Connect button");
-        storeJson.Should().Contain(">CLI<", "the CLI card is badged [CLI]");
+        storeJson.Should().Contain("\\u003ECLI\\u003C", "the CLI card is badged [CLI]");
 
         // API card: the provider's model list is present, badged [API].
         storeJson.Should().Contain("claude-opus-4-7", "the API provider shows its model list");
-        storeJson.Should().Contain(">API<", "the API card is badged [API]");
+        storeJson.Should().Contain("\\u003EAPI\\u003C", "the API card is badged [API]");
 
         // The CLI provider must NOT advertise its model ids as a list — its catalog
         // model ids (sonnet/opus/haiku) are not rendered as a checkable list on the CLI card.
