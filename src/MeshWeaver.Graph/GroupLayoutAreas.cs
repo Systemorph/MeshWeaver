@@ -158,7 +158,7 @@ public static class GroupLayoutAreas
                 .WithIconStart(FluentIcons.PersonAdd())
                 .WithClickAction(ctx =>
                 {
-                    _ = ShowAddMemberDialog(ctx, hubPath);
+                    ShowAddMemberDialog(ctx, hubPath);
                     return Task.CompletedTask;
                 }));
 
@@ -175,7 +175,7 @@ public static class GroupLayoutAreas
         return null;
     }
 
-    private static async Task ShowAddMemberDialog(UiActionContext ctx, string groupPath)
+    private static void ShowAddMemberDialog(UiActionContext ctx, string groupPath)
     {
         var formId = $"add_member_{Guid.NewGuid().AsString()}";
         ctx.Host.UpdateData(formId, new Dictionary<string, object?>
@@ -183,19 +183,24 @@ public static class GroupLayoutAreas
             ["memberId"] = ""
         });
 
-        // Load user/group options for autocomplete
+        // Load user/group options for autocomplete — REACTIVELY. Never await / await-foreach
+        // a hub query on the action-block thread: that is the layout-area deadlock (the click
+        // runs on the hub, and the query response is queued behind the blocked await). The
+        // Autocomplete observable's first snapshot populates the combobox options; the combobox
+        // databinds to optionsId and refreshes when they arrive.
         var optionsId = $"member_options_{Guid.NewGuid().AsString()}";
-        var options = new List<Option>();
+        ctx.Host.UpdateData(optionsId, Array.Empty<Option>());
         var meshQuery = ctx.Hub.ServiceProvider.GetService<IMeshService>();
-        if (meshQuery != null)
-        {
-            await foreach (var suggestion in meshQuery.AutocompleteAsync(groupPath, "", limit: 50))
+        meshQuery?.Autocomplete(groupPath, "", limit: 50)
+            .Take(1)
+            .Subscribe(suggestions =>
             {
-                if (suggestion.NodeType is "User" or "Group")
-                    options.Add(new Option<string>(suggestion.Path, $"{suggestion.Name} ({suggestion.Path})"));
-            }
-        }
-        ctx.Host.UpdateData(optionsId, options.ToArray());
+                var options = new List<Option>();
+                foreach (var s in suggestions)
+                    if (s.NodeType is "User" or "Group")
+                        options.Add(new Option<string>(s.Path, $"{s.Name} ({s.Path})"));
+                ctx.Host.UpdateData(optionsId, options.ToArray());
+            });
 
         var formContent = Controls.Stack.WithStyle("gap: 16px; padding: 16px;")
             .WithView(new ComboboxControl(
