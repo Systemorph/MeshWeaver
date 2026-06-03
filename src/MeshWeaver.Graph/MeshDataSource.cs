@@ -521,6 +521,23 @@ public static class MeshDataSourceExtensions
                 .Subscribe(node => cache.Current = node, _ => { });
             hub.RegisterForDisposal(nodeSub);
 
+            // 🚨 Memory: reclaim this node's compiled assembly when the node hub
+            // disposes. CompilationCacheService is a top-level singleton whose root
+            // container is NEVER disposed in tests (TestBase deliberately skips SP
+            // dispose — it broke 40+ tests reading singletons post-dispose) and lives
+            // for the whole process in prod. So a node's collectible
+            // NodeAssemblyLoadContext would otherwise survive long after its hub is
+            // gone, accumulating across every compile and driving the late-project CI
+            // OOM / GC-stall. RegisterForDisposal fires on hub teardown regardless of
+            // SP disposal, so unloading here gives each ALC a per-node lifetime — the
+            // disk release artifacts stay on the shared cache mount for cheap reload.
+            var compilationCache = hub.ServiceProvider.GetService<ICompilationCacheService>();
+            if (compilationCache != null)
+            {
+                var sanitizedNodeName = compilationCache.SanitizeNodeName(hub.Address.Path);
+                hub.RegisterForDisposal(_ => compilationCache.UnloadNodeContexts(sanitizedNodeName));
+            }
+
             // Persistence sampler: posts SaveMeshNodeRequest to the per-node
             // hub at most every SaveSampleInterval, with the latest version of
             // the own MeshNode. The handler subscribes to IStorageAdapter.SaveNode
