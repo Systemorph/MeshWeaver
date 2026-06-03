@@ -217,7 +217,21 @@ public static class MemexConfiguration
         services.AddSingleton<MeshWeaver.AI.Connect.IConnectTokenSink, Memex.Portal.Shared.Models.ConnectTokenSink>();
         services.AddSingleton<MeshWeaver.AI.Connect.ConnectSessionManager>();
         if (features.Ai.Clis.ClaudeCode)
+        {
             services.AddSingleton<MeshWeaver.AI.Connect.IConnectStrategy, MeshWeaver.AI.Connect.ClaudeConnectStrategy>();
+            // Wire the Connect login: bind ClaudeConnect:* overrides, default the PTY wrapper ON for
+            // the co-hosted Linux portal (claude setup-token renders an Ink UI that needs a real TTY —
+            // see ClaudeConnectStrategy), and mirror the per-user .claude root the co-hosted client uses
+            // (ClaudeCode:ConfigDirRoot, e.g. /mnt/users) so each user logs in under their own dir.
+            services.Configure<MeshWeaver.AI.Connect.ClaudeConnectOptions>(o =>
+            {
+                builder.Configuration.GetSection("ClaudeConnect").Bind(o);
+                if (builder.Configuration["ClaudeConnect:UsePseudoTerminal"] is null && !OperatingSystem.IsWindows())
+                    o.UsePseudoTerminal = true;
+                if (string.IsNullOrEmpty(o.ConfigDirRoot))
+                    o.ConfigDirRoot = builder.Configuration["ClaudeCode:ConfigDirRoot"];
+            });
+        }
         if (features.Ai.Clis.Copilot)
             services.AddSingleton<MeshWeaver.AI.Connect.IConnectStrategy, MeshWeaver.AI.Copilot.CopilotConnectStrategy>();
 

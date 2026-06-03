@@ -44,13 +44,15 @@ secrets:
     Authentication__Google__ClientSecret: "CHANGE_ME_google_client_secret"
     Authentication__LinkedIn__ClientSecret: "CHANGE_ME_linkedin_client_secret"
     # ---- AI provider keys ---------------------------------------------------
-    # One shared Azure AI Foundry key backs both the /anthropic and /models routes,
-    # so Anthropic__ApiKey and AzureFoundry__ApiKey are usually the SAME value.
-    # Source from Key Vault via the CSI Secrets Store add-on; never commit a real key.
-    # Ai__KeyProtection__MasterKey encrypts per-user ModelProvider keys at rest —
-    # set a stable random value (rotating it makes existing stored keys unreadable).
-    AzureFoundry__ApiKey: "CHANGE_ME_azure_foundry_key"   # s-meshweaver key1; inject via Key Vault / --set
-    Ai__KeyProtection__MasterKey: "CHANGE_ME_stable_random_master_key"
+    # Never commit a real key. The chart emits each secret key ONLY when non-empty, so leaving
+    # these empty means "don't manage / preserve whatever is set out-of-band". Inject the real
+    # AzureFoundry key (the s-meshweaver key1) at deploy via Key Vault CSI
+    # (manifests/secretproviderclass.yaml) or `--set secrets.memex_portal.AzureFoundry__ApiKey=...`.
+    AzureFoundry__ApiKey: ""
+    # Ai__KeyProtection__MasterKey: intentionally UNSET — it is provided out-of-band, and overriding
+    # it makes stored enc: provider keys undecryptable. If you DO manage it via the chart, point it
+    # at the SAME Key Vault secret the deployment already uses (a different value breaks decryption).
+    Ai__KeyProtection__MasterKey: ""
 
 config:
   memex_postgres:
@@ -129,6 +131,9 @@ config:
     ModelTier__Standard: "DeepSeek-V3-0324"
     ModelTier__Light: "DeepSeek-V4-Flash"
     ModelTier__Utility: "DeepSeek-V4-Flash"
+    # Per-user Claude Code config root → the RWX /mnt/users share (mounted by the portal deployment).
+    # Lets each user connect Claude Code under their own dir; pairs with the PTY login fix.
+    ClaudeCode__ConfigDirRoot: "/mnt/users"
     # ---- OpenTelemetry: export to the in-cluster OTel Collector -------------
     # ServiceDefaults.AddOpenTelemetryExporters() calls UseOtlpExporter() when
     # OTEL_EXPORTER_OTLP_ENDPOINT is set — UNLESS APPLICATIONINSIGHTS_CONNECTION_STRING

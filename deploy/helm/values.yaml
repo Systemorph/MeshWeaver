@@ -57,3 +57,4 @@ config:
     ModelTier__Standard: ""
     ModelTier__Light: ""
     ModelTier__Utility: ""
+    ClaudeCode__ConfigDirRoot: ""
