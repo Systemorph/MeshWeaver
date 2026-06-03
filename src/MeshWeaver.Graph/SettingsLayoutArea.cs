@@ -167,15 +167,18 @@ public static class SettingsLayoutArea
         string tabId,
         IReadOnlyList<SettingsMenuItemDefinition> items)
     {
-        // `settings-content-pane` (standard-page-layout.css) makes this stack `flex: 1;
-        // min-height: 0; overflow-y: auto` inside the definite-height splitter pane, so long
-        // tabs (Metadata + many fields, Access Control, Effective Access) scroll within the
-        // pane instead of overflowing the page. The pane gets its height from the splitter —
-        // no viewport-minus-magic-number guess, which previously clipped the bottom out of reach.
+        // Scroll the content pane internally — set directly on the splitter's content control
+        // so it does NOT depend on the global standard-page-layout.css stylesheet (that file's
+        // pane selectors were silently dead for a long time, which is exactly why the panel
+        // wouldn't scroll). The FluentMultiSplitter pane (<div class="fluent-multi-splitter-pane">)
+        // is cross-axis stretched to the splitter's definite height, so height:100% here resolves
+        // and overflow-y:auto scrolls within it — the same proven pattern NavMenuView uses inline
+        // for the left pane (.navmenu { height:100%; ... } / .sitenav { overflow-y:auto }).
+        // The `settings-content-pane` class is kept only as a styling hook (no longer load-bearing).
         var stack = Controls.Stack
             .WithClass("settings-content-pane")
             .WithWidth("100%")
-            .WithStyle("padding: 24px;");
+            .WithStyle("height: 100%; max-height: calc(100dvh - 48px); min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 24px;");
 
         var matchedItem = items.FirstOrDefault(i => i.Id == tabId)
             ?? items.FirstOrDefault();
