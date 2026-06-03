@@ -84,15 +84,22 @@ public static class FutuReDataLoader
                 };
             });
 
-        var csvRowsObs = Observable.FromAsync<List<FutuReDataCube>>(async ct =>
-        {
-            var stream = await contentService.GetContentAsync("attachments", "datacube.csv", ct);
-            if (stream == null)
-                return new List<FutuReDataCube>();
-            using var reader = new StreamReader(stream);
-            var content = await reader.ReadToEndAsync(ct);
-            return ParseLocalCsvContent(content, businessUnit);
-        });
+        // Single sanctioned async boundary (Observable.FromAsync(ct => task)) + a fully
+        // SYNCHRONOUS read/parse in Select — no `async`/`await` state machine. A multi-
+        // await lambda here resumes its continuations on whatever scheduler the awaiter
+        // captures; inside the layout-area render chain that can land back on a congested
+        // action block and stall the whole view (the intermittent 50s render timeout in
+        // the FutuRe analysis tests). FromAsync observes the one I/O Task on the default
+        // scheduler and the parse runs inline on the emission — reactive end-to-end.
+        var csvRowsObs = Observable
+            .FromAsync(ct => contentService.GetContentAsync("attachments", "datacube.csv", ct))
+            .Select(stream =>
+            {
+                if (stream == null)
+                    return new List<FutuReDataCube>();
+                using var reader = new StreamReader(stream);
+                return ParseLocalCsvContent(reader.ReadToEnd(), businessUnit);
+            });
 
         return buCurrencyObs
             .SelectMany(currency => csvRowsObs.Select(rows => (Rows: rows, Currency: currency)))
