@@ -10,6 +10,33 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data;
 
+/// <summary>
+/// Pure-reflection replacement for the deleted <c>DelegateCache.InvokeAsFunction</c>.
+/// Instantiates an open generic instance method and invokes it on <paramref name="target"/>.
+/// <para>No compiled-delegate cache: the old <c>DelegateCache</c> kept a process-wide static
+/// <c>CreatableObjectStore&lt;Token, Delegate&gt;</c> whose <c>Token</c> held the generic type
+/// argument — pinning a dynamically-compiled NodeType's <c>AssemblyLoadContext</c> for the
+/// whole process. These two call sites run once per data-source type registration (not hot),
+/// so a direct <see cref="MethodBase.Invoke(object, object[])"/> is the right trade.</para>
+/// <para>The <see cref="System.Reflection.TargetInvocationException"/> is unwrapped so callers
+/// observe the original exception, exactly as the old compiled delegate did.</para>
+/// </summary>
+internal static class GenericMethodInvoker
+{
+    public static object InvokeGeneric(MethodInfo openGenericMethod, Type typeArgument, object target, params object?[] args)
+    {
+        try
+        {
+            return openGenericMethod.MakeGenericMethod(typeArgument).Invoke(target, args)!;
+        }
+        catch (TargetInvocationException tie) when (tie.InnerException is not null)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(tie.InnerException).Throw();
+            throw; // unreachable — Throw() always throws
+        }
+    }
+}
+
 public static class DataSourceAddress
 {
     public const string TypeName = "ds";
@@ -64,7 +91,8 @@ public abstract record UnpartitionedDataSource<TDataSource, TTypeSource>(object 
     where TTypeSource : ITypeSource
 {
     public virtual IUnpartitionedDataSource WithType(Type type, Func<ITypeSource, ITypeSource>? config) =>
-        (TDataSource)WithTypeMethod.MakeGenericMethod(type).InvokeAsFunction(this, config ?? (x => x));
+        (TDataSource)GenericMethodInvoker.InvokeGeneric(
+            WithTypeMethod, type, this, config ?? (Func<ITypeSource, ITypeSource>)(x => x));
 
     private static readonly MethodInfo WithTypeMethod = ReflectionHelper.GetMethodGeneric<
         UnpartitionedDataSource<TDataSource, TTypeSource>
@@ -208,7 +236,8 @@ public abstract record GenericUnpartitionedDataSource<TDataSource>(object Id, IW
     public override TDataSource WithType<T>(Func<ITypeSource, ITypeSource>? config) =>
         WithType<T>(x => (TypeSourceWithType<T>)(config ?? (y => y))(x));
     public override TDataSource WithType(Type type, Func<ITypeSource, ITypeSource>? config = null) =>
-        (TDataSource)WithTypeGeneric.MakeGenericMethod(type).InvokeAsFunction(this, config ?? (Func<ITypeSource, ITypeSource>)(x => x));
+        (TDataSource)GenericMethodInvoker.InvokeGeneric(
+            WithTypeGeneric, type, this, config ?? (Func<ITypeSource, ITypeSource>)(x => x));
 
     public TDataSource WithType<T>(Func<TypeSourceWithType<T>, TypeSourceWithType<T>>? configurator)
         where T : class => WithTypeSource(typeof(T), (configurator ?? (x => x)).Invoke(new(Workspace, Id)));

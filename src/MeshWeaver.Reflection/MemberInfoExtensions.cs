@@ -185,8 +185,6 @@ namespace MeshWeaver.Reflection
             }
         }
 
-        private static readonly CreatableObjectStore<MethodInfo, List<MethodInfo>> MethodsFromInterfacesCache = new CreatableObjectStore<MethodInfo, List<MethodInfo>>(GetMethodsFromInterfacesInner);
-
         /// <summary>
         /// Gets for the <paramref name="implementationMethod"/> method the list of original <see cref="MethodInfo"/>s declared in an interface
         /// </summary>
@@ -198,6 +196,9 @@ namespace MeshWeaver.Reflection
         /// </example>
         public static IEnumerable<MethodInfo> GetMethodsFromInterfaces(this MethodInfo implementationMethod)
         {
+            // No static memoization cache: the key was a MethodInfo, which keeps its
+            // DeclaringType (and that type's collectible ALC) alive process-wide. The
+            // interface-map walk below is cheap and rarely hit. See NoStaticState.md.
             if (implementationMethod == null)
                 throw new ArgumentNullException(nameof(implementationMethod));
 
@@ -205,7 +206,7 @@ namespace MeshWeaver.Reflection
             if (reflectedType!.IsInterface)
                 return new List<MethodInfo>();
 
-            return MethodsFromInterfacesCache.GetInstance(implementationMethod);
+            return GetMethodsFromInterfacesInner(implementationMethod);
         }
 
         private static List<MethodInfo> GetMethodsFromInterfacesInner(MethodInfo implMethod)
