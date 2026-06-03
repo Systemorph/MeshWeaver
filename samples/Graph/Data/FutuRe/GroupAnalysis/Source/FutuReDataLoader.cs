@@ -11,6 +11,7 @@ using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.DependencyInjection;
 
 /// <summary>
@@ -84,22 +85,25 @@ public static class FutuReDataLoader
                 };
             });
 
-        // Single sanctioned async boundary (Observable.FromAsync(ct => task)) + a fully
-        // SYNCHRONOUS read/parse in Select — no `async`/`await` state machine. A multi-
-        // await lambda here resumes its continuations on whatever scheduler the awaiter
-        // captures; inside the layout-area render chain that can land back on a congested
-        // action block and stall the whole view (the intermittent 50s render timeout in
-        // the FutuRe analysis tests). FromAsync observes the one I/O Task on the default
-        // scheduler and the parse runs inline on the emission — reactive end-to-end.
-        var csvRowsObs = Observable
-            .FromAsync(ct => contentService.GetContentAsync("attachments", "datacube.csv", ct))
-            .Select(stream =>
-            {
-                if (stream == null)
-                    return new List<FutuReDataCube>();
-                using var reader = new StreamReader(stream);
-                return ParseLocalCsvContent(reader.ReadToEnd(), businessUnit);
-            });
+        // CSV I/O on the bounded FileSystem IoPool — no Observable.FromAsync, no async/await.
+        // Invoke() runs the genuinely-async content fetch on the pool's semaphore-gated
+        // Scheduler.Default: the ThreadPool thread is released during the await, so the
+        // continuation can't re-enter a congested hub action block (the cause of the
+        // intermittent 50s render stall). InvokeBlocking() runs the sync StreamReader read
+        // + CSV parse on the pool's dedicated limited-concurrency scheduler, so the blocking
+        // read can't trigger ThreadPool thread-injection that starves the grain schedulers.
+        // Both are cold IObservables — reactive end-to-end, no async state machine.
+        var ioPool = workspace.Hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
+                     ?? IoPool.Unbounded;
+        var csvRowsObs = ioPool
+            .Invoke(ct => contentService.GetContentAsync("attachments", "datacube.csv", ct))
+            .SelectMany(stream => stream is null
+                ? Observable.Return(new List<FutuReDataCube>())
+                : ioPool.InvokeBlocking(_ =>
+                {
+                    using var reader = new StreamReader(stream);
+                    return ParseLocalCsvContent(reader.ReadToEnd(), businessUnit);
+                }));
 
         return buCurrencyObs
             .SelectMany(currency => csvRowsObs.Select(rows => (Rows: rows, Currency: currency)))
