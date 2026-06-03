@@ -12,14 +12,24 @@ on:
 
 jobs:
   build:
-    name: Build and Run Unit tests
-    # 60 min: setup+restore+build runs ~3 min; tests currently take ~35-40 min
-    # (FutuRe ~6m, Autocomplete ~4m, AI ~3m, Acme ~3m, plus ~30 smaller projects).
-    # Headroom for a single hung project burning its 6m wallclock cap without
-    # truncating the suite. If this gets tight again, the next move is matrix-
-    # parallelizing the per-project loop instead of bumping the cap further.
-    timeout-minutes: 60
+    name: "Build and Run Unit tests (shard ${{ matrix.shard }})"
+    # Matrix-sharded: the ~40 test projects are split across SHARD_TOTAL parallel
+    # runners (each runs every Nth project of the sorted list). This is the
+    # documented next step past "bump the per-project cap" — it cuts the
+    # per-runner project count (and the leftover-state / memory accumulation that
+    # made late projects flake under the old single-runner sequential loop) by
+    # ~SHARD_TOTAL×, and roughly halves wall-clock. Each shard restores+builds
+    # independently (parallel, ~3 min each) then runs only its subset.
+    # 30 min: a single shard's ~8-10 projects run in ~15-20 min; headroom for one
+    # hung project burning its 6m wall-clock cap.
+    timeout-minutes: 30
     runs-on: ubuntu-latest
+    strategy:
+      # Don't cancel sibling shards when one fails — we want every shard's
+      # results so the PR shows the full failure picture, not just the first.
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
 
     steps:
     - uses: actions/checkout@v6
@@ -38,6 +48,8 @@ jobs:
       env:
         DOTNET_ENVIRONMENT: Development
         Logging__LogLevel__Default: Warning
+        SHARD_INDEX: ${{ matrix.shard }}
+        SHARD_TOTAL: 4
       run: |
         # Only Cosmos is excluded — needs the Cosmos emulator which is heavy to
         # set up on a runner. Everything else runs (PostgreSql via Testcontainers
@@ -59,17 +71,27 @@ jobs:
         # exit markers — trx files still capture full per-test results.
         set +e
         : > test/test-results.log
-        echo "::group::Per-project test runs"
+        echo "::group::Per-project test runs (shard $SHARD_INDEX/$SHARD_TOTAL)"
         # `! -path '*/bin/*'`: the build copies sample csproj fixtures into test
         # bin dirs (e.g. MeshWeaver.Samples.Graph.csproj under
         # test/MeshWeaver.Acme.Test/bin/Debug/net10.0/SamplesGraph/). They match
         # the *.csproj pattern but aren't test projects — invoking dotnet test on
         # each wastes ~1 s × 23 entries per run.
         #
+        # Shard selection: each runner handles every SHARD_TOTAL-th project of the
+        # sorted list (idx % SHARD_TOTAL == SHARD_INDEX). Sorting + modulo
+        # interleaves heavy projects (FutuRe, AI, Autocomplete, Acme) across shards
+        # rather than clustering them in one.
+        idx=0
         for csproj in $(find test -name '*.csproj' \
             ! -path '*Cosmos*' \
             ! -path '*/bin/*' \
             | sort); do
+          if [ "$(( idx % SHARD_TOTAL ))" -ne "$SHARD_INDEX" ]; then
+            idx=$((idx + 1))
+            continue
+          fi
+          idx=$((idx + 1))
           name=$(basename "$csproj" .csproj)
           echo "::endgroup::"
           echo "::group::$name"
@@ -148,6 +170,9 @@ jobs:
       uses: EnricoMi/publish-unit-test-result-action@v2.12.0
       if: always()
       with:
+        # Unique check per shard so the 4 parallel matrix legs don't clobber each
+        # other's check-run. The PR is green only when every shard's check passes.
+        check_name: "Test Results (shard ${{ matrix.shard }})"
         action_fail: true
         # File patterns of test result files. Relative paths are known to work best, while the composite action also works with absolute paths. Supports "*", "**", "?", and "[]" character ranges. Use multiline string for multiple patterns. Patterns starting with "!" exclude the matching files. There have to be at least one pattern starting without a "!". 
         files: |
@@ -156,7 +181,7 @@ jobs:
       uses: actions/upload-artifact@v6
       if: always()
       with:
-        name: testResults
+        name: testResults-shard${{ matrix.shard }}
         path: |
           test/**/*.trx
           test/test-results.log
