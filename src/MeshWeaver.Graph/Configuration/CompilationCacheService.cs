@@ -128,6 +128,21 @@ internal interface ICompilationCacheService
     void UnloadContext(string nodeName);
 
     /// <summary>
+    /// 🚨 Memory reclaim on node-hub disposal. Unloads EVERY collectible
+    /// <c>NodeAssemblyLoadContext</c> that loaded code for this NodeType — keyed by
+    /// sanitized node name, by full DLL path, or by release path — so the compiled
+    /// assembly (and its native footprint) is GC-collectable the moment the owning
+    /// node hub goes away. Unlike <see cref="InvalidateCache"/> this does NOT set the
+    /// sticky "invalidated" flag and does NOT touch on-disk DLLs: the durable release
+    /// artifacts stay on the shared cache mount, so a later reactivation reloads them
+    /// without recompiling. This is the per-node-lifetime ALC ownership the top-level
+    /// singleton otherwise can't provide (its root container is never disposed — see
+    /// CompilationCacheService registration + MeshDataSource.SubscribeToOwnDeletion).
+    /// </summary>
+    /// <param name="nodeName">Sanitized node name (e.g. <c>SanitizeNodeName(node.Path)</c>).</param>
+    void UnloadNodeContexts(string nodeName);
+
+    /// <summary>
     /// Gets the release folder path for a node and release key.
     /// Release folders are immutable once created.
     /// </summary>
@@ -765,6 +780,32 @@ internal class CompilationCacheService(
             logger.LogDebug("Unloading AssemblyLoadContext for {NodeName}", nodeName);
             context.Dispose();
         }
+    }
+
+    /// <inheritdoc />
+    public void UnloadNodeContexts(string nodeName)
+    {
+        if (_disposed)
+            return;
+
+        // Match the same set InvalidateCache flushes — but WITHOUT the sticky
+        // _invalidated flag (no forced recompile on reactivation) and WITHOUT
+        // deleting disk artifacts. Release- and path-keyed contexts register their
+        // owning NodeType under NodeAssemblyLoadContext.NodeName; the dictionary key
+        // may instead be the sanitized name, a full DLL path, or a release path, so
+        // match on either.
+        var keysToUnload = _loadContexts
+            .Where(kvp => string.Equals(kvp.Key, nodeName, StringComparison.Ordinal)
+                       || string.Equals(kvp.Value.NodeName, nodeName, StringComparison.Ordinal))
+            .Select(kvp => kvp.Key)
+            .ToList();
+
+        foreach (var key in keysToUnload)
+            UnloadContext(key);
+
+        if (keysToUnload.Count > 0)
+            logger.LogDebug("Unloaded {Count} AssemblyLoadContext(s) for disposed node {NodeName}",
+                keysToUnload.Count, nodeName);
     }
 
     /// <inheritdoc />
