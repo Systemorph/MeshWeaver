@@ -5,6 +5,7 @@ using System.Reactive.Threading.Tasks;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Services.LanguageServer;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Completion;
@@ -12,6 +13,7 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.QuickInfo;
 using Microsoft.CodeAnalysis.Tags;
 using Microsoft.CodeAnalysis.Text;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using RoslynDiagnosticSeverity = Microsoft.CodeAnalysis.DiagnosticSeverity;
 using LspDiagnosticSeverity = MeshWeaver.Mesh.Services.LanguageServer.DiagnosticSeverity;
@@ -44,11 +46,21 @@ internal sealed class MeshNodeLanguageService(
     private readonly ConcurrentDictionary<string, CachedWorkspace> _cache =
         new(StringComparer.Ordinal);
 
+    // Compile pool: Roslyn LSP work is CPU-bound, so it routes through the bounded
+    // Compile pool which caps concurrency so it can't starve other schedulers.
+    // A bare Observable.FromAsync deadlocks under a blocking subscriber (SubscribeOn
+    // only moves the subscribe, not the await continuation); the pool runs the leaf
+    // with ConfigureAwait(false) behind a gate. Falls back to the unbounded pool
+    // when no registry is wired (e.g. tests constructing the service outside DI).
+    private readonly IIoPool _ioPool =
+        hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Compile)
+        ?? IoPool.Unbounded;
+
     public IObservable<IReadOnlyList<DiagnosticInfo>> GetDiagnostics(string nodeTypePath)
         => GetOrBuildWorkspace(nodeTypePath)
             .SelectMany(cached => cached is null
                 ? Observable.Return<IReadOnlyList<DiagnosticInfo>>(Array.Empty<DiagnosticInfo>())
-                : Observable.FromAsync(ct => GetDiagnosticsAsync(cached, ct)));
+                : _ioPool.Run(ct => GetDiagnosticsAsync(cached, ct)));
 
     public IObservable<HoverInfo?> GetHover(string nodeTypePath, string sourcePath, SourcePosition position)
         => GetOrBuildWorkspace(nodeTypePath)
@@ -56,7 +68,7 @@ internal sealed class MeshNodeLanguageService(
             {
                 if (cached is null || !cached.DocumentsByPath.TryGetValue(sourcePath, out var docId))
                     return Observable.Return<HoverInfo?>(null);
-                return Observable.FromAsync(ct => GetHoverAsync(cached, docId, position, ct));
+                return _ioPool.Run(ct => GetHoverAsync(cached, docId, position, ct));
             });
 
     public IObservable<IReadOnlyList<CompletionEntry>> GetCompletions(
@@ -66,7 +78,7 @@ internal sealed class MeshNodeLanguageService(
             {
                 if (cached is null || !cached.DocumentsByPath.TryGetValue(sourcePath, out var docId))
                     return Observable.Return<IReadOnlyList<CompletionEntry>>(Array.Empty<CompletionEntry>());
-                return Observable.FromAsync(ct => GetCompletionsAsync(cached, docId, position, maxResults, ct));
+                return _ioPool.Run(ct => GetCompletionsAsync(cached, docId, position, maxResults, ct));
             });
 
     public IObservable<IReadOnlyList<DiagnosticInfo>> CheckSpeculative(
@@ -77,7 +89,7 @@ internal sealed class MeshNodeLanguageService(
                 : compilationService.GetCompilationInputsAsync(node)
                     .SelectMany(inputs => inputs is null
                         ? Observable.Return<IReadOnlyList<DiagnosticInfo>>(Array.Empty<DiagnosticInfo>())
-                        : Observable.FromAsync(ct =>
+                        : _ioPool.Run(ct =>
                             speculativeCompilation.GetDiagnosticsAsync(inputs, sourcePath, proposedCode, ct))));
 
     /// <summary>
@@ -179,7 +191,7 @@ internal sealed class MeshNodeLanguageService(
         var project = cached.Workspace.CurrentSolution.GetProject(cached.ProjectId);
         if (project is null) return Array.Empty<DiagnosticInfo>();
 
-        var compilation = await project.GetCompilationAsync(ct);
+        var compilation = await project.GetCompilationAsync(ct).ConfigureAwait(false);
         if (compilation is null) return Array.Empty<DiagnosticInfo>();
 
         var diags = compilation.GetDiagnostics(ct);
@@ -204,14 +216,14 @@ internal sealed class MeshNodeLanguageService(
         var document = cached.Workspace.CurrentSolution.GetDocument(docId);
         if (document is null) return null;
 
-        var text = await document.GetTextAsync(ct);
+        var text = await document.GetTextAsync(ct).ConfigureAwait(false);
         var offset = TryGetOffset(text, position);
         if (offset is null) return null;
 
         var service = QuickInfoService.GetService(document);
         if (service is null) return null;
 
-        var info = await service.GetQuickInfoAsync(document, offset.Value, ct);
+        var info = await service.GetQuickInfoAsync(document, offset.Value, ct).ConfigureAwait(false);
         if (info is null) return null;
 
         var markdown = RenderQuickInfo(info);
@@ -225,14 +237,14 @@ internal sealed class MeshNodeLanguageService(
         var document = cached.Workspace.CurrentSolution.GetDocument(docId);
         if (document is null) return Array.Empty<CompletionEntry>();
 
-        var text = await document.GetTextAsync(ct);
+        var text = await document.GetTextAsync(ct).ConfigureAwait(false);
         var offset = TryGetOffset(text, position);
         if (offset is null) return Array.Empty<CompletionEntry>();
 
         var service = CompletionService.GetService(document);
         if (service is null) return Array.Empty<CompletionEntry>();
 
-        var list = await service.GetCompletionsAsync(document, offset.Value, cancellationToken: ct);
+        var list = await service.GetCompletionsAsync(document, offset.Value, cancellationToken: ct).ConfigureAwait(false);
         if (list is null || list.ItemsList.Count == 0) return Array.Empty<CompletionEntry>();
 
         var take = Math.Min(maxResults, list.ItemsList.Count);
