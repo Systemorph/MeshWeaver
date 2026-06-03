@@ -161,6 +161,25 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     protected virtual bool ShareMeshAcrossTests => false;
 
     /// <summary>
+    /// Opt-in: when overridden to <c>true</c>, <see cref="DisposeAsync"/> disposes
+    /// this test's <see cref="MeshWeaver.Fixture.ServiceSetup.ServiceProvider"/> at the
+    /// very END of teardown — after the mesh and every hosted hub have disposed. That
+    /// tears down the Autofac container and every <see cref="IDisposable"/> singleton
+    /// (the compilation cache, Roslyn metadata/workspaces, the TypeRegistry, the whole
+    /// per-<c>[Fact]</c> DI graph) instead of letting it survive for the entire testhost
+    /// process. For compile-heavy classes that is the dominant per-test managed retention.
+    ///
+    /// <para><strong>Default <c>false</c>.</strong> Disposing the SP eagerly once broke
+    /// ~40 test classes that read a singleton handle AFTER teardown (their own
+    /// <c>IDisposable.Dispose</c>, a fixture DI pattern, or a hub-disposal callback that
+    /// re-resolves a service). A class may opt in ONLY once verified not to touch the SP
+    /// post-teardown. Mutually exclusive with <see cref="ShareMeshAcrossTests"/> (the
+    /// shared SP is cached statically and reused across the class's <c>[Fact]</c>s, so it
+    /// must never be disposed per-test) — the dispose runs only on the non-shared path.</para>
+    /// </summary>
+    protected virtual bool DisposeServiceProviderOnTeardown => true;
+
+    /// <summary>
     /// Cached <see cref="IServiceProvider"/> per test-class type, populated on
     /// the first instance of a class that opts in via
     /// <see cref="ShareMeshAcrossTests"/>. Never cleared during the testhost
@@ -983,6 +1002,24 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         finally
         {
             await base.DisposeAsync();
+
+            // Opt-in (non-shared path only): release the per-[Fact] ServiceProvider so
+            // its Autofac container + every IDisposable singleton (compilation cache,
+            // Roslyn workspaces, TypeRegistry, the whole mesh DI graph) is torn down now
+            // instead of surviving for the whole testhost process. The mesh + all hubs
+            // have already disposed at this point (base.DisposeAsync above), so the ALC
+            // unload hook and every RegisterForDisposal callback that re-resolves a
+            // service have already run — nothing should read the SP after this.
+            if (DisposeServiceProviderOnTeardown)
+            {
+                try { (ServiceProvider as IDisposable)?.Dispose(); }
+                catch (Exception ex)
+                {
+                    TestPhaseTrace(testName, "DISPOSE_SP_ERROR", sw.ElapsedMilliseconds,
+                        $"{ex.GetType().Name}: {ex.Message}");
+                }
+            }
+
             // Force a full GC + finalizers + a second collection so any short-lived
             // garbage is gone and the MEM line shows what actually survived this
             // class. Across the run, look for classes whose post-DISPOSE managed
