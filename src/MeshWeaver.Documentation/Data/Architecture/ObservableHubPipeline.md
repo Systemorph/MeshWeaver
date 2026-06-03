@@ -67,30 +67,87 @@ becomes a reactive fold (`Handlers.Aggregate(Observable.Return(delivery), (acc, 
 then `.Select(RouteAlongHostingHierarchy)`. The observable-handler `WithHandler` stores the
 handler directly — the `.FirstAsync().ToTask()` bridge is deleted.
 
-### 4. Turn loop — synchronous queue, no TPL Dataflow
+### 4. Turn loop — a single-threaded queue of `IObservable`, not a TPL `ActionBlock`
+
+> **The core mechanism (a).** The inbox is a queue of **`IObservable<IMessageDelivery>`**
+> (one per message — the lazy routing→gates→pipeline→handler chain for that delivery), NOT a
+> queue of `Task`. The loop dequeues one, **starts it (`.Subscribe(...)`) with error handling**,
+> and moves on. The queue itself is the single-thread guarantee — exactly one turn drains at a
+> time — so the `ActionBlock` (whose only job was to serialize async continuations) is gone.
 
 `MessageService` replaces the `ActionBlock`/`deferredBuffer`/`executionBuffer` Dataflow blocks
-with a single lock-guarded FIFO queue and a drain loop:
+with a single lock-guarded FIFO queue and a re-entrancy-guarded drain loop:
 
+```csharp
+// q : Queue<Func<IObservable<IMessageDelivery>>>   — each item is the lazy turn for one delivery
+void Post(IMessageDelivery d)
+{
+    lock (gate) { q.Enqueue(() => RouteAndDeliver(d)); }   // RouteAndDeliver returns IObservable
+    Drain();                                                // no-op if a drain is already running
+}
+
+void Drain()
+{
+    lock (gate) { if (draining) return; draining = true; }  // one turn at a time, ever
+    try
+    {
+        while (TryDequeue(out var turn))
+            turn().Subscribe(                               // START the turn's observable
+                _ => { },                                   // terminal: state was mutated INLINE
+                ex => ReportFailure(ex));                   // error handling per turn
+    }
+    finally { lock (gate) { draining = false; } }
+}
 ```
-Post(delivery):
-    lock(q): q.Enqueue(delivery)
-    if (!draining) Drain()        // re-entrancy guarded; one turn at a time
 
-Drain():
-    while (q.TryDequeue(d)):
-        Route(d)                  // IObservable; subscribe-inline, completes synchronously
-          .Subscribe(processed => { /* gates/deferral/pipeline as today, but sync */ },
-                     ex => ReportFailure(d, ex))
+For a **synchronous** handler the turn's `IObservable` emits and completes *inline on
+`Subscribe`*, so all of its hub-state mutation happens on this single thread before `Drain`
+advances — strict FIFO, no overlap. A handler that `hub.Post`s to its own hub enqueues behind
+the current turn (the `while` picks it up; `draining` blocks nested re-entry). The
+deferral/gate machinery (`gates`, `ScheduleDeferralTimeout`, `ProcessDeferredMessage`) maps 1:1:
+a deferred message is **re-enqueued** when its gate opens instead of `deferredBuffer.Post(...)`.
+
+**Ordering invariant to preserve (the single hardest property):** one turn at a time, FIFO,
+self-posts go to the back. Every message-flow test (`Messaging.Hub.Test`, hub-handler tests,
+the Orleans propagation suite) exists to pin exactly this.
+
+### 5. Promises for genuine async — `ReplaySubject` + `IIoPool` (mechanism b)
+
+A handler must **never** block the turn thread on I/O. When it hits a genuinely-async leaf
+(Postgres, blob, file, compile, a cross-hub round-trip), it **returns a promise — a
+`ReplaySubject<T>(1)` — and outsources the async work to the [`IIoPool`](xref:Architecture/AsynchronousCalls)**.
+The synchronous part of the turn completes immediately; the async result resolves later and
+**re-enters the hub as a posted message**, so hub state is still only ever touched on the single
+turn thread:
+
+```csharp
+IObservable<IMessageDelivery> Handle(IMessageDelivery<FooRequest> d)
+{
+    var promise = new ReplaySubject<Result>(1);     // the "promise": buffers the 1 result for
+    _ioPool.Invoke(ct => DoIo(d.Message))           // late subscribers. async outsourced to pool.
+           .Subscribe(promise);                      // pool thread pushes the result in
+
+    // The continuation subscribes to the promise and POSTS the outcome back (re-enters the
+    // queue on the turn thread — never mutates state from the pool thread). See
+    // AsynchronousCalls.md "Subscribe callbacks post to the hub".
+    promise.Subscribe(
+        result => hub.Post(new FooResponse(result), o => o.ResponseFor(d)),
+        ex     => hub.Post(new FooResponse(error: ex.Message), o => o.ResponseFor(d)));
+
+    return Observable.Return(d.Processed());          // turn completes synchronously — loop advances
+}
 ```
 
-The deferral/gate machinery (`gates`, `deferredBuffer`, `ScheduleDeferralTimeout`,
-`ProcessDeferredMessage`) maps 1:1 onto the queue — a deferred message is re-enqueued when its
-gate opens, instead of `deferredBuffer.Post(...)`. **Ordering invariant to preserve:** a hub
-processes exactly one turn at a time, FIFO, and a handler that posts to *itself* enqueues
-behind the current turn (never re-enters). This is the single hardest property to get right —
-every message-flow test (`Messaging.Hub.Test`, hub-handler tests, the Orleans propagation
-suite) exists to pin it.
+Why `ReplaySubject(1)` and not a plain `Subject`: the pool may resolve *before* the continuation
+subscribes; `ReplaySubject(1)` buffers the single result so the late subscriber still observes it
+(this is the "promise" semantics). It is also the bridge type for any caller that wants to
+`hub.Observe(...)` the eventual answer — they get the value whenever they attach.
+
+**The rule:** the turn thread runs only synchronous, in-memory work and *starts* observables;
+every real wait is a `ReplaySubject` promise fed by an `IIoPool` leaf, never an `await` on the
+loop. This is the same actor-model boundary as today (state on one thread, I/O off-thread,
+results re-enter as messages) — just expressed in `IObservable` + a plain queue instead of
+`Task` + a Dataflow `ActionBlock`.
 
 ## Staged plan (green CI gate per stage — do NOT merge a red stage)
 
