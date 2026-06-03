@@ -43,6 +43,14 @@ public sealed class ClaudeConnectOptions
     public string PtyWrapper { get; set; } = "script";
 
     /// <summary>
+    /// Terminal width (columns) forced on the PTY before the CLI runs (<c>stty cols</c>). The Ink UI
+    /// line-wraps the long OAuth URL at the terminal width; a wrapped URL gets scraped truncated
+    /// (losing trailing params like <c>redirect_uri</c>). Set wide enough that the whole URL stays on
+    /// one line. Only used when <see cref="UsePseudoTerminal"/> is set.
+    /// </summary>
+    public int PtyColumns { get; set; } = 4096;
+
+    /// <summary>
     /// Regex whose first capturing group (or whole match) is the auth URL to surface, applied to
     /// each stdout line. Default matches an <c>https://…</c> URL on a line.
     /// </summary>

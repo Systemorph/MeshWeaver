@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reactive.Linq;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -51,6 +52,11 @@ public sealed class ClaudeConnectStrategy : IConnectStrategy
 
     private ClaudeConnectOptions Options =>
         services.GetService<IOptions<ClaudeConnectOptions>>()?.Value ?? new ClaudeConnectOptions();
+
+    // PTY output carries ANSI escape/colour sequences (the Ink UI). Strip them before scraping so the
+    // URL/token regexes see clean text (an escape sequence is non-whitespace and would corrupt \S+).
+    private static readonly Regex AnsiEscape = new(@"\x1B\[[0-9;?]*[ -/]*[@-~]", RegexOptions.Compiled);
+    private static string StripAnsi(string s) => AnsiEscape.Replace(s, "");
 
     /// <summary>
     /// Logged-in ⇔ a non-empty <c>{userConfigDir}/.credentials.json</c> (where the CLI persists its
@@ -111,9 +117,12 @@ public sealed class ClaudeConnectStrategy : IConnectStrategy
             // our pipe (so URL/token lines become scrapeable) and forwards our stdin into the PTY
             // (so the pasted code reaches the CLI). Linux-only; UsePseudoTerminal stays false on
             // Windows/dev and in the fake-CLI test.
-            var inner = options.Arguments.Count > 0
+            var cmd = options.Arguments.Count > 0
                 ? $"{options.FileName} {string.Join(" ", options.Arguments)}"
                 : options.FileName;
+            // Force a wide PTY first so the Ink UI doesn't wrap the long OAuth URL across lines —
+            // a wrapped URL gets scraped truncated (losing trailing params like redirect_uri).
+            var inner = $"stty cols {options.PtyColumns} 2>/dev/null; {cmd}";
             startInfo.FileName = options.PtyWrapper;
             startInfo.ArgumentList.Add("-qfc");
             startInfo.ArgumentList.Add(inner);
@@ -152,7 +161,7 @@ public sealed class ClaudeConnectStrategy : IConnectStrategy
         {
             while (!timeoutCts.IsCancellationRequested)
             {
-                var line = await buffer.TakeAsync(timeoutCts.Token).ConfigureAwait(false);
+                var line = StripAnsi(await buffer.TakeAsync(timeoutCts.Token).ConfigureAwait(false));
                 var m = urlRegex.Match(line);
                 if (m.Success)
                 {
@@ -203,7 +212,7 @@ public sealed class ClaudeConnectStrategy : IConnectStrategy
         {
             while (!timeoutCts.IsCancellationRequested)
             {
-                var line = await buffer.TakeAsync(timeoutCts.Token).ConfigureAwait(false);
+                var line = StripAnsi(await buffer.TakeAsync(timeoutCts.Token).ConfigureAwait(false));
                 var m = tokenRegex.Match(line);
                 if (m.Success)
                 {
