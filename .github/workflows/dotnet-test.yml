@@ -78,21 +78,38 @@ jobs:
         # the *.csproj pattern but aren't test projects — invoking dotnet test on
         # each wastes ~1 s × 23 entries per run.
         #
-        # Shard selection: each runner handles every SHARD_TOTAL-th project of the
-        # sorted list (idx % SHARD_TOTAL == SHARD_INDEX). Sorting + modulo
-        # interleaves heavy projects (FutuRe, AI, Autocomplete, Acme) across shards
-        # rather than clustering them in one.
-        idx=0
+        # Shard selection (weighted): the ~7 dynamic-compilation / collectible-ALC
+        # heavyweights (Acme, AI, Content, FutuRe, Graph, Hosting.Monolith,
+        # Hosting.Orleans) dominate BOTH wall-clock AND the per-runner memory
+        # accumulation (leaked NodeType ALCs) that makes a late project GC-stall and
+        # time out. A plain `idx % SHARD_TOTAL` over the *alphabetical* list happened
+        # to drop the three worst — AI + FutuRe + Orleans — all onto shard 2, which
+        # then memory-pressured and timed out the Orleans Resubmit test at 45 s +
+        # crashed teardown. Fix: round-robin the heavies on their OWN counter so
+        # consecutive heavies always land on different shards (AI/FutuRe/Orleans →
+        # distinct shards), and round-robin the light projects on a separate counter.
+        # Net: no shard carries more than two heavies, never the three ALC-heaviest
+        # together. AI.Test.FakeCli is a helper exe, not a heavy test → stays light.
+        heavy_idx=0
+        light_idx=0
         for csproj in $(find test -name '*.csproj' \
             ! -path '*Cosmos*' \
             ! -path '*/bin/*' \
             | sort); do
-          if [ "$(( idx % SHARD_TOTAL ))" -ne "$SHARD_INDEX" ]; then
-            idx=$((idx + 1))
+          name=$(basename "$csproj" .csproj)
+          case "$name" in
+            MeshWeaver.Acme.Test|MeshWeaver.AI.Test|MeshWeaver.Content.Test|MeshWeaver.FutuRe.Test|MeshWeaver.Graph.Test|MeshWeaver.Hosting.Monolith.Test|MeshWeaver.Hosting.Orleans.Test)
+              assigned=$(( heavy_idx % SHARD_TOTAL ))
+              heavy_idx=$(( heavy_idx + 1 ))
+              ;;
+            *)
+              assigned=$(( light_idx % SHARD_TOTAL ))
+              light_idx=$(( light_idx + 1 ))
+              ;;
+          esac
+          if [ "$assigned" -ne "$SHARD_INDEX" ]; then
             continue
           fi
-          idx=$((idx + 1))
-          name=$(basename "$csproj" .csproj)
           echo "::endgroup::"
           echo "::group::$name"
           # `timeout 6m`: per-project wall-clock cap. blame-hang-timeout 30s only
