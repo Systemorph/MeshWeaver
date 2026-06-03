@@ -46,10 +46,9 @@ internal class MonolithRoutingService(
         if (streams.TryGetValue(address, out var stream))
         {
             logger.LogDebug("[ROUTE-IMPL] delivering via existing stream for {Address}", address);
-            // Bridge the AsyncDelivery callback (Task-shaped) into the chain via FromAsync —
-            // single-shot, no leak. The base RouteMessageAsync re-bridges to Task at the
-            // framework boundary.
-            return Observable.FromAsync(ct => stream.Invoke(delivery, ct));
+            // The AsyncDelivery callback is a cold IObservable now — return it
+            // directly; the base RouteMessageAsync subscribes once at the boundary.
+            return stream.Invoke(delivery, CancellationToken.None);
         }
 
         // 100% reactive: CreateHub returns IObservable<IMessageHub?>. Compose

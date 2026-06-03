@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Mesh.Services;
@@ -33,7 +34,7 @@ public interface IRoutingService
     /// Registers a stream for the given address and returns immediately.
     /// </summary>
     IAsyncDisposable RegisterStream(Address address, SyncDelivery callback)
-        => RegisterStream(address, (d, _) => Task.FromResult(callback(d)));
+        => RegisterStream(address, (d, _) => Observable.Return(callback(d)));
 
     /// <summary>
     /// Easy-access overload to register a hub as a stream sink.

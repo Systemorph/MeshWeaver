@@ -258,13 +258,12 @@ public sealed class MessageHub : IMessageHub
         TypeRegistry.WithType(typeof(PingRequest), nameof(PingRequest));
         TypeRegistry.WithType(typeof(PingResponse), nameof(PingResponse));
         Register<DisposeRequest>(HandleDispose);
-        Register<ShutdownRequest>(HandleShutdown);
+        // Disposal is a genuinely-async leaf → delegate to the pool; the rule chain stays reactive.
+        Register<ShutdownRequest>((request, ct) => DeliveryObservable.Run(_ => HandleShutdownCore(request, ct)));
         Register<PingRequest>(HandlePingRequest);
-        // Observable-shaped init handler bridged to the Task-based rule chain at this actor-loop edge
-        // (the sanctioned Observable->Task boundary). HandleInitialize + the buildup composition contain
-        // no await; the gate opens reactively on completion. The execution ct flows into ToTask so a
-        // cancelled execution unsubscribes (cancelling the in-flight buildup), matching the old await loop.
-        Register<InitializeHubRequest>((request, ct) => HandleInitialize(request).ToTask(ct));
+        // HandleInitialize already returns IObservable (buildup composed via Observable.Concat,
+        // no await) — register it directly now that the rule chain is reactive.
+        Register<InitializeHubRequest>((request, ct) => HandleInitialize(request));
         lock (messageHandlerRegistrationLock)
         {
             foreach (var messageHandler in configuration.MessageHandlers)
@@ -415,15 +414,17 @@ public sealed class MessageHub : IMessageHub
             expressions
         );
 
+        // Sync IMessageHandler<> returns IMessageDelivery → wrap in Observable.Return;
+        // async IMessageHandlerAsync<> already returns IObservable<IMessageDelivery>.
         if (interfaceType.GetGenericTypeDefinition() == typeof(IMessageHandler<>))
             handlerCall = Expression.Call(
                 null,
-                MessageHubPluginExtensions.TaskFromResultMethod,
+                MessageHubPluginExtensions.ObservableReturnMethod,
                 handlerCall
             );
 
         var lambda = Expression
-            .Lambda<Func<IMessageDelivery, CancellationToken, Task<IMessageDelivery>>>(
+            .Lambda<Func<IMessageDelivery, CancellationToken, IObservable<IMessageDelivery>>>(
                 handlerCall,
                 prm,
                 cancellationTokenPrm
@@ -440,27 +441,32 @@ public sealed class MessageHub : IMessageHub
 
 
 
-    private async Task<IMessageDelivery> HandleMessageAsync(
+    private IObservable<IMessageDelivery> HandleMessageAsync(
         IMessageDelivery delivery,
         LinkedListNode<AsyncDelivery> node,
         CancellationToken cancellationToken
     )
     {
-        // Iterative — every rule becomes one continuation in the SAME async state
-        // machine instead of N nested ones. The previous shape recursed
-        // HandleMessageAsyncImpl(node.Next, depth+1), allocating one state machine
-        // per rule per message. Hubs accumulate ~10–20 rules; the dispatch loop
-        // showed up at 0.82% inclusive in the Orleans test profile.
+        // Reactive fold over the rule chain: each rule maps the running delivery
+        // to an IObservable that emits the transformed delivery, fed to the next
+        // rule via SelectMany. Same sequential semantics as the previous
+        // await-loop — sync rules (Observable.Return) collapse synchronously on
+        // subscribe (on the action-block thread), genuinely-async rules complete
+        // later via the pool. The chain is BUILT here (one SelectMany per rule);
+        // it runs when the actor-loop edge subscribes (.ToTask).
+        var inputMessageType = delivery.Message.GetType();
+        IObservable<IMessageDelivery> result = Observable.Return(delivery);
         LinkedListNode<AsyncDelivery>? current = node;
         var depth = 0;
         while (current is not null)
         {
             if (depth++ > 500)
-                throw new InvalidOperationException($"HandleMessageAsync recursion depth exceeded 500 in hub {Address} for {delivery.Message.GetType().Name}");
-            delivery = await current.Value.Invoke(delivery, cancellationToken);
+                throw new InvalidOperationException($"HandleMessageAsync recursion depth exceeded 500 in hub {Address} for {inputMessageType.Name}");
+            var rule = current.Value;
+            result = result.SelectMany(d => rule.Invoke(d, cancellationToken));
             current = current.Next;
         }
-        return delivery;
+        return result;
     }
 
     public bool OpenGate(string name)
@@ -541,6 +547,10 @@ public sealed class MessageHub : IMessageHub
                 if (traceEnabled)
                     logger.LogTrace("MESSAGE_FLOW: HUB_PROCESSING_RULES | {MessageType} | Hub: {Address} | MessageId: {MessageId} | RuleCount: {RuleCount}",
                         messageTypeName, Address, delivery.Id, rules.Count);
+                // Subscribe to the reactive rule chain HERE on the action-block
+                // thread (inside the AccessContext try/finally). `await` uses Rx's
+                // awaiter for the chain's single final emission — no .ToTask().
+                // Cancellation flows through the rules' cancellationToken.
                 delivery = await HandleMessageAsync(delivery, rules.First, cancellationToken);
             }
             else if (traceEnabled)
@@ -802,18 +812,23 @@ public sealed class MessageHub : IMessageHub
     }
 
 
-    private async Task<IMessageDelivery> ExecuteRequest(
+    private IObservable<IMessageDelivery> ExecuteRequest(
         IMessageDelivery delivery,
         CancellationToken cancellationToken
     )
     {
         if (delivery.Message is not ExecutionRequest er)
-            return delivery;
-        await er.Action.Invoke(cancellationToken);
-        return delivery.Processed();
+            return Observable.Return(delivery);
+        // Genuinely-async leaf (the caller-supplied Action) → delegate to the
+        // pool and replay the result; everything around it stays synchronous.
+        return DeliveryObservable.Run(async _ =>
+        {
+            await er.Action.Invoke(cancellationToken);
+            return delivery.Processed();
+        });
     }
 
-    private Task<IMessageDelivery> HandleCallbacks(
+    private IObservable<IMessageDelivery> HandleCallbacks(
         IMessageDelivery delivery,
         CancellationToken cancellationToken
     )
@@ -835,7 +850,7 @@ public sealed class MessageHub : IMessageHub
             if (traceEnabled)
                 logger.LogTrace("MESSAGE_FLOW: HUB_NO_CALLBACKS | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
                     messageTypeName, Address, delivery.Id);
-            return Task.FromResult(delivery);
+            return Observable.Return(delivery);
         }
 
         System.Reactive.Subjects.AsyncSubject<IMessageDelivery> subject;
@@ -846,7 +861,7 @@ public sealed class MessageHub : IMessageHub
                 if (debugEnabled)
                     logger.LogDebug("No subject found for response message {MessageType} (ID: {MessageId}) - treating as processed",
                         messageTypeName, delivery.Id);
-                return Task.FromResult(delivery.Processed());
+                return Observable.Return(delivery.Processed());
             }
             subject = entry.Subject;
         }
@@ -868,7 +883,7 @@ public sealed class MessageHub : IMessageHub
         if (traceEnabled)
             logger.LogTrace("MESSAGE_FLOW: HUB_CALLBACKS_COMPLETE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
                 messageTypeName, Address, delivery.Id);
-        return Task.FromResult(delivery.Processed());
+        return Observable.Return(delivery.Processed());
     }
 
     Address IMessageHub.Address => Address;
@@ -1158,7 +1173,9 @@ public sealed class MessageHub : IMessageHub
                 sb.Append(indent).Append("  Hub ").Append(child.Address).AppendLine();
         }
     }
-    private async Task<IMessageDelivery> HandleShutdown(
+    // Kept as an async Task leaf (drains the async dispose-action queue); bridged
+    // into the reactive rule chain via DeliveryObservable.Run at the registration.
+    private async Task<IMessageDelivery> HandleShutdownCore(
         IMessageDelivery<ShutdownRequest> request,
         CancellationToken ct
     )
@@ -1580,7 +1597,7 @@ public sealed class MessageHub : IMessageHub
         DeliveryFilter<TMessage> filter
     )
     {
-        return Register((d, _) => Task.FromResult(action(d)), filter);
+        return Register((d, _) => Observable.Return(action(d)), filter);
     }
 
     public IDisposable RegisterInherited<TMessage>(
@@ -1592,14 +1609,14 @@ public sealed class MessageHub : IMessageHub
             (d, c) =>
                 d is IMessageDelivery<TMessage> md && (filter?.Invoke(md) ?? true)
                     ? action(md, c)
-                    : Task.FromResult(d)
+                    : Observable.Return(d)
         );
         rules.AddLast(node);
         return new AnonymousDisposable(() => rules.Remove(node));
     }
 
     public IDisposable Register(SyncDelivery delivery) =>
-        Register((d, _) => Task.FromResult(delivery(d)));
+        Register((d, _) => Observable.Return(delivery(d)));
 
     public IDisposable Register(AsyncDelivery delivery)
     {
@@ -1611,7 +1628,7 @@ public sealed class MessageHub : IMessageHub
     public IDisposable RegisterInherited<TMessage>(
         SyncDelivery<TMessage> action,
         DeliveryFilter<TMessage>? filter = null
-    ) => RegisterInherited((d, _) => Task.FromResult(action(d)), filter);
+    ) => RegisterInherited((d, _) => Observable.Return(action(d)), filter);
 
     public IDisposable Register<TMessage>(
         AsyncDelivery<TMessage> action,
@@ -1638,7 +1655,7 @@ public sealed class MessageHub : IMessageHub
 
     public IDisposable Register(AsyncDelivery action, DeliveryFilter filter)
     {
-        Task<IMessageDelivery> Rule
+        IObservable<IMessageDelivery> Rule
             (IMessageDelivery delivery, CancellationToken cancellationToken)
             => WrapFilter(delivery, action, filter, cancellationToken);
         var node = new LinkedListNode<AsyncDelivery>(Rule);
@@ -1649,7 +1666,7 @@ public sealed class MessageHub : IMessageHub
         });
     }
 
-    private Task<IMessageDelivery> WrapFilter(
+    private IObservable<IMessageDelivery> WrapFilter(
         IMessageDelivery delivery,
         AsyncDelivery action,
         DeliveryFilter filter,
@@ -1658,7 +1675,7 @@ public sealed class MessageHub : IMessageHub
     {
         if (filter(delivery))
             return action(delivery, cancellationToken);
-        return Task.FromResult(delivery);
+        return Observable.Return(delivery);
     }
 
     public IDisposable Register(Type tMessage, SyncDelivery action) =>
@@ -1670,7 +1687,7 @@ public sealed class MessageHub : IMessageHub
             (d, _) =>
             {
                 d = action(d);
-                return Task.FromResult(d);
+                return Observable.Return(d);
             },
             filter
         );

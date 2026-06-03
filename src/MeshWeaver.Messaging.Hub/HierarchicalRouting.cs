@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using System.Reactive.Linq;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Messaging;
@@ -31,7 +32,7 @@ internal class HierarchicalRouting
     /// <param name="delivery"></param>
     /// <param name="cancellationToken"></param>
     /// <returns></returns>
-    public async Task<IMessageDelivery> RouteMessageAsync(IMessageDelivery delivery,
+    public IMessageDelivery RouteMessageAsync(IMessageDelivery delivery,
         CancellationToken cancellationToken)
     {
         if (delivery.State != MessageDeliveryState.Submitted)
@@ -52,8 +53,13 @@ internal class HierarchicalRouting
 
         }
 
+        // The routing handlers are Observable.Return-shaped (synchronous emit) — fold
+        // them in sequence by subscribing inline; each handler observes the prior result.
         foreach (var handler in configuration.Handlers)
-            delivery = await handler(delivery, cancellationToken);
+        {
+            var routed = delivery;
+            handler(routed, cancellationToken).Subscribe(d => delivery = d);
+        }
 
         if (delivery.State != MessageDeliveryState.Submitted)
             return delivery;

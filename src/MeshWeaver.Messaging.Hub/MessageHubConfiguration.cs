@@ -155,8 +155,24 @@ public record MessageHubConfiguration
     private record ParentMessageHub(IMessageHub Value);
 
 
-    public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, IMessageDelivery> delivery, Func<IMessageHub, IMessageDelivery, bool>? filter = null) =>
-        WithHandler<TMessage>((h, d, _) => Task.FromResult(delivery.Invoke(h, d)), filter);
+    public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, IMessageDelivery> delivery, Func<IMessageHub, IMessageDelivery, bool>? filter = null)
+    {
+        TypeRegistry.GetOrAddType(typeof(TMessage));
+        return this with
+        {
+            MessageHandlers = MessageHandlers.Add(
+                new(typeof(TMessage),
+                    (h, m, c) =>
+                        m is IMessageDelivery<TMessage> mdTyped &&
+                        (filter ?? DefaultFilter).Invoke(h, m)
+                            // Synchronous handler: run inline on the hub's ActionBlock
+                            // thread (preserves TaskScheduler.Current — the actor-model
+                            // invariant WithTaskScheduler relies on) and emit via
+                            // Observable.Return. No pool hop.
+                            ? Observable.Return(delivery.Invoke(h, mdTyped))
+                            : Observable.Return(m)))
+        };
+    }
     public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, CancellationToken, Task<IMessageDelivery>> delivery, Func<IMessageHub, IMessageDelivery, bool>? filter = null)
     {
         TypeRegistry.GetOrAddType(typeof(TMessage));
@@ -167,8 +183,13 @@ public record MessageHubConfiguration
                     (h, m, c) =>
                         m is IMessageDelivery<TMessage> mdTyped &&
                         (filter ?? DefaultFilter).Invoke(h, m)
-                            ? delivery.Invoke(h, mdTyped, c)
-                            : Task.FromResult(m)))
+                            // Invoke inline so the handler's synchronous prefix runs on
+                            // the hub's ActionBlock scheduler (actor-model invariant);
+                            // bridge the resulting Task to the rule chain. An
+                            // already-completed Task emits inline; genuine async resumes
+                            // on its own continuation.
+                            ? delivery.Invoke(h, mdTyped, c).ToObservable()
+                            : Observable.Return(m)))
         };
     }
 
@@ -422,7 +443,7 @@ public record MessageHubConfiguration
     {
         var userService = asyncPipeline.Hub.ServiceProvider.GetService<AccessService>();
         var logger = asyncPipeline.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.AccessContext");
-        return asyncPipeline.AddPipeline(async (d, ct, next) =>
+        return asyncPipeline.AddPipeline((d, ct, next) =>
         {
             var accessContext = d.AccessContext;
             // Per-message; gate on Debug.
@@ -440,17 +461,13 @@ public record MessageHubConfiguration
             // hook applies the same guard for the rule-chain dispatch boundary.
             var shouldStamp = accessContext is not null
                 && !AccessService.LooksLikeHubPrincipal(accessContext.ObjectId);
-            if (shouldStamp)
-                userService?.SetContext(accessContext);
-            try
-            {
-                return await next.Invoke(d, ct);
-            }
-            finally
-            {
-                if (shouldStamp)
-                    userService?.SetContext(null);
-            }
+            if (!shouldStamp)
+                return next.Invoke(d, ct);
+            // next() emits synchronously (terminates at ScheduleExecution); Finally
+            // clears the AsyncLocal stamp when that emission completes — the same
+            // set/clear window the old try/finally gave us, with no await.
+            userService?.SetContext(accessContext);
+            return next.Invoke(d, ct).Finally(() => userService?.SetContext(null));
         });
     }
 
@@ -485,7 +502,7 @@ public record AsyncPipelineConfig
     internal AsyncDelivery AsyncDelivery { get; init; }
 
     public AsyncPipelineConfig AddPipeline(
-        Func<IMessageDelivery, CancellationToken, AsyncDelivery, Task<IMessageDelivery>> pipeline)
+        Func<IMessageDelivery, CancellationToken, AsyncDelivery, IObservable<IMessageDelivery>> pipeline)
         => this with { AsyncDelivery = (d, ct) => pipeline.Invoke(d, ct, AsyncDelivery) };
 
     public IMessageHub Hub { get; init; }
@@ -508,4 +525,4 @@ public record SyncPipelineConfig
     public IMessageHub Hub { get; init; }
 }
 
-internal record MessageHandlerItem(Type MessageType, Func<IMessageHub, IMessageDelivery, CancellationToken, Task<IMessageDelivery>> AsyncDelivery);
+internal record MessageHandlerItem(Type MessageType, Func<IMessageHub, IMessageDelivery, CancellationToken, IObservable<IMessageDelivery>> AsyncDelivery);

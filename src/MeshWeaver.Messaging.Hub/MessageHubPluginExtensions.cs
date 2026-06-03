@@ -11,8 +11,11 @@ public static class MessageHubPluginExtensions
         typeof(IMessageHandler<>),
         typeof(IMessageHandlerAsync<>)
     ];
-    internal static readonly MethodInfo TaskFromResultMethod = ReflectionHelper.GetStaticMethod(
-        () => Task.FromResult<IMessageDelivery>(null!)
+    // Wraps a synchronous IMessageHandler<>.HandleMessage result (IMessageDelivery)
+    // into the reactive rule-chain shape (IObservable<IMessageDelivery>) — the
+    // Observable.Return analogue of the old Task.FromResult bridge.
+    internal static readonly MethodInfo ObservableReturnMethod = ReflectionHelper.GetStaticMethod(
+        () => System.Reactive.Linq.Observable.Return<IMessageDelivery>(null!)
     );
 
 }

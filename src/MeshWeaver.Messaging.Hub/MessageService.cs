@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Reactive.Linq;
 using System.Threading.Tasks.Dataflow;
 using MeshWeaver.Reflection;
 using Microsoft.Extensions.Logging;
@@ -150,7 +151,7 @@ public class MessageService : IMessageService
             .Aggregate(new SyncPipelineConfig(hub, d => d), (p, c) => c.Invoke(p)).SyncDelivery;
         hierarchicalRouting = new HierarchicalRouting(hub, parentHub);
         deliveryPipeline = hub.Configuration.DeliveryPipeline
-            .Aggregate(new AsyncPipelineConfig(hub, (d, _) => Task.FromResult(ScheduleExecution(d))),
+            .Aggregate(new AsyncPipelineConfig(hub, (d, _) => Observable.Return(ScheduleExecution(d))),
                 (p, c) => c.Invoke(p)).AsyncDelivery;
         // Store gate names from configuration for tracking which gates are still open
         gates = new(hub.Configuration.InitializationGates);
@@ -398,7 +399,7 @@ public class MessageService : IMessageService
             logger.LogTrace(
                 "MESSAGE_FLOW: ROUTING_TO_HIERARCHICAL | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}",
                 name, Address, delivery.Id, delivery.Target);
-        delivery = await hierarchicalRouting.RouteMessageAsync(delivery, cancellationToken);
+        delivery = hierarchicalRouting.RouteMessageAsync(delivery, cancellationToken);
         if (traceEnabled)
             logger.LogTrace(
                 "MESSAGE_FLOW: HIERARCHICAL_ROUTING_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: {State}",
@@ -477,7 +478,7 @@ public class MessageService : IMessageService
             logger.LogTrace(
                 "MESSAGE_FLOW: ROUTING_TO_LOCAL_EXECUTION | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
                 name, Address, delivery.Id);
-            return await deliveryPipeline.Invoke(delivery, cancellationToken);
+            return InvokeDeliveryPipeline(delivery, cancellationToken);
         }
 
         return delivery;
@@ -565,11 +566,11 @@ public class MessageService : IMessageService
                 return ReportFailure(delivery);
         }
 
-        delivery = await hierarchicalRouting.RouteMessageAsync(delivery, cancellationToken);
+        delivery = hierarchicalRouting.RouteMessageAsync(delivery, cancellationToken);
 
         if (isOnTarget)
         {
-            return await deliveryPipeline.Invoke(delivery, cancellationToken);
+            return InvokeDeliveryPipeline(delivery, cancellationToken);
         }
 
         return delivery;
@@ -594,6 +595,17 @@ public class MessageService : IMessageService
         {
             // Already disposed, ignore
         }
+    }
+
+    // Drains the synchronously-emitting delivery pipeline into its result. The
+    // pipeline terminates at ScheduleExecution, which posts the actual handler run
+    // to executionBuffer and returns synchronously — so Subscribe completes inline
+    // (no await, no ToTask). The genuine async work runs downstream on the block.
+    private IMessageDelivery InvokeDeliveryPipeline(IMessageDelivery delivery, CancellationToken cancellationToken)
+    {
+        var result = delivery;
+        deliveryPipeline.Invoke(delivery, cancellationToken).Subscribe(d => result = d);
+        return result;
     }
 
     private IMessageDelivery ScheduleExecution(IMessageDelivery delivery)

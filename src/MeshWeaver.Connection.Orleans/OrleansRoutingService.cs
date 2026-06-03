@@ -72,12 +72,12 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             OrleansRouteTrace.Write($"OrleansRoutingService.Deliver target={target} hostAddr={address} msg={delivery.Message?.GetType().Name} id={delivery.Id} streams.contains={streams.ContainsKey(address)}");
 
             // 1. Check registered local streams (portals, in-process clients).
-            //    Bridge the AsyncDelivery callback (Task-shaped) into the chain
-            //    via FromAsync — single-shot, no leak.
+            //    The AsyncDelivery callback is a cold IObservable now — return it
+            //    directly; the base chain subscribes once at the boundary.
             if (streams.TryGetValue(address, out var callback))
             {
                 OrleansRouteTrace.Write($"OrleansRoutingService.Deliver LOCAL_STREAM_HIT addr={address} id={delivery.Id}");
-                return Observable.FromAsync(ct => callback.Invoke(delivery, ct));
+                return callback.Invoke(delivery, CancellationToken.None);
             }
 
             // 2. Background mesh dispatch via the routing grain. Path resolution
@@ -242,7 +242,11 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         var subscriptionTask = stream.SubscribeAsync((v, _) =>
         {
             OrleansRouteTrace.Write($"OrleansRoutingService.STREAM_CALLBACK addr={address} msg={v.Message?.GetType().Name} id={v.Id}");
-            return callback.Invoke(v, CancellationToken.None);
+            // Orleans stream handlers must return Task; the AsyncDelivery callback
+            // is a cold IObservable now — Subscribe to run the delivery (the hub
+            // queues it), then signal Orleans the message was accepted.
+            callback.Invoke(v, CancellationToken.None).Subscribe();
+            return Task.CompletedTask;
         });
         subscriptionTask.ContinueWith(t =>
         {

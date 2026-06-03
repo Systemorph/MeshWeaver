@@ -189,11 +189,13 @@ public static class AccessControlPipeline
                         {
                             if (decided) return;
                             decided = true;
-                            // All checks passed — invoke next; fire-and-forget.
-                            _ = next.Invoke(delivery, ct);
+                            // All checks passed — invoke next. next is a cold
+                            // IObservable now; Subscribe to run the downstream side
+                            // effect (the old Task was hot/already-running).
+                            next.Invoke(delivery, ct).Subscribe();
                         });
 
-                return Task.FromResult(delivery.Forwarded());
+                return Observable.Return(delivery.Forwarded());
             });
         });
 
