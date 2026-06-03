@@ -23,3 +23,23 @@ data:
   Graph__Storage__Type: "{{ .Values.config.memex_portal.Graph__Storage__Type }}"
   Graph__Storage__BasePath: "{{ .Values.config.memex_portal.Graph__Storage__BasePath }}"
   Mcp__BaseUrl: "{{ .Values.config.memex_portal.Mcp__BaseUrl }}"
+  # ---- AI model providers (non-secret: endpoints + model catalog) ----------
+  # BuiltInLanguageModelProvider scans {Section}:Models / :Endpoint and emits the
+  # nodeType:LanguageModel mesh nodes the chat picker shows. Section names are the
+  # ones the catalog sources actually bind: "Anthropic" (claude) and "AzureFoundry"
+  # (open-weight multi-model /models endpoint). NOTE: NOT "AzureAIS" — nothing binds
+  # that section (the AppHost's AzureAIS__* env is dead config). Keys come from
+  # secrets.yaml. Leave a Models slot blank to drop that model.
+  Anthropic__Endpoint: "{{ .Values.config.memex_portal.Anthropic__Endpoint }}"
+  Anthropic__Models__0: "{{ .Values.config.memex_portal.Anthropic__Models__0 }}"
+  Anthropic__Models__1: "{{ .Values.config.memex_portal.Anthropic__Models__1 }}"
+  Anthropic__Models__2: "{{ .Values.config.memex_portal.Anthropic__Models__2 }}"
+  AzureFoundry__Endpoint: "{{ .Values.config.memex_portal.AzureFoundry__Endpoint }}"
+  AzureFoundry__Models__0: "{{ .Values.config.memex_portal.AzureFoundry__Models__0 }}"
+  AzureFoundry__Models__1: "{{ .Values.config.memex_portal.AzureFoundry__Models__1 }}"
+  AzureFoundry__Models__2: "{{ .Values.config.memex_portal.AzureFoundry__Models__2 }}"
+  # Tier → concrete model id (agents that declare ModelTier resolve through these).
+  ModelTier__Heavy: "{{ .Values.config.memex_portal.ModelTier__Heavy }}"
+  ModelTier__Standard: "{{ .Values.config.memex_portal.ModelTier__Standard }}"
+  ModelTier__Light: "{{ .Values.config.memex_portal.ModelTier__Light }}"
+  ModelTier__Utility: "{{ .Values.config.memex_portal.ModelTier__Utility }}"

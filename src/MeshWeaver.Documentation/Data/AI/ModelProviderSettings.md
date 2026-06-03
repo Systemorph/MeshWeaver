@@ -7,6 +7,8 @@ Description: "Settings → Models UX: per-provider-type layout, model lists for 
 
 The **Settings → Models** page is the user's single destination for wiring AI into Memex — adding API keys, enabling specific models, and connecting CLI-based providers like Claude Code and GitHub Copilot. This document is the actionable implementation spec: it identifies the exact files to touch, the behavioral seams to introduce, and the testing approach.
 
+> **Setting up models (admin or user)?** This page is the *UI design spec*. For the operational how-to — provider/model mesh nodes, the system/space/user layers, which query goes where in a user's namespace, the open-weight tier choices, and the install-time config gaps — read **[Setting Up Model Providers](ModelProviderSetup.md)**.
+
 ---
 
 ## Two provider kinds, two different UIs

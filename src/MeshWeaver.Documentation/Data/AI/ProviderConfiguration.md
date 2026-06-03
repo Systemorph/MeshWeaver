@@ -13,9 +13,9 @@ Tags:
   - "Providers"
 ---
 
-MeshWeaver speaks to multiple LLM providers — Claude via Anthropic, GPT-class models via the Azure AI Services multi-model gateway, embedding models, and more — but the configuration surface is intentionally small: **one shared key, a handful of endpoints, and no hardcoded model lists.** This page explains the design and points you to the right knobs when you need to extend it.
+MeshWeaver speaks to multiple LLM providers — Claude via Anthropic, GPT-class and open-weight models via the Azure AI Services multi-model gateway, embedding models, and more — but the configuration surface is intentionally small: **one shared key, a handful of endpoints, and a short per-provider model list.** This page explains the credential/endpoint wiring and the factory routing. For getting models to actually appear in the picker — provider/model **mesh nodes**, the space/user layers, and the install-time gotchas — read the operational guide first: **[Setting Up Model Providers](ModelProviderSetup.md)**.
 
-> **Why read this?** The previous shape used provider-specific `*__Models__*` environment variables. Those have been removed. If you're wondering where the model list went, this page has the answer.
+> **Why read this?** This page is about *credentials, endpoints, and which factory handles a model*. If your question is "why is the model picker empty / how do I add models," start with [Setting Up Model Providers](ModelProviderSetup.md) — the picker is fed by `ModelProvider` / `LanguageModel` mesh nodes, which this deployment seeds from the config sections below.
 
 <svg viewBox="0 0 760 320" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
   <defs>
@@ -79,7 +79,7 @@ A single Aspire parameter — `azure-foundry-key`, declared in [`memex/aspire/Me
 | Env var | Provider | Endpoint path |
 |---|---|---|
 | `Anthropic__ApiKey` | Claude (Anthropic) | `/anthropic/...` |
-| `AzureAIS__ApiKey` | Multi-model gateway | `/models/...` |
+| `AzureFoundry__ApiKey` | Multi-model gateway (open-weight: DeepSeek, Llama, Mistral, Phi…) | `/models/...` |
 
 Both routes share one credential under the Azure Foundry resource. **You do not need a separate Anthropic key in this deployment.** A dedicated Anthropic key only makes sense if you route directly to `api.anthropic.com` rather than through Foundry.
 
@@ -92,9 +92,11 @@ Endpoints are never literal strings in source code. In development they come fro
 | Aspire parameter | Environment variable |
 |---|---|
 | `anthropic-endpoint` | `Anthropic__Endpoint` |
-| `azure-foundry-endpoint` | `AzureAIS__Endpoint` |
+| `azure-foundry-endpoint` | `AzureFoundry__Endpoint` |
 | `embedding-endpoint` | `Embedding__Endpoint` |
 | `embedding-model` | `Embedding__Model` |
+
+> **Section-name caveat (latent bug):** the code binds the **`AzureFoundry:`** section (`AzureFoundryConfiguration`, `AddAzureFoundry`, and the catalog source). The Aspire AppHost currently emits `AzureAIS__Endpoint` / `AzureAIS__ApiKey`, which **nothing in `src/` binds** — so that config is dead. Use `AzureFoundry__*`. The Helm chart (`deploy/helm`) already uses the correct names; the AppHost (`memex/aspire/Memex.AppHost/Program.cs`) should be renamed `AzureAIS__* → AzureFoundry__*`.
 
 The embedding pair establishes the canonical pattern — a sibling `endpoint` + `model` parameter per provider. Chat providers follow the same shape.
 
@@ -102,7 +104,7 @@ The embedding pair establishes the canonical pattern — a sibling `endpoint` + 
 
 ## Models Live in Agent Definitions, Not in Config
 
-The AppHost no longer ships any `*__Models__*` environment variables. The authoritative source for "which model should this agent use" is the agent's own definition:
+Two things select a model, at two different layers. **An agent** picks its model from its own definition (below); **a deployment** advertises which models exist by listing them in each provider's `{Section}:Models` config, which `BuiltInLanguageModelProvider` turns into `LanguageModel` mesh nodes for the picker (see [Setting Up Model Providers](ModelProviderSetup.md)). The Aspire AppHost ships `Anthropic__Models__0..2` (= the three `ModelTier` ids) for exactly that reason — keep the catalog in sync with the tier params. What the AppHost does *not* do is hardcode model ids in framework C#. The authoritative source for "which model should *this agent* use" is the agent's own definition:
 
 - **`AgentConfiguration.PreferredModel`** — a pinned model name for this specific agent.
 - **`AgentConfiguration.ModelTier`** — `"heavy"`, `"standard"`, or `"light"`, resolved through the Aspire parameters `ModelTier__Heavy`, `ModelTier__Standard`, and `ModelTier__Light`.
@@ -113,11 +115,13 @@ Factories such as `AzureOpenAIChatClientAgentFactory` and `AzureClaudeChatClient
 
 ---
 
-## Why the Model Dropdown Is Empty
+## How the Model Picker Is Populated
 
-`ModelAutocompleteProvider` populates the dropdown from the union of every `IChatClientFactory.Models[]` array. With `*__Models__*` env vars gone, those arrays are empty by default, so **the dropdown is normally empty — and that is by design.** Users see the agent's own model selection rather than a global override list.
+The picker is **node-based**, not factory-based. `AgentPickerProjection` runs `nodeType:LanguageModel|ModelProvider` queries over the `_Provider` namespaces (system, the user's selected providers) and shows the resulting `LanguageModel` nodes, grouped by provider. Those nodes come from two places: the system catalog `BuiltInLanguageModelProvider` materialises from each `{Section}:Models` config list, and space/user `ModelProvider` nodes authored in the mesh.
 
-If you want to surface a curated list to humans, populate `Models[]` from a small, explicit config section. Resist the urge to mirror "everything the provider sells."
+So an empty picker means **no provider/model nodes are visible to the user** — almost always because the deployment carries no `{Section}:Models` config signal (the classic Helm/AKS gap) or the user's `_Provider/_Selection` points at a provider that doesn't exist. The full diagnosis + fix is in **[Setting Up Model Providers → Troubleshooting](ModelProviderSetup.md#troubleshooting-an-empty-picker)**.
+
+> Don't try to mirror "everything the provider sells." List a short, curated set in `{Section}:Models` (the deployment's catalog) and let agents pin specifics via `PreferredModel`.
 
 ---
 
