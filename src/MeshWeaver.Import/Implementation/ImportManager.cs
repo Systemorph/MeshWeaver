@@ -3,6 +3,7 @@ using System.Text;
 using MeshWeaver.Data;
 using MeshWeaver.DataStructures;
 using MeshWeaver.Import.Configuration;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -42,7 +43,9 @@ public class ImportManager
         var importActivity = activity.StartSubActivity(ActivityCategory.Import);
         activity.LogInformation("Starting import {ActivityId} for request {RequestId}", activity.Id, request.Id);
 
-        Observable.FromAsync(_ => ImportInstancesAsync(request.Message, importActivity, combined.Token))
+        // ImportInstances is a cold IObservable (its I/O leaves bridge through the
+        // IIoPool internally); subscribe to run the import and post the response.
+        ImportInstances(request.Message, importActivity, combined.Token)
             .Subscribe(
                 imported =>
                 {
@@ -184,100 +187,113 @@ public class ImportManager
         return null;
     }
 
-    public async Task<EntityStore> ImportInstancesAsync(
+    /// <summary>
+    /// Imports the request's source into an <see cref="EntityStore"/> as a COLD
+    /// <see cref="IObservable{T}"/> — no <c>async</c>/<c>await</c> here. Each
+    /// genuinely-async I/O leaf (open + read the data set, then run the format
+    /// import) bridges through the <see cref="IoPool"/> once; the steps compose
+    /// with <c>SelectMany</c>. Subscribe to run.
+    /// </summary>
+    public IObservable<EntityStore> ImportInstances(
         ImportRequest importRequest,
         Activity? activity,
         CancellationToken cancellationToken)
     {
         // If ExcelImportConfiguration is provided, use ConfiguredExcelImporter directly
+        // (already a cold IObservable — defers its single async leaf internally).
         if (importRequest.Configuration is ExcelImportConfiguration excelConfig)
-        {
-            return await ImportWithConfiguredExcelImporter(importRequest, excelConfig, activity);
-        }
+            return ImportWithConfiguredExcelImporter(importRequest, excelConfig, activity);
 
-        var (dataSet, format) = await ReadDataSetAsync(importRequest, activity, cancellationToken);
-        var imported = await format.Import(importRequest, dataSet, activity, cancellationToken);
-        return imported!;
+        // Read the data set (file/stream I/O leaf), then run the format import —
+        // composed reactively, each leaf bridged through the IIoPool once.
+        return IoPool.Unbounded
+            .Run(_ => ReadDataSetAsync(importRequest, activity, cancellationToken))
+            .SelectMany(read => IoPool.Unbounded
+                .Run(_ => read.format.Import(importRequest, read.dataSet, activity, cancellationToken)))
+            .Select(imported => imported!);
     }
 
-    private async Task<EntityStore> ImportWithConfiguredExcelImporter(
+    private IObservable<EntityStore> ImportWithConfiguredExcelImporter(
         ImportRequest importRequest,
         ExcelImportConfiguration config,
         Activity? activity)
-    {
-        activity?.LogInformation("Using ConfiguredExcelImporter with TypeName: {TypeName}", config.TypeName);
-
-        // Get the stream provider
-        var sourceType = importRequest.Source.GetType();
-        if (!Configuration.StreamProviders.TryGetValue(sourceType, out var streamProvider))
-            throw new ImportException($"Unknown stream type: {sourceType.FullName}");
-
-        var stream = await streamProvider.Invoke(importRequest);
-        if (stream == null)
-            throw new ImportException($"Could not open stream: {importRequest.Source}");
-
-        // Get the source name for tracking
-        var sourceName = importRequest.Source switch
+        => Observable.Defer(() =>
         {
-            CollectionSource cs => cs.Path,
-            _ => "unknown"
-        };
+            // ── Synchronous setup + validation — pure in-memory, no I/O, no async. ──
+            activity?.LogInformation("Using ConfiguredExcelImporter with TypeName: {TypeName}", config.TypeName);
 
-        // Resolve the entity type from TypeName
-        if (string.IsNullOrWhiteSpace(config.TypeName))
-            throw new ImportException("TypeName is required in ExcelImportConfiguration");
+            // Get the stream provider
+            var sourceType = importRequest.Source.GetType();
+            if (!Configuration.StreamProviders.TryGetValue(sourceType, out var streamProvider))
+                throw new ImportException($"Unknown stream type: {sourceType.FullName}");
 
-        var entityType = ResolveType(config.TypeName);
-        if (entityType == null)
-            throw new ImportException($"Could not resolve type: {config.TypeName}");
+            // Get the source name for tracking
+            var sourceName = importRequest.Source switch
+            {
+                CollectionSource cs => cs.Path,
+                _ => "unknown"
+            };
 
-        activity?.LogInformation("Resolved entity type: {EntityType}", entityType.FullName);
+            // Resolve the entity type from TypeName
+            if (string.IsNullOrWhiteSpace(config.TypeName))
+                throw new ImportException("TypeName is required in ExcelImportConfiguration");
 
-        // Create entity builder using AutoEntityBuilder.CreateBuilder<T>() generic method
-        var builderGenericMethod = typeof(AutoEntityBuilder).GetMethods()
-            .FirstOrDefault(m => m.Name == nameof(AutoEntityBuilder.CreateBuilder) && m.IsGenericMethod);
-        if (builderGenericMethod == null)
-            throw new ImportException("Could not find AutoEntityBuilder.CreateBuilder<T> method");
+            var entityType = ResolveType(config.TypeName);
+            if (entityType == null)
+                throw new ImportException($"Could not resolve type: {config.TypeName}");
 
-        var builderMethod = builderGenericMethod.MakeGenericMethod(entityType);
-        var entityBuilder = builderMethod.Invoke(null, null);
-        if (entityBuilder == null)
-            throw new ImportException("Failed to create entity builder");
+            activity?.LogInformation("Resolved entity type: {EntityType}", entityType.FullName);
 
-        // Create ConfiguredExcelImporter using reflection (since it's generic)
-        var importerType = typeof(ConfiguredExcelImporter<>).MakeGenericType(entityType);
-        var importer = Activator.CreateInstance(importerType, entityBuilder);
-        if (importer == null)
-            throw new ImportException($"Failed to create ConfiguredExcelImporter<{entityType.Name}>");
+            // Create entity builder using AutoEntityBuilder.CreateBuilder<T>() generic method
+            var builderGenericMethod = typeof(AutoEntityBuilder).GetMethods()
+                .FirstOrDefault(m => m.Name == nameof(AutoEntityBuilder.CreateBuilder) && m.IsGenericMethod);
+            if (builderGenericMethod == null)
+                throw new ImportException("Could not find AutoEntityBuilder.CreateBuilder<T> method");
 
-        // Call the Import method
-        var importMethod = importerType.GetMethod(nameof(ConfiguredExcelImporter<object>.Import), new[] { typeof(Stream), typeof(string), typeof(ExcelImportConfiguration) });
-        if (importMethod == null)
-            throw new ImportException("Could not find Import method on ConfiguredExcelImporter");
+            var builderMethod = builderGenericMethod.MakeGenericMethod(entityType);
+            var entityBuilder = builderMethod.Invoke(null, null);
+            if (entityBuilder == null)
+                throw new ImportException("Failed to create entity builder");
 
-        var importedEntities = importMethod.Invoke(importer, new object[] { stream, sourceName, config }) as System.Collections.IEnumerable;
-        if (importedEntities == null)
-            throw new ImportException("Import returned null");
+            // Create ConfiguredExcelImporter using reflection (since it's generic)
+            var importerType = typeof(ConfiguredExcelImporter<>).MakeGenericType(entityType);
+            var importer = Activator.CreateInstance(importerType, entityBuilder);
+            if (importer == null)
+                throw new ImportException($"Failed to create ConfiguredExcelImporter<{entityType.Name}>");
 
-        // Convert to EntityStore
-        var entities = importedEntities.Cast<object>().ToArray();
-        activity?.LogInformation("Imported {Count} entities of type {TypeName}", entities.Length, config.TypeName);
+            var importMethod = importerType.GetMethod(nameof(ConfiguredExcelImporter<object>.Import), new[] { typeof(Stream), typeof(string), typeof(ExcelImportConfiguration) });
+            if (importMethod == null)
+                throw new ImportException("Could not find Import method on ConfiguredExcelImporter");
 
-        var entityStore = new EntityStore();
-        var instanceDict = new Dictionary<object, object>();
+            // ── The ONLY async: open the stream. Deferred to the very end and
+            //    bridged through the IIoPool; the Excel parse + EntityStore build
+            //    that follow are SYNCHRONOUS (ConfiguredExcelImporter.Import returns
+            //    IEnumerable), so they live in a plain Select. No async/await here. ──
+            return IoPool.Unbounded.Run(_ => streamProvider.Invoke(importRequest))
+                .Select(stream =>
+                {
+                    if (stream == null)
+                        throw new ImportException($"Could not open stream: {importRequest.Source}");
 
-        foreach (var entity in entities)
-        {
-            var id = GetEntityId(entity, entityType);
-            instanceDict[id] = entity;
-        }
+                    var importedEntities = importMethod.Invoke(importer, new object[] { stream, sourceName, config }) as System.Collections.IEnumerable;
+                    if (importedEntities == null)
+                        throw new ImportException("Import returned null");
 
-        var collection = new InstanceCollection(instanceDict);
-        var collectionName = entityType.FullName ?? entityType.Name;
+                    var entities = importedEntities.Cast<object>().ToArray();
+                    activity?.LogInformation("Imported {Count} entities of type {TypeName}", entities.Length, config.TypeName);
 
-        entityStore = entityStore.WithCollection(collectionName, collection);
-        return entityStore;
-    }
+                    var instanceDict = new Dictionary<object, object>();
+                    foreach (var entity in entities)
+                    {
+                        var id = GetEntityId(entity, entityType);
+                        instanceDict[id] = entity;
+                    }
+
+                    var collection = new InstanceCollection(instanceDict);
+                    var collectionName = entityType.FullName ?? entityType.Name;
+                    return new EntityStore().WithCollection(collectionName, collection);
+                });
+        });
 
     private string GetEntityId(object entity, Type entityType)
     {

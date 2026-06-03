@@ -1,4 +1,6 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Data;
 using MeshWeaver.Import.Configuration;
@@ -21,12 +23,11 @@ public record ImportUnpartitionedDataSource(Source Source, IWorkspace Workspace)
     protected override async Task<EntityStore> GetInitialValueAsync(ISynchronizationStream<EntityStore> stream, CancellationToken cancellationToken)
     {
         var importManager = Workspace.Hub.ServiceProvider.GetRequiredService<ImportManager>();
-        var store = await importManager.ImportInstancesAsync(
-            ImportRequest,
-            null,
-            cancellationToken
-        );
-        return store;
+        // Initial-value lifecycle edge — bridge the import observable to the
+        // framework's Task contract via FirstAsync (no further mesh work after).
+        return await importManager.ImportInstances(ImportRequest, null, cancellationToken)
+            .FirstAsync()
+            .ToTask(cancellationToken);
     }
 
     private ImmutableList<
