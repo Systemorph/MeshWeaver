@@ -9,6 +9,7 @@ using MeshWeaver.Graph.Configuration;      // TeamsConversationNodeType
 using MeshWeaver.Mesh;                      // TeamsConversation, MeshNode
 using MeshWeaver.Mesh.Security;             // ImpersonateAsSystem
 using MeshWeaver.Mesh.Services;             // IMeshQueryCore, MeshQueryRequest
+using MeshWeaver.Mesh.Threading;           // IoPool — bounded HTTP pool (replaces bare Observable.FromAsync)
 using MeshWeaver.Messaging;                 // IMessageHub, AccessService
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -30,10 +31,20 @@ public sealed class TeamsReplySender(
     IHostApplicationLifetime lifetime,
     ILogger<TeamsReplySender>? logger = null) : IHostedService, IDisposable
 {
+    // Bound to a sane cap so a burst of outbound sends can't open unbounded Graph calls.
+    private const int HttpConcurrency = 8;
+
     private readonly CompositeDisposable subscriptions = new();
     private readonly ConcurrentDictionary<string, byte> watched = new();   // threadPath → subscribed (instance)
     private readonly ConcurrentDictionary<string, string?> lastSent = new();
     private IServiceScope? scope;
+
+    // Dedicated bounded HTTP pool, ALWAYS created fresh and owned by this instance — never resolved
+    // from the mesh-scoped IoPoolRegistry. The portal builds this sender from its OWN DI container
+    // while activating hosted services; reaching across into the mesh hub's ServiceProvider at that
+    // moment races that provider's internal service realization (a documented NRE crash-loop — see
+    // GraphMail). A self-owned pool always resolves and is disposed with this singleton.
+    private readonly IoPool _http = new(HttpConcurrency);
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -86,8 +97,8 @@ public sealed class TeamsReplySender(
         // No bespoke thread observing here (see ThreadFlow.ObserveResponses / ThreadOperations.md).
         subscriptions.Add(ThreadFlow.ObserveResponses(hub, link.ThreadPath)
             .Where(r => r.MessageId != lastSent.GetValueOrDefault(link.ThreadPath))
-            .SelectMany(r => Observable
-                .FromAsync(ct => teams.SendMessageAsync(link.ServiceUrl, link.ConversationId, r.Message.Text, ct))
+            .SelectMany(r => _http
+                .Run(ct => teams.SendMessageAsync(link.ServiceUrl, link.ConversationId, r.Message.Text, ct))
                 .Select(ok => (r.MessageId, ok)))
             .Subscribe(
                 res =>
@@ -122,5 +133,6 @@ public sealed class TeamsReplySender(
     {
         subscriptions.Dispose();
         scope?.Dispose();
+        _http.Dispose();
     }
 }
