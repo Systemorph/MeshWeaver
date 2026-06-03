@@ -91,45 +91,53 @@ public class ConnectStrategyTest : AITestBase
         return found ?? path;
     }
 
+    // 🚨 Reactive assertions ONLY — this test MUST stay a `void` method with NO
+    // `await` / `.ToTask()` / `.GetAwaiter().GetResult()`. SubmitCode's connect chain
+    // completes INLINE on the mesh hub's action block (the last child-model
+    // CreateNodeResponse triggers CombineLatest → Connected synchronously there). An
+    // `await ...ToTask()` would resume the continuation ON that action-block thread, and
+    // the subsequent BLOCKING reads (GetMeshNodeStream, .Match) would then deadlock against
+    // the action block needing to serve those very reads — the 8s + 15s = 23s stall this
+    // test used to hit. A `void` method's reactive assertions block the TEST thread, never
+    // the action block, so the chain completes freely. See ReactiveTestAssertions.md.
     [Fact]
-    public async Task PasteCodeFlow_CapturesToken_WritesEncryptedModelProvider_RoundTrips()
+    public void PasteCodeFlow_CapturesToken_WritesEncryptedModelProvider_RoundTrips()
     {
-        var ct = new CancellationTokenSource(60.Seconds()).Token;
         var owner = $"user-{Guid.NewGuid():N}";
         var configDir = Path.Combine(Path.GetTempPath(), $"connect-test-{Guid.NewGuid():N}", ".claude");
 
         // Establish the owner's partition root first. The connect flow writes the credential
         // node at {owner}/_Provider/ClaudeCode; in production the owner is the logged-in user
-        // whose partition already exists. Without a partition root the synthetic owner has no
-        // resolvable hub, so single-node reads of the satellite (GetMeshNodeStream, line ~135)
-        // time out even though the partition query already surfaces the node.
+        // whose partition already exists.
         NodeFactory.CreateNode(new MeshNode(owner) { Name = owner, NodeType = "Markdown" })
             .Should().Within(10.Seconds()).Emit();
 
         // 1. Not logged in initially (no credentials file).
-        var loggedInBefore = await Manager.IsLoggedIn(ConnectProvider.ClaudeCode, configDir).FirstAsync().ToTask(ct);
+        var loggedInBefore = Manager.IsLoggedIn(ConnectProvider.ClaudeCode, configDir)
+            .Should().Within(10.Seconds()).Emit();
         loggedInBefore.Should().BeFalse();
 
         // 2. Connect → the fake CLI prints an auth URL → Connecting state with the URL.
-        var connecting = await Manager.StartConnect(owner, ConnectProvider.ClaudeCode, configDir).FirstAsync().ToTask(ct);
+        var connecting = Manager.StartConnect(owner, ConnectProvider.ClaudeCode, configDir)
+            .Should().Within(10.Seconds()).Emit();
         var challenge = connecting.Should().BeOfType<ConnectStatus.Connecting>().Which.Challenge;
         challenge.RequiresPastedCode.Should().BeTrue();
         challenge.VerificationUrl.Should().StartWith("https://");
 
         // 3. Submit the code → the fake CLI prints the token → Connected, provider node written.
-        var connected = await Manager.SubmitCode(owner, ConnectProvider.ClaudeCode, "the-pasted-code")
-            .FirstAsync().ToTask(ct);
+        var connected = Manager.SubmitCode(owner, ConnectProvider.ClaudeCode, "the-pasted-code")
+            .Should().Within(20.Seconds()).Emit();
         Output.WriteLine($"[diag] connect status = {connected.GetType().Name}: {connected}");
         var ok = connected.Should().BeOfType<ConnectStatus.Connected>().Which;
         Output.WriteLine($"[diag] connected path={ok.ProviderNodePath} fp={ok.KeyFingerprint}");
         ok.ProviderNodePath.Should().Be($"{owner}/_Provider/ClaudeCode");
         ok.KeyFingerprint.Should().NotBe("(empty)");
 
-        // Direct create via the same service to confirm the partition write path works at all.
+        // Diagnostic single-node read — confirms the satellite read path resolves.
         var directRead = Mesh.GetWorkspace().GetMeshNodeStream(ok.ProviderNodePath)
             .Take(1).Timeout(8.Seconds())
             .Catch((Exception ex) => { Output.WriteLine($"[diag] direct read threw: {ex.Message}"); return Observable.Return<MeshNode?>(null); })
-            .FirstAsync().ToTask(ct).GetAwaiter().GetResult();
+            .Should().Within(10.Seconds()).Emit();
         Output.WriteLine($"[diag] direct read node null={directRead is null} content={(directRead?.Content?.GetType().Name ?? "(none)")}");
 
         // 4. AT REST: the stored ApiKey is enc:-tagged ciphertext, not the captured token.
