@@ -10,15 +10,14 @@ namespace MeshWeaver.Reflection
     /// </summary>
     public static class MemberInfoExtensions
     {
-        private static readonly CreatableObjectStore<Type, ICustomAttributeProvider, bool, bool> HasAttributeCache = new CreatableObjectStore<Type, ICustomAttributeProvider, bool, bool>(HasAttributeCacheFactory);
-
-        private static bool HasAttributeCacheFactory(Type attributeType, ICustomAttributeProvider attributeProvider, bool inherit)
-        {
-            var memberInfo = attributeProvider as MemberInfo;
-            return memberInfo != null
-                       ? Attribute.IsDefined(memberInfo, attributeType, inherit)
-                       : attributeProvider.IsDefined(attributeType, inherit);
-        }
+        // 🚨 No static attribute caches. They were keyed by (attributeType, MemberInfo),
+        // and a MemberInfo of a dynamically-compiled NodeType property keeps its
+        // DeclaringType — and thus that type's collectible AssemblyLoadContext — alive
+        // for the whole process, leaking the ALC across meshes/tests (these run on
+        // generated content-type properties via the property editor / data grid). The
+        // CLR already caches custom-attribute metadata per member internally, so the
+        // direct reflection calls below are cheap; dropping the managed cache removes the
+        // pin without a measurable cost. See NoStaticState.md.
 
         /// <summary>
         /// Tests if on the <paramref name="member"/> (or an ancestor of the member) an attribute of type <typeparamref name="T"/> is applied
@@ -33,7 +32,7 @@ namespace MeshWeaver.Reflection
             if (member == null)
                 throw new ArgumentNullException(nameof(member));
 
-            return HasAttributeCache.GetInstance(typeof(T), member, inherit);
+            return Attribute.IsDefined(member, typeof(T), inherit);
         }
 
         /// <summary>
@@ -49,41 +48,13 @@ namespace MeshWeaver.Reflection
             if (parameter == null)
                 throw new ArgumentNullException(nameof(parameter));
 
-            return HasAttributeCache.GetInstance(typeof(T), parameter, inherit);
-        }
-
-        private static readonly CreatableObjectStore<Type, MemberInfo, bool, Attribute?> SingleCustomAttributeCache = new CreatableObjectStore<Type, MemberInfo, bool, Attribute?>(SingleCustomAttributeCacheFactory);
-
-        private static Attribute? SingleCustomAttributeCacheFactory(Type type, MemberInfo member, bool inherit)
-        {
-            switch (member.MemberType)
-            {
-                case MemberTypes.Event:
-                case MemberTypes.Property:
-                    {
-                        var attributes = Attribute.GetCustomAttributes(member, inherit);
-                        var attribute = attributes.SingleOrDefault(type.IsInstanceOfType);
-                        return attribute;
-                    }
-                default:
-                    {
-                        var attributes = member.GetCustomAttributes(type, inherit);
-                        return (Attribute?)attributes.SingleOrDefault();
-                    }
-            }
-        }
-
-        private static readonly CreatableObjectStore<Type, MemberInfo, bool, List<Attribute>> MultipleCustomAttributeCache = new CreatableObjectStore<Type, MemberInfo, bool, List<Attribute>>(MultipleCustomAtrbuteCacheFactory);
-
-        private static List<Attribute> MultipleCustomAtrbuteCacheFactory(Type type, MemberInfo member, bool inherit)
-        {
-            return member.GetCustomAttributes(type, inherit).Cast<Attribute>().ToList();
+            return parameter.IsDefined(typeof(T), inherit);
         }
 
         public static List<T> GetMultipleCustomAttributes<T>(this MemberInfo member, bool inherit = true)
             where T : Attribute
         {
-            return MultipleCustomAttributeCache.GetInstance(typeof(T), member, inherit).Cast<T>().ToList();
+            return member.GetCustomAttributes(typeof(T), inherit).Cast<T>().ToList();
         }
 
         /// <summary>
@@ -97,7 +68,9 @@ namespace MeshWeaver.Reflection
         public static T? GetSingleCustomAttribute<T>(this MemberInfo member, bool inherit = true)
             where T : Attribute
         {
-            return (T?)SingleCustomAttributeCache.GetInstance(typeof(T), member, inherit);
+            return member.MemberType is MemberTypes.Event or MemberTypes.Property
+                ? (T?)Attribute.GetCustomAttributes(member, inherit).SingleOrDefault(a => a is T)
+                : (T?)member.GetCustomAttributes(typeof(T), inherit).SingleOrDefault();
         }
 
         /// <summary>
