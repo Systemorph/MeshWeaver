@@ -39,6 +39,11 @@ public class NoStaticCollectionsTest
         "System.Collections.Concurrent.ConcurrentQueue`",
         "System.Collections.Concurrent.ConcurrentStack`",
         "Microsoft.Extensions.Caching.Memory.MemoryCache",
+        // Project-local memoizing cache primitive. Was previously invisible to this guard,
+        // so DelegateCache.InnerCache + the MemberInfoExtensions attribute caches (all keyed
+        // by Type/MethodInfo of dynamically-compiled NodeTypes → pinned their collectible
+        // ALCs process-wide) slipped through. Detected now; all such fields were removed.
+        "MeshWeaver.Utils.CreatableObjectStore",
     };
 
     /// <summary>
@@ -81,8 +86,9 @@ public class NoStaticCollectionsTest
         ["MeshWeaver.Hosting.Security.AccessControlPipeline.AttributeCache"] = "MEMO: Type -> attribute",
         ["MeshWeaver.Markdown.MarkdownExtensions.PipelineCache"] = "MEMO: (lang,style) -> pipeline",
         ["MeshWeaver.Messaging.MessageHubConfiguration._systemMessageCache"] = "MEMO: Type -> bool",
-        ["MeshWeaver.Reflection.GenericCaches.MethodCaches"] = "MEMO: MethodInfo",
-        ["MeshWeaver.Reflection.GenericCaches.TypeCaches"] = "MEMO: Type",
+        // GenericCaches.{TypeCaches,MethodCaches} removed 2026-06-03 — the whole
+        // GenericCaches/DelegateCache surface was dead code (only 2 InvokeAsFunction call
+        // sites, now pure reflection via GenericMethodInvoker). Deleted, not allowlisted.
 
         // ---- PROC: tied to a process-global resource; per-mesh is meaningless, no test bleed ----
         ["MeshWeaver.Kernel.Hub.KernelExecutor._probingDirs"] = "PROC: AssemblyLoadContext.Default.Resolving probe registry (one resolver per process)",
