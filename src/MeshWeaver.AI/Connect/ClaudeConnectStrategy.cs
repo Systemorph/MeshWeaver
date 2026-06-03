@@ -20,14 +20,18 @@ namespace MeshWeaver.AI.Connect;
 /// <para>This strategy therefore implements the <b>paste-code shape cleanly and configurably</b>
 /// (<see cref="ClaudeConnectOptions"/>): it spawns the configured command under the user's
 /// <c>CLAUDE_CONFIG_DIR</c>, scrapes the auth URL from stdout, accepts a pasted code via stdin, and
-/// captures the token from stdout (or <c>{ConfigDir}/.credentials.json</c>). With the default
-/// <c>claude setup-token</c> command this will NOT work headlessly until the PTY wrapper lands;
+/// captures the token from stdout (or <c>{ConfigDir}/.credentials.json</c>).
 /// the committed fake-CLI test drives the exact same shape to prove the wiring end-to-end.</para>
 ///
-/// <para>TODO(claude-pty): wrap the spawn in a pseudo-terminal (e.g. ConPTY on Windows / forkpty on
-/// Linux via Pty.Net or `script -qfc`) so the Ink UI runs and its URL/prompt become scrapeable, OR
-/// switch to whatever non-interactive token-issue path Anthropic ships (none exists as of CLI
-/// 2.1.159). Until then the real-CLI path is gated behind <c>CLAUDE_CONNECT_E2E=1</c>.</para>
+/// <para>PTY (claude-pty): set <see cref="ClaudeConnectOptions.UsePseudoTerminal"/> to run the real
+/// CLI under a pseudo-terminal — on Linux the spawn is wrapped as
+/// <c>script -qfc "claude setup-token" /dev/null</c> (util-linux <c>script</c>), which allocates a
+/// PTY so the Ink UI renders and its URL/prompt become scrapeable, forwards stdin into the terminal
+/// for the pasted code, and is configured on for the co-hosted Linux portal via
+/// <c>ClaudeConnect:UsePseudoTerminal=true</c>. With <c>UsePseudoTerminal=false</c> (the default,
+/// Windows/dev/tests) the command is spawned directly and the fake CLI drives the same shape. No
+/// non-interactive token-issue path exists as of CLI 2.1.159, so real-CLI E2E stays gated behind
+/// <c>CLAUDE_CONNECT_E2E=1</c>.</para>
 /// </summary>
 public sealed class ClaudeConnectStrategy : IConnectStrategy
 {
@@ -91,25 +95,41 @@ public sealed class ClaudeConnectStrategy : IConnectStrategy
         ConnectSession session, ClaudeConnectOptions options, CancellationToken ct)
     {
         var configDir = ResolveConfigDir(session, options);
-        var process = new Process
+        var startInfo = new ProcessStartInfo
         {
-            StartInfo = new ProcessStartInfo
-            {
-                FileName = options.FileName,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                RedirectStandardInput = true,   // paste-code is written here
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            },
-            EnableRaisingEvents = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            RedirectStandardInput = true,   // paste-code is written here (forwarded into the PTY when wrapped)
+            UseShellExecute = false,
+            CreateNoWindow = true,
         };
-        foreach (var a in options.Arguments) process.StartInfo.ArgumentList.Add(a);
+        if (options.UsePseudoTerminal)
+        {
+            // claude setup-token renders an Ink (React-for-terminal) UI that needs a real TTY; on a
+            // plain redirected pipe it emits nothing. Run it under a pseudo-terminal via util-linux
+            // `script -qfc "<cmd>" /dev/null`, which allocates a PTY, forwards the child's stdout to
+            // our pipe (so URL/token lines become scrapeable) and forwards our stdin into the PTY
+            // (so the pasted code reaches the CLI). Linux-only; UsePseudoTerminal stays false on
+            // Windows/dev and in the fake-CLI test.
+            var inner = options.Arguments.Count > 0
+                ? $"{options.FileName} {string.Join(" ", options.Arguments)}"
+                : options.FileName;
+            startInfo.FileName = options.PtyWrapper;
+            startInfo.ArgumentList.Add("-qfc");
+            startInfo.ArgumentList.Add(inner);
+            startInfo.ArgumentList.Add("/dev/null");
+        }
+        else
+        {
+            startInfo.FileName = options.FileName;
+            foreach (var a in options.Arguments) startInfo.ArgumentList.Add(a);
+        }
         if (!string.IsNullOrEmpty(configDir))
         {
             try { Directory.CreateDirectory(configDir); } catch { /* best effort */ }
-            process.StartInfo.Environment["CLAUDE_CONFIG_DIR"] = configDir;
+            startInfo.Environment["CLAUDE_CONFIG_DIR"] = configDir;
         }
+        var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
 
         // Line buffer shared with CompleteConnect via the session — both stdout (URL, token) lines
         // and a completion signal accumulate here. A ConcurrentQueue keeps the reader lock-free.

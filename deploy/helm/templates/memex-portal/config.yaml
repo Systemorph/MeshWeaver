@@ -43,3 +43,6 @@ data:
   ModelTier__Standard: "{{ .Values.config.memex_portal.ModelTier__Standard }}"
   ModelTier__Light: "{{ .Values.config.memex_portal.ModelTier__Light }}"
   ModelTier__Utility: "{{ .Values.config.memex_portal.ModelTier__Utility }}"
+  # Per-user co-hosted Claude Code config root (the /mnt/users RWX share): each user's `claude`
+  # login + .credentials.json live under {root}/{userId}/.claude. Drives the Connect login dir.
+  ClaudeCode__ConfigDirRoot: "{{ .Values.config.memex_portal.ClaudeCode__ConfigDirRoot }}"

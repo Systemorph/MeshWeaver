@@ -30,6 +30,19 @@ public sealed class ClaudeConnectOptions
     public string? ConfigDirRoot { get; set; }
 
     /// <summary>
+    /// Run the login command inside a pseudo-terminal. <c>claude setup-token</c> renders an Ink
+    /// (React-for-terminal) UI that emits nothing on a non-TTY pipe; with this on, the spawn is
+    /// wrapped as <c>{PtyWrapper} -qfc "{FileName} {Arguments}" /dev/null</c> (util-linux
+    /// <c>script</c>) so a real PTY is allocated, the URL/prompt become scrapeable, and the pasted
+    /// code is forwarded into the terminal. Linux-only; keep <c>false</c> for the fake-CLI test and
+    /// Windows dev. The co-hosted Linux portal sets this <c>true</c> (via <c>ClaudeConnect:UsePseudoTerminal</c>).
+    /// </summary>
+    public bool UsePseudoTerminal { get; set; } = false;
+
+    /// <summary>PTY wrapper executable used when <see cref="UsePseudoTerminal"/> is set (util-linux <c>script</c>).</summary>
+    public string PtyWrapper { get; set; } = "script";
+
+    /// <summary>
     /// Regex whose first capturing group (or whole match) is the auth URL to surface, applied to
     /// each stdout line. Default matches an <c>https://…</c> URL on a line.
     /// </summary>
