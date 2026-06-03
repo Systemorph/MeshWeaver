@@ -16,6 +16,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Kernel;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -1090,16 +1091,17 @@ public class MeshOperations
                         return Observable.Return("Error: content service not configured on the hub.");
 
                     contentService.AddConfiguration(collectionConfig);
-                    return Observable.FromAsync(async () =>
+                    var ioPool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
+                    return ioPool.Run(async ct =>
                     {
-                        var collection = await contentService.GetCollectionAsync(qualifiedCollectionName, CancellationToken.None);
+                        var collection = await contentService.GetCollectionAsync(qualifiedCollectionName, ct).ConfigureAwait(false);
                         if (collection == null)
                             return $"Error: failed to initialize collection '{qualifiedCollectionName}'.";
 
                         var dir = Path.GetDirectoryName(filePath)?.Replace('\\', '/') ?? "";
                         var fileName = Path.GetFileName(filePath);
                         using var ms = new MemoryStream(bytes);
-                        await collection.SaveFileAsync(dir, fileName, ms);
+                        await collection.SaveFileAsync(dir, fileName, ms).ConfigureAwait(false);
 
                         return JsonSerializer.Serialize(new
                         {

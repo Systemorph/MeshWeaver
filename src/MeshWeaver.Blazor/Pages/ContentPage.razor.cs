@@ -3,6 +3,7 @@ using System.Reactive.Threading.Tasks;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
@@ -46,6 +47,12 @@ public partial class ContentPage : ComponentBase, IDisposable
 
     [Inject] public PortalApplication PortalApplication { get; set; } = null!;
     private IContentService ContentService => PortalApplication.Hub.ServiceProvider.GetRequiredService<IContentService>();
+
+    [Inject] private IoPoolRegistry? IoPoolRegistry { get; set; }
+
+    // FileSystem I/O pool — keeps the genuine file/content I/O off the Blazor circuit
+    // thread. Property named Pool (not IoPool) to avoid clashing with the IoPool type.
+    private IIoPool Pool => IoPoolRegistry?.Get(IoPoolNames.FileSystem) ?? global::MeshWeaver.Mesh.Threading.IoPool.Unbounded;
 
     protected override void OnInitialized()
     {
@@ -117,9 +124,9 @@ public partial class ContentPage : ComponentBase, IDisposable
             });
         }
 
-        // ContentService.GetCollectionAsync is local catalog lookup; bridge with
-        // Observable.FromAsync at the file-I/O boundary.
-        Observable.FromAsync(() => ContentService.GetCollectionAsync(ResolvedCollection!))
+        // ContentService.GetCollectionAsync is a content-I/O leaf; run it on the
+        // FileSystem I/O pool so it never executes on the Blazor circuit thread.
+        Pool.Run(ct => ContentService.GetCollectionAsync(ResolvedCollection!, ct))
             .Subscribe(collection =>
             {
                 if (collection is null)
@@ -143,7 +150,7 @@ public partial class ContentPage : ComponentBase, IDisposable
                 }
                 else if (ContentType != "text/markdown")
                 {
-                    Observable.FromAsync(() => collection.GetContentAsync(ResolvedPath!))
+                    Pool.Run(ct => collection.GetContentAsync(ResolvedPath!, ct))
                         .Subscribe(content =>
                         {
                             Content = content;

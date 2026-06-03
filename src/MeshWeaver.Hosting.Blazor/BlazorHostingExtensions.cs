@@ -8,6 +8,7 @@ using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Blazor.Services;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -157,7 +158,8 @@ public static class BlazorHostingExtensions
             // Pattern 1: /static/{collection}/{filePath}
             var collectionName = decodedFirstSegment;
             var filePath = string.Join("/", pathParts.Skip(1));
-            return Observable.FromAsync(() => ServeFromCollection(context, mainHub, collectionName, filePath, collectionCache));
+            return (mainHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded)
+                .Run(_ => ServeFromCollection(context, mainHub, collectionName, filePath, collectionCache));
         }
 
         // Pattern 2: /static/{address}/{collection}/{filePath} — observable chain.
@@ -222,13 +224,14 @@ public static class BlazorHostingExtensions
                     return Observable.Return(Results.NotFound("Content service not configured"));
 
                 portalContentService.AddConfiguration(collectionConfig);
-                return Observable.FromAsync(async () =>
-                {
-                    var contentCollection = await portalContentService.GetCollectionAsync(qualifiedCollectionName, context.RequestAborted);
-                    if (contentCollection == null)
-                        return Results.NotFound($"Content collection '{addressCollectionName}' not found");
-                    return await ServeFile(context, contentCollection, addressFilePath);
-                });
+                return (mainHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded)
+                    .Run(async ct =>
+                    {
+                        var contentCollection = await portalContentService.GetCollectionAsync(qualifiedCollectionName, context.RequestAborted).ConfigureAwait(false);
+                        if (contentCollection == null)
+                            return Results.NotFound($"Content collection '{addressCollectionName}' not found");
+                        return await ServeFile(context, contentCollection, addressFilePath).ConfigureAwait(false);
+                    });
             });
         });
     }

@@ -57,13 +57,14 @@ public record TypeSourceWithTypeWithDataStorage<T>
         CancellationToken cancellationToken
     ) => Observable.FromAsync(async ct =>
     {
-        await using var transaction = await Storage.StartTransactionAsync(ct);
+        await using var transaction = await Storage.StartTransactionAsync(ct).ConfigureAwait(false);
         return LastSaved = new()
         {
             Instances = (
                 await Storage
                     .Query<T>()
                     .ToDictionaryAsync(TypeDefinition.GetKey, x => (object)x, ct)
+                    .ConfigureAwait(false)
             ).ToImmutableDictionary(),
             GetKey = TypeDefinition.GetKey
         };
