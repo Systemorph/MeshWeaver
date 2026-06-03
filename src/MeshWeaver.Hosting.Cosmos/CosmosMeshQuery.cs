@@ -129,7 +129,7 @@ public class CosmosMeshQuery : IMeshQueryProvider
         if (!string.IsNullOrEmpty(request.ContextPath))
         {
             var buffered = new List<(MeshNode Node, double Score)>();
-            await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, ct: ct))
+            await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, ct: ct).ConfigureAwait(false))
             {
                 if (context != null && IsExcludedByContext(node, context))
                     continue;
@@ -157,7 +157,7 @@ public class CosmosMeshQuery : IMeshQueryProvider
         var skipOrig = request.Skip ?? 0;
         var countOrig = 0;
 
-        await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, ct: ct))
+        await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, ct: ct).ConfigureAwait(false))
         {
             if (context != null && IsExcludedByContext(node, context))
                 continue;
@@ -212,7 +212,7 @@ public class CosmosMeshQuery : IMeshQueryProvider
         return Observable.FromAsync(async cancel =>
             {
                 var suggestions = new List<QuerySuggestion>();
-                await foreach (var node in _adapter.QueryNodesAsync(query, ct: cancel))
+                await foreach (var node in _adapter.QueryNodesAsync(query, ct: cancel).ConfigureAwait(false))
                 {
                     if (_meshConfiguration?.AutocompleteExcludedNodeTypes.Contains(node.NodeType ?? "") == true)
                         continue;
@@ -269,7 +269,7 @@ public class CosmosMeshQuery : IMeshQueryProvider
 
         return Observable.FromAsync<T?>(async cancel =>
             {
-                await foreach (var node in _adapter.QueryNodesAsync(query, ct: cancel))
+                await foreach (var node in _adapter.QueryNodesAsync(query, ct: cancel).ConfigureAwait(false))
                 {
                     if (typeof(MeshNode).GetProperty(property)?.GetValue(node) is T typedValue)
                         return typedValue;
@@ -319,7 +319,7 @@ public class CosmosMeshQuery : IMeshQueryProvider
             try
             {
                 var initialItems = new List<T>();
-                await foreach (var item in QueryAsync(request, options, ct))
+                await foreach (var item in QueryAsync(request, options, ct).ConfigureAwait(false))
                 {
                     if (item is T typedItem)
                     {

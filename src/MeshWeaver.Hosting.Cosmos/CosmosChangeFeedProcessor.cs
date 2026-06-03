@@ -48,7 +48,7 @@ public class CosmosChangeFeedProcessor : IAsyncDisposable
 
         var containerResponse = await database.CreateContainerIfNotExistsAsync(
             new ContainerProperties(containerName, "/id"),
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         return containerResponse.Container;
     }
@@ -69,7 +69,7 @@ public class CosmosChangeFeedProcessor : IAsyncDisposable
             "Starting Cosmos Change Feed processor '{ProcessorName}' for container '{ContainerName}'",
             _processorName, _monitoredContainer.Id);
 
-        await _processor.StartAsync();
+        await _processor.StartAsync().ConfigureAwait(false);
     }
 
     /// <summary>
@@ -83,7 +83,7 @@ public class CosmosChangeFeedProcessor : IAsyncDisposable
                 "Stopping Cosmos Change Feed processor '{ProcessorName}'",
                 _processorName);
 
-            await _processor.StopAsync();
+            await _processor.StopAsync().ConfigureAwait(false);
             _processor = null;
         }
     }
@@ -145,6 +145,6 @@ public class CosmosChangeFeedProcessor : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        await StopAsync();
+        await StopAsync().ConfigureAwait(false);
     }
 }

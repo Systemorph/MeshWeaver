@@ -106,7 +106,7 @@ public static class PostgreSqlSchemaInitializer
             END;
             $$ LANGUAGE plpgsql;
             """);
-        await cmd.ExecuteNonQueryAsync(ct);
+        await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -120,13 +120,13 @@ public static class PostgreSqlSchemaInitializer
         // Even if UseVector() can't find the type yet, plain SQL commands work fine.
         await using (var cmd = dataSource.CreateCommand("CREATE EXTENSION IF NOT EXISTS vector"))
         {
-            await cmd.ExecuteNonQueryAsync(ct);
+            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
 
         // Step 2: Reload the type catalog so UseVector() picks up the new vector type.
-        await using (var conn = await dataSource.OpenConnectionAsync(ct))
+        await using (var conn = await dataSource.OpenConnectionAsync(ct).ConfigureAwait(false))
         {
-            await conn.ReloadTypesAsync();
+            await conn.ReloadTypesAsync().ConfigureAwait(false);
         }
 
         // Step 2.5: Create the access-object → auth mirror trigger FUNCTION before any
@@ -138,13 +138,13 @@ public static class PostgreSqlSchemaInitializer
         // here (always-run path) makes the guard pass on every DB, fresh or not.
         await using (var cmd = dataSource.CreateCommand(GetAuthMirrorFunctionScript()))
         {
-            await cmd.ExecuteNonQueryAsync(ct);
+            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
 
         // Step 3: Run the full schema script (tables, indexes, triggers).
         await using (var cmd = dataSource.CreateCommand(GetSchemaScript(options)))
         {
-            await cmd.ExecuteNonQueryAsync(ct);
+            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
 
         // Step 4: (Re)create the public.ensure_partition_schema(text) stored proc —
@@ -154,7 +154,7 @@ public static class PostgreSqlSchemaInitializer
         // Routed to by PostgreSqlPartitionStorageProvider.EnsureSchemaAsync.
         await using (var cmd = dataSource.CreateCommand(GetEnsurePartitionSchemaProcScript(options.VectorDimensions)))
         {
-            await cmd.ExecuteNonQueryAsync(ct);
+            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
     }
 
@@ -316,17 +316,17 @@ public static class PostgreSqlSchemaInitializer
         NpgsqlDataSource dataSource, string schema, CancellationToken ct = default)
     {
         var lockKey = ComputeAdvisoryLockKey(schema);
-        var conn = await dataSource.OpenConnectionAsync(ct);
+        var conn = await dataSource.OpenConnectionAsync(ct).ConfigureAwait(false);
         try
         {
             await using var lockCmd = conn.CreateCommand();
             lockCmd.CommandText = "SELECT pg_advisory_lock(@key)";
             lockCmd.Parameters.AddWithValue("key", lockKey);
-            await lockCmd.ExecuteNonQueryAsync(ct);
+            await lockCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
         catch
         {
-            await conn.DisposeAsync();
+            await conn.DisposeAsync().ConfigureAwait(false);
             throw;
         }
         return new SchemaInitLock(conn, lockKey);
@@ -344,13 +344,13 @@ public static class PostgreSqlSchemaInitializer
                 await using var unlockCmd = conn.CreateCommand();
                 unlockCmd.CommandText = "SELECT pg_advisory_unlock(@key)";
                 unlockCmd.Parameters.AddWithValue("key", key);
-                await unlockCmd.ExecuteNonQueryAsync(CancellationToken.None);
+                await unlockCmd.ExecuteNonQueryAsync(CancellationToken.None).ConfigureAwait(false);
             }
             catch
             {
                 // ignore — lock will release at session end
             }
-            await conn.DisposeAsync();
+            await conn.DisposeAsync().ConfigureAwait(false);
         }
     }
 
@@ -373,14 +373,14 @@ public static class PostgreSqlSchemaInitializer
     public static async Task InitializeMeshTablesAsync(
         NpgsqlDataSource schemaDataSource, PostgreSqlStorageOptions options, CancellationToken ct = default)
     {
-        await using (var conn = await schemaDataSource.OpenConnectionAsync(ct))
+        await using (var conn = await schemaDataSource.OpenConnectionAsync(ct).ConfigureAwait(false))
         {
-            await conn.ReloadTypesAsync();
+            await conn.ReloadTypesAsync().ConfigureAwait(false);
         }
 
         await using (var cmd = schemaDataSource.CreateCommand(GetUnversionedSchemaScript(options)))
         {
-            await cmd.ExecuteNonQueryAsync(ct);
+            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
     }
 
@@ -399,25 +399,25 @@ public static class PostgreSqlSchemaInitializer
         // Step 1: Create the vector extension using plain SQL
         await using (var cmd = baseDataSource.CreateCommand("CREATE EXTENSION IF NOT EXISTS vector"))
         {
-            await cmd.ExecuteNonQueryAsync(ct);
+            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
 
         // Step 2: Reload types on both data sources
-        await using (var conn = await schemaDataSource.OpenConnectionAsync(ct))
+        await using (var conn = await schemaDataSource.OpenConnectionAsync(ct).ConfigureAwait(false))
         {
-            await conn.ReloadTypesAsync();
+            await conn.ReloadTypesAsync().ConfigureAwait(false);
         }
 
         // Step 3: Create versions schema tables (mesh_node_history)
         await using (var cmd = versionsDataSource.CreateCommand(GetVersionsSchemaScript()))
         {
-            await cmd.ExecuteNonQueryAsync(ct);
+            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
 
         // Step 4: Create mesh schema tables + cross-schema trigger
         await using (var cmd = schemaDataSource.CreateCommand(GetMeshSchemaScript(options, versionsSchema)))
         {
-            await cmd.ExecuteNonQueryAsync(ct);
+            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
     }
 
@@ -435,7 +435,7 @@ public static class PostgreSqlSchemaInitializer
         foreach (var tableName in tableNames.Distinct())
         {
             await using var cmd = schemaDataSource.CreateCommand(GetSatelliteTableScript(tableName, dim));
-            await cmd.ExecuteNonQueryAsync(ct);
+            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
     }
 

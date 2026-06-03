@@ -44,12 +44,12 @@ public class PostgreSqlChangeListener : IAsyncDisposable
     {
         if (_cts != null)
         {
-            await _cts.CancelAsync();
+            await _cts.CancelAsync().ConfigureAwait(false);
             if (_listenTask != null)
             {
                 try
                 {
-                    await _listenTask;
+                    await _listenTask.ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
@@ -65,14 +65,14 @@ public class PostgreSqlChangeListener : IAsyncDisposable
         {
             try
             {
-                await using var conn = await _dataSource.OpenConnectionAsync(ct);
+                await using var conn = await _dataSource.OpenConnectionAsync(ct).ConfigureAwait(false);
 
                 // Subscribe to notification event
                 conn.Notification += OnNotification;
 
                 await using (var listenCmd = new NpgsqlCommand("LISTEN mesh_node_changes", conn))
                 {
-                    await listenCmd.ExecuteNonQueryAsync(ct);
+                    await listenCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
                 }
 
                 _logger?.LogInformation("PostgreSQL LISTEN started on mesh_node_changes");
@@ -80,7 +80,7 @@ public class PostgreSqlChangeListener : IAsyncDisposable
                 // WaitAsync will block until a notification arrives or cancellation is requested
                 while (!ct.IsCancellationRequested)
                 {
-                    await conn.WaitAsync(ct);
+                    await conn.WaitAsync(ct).ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -92,7 +92,7 @@ public class PostgreSqlChangeListener : IAsyncDisposable
                 _logger?.LogError(ex, "LISTEN connection error, reconnecting in 5s");
                 try
                 {
-                    await Task.Delay(5000, ct);
+                    await Task.Delay(5000, ct).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
@@ -131,7 +131,7 @@ public class PostgreSqlChangeListener : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        await StopAsync();
+        await StopAsync().ConfigureAwait(false);
         _cts?.Dispose();
     }
 }

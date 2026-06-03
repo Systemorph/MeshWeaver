@@ -117,8 +117,8 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
                 ORDER BY s.schema_name
                 """))
             {
-                await using var reader = await discoverCmd.ExecuteReaderAsync(ct);
-                while (await reader.ReadAsync(ct))
+                await using var reader = await discoverCmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+                while (await reader.ReadAsync(ct).ConfigureAwait(false))
                 {
                     var schema = reader.GetString(0);
                     if (!ExcludedSchemas.Contains(schema))
@@ -130,7 +130,7 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
                 "DELETE FROM public.searchable_schemas; " +
                 string.Join(" ", schemas.Select(s =>
                     $"INSERT INTO public.searchable_schemas (schema_name) VALUES ('{s.Replace("'", "''")}') ON CONFLICT DO NOTHING;")));
-            await cmd.ExecuteNonQueryAsync(ct);
+            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
 
             Interlocked.Increment(ref ActualSyncCount);
             Interlocked.Exchange(ref _lastSyncTicks, DateTime.UtcNow.Ticks);
@@ -151,7 +151,7 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
     public async Task<IReadOnlyList<string>> GetSchemasWithTableAsync(
         string tableName, CancellationToken ct = default)
     {
-        var schemas = await GetSearchableSchemasAsync(ct);
+        var schemas = await GetSearchableSchemasAsync(ct).ConfigureAwait(false);
         if (schemas.Count == 0 || string.IsNullOrEmpty(tableName))
             return schemas;
 
@@ -165,8 +165,8 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
             """);
         cmd.Parameters.AddWithValue(tableName);
         cmd.Parameters.AddWithValue(schemas.ToArray());
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
             present.Add(reader.GetString(0));
         return present;
     }
@@ -178,19 +178,19 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
             var schemas = new List<string>();
             await using var cmd = _dataSource.CreateCommand(
                 "SELECT schema_name FROM public.searchable_schemas ORDER BY schema_name");
-            await using var reader = await cmd.ExecuteReaderAsync(ct);
-            while (await reader.ReadAsync(ct))
+            await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
                 schemas.Add(reader.GetString(0));
 
             // If empty (first run), sync from factory and retry
             if (schemas.Count == 0)
             {
-                await SyncSearchableSchemasAsync(ct);
+                await SyncSearchableSchemasAsync(ct).ConfigureAwait(false);
                 schemas.Clear();
                 await using var cmd2 = _dataSource.CreateCommand(
                     "SELECT schema_name FROM public.searchable_schemas ORDER BY schema_name");
-                await using var reader2 = await cmd2.ExecuteReaderAsync(ct);
-                while (await reader2.ReadAsync(ct))
+                await using var reader2 = await cmd2.ExecuteReaderAsync(ct).ConfigureAwait(false);
+                while (await reader2.ReadAsync(ct).ConfigureAwait(false))
                     schemas.Add(reader2.GetString(0));
             }
 
@@ -296,8 +296,8 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         cmd.Parameters.Add(new NpgsqlParameter("@p_order", orderBy));
         cmd.Parameters.Add(new NpgsqlParameter("@p_limit", limit));
 
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
             yield return ReadMeshNode(reader, options);
         }
@@ -406,7 +406,7 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         // treat as no rows; the next query will see the now-existing table
         // after the write commits.
         await foreach (var node in EnumerateReaderOrEmptyOnMissingRelationAsync(
-            cmd, options, schemas, tableName, ct).WithCancellation(ct))
+            cmd, options, schemas, tableName, ct).WithCancellation(ct).ConfigureAwait(false))
         {
             yield return node;
         }
@@ -420,7 +420,7 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         [EnumeratorCancellation] CancellationToken ct)
     {
         Npgsql.NpgsqlDataReader reader;
-        try { reader = await cmd.ExecuteReaderAsync(ct); }
+        try { reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false); }
         catch (Npgsql.PostgresException ex) when (ex.SqlState == "42P01")
         {
             _logger?.LogDebug(
@@ -433,7 +433,7 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         while (true)
         {
             bool hasNext;
-            try { hasNext = await reader.ReadAsync(ct); }
+            try { hasNext = await reader.ReadAsync(ct).ConfigureAwait(false); }
             catch (Npgsql.PostgresException ex) when (ex.SqlState == "42P01")
             {
                 _logger?.LogDebug(

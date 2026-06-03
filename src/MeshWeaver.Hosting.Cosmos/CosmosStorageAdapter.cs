@@ -63,7 +63,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
     {
         if (_changeFeedProcessor != null)
         {
-            await _changeFeedProcessor.StartAsync(cancellationToken);
+            await _changeFeedProcessor.StartAsync(cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -74,7 +74,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
     {
         if (_changeFeedProcessor != null)
         {
-            await _changeFeedProcessor.StopAsync();
+            await _changeFeedProcessor.StopAsync().ConfigureAwait(false);
         }
     }
 
@@ -105,7 +105,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
             var response = await _nodesContainer.ReadItemAsync<MeshNode>(
                 id,
                 new PartitionKey(ns),
-                cancellationToken: ct);
+                cancellationToken: ct).ConfigureAwait(false);
             return response.Resource;
         }
         catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
@@ -115,7 +115,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
     }
 
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
-        => Observable.FromAsync(async ct => { await WriteAsyncCore(node, options, ct); return node; });
+        => Observable.FromAsync(async ct => { await WriteAsyncCore(node, options, ct).ConfigureAwait(false); return node; });
 
     private async Task WriteAsyncCore(MeshNode node, JsonSerializerOptions options, CancellationToken ct)
     {
@@ -126,11 +126,11 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
         await _nodesContainer.UpsertItemAsync(
             nodeToWrite,
             new PartitionKey(nodeToWrite.Namespace),
-            cancellationToken: ct);
+            cancellationToken: ct).ConfigureAwait(false);
     }
 
     public IObservable<string> Delete(string path)
-        => Observable.FromAsync(async ct => { await DeleteAsyncCore(path, ct); return path; });
+        => Observable.FromAsync(async ct => { await DeleteAsyncCore(path, ct).ConfigureAwait(false); return path; });
 
     private async Task DeleteAsyncCore(string path, CancellationToken ct)
     {
@@ -148,7 +148,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
             await _nodesContainer.DeleteItemAsync<MeshNode>(
                 id,
                 new PartitionKey(ns),
-                cancellationToken: ct);
+                cancellationToken: ct).ConfigureAwait(false);
         }
         catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
         {
@@ -178,7 +178,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
 
         while (iterator.HasMoreResults)
         {
-            var response = await iterator.ReadNextAsync(ct);
+            var response = await iterator.ReadNextAsync(ct).ConfigureAwait(false);
             foreach (var item in response)
             {
                 var ns = item.TryGetProperty("namespace", out var nsProp) ? nsProp.GetString() ?? "" : "";
@@ -204,7 +204,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
         var id = lastSlash > 0 ? normalizedPath[(lastSlash + 1)..] : normalizedPath;
         try
         {
-            await _nodesContainer.ReadItemAsync<MeshNode>(id, new PartitionKey(ns), cancellationToken: ct);
+            await _nodesContainer.ReadItemAsync<MeshNode>(id, new PartitionKey(ns), cancellationToken: ct).ConfigureAwait(false);
             return true;
         }
         catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
@@ -219,7 +219,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
         string nodePath, string? subPath, JsonSerializerOptions options)
         => Observable.Create<object>(async (observer, ct) =>
         {
-            await foreach (var obj in GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct))
+            await foreach (var obj in GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct).ConfigureAwait(false))
                 observer.OnNext(obj);
             observer.OnCompleted();
         });
@@ -238,7 +238,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
 
         while (iterator.HasMoreResults)
         {
-            var response = await iterator.ReadNextAsync(ct);
+            var response = await iterator.ReadNextAsync(ct).ConfigureAwait(false);
             foreach (var item in response)
             {
                 // Deserialize using $type discriminator if present
@@ -250,7 +250,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
     public IObservable<Unit> SavePartitionObjects(
         string nodePath, string? subPath,
         IReadOnlyCollection<object> objects, JsonSerializerOptions options)
-        => Observable.FromAsync(async ct => { await SavePartitionObjectsAsyncCore(nodePath, subPath, objects, options, ct); return Unit.Default; });
+        => Observable.FromAsync(async ct => { await SavePartitionObjectsAsyncCore(nodePath, subPath, objects, options, ct).ConfigureAwait(false); return Unit.Default; });
 
     private async Task SavePartitionObjectsAsyncCore(
         string nodePath,
@@ -262,7 +262,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
         var partitionKey = GetPartitionStorageKey(nodePath, subPath);
 
         // Delete existing objects first
-        await DeletePartitionObjectsAsyncCore(nodePath, subPath, ct);
+        await DeletePartitionObjectsAsyncCore(nodePath, subPath, ct).ConfigureAwait(false);
 
         // Insert new objects
         foreach (var obj in objects)
@@ -280,12 +280,12 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
             await _partitionsContainer.UpsertItemAsync(
                 document,
                 new PartitionKey(partitionKey),
-                cancellationToken: ct);
+                cancellationToken: ct).ConfigureAwait(false);
         }
     }
 
     public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
-        => Observable.FromAsync(async ct => { await DeletePartitionObjectsAsyncCore(nodePath, subPath, ct); return Unit.Default; });
+        => Observable.FromAsync(async ct => { await DeletePartitionObjectsAsyncCore(nodePath, subPath, ct).ConfigureAwait(false); return Unit.Default; });
 
     private async Task DeletePartitionObjectsAsyncCore(
         string nodePath,
@@ -302,7 +302,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
 
         while (iterator.HasMoreResults)
         {
-            var response = await iterator.ReadNextAsync(ct);
+            var response = await iterator.ReadNextAsync(ct).ConfigureAwait(false);
             foreach (var item in response)
             {
                 try
@@ -311,7 +311,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
                     await _partitionsContainer.DeleteItemAsync<object>(
                         id,
                         new PartitionKey(partitionKey),
-                        cancellationToken: ct);
+                        cancellationToken: ct).ConfigureAwait(false);
                 }
                 catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
                 {
@@ -339,7 +339,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
 
         if (iterator.HasMoreResults)
         {
-            var response = await iterator.ReadNextAsync(ct);
+            var response = await iterator.ReadNextAsync(ct).ConfigureAwait(false);
             foreach (var item in response)
             {
                 if (item.TryGetProperty("maxTime", out var maxTimeProp) && maxTimeProp.ValueKind != JsonValueKind.Null)
@@ -408,7 +408,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
 
         while (iterator.HasMoreResults)
         {
-            var response = await iterator.ReadNextAsync(ct);
+            var response = await iterator.ReadNextAsync(ct).ConfigureAwait(false);
             foreach (var node in response)
             {
                 yield return node;
@@ -468,7 +468,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
 
         while (iterator.HasMoreResults)
         {
-            var response = await iterator.ReadNextAsync(ct);
+            var response = await iterator.ReadNextAsync(ct).ConfigureAwait(false);
             foreach (var node in response)
             {
                 yield return node;
@@ -501,7 +501,7 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
         // Stop and dispose the change feed processor if attached
         if (_changeFeedProcessor != null)
         {
-            await _changeFeedProcessor.DisposeAsync();
+            await _changeFeedProcessor.DisposeAsync().ConfigureAwait(false);
             _changeFeedProcessor = null;
         }
 

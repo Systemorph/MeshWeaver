@@ -54,10 +54,10 @@ public sealed class PgPartitionNotifyListener : IHostedService, IAsyncDisposable
     public async Task StopAsync(CancellationToken ct)
     {
         if (_cts is null) return;
-        await _cts.CancelAsync();
+        await _cts.CancelAsync().ConfigureAwait(false);
         if (_listenTask is not null)
         {
-            try { await _listenTask; }
+            try { await _listenTask.ConfigureAwait(false); }
             catch (OperationCanceledException) { /* expected */ }
         }
     }
@@ -71,14 +71,14 @@ public sealed class PgPartitionNotifyListener : IHostedService, IAsyncDisposable
         {
             try
             {
-                await using var conn = await _dataSource.OpenConnectionAsync(ct);
+                await using var conn = await _dataSource.OpenConnectionAsync(ct).ConfigureAwait(false);
                 conn.Notification += OnNotification;
                 await using (var cmd = new NpgsqlCommand("LISTEN partition_changes", conn))
-                    await cmd.ExecuteNonQueryAsync(ct);
+                    await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
                 _logger?.LogInformation("PgPartitionNotifyListener: LISTEN started on partition_changes");
                 backoff = TimeSpan.FromSeconds(1);
                 while (!ct.IsCancellationRequested)
-                    await conn.WaitAsync(ct);
+                    await conn.WaitAsync(ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
             catch (Exception ex)
@@ -86,7 +86,7 @@ public sealed class PgPartitionNotifyListener : IHostedService, IAsyncDisposable
                 _logger?.LogWarning(ex,
                     "PgPartitionNotifyListener: connection broke; reconnecting in {Backoff}s",
                     backoff.TotalSeconds);
-                try { await Task.Delay(backoff, ct); }
+                try { await Task.Delay(backoff, ct).ConfigureAwait(false); }
                 catch (OperationCanceledException) { break; }
                 backoff = TimeSpan.FromSeconds(Math.Min(backoff.TotalSeconds * 2, 30));
             }

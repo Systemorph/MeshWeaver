@@ -147,7 +147,7 @@ public static class PersistenceExtensions
         // Create database if not exists
         var databaseResponse = await cosmosClient.CreateDatabaseIfNotExistsAsync(
             databaseName,
-            ThroughputProperties.CreateManualThroughput(throughput));
+            ThroughputProperties.CreateManualThroughput(throughput)).ConfigureAwait(false);
         var database = databaseResponse.Database;
 
         // Create containers if not exists
@@ -155,13 +155,13 @@ public static class PersistenceExtensions
             new ContainerProperties("nodes", "/key")
             {
                 DefaultTimeToLive = -1 // No expiration
-            });
+            }).ConfigureAwait(false);
 
         await database.CreateContainerIfNotExistsAsync(
             new ContainerProperties("partitions", "/partitionKey")
             {
                 DefaultTimeToLive = -1
-            });
+            }).ConfigureAwait(false);
 
         return services.AddCosmosPersistence(cosmosClient, databaseName);
     }
@@ -236,7 +236,7 @@ public static class PersistenceExtensions
         // Create database if not exists
         var databaseResponse = await cosmosClient.CreateDatabaseIfNotExistsAsync(
             databaseName,
-            ThroughputProperties.CreateManualThroughput(throughput));
+            ThroughputProperties.CreateManualThroughput(throughput)).ConfigureAwait(false);
         var database = databaseResponse.Database;
 
         // Create containers if not exists
@@ -244,20 +244,20 @@ public static class PersistenceExtensions
             new ContainerProperties("nodes", "/key")
             {
                 DefaultTimeToLive = -1 // No expiration
-            });
+            }).ConfigureAwait(false);
 
         await database.CreateContainerIfNotExistsAsync(
             new ContainerProperties("partitions", "/partitionKey")
             {
                 DefaultTimeToLive = -1
-            });
+            }).ConfigureAwait(false);
 
         // Create lease container for Change Feed
         await database.CreateContainerIfNotExistsAsync(
             new ContainerProperties($"{databaseName}-leases", "/id")
             {
                 DefaultTimeToLive = -1
-            });
+            }).ConfigureAwait(false);
 
         return services.AddCosmosPersistenceWithChangeFeed(cosmosClient, databaseName);
     }
@@ -330,7 +330,7 @@ public static class PersistenceExtensions
         // Create database if not exists
         var databaseResponse = await cosmosClient.CreateDatabaseIfNotExistsAsync(
             databaseName,
-            ThroughputProperties.CreateManualThroughput(throughput));
+            ThroughputProperties.CreateManualThroughput(throughput)).ConfigureAwait(false);
         var database = databaseResponse.Database;
 
         // Create nodes container with vector index support
@@ -340,14 +340,14 @@ public static class PersistenceExtensions
             "/embedding",
             vectorDimensions);
 
-        await database.CreateContainerIfNotExistsAsync(nodesContainerProperties);
+        await database.CreateContainerIfNotExistsAsync(nodesContainerProperties).ConfigureAwait(false);
 
         // Create partitions container (standard, no vector support needed)
         await database.CreateContainerIfNotExistsAsync(
             new ContainerProperties("partitions", "/partitionKey")
             {
                 DefaultTimeToLive = -1
-            });
+            }).ConfigureAwait(false);
 
         return services.AddCosmosPersistence(cosmosClient, databaseName);
     }

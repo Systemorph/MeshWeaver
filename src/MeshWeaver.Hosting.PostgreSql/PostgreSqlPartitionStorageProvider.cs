@@ -118,7 +118,7 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
         await using (var cmd = _baseDataSource.CreateCommand("SELECT public.ensure_partition_schema(@partition)"))
         {
             cmd.Parameters.AddWithValue("partition", schema);
-            await cmd.ExecuteNonQueryAsync(ct);
+            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
 
         // Non-standard satellite tables: the proc only provisions the standard set
@@ -155,7 +155,7 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
                 Schema = schema
             };
             await PostgreSqlSchemaInitializer.CreateSatelliteTablesAsync(
-                ddlDs, schemaOptions, extraTables, ct);
+                ddlDs, schemaOptions, extraTables, ct).ConfigureAwait(false);
         }
 
         _schemasInitialized.TryAdd(schema, 0);

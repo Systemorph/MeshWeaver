@@ -26,7 +26,7 @@ public class AzureFoundryEmbeddingProvider : IEmbeddingProvider
     {
         if (string.IsNullOrWhiteSpace(text)) return null;
         var options = new EmbeddingsOptions([text]) { Model = _model };
-        var response = await _client.EmbedAsync(options);
+        var response = await _client.EmbedAsync(options).ConfigureAwait(false);
         return response.Value.Data[0].Embedding.ToObjectFromJson<float[]>();
     }
 }

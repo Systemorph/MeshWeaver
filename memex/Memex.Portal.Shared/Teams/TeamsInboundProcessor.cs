@@ -5,6 +5,7 @@ using MeshWeaver.AI;                       // StartThread / SubmitMessage
 using MeshWeaver.Graph.Configuration;      // TeamsConversationNodeType, UserNodeType
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;            // IMeshService, IMeshQueryCore, MeshQueryRequest
+using MeshWeaver.Mesh.Threading;           // IoPool — bounded HTTP pool (replaces bare Observable.FromAsync)
 using MeshWeaver.Messaging;                // IMessageHub, AccessService
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -22,9 +23,12 @@ public record InboundTeamsMessage(
 /// The agent's reply is delivered back to Teams by <c>TeamsReplySender</c>. Unknown senders get a polite
 /// "no account" reply.
 /// </summary>
-public sealed class TeamsInboundProcessor
+public sealed class TeamsInboundProcessor : IDisposable
 {
     private const string Agent = "Assistant";
+
+    // Bound to a sane cap so a burst of inbound Teams notifications can't open unbounded Graph calls.
+    private const int HttpConcurrency = 8;
 
     private readonly IMessageHub hub;
     private readonly ITeamsClient teamsClient;
@@ -33,6 +37,13 @@ public sealed class TeamsInboundProcessor
     private readonly AccessService accessService;
     private readonly IMeshQueryCore query;
     private readonly JsonSerializerOptions jsonOptions;
+
+    // Dedicated bounded HTTP pool, ALWAYS created fresh and owned by this instance — never resolved
+    // from the mesh-scoped IoPoolRegistry. The portal builds this processor from its OWN DI container
+    // while activating hosted services; reaching across into the mesh hub's ServiceProvider at that
+    // moment races that provider's internal service realization (a documented NRE crash-loop — see
+    // GraphMail). A self-owned pool always resolves and is disposed with this singleton.
+    private readonly IoPool _http = new(HttpConcurrency);
 
     public TeamsInboundProcessor(IMessageHub hub, ITeamsClient teamsClient, ILogger<TeamsInboundProcessor>? logger = null)
     {
@@ -44,6 +55,8 @@ public sealed class TeamsInboundProcessor
         query = hub.ServiceProvider.GetRequiredService<IMeshQueryCore>();
         jsonOptions = hub.JsonSerializerOptions;
     }
+
+    public void Dispose() => _http.Dispose();
 
     /// <summary>Routes a parsed Teams message. Bot-Framework-free → unit-testable.</summary>
     public IObservable<Unit> Route(InboundTeamsMessage m)
@@ -86,8 +99,9 @@ public sealed class TeamsInboundProcessor
     private IObservable<Unit> HandleUnknown(InboundTeamsMessage m)
     {
         logger?.LogInformation("TeamsInbound: message from unknown Teams user {User}", m.AadObjectId);
-        return Observable.FromAsync(ct => teamsClient.SendMessageAsync(m.ServiceUrl, m.ConversationId,
-                "You don't have a Memex account linked to this Microsoft identity yet, so I can't act for you here.", ct))
+        return _http.Run(async ct => await teamsClient.SendMessageAsync(m.ServiceUrl, m.ConversationId,
+                "You don't have a Memex account linked to this Microsoft identity yet, so I can't act for you here.", ct)
+                .ConfigureAwait(false))
             .Select(_ => Unit.Default)
             .Catch((Exception _) => Observable.Return(Unit.Default));
     }

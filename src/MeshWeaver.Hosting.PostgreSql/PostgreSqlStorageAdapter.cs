@@ -119,8 +119,8 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
             cmd.Parameters.AddWithValue(ns);
             cmd.Parameters.AddWithValue(id);
 
-            await using var reader = await cmd.ExecuteReaderAsync(ct);
-            if (!await reader.ReadAsync(ct))
+            await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            if (!await reader.ReadAsync(ct).ConfigureAwait(false))
                 return null;
 
             return ReadMeshNode(reader, options);
@@ -191,8 +191,8 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
                     foreach (var id in ids)
                         cmd.Parameters.AddWithValue(id);
 
-                    await using var reader = await cmd.ExecuteReaderAsync(ct);
-                    while (await reader.ReadAsync(ct))
+                    await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+                    while (await reader.ReadAsync(ct).ConfigureAwait(false))
                     {
                         observer.OnNext(ReadMeshNode(reader, options));
                     }
@@ -209,7 +209,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
         => Observable.FromAsync<MeshNode?>(async ct =>
         {
-            await WriteAsyncCore(node, options, ct);
+            await WriteAsyncCore(node, options, ct).ConfigureAwait(false);
             // Fire the in-process Changes feed so same-process synced-query
             // subscribers re-emit without waiting for the PG NOTIFY round-trip.
             // PostgreSqlChangeListener still publishes for cross-process; the
@@ -232,7 +232,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         var embeddingText = string.Join(" ",
             new[] { node.Name, node.NodeType }
                 .Where(s => !string.IsNullOrEmpty(s)));
-        var embeddingVector = await _embeddingProvider.GenerateEmbeddingAsync(embeddingText);
+        var embeddingVector = await _embeddingProvider.GenerateEmbeddingAsync(embeddingText).ConfigureAwait(false);
 
         var contentJson = node.Content != null
             ? JsonSerializer.Serialize(node.Content, node.Content.GetType(), options)
@@ -281,13 +281,13 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
 
         cmd.Parameters.AddWithValue(node.MainNode);
 
-        await cmd.ExecuteNonQueryAsync(ct);
+        await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
     public IObservable<string> Delete(string path)
         => Observable.FromAsync(async ct =>
         {
-            await DeleteAsyncCore(path, ct);
+            await DeleteAsyncCore(path, ct).ConfigureAwait(false);
             try { _changes.OnNext(DataChangeNotification.Deleted(path)); }
             catch { /* never throw — change feed is best-effort */ }
             return path;
@@ -307,7 +307,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         cmd.Parameters.AddWithValue(ns);
         cmd.Parameters.AddWithValue(id);
 
-        await cmd.ExecuteNonQueryAsync(ct);
+        await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
@@ -325,8 +325,8 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         cmd.Parameters.AddWithValue(normalizedParent);
 
         var paths = new List<string>();
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
             var id = reader.GetString(0);
             var ns = reader.GetString(1);
@@ -354,8 +354,8 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         cmd.Parameters.AddWithValue(ns);
         cmd.Parameters.AddWithValue(id);
 
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        return await reader.ReadAsync(ct);
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        return await reader.ReadAsync(ct).ConfigureAwait(false);
     }
 
     public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
@@ -380,8 +380,8 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
             $"ORDER BY LENGTH(path) DESC LIMIT 1");
         cmd.Parameters.AddWithValue(normalizedPath);
 
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        if (!await reader.ReadAsync(ct))
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        if (!await reader.ReadAsync(ct).ConfigureAwait(false))
             return (null, 0);
 
         var node = ReadMeshNode(reader, options);
@@ -447,8 +447,8 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         await using var cmd = _dataSource.CreateCommand(sql);
         cmd.Parameters.AddWithValue(normalizedPath);
 
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        if (!await reader.ReadAsync(ct))
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        if (!await reader.ReadAsync(ct).ConfigureAwait(false))
             return (null, 0);
 
         var node = ReadMeshNode(reader, options);
@@ -462,7 +462,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         string nodePath, string? subPath, JsonSerializerOptions options)
         => Observable.Create<object>(async (observer, ct) =>
         {
-            await foreach (var obj in GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct))
+            await foreach (var obj in GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct).ConfigureAwait(false))
                 observer.OnNext(obj);
             observer.OnCompleted();
         });
@@ -478,8 +478,8 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
             $"SELECT data, type_name FROM {poTable} WHERE partition_key = $1");
         cmd.Parameters.AddWithValue(partitionKey);
 
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
             var json = reader.GetString(0);
             json = EnsureTypeDiscriminatorFirst(json);
@@ -505,7 +505,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
 
     public IObservable<Unit> SavePartitionObjects(
         string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options)
-        => Observable.FromAsync(async ct => { await SavePartitionObjectsAsyncCore(nodePath, subPath, objects, options, ct); return Unit.Default; });
+        => Observable.FromAsync(async ct => { await SavePartitionObjectsAsyncCore(nodePath, subPath, objects, options, ct).ConfigureAwait(false); return Unit.Default; });
 
     private async Task SavePartitionObjectsAsyncCore(
         string nodePath,
@@ -516,7 +516,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     {
         var partitionKey = GetPartitionStorageKey(nodePath, subPath);
 
-        await DeletePartitionObjectsAsyncCore(nodePath, subPath, ct);
+        await DeletePartitionObjectsAsyncCore(nodePath, subPath, ct).ConfigureAwait(false);
 
         foreach (var obj in objects)
         {
@@ -540,12 +540,12 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
             cmd.Parameters.AddWithValue(json);
             cmd.Parameters.AddWithValue(DateTimeOffset.UtcNow);
 
-            await cmd.ExecuteNonQueryAsync(ct);
+            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
     }
 
     public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
-        => Observable.FromAsync(async ct => { await DeletePartitionObjectsAsyncCore(nodePath, subPath, ct); return Unit.Default; });
+        => Observable.FromAsync(async ct => { await DeletePartitionObjectsAsyncCore(nodePath, subPath, ct).ConfigureAwait(false); return Unit.Default; });
 
     private async Task DeletePartitionObjectsAsyncCore(
         string nodePath,
@@ -559,7 +559,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
             $"DELETE FROM {poTable} WHERE partition_key = $1");
         cmd.Parameters.AddWithValue(partitionKey);
 
-        await cmd.ExecuteNonQueryAsync(ct);
+        await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
     public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
@@ -577,7 +577,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
             $"SELECT MAX(last_modified) FROM {poTable} WHERE partition_key = $1");
         cmd.Parameters.AddWithValue(partitionKey);
 
-        var result = await cmd.ExecuteScalarAsync(ct);
+        var result = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
         if (result is DateTimeOffset dto)
             return dto;
         if (result is DateTime dt)
@@ -607,8 +607,8 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         cmd.Parameters.AddWithValue(prefix + "%");
 
         var subPaths = new List<string>();
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
             var sub = reader.GetString(0);
             if (!string.IsNullOrEmpty(sub))
@@ -716,8 +716,8 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
                 cmd.Parameters.Add(p);
             }
 
-            reader = await cmd.ExecuteReaderAsync(ct);
-            while (await reader.ReadAsync(ct))
+            reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
             {
                 yield return ReadMeshNode(reader, options);
             }
@@ -725,7 +725,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         finally
         {
             if (reader != null)
-                await reader.DisposeAsync();
+                await reader.DisposeAsync().ConfigureAwait(false);
         }
 
     }
@@ -761,7 +761,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         if (queries.Count == 1)
         {
             await foreach (var node in QueryNodesAsync(
-                queries[0], options, userId, basePath, activityUserId, excludedNodeTypes, ct))
+                queries[0], options, userId, basePath, activityUserId, excludedNodeTypes, ct).ConfigureAwait(false))
                 yield return node;
             yield break;
         }
@@ -824,8 +824,8 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         foreach (var (name, value) in unionedParams)
             cmd.Parameters.Add(new NpgsqlParameter(name, value ?? DBNull.Value));
 
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
             yield return ReadMeshNode(reader, options);
     }
 
@@ -928,8 +928,8 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
             cmd.Parameters.Add(p);
         }
 
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
             yield return ReadMeshNode(reader, options);
         }
@@ -961,8 +961,8 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
             cmd.Parameters.Add(p);
         }
 
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
             yield return ReadMeshNode(reader, options);
         }

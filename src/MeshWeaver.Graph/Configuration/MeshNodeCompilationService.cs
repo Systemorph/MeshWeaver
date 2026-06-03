@@ -8,6 +8,7 @@ using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using MeshWeaver.NuGet;
 using Microsoft.CodeAnalysis;
@@ -35,6 +36,15 @@ internal class MeshNodeCompilationService(
 {
     private readonly IAssemblyStore _assemblyStore = assemblyStore ?? NullAssemblyStore.Instance;
     private readonly CompilationCacheOptions _cacheOptions = cacheOptions.Value ?? new CompilationCacheOptions();
+
+    // Compile pool for the bare-async leaf (CompilationInputs assembly): a plain
+    // Observable.FromAsync deadlocks under a blocking subscriber because SubscribeOn
+    // only moves the subscribe, not the await continuation. The pool runs the leaf
+    // with ConfigureAwait(false) behind a concurrency gate. Falls back to the
+    // unbounded pool when no registry is wired (e.g. tests outside DI).
+    private readonly IIoPool _ioPool =
+        hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Compile)
+        ?? IoPool.Unbounded;
     private JsonSerializerOptions JsonOptions => hub.JsonSerializerOptions;
     private readonly DynamicMeshNodeAttributeGenerator _attributeGenerator = new();
 
@@ -699,7 +709,7 @@ internal class MeshNodeCompilationService(
                     var pairs = CollectSourcePairs(matches);
                     return ResolveIncludesForPairs(pairs)
                         .SelectMany(resolvedPairs =>
-                            Observable.FromAsync(ct =>
+                            _ioPool.Run(ct =>
                                 AssembleCompilationInputsAsync(node, ntDef, resolvedPairs, ct)));
                 }));
     }
@@ -782,7 +792,7 @@ internal class MeshNodeCompilationService(
         ImmutableArray<MetadataReference> references;
         if (allNugetRefs.Count > 0)
         {
-            var resolved = await nugetResolver.ResolveAsync(allNugetRefs, targetFramework: null, ct);
+            var resolved = await nugetResolver.ResolveAsync(allNugetRefs, targetFramework: null, ct).ConfigureAwait(false);
             references = _references
                 .Concat(resolved.AssemblyPaths.Select(p => (MetadataReference)MetadataReference.CreateFromFile(p)))
                 .ToImmutableArray();

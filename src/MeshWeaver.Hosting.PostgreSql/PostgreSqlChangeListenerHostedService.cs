@@ -36,6 +36,6 @@ internal sealed class PostgreSqlChangeListenerHostedService : IHostedService
     public async Task StopAsync(CancellationToken cancellationToken)
     {
         _logger?.LogInformation("Stopping PostgreSqlChangeListener");
-        await _listener.StopAsync();
+        await _listener.StopAsync().ConfigureAwait(false);
     }
 }

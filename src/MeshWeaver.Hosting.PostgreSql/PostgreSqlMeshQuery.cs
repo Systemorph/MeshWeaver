@@ -137,12 +137,12 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
         if (_embeddingProvider is null || string.IsNullOrWhiteSpace(queryText))
             yield break;
 
-        var vec = await _embeddingProvider.GenerateEmbeddingAsync(queryText);
+        var vec = await _embeddingProvider.GenerateEmbeddingAsync(queryText).ConfigureAwait(false);
         if (vec is null)
             yield break;
 
         await foreach (var node in _adapter.VectorSearchAsync(
-            vec, options, filter: null, userId, namespacePath, topK, ct))
+            vec, options, filter: null, userId, namespacePath, topK, ct).ConfigureAwait(false))
             yield return node;
     }
 
@@ -166,7 +166,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
         // PostgreSqlStorageAdapter.QueryNodesAsync(IReadOnlyList&lt;ParsedQuery&gt;,...).
         if (request.Queries is { Count: > 1 })
         {
-            await foreach (var item in QueryNodesUnionAsync(request, options, ct))
+            await foreach (var item in QueryNodesUnionAsync(request, options, ct).ConfigureAwait(false))
                 yield return item;
             yield break;
         }
@@ -195,7 +195,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
         // gets cosine-ranked among Story rows in ACME's subtree.
         if (_embeddingProvider != null && !string.IsNullOrWhiteSpace(parsedQuery.TextSearch))
         {
-            var vec = await _embeddingProvider.GenerateEmbeddingAsync(parsedQuery.TextSearch);
+            var vec = await _embeddingProvider.GenerateEmbeddingAsync(parsedQuery.TextSearch).ConfigureAwait(false);
             if (vec != null)
             {
                 var vectorUserId = GetEffectiveUserId(request);
@@ -207,7 +207,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
                 // WHERE clause has the structured predicates only.
                 var structuralFilter = parsedQuery with { TextSearch = null };
                 await foreach (var node in _adapter.VectorSearchAsync(
-                    vec, options, structuralFilter, vectorUserId, vectorNamespace, topK, ct))
+                    vec, options, structuralFilter, vectorUserId, vectorNamespace, topK, ct).ConfigureAwait(false))
                     yield return node;
                 yield break;
             }
@@ -245,7 +245,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
         {
             var buffered = new List<(MeshNode Node, double Score)>();
             var userId = GetEffectiveUserId(request);
-            await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, options, userId, activityUserId: activityUserId, excludedNodeTypes: excludedNodeTypes, ct: ct))
+            await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, options, userId, activityUserId: activityUserId, excludedNodeTypes: excludedNodeTypes, ct: ct).ConfigureAwait(false))
             {
                 // Instance-level exclusion still checked in memory (node.ExcludeFromContext)
                 if (context != null && node.ExcludeFromContext?.Contains(context) == true)
@@ -273,7 +273,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
         var countOrig = 0;
 
         var effectiveUserId = GetEffectiveUserId(request);
-        await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, options, effectiveUserId, activityUserId: activityUserId, excludedNodeTypes: excludedNodeTypes, ct: ct))
+        await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, options, effectiveUserId, activityUserId: activityUserId, excludedNodeTypes: excludedNodeTypes, ct: ct).ConfigureAwait(false))
         {
             // Instance-level exclusion still checked in memory (node.ExcludeFromContext)
             if (context != null && node.ExcludeFromContext?.Contains(context) == true)
@@ -352,7 +352,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
         var effectiveUserId = GetEffectiveUserId(request);
         await foreach (var node in _adapter.QueryNodesAsync(
             parsedList, options, effectiveUserId, activityUserId: activityUserId,
-            excludedNodeTypes: excludedNodeTypes, ct: ct))
+            excludedNodeTypes: excludedNodeTypes, ct: ct).ConfigureAwait(false))
         {
             if (context != null && node.ExcludeFromContext?.Contains(context) == true)
                 continue;
@@ -421,7 +421,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
         return Observable.FromAsync(async cancel =>
             {
                 var suggestions = new List<QuerySuggestion>();
-                await foreach (var node in _adapter.QueryNodesAsync(query, options, effectiveAutocompleteUserId, ct: cancel))
+                await foreach (var node in _adapter.QueryNodesAsync(query, options, effectiveAutocompleteUserId, ct: cancel).ConfigureAwait(false))
                 {
                     // Skip node types excluded from autocomplete (AddAutocompleteExcludedTypes)
                     if (_meshConfiguration?.AutocompleteExcludedNodeTypes.Contains(node.NodeType ?? "") == true)
@@ -483,7 +483,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
         // PG execute-query leaf wrapped in Observable.FromAsync + TaskPool — no ToTask on the surface.
         return Observable.FromAsync<T?>(async cancel =>
             {
-                await foreach (var node in _adapter.QueryNodesAsync(query, options, effectiveSelectUserId, ct: cancel))
+                await foreach (var node in _adapter.QueryNodesAsync(query, options, effectiveSelectUserId, ct: cancel).ConfigureAwait(false))
                 {
                     if (typeof(MeshNode).GetProperty(property)?.GetValue(node) is T typedValue)
                         return typedValue;
@@ -856,7 +856,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
         MeshQueryRequest request, JsonSerializerOptions options, CancellationToken ct)
     {
         var results = new List<(string?, T)>();
-        await foreach (var item in QueryAsync(request, options, ct))
+        await foreach (var item in QueryAsync(request, options, ct).ConfigureAwait(false))
             if (item is T typed)
                 results.Add(((item as MeshNode)?.Path, typed));
         return results;

@@ -28,7 +28,7 @@ public class ExportTemplateResolver(IMessageHub hub, ILogger<ExportTemplateResol
         if (string.IsNullOrWhiteSpace(templatePath))
             return null;
 
-        var bytes = await LoadBytesAsync(templatePath, ct);
+        var bytes = await LoadBytesAsync(templatePath, ct).ConfigureAwait(false);
         if (bytes is null)
             return null;
 
@@ -126,11 +126,11 @@ public class ExportTemplateResolver(IMessageHub hub, ILogger<ExportTemplateResol
         try
         {
             if (path.StartsWith("content:", StringComparison.OrdinalIgnoreCase))
-                return await LoadFromContentAsync(path["content:".Length..], ct);
+                return await LoadFromContentAsync(path["content:".Length..], ct).ConfigureAwait(false);
 
             const string staticPrefix = "/static/storage/content/";
             if (path.StartsWith(staticPrefix, StringComparison.OrdinalIgnoreCase))
-                return await LoadFromContentAsync(path[staticPrefix.Length..], ct);
+                return await LoadFromContentAsync(path[staticPrefix.Length..], ct).ConfigureAwait(false);
 
             logger.LogInformation("Template path '{Path}' is not a content path; skipping", path);
             return null;
@@ -147,10 +147,10 @@ public class ExportTemplateResolver(IMessageHub hub, ILogger<ExportTemplateResol
         var (collection, subPath) = SplitCollection(rel);
         var contentSvc = hub.ServiceProvider.GetService<IContentService>();
         if (contentSvc is null) return null;
-        await using var stream = await contentSvc.GetContentAsync(collection, subPath, ct);
+        await using var stream = await contentSvc.GetContentAsync(collection, subPath, ct).ConfigureAwait(false);
         if (stream is null) return null;
         using var ms = new MemoryStream();
-        await stream.CopyToAsync(ms, ct);
+        await stream.CopyToAsync(ms, ct).ConfigureAwait(false);
         return ms.ToArray();
     }
 

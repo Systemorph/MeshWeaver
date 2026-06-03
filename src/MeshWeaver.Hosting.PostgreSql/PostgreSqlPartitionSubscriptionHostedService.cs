@@ -61,7 +61,7 @@ internal sealed class PostgreSqlPartitionSubscriptionHostedService : IHostedServ
                 if (string.IsNullOrEmpty(def.Namespace)) continue;
                 try
                 {
-                    await _provider.EnsureSchemaForPartitionAsync(def, cancellationToken);
+                    await _provider.EnsureSchemaForPartitionAsync(def, cancellationToken).ConfigureAwait(false);
                     seeded++;
                 }
                 catch (Exception ex)

@@ -2,6 +2,7 @@ using System.Reactive.Linq;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -15,8 +16,25 @@ namespace MeshWeaver.Markdown.Export.Branding;
 /// raw content path (logo-only) -> portal defaults.
 /// Reactive — public API returns <c>IObservable&lt;T&gt;</c>; no <c>Task&lt;T&gt;</c>.
 /// </summary>
-public class BrandingResolver(IMessageHub hub, ExportTemplateResolver templateResolver, ILogger<BrandingResolver> logger)
+public class BrandingResolver
 {
+    private readonly IMessageHub hub;
+    private readonly ExportTemplateResolver templateResolver;
+    private readonly ILogger<BrandingResolver> logger;
+    private readonly IIoPool _ioPool;
+
+    public BrandingResolver(
+        IMessageHub hub,
+        ExportTemplateResolver templateResolver,
+        ILogger<BrandingResolver> logger,
+        IoPoolRegistry? ioPoolRegistry = null)
+    {
+        this.hub = hub;
+        this.templateResolver = templateResolver;
+        this.logger = logger;
+        _ioPool = ioPoolRegistry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
+    }
+
     /// <summary>
     /// Resolves the branding for a given path. Returns <see cref="BrandingOptions.Default"/> on any miss.
     /// </summary>
@@ -60,7 +78,7 @@ public class BrandingResolver(IMessageHub hub, ExportTemplateResolver templateRe
     private IObservable<BrandingOptions> FromCorporateIdentity(CorporateIdentity ci)
     {
         var logoObs = LoadLogo(ci.LogoPath);
-        var templateObs = Observable.FromAsync(ct => templateResolver.LoadAsync(ci.TemplatePath, ct));
+        var templateObs = _ioPool.Run(ct => templateResolver.LoadAsync(ci.TemplatePath, ct));
 
         return logoObs.Zip(templateObs, (logo, template) => new BrandingOptions
         {
@@ -100,7 +118,7 @@ public class BrandingResolver(IMessageHub hub, ExportTemplateResolver templateRe
     // File-I/O kernel kept as async Task internally — wrapped into IObservable at the
     // single boundary below. This is the "non-hub I/O" exception per the reactive rules.
     private IObservable<LogoImage?> LoadLogo(string? path) =>
-        Observable.FromAsync(ct => LoadLogoInternalAsync(path, ct));
+        _ioPool.Run(ct => LoadLogoInternalAsync(path, ct));
 
     private async Task<LogoImage?> LoadLogoInternalAsync(string? path, CancellationToken ct)
     {
@@ -116,10 +134,10 @@ public class BrandingResolver(IMessageHub hub, ExportTemplateResolver templateRe
                 var (collection, subPath) = SplitCollection(rel);
                 var contentSvc = hub.ServiceProvider.GetService<IContentService>();
                 if (contentSvc is null) return null;
-                await using var stream = await contentSvc.GetContentAsync(collection, subPath, ct);
+                await using var stream = await contentSvc.GetContentAsync(collection, subPath, ct).ConfigureAwait(false);
                 if (stream is null) return null;
                 using var ms = new MemoryStream();
-                await stream.CopyToAsync(ms, ct);
+                await stream.CopyToAsync(ms, ct).ConfigureAwait(false);
                 return new LogoImage(ms.ToArray(), InferMime(path));
             }
 
@@ -133,10 +151,10 @@ public class BrandingResolver(IMessageHub hub, ExportTemplateResolver templateRe
                 var (collection, subPath) = SplitCollection(rel);
                 var contentSvc = hub.ServiceProvider.GetService<IContentService>();
                 if (contentSvc is null) return null;
-                await using var stream = await contentSvc.GetContentAsync(collection, subPath, ct);
+                await using var stream = await contentSvc.GetContentAsync(collection, subPath, ct).ConfigureAwait(false);
                 if (stream is null) return null;
                 using var ms = new MemoryStream();
-                await stream.CopyToAsync(ms, ct);
+                await stream.CopyToAsync(ms, ct).ConfigureAwait(false);
                 return new LogoImage(ms.ToArray(), InferMime(path));
             }
 

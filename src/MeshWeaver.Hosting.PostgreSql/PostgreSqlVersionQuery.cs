@@ -50,8 +50,8 @@ public class PostgreSqlVersionQuery : IVersionQuery
             "ORDER BY version DESC");
         cmd.Parameters.AddWithValue(ns);
         cmd.Parameters.AddWithValue(id);
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
             results.Add(new MeshNodeVersion(
                 path,
@@ -76,8 +76,8 @@ public class PostgreSqlVersionQuery : IVersionQuery
             cmd.Parameters.AddWithValue(id);
             cmd.Parameters.AddWithValue(version);
 
-            await using var reader = await cmd.ExecuteReaderAsync(ct);
-            if (!await reader.ReadAsync(ct))
+            await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            if (!await reader.ReadAsync(ct).ConfigureAwait(false))
                 return (MeshNode?)null;
 
             return ReadMeshNode(reader, options);
@@ -96,8 +96,8 @@ public class PostgreSqlVersionQuery : IVersionQuery
             cmd.Parameters.AddWithValue(id);
             cmd.Parameters.AddWithValue(beforeVersion);
 
-            await using var reader = await cmd.ExecuteReaderAsync(ct);
-            if (!await reader.ReadAsync(ct))
+            await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            if (!await reader.ReadAsync(ct).ConfigureAwait(false))
                 return (MeshNode?)null;
 
             return ReadMeshNode(reader, options);
@@ -135,7 +135,7 @@ public class PostgreSqlVersionQuery : IVersionQuery
             cmd.Parameters.AddWithValue((object?)node.DesiredId ?? DBNull.Value);
             cmd.Parameters.AddWithValue((object?)node.MainNode ?? DBNull.Value);
 
-            await cmd.ExecuteNonQueryAsync(ct);
+            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             return node;
         });
 

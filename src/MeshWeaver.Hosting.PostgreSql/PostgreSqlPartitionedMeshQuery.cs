@@ -105,7 +105,7 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
             var items = new List<T>();
             if (NeedsFanOut(parsed))
             {
-                await foreach (var node in EnumerateFanOutAsync(parsed, options, request, ct))
+                await foreach (var node in EnumerateFanOutAsync(parsed, options, request, ct).ConfigureAwait(false))
                 {
                     if (node is T typed)
                         items.Add(typed);
@@ -138,7 +138,7 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
         var skip = request.Skip ?? 0;
         var limit = request.Limit ?? parsed.Limit;
 
-        await foreach (var node in EnumerateFanOutAsync(parsed, options, request, ct))
+        await foreach (var node in EnumerateFanOutAsync(parsed, options, request, ct).ConfigureAwait(false))
         {
             if (skip > 0) { skip--; continue; }
             yield return parsed.Select != null
@@ -281,11 +281,11 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
             // BOTH the projection table and the join table. Older partitions /
             // static-mesh schemas (Doc, etc.) only ship mesh_nodes — including
             // them in a satellite UNION raises "relation does not exist".
-            await _crossSchema.SyncSearchableSchemasAsync(ct);
-            schemas = (await _crossSchema.GetSchemasWithTableAsync(tableName, ct)).ToList();
+            await _crossSchema.SyncSearchableSchemasAsync(ct).ConfigureAwait(false);
+            schemas = (await _crossSchema.GetSchemasWithTableAsync(tableName, ct).ConfigureAwait(false)).ToList();
             if (joinTable is not null)
             {
-                var withJoin = await _crossSchema.GetSchemasWithTableAsync(joinTable, ct);
+                var withJoin = await _crossSchema.GetSchemasWithTableAsync(joinTable, ct).ConfigureAwait(false);
                 var joinSet = new HashSet<string>(withJoin, StringComparer.OrdinalIgnoreCase);
                 schemas = schemas.Where(s => joinSet.Contains(s)).ToList();
             }
@@ -319,7 +319,7 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
         await foreach (var node in _crossSchema.QueryAcrossSchemasAsync(
                             queryForSql, options, schemas, tableName,
                             userId == WellKnownUsers.System ? null : userId,
-                            activityUserId, ct))
+                            activityUserId, ct).ConfigureAwait(false))
         {
             yield return node;
         }

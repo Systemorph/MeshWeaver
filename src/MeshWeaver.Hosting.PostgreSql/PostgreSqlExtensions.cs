@@ -216,7 +216,7 @@ public static class PostgreSqlExtensions
         var options = serviceProvider.GetService<IOptions<PostgreSqlStorageOptions>>()?.Value
             ?? new PostgreSqlStorageOptions();
 
-        await PostgreSqlSchemaInitializer.InitializeAsync(dataSource, options, ct);
+        await PostgreSqlSchemaInitializer.InitializeAsync(dataSource, options, ct).ConfigureAwait(false);
 
         // Sync node type permissions from MeshConfiguration to the database
         var meshConfig = serviceProvider.GetService<MeshConfiguration>();
@@ -224,7 +224,7 @@ public static class PostgreSqlExtensions
         {
             var ac = serviceProvider.GetService<PostgreSqlAccessControl>()
                 ?? new PostgreSqlAccessControl(dataSource);
-            await ac.SyncNodeTypePermissionsAsync(permissions, ct);
+            await ac.SyncNodeTypePermissionsAsync(permissions, ct).ConfigureAwait(false);
         }
     }
 
