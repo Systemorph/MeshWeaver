@@ -155,27 +155,21 @@ public static class ContentCollectionsExtensions
             configuration ?? (c => c)
         );
 
-        // Create an observable that returns the collection configs
-        var observable = Observable.FromAsync(ct =>
+        // Pure in-memory config lookup — no I/O, so it's synchronous reactive.
+        // Defer keeps it cold/lazy (runs on subscribe) like the Observable.FromAsync
+        // it replaces, but without the async/Task.FromResult shell. See
+        // AsynchronousCalls.md: in-memory work is never async.
+        var observable = Observable.Defer(() =>
         {
-            IReadOnlyCollection<ContentCollectionConfig> configs;
             var collectionNames = collectionRef.CollectionNames;
-
-            if (collectionNames is null || collectionNames.Count == 0)
-            {
-                // Return all collection configurations
-                configs = contentService.GetAllCollectionConfigs();
-            }
-            else
-            {
-                // Return specific collection configurations
-                configs = collectionNames
-                    .Select(contentService.GetCollectionConfig)
-                    .OfType<ContentCollectionConfig>()
-                    .ToArray();
-            }
-
-            return Task.FromResult<object?>(configs);
+            IReadOnlyCollection<ContentCollectionConfig> configs =
+                collectionNames is null || collectionNames.Count == 0
+                    ? contentService.GetAllCollectionConfigs()
+                    : collectionNames
+                        .Select(contentService.GetCollectionConfig)
+                        .OfType<ContentCollectionConfig>()
+                        .ToArray();
+            return Observable.Return<object?>(configs);
         });
 
         stream.RegisterForDisposal(
