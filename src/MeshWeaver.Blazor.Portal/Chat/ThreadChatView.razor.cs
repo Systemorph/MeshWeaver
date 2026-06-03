@@ -503,7 +503,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         // 1) Explicit PreferredModel on the agent wins.
         if (!string.IsNullOrEmpty(agentConfig?.PreferredModel))
         {
-            var configuredModel = availableModels.FirstOrDefault(m => m.Name == agentConfig.PreferredModel);
+            var configuredModel = MatchModel(agentConfig.PreferredModel);
             if (configuredModel != null)
                 return configuredModel;
         }
@@ -516,13 +516,35 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             var resolvedModelName = ModelTierOptions?.Value?.Resolve(agentConfig.ModelTier);
             if (!string.IsNullOrEmpty(resolvedModelName))
             {
-                var resolved = availableModels.FirstOrDefault(m => m.Name == resolvedModelName);
+                var resolved = MatchModel(resolvedModelName);
                 if (resolved != null)
                     return resolved;
             }
         }
 
         return availableModels.FirstOrDefault();
+    }
+
+    /// <summary>
+    /// Resolves a model name to an available <see cref="ModelInfo"/> tolerantly:
+    /// exact (case-insensitive) first, then a substring match in either direction
+    /// so an alias ("sonnet") or a versioned id ("claude-sonnet-4-6-2025…") still
+    /// lands on the right model when the configured / agent-declared name isn't a
+    /// character-for-character match of the available model's Name. Without this,
+    /// a tier/PreferredModel that doesn't EXACTLY equal an available model silently
+    /// falls through to the first model (the "model never follows the agent" bug).
+    /// </summary>
+    private ModelInfo? MatchModel(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return null;
+        var exact = availableModels.FirstOrDefault(m =>
+            string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase));
+        if (exact != null)
+            return exact;
+        return availableModels.FirstOrDefault(m =>
+            m.Name.Contains(name, StringComparison.OrdinalIgnoreCase) ||
+            name.Contains(m.Name, StringComparison.OrdinalIgnoreCase));
     }
 
     private void SendMessage()
