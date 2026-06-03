@@ -1,7 +1,5 @@
 #nullable enable
 
-using System.Reactive.Linq;
-
 namespace MeshWeaver.Data.Completion;
 
 /// <summary>
@@ -10,10 +8,11 @@ namespace MeshWeaver.Data.Completion;
 /// <para>
 /// Observable-first contract: implementations return <see cref="IObservable{AutocompleteItem}"/>
 /// so the entire autocomplete chain composes through Rx (Merge, ScanTopN, …) without
-/// bridging to <c>Task</c>. Only the innermost provider — where the implementation
-/// touches an external system (mesh query, file system, model registry) — is allowed
-/// to use <c>await</c>, typically via <c>Observable.Create</c> with an inner
-/// <c>await foreach</c> that pumps results into <c>observer.OnNext</c>.
+/// bridging to <c>Task</c>. The innermost provider — where the implementation touches an
+/// external system (mesh query, file system, model registry) — bridges its async/IAsyncEnumerable
+/// leaf through the shared <c>IIoPool</c> (<c>pool.Run</c> / <c>pool.RunStream</c>), never a bare
+/// <c>Observable.FromAsync</c>/<c>Observable.Create(await foreach)</c>, which would deadlock under
+/// a blocking subscriber. See <c>Doc/Architecture/AsynchronousCalls.md</c>.
 /// </para>
 /// </summary>
 public interface IAutocompleteProvider
@@ -35,40 +34,4 @@ public interface IAutocompleteProvider
     /// Aggregated by <see cref="IAutocompletePrefixRegistry"/> and exposed via the prefix/ UCR.
     /// </summary>
     string? Prefix => null;
-}
-
-/// <summary>
-/// Helpers for building <see cref="IAutocompleteProvider"/> implementations whose
-/// underlying source is <see cref="IAsyncEnumerable{T}"/> — the canonical bridge
-/// from the storage-layer "innermost <c>await</c>" to the observable contract.
-/// </summary>
-public static class AutocompleteProviderObservable
-{
-    /// <summary>
-    /// Wraps an async-iterator factory as an <see cref="IObservable{AutocompleteItem}"/>.
-    /// The factory is invoked for each subscriber on a background continuation; items
-    /// flow through <c>OnNext</c>; the observable completes when the iterator finishes
-    /// (or fires <c>OnError</c> if it throws). Subscribing late or unsubscribing early
-    /// works naturally because the iteration runs against the provided cancellation
-    /// token tied to the subscription.
-    /// </summary>
-    public static IObservable<AutocompleteItem> FromAsyncEnumerable(
-        Func<CancellationToken, IAsyncEnumerable<AutocompleteItem>> factory) =>
-        Observable.Create<AutocompleteItem>(async (observer, ct) =>
-        {
-            try
-            {
-                await foreach (var item in factory(ct).WithCancellation(ct))
-                    observer.OnNext(item);
-                observer.OnCompleted();
-            }
-            catch (OperationCanceledException)
-            {
-                observer.OnCompleted();
-            }
-            catch (Exception ex)
-            {
-                observer.OnError(ex);
-            }
-        });
 }

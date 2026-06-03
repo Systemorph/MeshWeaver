@@ -115,7 +115,14 @@ public class MeshQuery : IMeshQueryCore
         var matched = SelectMatchingProviders(NamespacesForRequest(request));
         if (matched.Count == 0)
             return Observable.Return((IReadOnlyCollection<QueryResult>)Array.Empty<QueryResult>());
-        var streams = matched.Select(p => p.Query(request, Options)).ToList();
+        IReadOnlyCollection<QueryResult> empty = Array.Empty<QueryResult>();
+        // .StartWith(empty) per provider so CombineLatest emits as soon as ANY
+        // source converges instead of stalling on the slowest: source B's rows
+        // render immediately (the other sources contribute their empty seed),
+        // then the snapshot re-emits — re-merged + re-ordered by score — as A and
+        // C return. Same progressive shape as Autocomplete; the brief leading
+        // all-empty frame is the cost of not waiting for the whole fan-out.
+        var streams = matched.Select(p => p.Query(request, Options).StartWith(empty)).ToList();
         return Observable.CombineLatest(streams)
             .Select(snapshots => MergeSnapshots(snapshots))
             // Provider Query() opens connection-pool / change-feed

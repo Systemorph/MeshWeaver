@@ -41,9 +41,13 @@ public sealed class GraphMail : IDisposable
         // only the routing never touch Graph; the credential would otherwise throw on empty values).
         _graph = new Lazy<GraphServiceClient>(() =>
         {
+            // Azure SDK credentials are server-only; CA1416's browser-reachability
+            // analysis doesn't apply (this client never runs in WASM/browser).
+#pragma warning disable CA1416
             TokenCredential credential = options.UseManagedIdentity
                 ? new DefaultAzureCredential()
                 : new ClientSecretCredential(options.TenantId, options.ClientId, options.ClientSecret);
+#pragma warning restore CA1416
             return new GraphServiceClient(credential, ["https://graph.microsoft.com/.default"]);
         });
     }

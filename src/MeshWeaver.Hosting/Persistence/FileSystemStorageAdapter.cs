@@ -5,6 +5,7 @@ using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 
 namespace MeshWeaver.Hosting.Persistence;
 
@@ -18,6 +19,11 @@ public class FileSystemStorageAdapter : IStorageAdapter
     private readonly string _baseDirectory;
     private readonly Func<JsonSerializerOptions, JsonSerializerOptions>? _writeOptionsModifier;
     private readonly FileFormatParserRegistry _parserRegistry = new();
+    // I/O leaves (Read / Write / FindBestPrefixMatch / SavePartitionObjects) are
+    // bridged to IObservable through this pool — never via a bare
+    // Observable.FromAsync, which deadlocks under a blocking subscriber. See
+    // IoPoolExtensions and Doc/Architecture/AsynchronousCalls.md.
+    private readonly IIoPool _ioPool;
 
     /// <summary>
     /// The base directory for file storage.
@@ -34,15 +40,19 @@ public class FileSystemStorageAdapter : IStorageAdapter
     /// </summary>
     /// <param name="baseDirectory">Base directory for file storage</param>
     /// <param name="writeOptionsModifier">Optional modifier for JsonSerializerOptions when writing (e.g., to enable WriteIndented)</param>
-    public FileSystemStorageAdapter(string baseDirectory, Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null)
+    public FileSystemStorageAdapter(
+        string baseDirectory,
+        Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null,
+        IoPoolRegistry? ioPoolRegistry = null)
     {
         _baseDirectory = baseDirectory;
         _writeOptionsModifier = writeOptionsModifier;
+        _ioPool = ioPoolRegistry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
         Directory.CreateDirectory(baseDirectory);
     }
 
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
-        => Observable.FromAsync(ct => ReadAsyncCore(path, options, ct));
+        => _ioPool.Run(ct => ReadAsyncCore(path, options, ct));
 
     /// <summary>
     /// Walks segments deepest-first, calling <see cref="Read"/> per depth and
@@ -60,7 +70,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
     /// </summary>
     public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
         string fullPath, JsonSerializerOptions options)
-        => Observable.FromAsync(ct => FindBestPrefixMatchAsyncCore(fullPath, options, ct));
+        => _ioPool.Run(ct => FindBestPrefixMatchAsyncCore(fullPath, options, ct));
 
     private async Task<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatchAsyncCore(
         string fullPath, JsonSerializerOptions options, CancellationToken ct)
@@ -73,7 +83,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
         for (var depth = segments.Length; depth >= 1; depth--)
         {
             var testPath = string.Join("/", segments.Take(depth));
-            var node = await ReadAsyncCore(testPath, options, ct);
+            var node = await ReadAsyncCore(testPath, options, ct).ConfigureAwait(false);
             if (node != null)
                 return (node, depth);
         }
@@ -89,7 +99,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
         // Use FileShare.ReadWrite | FileShare.Delete to allow concurrent access
         await using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         using var reader = new StreamReader(stream);
-        var content = await reader.ReadToEndAsync(ct);
+        var content = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
 
         // Try to use parsers for non-JSON formats (with fallback support for .md files)
         MeshNode? node;
@@ -99,7 +109,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
             if (parsers.Count > 0)
             {
                 // Use TryParseAsync for fallback support (e.g., AgentFileParser -> MarkdownFileParser)
-                node = await _parserRegistry.TryParseAsync(extension, filePath, content, path, ct);
+                node = await _parserRegistry.TryParseAsync(extension, filePath, content, path, ct).ConfigureAwait(false);
             }
             else
             {
@@ -154,14 +164,14 @@ public class FileSystemStorageAdapter : IStorageAdapter
         // Merge companion index.md content into JSON-sourced nodes that have no content
         if (extension == ".json" && node.Content is null)
         {
-            node = await MergeIndexMarkdownAsync(node, path, ct);
+            node = await MergeIndexMarkdownAsync(node, path, ct).ConfigureAwait(false);
         }
 
         return node;
     }
 
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
-        => Observable.FromAsync<MeshNode?>(async ct => { await WriteAsyncCore(node, options, ct); return node; });
+        => _ioPool.Run<MeshNode?>(async ct => { await WriteAsyncCore(node, options, ct).ConfigureAwait(false); return node; });
 
     private async Task WriteAsyncCore(MeshNode node, JsonSerializerOptions options, CancellationToken ct)
     {
@@ -177,12 +187,12 @@ public class FileSystemStorageAdapter : IStorageAdapter
             // Split write: JSON registry (without markdown) + index.md (markdown body)
             var jsonNode = node with { Content = null, PreRenderedHtml = null };
             var jsonContent = JsonSerializer.Serialize(jsonNode, GetWriteOptions(options));
-            await File.WriteAllTextAsync(existingJsonPath, jsonContent, ct);
+            await File.WriteAllTextAsync(existingJsonPath, jsonContent, ct).ConfigureAwait(false);
 
             var indexDir = Path.GetDirectoryName(indexMdPath);
             if (!string.IsNullOrEmpty(indexDir))
                 Directory.CreateDirectory(indexDir);
-            await File.WriteAllTextAsync(indexMdPath, mdContent.Content, ct);
+            await File.WriteAllTextAsync(indexMdPath, mdContent.Content, ct).ConfigureAwait(false);
 
             return;
         }
@@ -194,7 +204,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
         var serializer = _parserRegistry.GetSerializerFor(node);
         if (serializer != null)
         {
-            content = await serializer.SerializeAsync(node, ct);
+            content = await serializer.SerializeAsync(node, ct).ConfigureAwait(false);
             extension = serializer.SupportedExtensions[0]; // Use the primary extension
         }
         else
@@ -211,7 +221,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
             Directory.CreateDirectory(directory);
         }
 
-        await WriteAtomicAsync(filePath, content, ct);
+        await WriteAtomicAsync(filePath, content, ct).ConfigureAwait(false);
 
         // Clean up old files with different extensions (e.g., if originally read from .json)
         CleanupOtherExtensions(node.Path, extension);
@@ -389,10 +399,10 @@ public class FileSystemStorageAdapter : IStorageAdapter
         if (!File.Exists(indexMdPath))
             return node;
 
-        var mdContent = await ReadFileWithSharingAsync(indexMdPath, ct);
+        var mdContent = await ReadFileWithSharingAsync(indexMdPath, ct).ConfigureAwait(false);
 
         var mdNode = await _parserRegistry.TryParseAsync(".md", indexMdPath, mdContent,
-            normalizedPath + "/index", ct);
+            normalizedPath + "/index", ct).ConfigureAwait(false);
 
         if (mdNode?.Content is MarkdownContent markdownContent)
         {
@@ -529,9 +539,9 @@ public class FileSystemStorageAdapter : IStorageAdapter
     public IObservable<Unit> SavePartitionObjects(
         string nodePath, string? subPath,
         IReadOnlyCollection<object> objects, JsonSerializerOptions options)
-        => Observable.FromAsync(async ct =>
+        => _ioPool.Run(async ct =>
         {
-            await SavePartitionObjectsAsyncCore(nodePath, subPath, objects, options, ct);
+            await SavePartitionObjectsAsyncCore(nodePath, subPath, objects, options, ct).ConfigureAwait(false);
             return Unit.Default;
         });
 
@@ -554,14 +564,14 @@ public class FileSystemStorageAdapter : IStorageAdapter
                 var fileName = GetCodeConfigurationFileName(codeConfig);
                 var filePath = Path.Combine(partitionDir, fileName);
                 var content = CSharpFileParser.SerializeCodeConfiguration(codeConfig);
-                await File.WriteAllTextAsync(filePath, content, ct);
+                await File.WriteAllTextAsync(filePath, content, ct).ConfigureAwait(false);
             }
             else
             {
                 var fileName = GetObjectFileName(obj);
                 var filePath = Path.Combine(partitionDir, fileName);
                 var json = JsonSerializer.Serialize(obj, obj.GetType(), GetWriteOptions(options));
-                await File.WriteAllTextAsync(filePath, json, ct);
+                await File.WriteAllTextAsync(filePath, json, ct).ConfigureAwait(false);
             }
         }
     }
@@ -870,7 +880,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
     {
         await using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         using var reader = new StreamReader(stream);
-        return await reader.ReadToEndAsync(ct);
+        return await reader.ReadToEndAsync(ct).ConfigureAwait(false);
     }
 
     // Writes content via a temp file + atomic rename so a mid-write cancellation
@@ -892,7 +902,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
         var tempPath = filePath + ".tmp." + Guid.NewGuid().ToString("N");
         try
         {
-            await File.WriteAllTextAsync(tempPath, content, ct);
+            await File.WriteAllTextAsync(tempPath, content, ct).ConfigureAwait(false);
             File.Move(tempPath, filePath, overwrite: true);
         }
         catch

@@ -88,7 +88,8 @@ public static class InboxSettingsTab
         var container = Controls.Stack.WithWidth("100%").WithStyle("gap: 8px;");
         foreach (var (node, email) in rows)
         {
-            var preview = (email!.Body ?? "").Length > 140 ? email.Body[..140] + "…" : email.Body ?? "";
+            var body = email!.Body ?? "";
+            var preview = body.Length > 140 ? body[..140] + "…" : body;
             var row = Controls.Stack.WithOrientation(Orientation.Horizontal)
                 .WithStyle("padding: 12px; border: 1px solid var(--neutral-stroke-rest); " +
                            "border-radius: 6px; align-items: center; gap: 16px;");

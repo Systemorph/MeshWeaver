@@ -6,6 +6,7 @@ using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 
 namespace MeshWeaver.Hosting.Persistence;
 
@@ -21,6 +22,11 @@ public class CachingStorageAdapter : IStorageAdapter
     private readonly string _baseDirectory;
     private readonly Func<JsonSerializerOptions, JsonSerializerOptions>? _writeOptionsModifier;
     private readonly FileFormatParserRegistry _parserRegistry = new();
+    private readonly IoPoolRegistry? _ioPoolRegistry;
+    // The Read leaf is bridged to IObservable through this pool — never via a
+    // bare Observable.FromAsync, which deadlocks under a blocking subscriber.
+    // See IoPoolExtensions and Doc/Architecture/AsynchronousCalls.md.
+    private readonly IIoPool _ioPool;
 
     // Per-adapter snapshot — NOT static. The adapter is registered AddSingleton<IStorageAdapter>
     // per hub (PersistenceExtensions), so this instance field lives and dies with the mesh.
@@ -33,10 +39,13 @@ public class CachingStorageAdapter : IStorageAdapter
 
     public CachingStorageAdapter(
         string baseDirectory,
-        Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null)
+        Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null,
+        IoPoolRegistry? ioPoolRegistry = null)
     {
         _baseDirectory = Path.GetFullPath(baseDirectory);
         _writeOptionsModifier = writeOptionsModifier;
+        _ioPoolRegistry = ioPoolRegistry;
+        _ioPool = ioPoolRegistry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
         Directory.CreateDirectory(_baseDirectory);
         _snapshot = new DirectorySnapshot(_baseDirectory);
     }
@@ -123,7 +132,7 @@ public class CachingStorageAdapter : IStorageAdapter
     }
 
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
-        => Observable.FromAsync(ct => ReadAsyncCore(path, options, ct));
+        => _ioPool.Run(ct => ReadAsyncCore(path, options, ct));
 
     private async Task<MeshNode?> ReadAsyncCore(string path, JsonSerializerOptions options, CancellationToken ct)
     {
@@ -146,7 +155,7 @@ public class CachingStorageAdapter : IStorageAdapter
         {
             var parsers = _parserRegistry.GetParsers(extension);
             if (parsers.Count > 0)
-                node = await _parserRegistry.TryParseAsync(extension, filePath, content, normalizedPath, ct);
+                node = await _parserRegistry.TryParseAsync(extension, filePath, content, normalizedPath, ct).ConfigureAwait(false);
             else
                 node = JsonSerializer.Deserialize<MeshNode>(content, options);
         }
@@ -193,14 +202,14 @@ public class CachingStorageAdapter : IStorageAdapter
 
         // Merge companion index.md
         if (extension == ".json" && node.Content is null)
-            node = await MergeIndexMarkdownAsync(node, normalizedPath, ct);
+            node = await MergeIndexMarkdownAsync(node, normalizedPath, ct).ConfigureAwait(false);
 
         return node;
     }
 
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
     {
-        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier);
+        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry);
         return innerAdapter.Write(node, options)
             .Do(written =>
             {
@@ -210,7 +219,7 @@ public class CachingStorageAdapter : IStorageAdapter
 
     public IObservable<string> Delete(string path)
     {
-        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier);
+        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry);
         return innerAdapter.Delete(path)
             .Do(deletedPath =>
             {
@@ -399,14 +408,14 @@ public class CachingStorageAdapter : IStorageAdapter
     public IObservable<Unit> SavePartitionObjects(
         string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options)
     {
-        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier);
+        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry);
         return innerAdapter.SavePartitionObjects(nodePath, subPath, objects, options)
             .Do(_ => RefreshCacheForPartition(nodePath, subPath));
     }
 
     public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
     {
-        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier);
+        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry);
         return innerAdapter.DeletePartitionObjects(nodePath, subPath);
     }
 
@@ -463,7 +472,7 @@ public class CachingStorageAdapter : IStorageAdapter
         var filePath = Path.Combine(_baseDirectory, indexMdKey.Replace('/', Path.DirectorySeparatorChar));
 
         var mdNode = await _parserRegistry.TryParseAsync(".md", filePath, mdContent,
-            normalizedPath + "/index", ct);
+            normalizedPath + "/index", ct).ConfigureAwait(false);
 
         if (mdNode?.Content is MarkdownContent markdownContent)
         {

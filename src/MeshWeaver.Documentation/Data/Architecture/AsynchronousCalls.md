@@ -139,6 +139,79 @@ The Task boundary belongs at the test edge (`.FirstAsync().ToTask(ct)`) or in fr
 
 ---
 
+## 🚨 No bare `Observable.FromAsync` in adapters — bridge I/O only through `IIoPool`
+
+`Observable.FromAsync(asyncFn).SubscribeOn(TaskPoolScheduler.Default)` looks safe but **deadlocks under a blocking subscriber**. `SubscribeOn` only moves the *subscribe* onto the pool; the `await` continuations *inside* `asyncFn` (including each `MoveNextAsync` of an `await foreach`) resume on whatever scheduler the awaited task captured. When the leaf is consumed by a blocking subscriber — a hub/grain `ActionBlock`, or a test's synchronous `Should().Within(...).Match(...)` wait — that continuation can be queued behind the very thread that is blocked waiting for it. This is the recurring **"search / snapshot query hangs"** failure, and it is invisible on the happy path (an unscoped, single-provider query that emits synchronously never exercises the captured continuation; stack a `CombineLatest` fan-out plus a blocking wait on top and it wedges).
+
+**The fix is the `IIoPool` (`MeshWeaver.Mesh.Threading`)** — the single sealed boundary between the turn-based hub schedulers and the genuinely-async I/O leaves. It runs the work behind a concurrency gate with `ConfigureAwait(false)` on every await, so the continuation can never hop back to a captured scheduler. Use the fluent `IoPoolExtensions` helpers, which push the leaf onto the pool eagerly and replay its results through a `ReplaySubject` — a blocking subscriber attaches late and still observes the full result, because the leaf never depends on the subscriber's thread to progress:
+
+```csharp
+// ❌ WRONG — deadlocks when a blocking subscriber (ActionBlock / test wait) is downstream.
+return Observable.FromAsync(async ct =>
+    {
+        var rows = new List<Row>();
+        await foreach (var r in QueryStream(ct))   // continuation captures the caller's scheduler
+            rows.Add(r);
+        return rows;
+    })
+    .SubscribeOn(TaskPoolScheduler.Default);        // moves the SUBSCRIBE, not the await continuation
+
+// ✅ RIGHT — the leaf runs entirely inside the pool; results replay to any subscriber.
+private readonly IIoPool _ioPool =
+    ioPoolRegistry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;   // DI-less fallback still pools
+
+return _ioPool.Run(async ct =>
+{
+    var rows = new List<Row>();
+    await foreach (var r in QueryStream(ct).ConfigureAwait(false))
+        rows.Add(r);
+    return rows;
+});
+
+// Streaming leaf (emit each item rather than accumulate):
+return _ioPool.RunStream(ct => QueryStream(ct));   // IObservable<Row>, one OnNext per item
+```
+
+Obtain a pool with `hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.X) ?? IoPool.Unbounded` (the `Unbounded` fallback still offloads to the ThreadPool with `ConfigureAwait(false)`, so it is never worse than the bare `FromAsync` it replaces). Pool names (`FileSystem`, `Blob`, `Http`, `Compile`, `Process`) pick the concurrency cap per resource class.
+
+**The only sanctioned `Observable.FromAsync` lives inside `IoPool` itself** — it is the one place that owns the gate + `ConfigureAwait(false)` + `SubscribeOn` discipline. Every adapter / provider / service that bridges an `async`/`IAsyncEnumerable` leaf goes through `IIoPool`, never `Observable.FromAsync` directly. This is the same litmus test as rule #9 in the absolute rules below: name the I/O the leaf awaits, run it in the pool, and return `IObservable<T>`.
+
+### Which `Observable.FromAsync` sites convert — and which don't
+
+Not every `Observable.FromAsync` is an I/O leaf. Apply the rule by category:
+
+| Category | Examples | Action |
+|---|---|---|
+| **I/O leaf, no pool of its own** | file-system / embedded-resource / content reads, version stores, Azure **blob** I/O, the storage-adapter scope-walk query | **Convert → `IIoPool`** (`FileSystem` / `Blob` pool). This is the exact case `IIoPool` exists for. |
+| **I/O leaf that already owns a pool** | Postgres / Cosmos adapters & query leaves — bounded by the **Npgsql / Cosmos connection pool** | **Keep `Observable.FromAsync(fn, Scheduler.Default)`** — this is the reference pattern `IIoPool` *generalizes* (see `IoPool` summary). The deadlock fix here is `ConfigureAwait(false)` on every `await` (incl. each `await foreach`) inside the DB core, so the continuation can't capture a blocking subscriber's scheduler. |
+| **Not an I/O leaf** | message routing (`OrleansRoutingService` / `MonolithRoutingService` / `RoutingGrain`), semaphore/lock acquisition (`KernelExecutor.executionLock`), async **view generators** (`LayoutAreaHost`, `LayoutDefinitionExtensions`), hub **handler bridges** (`MeshExtensions`, `MessageHubConfiguration`) | **Leave as-is.** These bridge a hub turn or user-supplied async, not a storage leaf; they run on (or are owned by) a scheduler that is correct for them. Forcing them through the I/O pool is a category error. |
+
+When in doubt, the litmus test is **rule #9**: *name the I/O the leaf awaits.* If it's a Postgres round-trip → connection-pool-bounded `FromAsync` + `ConfigureAwait(false)`. If it's a file/blob/in-memory read with no pool → `IIoPool`. If you can't name any I/O (it's routing, a lock, a view render, a handler hop) → it isn't a leaf, leave it.
+
+### The consumer side — bind whole collections, never `await foreach`
+
+The flip side of the producer rule: code that *consumes* a query/search result binds the **whole collection per emission** off an `IObservable<IReadOnlyCollection<T>>`; it never drives a UI off an `IAsyncEnumerable` / `await foreach` / `Channel`. The portal search box is the canonical example — a `Subject` of typed terms, debounced, `Switch`ed to the latest term's progressive suggestion stream, bound whole:
+
+```csharp
+// IMeshService.Query(request) / .Autocomplete(...) return IObservable<IReadOnlyCollection<QueryResult>>:
+// every provider stream is seeded .StartWith(empty) + CombineLatest, so the snapshot emits as soon as
+// the FIRST source converges (source B), then re-emits B+A re-ordered by score as A returns.
+_searchSubscription = _terms
+    .Throttle(TimeSpan.FromMilliseconds(250))     // debounce — reactive, not Task.Delay
+    .DistinctUntilChanged()
+    .Select(term => MeshSearch.Suggestions(_meshService, term, contextPath, MaxResults))
+    .Switch()                                     // cancel the previous term's stream
+    .Subscribe(list => InvokeAsync(() =>          // bind the WHOLE collection, not per-item inserts
+    {
+        suggestions = list.ToArray();
+        StateHasChanged();
+    }));
+```
+
+No `SearchHub`, no `Channel`, no `await foreach`, no per-item insertion: one subscription, the whole set rebinds on every progressive emission. The old fire-and-forget `Channel`/`IAsyncEnumerable` streaming search (where the handler's `finally` completed the writer before the pool-scheduled query emitted, dropping every result) is exactly what this replaces.
+
+---
+
 ## 🚨 Cold observables: Subscribe is mandatory
 
 Every method that performs a write or side effect returns a cold `IObservable<T>` — **the side effect runs on `Subscribe`, not on call.** Forgetting to subscribe means the work silently never happens.
