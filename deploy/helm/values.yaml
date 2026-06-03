@@ -10,6 +10,12 @@ secrets:
     ConnectionStrings__memex: ""
     memex_postgres_password: ""
     MEMEX_URI: ""
+    # AI provider keys — empty by default (neutral chart). Set in an overlay
+    # (e.g. values.aks.yaml) or via --set / Key Vault CSI. Empty = no system
+    # catalog seeded for that provider.
+    Anthropic__ApiKey: ""
+    AzureFoundry__ApiKey: ""
+    Ai__KeyProtection__MasterKey: ""
 config:
   memex_postgres:
     POSTGRES_HOST_AUTH_METHOD: "scram-sha-256"
@@ -37,3 +43,17 @@ config:
     Graph__Storage__Type: "PostgreSql"
     Graph__Storage__BasePath: "/data/graph"
     Mcp__BaseUrl: "http://memex-portal-service:8080"
+    # AI model catalog — empty by default. An overlay sets endpoints + model
+    # lists (+ keys in secrets above) to seed the system catalog on deploy.
+    Anthropic__Endpoint: ""
+    Anthropic__Models__0: ""
+    Anthropic__Models__1: ""
+    Anthropic__Models__2: ""
+    AzureFoundry__Endpoint: ""
+    AzureFoundry__Models__0: ""
+    AzureFoundry__Models__1: ""
+    AzureFoundry__Models__2: ""
+    ModelTier__Heavy: ""
+    ModelTier__Standard: ""
+    ModelTier__Light: ""
+    ModelTier__Utility: ""

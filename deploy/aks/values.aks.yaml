@@ -43,6 +43,14 @@ secrets:
     Authentication__Microsoft__ClientSecret: "CHANGE_ME_aad_client_secret"
     Authentication__Google__ClientSecret: "CHANGE_ME_google_client_secret"
     Authentication__LinkedIn__ClientSecret: "CHANGE_ME_linkedin_client_secret"
+    # ---- AI provider keys ---------------------------------------------------
+    # One shared Azure AI Foundry key backs both the /anthropic and /models routes,
+    # so Anthropic__ApiKey and AzureFoundry__ApiKey are usually the SAME value.
+    # Source from Key Vault via the CSI Secrets Store add-on; never commit a real key.
+    # Ai__KeyProtection__MasterKey encrypts per-user ModelProvider keys at rest —
+    # set a stable random value (rotating it makes existing stored keys unreadable).
+    AzureFoundry__ApiKey: "CHANGE_ME_azure_foundry_key"   # s-meshweaver key1; inject via Key Vault / --set
+    Ai__KeyProtection__MasterKey: "CHANGE_ME_stable_random_master_key"
 
 config:
   memex_postgres:
@@ -102,6 +110,25 @@ config:
     Graph__Storage__Type: "PostgreSql"
     Graph__Storage__BasePath: "/data/graph"
     Mcp__BaseUrl: "http://memex-portal-service:8080"
+    # ---- AI model providers (templated by the chart) ------------------------
+    # These seed the system model catalog on deploy (BuiltInLanguageModelProvider
+    # scans {Section}:Models/:Endpoint → nodeType:LanguageModel nodes the picker shows).
+    # Only the AzureFoundry (open-weight /models) provider is configured via Helm.
+    # Section name "AzureFoundry" is what the code binds (NOT "AzureAIS" — dead section).
+    # Anthropic/Claude is intentionally NOT wired here — add it node-based later (a
+    # ModelProvider node with the /anthropic endpoint). Key is in secrets.memex_portal
+    # below (source from Key Vault via the CSI add-on). Full guide: Doc/AI/ModelProviderSetup.
+    AzureFoundry__Endpoint: "https://s-meshweaver.services.ai.azure.com/models"
+    AzureFoundry__Models__0: "DeepSeek-V4-Pro"
+    AzureFoundry__Models__1: "DeepSeek-V3-0324"
+    AzureFoundry__Models__2: "DeepSeek-V4-Flash"
+    # Tier → model (h/m/l + utility). Open-weight DeepSeek ladder, all deployed on
+    # s-meshweaver. Claude works very well but costs more — it's NOT wired via Helm
+    # here; add it node-based later and pin per-agent via PreferredModel when worth it.
+    ModelTier__Heavy: "DeepSeek-V4-Pro"
+    ModelTier__Standard: "DeepSeek-V3-0324"
+    ModelTier__Light: "DeepSeek-V4-Flash"
+    ModelTier__Utility: "DeepSeek-V4-Flash"
     # ---- OpenTelemetry: export to the in-cluster OTel Collector -------------
     # ServiceDefaults.AddOpenTelemetryExporters() calls UseOtlpExporter() when
     # OTEL_EXPORTER_OTLP_ENDPOINT is set — UNLESS APPLICATIONINSIGHTS_CONNECTION_STRING
