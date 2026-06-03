@@ -246,8 +246,14 @@ public static class AgentPickerProjection
                 byPath[node.Path] = info;
         }
 
+        // Group by harness (GroupName) so the picker shows major categories —
+        // Claude Code / GitHub Copilot / MeshWeaver — with each harness's agents
+        // contiguous (SimpleDropdown renders a header when the group key changes).
+        // Alphabetical group order happens to give Claude Code, GitHub Copilot,
+        // MeshWeaver; within a group, Order then Name (Assistant's order:-1 leads MeshWeaver).
         return byPath.Values
-            .OrderBy(a => a.Order)
+            .OrderBy(a => a.GroupName ?? "MeshWeaver", StringComparer.OrdinalIgnoreCase)
+            .ThenBy(a => a.Order)
             .ThenBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }

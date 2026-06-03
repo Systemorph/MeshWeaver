@@ -374,6 +374,7 @@ else
                             SelectedItemChanged="@OnAgentChanged"
                             Items="@agentDisplayInfos"
                             GetDisplayText="@(a => a?.Name ?? "Agent…")"
+                            GetGroupKey="@(a => a.GroupName ?? "MeshWeaver")"
                             Placeholder="Agent…"
                             Tooltip="@(selectedAgentInfo?.Path ?? "Pick an agent (or type /agent)")"
                             PanelWidth="420px"

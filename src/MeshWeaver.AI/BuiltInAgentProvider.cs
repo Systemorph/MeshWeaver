@@ -162,7 +162,7 @@ public class BuiltInAgentProvider : IStaticNodeProvider
             Instructions = string.IsNullOrWhiteSpace(markdownBody) ? null : markdownBody.Trim(),
             Icon = frontMatter.Icon,
             CustomIconSvg = frontMatter.CustomIconSvg,
-            GroupName = frontMatter.GroupName,
+            GroupName = frontMatter.GroupName ?? "MeshWeaver",
             IsDefault = frontMatter.IsDefault,
             ExposedInNavigator = frontMatter.ExposedInNavigator,
             Delegations = frontMatter.Delegations?.Select(d => new AgentDelegation
