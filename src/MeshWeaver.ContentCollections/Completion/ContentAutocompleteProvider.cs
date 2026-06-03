@@ -1,6 +1,7 @@
-using System.Runtime.CompilerServices;
+using System.Reactive.Linq;
 using MeshWeaver.AI.Completion;
 using MeshWeaver.Data.Completion;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.ContentCollections.Completion;
@@ -10,111 +11,97 @@ namespace MeshWeaver.ContentCollections.Completion;
 /// Uses fzf-style fuzzy matching (FuzzyScorer) so a query matching ANY word in the filename
 /// scores high — e.g., "two" matches "one two three.docx", "thr" matches "three" word.
 /// Priority scale: word-boundary fuzzy matches score in the thousands; proximity boost +1000 for local content.
+/// <para>Fully reactive — the collection load and the recursive file walk compose via
+/// <c>SelectMany</c>/<c>Merge</c>; the genuine I/O leaves (<c>GetCollectionAsync</c>,
+/// <c>GetFiles</c>/<c>GetFolders</c>) bridge through the <see cref="IIoPool"/> (no bare
+/// <c>Observable.FromAsync</c>, no provider-level async-enumerable). Dedup by insert text
+/// across collections is <c>Observable.Distinct</c>.</para>
 /// </summary>
-public class ContentAutocompleteProvider(IContentService contentService) : IAutocompleteProvider
+public class ContentAutocompleteProvider(
+    IContentService contentService,
+    IoPoolRegistry? ioPoolRegistry = null) : IAutocompleteProvider
 {
     private static readonly FuzzyScorer Scorer = new();
+    private readonly IIoPool _ioPool = ioPoolRegistry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
 
     /// <inheritdoc />
     public string? Prefix => "content";
 
     /// <inheritdoc />
-    public IObservable<AutocompleteItem> GetItems(string query, string? contextPath = null) =>
-        AutocompleteProviderObservable.FromAsyncEnumerable(ct => EnumerateAsync(query, contextPath, ct));
-
-    private async IAsyncEnumerable<AutocompleteItem> EnumerateAsync(
-        string query,
-        string? contextPath,
-        [EnumeratorCancellation] CancellationToken ct)
+    public IObservable<AutocompleteItem> GetItems(string query, string? contextPath = null)
     {
-        // Strip @ prefix and any path before the query text
         var searchText = ExtractSearchText(query);
-
-        // Dedupe by insert text — same file can appear via multiple collections
-        // (parent/child hierarchy, mapped collections pointing to same storage path)
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        // Iterate over all configured collections
-        foreach (var config in contentService.GetAllCollectionConfigs())
-        {
-            var collection = await contentService.GetCollectionAsync(config.Name!, ct);
-            if (collection == null)
-                continue;
-
-            await foreach (var item in EnumerateMatchingFilesAsync(collection, "/", searchText, contextPath))
-            {
-                if (seen.Add(item.InsertText))
-                    yield return item;
-            }
-        }
+        return contentService.GetAllCollectionConfigs().ToObservable()
+            .SelectMany(config => _ioPool.Run(ct => contentService.GetCollectionAsync(config.Name!, ct)))
+            .Where(collection => collection is not null)
+            .SelectMany(collection => WalkCollection(collection!, "/", searchText, contextPath))
+            // Same file can surface via multiple collections (parent/child hierarchy,
+            // mapped collections pointing at the same storage path) — dedupe by insert text.
+            .Distinct(item => item.InsertText);
     }
 
-    private static async IAsyncEnumerable<AutocompleteItem> EnumerateMatchingFilesAsync(
+    private IObservable<AutocompleteItem> WalkCollection(
         ContentCollection collection, string path, string searchText, string? contextPath)
     {
-        var files = new List<FileItem>();
-        var folders = new List<FolderItem>();
-        try
+        // Files at this level + a recursive walk of every folder, merged. Each leaf
+        // enumeration is bridged through the pool and Catch-guarded so a path that
+        // fails to enumerate is skipped rather than tearing down the whole stream.
+        var files = _ioPool.InvokeStream(ct => collection.GetFiles(path, ct))
+            .Select(file => ScoreFile(collection, file, searchText, contextPath))
+            .Where(item => item is not null)
+            .Select(item => item!)
+            .Catch<AutocompleteItem, Exception>(_ => Observable.Empty<AutocompleteItem>());
+
+        var folders = _ioPool.InvokeStream(ct => collection.GetFolders(path, ct))
+            .SelectMany(folder => WalkCollection(collection, folder.Path, searchText, contextPath))
+            .Catch<AutocompleteItem, Exception>(_ => Observable.Empty<AutocompleteItem>());
+
+        return files.Merge(folders);
+    }
+
+    /// <summary>
+    /// Scores one file against the query and projects it to an <see cref="AutocompleteItem"/>,
+    /// or returns null when the file doesn't match a non-empty query.
+    /// </summary>
+    private static AutocompleteItem? ScoreFile(
+        ContentCollection collection, FileItem file, string searchText, string? contextPath)
+    {
+        var score = ScoreMatch(file.Name, searchText);
+        if (score <= 0 && !string.IsNullOrEmpty(searchText))
+            return null; // Skip non-matching files when there's a query
+
+        var pathWithoutLeadingSlash = file.Path.TrimStart('/');
+        // For the default "content" collection, omit the collection name to avoid content/content/file
+        var contentPath = collection.Collection == "content"
+            ? pathWithoutLeadingSlash
+            : $"{collection.Collection}/{pathWithoutLeadingSlash}";
+        var ext = Path.GetExtension(file.Name).ToLowerInvariant();
+        var description = IsConvertibleDocument(ext)
+            ? $"{contentPath} (converts to markdown)"
+            : contentPath;
+
+        // Build insert text: use relative content/ path when in context
+        var insertText = FormatInsertText(contentPath, collection.Address, contextPath);
+
+        // Proximity boost: content in same address as context gets a bonus
+        var addressStr = collection.Address?.ToString();
+        if (!string.IsNullOrEmpty(contextPath) &&
+            !string.IsNullOrEmpty(addressStr) &&
+            (contextPath.Equals(addressStr, StringComparison.OrdinalIgnoreCase) ||
+             contextPath.StartsWith(addressStr + "/", StringComparison.OrdinalIgnoreCase)))
         {
-            await foreach (var f in collection.GetFiles(path))
-                files.Add(f);
-            await foreach (var f in collection.GetFolders(path))
-                folders.Add(f);
-        }
-        catch
-        {
-            // Skip paths that fail to enumerate
-        }
-
-        {
-            foreach (var file in files)
-            {
-                var score = ScoreMatch(file.Name, searchText);
-                if (score <= 0 && !string.IsNullOrEmpty(searchText))
-                    continue; // Skip non-matching files when there's a query
-
-                var pathWithoutLeadingSlash = file.Path.TrimStart('/');
-                // For the default "content" collection, omit the collection name to avoid content/content/file
-                var contentPath = collection.Collection == "content"
-                    ? pathWithoutLeadingSlash
-                    : $"{collection.Collection}/{pathWithoutLeadingSlash}";
-                var ext = Path.GetExtension(file.Name).ToLowerInvariant();
-                var description = IsConvertibleDocument(ext)
-                    ? $"{contentPath} (converts to markdown)"
-                    : contentPath;
-
-                // Build insert text: use relative content/ path when in context
-                var insertText = FormatInsertText(contentPath, collection.Address, contextPath);
-
-                // Proximity boost: content in same address as context gets a bonus
-                var addressStr = collection.Address?.ToString();
-                if (!string.IsNullOrEmpty(contextPath) &&
-                    !string.IsNullOrEmpty(addressStr) &&
-                    (contextPath.Equals(addressStr, StringComparison.OrdinalIgnoreCase) ||
-                     contextPath.StartsWith(addressStr + "/", StringComparison.OrdinalIgnoreCase)))
-                {
-                    score += 1000; // local content
-                }
-
-                yield return new AutocompleteItem(
-                    Label: file.Name,
-                    InsertText: insertText,
-                    Description: description,
-                    Category: collection.DisplayName,
-                    Priority: score,
-                    Kind: AutocompleteKind.File,
-                    Path: contentPath
-                );
-            }
+            score += 1000; // local content
         }
 
-        foreach (var folder in folders)
-        {
-            await foreach (var item in EnumerateMatchingFilesAsync(collection, folder.Path, searchText, contextPath))
-            {
-                yield return item;
-            }
-        }
+        return new AutocompleteItem(
+            Label: file.Name,
+            InsertText: insertText,
+            Description: description,
+            Category: collection.DisplayName,
+            Priority: score,
+            Kind: AutocompleteKind.File,
+            Path: contentPath
+        );
     }
 
     /// <summary>

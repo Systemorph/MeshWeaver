@@ -2,6 +2,7 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 
 namespace MeshWeaver.Hosting.Persistence;
 
@@ -11,22 +12,32 @@ namespace MeshWeaver.Hosting.Persistence;
 /// naming is <c>{namespace}/{id}_{version}.json</c>.
 ///
 /// <para>All public methods return <see cref="IObservable{T}"/> — see
-/// <c>Doc/Architecture/AsynchronousCalls.md</c>. The async file I/O is wrapped
-/// in <see cref="Observable.FromAsync(Func{System.Threading.CancellationToken, Task})"/>
-/// at the boundary; callers compose with <c>.SelectMany</c> / <c>.Subscribe</c>
-/// inside hub-reachable code without bridging to a Task.</para>
+/// <c>Doc/Architecture/AsynchronousCalls.md</c>. The async file I/O is bridged
+/// to <see cref="IObservable{T}"/> via the <c>FileSystem</c> <see cref="IIoPool"/>
+/// (<c>IoPoolExtensions.Run</c>), which runs the leaf entirely on the pool with
+/// <c>ConfigureAwait(false)</c> behind a concurrency gate — never a bare
+/// <c>Observable.FromAsync</c>, which deadlocks under a blocking subscriber.
+/// Callers compose with <c>.SelectMany</c> / <c>.Subscribe</c> inside
+/// hub-reachable code without bridging to a Task.</para>
 /// </summary>
 public class FileSystemVersionStore : IVersionQuery
 {
     private readonly string _versionsDirectory;
     private readonly Func<JsonSerializerOptions, JsonSerializerOptions>? _writeOptionsModifier;
+    // Versioned-snapshot file I/O (WriteVersion / GetVersion) is bridged to
+    // IObservable through this pool — never via a bare Observable.FromAsync,
+    // which deadlocks under a blocking subscriber. See IoPoolExtensions and
+    // Doc/Architecture/AsynchronousCalls.md.
+    private readonly IIoPool _ioPool;
 
     public FileSystemVersionStore(
         string baseDirectory,
-        Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null)
+        Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null,
+        IoPoolRegistry? ioPoolRegistry = null)
     {
         _versionsDirectory = Path.Combine(baseDirectory, ".versions");
         _writeOptionsModifier = writeOptionsModifier;
+        _ioPool = ioPoolRegistry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
     }
 
     /// <summary>
@@ -40,7 +51,7 @@ public class FileSystemVersionStore : IVersionQuery
     /// the snapshot history that <c>VersionQuery_GetVersionBefore</c> caught.
     /// </summary>
     public IObservable<MeshNode> WriteVersion(MeshNode node, JsonSerializerOptions options)
-        => Observable.FromAsync(async ct =>
+        => _ioPool.Run(async ct =>
         {
             if (node.Version <= 0) return node;
 
@@ -58,7 +69,7 @@ public class FileSystemVersionStore : IVersionQuery
             var filePath = Path.Combine(dir, fileName);
 
             var json = JsonSerializer.Serialize(node, writeOptions);
-            await File.WriteAllTextAsync(filePath, json, ct);
+            await File.WriteAllTextAsync(filePath, json, ct).ConfigureAwait(false);
             return node;
         });
 
@@ -91,13 +102,13 @@ public class FileSystemVersionStore : IVersionQuery
         });
 
     public IObservable<MeshNode?> GetVersion(string path, long version, JsonSerializerOptions options)
-        => Observable.FromAsync(async ct =>
+        => _ioPool.Run(async ct =>
         {
             var filePath = GetVersionFilePath(path, version);
             if (filePath == null || !File.Exists(filePath))
                 return (MeshNode?)null;
 
-            var json = await File.ReadAllTextAsync(filePath, ct);
+            var json = await File.ReadAllTextAsync(filePath, ct).ConfigureAwait(false);
             return JsonSerializer.Deserialize<MeshNode>(json, options);
         });
 

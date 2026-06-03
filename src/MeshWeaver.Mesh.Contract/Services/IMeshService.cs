@@ -67,6 +67,10 @@ public interface IMeshService
     /// dedupes by <see cref="QueryResult.Path"/>, and orders by score. Each emission is the
     /// full current result set (updates until disposed). Providers run their I/O leaf inside
     /// the IIoPool — the call here never blocks the mesh hub's action block.
+    /// <para>Progressive: every provider stream is seeded with <c>.StartWith(empty)</c>,
+    /// so the snapshot emits as soon as the FIRST source converges (the others contribute
+    /// their empty seed) and re-emits — re-merged + re-ordered by score — as each remaining
+    /// source returns. Consumers bind the whole collection per emission.</para>
     /// </summary>
     IObservable<IReadOnlyCollection<QueryResult>> Query(MeshQueryRequest request);
 

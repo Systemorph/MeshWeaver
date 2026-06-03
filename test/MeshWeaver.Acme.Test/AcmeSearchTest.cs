@@ -1,5 +1,6 @@
 using System;
 using MeshWeaver.Blazor.Portal;
+using MeshWeaver.Blazor.Portal.Components;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -25,8 +26,9 @@ using Xunit;
 namespace MeshWeaver.Acme.Test;
 
 /// <summary>
-/// Tests that the ACME space root node is findable via search.
-/// Validates the scope:subtree fix in SearchHub.ExecuteTextSearchAsync.
+/// Tests that the ACME space root node is findable via search — both the mesh
+/// query engine directly and the portal search box's reactive composer
+/// (<see cref="MeshSearch.Suggestions"/>).
 /// </summary>
 public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -161,6 +163,43 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
 
         results.Should().Contain(n => n.Path == "ACME",
             "portal search with context:search should find the ACME root node");
+    }
+
+    /// <summary>
+    /// Repro for "no matter what I type in search, I cannot see anything": the
+    /// top-bar <c>SearchBar</c> composes its suggestion stream via
+    /// <see cref="MeshSearch.Suggestions"/>, an <c>IObservable</c> of the WHOLE
+    /// suggestion collection. The free-text branch goes through the progressive
+    /// <see cref="IMeshService.Query"/> snapshot surface (CombineLatest +
+    /// per-source StartWith), so the search re-emits as each source converges and
+    /// the caller binds the entire collection per emission — no channels, no
+    /// async-enumerable streaming that could drop results.
+    ///
+    /// The query engine itself returns ACME (asserted first, which also lets the
+    /// async catalog index settle), so this isolates the search composition from
+    /// index lag: if the engine has ACME, the bound collection must contain it.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public void SearchSuggestions_FreeText_BindsWholeCollectionContainingMatch()
+    {
+        // Gate on the engine actually returning ACME so the assertion below can't
+        // be excused by the catalog scan not having indexed it yet.
+        var indexed = QueryUntilAcmeIndexed(
+            "*ACME* scope:descendants context:search is:main limit:50");
+        indexed.Should().Contain(n => n.Path == "ACME",
+            "precondition: the mesh query engine must return the ACME node");
+
+        // Subscribe to the search box's suggestion stream and wait for a bound
+        // snapshot that contains ACME. MeshSearch.Suggestions merges every source
+        // progressively; the assertion accepts the first snapshot in which the
+        // match appears (later sources only add/re-order).
+        var snapshot = MeshSearch
+            .Suggestions(MeshQuery, "ACME", contextPath: null, maxResults: 10)
+            .Should().Within(30.Seconds())
+            .Match(list => list.Any(s => s.Path == "ACME"));
+
+        snapshot.Should().Contain(s => s.Path == "ACME",
+            "free-text search must bind a whole collection that includes the matching node");
     }
 
     [Fact(Timeout = 60000)]

@@ -8,6 +8,9 @@
     <SupportedPlatform Include="browser" />
   </ItemGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="MeshWeaver.Acme.Test" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.AI\MeshWeaver.AI.csproj" />
     <ProjectReference Include="..\MeshWeaver.AI.Application\MeshWeaver.AI.Application.csproj" />
     <ProjectReference Include="..\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />

@@ -6,6 +6,7 @@ using Azure.Storage.Blobs.Models;
 using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 
 namespace MeshWeaver.Hosting.AzureStorage;
 
@@ -18,15 +19,24 @@ public class AzureBlobStorageAdapter : IStorageAdapter
 {
     private readonly BlobContainerClient _containerClient;
     private readonly FileFormatParserRegistry _parserRegistry = new();
+    // Blob I/O leaves are bridged to IObservable through this pool — never via a
+    // bare Observable.FromAsync, which only moves the subscribe onto the pool and
+    // leaves the await continuation free to resume on a captured scheduler and
+    // deadlock under a blocking subscriber. See IoPoolExtensions and
+    // Doc/Architecture/AsynchronousCalls.md.
+    private readonly IIoPool _ioPool;
 
     /// <summary>
     /// Supported file extensions in priority order for reading.
     /// </summary>
     private static readonly string[] SupportedExtensions = [".md", ".json"];
 
-    public AzureBlobStorageAdapter(BlobContainerClient containerClient)
+    public AzureBlobStorageAdapter(BlobContainerClient containerClient, IoPoolRegistry? ioPoolRegistry = null)
     {
         _containerClient = containerClient;
+        // Blob pool cap governs blob-storage concurrency; Unbounded is the
+        // DI-less fallback (still offloads to the ThreadPool with ConfigureAwait).
+        _ioPool = ioPoolRegistry?.Get(IoPoolNames.Blob) ?? IoPool.Unbounded;
     }
 
     private static string NormalizePath(string? path) =>
@@ -48,7 +58,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
 
             try
             {
-                var exists = await blobClient.ExistsAsync(ct);
+                var exists = await blobClient.ExistsAsync(ct).ConfigureAwait(false);
                 if (exists.Value)
                     return (blobClient, ext);
             }
@@ -62,17 +72,17 @@ public class AzureBlobStorageAdapter : IStorageAdapter
     }
 
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
-        => Observable.FromAsync(ct => ReadAsyncCore(path, options, ct));
+        => _ioPool.Run(ct => ReadAsyncCore(path, options, ct));
 
     private async Task<MeshNode?> ReadAsyncCore(string path, JsonSerializerOptions options, CancellationToken ct)
     {
-        var (blobClient, extension) = await FindBlobWithExtensionAsync(path, ct);
+        var (blobClient, extension) = await FindBlobWithExtensionAsync(path, ct).ConfigureAwait(false);
         if (blobClient == null)
             return null;
 
         try
         {
-            var response = await blobClient.DownloadContentAsync(ct);
+            var response = await blobClient.DownloadContentAsync(ct).ConfigureAwait(false);
             var content = response.Value.Content.ToString();
 
             // Try to use parsers for non-JSON formats (with fallback support for .md files)
@@ -81,7 +91,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
             if (parsers.Count > 0)
             {
                 // Use TryParseAsync for fallback support (e.g., AgentFileParser -> MarkdownFileParser)
-                node = await _parserRegistry.TryParseAsync(extension, blobClient.Name, content, path, ct);
+                node = await _parserRegistry.TryParseAsync(extension, blobClient.Name, content, path, ct).ConfigureAwait(false);
             }
             else
             {
@@ -92,7 +102,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
             if (node != null)
             {
                 // Use blob last modified time if not set
-                var properties = await blobClient.GetPropertiesAsync(cancellationToken: ct);
+                var properties = await blobClient.GetPropertiesAsync(cancellationToken: ct).ConfigureAwait(false);
                 if (node.LastModified == default && properties.Value.LastModified != default)
                 {
                     node = node with { LastModified = properties.Value.LastModified };
@@ -117,7 +127,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
     }
 
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
-        => Observable.FromAsync(async ct => { await WriteAsyncCore(node, options, ct); return node; });
+        => _ioPool.Run<MeshNode?>(async ct => { await WriteAsyncCore(node, options, ct).ConfigureAwait(false); return node; });
 
     private async Task WriteAsyncCore(MeshNode node, JsonSerializerOptions options, CancellationToken ct)
     {
@@ -134,7 +144,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
         var serializer = _parserRegistry.GetSerializerFor(nodeToSave);
         if (serializer != null)
         {
-            content = await serializer.SerializeAsync(nodeToSave, ct);
+            content = await serializer.SerializeAsync(nodeToSave, ct).ConfigureAwait(false);
             extension = serializer.SupportedExtensions[0]; // Use the primary extension
         }
         else
@@ -150,10 +160,10 @@ public class AzureBlobStorageAdapter : IStorageAdapter
         await blobClient.UploadAsync(
             BinaryData.FromString(content),
             overwrite: true,
-            cancellationToken: ct);
+            cancellationToken: ct).ConfigureAwait(false);
 
         // Clean up old blobs with different extensions (e.g., if originally read from .json)
-        await CleanupOtherExtensionsAsync(key, extension, ct);
+        await CleanupOtherExtensionsAsync(key, extension, ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -169,12 +179,12 @@ public class AzureBlobStorageAdapter : IStorageAdapter
 
             var blobPath = GetBlobPath(path, ext);
             var blobClient = _containerClient.GetBlobClient(blobPath);
-            await blobClient.DeleteIfExistsAsync(cancellationToken: ct);
+            await blobClient.DeleteIfExistsAsync(cancellationToken: ct).ConfigureAwait(false);
         }
     }
 
     public IObservable<string> Delete(string path)
-        => Observable.FromAsync(async ct => { await DeleteAsyncCore(path, ct); return path; });
+        => _ioPool.Run(async ct => { await DeleteAsyncCore(path, ct).ConfigureAwait(false); return path; });
 
     private async Task DeleteAsyncCore(string path, CancellationToken ct)
     {
@@ -183,12 +193,12 @@ public class AzureBlobStorageAdapter : IStorageAdapter
         {
             var blobPath = GetBlobPath(path, ext);
             var blobClient = _containerClient.GetBlobClient(blobPath);
-            await blobClient.DeleteIfExistsAsync(cancellationToken: ct);
+            await blobClient.DeleteIfExistsAsync(cancellationToken: ct).ConfigureAwait(false);
         }
     }
 
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
-        => Observable.FromAsync(ct => ListChildPathsAsyncCore(parentPath, ct));
+        => _ioPool.Run(ct => ListChildPathsAsyncCore(parentPath, ct));
 
     private async Task<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPathsAsyncCore(
         string? parentPath, CancellationToken ct)
@@ -199,7 +209,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
         var nodePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var directoryPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        await foreach (var blobItem in _containerClient.GetBlobsAsync(BlobTraits.None, BlobStates.None, prefix, ct))
+        await foreach (var blobItem in _containerClient.GetBlobsAsync(BlobTraits.None, BlobStates.None, prefix, ct).ConfigureAwait(false))
         {
             var fullPath = blobItem.Name;
             if (!fullPath.StartsWith("nodes/"))
@@ -252,9 +262,9 @@ public class AzureBlobStorageAdapter : IStorageAdapter
     }
 
     public IObservable<bool> Exists(string path)
-        => Observable.FromAsync(async ct =>
+        => _ioPool.Run(async ct =>
         {
-            var (blobClient, _) = await FindBlobWithExtensionAsync(path, ct);
+            var (blobClient, _) = await FindBlobWithExtensionAsync(path, ct).ConfigureAwait(false);
             return blobClient != null;
         });
 
@@ -271,12 +281,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
             : $"partitions/{NormalizePath(nodePath)}/{NormalizePath(subPath)}/";
 
     public IObservable<object> GetPartitionObjects(string nodePath, string? subPath, JsonSerializerOptions options)
-        => Observable.Create<object>(async (observer, ct) =>
-        {
-            await foreach (var obj in GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct))
-                observer.OnNext(obj);
-            observer.OnCompleted();
-        });
+        => _ioPool.RunStream(ct => GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct));
 
     private async IAsyncEnumerable<object> GetPartitionObjectsAsyncCore(
         string nodePath,
@@ -286,7 +291,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
     {
         var prefix = GetPartitionPrefix(nodePath, subPath);
 
-        await foreach (var blobItem in _containerClient.GetBlobsAsync(BlobTraits.None, BlobStates.None, prefix, ct))
+        await foreach (var blobItem in _containerClient.GetBlobsAsync(BlobTraits.None, BlobStates.None, prefix, ct).ConfigureAwait(false))
         {
             if (!blobItem.Name.EndsWith(".json"))
                 continue;
@@ -296,7 +301,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
             BinaryData content;
             try
             {
-                var response = await blobClient.DownloadContentAsync(ct);
+                var response = await blobClient.DownloadContentAsync(ct).ConfigureAwait(false);
                 content = response.Value.Content;
             }
             catch (Azure.RequestFailedException ex) when (ex.Status == 404)
@@ -313,7 +318,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
     public IObservable<Unit> SavePartitionObjects(
         string nodePath, string? subPath,
         IReadOnlyCollection<object> objects, JsonSerializerOptions options)
-        => Observable.FromAsync(async ct => { await SavePartitionObjectsAsyncCore(nodePath, subPath, objects, options, ct); return Unit.Default; });
+        => _ioPool.Run(async ct => { await SavePartitionObjectsAsyncCore(nodePath, subPath, objects, options, ct).ConfigureAwait(false); return Unit.Default; });
 
     private async Task SavePartitionObjectsAsyncCore(
         string nodePath,
@@ -323,7 +328,7 @@ public class AzureBlobStorageAdapter : IStorageAdapter
         CancellationToken ct)
     {
         // Delete existing objects first
-        await DeletePartitionObjectsAsyncCore(nodePath, subPath, ct);
+        await DeletePartitionObjectsAsyncCore(nodePath, subPath, ct).ConfigureAwait(false);
 
         // Save new objects
         foreach (var obj in objects)
@@ -344,33 +349,33 @@ public class AzureBlobStorageAdapter : IStorageAdapter
             await blobClient.UploadAsync(
                 BinaryData.FromString(json),
                 overwrite: true,
-                cancellationToken: ct);
+                cancellationToken: ct).ConfigureAwait(false);
         }
     }
 
     public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
-        => Observable.FromAsync(async ct => { await DeletePartitionObjectsAsyncCore(nodePath, subPath, ct); return Unit.Default; });
+        => _ioPool.Run(async ct => { await DeletePartitionObjectsAsyncCore(nodePath, subPath, ct).ConfigureAwait(false); return Unit.Default; });
 
     private async Task DeletePartitionObjectsAsyncCore(string nodePath, string? subPath, CancellationToken ct)
     {
         var prefix = GetPartitionPrefix(nodePath, subPath);
 
-        await foreach (var blobItem in _containerClient.GetBlobsAsync(BlobTraits.None, BlobStates.None, prefix, ct))
+        await foreach (var blobItem in _containerClient.GetBlobsAsync(BlobTraits.None, BlobStates.None, prefix, ct).ConfigureAwait(false))
         {
             var blobClient = _containerClient.GetBlobClient(blobItem.Name);
-            await blobClient.DeleteIfExistsAsync(cancellationToken: ct);
+            await blobClient.DeleteIfExistsAsync(cancellationToken: ct).ConfigureAwait(false);
         }
     }
 
     public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
-        => Observable.FromAsync(ct => GetPartitionMaxTimestampAsyncCore(nodePath, subPath, ct));
+        => _ioPool.Run(ct => GetPartitionMaxTimestampAsyncCore(nodePath, subPath, ct));
 
     private async Task<DateTimeOffset?> GetPartitionMaxTimestampAsyncCore(string nodePath, string? subPath, CancellationToken ct)
     {
         var prefix = GetPartitionPrefix(nodePath, subPath);
         DateTimeOffset? maxTimestamp = null;
 
-        await foreach (var blobItem in _containerClient.GetBlobsAsync(BlobTraits.Metadata, BlobStates.None, prefix, ct))
+        await foreach (var blobItem in _containerClient.GetBlobsAsync(BlobTraits.Metadata, BlobStates.None, prefix, ct).ConfigureAwait(false))
         {
             if (blobItem.Properties.LastModified.HasValue)
             {

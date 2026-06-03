@@ -2,6 +2,7 @@ using System.Reactive.Linq;
 using Azure;
 using Azure.Storage.Blobs;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.AzureBlob;
@@ -35,16 +36,26 @@ public sealed class BlobAssemblyStore : IAssemblyStore
     private readonly BlobContainerClient container;
     private readonly string localCacheDirectory;
     private readonly ILogger<BlobAssemblyStore> logger;
+    // Blob I/O leaves (download/upload) are bridged to IObservable through this
+    // pool — never via a bare Observable.FromAsync, which only moves the subscribe
+    // onto the pool and leaves the await continuation free to resume on a captured
+    // scheduler and deadlock under a blocking subscriber. See IoPoolExtensions and
+    // Doc/Architecture/AsynchronousCalls.md.
+    private readonly IIoPool _ioPool;
 
     public BlobAssemblyStore(
         BlobServiceClient blobService,
         string containerName,
         string localCacheDirectory,
-        ILogger<BlobAssemblyStore> logger)
+        ILogger<BlobAssemblyStore> logger,
+        IoPoolRegistry? ioPoolRegistry = null)
     {
         this.container = blobService.GetBlobContainerClient(containerName);
         this.localCacheDirectory = localCacheDirectory;
         this.logger = logger;
+        // Blob pool cap governs blob-storage concurrency; Unbounded is the DI-less
+        // fallback (still offloads to the ThreadPool with ConfigureAwait).
+        _ioPool = ioPoolRegistry?.Get(IoPoolNames.Blob) ?? IoPool.Unbounded;
         Directory.CreateDirectory(localCacheDirectory);
     }
 
@@ -56,16 +67,16 @@ public sealed class BlobAssemblyStore : IAssemblyStore
             // Already materialised in this process's local cache — no remote call needed.
             return Observable.Return<string?>(localPath);
         }
-        return Observable.FromAsync(async () =>
+        return _ioPool.Run(async ct =>
         {
-            await EnsureContainerAsync();
+            await EnsureContainerAsync(ct).ConfigureAwait(false);
             var dllBlob = container.GetBlobClient(BlobName(nodeTypePath, version, ".dll"));
             var pdbBlob = container.GetBlobClient(BlobName(nodeTypePath, version, ".pdb"));
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(localPath)!);
-                await dllBlob.DownloadToAsync(localPath);
-                try { await pdbBlob.DownloadToAsync(Path.ChangeExtension(localPath, ".pdb")); }
+                await dllBlob.DownloadToAsync(localPath, ct).ConfigureAwait(false);
+                try { await pdbBlob.DownloadToAsync(Path.ChangeExtension(localPath, ".pdb"), ct).ConfigureAwait(false); }
                 catch (RequestFailedException rfe) when (rfe.Status == 404) { /* pdb optional */ }
                 logger.LogInformation(
                     "Hydrated {NodeTypePath}@v{Version} from blob to {LocalPath}",
@@ -87,28 +98,28 @@ public sealed class BlobAssemblyStore : IAssemblyStore
     {
         var localPath = LocalPath(nodeTypePath, version);
         var dllBlobName = BlobName(nodeTypePath, version, ".dll");
-        return Observable.FromAsync(async () =>
+        return _ioPool.Run(async ct =>
         {
-            await EnsureContainerAsync();
+            await EnsureContainerAsync(ct).ConfigureAwait(false);
 
             // Write to local cache first so the caller can load immediately without waiting
             // on the upload round-trip.
             Directory.CreateDirectory(Path.GetDirectoryName(localPath)!);
-            await File.WriteAllBytesAsync(localPath, assemblyBytes);
+            await File.WriteAllBytesAsync(localPath, assemblyBytes, ct).ConfigureAwait(false);
             if (pdbBytes is { Length: > 0 })
-                await File.WriteAllBytesAsync(Path.ChangeExtension(localPath, ".pdb"), pdbBytes);
+                await File.WriteAllBytesAsync(Path.ChangeExtension(localPath, ".pdb"), pdbBytes, ct).ConfigureAwait(false);
 
             // Then upload. Overwrite=true is safe because two replicas compiling the same
             // version produce (near-)identical bytes.
             var dllBlob = container.GetBlobClient(dllBlobName);
             using (var ms = new MemoryStream(assemblyBytes))
-                await dllBlob.UploadAsync(ms, overwrite: true);
+                await dllBlob.UploadAsync(ms, overwrite: true, ct).ConfigureAwait(false);
 
             if (pdbBytes is { Length: > 0 })
             {
                 var pdbBlob = container.GetBlobClient(BlobName(nodeTypePath, version, ".pdb"));
                 using var ms = new MemoryStream(pdbBytes);
-                await pdbBlob.UploadAsync(ms, overwrite: true);
+                await pdbBlob.UploadAsync(ms, overwrite: true, ct).ConfigureAwait(false);
             }
 
             logger.LogInformation(
@@ -118,13 +129,13 @@ public sealed class BlobAssemblyStore : IAssemblyStore
         });
     }
 
-    private async Task EnsureContainerAsync()
+    private async Task EnsureContainerAsync(CancellationToken ct)
     {
         // Exists-then-Create instead of CreateIfNotExistsAsync to skip the
         // Azure SDK's per-response "409 ContainerAlreadyExists" warning on
         // every startup against a pre-existing container.
-        if (!await container.ExistsAsync())
-            await container.CreateAsync();
+        if (!await container.ExistsAsync(ct).ConfigureAwait(false))
+            await container.CreateAsync(cancellationToken: ct).ConfigureAwait(false);
     }
 
     private string LocalPath(string nodeTypePath, long version) =>

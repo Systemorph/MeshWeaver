@@ -6,6 +6,7 @@ using System.Text.Json;
 using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 
 namespace MeshWeaver.Hosting.Persistence;
 
@@ -60,13 +61,19 @@ public sealed class EmbeddedResourceStorageAdapter : IStorageAdapter
     // (matching the FileSystem adapter's "deleted" semantics).
     private readonly ConcurrentDictionary<string, MeshNode?> _writeOverlay =
         new(StringComparer.OrdinalIgnoreCase);
+    // The embedded-resource Read leaf is bridged to IObservable through this pool
+    // — never via a bare Observable.FromAsync, which deadlocks under a blocking
+    // subscriber. See IoPoolExtensions and Doc/Architecture/AsynchronousCalls.md.
+    private readonly IIoPool _ioPool;
 
     public EmbeddedResourceStorageAdapter(
         Assembly assembly,
         string prefix,
         IEnumerable<MeshNode>? seedNodes = null,
-        string? partitionNamespace = null)
+        string? partitionNamespace = null,
+        IoPoolRegistry? ioPoolRegistry = null)
     {
+        _ioPool = ioPoolRegistry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
         _assembly = assembly;
         _prefix = prefix.EndsWith('.') ? prefix : prefix + ".";
         // Routing layer hands us paths *with* the partition namespace
@@ -135,7 +142,7 @@ public sealed class EmbeddedResourceStorageAdapter : IStorageAdapter
     }
 
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
-        => Observable.FromAsync(ct => ReadAsyncCore(path, options, ct));
+        => _ioPool.Run(ct => ReadAsyncCore(path, options, ct));
 
     private async Task<MeshNode?> ReadAsyncCore(string path, JsonSerializerOptions options, CancellationToken ct)
     {
@@ -151,10 +158,10 @@ public sealed class EmbeddedResourceStorageAdapter : IStorageAdapter
         await using var stream = _assembly.GetManifestResourceStream(entry.ResourceName);
         if (stream == null) return null;
         using var reader = new StreamReader(stream);
-        var content = await reader.ReadToEndAsync(ct);
+        var content = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
 
         var registry = GetParserRegistry(options);
-        var node = await registry.TryParseAsync(entry.Extension, entry.ResourceName, content, normalized, ct);
+        var node = await registry.TryParseAsync(entry.Extension, entry.ResourceName, content, normalized, ct).ConfigureAwait(false);
         if (node == null) return null;
 
         // Same path-source-of-truth normalization as FileSystemStorageAdapter.

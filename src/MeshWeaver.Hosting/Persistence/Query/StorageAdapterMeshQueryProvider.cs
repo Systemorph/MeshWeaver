@@ -9,6 +9,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reactive;
 using Microsoft.Extensions.Logging;
@@ -50,6 +51,11 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     private readonly ILogger<StorageAdapterMeshQueryProvider>? logger;
     private readonly QueryParser _parser = new();
     private readonly QueryEvaluator _evaluator = new();
+    // The query scope-walk leaf (ListChildPaths / Read over the storage adapter)
+    // is bridged to IObservable through this pool — never via a bare
+    // Observable.FromAsync, which deadlocks under a blocking subscriber. See
+    // IoPoolExtensions and Doc/Architecture/AsynchronousCalls.md.
+    private readonly IIoPool _ioPool;
     private long _version;
 
     /// <summary>
@@ -76,13 +82,17 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         MeshConfiguration? meshConfiguration = null,
         IEnumerable<Lazy<INodeValidator>>? nodeValidators = null,
         IEnumerable<IPartitionStorageProvider>? partitionProviders = null,
-        ILogger<StorageAdapterMeshQueryProvider>? logger = null)
+        ILogger<StorageAdapterMeshQueryProvider>? logger = null,
+        IoPoolRegistry? ioPoolRegistry = null)
     {
         this.persistence = persistence;
         this.accessService = accessService;
         this.meshConfiguration = meshConfiguration;
         this.nodeValidators = nodeValidators;
         this.logger = logger;
+        // FileSystem pool cap governs the scope-walk concurrency; Unbounded is the
+        // DI-less fallback (still offloads to the ThreadPool with ConfigureAwait).
+        _ioPool = ioPoolRegistry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
         // Exclusion derived from IPartitionStorageProvider — the partition
         // registry. Only static-source partitions (DataSource="static") count
         // as "owned by someone else" for the Matches predicate. AddMeshNodes
@@ -749,10 +759,10 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 : Math.Max(limit * 5, 100),
         };
 
-        return Observable.FromAsync(async cancel =>
+        return _ioPool.Run(async cancel =>
             {
                 var suggestions = new List<QuerySuggestion>();
-                await foreach (var obj in QueryCoreAsync(queryRequest, options, cancel))
+                await foreach (var obj in QueryCoreAsync(queryRequest, options, cancel).ConfigureAwait(false))
                 {
                     if (obj is not MeshNode node) continue;
                     // Skip node types excluded from autocomplete (AddAutocompleteExcludedTypes)
@@ -833,8 +843,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                         ProviderName = providerName,
                     })
                     .ToList();
-            })
-            .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default);
+            });
     }
 
     /// <summary>
@@ -988,24 +997,25 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             IAsyncEnumerable<object> QueryStream(CancellationToken ct) =>
                 useSecurityFilter ? QueryAsync(request, options, ct) : QueryCoreAsync(request, options, ct);
 
-            // Pure IObservable shape — no Task.Factory.StartNew. The async
-            // IAsyncEnumerable is wrapped via Observable.FromAsync, then pushed
-            // to TaskPoolScheduler.Default via SubscribeOn so no inherited
-            // TaskScheduler (Orleans grain, ASP.NET) is captured by the async
-            // state machine on Subscribe.
+            // Pure IObservable shape — the IAsyncEnumerable leaf runs entirely
+            // inside the IIoPool (every await ConfigureAwait(false) behind the
+            // pool gate) and its result is replayed via a ReplaySubject. NEVER a
+            // bare Observable.FromAsync: that only moves the subscribe onto the
+            // pool, leaving the await-foreach continuation free to resume on a
+            // captured scheduler and deadlock under a blocking subscriber (the
+            // snapshot-query hang). See IoPoolExtensions / AsynchronousCalls.md.
             IObservable<List<(string? Path, T Item)>> RunQuery(CancellationToken ct) =>
-                Observable.FromAsync(async cancel =>
+                _ioPool.Run(async cancel =>
                     {
                         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, cancel);
                         var results = new List<(string?, T)>();
-                        await foreach (var item in QueryStream(linked.Token))
+                        await foreach (var item in QueryStream(linked.Token).ConfigureAwait(false))
                         {
                             if (item is T typed)
                                 results.Add((GetItemPath(item), typed));
                         }
                         return results;
-                    })
-                    .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default);
+                    });
 
             // Subscribe to persistence.Changes BEFORE running the initial query so
             // notifications during the I/O window are captured. After Initial,
