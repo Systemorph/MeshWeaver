@@ -180,12 +180,12 @@ public static class DataExtensions
             .WithInitializationGate(DataContext.InitializationGateName, d => d.Message is PingRequest);
     }
 
-    private static Task<IMessageDelivery> RouteStreamMessage(IMessageHub hub, IMessageDelivery request)
+    private static IObservable<IMessageDelivery> RouteStreamMessage(IMessageHub hub, IMessageDelivery request)
     {
         // Check if we're at the target - compare without Host since Host tracks routing path
         var targetWithoutHost = request.Target is not null ? request.Target with { Host = null } : null;
         if (targetWithoutHost is not null && !targetWithoutHost.Equals(hub.Address))
-            return Task.FromResult(request);
+            return Observable.Return(request);
 
         var message = request.Message;
         if (message is RawJson rawJson)
@@ -194,17 +194,17 @@ public static class DataExtensions
             {
                 var deserialized = JsonNode.Parse(rawJson.Content).Deserialize<object>(hub.JsonSerializerOptions);
                 if (deserialized is null)
-                    return Task.FromResult(request.Failed("Error deserializing RawJson: Result is null"));
+                    return Observable.Return(request.Failed("Error deserializing RawJson: Result is null"));
                 request = request.WithMessage(deserialized);
                 message = deserialized;
             }
             catch (Exception ex)
             {
-                return Task.FromResult(request.Failed($"Error deserializing RawJson: {ex}"));
+                return Observable.Return(request.Failed($"Error deserializing RawJson: {ex}"));
             }
         }
         if (message is not StreamMessage streamMessage)
-            return Task.FromResult(request);
+            return Observable.Return(request);
 
         request = request.ForwardTo(SynchronizationAddress.Create(streamMessage.StreamId));
 
@@ -224,9 +224,9 @@ public static class DataExtensions
             current = current.Configuration.ParentHub;
         }
         if (syncHub is null)
-            return Task.FromResult(request.Ignored());
+            return Observable.Return(request.Ignored());
         syncHub.DeliverMessage(request);
-        return Task.FromResult(request.Forwarded());
+        return Observable.Return(request.Forwarded());
     }
 
 

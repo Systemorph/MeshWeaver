@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reactive.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 using Microsoft.Agents.AI;
@@ -155,7 +156,7 @@ public class SharedOrleansFixture : IAsyncLifetime
         if (siloRouting != null)
         {
             var siloSub = siloRouting.RegisterStream(client.Address,
-                (d, _) => Task.FromResult(client.DeliverMessage(d)));
+                (d, _) => Observable.Return(client.DeliverMessage(d)));
             subscriptions.Add(siloSub);
         }
 

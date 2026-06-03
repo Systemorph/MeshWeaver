@@ -294,7 +294,7 @@ public static class MeshDataSourceExtensions
             if (cache?.IsDeleted == true)
             {
                 hub.Post(new GetDataResponse(null, 0), o => o.ResponseFor(delivery));
-                return Task.FromResult(delivery.Processed());
+                return Observable.Return(delivery.Processed());
             }
 
             var validators = hub.ServiceProvider.GetServices<INodeValidator>()
@@ -347,7 +347,7 @@ public static class MeshDataSourceExtensions
                     () =>
                     {
                         if (failures.IsEmpty)
-                            _ = next.Invoke(delivery, ct);
+                            next.Invoke(delivery, ct).Subscribe();
                         else
                             hub.Post(
                                 new GetDataResponse(null, 0)
@@ -358,7 +358,7 @@ public static class MeshDataSourceExtensions
                                 o => o.ResponseFor(delivery));
                     });
 
-            return Task.FromResult(delivery.Forwarded());
+            return Observable.Return(delivery.Forwarded());
         });
     }
 

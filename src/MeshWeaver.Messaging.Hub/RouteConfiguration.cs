@@ -23,8 +23,7 @@ public record RouteConfiguration(IMessageHub Hub)
     public RouteConfiguration WithHandler(Func<IMessageDelivery, IObservable<IMessageDelivery>> observableHandler) =>
         this with
         {
-            Handlers = Handlers.Add((delivery, ct) =>
-                observableHandler(delivery).FirstAsync().ToTask(ct))
+            Handlers = Handlers.Add((delivery, ct) => observableHandler(delivery))
         };
 
     /// <summary>
@@ -50,7 +49,7 @@ public record RouteConfiguration(IMessageHub Hub)
     /// Routes addresses of a specific type to a handler.
     /// </summary>
     public RouteConfiguration RouteAddress(string addressType, SyncRouteDelivery handler)
-        => RouteAddress(addressType, (routedAddress, d, _) => Task.FromResult(handler(routedAddress, d)));
+        => RouteAddress(addressType, (routedAddress, d, _) => Observable.Return(handler(routedAddress, d)));
 
     /// <summary>
     /// Routes addresses of a specific type to an async handler.
@@ -60,10 +59,10 @@ public record RouteConfiguration(IMessageHub Hub)
     public RouteConfiguration RouteAddress(string addressType, AsyncRouteDelivery handler)
         => this with
         {
-            Handlers = Handlers.Add(async (delivery, cancellationToken) =>
+            Handlers = Handlers.Add((delivery, cancellationToken) =>
                 {
                     if (delivery.State != MessageDeliveryState.Submitted || Hub.Address.Equals(delivery.Target))
-                        return delivery;
+                        return Observable.Return(delivery);
 
                     // Match by type string - only when Target.Type matches directly
                     // Do NOT match based on Target.Host.Type to avoid routing loops
@@ -72,10 +71,10 @@ public record RouteConfiguration(IMessageHub Hub)
                         // Extract just the inner address (without Host) for routing
                         // The inner address is what we route to; Host tracks the routing path
                         var innerAddress = delivery.Target with { Host = null };
-                        return await handler(innerAddress, delivery, cancellationToken);
+                        return handler(innerAddress, delivery, cancellationToken);
                     }
 
-                    return delivery;
+                    return Observable.Return(delivery);
                 }
             ),
         };
@@ -99,29 +98,29 @@ public record RouteConfiguration(IMessageHub Hub)
         // Then add a handler for Target.Host.Type matching
         return result with
         {
-            Handlers = result.Handlers.Add(async (delivery, cancellationToken) =>
+            Handlers = result.Handlers.Add((delivery, cancellationToken) =>
             {
                 if (delivery.State != MessageDeliveryState.Submitted || Hub.Address.Equals(delivery.Target))
-                    return delivery;
+                    return Observable.Return(delivery);
 
                 // Match when Target.Host.Type equals addressType - route to the Host hub first
                 if (delivery.Target?.Host?.Type == addressType)
                 {
                     if (Hub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
                     {
-                        return delivery.Failed("Parent hub disposing");
+                        return Observable.Return(delivery.Failed("Parent hub disposing"));
                     }
 
                     var hub = GetOrCreateHub(delivery.Target.Host);
                     if (hub == null)
-                        return delivery.NotFound();
+                        return Observable.Return(delivery.NotFound());
 
                     // Deliver with Target stripped of its Host
                     hub.DeliverMessage(delivery.WithTarget(delivery.Target with { Host = null }));
-                    return delivery.Forwarded();
+                    return Observable.Return(delivery.Forwarded());
                 }
 
-                return delivery;
+                return Observable.Return(delivery);
             })
         };
     }
