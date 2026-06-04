@@ -55,6 +55,14 @@ public class TwoSiloCacheUpdateFixture : IAsyncLifetime
 
     public async ValueTask InitializeAsync()
     {
+        // Per-class isolation: these backing dicts are process-wide statics shared
+        // across every cluster (Orleans configurators are new()-instantiated, so the
+        // static is the only channel both silos' adapters can reach). Reset before
+        // DeployAsync so a prior class's leftover nodes don't bleed into this fresh
+        // two-silo cluster — same rationale as SharedOrleansFixture.ResetSharedState.
+        SharedNodes.Clear();
+        SharedPartitionObjects.Clear();
+
         var builder = new TestClusterBuilder();
         // TWO silos — Orleans hashes the per-node hub grain key onto one of
         // them; cache.Update from the OTHER silo issues a cross-silo grain
