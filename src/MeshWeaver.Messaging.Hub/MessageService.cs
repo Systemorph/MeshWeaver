@@ -48,8 +48,8 @@ public class MessageService : IMessageService
     // until the last gate opens. Exactly one turn drains at a time (the actor's single
     // logical thread); each turn is (re)scheduled on turnScheduler and awaited before
     // the next — the MaxDegreeOfParallelism=1 ActionBlock semantics, minus Dataflow.
-    private readonly Queue<Func<Task<IMessageDelivery>>> mainQueue = new();
-    private readonly Queue<Func<Task<IMessageDelivery>>> deferredQueue = new();
+    private readonly Queue<Func<IObservable<IMessageDelivery>>> mainQueue = new();
+    private readonly Queue<Func<IObservable<IMessageDelivery>>> deferredQueue = new();
     private readonly Lock turnGate = new();
     private bool draining;
 
@@ -324,7 +324,7 @@ public class MessageService : IMessageService
     // the hub's configured scheduler) and awaited before the next is scheduled —
     // strict FIFO, MaxDegreeOfParallelism=1. A handler that Posts to its own hub
     // enqueues behind the current turn; shutdown re-queues the same way.
-    private void EnqueueTurn(Func<Task<IMessageDelivery>> turn)
+    private void EnqueueTurn(Func<IObservable<IMessageDelivery>> turn)
     {
         lock (turnGate) mainQueue.Enqueue(turn);
         KickDrain();
@@ -342,39 +342,85 @@ public class MessageService : IMessageService
     }
 
     // Schedule the next turn ON turnScheduler so each turn STARTS on the hub's
-    // scheduler (the ActionBlock re-scheduled every item the same way). A turn's
-    // own internal awaits resume on the pool, but the NEXT turn is re-scheduled here.
+    // scheduler (the ActionBlock re-scheduled every item the same way). The turn is
+    // an IObservable — we SUBSCRIBE, never await. A synchronous turn completes inline
+    // and advances the drain on this thread; a genuinely-async turn advances when it
+    // completes. No Task anywhere on the turn path.
     private void ScheduleDrainOne() =>
-        Task.Factory.StartNew(DrainOneAsync, CancellationToken.None,
+        Task.Factory.StartNew(DrainOne, CancellationToken.None,
             TaskCreationOptions.DenyChildAttach, turnScheduler);
 
-    private async Task DrainOneAsync()
+    private void DrainOne()
     {
-        Func<Task<IMessageDelivery>>? turn;
-        lock (turnGate)
+        while (true)
         {
-            if (mainQueue.Count == 0)
+            Func<IObservable<IMessageDelivery>>? turn;
+            lock (turnGate)
             {
-                draining = false;
-                return;
+                if (mainQueue.Count == 0)
+                {
+                    draining = false;
+                    return;
+                }
+                turn = mainQueue.Dequeue();
             }
-            turn = mainQueue.Dequeue();
+
+            // Trampoline. A synchronous turn (Observable.Return chains — the norm)
+            // completes inline during Subscribe, so we loop to the next turn on THIS
+            // pool task without re-scheduling: one task drains a whole run of sync turns,
+            // exactly as the old ActionBlock did. The previous one-StartNew-per-turn shape
+            // added a pool-queue wait per turn; under a saturated full-suite run that
+            // accumulated into the ResubscribeOnOwnerDispose 20s timeout. Only a
+            // genuinely-async turn returns before completing — then we stop and its
+            // terminal callback re-schedules the drain onto turnScheduler. subscribeLock
+            // makes the sync/async decision race-free against a terminal that may fire
+            // from another thread.
+            var subscribeLock = new object();
+            var completed = false;
+            var returned = false;
+            void Terminal()
+            {
+                bool resume;
+                lock (subscribeLock)
+                {
+                    completed = true;
+                    resume = returned;
+                }
+                if (resume)
+                    ScheduleDrainOne();
+            }
+            try
+            {
+                turn().Subscribe(
+                    _ => { },
+                    ex => { LogPumpError(ex); Terminal(); },
+                    Terminal);
+            }
+            catch (Exception ex)
+            {
+                LogPumpError(ex);
+                lock (subscribeLock) completed = true;
+            }
+
+            bool loopNext;
+            lock (subscribeLock)
+            {
+                returned = true;
+                loopNext = completed;
+            }
+            if (!loopNext)
+                return;   // async turn in flight — Terminal() re-schedules the drain
         }
-        try
-        {
-            await turn();
-        }
-        catch (Exception ex)
-        {
-            // Defensive: a faulting turn (or a broken logger) must never wedge the
-            // pump — swallow so the drain keeps advancing.
-            try { logger.LogError(ex, "Unhandled exception in delivery pipeline for hub {Address}", Address); }
-            catch { /* logger itself failed — nothing else to do */ }
-        }
-        ScheduleDrainOne();
     }
 
-    private async Task<IMessageDelivery> NotifyAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
+    private void LogPumpError(Exception ex)
+    {
+        // A faulting turn (or a broken logger) must never wedge the pump.
+        try { logger.LogError(ex, "Unhandled exception in delivery pipeline for hub {Address}", Address); }
+        catch { /* logger itself failed — nothing else to do */ }
+    }
+
+    private IObservable<IMessageDelivery> NotifyAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
         // Per-message hot path. Lift the trace gate once at the top.
         var traceEnabled = logger.IsEnabled(LogLevel.Trace);
@@ -384,7 +430,7 @@ public class MessageService : IMessageService
         if (delivery.State != MessageDeliveryState.Submitted)
         {
             MessageTrace.Write($"hub={Address} msg={name} id={delivery.Id} NotifyAsync EARLY_RETURN state={delivery.State}");
-            return delivery;
+            return Observable.Return(delivery);
         }
 
         // For initialization messages, skip waiting for parent startup to avoid deadlocks
@@ -409,7 +455,7 @@ public class MessageService : IMessageService
             {
                 logger.LogWarning("Routing loop detected for {MessageType} (ID: {MessageId}) in {Address} targeting {Target} - failing message",
                     name, delivery.Id, Address, delivery.Target);
-                return delivery.Failed($"Routing loop: no hub found for target {delivery.Target}");
+                return Observable.Return(delivery.Failed($"Routing loop: no hub found for target {delivery.Target}"));
             }
             // On-target re-visit is legitimate (e.g. deferred messages)
         }
@@ -429,7 +475,7 @@ public class MessageService : IMessageService
                     name, Address, delivery.Id);
 
             if (delivery.State == MessageDeliveryState.Failed)
-                return ReportFailure(delivery);
+                return Observable.Return(ReportFailure(delivery));
         }
 
 
@@ -509,7 +555,7 @@ public class MessageService : IMessageService
                             ScheduleDeferralTimeout(delivery);
                             lock (turnGate)
                                 deferredQueue.Enqueue(() => ProcessDeferredMessage(delivery, cancellationToken));
-                            return delivery.Forwarded();
+                            return Observable.Return(delivery.Forwarded());
                         }
                     }
                 }
@@ -518,10 +564,10 @@ public class MessageService : IMessageService
             logger.LogTrace(
                 "MESSAGE_FLOW: ROUTING_TO_LOCAL_EXECUTION | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
                 name, Address, delivery.Id);
-            return await deliveryPipeline.Invoke(delivery, cancellationToken);
+            return deliveryPipeline.Invoke(delivery, cancellationToken);
         }
 
-        return delivery;
+        return Observable.Return(delivery);
     }
 
     private static string GetMessageType(IMessageDelivery delivery)
@@ -567,7 +613,7 @@ public class MessageService : IMessageService
         }, TaskScheduler.Default);
     }
 
-    private async Task<IMessageDelivery> ProcessDeferredMessage(IMessageDelivery delivery, CancellationToken cancellationToken)
+    private IObservable<IMessageDelivery> ProcessDeferredMessage(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
         // Pull from the deferral-timeout tracker first so the timeout timer
         // won't fire ReportFailure after the message has been successfully
@@ -583,7 +629,7 @@ public class MessageService : IMessageService
             logger.LogDebug(
                 "Dropping deferred message {MessageType} (ID: {MessageId}) in {Address} — deferral timeout already fired",
                 delivery.Message.GetType().Name, delivery.Id, Address);
-            return delivery.Ignored();
+            return Observable.Return(delivery.Ignored());
         }
 
         logger.LogDebug("Processing deferred message {MessageType} (ID: {MessageId}) in {Address}",
@@ -603,17 +649,17 @@ public class MessageService : IMessageService
             delivery = UnpackIfNecessary(delivery);
 
             if (delivery.State == MessageDeliveryState.Failed)
-                return ReportFailure(delivery);
+                return Observable.Return(ReportFailure(delivery));
         }
 
         delivery = hierarchicalRouting.RouteMessageAsync(delivery, cancellationToken);
 
         if (isOnTarget)
         {
-            return await deliveryPipeline.Invoke(delivery, cancellationToken);
+            return deliveryPipeline.Invoke(delivery, cancellationToken);
         }
 
-        return delivery;
+        return Observable.Return(delivery);
     }
 
     private volatile CancellationTokenSource cancellationTokenSource = new();
