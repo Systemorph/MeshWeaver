@@ -1,30 +1,27 @@
-using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 
 namespace MeshWeaver.Messaging;
 
 /// <summary>
-/// Bridges a genuinely-async delivery handler into the reactive rule chain —
-/// the same eager-pool + ReplaySubject pattern as
-/// <c>MeshWeaver.Mesh.Threading.IoPool.Run</c> (which is NOT reachable here:
-/// <c>IoPool</c> lives in <c>MeshWeaver.Mesh.Contract</c>, and that assembly
-/// references this one). The async leaf is pushed onto the ThreadPool
-/// immediately and its single result is replayed through a
-/// <see cref="ReplaySubject{T}"/>, so the serialized actor-loop subscriber can
-/// never deadlock on a continuation that captured its scheduler.
+/// Bridges a genuinely-async delivery handler (one that internally <c>await</c>s
+/// I/O — a user <c>ExecutionRequest.Action</c>, disposal) into the reactive rule
+/// chain as a <see cref="ReplaySubject{T}"/> "promise".
 ///
-/// <para><b>AccessContext.</b> The eager <c>Subscribe</c> runs on the
-/// action-block thread (where the rule fires, inside
-/// <c>IMessageHub.HandleMessageAsync</c>'s AccessContext try/finally), and
-/// <c>SubscribeOn(TaskPoolScheduler)</c> captures the ExecutionContext — which
-/// carries the <c>AccessService</c> AsyncLocal identity — so the pooled work
-/// runs under the originating user's identity. (Verified by the security suite.)</para>
+/// <para><b>Single-threaded invariant.</b> There is deliberately NO
+/// <c>SubscribeOn(TaskPoolScheduler)</c> here. The hub turn must stay on ONE
+/// thread — every gratuitous pool hop is a thread transition, and under load
+/// those transitions are the "near-miss" reordering that surfaces as the
+/// request/response timeouts. The eager <c>Subscribe</c> runs the operation's
+/// SYNCHRONOUS prefix inline on the action-block (turn) thread; only a genuine
+/// <c>await</c> inside <paramref name="io"/> yields, and its continuation
+/// resumes via the captured <see cref="System.Threading.ExecutionContext"/>
+/// (which carries the <c>AccessService</c> AsyncLocal identity) — no extra
+/// scheduler is interposed. The <see cref="ReplaySubject{T}"/> buffers the one
+/// result so a later subscriber still observes it.</para>
 ///
 /// <para>Synchronous handlers never come here — they project via
-/// <c>Observable.Return</c>. Only handlers that genuinely <c>await</c> external
-/// work (a user <c>ExecutionRequest.Action</c>, disposal, a route round-trip)
-/// delegate to the pool.</para>
+/// <c>Observable.Return</c> and complete inline on the turn thread.</para>
 /// </summary>
 internal static class DeliveryObservable
 {
@@ -32,7 +29,9 @@ internal static class DeliveryObservable
         Func<CancellationToken, Task<IMessageDelivery>> io)
     {
         var subject = new ReplaySubject<IMessageDelivery>(1);
-        Observable.FromAsync(io).SubscribeOn(TaskPoolScheduler.Default).Subscribe(subject);
+        // No SubscribeOn — stay on the turn thread; the sync prefix of `io` runs
+        // inline, only a real await inside it yields.
+        Observable.FromAsync(io).Subscribe(subject);
         return subject.AsObservable();
     }
 }
