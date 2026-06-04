@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks.Dataflow;
 using MeshWeaver.Reflection;
 using Microsoft.Extensions.Logging;
@@ -63,8 +64,6 @@ public class MessageService : IMessageService
     private readonly ConcurrentDictionary<string, (IMessageDelivery Delivery, CancellationTokenSource TimeoutCts)>
         deferredDeliveries = new();
     private readonly ActionBlock<Func<Task<IMessageDelivery>>> deliveryAction;
-    private readonly BufferBlock<Func<CancellationToken, Task>> executionBuffer = new();
-    private readonly ActionBlock<Func<CancellationToken, Task>> executionBlock;
     private readonly HierarchicalRouting hierarchicalRouting;
     private readonly SyncDelivery postPipeline;
     private readonly AsyncDelivery deliveryPipeline;
@@ -146,12 +145,14 @@ public class MessageService : IMessageService
             }
         }, blockOptions);
 
-        executionBlock = new(f => f.Invoke(default), blockOptions);
         postPipeline = hub.Configuration.PostPipeline
             .Aggregate(new SyncPipelineConfig(hub, d => d), (p, c) => c.Invoke(p)).SyncDelivery;
         hierarchicalRouting = new HierarchicalRouting(hub, parentHub);
+        // The pipeline LEAF now runs the handler INLINE on the single turn thread
+        // (was: post to a second executionBlock). No deliveryAction->executionBlock
+        // thread hop — that per-message hop was the under-load near-miss source.
         deliveryPipeline = hub.Configuration.DeliveryPipeline
-            .Aggregate(new AsyncPipelineConfig(hub, (d, _) => Observable.Return(ScheduleExecution(d))),
+            .Aggregate(new AsyncPipelineConfig(hub, (d, ct) => ExecuteOnTarget(d, ct)),
                 (p, c) => c.Invoke(p)).AsyncDelivery;
         // Store gate names from configuration for tracking which gates are still open
         gates = new(hub.Configuration.InitializationGates);
@@ -165,9 +166,6 @@ public class MessageService : IMessageService
 
     void IMessageService.Start()
     {
-        // Ensure the execution buffer is linked before we start processing
-        executionBuffer.LinkTo(executionBlock, new DataflowLinkOptions { PropagateCompletion = true });
-
         // Link only the main buffer to the action block initially
         // The deferred buffer will be linked when all gates are opened
         buffer.LinkTo(deliveryAction, new DataflowLinkOptions { PropagateCompletion = true });
@@ -298,7 +296,7 @@ public class MessageService : IMessageService
             if (startedTicks > 0)
                 elapsed = (long)((Stopwatch.GetTimestamp() - startedTicks) * 1000.0 / Stopwatch.Frequency);
         }
-        return (buffer.Count, deferredBuffer.Count, executionBuffer.Count, gates.Count,
+        return (buffer.Count, deferredBuffer.Count, 0, gates.Count,
             deliveryAction.Completion.IsCompleted, current, elapsed);
     }
 
@@ -478,7 +476,7 @@ public class MessageService : IMessageService
             logger.LogTrace(
                 "MESSAGE_FLOW: ROUTING_TO_LOCAL_EXECUTION | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
                 name, Address, delivery.Id);
-            return InvokeDeliveryPipeline(delivery, cancellationToken);
+            return await deliveryPipeline.Invoke(delivery, cancellationToken);
         }
 
         return delivery;
@@ -570,7 +568,7 @@ public class MessageService : IMessageService
 
         if (isOnTarget)
         {
-            return InvokeDeliveryPipeline(delivery, cancellationToken);
+            return await deliveryPipeline.Invoke(delivery, cancellationToken);
         }
 
         return delivery;
@@ -597,31 +595,23 @@ public class MessageService : IMessageService
         }
     }
 
-    // Drains the synchronously-emitting delivery pipeline into its result. The
-    // pipeline terminates at ScheduleExecution, which posts the actual handler run
-    // to executionBuffer and returns synchronously — so Subscribe completes inline
-    // (no await, no ToTask). The genuine async work runs downstream on the block.
-    private IMessageDelivery InvokeDeliveryPipeline(IMessageDelivery delivery, CancellationToken cancellationToken)
-    {
-        var result = delivery;
-        deliveryPipeline.Invoke(delivery, cancellationToken).Subscribe(d => result = d);
-        return result;
-    }
+    // Pipeline LEAF. Runs the message's handler chain INLINE on the single turn
+    // thread (the deliveryAction block) — there is no executionBuffer/executionBlock
+    // and therefore no deliveryAction->executionBlock thread hop (the per-message
+    // hop whose under-load latency was the request/response timeout near-misses).
+    // Defer so the work begins on Subscribe; a synchronous handler's Task completes
+    // before this observable is awaited, so the turn never leaves the thread. A
+    // genuinely-async handler yields only at its own await.
+    private IObservable<IMessageDelivery> ExecuteOnTarget(IMessageDelivery delivery, CancellationToken pipelineToken)
+        => Observable.Defer(() => RunHandlerAsync(delivery).ToObservable());
 
-    private IMessageDelivery ScheduleExecution(IMessageDelivery delivery)
+    private async Task<IMessageDelivery> RunHandlerAsync(IMessageDelivery delivery)
     {
         // Per-message hot path. All MESSAGE_FLOW: LogTrace + the {@Delivery}
         // LogDebug compute GetType().Name and box args even when the level is
         // off; gate via IsEnabled and cache the type name once.
         var traceEnabled = logger.IsEnabled(LogLevel.Trace);
         var messageTypeName = delivery.Message.GetType().Name;
-        if (traceEnabled)
-            logger.LogTrace("MESSAGE_FLOW: SCHEDULE_EXECUTION_START | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-                messageTypeName, Address, delivery.Id);
-
-
-
-        executionBuffer.Post(async _ =>
         {
             if (traceEnabled)
                 logger.LogTrace("MESSAGE_FLOW: EXECUTION_START | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
@@ -710,11 +700,8 @@ public class MessageService : IMessageService
                 logger.LogDebug("Finished processing {Delivery} in {Address} after {Duration}ms",
                     delivery.Id, Address, executionStopwatch.ElapsedMilliseconds);
 
-        });
-        if (traceEnabled)
-            logger.LogTrace("MESSAGE_FLOW: SCHEDULE_EXECUTION_END | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: Forwarded",
-                messageTypeName, Address, delivery.Id);
-        return delivery.Forwarded(hub.Address);
+        }
+        return delivery;
     }
 
 
@@ -873,7 +860,6 @@ public class MessageService : IMessageService
             Address, buffer.Count, deferredBuffer.Count);
         buffer.Complete();
         deferredBuffer.Complete();
-        executionBuffer.Complete();
         logger.LogDebug("[DISPOSE-TRACE] {address}: Buffers completed in {elapsed}ms", Address, bufferStopwatch.ElapsedMilliseconds);
 
         var deliveryStopwatch = Stopwatch.StartNew();
