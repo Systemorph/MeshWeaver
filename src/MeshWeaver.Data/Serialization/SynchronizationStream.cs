@@ -653,10 +653,20 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             // ColdStart, Resubmit, HungSubThread).
             if (Current is null || currentJson is null)
             {
-                // No base snapshot yet — drop this Patch (the owner's Full, or a
-                // resync's fresh Full, will deliver the current state). Do NOT
-                // resubscribe here: that floods the owner with SubscribeRequests.
-                logger.LogDebug("[SYNC_STREAM] Patch arrived before base Full for {StreamId}; dropping", StreamId);
+                // A Patch raced ahead of the base Full during the subscribe handshake.
+                // We can't apply it onto a missing snapshot — and we must NOT just drop
+                // it and trust the owner's Full to carry the change: that Full may have
+                // been computed BEFORE this change (the producer updated in the
+                // subscribe→init window, or the Full/Patch reordered on the wire), so
+                // the change would be LOST and the consumer would sit on stale state
+                // forever — the "stream never emits" CI deadlock (CreateThread,
+                // RapidSubmits, TodoDataChangeWorkflow query waits). Request a fresh
+                // Full so we get the CURRENT state including this change. Flood-safe:
+                // RequestFreshSnapshot is gated by _resyncInFlight — exactly ONE
+                // resubscribe per gap, cleared when a Full re-establishes Current.
+                logger.LogDebug(
+                    "[SYNC_STREAM] Patch before base Full for {StreamId}; requesting fresh snapshot", StreamId);
+                RequestFreshSnapshot();
                 return;
             }
             try
