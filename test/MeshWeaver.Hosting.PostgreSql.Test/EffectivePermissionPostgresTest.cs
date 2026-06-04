@@ -35,14 +35,20 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
     /// </summary>
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        // Cap per-test MaxPoolSize so this test class (which spins a fresh Mesh
-        // per [Fact] late in the suite) doesn't exhaust the shared Postgres
-        // container's max_connections=100 after the fixture-managed tests
-        // have already consumed their share. Same tactical motivation as the
-        // MaxPoolSize=2 on PostgreSqlFixture.CreateSchemaAdapterAsync.
+        // Per-test pool cap. Tests run sequentially (xunit.runner.json:
+        // parallelizeAssembly=false, maxParallelThreads=1) so only one mesh's
+        // pool is live at a time — comfortably under the shared container's
+        // max_connections=100. Sized for the SHARED-pool architecture: since the
+        // connection-leak fix, the per-(schema,table) storage adapters reuse this
+        // single base pool (no more per-table MaxPoolSize=1 pools) and one slot is
+        // held by the PgPartitionNotifyListener LISTEN session — so 4 starved the
+        // setup's GetMeshNodeStream subscription against the synced-query reads a
+        // permission check fans out. 16 gives that headroom. (Bounding concurrency
+        // to a small pool without starvation is what the DB IO-pool gate buys us
+        // in prod — see the ~5-connections/silo work.)
         var csb = new Npgsql.NpgsqlConnectionStringBuilder(fixture.ConnectionString)
         {
-            MaxPoolSize = 4,
+            MaxPoolSize = 16,
             ConnectionIdleLifetime = 10
         };
         return builder
@@ -241,6 +247,47 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
         {
             accessService.SetCircuitContext(savedContext);
         }
+    }
+
+    /// <summary>
+    /// Regression for the atioz first-user bug: the platform-admin grant
+    /// (<c>UserOnboardingService.GrantPlatformAdmin</c>) must produce a ROOT-scope
+    /// AccessAssignment — namespace <c>_Access</c>, <c>MainNode=""</c> — so the first user
+    /// passes <c>AdminMenuGate</c>'s root check (<c>GetEffectivePermissions("").HasFlag(All)</c>,
+    /// which queries <c>namespace:_Access</c>) and the Invitations tab appears. The historical
+    /// bug wrote the grant at <c>Admin/_Access</c> (scope "Admin"), which the root synced query
+    /// never matched. This asserts the canonical <c>UserRole(userId,"Admin",null)</c> shape — the
+    /// exact shape the fixed <c>GrantPlatformAdmin</c> emits — yields <see cref="Permission.All"/>
+    /// at the ROOT path "" (and still covers the <c>Admin/Invitation</c> subtree the tab manages).
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public void RootScopeAdminGrant_PassesRootAdminGate()
+    {
+        const string userId = "pg-platform-admin";
+        var rootGrant = AssignmentNodeFactory.UserRole(userId, "Admin", scope: null);
+        // Document the shape the root check depends on (namespace "_Access", root prefix).
+        rootGrant.Path.Should().Be($"_Access/{userId}_Access");
+
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var workspace = Mesh.GetWorkspace();
+        meshService.CreateNode(rootGrant)
+            .SelectMany(_ => workspace
+                .GetMeshNodeStream(rootGrant.Path)
+                .Where(n => n != null)
+                .Take(1))
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Catch<MeshNode, InvalidOperationException>(ex =>
+                ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase)
+                    ? Observable.Return<MeshNode>(null!)
+                    : Observable.Throw<MeshNode>(ex))
+            .Should().Within(90.Seconds()).Emit();
+
+        // AdminMenuGate's exact check is the ROOT path "".
+        Mesh.GetEffectivePermissions("", userId)
+            .Should().Within(90.Seconds()).Match(p => p == Permission.All);
+        // And the root grant must still cover the Admin/Invitation subtree the tab manages.
+        Mesh.GetEffectivePermissions("Admin/Invitation", userId)
+            .Should().Within(90.Seconds()).Match(p => p == Permission.All);
     }
 
 }

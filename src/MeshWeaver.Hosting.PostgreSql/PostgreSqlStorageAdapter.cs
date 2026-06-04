@@ -25,6 +25,10 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     private readonly PartitionDefinition? _partitionDefinition;
     private readonly string? _schemaName;
     private readonly Microsoft.Extensions.Logging.ILogger? _logger;
+    // Optional per-adapter READ concurrency gate (Postgres only; null = ungated,
+    // e.g. in-memory/tests). Reads acquire a slot; writes stay ungated so they
+    // always have pool headroom. See ReadConcurrencyGate.
+    private readonly ReadConcurrencyGate? _readGate;
     private readonly Subject<DataChangeNotification> _changes = new();
 
     public NpgsqlDataSource DataSource => _dataSource;
@@ -48,14 +52,29 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         NpgsqlDataSource dataSource,
         IEmbeddingProvider? embeddingProvider = null,
         PartitionDefinition? partitionDefinition = null,
-        Microsoft.Extensions.Logging.ILogger<PostgreSqlStorageAdapter>? logger = null)
+        Microsoft.Extensions.Logging.ILogger<PostgreSqlStorageAdapter>? logger = null,
+        ReadConcurrencyGate? readGate = null)
     {
         _dataSource = dataSource;
         _embeddingProvider = embeddingProvider ?? NullEmbeddingProvider.Instance;
         _partitionDefinition = partitionDefinition;
         _schemaName = partitionDefinition?.Schema;
         _logger = logger;
+        _readGate = readGate;
     }
+
+    /// <summary>
+    /// Acquire a read-concurrency slot for the duration of a read:
+    /// <c>using var _ = await AcquireReadSlotAsync(ct);</c> (safe inside an
+    /// <c>async IAsyncEnumerable</c> — the slot releases when the enumerator is
+    /// disposed). No-op (immediate empty disposable) when the adapter is ungated
+    /// (in-memory / tests). Gated reads cannot drain the connection pool past
+    /// <see cref="ReadConcurrencyGate.MaxConcurrency"/>, leaving headroom for writes.
+    /// </summary>
+    private async Task<IDisposable> AcquireReadSlotAsync(CancellationToken ct)
+        => _readGate is null
+            ? System.Reactive.Disposables.Disposable.Empty
+            : await _readGate.AcquireAsync(ct).ConfigureAwait(false);
 
     /// <summary>
     /// Returns a schema-qualified table reference for use in SQL.
@@ -320,6 +339,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         var normalizedParent = NormalizePath(parentPath);
 
         var table = ResolveTable(normalizedParent);
+        using var readSlot = await AcquireReadSlotAsync(ct).ConfigureAwait(false);
         await using var cmd = _dataSource.CreateCommand(
             $"SELECT id, namespace FROM {table} WHERE namespace = $1");
         cmd.Parameters.AddWithValue(normalizedParent);
@@ -706,6 +726,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
                 _logger.LogDebug("  Param {Name} = {Value}", name, value);
         }
 
+        using var readSlot = await AcquireReadSlotAsync(ct).ConfigureAwait(false);
         NpgsqlDataReader? reader = null;
         try
         {
@@ -820,6 +841,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
                 _logger.LogDebug("  Param {Name} = {Value}", name, value);
         }
 
+        using var readSlot = await AcquireReadSlotAsync(ct).ConfigureAwait(false);
         await using var cmd = _dataSource.CreateCommand(sql);
         foreach (var (name, value) in unionedParams)
             cmd.Parameters.Add(new NpgsqlParameter(name, value ?? DBNull.Value));
@@ -919,6 +941,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
                 sql = sql.Replace("ORDER BY", "WHERE n.path LIKE @nsPrefix || '%' ORDER BY");
         }
 
+        using var readSlot = await AcquireReadSlotAsync(ct).ConfigureAwait(false);
         await using var cmd = _dataSource.CreateCommand(sql);
         foreach (var (name, value) in parameters)
         {
@@ -954,6 +977,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         if (_logger?.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Debug) == true)
             _logger.LogDebug("Cross-schema SQL ({SchemaCount} schemas): {Sql}", schemas.Count, sql);
 
+        using var readSlot = await AcquireReadSlotAsync(ct).ConfigureAwait(false);
         await using var cmd = _dataSource.CreateCommand(sql);
         foreach (var (name, value) in parameters)
         {

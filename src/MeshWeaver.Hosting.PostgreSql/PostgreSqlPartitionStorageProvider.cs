@@ -33,6 +33,10 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     private readonly Action<NpgsqlDataSourceBuilder>? _configureDataSource;
     private readonly ILogger<PostgreSqlPartitionStorageProvider>? _logger;
     private readonly PgPartitionCache _cache;
+    // One read-concurrency gate shared by every adapter this provider creates —
+    // they all share the single base connection pool, so the gate must be shared
+    // too. Bounds read fan-out below the pool size (leaves write headroom).
+    private readonly ReadConcurrencyGate _readGate;
 
     /// <summary>Per-silo memo of "CREATE SCHEMA already ran this session".</summary>
     private readonly ConcurrentDictionary<string, byte> _schemasInitialized =
@@ -41,6 +45,9 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
         new(StringComparer.OrdinalIgnoreCase);
 
     internal NpgsqlDataSource BaseDataSource => _baseDataSource;
+
+    /// <summary>Shared per-adapter read-concurrency gate (see <see cref="ReadConcurrencyGate"/>).</summary>
+    internal ReadConcurrencyGate ReadGate => _readGate;
 
     /// <summary>Cache shared with <see cref="PgPartitionNotifyListener"/>.</summary>
     internal PgPartitionCache PartitionCache => _cache;
@@ -71,6 +78,7 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
         _configureDataSource = configureDataSource;
         _logger = logger;
         _cache = new PgPartitionCache(baseDataSource, logger);
+        _readGate = new ReadConcurrencyGate(options.MaxReadConcurrency);
 
         Contexts = contexts != null
             ? ImmutableHashSet.CreateRange(StringComparer.OrdinalIgnoreCase, contexts)
@@ -250,32 +258,34 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     public void Dispose()
     {
         _cache.Dispose();
+        _readGate.Dispose();
     }
 
     /// <inheritdoc/>
     public IStorageAdapter CreateAdapterForTable(PartitionDefinition def, string table)
     {
-        var schema = !string.IsNullOrEmpty(def.Schema) ? def.Schema : def.Namespace;
-
         EnsureSchemaForPartitionSync(def);
 
-        var connBuilder = new NpgsqlConnectionStringBuilder(_baseConnectionString)
-        {
-            SearchPath = $"{schema},public",
-            MaxPoolSize = 1
-        };
-        var dsBuilder = new NpgsqlDataSourceBuilder(connBuilder.ConnectionString);
-        dsBuilder.UseVector();
-        _configureDataSource?.Invoke(dsBuilder);
-        var ds = dsBuilder.Build();
-
+        // Reuse the single shared base data source. PostgreSqlStorageAdapter
+        // schema-qualifies every statement ("schema"."table") from the def
+        // (see QualifyTable), so a per-(schema,table) connection pool /
+        // search_path is unnecessary.
+        //
+        // 🚨 Leak fix: this used to `dsBuilder.Build()` a fresh NpgsqlDataSource
+        // on every call — and the adapter's DisposeAsync is a deliberate no-op
+        // ("DataSource is shared and disposed elsewhere"), so nobody ever
+        // disposed these per-table pools. Each (schema, table) storage hub that
+        // spun up leaked one pool holding a live server connection; the sprawl
+        // exhausted the server's connection slots and starved the base pool
+        // ("connection pool has been exhausted, currently 50" on onboarding).
+        // One shared pool per silo instead.
         var tableScopedDef = def with
         {
             Table = table,
             TableMappings = null
         };
 
-        return new PostgreSqlStorageAdapter(ds, _embeddingProvider, tableScopedDef);
+        return new PostgreSqlStorageAdapter(_baseDataSource, _embeddingProvider, tableScopedDef, readGate: _readGate);
     }
 
     /// <inheritdoc/>

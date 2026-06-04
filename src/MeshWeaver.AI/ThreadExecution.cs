@@ -313,8 +313,11 @@ internal static class ThreadExecution
     /// <para>Branches (after honoring any pending cancel first):
     /// <list type="bullet">
     /// <item><b>Executing</b> (with a response cell) → <b>resume</b> the same
-    ///   cell: re-enter <c>StartingExecution</c> so the <c>_Exec</c> round
-    ///   watcher re-dispatches into the existing <c>ActiveMessageId</c>.</item>
+    ///   cell by re-launching the streaming loop directly
+    ///   (<see cref="ThreadSubmissionServer.ResumeInterruptedRound"/>) while
+    ///   <c>Status</c> STAYS <c>Executing</c>. 🚨 Never re-enter
+    ///   <c>StartingExecution</c> from <c>Executing</c> — that inverse of the
+    ///   commit edge is the re-dispatch ping-pong.</item>
     /// <item><b>Executing</b> without a response cell → nothing to resume; reset
     ///   to <c>Idle</c> so the submission watcher can claim pending input.</item>
     /// <item><b>StartingExecution</b> → no write; the <c>_Exec</c> round watcher
@@ -343,6 +346,11 @@ internal static class ThreadExecution
         // valid state. Driving an already-valid state is a no-op write (SetCurrent
         // skips equal), so re-establishing is cheap and idempotent.
         IDisposable? sub = null;
+        // Idempotency for the resume path: re-launch an interrupted round AT MOST
+        // once per ActiveMessageId. The observation is self-healing (re-establishes
+        // on fault), so without this a re-read of the same Executing state would
+        // re-launch the streaming loop repeatedly. Captured across re-establishes.
+        string? resumedRound = null;
         void Establish() => sub = workspace.GetMeshNodeStream()
             .Where(n => n?.Content is MeshThread)
             .Take(1)
@@ -367,29 +375,24 @@ internal static class ThreadExecution
                     {
                         case ThreadExecutionStatus.Executing
                             when !string.IsNullOrEmpty(thread.ActiveMessageId):
-                            // Interrupted mid-round — the in-flight Task.Run is
-                            // gone. RESUME the same response cell by re-entering
-                            // StartingExecution; DispatchAfterClaim reuses
-                            // ActiveMessageId (resume mode). Clear the throttled
-                            // streaming snapshot so the cell re-streams cleanly.
+                            // Interrupted mid-round — the in-flight Task.Run is gone.
+                            // 🚨 We STAY Executing and re-launch the streaming loop
+                            // directly. We must NOT write Executing→StartingExecution:
+                            // that is the exact inverse of the _Exec commit edge
+                            // (StartingExecution→Executing), and because BOTH this
+                            // recovery observer and the exec round watcher are
+                            // self-healing, the two volley under load — the re-dispatch
+                            // ping-pong (Resubmit/cold-load flake). Resume re-runs the
+                            // round into its EXISTING response cell while Status stays
+                            // Executing; idempotent per ActiveMessageId so a self-heal
+                            // re-read can't double-launch.
+                            if (resumedRound == thread.ActiveMessageId)
+                                break;
+                            resumedRound = thread.ActiveMessageId;
                             logger?.LogInformation(
-                                "[ThreadExec] Init: resuming interrupted round on {ThreadPath}, activeMsg={ActiveMsg}",
+                                "[ThreadExec] Init: resuming interrupted round on {ThreadPath}, activeMsg={ActiveMsg} (stay Executing)",
                                 threadPath, thread.ActiveMessageId);
-                            workspace.GetMeshNodeStream().Update(n =>
-                                n.Content is MeshThread t && t.Status == ThreadExecutionStatus.Executing
-                                    ? n with
-                                    {
-                                        LastModified = DateTime.UtcNow,
-                                        Content = t with
-                                        {
-                                            Status = ThreadExecutionStatus.StartingExecution,
-                                            StreamingText = null,
-                                            StreamingToolCalls = null,
-                                        }
-                                    }
-                                    : n)
-                                .Subscribe(_ => { }, ex => logger?.LogWarning(ex,
-                                    "[ThreadExec] Init resume: stream.Update failed for {ThreadPath}", threadPath));
+                            ThreadSubmissionServer.ResumeInterruptedRound(hub, node, logger);
                             break;
 
                         case ThreadExecutionStatus.Executing:

@@ -1122,13 +1122,24 @@ public class AgentChatClient : IAgentChat
         // (Same "no Timeout fallback" rule as agents: the synced query emits
         // Initial then quiesces; a Timeout wrapper would wipe loadedModels.)
         var accessService = hub.ServiceProvider.GetService<MeshWeaver.Messaging.AccessService>();
-        var selectionUserId = accessService?.Context?.ObjectId;
+        var selectionContext = accessService?.Context;
+        var selectionUserId = selectionContext?.ObjectId;
+        // 🚨 Guests (VUser / IsVirtual identities) own NO ModelProvider or
+        // LanguageModel nodes — they consume the root + shared catalog only.
+        // Watching a guest's partition makes ChatClientCredentialResolver.ReadSnapshot
+        // fan out `namespace:{VUser/id}/_Provider scope:descendants` per guest
+        // session: a descendants walk on the `vuser` schema that returns nothing
+        // yet pins a DB connection (ListChildPaths + node reads). With many
+        // concurrent guests that storms the connection pool to exhaustion
+        // ("pool exhausted, currently 50" — prod 2026-06-04). Only real
+        // users/spaces have their own providers; guests use the default catalog.
+        var watchOwnProviders = ShouldWatchOwnProviderPartition(selectionContext);
         var credentialResolver = hub.ServiceProvider.GetService<ChatClientCredentialResolver>();
-        if (!string.IsNullOrEmpty(selectionUserId))
-            credentialResolver?.WatchPartition(selectionUserId);
+        if (watchOwnProviders)
+            credentialResolver?.WatchPartition(selectionUserId!);
 
         selectionSubscription?.Dispose();
-        var selectionStream = string.IsNullOrEmpty(selectionUserId)
+        var selectionStream = !watchOwnProviders
             ? Observable.Return(ImmutableArray<string>.Empty)
             : workspace.GetMeshNodeStream(ModelProviderNodeType.SelectionPath(selectionUserId))
                 .Select(ExtractSelectedProviderPaths)
@@ -1431,6 +1442,19 @@ public class AgentChatClient : IAgentChat
             .OrderBy(f => f.Order)
             .FirstOrDefault();
     }
+
+    /// <summary>
+    /// Whether a chat client should watch its caller's OWN partition for
+    /// ModelProvider / LanguageModel nodes. True only for a real, non-virtual
+    /// identity. Guests (<c>VUser</c> / <see cref="MeshWeaver.Messaging.AccessContext.IsVirtual"/>)
+    /// own no providers — they consume the root + shared catalog — so watching
+    /// their partition fans out a per-session <c>namespace:{VUser/id}/_Provider
+    /// scope:descendants</c> query against the <c>vuser</c> schema that returns
+    /// nothing yet pins a DB connection; with many concurrent guests that storms
+    /// the connection pool to exhaustion (prod 2026-06-04).
+    /// </summary>
+    internal static bool ShouldWatchOwnProviderPartition(MeshWeaver.Messaging.AccessContext? context)
+        => !string.IsNullOrEmpty(context?.ObjectId) && context.IsVirtual != true;
 
     /// <summary>
     /// Orders agents for creation: non-delegating first, delegating second, default last.

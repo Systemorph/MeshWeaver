@@ -405,6 +405,39 @@ internal static class ThreadSubmissionServer
     }
 
     /// <summary>
+    /// Re-launch an interrupted round that is ALREADY <see cref="ThreadExecutionStatus.Executing"/>
+    /// — the cold-load / self-heal recovery case driven by
+    /// <c>InitializeThreadLifecycle</c>. The in-flight streaming Task is gone (the
+    /// hub re-activated), so we re-run the round into its EXISTING response cell.
+    ///
+    /// <para>🚨 This STAYS <c>Executing</c>. We never re-enter
+    /// <c>StartingExecution</c> from <c>Executing</c> — that inverse of the commit
+    /// edge (<c>StartingExecution → Executing</c>) is the re-dispatch ping-pong:
+    /// the exec round watcher commits StartingExecution→Executing while recovery
+    /// (self-healing, re-reading the node) flips Executing→StartingExecution, and
+    /// the two volley under load. Recovery now writes NO status; it calls this
+    /// directly. The caller (InitializeThreadLifecycle) guarantees a single
+    /// invocation per <see cref="MeshThread.ActiveMessageId"/>, and
+    /// <c>CommitRoundAndExecute</c>'s single-fire guard covers re-emissions.</para>
+    /// </summary>
+    internal static void ResumeInterruptedRound(
+        IMessageHub threadHub, MeshNode threadNode, ILogger<AgentChatClient>? logger)
+    {
+        if (threadNode.Content is not MeshThread thread
+            || string.IsNullOrEmpty(thread.ActiveMessageId))
+            return;
+
+        var resumeDispatch = new RoundDispatch(
+            ImmutableList<string>.Empty,
+            thread.ActiveMessageId!,
+            thread.PendingAgentName,
+            thread.PendingModelName,
+            thread.PendingContextPath,
+            thread.PendingAttachments);
+        DispatchRound(threadHub, threadNode, resumeDispatch, logger, onFailure: null, isResume: true);
+    }
+
+    /// <summary>
     /// Creates the output cell, writes the committed round to the thread node, and
     /// fires off agent execution on the _Exec hosted hub. Non-blocking — all
     /// Hub.Post + RegisterCallback; the workspace write is a synchronous fire-and-forget.
@@ -529,13 +562,29 @@ internal static class ThreadSubmissionServer
             hub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
             {
                 var t = node.Content as MeshThread ?? new MeshThread();
-                // We expect Status==StartingExecution (post-claim from InstallServerWatcher
-                // or InitializeThreadLifecycle's resume re-entry).
+                // Decide whether to LAUNCH from the lambda parameter's CURRENT status:
+                //   • fresh claim:  StartingExecution → Executing (the normal commit edge).
+                //   • resume:       the round is ALREADY Executing (cold-load / self-heal
+                //                   recovery re-launches the interrupted round). We STAY
+                //                   Executing — we must NEVER write Executing→StartingExecution
+                //                   (that inverse of the commit edge is the re-dispatch
+                //                   ping-pong). The cell already exists; this emission only
+                //                   re-launches the streaming loop.
                 // Anything else is an out-of-band state change — drop the commit.
                 // Reset-then-set so an optimistic-concurrency retry of this lambda
-                // reflects the FINAL decision: only a genuine StartingExecution→Executing
-                // transition leaves the flag true.
-                if (t.Status != ThreadExecutionStatus.StartingExecution) { didCommitThisEmission = false; return node; }
+                // reflects the FINAL decision: only a genuine launch leaves the flag true.
+                var canLaunch = isResume
+                    // Resume launches from EITHER a still-claimed round
+                    // (StartingExecution → Executing, the resume-from-claim path via
+                    // DispatchAfterClaim) OR an already-Executing round (cold-load /
+                    // self-heal recovery re-launch — stays Executing). Both are
+                    // forward edges; only Executing→StartingExecution is forbidden,
+                    // and recovery no longer writes it.
+                    ? (t.Status == ThreadExecutionStatus.StartingExecution
+                            || t.Status == ThreadExecutionStatus.Executing)
+                        && t.ActiveMessageId == responseMsgId
+                    : t.Status == ThreadExecutionStatus.StartingExecution;
+                if (!canLaunch) { didCommitThisEmission = false; return node; }
                 didCommitThisEmission = true;
 
                 // User ids in dispatch order, then the response id last.

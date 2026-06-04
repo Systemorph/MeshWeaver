@@ -41,7 +41,7 @@ public class NotificationServiceIntegrationTests(PostgreSqlFixture fixture, ITes
     {
         var csb = new NpgsqlConnectionStringBuilder(_fixture.ConnectionString)
         {
-            MaxPoolSize = 4,
+            MaxPoolSize = 16,
             ConnectionIdleLifetime = 10
         };
         return builder

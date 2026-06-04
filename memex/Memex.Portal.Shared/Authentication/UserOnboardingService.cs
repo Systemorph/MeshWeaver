@@ -189,18 +189,34 @@ public sealed class UserOnboardingService(
     }
 
     /// <summary>
-    /// First-user-only: grants the user global Admin at <c>Admin/_Access</c>. Caller
-    /// gates this on the "no existing User nodes" check. Subscribe to drive — a
-    /// silent failure would leave the platform with no admins, so callers must
-    /// surface OnError.
+    /// First-user-only: grants the user global, ROOT-scope Admin. The grant is an
+    /// AccessAssignment at namespace <c>_Access</c> with <c>MainNode=""</c> — the exact
+    /// shape <see cref="GlobalAdminSeed"/> writes for config-driven admins, and the only
+    /// shape the root permission check reads: the per-scope synced query for the root
+    /// scope is <c>namespace:_Access nodeType:AccessAssignment</c> (see
+    /// <c>PermissionEvaluator.ObserveScopeAssignments</c>).
+    ///
+    /// <para>🚨 Historical bug: this wrote the grant at <c>Admin/_Access</c> (scope
+    /// "Admin"). That gives access to the <c>Admin</c> subtree, but it is invisible to
+    /// <c>AdminMenuGate</c>'s ROOT check (<c>GetEffectivePermissions("").HasFlag(All)</c>,
+    /// which queries <c>namespace:_Access</c>) — so the first user was never recognised as
+    /// a platform admin and the Invitations tab stayed hidden. Root scope (<c>_Access</c>,
+    /// <c>MainNode=""</c>) fixes it and still covers <c>Admin/Invitation/*</c>.</para>
+    ///
+    /// <para>Caller gates this on the "no existing User nodes" check. Subscribe to drive —
+    /// a silent failure would leave the platform with no admins, so callers must surface
+    /// OnError.</para>
     /// </summary>
     public IObservable<MeshNode> GrantPlatformAdmin(string username)
     {
-        var assignment = new MeshNode($"{username}_Access", "Admin/_Access")
+        // Root scope: namespace "_Access" + MainNode "" → node_path_prefix "" → matches
+        // every path (global admin). Mirrors AssignmentNodeFactory.UserRole(username,
+        // "Admin", scope: null) and GlobalAdminSeed's config-admin shape.
+        var assignment = new MeshNode($"{username}_Access", "_Access")
         {
             NodeType = "AccessAssignment",
             Name = $"{username} Access",
-            MainNode = "Admin",
+            MainNode = "",
             Content = new AccessAssignment
             {
                 AccessObject = username,
@@ -221,7 +237,7 @@ public sealed class UserOnboardingService(
                         ? meshService.UpdateNode(assignment)
                         : Observable.Throw<MeshNode>(ex))
                 .Do(__ => logger?.LogInformation(
-                    "Onboarding: granted platform Admin (first user) to '{Username}' at Admin/_Access", username)));
+                    "Onboarding: granted platform Admin (first user) to '{Username}' at root scope (_Access, MainNode=\"\")", username)));
     }
 }
 

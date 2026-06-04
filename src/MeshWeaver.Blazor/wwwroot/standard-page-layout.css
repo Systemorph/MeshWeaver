@@ -71,14 +71,19 @@ body {
     min-height: 0;
 }
 
-.settings-splitter fluent-multi-splitter-pane {
+/* NOTE: the pane is a <div class="fluent-multi-splitter-pane"> (a CLASS), not a
+   <fluent-multi-splitter-pane> element. The leading dot is mandatory — without it
+   these rules match nothing, the pane keeps FluentUI's default
+   `display:block; overflow:hidden`, and the content stack below never gets a
+   definite height to scroll within (it just clips). */
+.settings-splitter .fluent-multi-splitter-pane {
     overflow: hidden;
     display: flex;
     flex-direction: column;
     min-height: 0;
 }
 
-.settings-splitter fluent-multi-splitter-pane > div {
+.settings-splitter .fluent-multi-splitter-pane > div {
     width: 100%;
     height: 100%;
     min-height: 0;

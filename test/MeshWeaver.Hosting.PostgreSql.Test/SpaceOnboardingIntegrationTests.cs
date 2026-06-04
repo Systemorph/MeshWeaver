@@ -48,7 +48,7 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
     {
         var csb = new Npgsql.NpgsqlConnectionStringBuilder(_fixture.ConnectionString)
         {
-            MaxPoolSize = 4,
+            MaxPoolSize = 16,
             ConnectionIdleLifetime = 10
         };
         return builder

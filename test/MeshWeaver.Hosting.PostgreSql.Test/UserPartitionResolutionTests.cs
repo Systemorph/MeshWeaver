@@ -46,7 +46,7 @@ public class UserPartitionResolutionTests(PostgreSqlFixture fixture, ITestOutput
     {
         var csb = new Npgsql.NpgsqlConnectionStringBuilder(fixture.ConnectionString)
         {
-            MaxPoolSize = 4,
+            MaxPoolSize = 16,
             ConnectionIdleLifetime = 10,
         };
         return builder
