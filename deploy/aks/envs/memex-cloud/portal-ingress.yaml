@@ -1,0 +1,31 @@
+# Ingress for memex.meshweaver.cloud (ns memex-cloud), cookie session affinity.
+#   kubectl apply -n memex-cloud -f portal-ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: memex-portal
+  namespace: memex-cloud
+  annotations:
+    nginx.ingress.kubernetes.io/affinity: "cookie"
+    nginx.ingress.kubernetes.io/affinity-mode: "persistent"
+    nginx.ingress.kubernetes.io/session-cookie-name: "MEMEXCLOUD_AFFINITY"
+    nginx.ingress.kubernetes.io/session-cookie-max-age: "172800"
+    nginx.ingress.kubernetes.io/session-cookie-samesite: "Lax"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+spec:
+  ingressClassName: webapprouting.kubernetes.azure.com
+  tls:
+    - hosts: [memex.meshweaver.cloud]
+      secretName: memexcloud-tls
+  rules:
+    - host: memex.meshweaver.cloud
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: memex-portal-service
+                port: { number: 8080 }
