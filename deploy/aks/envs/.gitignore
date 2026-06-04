@@ -1,0 +1,9 @@
+# Per-environment deployment config — NOT version-controlled.
+# These carry deployment-specific values (Entra client/tenant ids, OAuth client
+# ids, sender mailbox, Key Vault secret names, host/db wiring). The deploy
+# scripts read them from disk; they are managed out-of-band, not in git.
+# (The *.deploy.example.yaml templates and the reusable scripts/manifests/README
+# stay tracked.)
+*/values.*.yaml
+!*/values.deploy.example.yaml
+*/secretproviderclass.yaml
