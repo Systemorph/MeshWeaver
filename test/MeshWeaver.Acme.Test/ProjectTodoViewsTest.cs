@@ -271,13 +271,17 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
             projectAddress,
             reference);
 
-        // The area emits `null` while the ACME/Project NodeType is still compiling
-        // (~12s on cold start) — wait for the actually-loaded shape, not just the
-        // first non-null emission. Backlog may return CatalogControl with groups
-        // or MarkdownControl if all tasks are assigned.
+        // The area emits `null` while the ACME/Project NodeType is still compiling,
+        // then the loaded shape: CatalogControl with priority groups, or
+        // MarkdownControl ("*No unassigned tasks.*") if every task is assigned.
+        // Wait for that loaded shape, not the first non-null emission.
+        // 50 s budget (same as FutuRe Overview tests): warm render is ~12 s, but the
+        // first-activation compile + per-test fresh-mesh data load runs longer on
+        // slow CI agents / under full-suite load — the prior 30 s raced it and the
+        // identical Backlog_ShouldRenderWithData test only passed on timing luck.
         var control = stream
             .GetControlStream(reference.Area!)
-            .Should().Within(30.Seconds()).Match(c => c is CatalogControl { Groups.Count: > 0 } || c is MarkdownControl);
+            .Should().Within(50.Seconds()).Match(c => c is CatalogControl { Groups.Count: > 0 } || c is MarkdownControl);
 
         control.Should().NotBeNull("Backlog view should render");
         Output.WriteLine($"Control type: {control?.GetType().Name}");
@@ -325,12 +329,12 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
             projectAddress,
             reference);
 
-        // Same gating shape as Planning_ShouldRenderWithData — wait for the
-        // loaded view rather than the first non-null emission, since the area
-        // can emit `null` while the ACME/Project NodeType is still compiling.
+        // Same gating shape + 50 s cold-compile budget as Planning_ShouldRenderWithData
+        // — wait for the loaded view rather than the first non-null emission, since
+        // the area emits `null` while the ACME/Project NodeType is still compiling.
         var control = stream
             .GetControlStream(reference.Area!)
-            .Should().Within(30.Seconds()).Match(c => c is CatalogControl { Groups.Count: > 0 } || c is MarkdownControl);
+            .Should().Within(50.Seconds()).Match(c => c is CatalogControl { Groups.Count: > 0 } || c is MarkdownControl);
 
         control.Should().NotBeNull("Backlog view should render");
         Output.WriteLine($"Control type: {control?.GetType().Name}");
