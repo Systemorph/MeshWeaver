@@ -47,9 +47,10 @@ data:
   # login + .credentials.json live under {root}/{userId}/.claude. Drives the Connect login dir.
   ClaudeCode__ConfigDirRoot: "{{ .Values.config.memex_portal.ClaudeCode__ConfigDirRoot }}"
   # ---- AI: extra non-secret knobs (optional; default empty) -----------------
-  Anthropic__Order: "{{ .Values.config.memex_portal.Anthropic__Order | default "" }}"
+  # Order is an int — empty string fails Int32 binding, so default to "0" (NOT "").
+  Anthropic__Order: "{{ .Values.config.memex_portal.Anthropic__Order | default "0" }}"
   AzureAIS__Endpoint: "{{ .Values.config.memex_portal.AzureAIS__Endpoint | default "" }}"
-  AzureAIS__Order: "{{ .Values.config.memex_portal.AzureAIS__Order | default "" }}"
+  AzureAIS__Order: "{{ .Values.config.memex_portal.AzureAIS__Order | default "0" }}"
   # ---- Observability (OTLP collector) — optional ----------------------------
   OTEL_EXPORTER_OTLP_ENDPOINT: "{{ .Values.config.memex_portal.OTEL_EXPORTER_OTLP_ENDPOINT | default "" }}"
   OTEL_EXPORTER_OTLP_PROTOCOL: "{{ .Values.config.memex_portal.OTEL_EXPORTER_OTLP_PROTOCOL | default "" }}"
@@ -59,19 +60,19 @@ data:
   # image's appsettings.json ships a default (env overrides appsettings). Secrets
   # (client secrets) come from the SecretProviderClass, not here.
   Authentication__Provider: "{{ .Values.config.memex_portal.Authentication__Provider | default "" }}"
-  Authentication__EnableDevLogin: "{{ .Values.config.memex_portal.Authentication__EnableDevLogin | default "" }}"
+  Authentication__EnableDevLogin: "{{ .Values.config.memex_portal.Authentication__EnableDevLogin | default "false" }}"
   Authentication__Microsoft__ClientId: "{{ .Values.config.memex_portal.Authentication__Microsoft__ClientId | default "" }}"
   Authentication__Microsoft__TenantId: "{{ .Values.config.memex_portal.Authentication__Microsoft__TenantId | default "" }}"
   Authentication__Google__ClientId: "{{ .Values.config.memex_portal.Authentication__Google__ClientId | default "" }}"
   Authentication__LinkedIn__ClientId: "{{ .Values.config.memex_portal.Authentication__LinkedIn__ClientId | default "" }}"
   Social__LinkedIn__ClientId: "{{ .Values.config.memex_portal.Social__LinkedIn__ClientId | default "" }}"
   # ---- Onboarding: invitation-only gate (first user always bootstraps) ------
-  Features__Onboarding__InvitationOnly: "{{ .Values.config.memex_portal.Features__Onboarding__InvitationOnly | default "" }}"
+  Features__Onboarding__InvitationOnly: "{{ .Values.config.memex_portal.Features__Onboarding__InvitationOnly | default "false" }}"
   # ---- Outbound email (Microsoft Graph /sendMail) — invitations + notifications.
   # Non-secret here; Email__ClientSecret comes from the SecretProviderClass. When
   # Email__Enabled is empty/false the portal uses the NoOp sender (no mail sent).
-  Email__Enabled: "{{ .Values.config.memex_portal.Email__Enabled | default "" }}"
+  Email__Enabled: "{{ .Values.config.memex_portal.Email__Enabled | default "false" }}"
   Email__NoReplyAddress: "{{ .Values.config.memex_portal.Email__NoReplyAddress | default "" }}"
   Email__TenantId: "{{ .Values.config.memex_portal.Email__TenantId | default "" }}"
   Email__ClientId: "{{ .Values.config.memex_portal.Email__ClientId | default "" }}"
-  Email__UseManagedIdentity: "{{ .Values.config.memex_portal.Email__UseManagedIdentity | default "" }}"
+  Email__UseManagedIdentity: "{{ .Values.config.memex_portal.Email__UseManagedIdentity | default "false" }}"
