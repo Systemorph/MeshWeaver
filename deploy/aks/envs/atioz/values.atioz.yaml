@@ -81,6 +81,18 @@ config:
     Authentication__EnableDevLogin: "false"
     Authentication__Microsoft__TenantId: "3a01d7ac-3330-444d-942d-975eb491b5d6"
     Authentication__Microsoft__ClientId: "a69ba55e-7502-4da8-8e3d-1a6abbb1ab95"
+    # Microsoft is the ONLY sign-in provider on atioz. The portal image's
+    # appsettings.json ships a default LinkedIn client id; an empty value here
+    # overrides it (env > appsettings) so LinkedIn does not appear on the login
+    # page, and the "Connect LinkedIn for publishing" connect is off too.
+    Authentication__LinkedIn__ClientId: ""
+    Authentication__Google__ClientId: ""
+    Social__LinkedIn__ClientId: ""
+    # Invitation-only onboarding. The FIRST user (empty user table) always
+    # bootstraps and becomes global admin — the gate exempts the first user so the
+    # deployment can never lock itself out — then invites others via
+    # Settings → Administration → Invitations. Doc/Architecture/InvitationOnlyOnboarding.
+    Features__Onboarding__InvitationOnly: "true"
 
 # --- Container images (shared ACR; same AI portal image as systemorph) -------
 image:
