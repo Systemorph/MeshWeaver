@@ -67,3 +67,11 @@ data:
   Social__LinkedIn__ClientId: "{{ .Values.config.memex_portal.Social__LinkedIn__ClientId | default "" }}"
   # ---- Onboarding: invitation-only gate (first user always bootstraps) ------
   Features__Onboarding__InvitationOnly: "{{ .Values.config.memex_portal.Features__Onboarding__InvitationOnly | default "" }}"
+  # ---- Outbound email (Microsoft Graph /sendMail) — invitations + notifications.
+  # Non-secret here; Email__ClientSecret comes from the SecretProviderClass. When
+  # Email__Enabled is empty/false the portal uses the NoOp sender (no mail sent).
+  Email__Enabled: "{{ .Values.config.memex_portal.Email__Enabled | default "" }}"
+  Email__NoReplyAddress: "{{ .Values.config.memex_portal.Email__NoReplyAddress | default "" }}"
+  Email__TenantId: "{{ .Values.config.memex_portal.Email__TenantId | default "" }}"
+  Email__ClientId: "{{ .Values.config.memex_portal.Email__ClientId | default "" }}"
+  Email__UseManagedIdentity: "{{ .Values.config.memex_portal.Email__UseManagedIdentity | default "" }}"
