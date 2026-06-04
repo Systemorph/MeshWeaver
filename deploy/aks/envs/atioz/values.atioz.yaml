@@ -1,0 +1,131 @@
+# ===========================================================================
+# values.atioz.yaml — Helm overlay for the `atioz.meshweaver.cloud` environment.
+#
+# Second portal instance on the SAME AKS cluster as memex.systemorph.com
+# (memexaks-cluster / memex-aks-rg, swedencentral). Everything below is the
+# atioz-specific overlay on top of ../../../helm/values.yaml; apply it with the
+# env's deploy.sh (which targets namespace `atioz`).
+#
+#   helm upgrade --install atioz ../../../helm \
+#     -f ../../../helm/values.yaml -f values.atioz.yaml -f values.deploy.yaml \
+#     --namespace atioz --create-namespace
+#
+# SHARED with the systemorph env (do NOT duplicate): the cluster, the ingress
+# controller (AKS app-routing nginx), the Postgres Flexible Server `memexaks-pg`,
+# the `Systemorph` Key Vault, the shared ACR `meshweaver.azurecr.io`, and the
+# AzureFoundry/DeepSeek AI backend (s-meshweaver).
+#
+# SEPARATE per environment: namespace (`atioz`), database (`atioz` on the shared
+# PG server), public host (`atioz.meshweaver.cloud`), TLS secret (`atioz-tls`),
+# encryption master key (`atioz-Ai-KeyProtection-MasterKey` in the KV), and the
+# Entra app registration (atioz's own OAuth client).
+# ===========================================================================
+
+# --- Secrets (real values come from Key Vault via the CSI SecretProviderClass,
+#     or values.deploy.yaml for local/manual installs — NEVER commit real ones).
+secrets:
+  memex_portal:
+    ConnectionStrings__memex: ""        # patched by deploy.sh -> PG `atioz` db
+    # OAuth client secret + AI keys + master key are supplied by the atioz
+    # SecretProviderClass (secretproviderclass.yaml) at deploy time. Left empty
+    # here so the chart never overrides the KV-sourced values.
+    Authentication__Microsoft__ClientSecret: ""
+    AzureFoundry__ApiKey: ""
+    Ai__KeyProtection__MasterKey: ""
+
+config:
+  memex_portal:
+    # In-cluster pg is scaled to 0 (we use the Flexible Server `atioz` db); the
+    # authoritative connection is the patched ConnectionStrings__memex secret.
+    MEMEX_HOST: "memex-postgres-service"
+    MEMEX_PORT: "5432"
+    MEMEX_USERNAME: "postgres"
+    MEMEX_JDBCCONNECTIONSTRING: "jdbc:postgresql://memex-postgres-service:5432/atioz"
+    MEMEX_DATABASENAME: "atioz"
+    ASPNETCORE_HTTP_PORTS: "8080"
+    Deployment__Backend: "Filesystem"
+    Deployment__DataRoot: "/data"
+    # Single replica to start (fits alongside the memex portal on the shared
+    # nodes). For >1 replica switch to AdoNet Orleans clustering + the HA patch,
+    # exactly like the systemorph env.
+    Deployment__Orleans__Clustering: "Localhost"
+    # Content collection -> its own RWX Azure Files drive (/mnt/content PVC).
+    Storage__Name: "content"
+    Storage__SourceType: "FileSystem"
+    Storage__BasePath: "/mnt/content"
+    Graph__Storage__Type: "PostgreSql"
+    Graph__Storage__BasePath: "/data/graph"
+    Mcp__BaseUrl: "http://memex-portal-service:8080"
+    # ---- AI model providers — REUSE the shared DeepSeek/AzureFoundry backend ----
+    # Same s-meshweaver endpoint + open-weight DeepSeek ladder as systemorph.
+    # The key is shared (AzureFoundry-ApiKey in the KV); Claude is per-user
+    # Claude Code, not wired here. See Doc/AI/ModelProviderSetup.
+    AzureFoundry__Endpoint: "https://s-meshweaver.services.ai.azure.com/models"
+    AzureFoundry__Models__0: "DeepSeek-V4-Pro"
+    AzureFoundry__Models__1: "DeepSeek-V3-0324"
+    AzureFoundry__Models__2: "DeepSeek-V4-Flash"
+    ModelTier__Heavy: "DeepSeek-V4-Pro"
+    ModelTier__Standard: "DeepSeek-V3-0324"
+    ModelTier__Light: "DeepSeek-V4-Flash"
+    ModelTier__Utility: "DeepSeek-V4-Flash"
+    # Per-user Claude Code config root -> the RWX /mnt/users share.
+    ClaudeCode__ConfigDirRoot: "/mnt/users"
+    # ---- OpenTelemetry -> in-cluster collector (shared monitoring stack) -------
+    OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
+    OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
+    # ---- Sign-in: dedicated Entra app in the Systemorph tenant ------------------
+    # atioz has its OWN Entra app registration (not the memex one). ClientId +
+    # TenantId are non-secret (here); the ClientSecret comes from the KV via the
+    # SecretProviderClass. Redirect URI on the app: https://atioz.meshweaver.cloud/signin-microsoft
+    Authentication__Provider: "Custom"
+    Authentication__EnableDevLogin: "false"
+    Authentication__Microsoft__TenantId: "3a01d7ac-3330-444d-942d-975eb491b5d6"
+    Authentication__Microsoft__ClientId: "a69ba55e-7502-4da8-8e3d-1a6abbb1ab95"
+
+# --- Container images (shared ACR; same AI portal image as systemorph) -------
+image:
+  registry: "meshweaver.azurecr.io"
+  portal: "memex-portal-ai"
+  migration: "memex-migration"
+  tag: "latest"            # deploy.sh repoints to a pinned sha tag via set-image
+  pullPolicy: "IfNotPresent"
+
+# --- Portal pod resources (modest — co-tenant on the shared nodes) -----------
+# Smaller than the systemorph overlay so the atioz portal schedules alongside
+# the memex portal without a node scale-up. Bump once you add a node / dedicate
+# capacity.
+resources:
+  portal:
+    requests:
+      cpu: "2"
+      memory: "4Gi"
+    limits:
+      cpu: "4"
+      memory: "8Gi"
+
+replicas:
+  portal: 1
+  postgres: 1      # chart's in-cluster pg — scaled to 0 by deploy.sh (we use the Flexible Server)
+
+# --- Persistence (own RWX Azure Files PVCs in the atioz namespace) -----------
+persistence:
+  data:        { storageClass: "azurefile-memex", accessMode: "ReadWriteMany", mountPath: "/data",            size: "16Gi" }
+  content:     { storageClass: "azurefile-memex", accessMode: "ReadWriteMany", mountPath: "/mnt/content",     size: "64Gi" }
+  attachments: { storageClass: "azurefile-memex", accessMode: "ReadWriteMany", mountPath: "/mnt/attachments", size: "32Gi" }
+  users:       { storageClass: "azurefile-memex", accessMode: "ReadWriteMany", mountPath: "/mnt/users",       size: "16Gi" }
+
+# --- Ingress: atioz host, own TLS secret, cookie affinity (Blazor Server) ----
+ingress:
+  enabled: true
+  className: "webapprouting.kubernetes.azure.com"
+  host: "atioz.meshweaver.cloud"
+  tls:
+    enabled: true
+    secretName: "atioz-tls"
+  sessionAffinity:
+    enabled: true
+    cookieName: "ATIOZ_AFFINITY"
+
+# --- pgBackRest: OFF (the managed Flexible Server provides PITR) --------------
+pgbackrest:
+  enabled: false

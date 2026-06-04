@@ -1,0 +1,39 @@
+# ---------------------------------------------------------------------------
+# portal-ingress.yaml (atioz) — Ingress for atioz.meshweaver.cloud with cookie
+# session affinity (mandatory for Blazor Server). Same AKS app-routing nginx
+# controller as the systemorph env — only the host, namespace, affinity cookie
+# and TLS secret differ.
+#
+#   kubectl apply -n atioz -f portal-ingress.yaml
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: memex-portal
+  namespace: atioz
+  annotations:
+    nginx.ingress.kubernetes.io/affinity: "cookie"
+    nginx.ingress.kubernetes.io/affinity-mode: "persistent"
+    nginx.ingress.kubernetes.io/session-cookie-name: "ATIOZ_AFFINITY"
+    nginx.ingress.kubernetes.io/session-cookie-max-age: "172800"
+    nginx.ingress.kubernetes.io/session-cookie-samesite: "Lax"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+spec:
+  ingressClassName: webapprouting.kubernetes.azure.com
+  tls:
+    - hosts:
+        - atioz.meshweaver.cloud
+      secretName: atioz-tls
+  rules:
+    - host: atioz.meshweaver.cloud
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: memex-portal-service
+                port:
+                  number: 8080

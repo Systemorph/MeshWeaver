@@ -1,0 +1,73 @@
+# ---------------------------------------------------------------------------
+# portal-patch.yaml (atioz) — strategic-merge patch applied AFTER `helm install`
+# to turn the chart's single-pod emptyDir Deployment into the atioz workload:
+#   - bind the RWX Azure Files PVCs (/data, /mnt/users, /mnt/content, /mnt/attachments)
+#   - mount the Key Vault CSI secrets (SecretProviderClass atioz-portal-ai-secrets)
+#     and envFrom the synced secret
+#   - modest resources + HTTP readiness/liveness probes
+#   - keep replicas: 1 (Localhost Orleans clustering)
+#
+#   kubectl -n atioz patch deployment memex-portal-deployment \
+#     --type strategic --patch-file portal-patch.yaml
+#
+# MERGE-KEY NOTES:
+#   * containers       merge by `name`
+#   * volumeMounts     merge by `mountPath`  (additive)
+#   * volumes          merge by `name`       (override emptyDir -> PVC; add new)
+#   * envFrom          has NO merge key -> strategic merge REPLACES the whole list.
+#     So ALL THREE sources are listed here (config + chart secret + KV-synced
+#     secret); omitting the first two would drop them. This is intentional.
+# ---------------------------------------------------------------------------
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: memex-portal
+          envFrom:
+            - configMapRef:
+                name: memex-portal-config
+            - secretRef:
+                name: memex-portal-secrets
+            - secretRef:
+                name: atioz-portal-ai-secrets   # synced from the Key Vault by the SPC
+          readinessProbe:
+            httpGet: { path: /, port: 8080 }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            httpGet: { path: /, port: 8080 }
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            failureThreshold: 6
+          resources:
+            requests: { cpu: "2", memory: "4Gi" }
+            limits:   { cpu: "4", memory: "8Gi" }
+          volumeMounts:
+            - name: memex-data
+              mountPath: /data
+            - name: memex-users
+              mountPath: /mnt/users
+            - name: memex-content
+              mountPath: /mnt/content
+            - name: memex-attachments
+              mountPath: /mnt/attachments
+            - name: kv-ai-secrets
+              mountPath: /mnt/secrets-store
+              readOnly: true
+      volumes:
+        - name: memex-data
+          persistentVolumeClaim: { claimName: memex-data }
+        - name: memex-users
+          persistentVolumeClaim: { claimName: memex-users }
+        - name: memex-content
+          persistentVolumeClaim: { claimName: memex-content }
+        - name: memex-attachments
+          persistentVolumeClaim: { claimName: memex-attachments }
+        - name: kv-ai-secrets
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: atioz-portal-ai-secrets
