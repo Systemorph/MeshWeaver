@@ -214,6 +214,18 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private AgentDisplayInfo? selectedAgentInfo;
     private ModelInfo? selectedModelInfo;
     private IReadOnlyList<AgentDisplayInfo> agentDisplayInfos = [];
+
+    /// <summary>
+    /// Per-browser sticky: the user's last-used agent name, persisted to localStorage so
+    /// it survives reloads and seeds new threads ("last used stays"). Read once on first
+    /// render (see <see cref="OnAfterRenderAsync"/>) and updated on every pick. Degrades
+    /// gracefully to the configuration default if the read fails or the stored agent is no
+    /// longer available. Deliberately does NOT touch the server-side <c>IsDefault</c>
+    /// orchestration entry agent — that stays the MeshWeaver entry agent (Assistant).
+    /// </summary>
+    private string? _stickyAgentName;
+    private bool _stickyRead;
+    private const string StickyAgentKey = "mw.chat.lastAgent";
     private IReadOnlyList<ModelInfo> availableModels = [];
     private readonly Dictionary<string, string> agentModelPreferences = new();
 
@@ -297,6 +309,59 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         }
 
         Logger.LogDebug("[ThreadChat:{InstanceId}] OnInitialized completed", _instanceId);
+    }
+
+    /// <summary>
+    /// First render only: restore the user's last-used agent from localStorage and apply
+    /// it as the picker default ("last used stays") — unless the thread already carries an
+    /// explicit selection, or the user already changed the agent this session. Best-effort:
+    /// any failure leaves the configuration default in place. localStorage isn't reachable
+    /// during prerender, so this runs once the interactive circuit is established.
+    /// </summary>
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _stickyRead || _isDisposed)
+            return;
+        _stickyRead = true;
+
+        try
+        {
+            var last = await JSRuntime.InvokeAsync<string?>("localStorage.getItem", StickyAgentKey);
+            if (string.IsNullOrEmpty(last))
+                return;
+
+            _stickyAgentName = last;
+
+            // Never override a selection the thread already persisted — only seed the
+            // auto-picked default for a fresh thread.
+            if (!string.IsNullOrEmpty(ThreadViewModel?.SelectedAgentName))
+                return;
+
+            var match = agentDisplayInfos.FirstOrDefault(a =>
+                string.Equals(a.Name, last, StringComparison.OrdinalIgnoreCase));
+            if (match != null && match.Name != selectedAgentInfo?.Name)
+            {
+                selectedAgentInfo = match;
+                selectedModelInfo = GetPreferredModelInfoForAgent(match.Name);
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "[ThreadChat:{InstanceId}] sticky agent restore failed", _instanceId);
+        }
+    }
+
+    private async Task PersistStickyAgentAsync(string agentName)
+    {
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("localStorage.setItem", StickyAgentKey, agentName);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "[ThreadChat:{InstanceId}] sticky agent persist failed", _instanceId);
+        }
     }
 
     /// <summary>
@@ -447,11 +512,18 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         }
         else
         {
-            // Default agent: prefer the one marked IsDefault=true (Orchestrator),
-            // then fall back to the first in display order. Keeps the chat picker
-            // landing on Orchestrator when no thread-side selection exists.
-            selectedAgentInfo = agentDisplayInfos.FirstOrDefault(
-                    a => a.AgentConfiguration?.IsDefault == true)
+            // No thread-side selection. Order of preference:
+            //   1. the user's last-used agent (sticky, read from localStorage on first
+            //      render) — "last used stays";
+            //   2. the configuration default (IsDefault — the MeshWeaver orchestration
+            //      entry agent);
+            //   3. the first in display order.
+            selectedAgentInfo =
+                (string.IsNullOrEmpty(_stickyAgentName)
+                    ? null
+                    : agentDisplayInfos.FirstOrDefault(a =>
+                        string.Equals(a.Name, _stickyAgentName, StringComparison.OrdinalIgnoreCase)))
+                ?? agentDisplayInfos.FirstOrDefault(a => a.AgentConfiguration?.IsDefault == true)
                 ?? agentDisplayInfos.FirstOrDefault();
         }
 
@@ -1127,6 +1199,11 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         // reload. Distinct from PendingAgentName which is transient (the
         // server clears it after the round runs).
         PersistSelectionOnThread(newAgent.Name, selectedModelInfo?.Name);
+
+        // Remember as the user's last-used agent across threads/sessions (sticky,
+        // per-browser via localStorage). New threads will land on this agent.
+        _stickyAgentName = newAgent.Name;
+        _ = PersistStickyAgentAsync(newAgent.Name);
 
         StateHasChanged();
     }
