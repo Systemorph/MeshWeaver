@@ -199,8 +199,44 @@ The legacy `SubmitContext` / `ResubmitContext` parameter-bag records and the old
 
 > Build errors of the form `'ThreadSubmission' does not contain a definition for 'Submit'` mean the callsite has not been migrated yet. Replace it with the corresponding `hub.X(…)` extension listed in [The extension surface](#the-extension-surface) above.
 
+## Resurrection on activation — the thread must self-heal
+
+A thread hub can activate onto a node a previous process left **mid-round**:
+`Status = Executing`, an `ActiveMessageId` whose `Task.Run` is gone, maybe an
+unfinished `delegate_to_agent` tool call pointing at a child sub-thread. The
+portal restarted, an Orleans grain deactivated and came back, or a test seeded the
+post-crash shape straight into storage. `ThreadExecution.InitializeThreadLifecycle`
+is the recovery: on activation it reads the OWN node's loaded state and drives any
+non-terminal state to a valid one.
+
+The non-negotiable property is **self-healing** — recovery reaches a terminal/valid
+state with no external nudge, and a single missed observation must not strand the
+thread forever:
+
+- **Never give up on the loaded-state read.** Recovery waits for the first real
+  thread emission and **re-establishes** the observation if it faults before
+  acting — it does NOT `Take(1).Timeout(15s)` and silently abandon the thread when
+  that emission is dropped/late under load. The one-shot give-up *was* the
+  sub-thread cold-load "deadlock" (really a missed observation).
+- **`Executing` + `ActiveMessageId`** → resume the same response cell (re-enter
+  `StartingExecution`; the `_Exec` round watcher re-dispatches). Resume → the round
+  naturally finishes.
+- **`Executing` mid-delegation** → re-observe the existing child sub-thread (do not
+  re-run the agent loop — that re-delegates). When the child reaches terminal,
+  write its result back so the parent settles/continues.
+- **Guarantee terminal.** A last-resort watchdog forces a wedged round to `Idle`
+  after a generous grace of *no node progress* (`Throttle` resets on every
+  emission, so live streaming never trips it; threads waiting on a child are
+  skipped — the heartbeat ticker owns that staleness).
+
+Every child sub-thread runs the same recovery recursively, so a parent's
+re-observation is guaranteed to fire. See
+[DebuggingMessageFlow → resurrection on init](DebuggingMessageFlow) for the trace
+signature: continuous work then silence = missed observation, not a lock.
+
 ## See also
 
 - [RequestViaStreamUpdate](RequestViaStreamUpdate) — the canonical "stream.Update + watcher" pattern this surface is built on
-- [ActivityControlPlane](ActivityControlPlane) — the `Status` / `RequestedStatus` pattern thread state uses
+- [ActivityControlPlane](ActivityControlPlane) — the `Status` / `RequestedStatus` pattern thread state uses, and its matching recovery-on-init
 - [AsynchronousCalls](AsynchronousCalls) — why everything returns `IObservable<T>` and how tests bridge to `Task`
+- [DebuggingMessageFlow](DebuggingMessageFlow) — diagnosing a hang that is really a missed observation

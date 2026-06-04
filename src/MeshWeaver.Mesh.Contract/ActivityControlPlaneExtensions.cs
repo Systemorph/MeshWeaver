@@ -66,14 +66,39 @@ public static class ActivityControlPlaneExtensions
             ?.CreateLogger("MeshWeaver.ActivityControlPlane");
 
         var workspace = hub.GetWorkspace();
-        return workspace.GetMeshNodeStream()
-            .Select(node => (node?.Content as ActivityLog)?.RequestedStatus)
-            .DistinctUntilChanged()
-            .Subscribe(
-                onRequestedStatus,
-                ex => logger?.LogError(ex,
-                    "ActivityControlPlane subscription faulted on {Address}",
-                    hub.Address));
+
+        // Self-healing: a faulted control-plane subscription must NOT leave the
+        // activity unobserved (the same "observer dies before terminal" hole that
+        // stranded mid-stream threads). On fault, re-establish after a short delay
+        // — never a one-shot that silently dies. Mirrors
+        // ThreadExecution.InitializeThreadLifecycle. A disposed guard + SerialDisposable
+        // make the re-establish stop cleanly when the hub tears down. See
+        // Doc/Architecture/ActivityControlPlane.md → "Recovery on activation".
+        var serial = new System.Reactive.Disposables.SerialDisposable();
+        var disposed = false;
+        void Establish()
+        {
+            if (disposed) return;
+            serial.Disposable = workspace.GetMeshNodeStream()
+                .Select(node => (node?.Content as ActivityLog)?.RequestedStatus)
+                .DistinctUntilChanged()
+                .Subscribe(
+                    onRequestedStatus,
+                    ex =>
+                    {
+                        logger?.LogError(ex,
+                            "ActivityControlPlane subscription faulted on {Address} — re-establishing",
+                            hub.Address);
+                        if (!disposed)
+                            Observable.Timer(TimeSpan.FromSeconds(1)).Subscribe(_ => Establish());
+                    });
+        }
+        Establish();
+        return System.Reactive.Disposables.Disposable.Create(() =>
+        {
+            disposed = true;
+            serial.Dispose();
+        });
     }
 
     /// <summary>
