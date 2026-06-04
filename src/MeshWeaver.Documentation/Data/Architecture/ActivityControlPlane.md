@@ -618,3 +618,33 @@ A few situations legitimately call for something other than the property pattern
 - **Internal hub-to-hub plumbing** (e.g. the kernel executor's `CancelScriptRequest`) is fine as a message type because it's an implementation detail hidden behind the public content-driven surface.
 
 If you're not sure: **default to the property pattern**. It scales better as the number of operations grows, and it forces you to think clearly about the state your nodes actually live in.
+
+## Recovery on activation — activities must self-heal too
+
+The control-plane property pattern makes an activity *cancellable* and *retryable*,
+but it does not by itself make it **crash-safe**. An activity hub can activate onto
+a node a previous process left mid-run — `Status = Running` with no live worker
+behind it (portal restart, Orleans grain deactivation, a seeded post-crash node).
+If the watcher that drives `Running → Completed/Failed` only existed in the dead
+process, the activity is stuck `Running` forever and every observer (`Take(1)` on
+the activity stream, a parent waiting on it) parks.
+
+Apply the **same resurrection contract as threads** (see
+[ThreadOperations → resurrection on activation](ThreadOperations) and
+[DebuggingMessageFlow → resurrection on init](DebuggingMessageFlow)) on the activity
+hub's init:
+
+- **Re-establish, never give up** on the loaded-state read — no
+  `Take(1).Timeout(N)`-then-abandon. If the observation faults before it drives the
+  node to terminal, re-subscribe.
+- On activation, drive any non-terminal `Status` to a valid one: a `Running`
+  activity with no resumable worker → `Failed`/`Cancelled` (so observers unblock and
+  the user can retry); a `RequestedStatus` left pending → honor it.
+- **Guarantee terminal** with a no-progress watchdog so a wedged `Running` activity
+  can never hang an observer indefinitely.
+- If any observer dies before the activity reaches a terminal `Status`
+  (`Completed`/`Cancelled`/`Failed`), **restart the watcher**.
+
+The trace signature is identical to the thread case: a burst of work then silence
+(the worker finished or died and nothing reported the terminal status) is a *missed
+observation*, not a lock — fix the observer, don't bump the timeout.

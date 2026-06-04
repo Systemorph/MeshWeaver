@@ -433,6 +433,93 @@ public class OrleansThreadColdLoadHangTest(ITestOutputHelper output) : TestBase(
     }
 
     /// <summary>
+    /// State-space coverage: a thread left in <c>StartingExecution</c> (claimed a
+    /// round but the dispatch never completed before the crash) must ALSO resurrect
+    /// to a terminal state on cold load — not just the <c>Executing</c> shape the
+    /// tests above cover. The self-healing init observation must drive it forward
+    /// (the <c>_Exec</c> round watcher re-dispatches on the StartingExecution
+    /// emission), with the guarantee-terminal watchdog as the backstop. This is the
+    /// gap that the one-shot Take(1).Timeout(15s) recovery silently left stuck under
+    /// load. Load-bearing invariant: IsExecuting clears.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task StaleStartingExecutionThread_LoadedColdFromStorage_Settles()
+    {
+        var ct = new CancellationTokenSource(80.Seconds()).Token;
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        var threadPath = $"TestUser/_Thread/starting-{suffix}";
+        var responseMsgId = $"r{suffix}";
+        var userMsgId = $"u{suffix}";
+
+        var siloSp = ((InProcessSiloHandle)Cluster.Primary).SiloHost.Services;
+        var adapter = siloSp.GetRequiredService<IStorageAdapter>();
+        var options = JsonSerializerOptions.Default;
+
+        await adapter.Write(new MeshNode($"starting-{suffix}", "TestUser/_Thread")
+        {
+            Name = "Stale StartingExecution thread",
+            NodeType = ThreadNodeType.NodeType,
+            MainNode = "TestUser",
+            CreatedBy = "TestUser",
+            Content = new MeshThread
+            {
+                CreatedBy = "TestUser",
+                Messages = ImmutableList.Create(userMsgId, responseMsgId),
+                Status = ThreadExecutionStatus.StartingExecution,
+                ActiveMessageId = responseMsgId,
+                ExecutionStartedAt = DateTime.UtcNow.AddMinutes(-5)
+            }
+        }, options).FirstAsync().ToTask(ct);
+
+        await adapter.Write(new MeshNode(userMsgId, threadPath)
+        {
+            Name = "User msg",
+            NodeType = ThreadMessageNodeType.NodeType,
+            MainNode = "TestUser",
+            CreatedBy = "TestUser",
+            Content = new ThreadMessage
+            {
+                Role = "user", Text = "do a thing",
+                Timestamp = DateTime.UtcNow.AddMinutes(-5),
+                Type = ThreadMessageType.ExecutedInput,
+                Status = ThreadMessageStatus.Submitted, CreatedBy = "TestUser"
+            }
+        }, options).FirstAsync().ToTask(ct);
+
+        await adapter.Write(new MeshNode(responseMsgId, threadPath)
+        {
+            Name = "Response (frozen)",
+            NodeType = ThreadMessageNodeType.NodeType,
+            MainNode = "TestUser",
+            Content = new ThreadMessage
+            {
+                Role = "assistant", Text = "Allocating agent...",
+                Timestamp = DateTime.UtcNow.AddMinutes(-5),
+                Type = ThreadMessageType.AgentResponse,
+                Status = ThreadMessageStatus.Streaming
+            }
+        }, options).FirstAsync().ToTask(ct);
+
+        var client = GetClient();
+        var workspace = client.GetWorkspace();
+        var stream = workspace
+            .GetRemoteStream<MeshNode, MeshNodeReference>(new Address(threadPath), new MeshNodeReference());
+
+        var settled = await stream
+            .Select(change => change.Value?.Content as MeshThread)
+            .Where(t => t is { IsExecuting: false })
+            .Take(1)
+            .Timeout(RecoveryBudget)
+            .ToTask(ct);
+
+        settled.Should().NotBeNull();
+        settled!.IsExecuting.Should().BeFalse(
+            "StartingExecution cold-load must resurrect to a terminal state — the " +
+            "self-healing recovery / _Exec round watcher must drive it forward. If " +
+            "this hangs, the StartingExecution shape is the un-recovered state.");
+    }
+
+    /// <summary>
     /// Grain activation budget — the proof that
     /// <c>MessageHubGrain.OnActivateAsync</c> finished. Generous enough for
     /// a cold Orleans bring-up + assembly-store warm-up; well below the

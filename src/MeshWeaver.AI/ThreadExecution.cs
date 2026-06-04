@@ -318,9 +318,20 @@ internal static class ThreadExecution
         var workspace = hub.GetWorkspace();
         var threadPath = hub.Address.Path;
 
-        var sub = workspace.GetMeshNodeStream()
+        // Self-healing recovery. The prior one-shot Take(1).Timeout(15s) SILENTLY
+        // GAVE UP if the loaded-state emission was missed or arrived late (the
+        // dropped-patch subscribe-handshake race, amplified under load) — leaving a
+        // stale Executing thread stuck forever. That is the sub-thread cold-load
+        // "deadlock": not a lock, but a missed observation the recovery never
+        // retried. We instead wait for the first real thread emission however long
+        // it takes, and RE-ESTABLISH the observation if it faults before we read &
+        // drive the loaded state — no observer may die before the thread reaches a
+        // valid state. Driving an already-valid state is a no-op write (SetCurrent
+        // skips equal), so re-establishing is cheap and idempotent.
+        IDisposable? sub = null;
+        void Establish() => sub = workspace.GetMeshNodeStream()
+            .Where(n => n?.Content is MeshThread)
             .Take(1)
-            .Timeout(TimeSpan.FromSeconds(15))
             .Subscribe(
                 node =>
                 {
@@ -402,17 +413,85 @@ internal static class ThreadExecution
                 },
                 ex =>
                 {
-                    if (ex is TimeoutException)
-                        logger?.LogDebug(
-                            "[ThreadExec] Init: no thread node within 15s for {ThreadPath} (new/empty thread)",
-                            threadPath);
-                    else
-                        logger?.LogWarning(ex,
-                            "[ThreadExec] InitializeThreadLifecycle faulted for {ThreadPath}", threadPath);
+                    // Observer died before we read & drove the loaded state — RESTART.
+                    // (User directive: any observer dying before the thread reaches a
+                    // terminal/valid state must restart the watcher.) Without this a
+                    // faulted observation left the stale thread stuck forever.
+                    logger?.LogWarning(ex,
+                        "[ThreadExec] Init observation faulted for {ThreadPath} — re-establishing recovery",
+                        threadPath);
+                    Establish();
                 });
 
-        hub.RegisterForDisposal(sub);
+        Establish();
+
+        // Guarantee-terminal watchdog. Belt-and-suspenders for the case where the
+        // initial recovery fired but the resumed round still never reached a
+        // terminal state — a missed StartingExecution dispatch, an observer that
+        // died mid-round, a child whose completion the parent never saw. If the
+        // thread node goes SILENT (no emission = no progress) for the grace period
+        // while still IsExecuting, the round is wedged: force it to Idle so
+        // IsExecuting clears and the user can resubmit. Two false-positive guards:
+        //   • Throttle resets on EVERY node emission, so a healthy streaming round
+        //     (which bumps LastModified continuously) never trips it.
+        //   • A thread legitimately waiting on a child delegation is silent by
+        //     design — that staleness is the HeartbeatTicker's job (it cancels the
+        //     stale sub-thread), so we skip threads with an unfinished delegation.
+        var watchdog = workspace.GetMeshNodeStream()
+            .Throttle(StuckGracePeriod)
+            .Select(n => n?.Content as MeshThread)
+            .Where(t => t is { IsExecuting: true } && !HasUnfinishedDelegation(t))
+            .Subscribe(
+                _ =>
+                {
+                    logger?.LogWarning(
+                        "[ThreadExec] Init watchdog: {ThreadPath} wedged non-terminal with no progress " +
+                        "for {Grace:F0}s — forcing Idle (guarantee terminal).",
+                        threadPath, StuckGracePeriod.TotalSeconds);
+                    workspace.GetMeshNodeStream().Update(node =>
+                        node.Content is MeshThread t && t.IsExecuting && !HasUnfinishedDelegation(t)
+                            ? node with
+                            {
+                                LastModified = DateTime.UtcNow,
+                                Content = t with
+                                {
+                                    Status = ThreadExecutionStatus.Idle,
+                                    ExecutionStatus = null,
+                                    ActiveMessageId = null,
+                                    ExecutionStartedAt = null,
+                                    StreamingText = null,
+                                    StreamingToolCalls = null,
+                                }
+                            }
+                            : node)
+                        .Subscribe(_ => { }, ex => logger?.LogWarning(ex,
+                            "[ThreadExec] Init watchdog: force-Idle Update failed for {ThreadPath}", threadPath));
+                },
+                ex => logger?.LogWarning(ex,
+                    "[ThreadExec] Init watchdog stream faulted for {ThreadPath}", threadPath));
+
+        hub.RegisterForDisposal(_ => { sub?.Dispose(); watchdog.Dispose(); });
     }
+
+    /// <summary>
+    /// Grace period for the guarantee-terminal watchdog. A thread node that emits
+    /// nothing (no progress) for this long while still <see cref="MeshThread.IsExecuting"/>
+    /// is treated as wedged and forced to Idle. Generous so it never races a slow
+    /// but live round — healthy work bumps <c>LastModified</c> far more often.
+    /// </summary>
+    private static readonly TimeSpan StuckGracePeriod = TimeSpan.FromSeconds(90);
+
+    /// <summary>
+    /// True when the thread carries an in-flight <c>delegate_to_agent</c> tool call
+    /// (a streaming tool call with a <see cref="ToolCallEntry.DelegationPath"/> and
+    /// no <see cref="ToolCallEntry.Result"/> yet). Such a thread is silent by
+    /// design while its child sub-thread runs; the <see cref="InstallHeartbeatTicker"/>
+    /// path — not the stuck-watchdog — owns its staleness.
+    /// </summary>
+    private static bool HasUnfinishedDelegation(MeshThread t) =>
+        t.StreamingToolCalls is { Count: > 0 }
+        && t.StreamingToolCalls.Any(tc =>
+            tc.Result is null && !string.IsNullOrEmpty(tc.DelegationPath));
 
     /// <summary>
     /// Wake-up branch for a thread that has a pending <c>RequestedStatus =

@@ -218,3 +218,65 @@ For test setup specifically: `MessageHubConfiguration.TypeRegistry` is mutable p
 > Don't rerun "to see if it still sticks" — it will, and you'll waste minutes per cycle. The trace tells you exactly which message went missing and why.
 
 When you find the broken edge, leave the relevant `LogTrace` / `LogDebug` lines in place. They cost nothing at higher log levels and are the only way to debug the next analogous failure without re-instrumenting the code from scratch.
+
+---
+
+## "Deadlock" that is really a missed observation — resurrection on init
+
+A whole class of "hangs" are **not** locks. The signature in the
+`MESHWEAVER_MSG_TRACE` file (`%TEMP%/meshweaver-msg-trace.log`) is decisive:
+
+- **Real lock-deadlock** — one *large gap* where nothing runs, then the test
+  times out. The action block is wedged on a blocking continuation.
+- **Missed observation** — the hub runs a **burst of work (seconds)**, then goes
+  **completely silent** for the rest of the timeout. The work *finished*; the
+  thing waiting on it never saw the terminal state. No gap-during-work, no lock.
+
+To tell them apart, compute the **max gap between handler-enters** for the stuck
+node (`grep "hub=<path> " trace | grep "HandleMessageAsync ENTER"` → diff the
+timestamps). A big mid-work gap ⇒ lock. Continuous work then silence ⇒ missed
+observation. The volume asymmetry is another tell: a synced-query subscription
+re-emitting on every change shows **far more `GetDataResponse` than `GetDataRequest`**,
+and the count *scales with load* — slower round-trips ⇒ more iterations.
+
+### The root pattern
+
+A long-lived operation (a thread round, a parent waiting on a delegated child,
+an activity) is driven by an **in-memory observer** — a `Subscribe` on a node
+stream, a `TaskCompletionSource` resolved by a callback. Two ways that observer
+silently dies and the operation parks forever:
+
+1. **One-shot with a give-up.** `stream.Take(1).Timeout(15s).Subscribe(...)` —
+   if the loaded-state emission is dropped during the subscribe handshake (see
+   [the init-gate-drops-patches note](xref:Architecture/AsynchronousCalls)) or
+   merely arrives late under load, the `Timeout` fires `onError`, the recovery
+   **gives up, and never retries**. The node stays non-terminal forever.
+2. **Lost on reactivation.** The observer lives only in the agent-loop / grain
+   that set it up. When the grain deactivates and reactivates (Orleans) or the
+   hub re-inits, the subscription is gone and is **never rebuilt**, so the child's
+   eventual completion is never observed.
+
+### The fix — self-healing resurrection on init
+
+Lifecycle recovery (`ThreadExecution.InitializeThreadLifecycle`, and the
+analogous activity init) must obey:
+
+- **Re-establish, never give up.** Wait for the first real state emission however
+  long it takes; if the observation *faults* before it drives the node to a valid
+  state, **re-subscribe** (restart the watcher). No `Timeout(...)`-then-give-up.
+- **Restart if any observer dies before terminal.** An observer that completes or
+  errors while the node is still non-terminal (`Cancelled`/`Done`/`Failed`/settled
+  `Idle`) must be restarted.
+- **Re-observe children on init.** A parent frozen mid-delegation must NOT blindly
+  re-run its agent loop (that re-delegates / duplicates the child). It must
+  **re-observe the existing child**, and when the child reaches terminal, write
+  the child's result back so the parent can settle/continue.
+- **Guarantee terminal.** A last-resort watchdog forces a wedged round to a
+  terminal `Idle` after a generous grace of **no progress** (Rx `Throttle` resets
+  on every node emission, so live streaming never trips it; threads legitimately
+  waiting on a child are skipped — that staleness is the heartbeat ticker's job).
+- **Children always reach terminal.** A sub-thread's own init must drive itself to
+  a terminal state so the parent's re-observation is guaranteed to fire.
+
+Don't "fix" this by bumping the test timeout — that hides a missed emission behind
+a longer wait. Find the observer that died and make it restart.
