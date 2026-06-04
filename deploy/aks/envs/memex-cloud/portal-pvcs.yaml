@@ -1,0 +1,22 @@
+# RWX Azure Files PVCs for the memex-cloud portal (ns memex-cloud). Uses the
+# cluster-wide azurefile-memex StorageClass. No pg PVC (uses memexaks-pg).
+#   kubectl apply -n memex-cloud -f portal-pvcs.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: memex-data, namespace: memex-cloud, labels: { app.kubernetes.io/component: memex-portal } }
+spec: { accessModes: [ReadWriteMany], storageClassName: azurefile-memex, resources: { requests: { storage: 16Gi } } }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: memex-content, namespace: memex-cloud, labels: { app.kubernetes.io/component: memex-portal } }
+spec: { accessModes: [ReadWriteMany], storageClassName: azurefile-memex, resources: { requests: { storage: 128Gi } } }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: memex-attachments, namespace: memex-cloud, labels: { app.kubernetes.io/component: memex-portal } }
+spec: { accessModes: [ReadWriteMany], storageClassName: azurefile-memex, resources: { requests: { storage: 64Gi } } }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: memex-users, namespace: memex-cloud, labels: { app.kubernetes.io/component: memex-portal } }
+spec: { accessModes: [ReadWriteMany], storageClassName: azurefile-memex, resources: { requests: { storage: 32Gi } } }

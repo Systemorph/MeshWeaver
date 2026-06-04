@@ -1,0 +1,34 @@
+[
+  { "op": "replace", "path": "/spec/replicas", "value": 1 },
+  { "op": "add", "path": "/spec/template/spec/nodeSelector", "value": { "workload": "silos" } },
+
+  { "op": "replace", "path": "/spec/template/spec/volumes/0",
+    "value": { "name": "memex-data", "persistentVolumeClaim": { "claimName": "memex-data" } } },
+  { "op": "replace", "path": "/spec/template/spec/volumes/1",
+    "value": { "name": "memex-users", "persistentVolumeClaim": { "claimName": "memex-users" } } },
+  { "op": "add", "path": "/spec/template/spec/volumes/-",
+    "value": { "name": "memex-content", "persistentVolumeClaim": { "claimName": "memex-content" } } },
+  { "op": "add", "path": "/spec/template/spec/volumes/-",
+    "value": { "name": "memex-attachments", "persistentVolumeClaim": { "claimName": "memex-attachments" } } },
+  { "op": "add", "path": "/spec/template/spec/volumes/-",
+    "value": { "name": "kv-ai-secrets",
+               "csi": { "driver": "secrets-store.csi.k8s.io", "readOnly": true,
+                        "volumeAttributes": { "secretProviderClass": "memexcloud-portal-ai-secrets" } } } },
+
+  { "op": "add", "path": "/spec/template/spec/containers/0/volumeMounts/-",
+    "value": { "name": "memex-content", "mountPath": "/mnt/content" } },
+  { "op": "add", "path": "/spec/template/spec/containers/0/volumeMounts/-",
+    "value": { "name": "memex-attachments", "mountPath": "/mnt/attachments" } },
+  { "op": "add", "path": "/spec/template/spec/containers/0/volumeMounts/-",
+    "value": { "name": "kv-ai-secrets", "mountPath": "/mnt/secrets-store", "readOnly": true } },
+
+  { "op": "add", "path": "/spec/template/spec/containers/0/envFrom/-",
+    "value": { "secretRef": { "name": "memexcloud-portal-ai-secrets" } } },
+
+  { "op": "add", "path": "/spec/template/spec/containers/0/resources",
+    "value": { "requests": { "cpu": "4", "memory": "8Gi" }, "limits": { "cpu": "6", "memory": "16Gi" } } },
+  { "op": "add", "path": "/spec/template/spec/containers/0/readinessProbe",
+    "value": { "httpGet": { "path": "/", "port": 8080 }, "initialDelaySeconds": 20, "periodSeconds": 10, "failureThreshold": 6 } },
+  { "op": "add", "path": "/spec/template/spec/containers/0/livenessProbe",
+    "value": { "httpGet": { "path": "/", "port": 8080 }, "initialDelaySeconds": 90, "periodSeconds": 20, "failureThreshold": 6 } }
+]
