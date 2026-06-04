@@ -380,7 +380,21 @@ internal static class ThreadSubmissionServer
             hub.GetWorkspace().GetMeshNodeStream().Update(n =>
             {
                 var t = n.Content as MeshThread ?? new MeshThread();
-                return n with { Content = t with { Status = ThreadExecutionStatus.Idle, ExecutionStartedAt = null } };
+                // 🚨 Roll back ONLY a stuck StartingExecution claim that found nothing
+                // to dispatch. NEVER roll back an Executing round. The claim Status
+                // oscillates and the _Exec round watcher can fire DispatchAfterClaim
+                // more than once for one logical round; a duplicate fire reaches here
+                // with dispatch==null AFTER the real commit already flipped
+                // StartingExecution→Executing and drained PendingUserMessages. Blindly
+                // forcing Idle there un-did the RUNNING round, so the next watcher tick
+                // saw Idle + (still/again) pending and re-claimed the SAME input into a
+                // fresh round — the re-dispatch loop (hundreds of response-cell creates,
+                // round never settles: Resubmit_AfterExecution_DoesNotDeadlock under the
+                // full Orleans sequence). Invariant: whenever pending exists the watcher
+                // requests execution start, and once started we never silently undo it.
+                return t.Status == ThreadExecutionStatus.StartingExecution
+                    ? n with { Content = t with { Status = ThreadExecutionStatus.Idle, ExecutionStartedAt = null } }
+                    : n;
             }).Subscribe(
                 _ => { },
                 ex => logger?.LogWarning(ex,
