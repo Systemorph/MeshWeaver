@@ -157,6 +157,35 @@ jobs:
           cat test/test-results.log
           exit 1
         fi
+    - name: Summarize test failures
+      # The test loop runs with --verbosity minimal, so this job's log only shows
+      # per-project exit markers — the actual FAILED test names live in the .trx
+      # files (surfaced by the "Test Results" check-run, a separate place you have
+      # to dig into). Parse the trx here and echo every failed test as an
+      # ::error:: annotation + into the job step summary, so the failing tests are
+      # visible directly on THIS job without opening the publish-action check.
+      if: always()
+      run: |
+        echo "### Failed tests — shard ${{ matrix.shard }}" >> "$GITHUB_STEP_SUMMARY"
+        any=0
+        for trx in $(find test -name '*.trx' 2>/dev/null | sort); do
+          # testName on each UnitTestResult element whose outcome is Failed.
+          fails=$(grep -oE '<UnitTestResult[^>]*outcome="Failed"[^>]*>' "$trx" \
+                  | grep -oE 'testName="[^"]*"' \
+                  | sed -E 's/testName="([^"]*)"/\1/' | sort -u)
+          if [ -n "$fails" ]; then
+            any=1
+            while IFS= read -r t; do
+              [ -z "$t" ] && continue
+              echo "::error title=Test failed::$t"
+              echo "- \`$t\`" >> "$GITHUB_STEP_SUMMARY"
+            done <<< "$fails"
+          fi
+        done
+        if [ "$any" = "0" ]; then
+          echo "_No failed tests in trx (a hang/crash would show above)._" >> "$GITHUB_STEP_SUMMARY"
+          echo "No failed tests found in trx for shard ${{ matrix.shard }}."
+        fi
     - name: Collect test logs for artifact
       if: always()
       run: |
