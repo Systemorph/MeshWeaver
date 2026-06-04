@@ -5,7 +5,6 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
-using System.Threading.Tasks.Dataflow;
 using MeshWeaver.Reflection;
 using Microsoft.Extensions.Logging;
 // ReSharper disable InconsistentlySynchronizedField
@@ -44,8 +43,15 @@ public class MessageService : IMessageService
 {
     private readonly ILogger<MessageService> logger;
     private readonly IMessageHub hub;
-    private readonly BufferBlock<Func<Task<IMessageDelivery>>> buffer = new();
-    private readonly BufferBlock<Func<Task<IMessageDelivery>>> deferredBuffer = new();
+    // Single-threaded turn loop (replaces the TPL Dataflow buffer/deferredBuffer/
+    // deliveryAction). mainQueue is the inbox; deferredQueue holds gate-deferred turns
+    // until the last gate opens. Exactly one turn drains at a time (the actor's single
+    // logical thread); each turn is (re)scheduled on turnScheduler and awaited before
+    // the next — the MaxDegreeOfParallelism=1 ActionBlock semantics, minus Dataflow.
+    private readonly Queue<Func<Task<IMessageDelivery>>> mainQueue = new();
+    private readonly Queue<Func<Task<IMessageDelivery>>> deferredQueue = new();
+    private readonly Lock turnGate = new();
+    private bool draining;
 
     /// <summary>
     /// Per-message deferral timeout. A message that sits in <see cref="deferredBuffer"/>
@@ -63,7 +69,7 @@ public class MessageService : IMessageService
     /// </summary>
     private readonly ConcurrentDictionary<string, (IMessageDelivery Delivery, CancellationTokenSource TimeoutCts)>
         deferredDeliveries = new();
-    private readonly ActionBlock<Func<Task<IMessageDelivery>>> deliveryAction;
+    private TaskScheduler turnScheduler = TaskScheduler.Default;
     private readonly HierarchicalRouting hierarchicalRouting;
     private readonly SyncDelivery postPipeline;
     private readonly AsyncDelivery deliveryPipeline;
@@ -118,32 +124,7 @@ public class MessageService : IMessageService
         // The Orleans grain glue overrides this for the root grain hub via
         // .WithTaskScheduler(TaskScheduler.Current) so Orleans can attribute work.
         // See Doc/Architecture/OrleansTaskScheduler.md.
-        var blockOptions = new ExecutionDataflowBlockOptions
-        {
-            TaskScheduler = hub.Configuration.TaskScheduler ?? TaskScheduler.Default,
-            MaxDegreeOfParallelism = 1
-        };
-
-        deliveryAction = new(async x =>
-        {
-            try { await x.Invoke(); }
-            catch (Exception ex)
-            {
-                // Defensive: a faulting log call here (e.g. xUnit output helper
-                // invalidated after test completion) would fault the action block,
-                // which propagates to deliveryAction.Completion and silently wedges
-                // dispose. Wrap so a broken logger never escalates to a hung pump.
-                try
-                {
-                    logger.LogError(ex, "Unhandled exception in delivery pipeline for hub {Address}", address);
-                }
-                catch
-                {
-                    // Logger itself failed — nothing else to do; we already swallowed
-                    // the inner exception so the action block stays alive.
-                }
-            }
-        }, blockOptions);
+        turnScheduler = hub.Configuration.TaskScheduler ?? TaskScheduler.Default;
 
         postPipeline = hub.Configuration.PostPipeline
             .Aggregate(new SyncPipelineConfig(hub, d => d), (p, c) => c.Invoke(p)).SyncDelivery;
@@ -166,9 +147,8 @@ public class MessageService : IMessageService
 
     void IMessageService.Start()
     {
-        // Link only the main buffer to the action block initially
-        // The deferred buffer will be linked when all gates are opened
-        buffer.LinkTo(deliveryAction, new DataflowLinkOptions { PropagateCompletion = true });
+        // No buffer linking — the turn loop (EnqueueTurn/DrainOneAsync) drives delivery.
+        // Deferred turns are moved into the main queue when the last gate opens.
     }
 
     private void NotifyStartupFailure(object? _)
@@ -213,8 +193,13 @@ public class MessageService : IMessageService
                         // This creates a chain: deferredBuffer → buffer → deliveryAction
                         // All deferred messages will flow through the main buffer, ensuring they are
                         // processed before any new messages that arrive after the gate opens
-                        logger.LogDebug("Linking deferred buffer to main buffer for hub {Address}", Address);
-                        deferredBuffer.LinkTo(buffer, new DataflowLinkOptions { PropagateCompletion = false });
+                        // Move deferred turns into the main queue (FIFO preserved) so
+                        // they run before any message that arrives after the gate opens.
+                        logger.LogDebug("Draining deferred queue into main queue for hub {Address}", Address);
+                        lock (turnGate)
+                            while (deferredQueue.Count > 0)
+                                mainQueue.Enqueue(deferredQueue.Dequeue());
+                        KickDrain();
 
                         logger.LogDebug("Message hub {address} fully initialized (all gates opened)", Address);
                     }
@@ -296,8 +281,8 @@ public class MessageService : IMessageService
             if (startedTicks > 0)
                 elapsed = (long)((Stopwatch.GetTimestamp() - startedTicks) * 1000.0 / Stopwatch.Frequency);
         }
-        return (buffer.Count, deferredBuffer.Count, 0, gates.Count,
-            deliveryAction.Completion.IsCompleted, current, elapsed);
+        return (mainQueue.Count, deferredQueue.Count, 0, gates.Count,
+            !draining, current, elapsed);
     }
 
     IMessageDelivery IMessageService.RouteMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken) =>
@@ -327,10 +312,66 @@ public class MessageService : IMessageService
 
         // Always buffer to the main buffer - deferral logic will be handled in NotifyAsync
         // based on whether the message is actually targeted at this hub
-        var posted = buffer.Post(() => NotifyAsync(delivery, cancellationToken));
-        MessageTrace.Write($"hub={Address} msg={typeName} id={delivery.Id} BUFFER.Post returned={posted}");
+        EnqueueTurn(() => NotifyAsync(delivery, cancellationToken));
+        MessageTrace.Write($"hub={Address} msg={typeName} id={delivery.Id} ENQUEUED");
 
         return delivery.Forwarded();
+    }
+
+    // ---- Turn loop (replaces the TPL Dataflow ActionBlock/BufferBlock pump) ----
+    // One turn drains at a time. Each turn is scheduled on turnScheduler (so the
+    // actor-model invariant holds: a handler observes TaskScheduler.Current ==
+    // the hub's configured scheduler) and awaited before the next is scheduled —
+    // strict FIFO, MaxDegreeOfParallelism=1. A handler that Posts to its own hub
+    // enqueues behind the current turn; shutdown re-queues the same way.
+    private void EnqueueTurn(Func<Task<IMessageDelivery>> turn)
+    {
+        lock (turnGate) mainQueue.Enqueue(turn);
+        KickDrain();
+    }
+
+    private void KickDrain()
+    {
+        lock (turnGate)
+        {
+            if (draining || mainQueue.Count == 0)
+                return;
+            draining = true;
+        }
+        ScheduleDrainOne();
+    }
+
+    // Schedule the next turn ON turnScheduler so each turn STARTS on the hub's
+    // scheduler (the ActionBlock re-scheduled every item the same way). A turn's
+    // own internal awaits resume on the pool, but the NEXT turn is re-scheduled here.
+    private void ScheduleDrainOne() =>
+        Task.Factory.StartNew(DrainOneAsync, CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach, turnScheduler);
+
+    private async Task DrainOneAsync()
+    {
+        Func<Task<IMessageDelivery>>? turn;
+        lock (turnGate)
+        {
+            if (mainQueue.Count == 0)
+            {
+                draining = false;
+                return;
+            }
+            turn = mainQueue.Dequeue();
+        }
+        try
+        {
+            await turn();
+        }
+        catch (Exception ex)
+        {
+            // Defensive: a faulting turn (or a broken logger) must never wedge the
+            // pump — swallow so the drain keeps advancing.
+            try { logger.LogError(ex, "Unhandled exception in delivery pipeline for hub {Address}", Address); }
+            catch { /* logger itself failed — nothing else to do */ }
+        }
+        ScheduleDrainOne();
     }
 
     private async Task<IMessageDelivery> NotifyAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
@@ -466,7 +507,8 @@ public class MessageService : IMessageService
                                 delivery.Message.GetType().Name, delivery.Id, Address);
                             MessageTrace.Write($"hub={Address} msg={name} id={delivery.Id} DEFERRED gates=[{string.Join(",", gates.Keys)}]");
                             ScheduleDeferralTimeout(delivery);
-                            deferredBuffer.Post(() => ProcessDeferredMessage(delivery, cancellationToken));
+                            lock (turnGate)
+                                deferredQueue.Enqueue(() => ProcessDeferredMessage(delivery, cancellationToken));
                             return delivery.Forwarded();
                         }
                     }
@@ -849,38 +891,20 @@ public class MessageService : IMessageService
         }
         deferredDeliveries.Clear();
 
-        // Complete the buffers to stop accepting new messages
-        var bufferStopwatch = Stopwatch.StartNew();
-        logger.LogDebug("[DISPOSE-TRACE] {address}: Completing buffers (bufferCount={bufferCount}, deferredCount={deferredCount})",
-            Address, buffer.Count, deferredBuffer.Count);
-        buffer.Complete();
-        deferredBuffer.Complete();
-        logger.LogDebug("[DISPOSE-TRACE] {address}: Buffers completed in {elapsed}ms", Address, bufferStopwatch.ElapsedMilliseconds);
+        // No buffers to Complete — ScheduleNotify drops post-shutdown messages and the
+        // pump drains whatever is already queued.
+        logger.LogDebug("[DISPOSE-TRACE] {address}: turn queues (mainCount={bufferCount}, deferredCount={deferredCount})",
+            Address, mainQueue.Count, deferredQueue.Count);
 
-        var deliveryStopwatch = Stopwatch.StartNew();
-        try
-        {
-            logger.LogDebug("[DISPOSE-TRACE] {address}: Awaiting deliveryAction.Completion (isCompleted={isCompleted})",
-                Address, deliveryAction.Completion.IsCompleted);
-            using var deliveryTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-            await deliveryAction.Completion.WaitAsync(deliveryTimeout.Token);
-            logger.LogDebug("[DISPOSE-TRACE] {address}: deliveryAction.Completion done in {elapsed}ms",
-                Address, deliveryStopwatch.ElapsedMilliseconds);
-        }
-        catch (OperationCanceledException)
-        {
-            logger.LogDebug("[DISPOSE-TRACE] {address}: deliveryAction.Completion TIMED OUT after {elapsed}ms",
-                Address, deliveryStopwatch.ElapsedMilliseconds);
-        }
-        catch (Exception ex)
-        {
-            logger.LogDebug("[DISPOSE-TRACE] {address}: deliveryAction.Completion ERROR after {elapsed}ms: {error}",
-                Address, deliveryStopwatch.ElapsedMilliseconds, ex.Message);
-        }
-
-        // Don't wait for execution completion during disposal as this disposal itself
-        // runs as an execution and might cause deadlocks waiting for itself
-        logger.LogDebug("[DISPOSE-TRACE] {address}: Skipping executionBlock.Completion wait", Address);
+        // Don't wait on deliveryAction.Completion. Handler execution now runs INLINE
+        // on this same block (executionBuffer/executionBlock were collapsed away), so
+        // disposal frequently runs AS a deliveryAction turn (the ShutdownRequest
+        // handler) — awaiting the block to complete from inside its own turn
+        // self-deadlocks, and the old 2s timeout then dominated dispose and broke the
+        // "host should dispose within 2s" guarantee. buffer.Complete() already stopped
+        // intake; any in-flight turn finishes on its own. Same rationale that always
+        // skipped executionBlock.Completion.
+        logger.LogDebug("[DISPOSE-TRACE] {address}: Skipping deliveryAction.Completion wait (inline-execution turn)", Address);
 
         // Complete the startup task if it's still pending
         try
