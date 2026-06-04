@@ -603,105 +603,100 @@ public class MessageService : IMessageService
     // before this observable is awaited, so the turn never leaves the thread. A
     // genuinely-async handler yields only at its own await.
     private IObservable<IMessageDelivery> ExecuteOnTarget(IMessageDelivery delivery, CancellationToken pipelineToken)
-        => Observable.Defer(() => RunHandlerAsync(delivery).ToObservable());
+        => Observable.Defer(() => RunHandler(delivery));
 
-    private async Task<IMessageDelivery> RunHandlerAsync(IMessageDelivery delivery)
+    // Runs the message's handler chain reactively (IObservable end-to-end, no await,
+    // no Task in the signature) INLINE on the single turn thread. A synchronous
+    // handler's chain completes before this observable is awaited by NotifyAsync, so
+    // the turn never leaves the thread; a genuinely-async handler yields only at its
+    // own await. Side effects (no-handler reporting, exception handling, the
+    // currently-executing tracker) ride Do/Catch/Finally — same semantics the old
+    // try/catch/finally gave us.
+    private IObservable<IMessageDelivery> RunHandler(IMessageDelivery delivery)
     {
-        // Per-message hot path. All MESSAGE_FLOW: LogTrace + the {@Delivery}
-        // LogDebug compute GetType().Name and box args even when the level is
-        // off; gate via IsEnabled and cache the type name once.
         var traceEnabled = logger.IsEnabled(LogLevel.Trace);
         var messageTypeName = delivery.Message.GetType().Name;
+        if (traceEnabled)
+            logger.LogTrace("MESSAGE_FLOW: EXECUTION_START | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
+                messageTypeName, Address, delivery.Id);
+        if (logger.IsEnabled(LogLevel.Debug))
+            logger.LogDebug("Start processing {Delivery} in {Address}", LogText(delivery), Address);
+
+        var executionStopwatch = Stopwatch.StartNew();
+        var isDisposing = hub.RunLevel >= MessageHubRunLevel.ShutDown;
+        // Mark this handler as the currently-executing one so a disposal timeout
+        // diagnostic can name it. Cleared in Finally below.
+        currentlyExecutingMessageType = messageTypeName;
+        Interlocked.Exchange(ref currentlyExecutingStartedTicks, Stopwatch.GetTimestamp());
+
+        IObservable<IMessageDelivery> exec;
+        if (!isDisposing || delivery.Message is ShutdownRequest)
         {
-            if (traceEnabled)
-                logger.LogTrace("MESSAGE_FLOW: EXECUTION_START | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-                    messageTypeName, Address, delivery.Id);
-            // LogText serialises through LoggingSerializerOptions ([PreventLogging]
-            // honoured — MeshNode.Content etc. stripped); still expensive per
-            // message, so gate on Debug.
-            if (logger.IsEnabled(LogLevel.Debug))
-                logger.LogDebug("Start processing {Delivery} in {Address}", LogText(delivery), Address);
-
-            var executionStopwatch = Stopwatch.StartNew();
-            var isDisposing = hub.RunLevel >= MessageHubRunLevel.ShutDown;
-            // Mark this handler as the currently-executing one so a disposal timeout
-            // diagnostic can name it — without this, "dispose hung" tells you nothing
-            // about which handler is wedged. Cleared in `finally` below.
-            currentlyExecutingMessageType = messageTypeName;
-            Interlocked.Exchange(ref currentlyExecutingStartedTicks, Stopwatch.GetTimestamp());
-            try
-            {
-
-                // Add timeout for disposal-related messages to prevent hangs
-                if (!isDisposing || delivery.Message is ShutdownRequest)
+            // ShutdownRequest uses CancellationToken.None so disposal can't be cancelled
+            // by CancelExecution() — other handlers CAN be cancelled to unblock the pipeline.
+            var token = delivery.Message is ShutdownRequest ? CancellationToken.None : cancellationTokenSource.Token;
+            MessageTrace.Write($"hub={Address} msg={messageTypeName} id={delivery.Id} HandleMessageAsync ENTER");
+            exec = hub.HandleMessageAsync(delivery, token)
+                .Do(handled =>
                 {
-                    // ShutdownRequest uses CancellationToken.None so disposal can't be cancelled
-                    // by CancelExecution() — other handlers CAN be cancelled to unblock the pipeline
-                    var token = delivery.Message is ShutdownRequest ? CancellationToken.None : cancellationTokenSource.Token;
-                    MessageTrace.Write($"hub={Address} msg={messageTypeName} id={delivery.Id} HandleMessageAsync ENTER");
-                    delivery = await hub.HandleMessageAsync(delivery, token);
-                    MessageTrace.Write($"hub={Address} msg={messageTypeName} id={delivery.Id} HandleMessageAsync EXIT state={delivery.State}");
+                    MessageTrace.Write($"hub={Address} msg={messageTypeName} id={handled.Id} HandleMessageAsync EXIT state={handled.State}");
                     // Compare target without Host since Host tracks routing path
-                    var ignoredTargetWithoutHost = delivery.Target is not null ? delivery.Target with { Host = null } : null;
-                    if (!isDisposing && delivery is { State: MessageDeliveryState.Ignored, Message: not DeliveryFailure }
+                    var ignoredTargetWithoutHost = handled.Target is not null ? handled.Target with { Host = null } : null;
+                    if (!isDisposing && handled is { State: MessageDeliveryState.Ignored, Message: not DeliveryFailure }
                                             && (ignoredTargetWithoutHost == null || ignoredTargetWithoutHost.Equals(hub.Address))
-                                            && !delivery.Message.GetType().HasAttribute<CanBeIgnoredAttribute>())
-                        ReportFailure(delivery.WithProperty("Error", $"No handler found for delivery {delivery.Message.GetType().FullName}: {delivery.Message}"));
-                }
-                else
+                                            && !handled.Message.GetType().HasAttribute<CanBeIgnoredAttribute>())
+                        ReportFailure(handled.WithProperty("Error", $"No handler found for delivery {handled.Message.GetType().FullName}: {handled.Message}"));
+                    if (traceEnabled)
+                        logger.LogTrace("MESSAGE_FLOW: EXECUTION_COMPLETED | {MessageType} | Hub: {Address} | Duration: {Duration}ms",
+                            messageTypeName, Address, executionStopwatch.ElapsedMilliseconds);
+                });
+        }
+        else
+        {
+            var jsonMessage = JsonSerializer.Serialize(delivery, hub.JsonSerializerOptions);
+            logger.LogWarning("Hub {Address} is disposing. Not processing message {Message}", hub.Address, jsonMessage);
+            exec = Observable.Return(delivery);
+        }
+
+        return exec
+            .Catch((Exception e) =>
+            {
+                // During disposal, cancellation timeouts are acceptable to prevent hangs.
+                if (e is OperationCanceledException && isDisposing)
                 {
-                    var jsonMessage = JsonSerializer.Serialize(delivery, hub.JsonSerializerOptions);
-                    logger.LogWarning("Hub {Address} is disposing. Not processing message {Message}", hub.Address, jsonMessage);
+                    if (traceEnabled)
+                        logger.LogTrace("MESSAGE_FLOW: EXECUTION_TIMEOUT_DURING_DISPOSAL | {MessageType} | Hub: {Address} | Duration: {Duration}ms",
+                            messageTypeName, Address, executionStopwatch.ElapsedMilliseconds);
+                    if (delivery.Message is not ExecutionRequest)
+                        logger.LogWarning("Execution timed out during disposal for {@Delivery} after {Duration}ms in {Address}",
+                            delivery, executionStopwatch.ElapsedMilliseconds, Address);
+                    return Observable.Return(delivery);
                 }
 
-                if (traceEnabled)
-                    logger.LogTrace("MESSAGE_FLOW: EXECUTION_COMPLETED | {MessageType} | Hub: {Address} | Duration: {Duration}ms",
-                        messageTypeName, Address, executionStopwatch.ElapsedMilliseconds);
-            }
-            catch (OperationCanceledException) when (isDisposing)
-            {
-                if (traceEnabled)
-                    logger.LogTrace("MESSAGE_FLOW: EXECUTION_TIMEOUT_DURING_DISPOSAL | {MessageType} | Hub: {Address} | Duration: {Duration}ms",
-                        messageTypeName, Address, executionStopwatch.ElapsedMilliseconds);
-
-                // During disposal, timeouts are acceptable to prevent hangs
-                if (delivery.Message is not ExecutionRequest)
-                {
-                    logger.LogWarning("Execution timed out during disposal for {@Delivery} after {Duration}ms in {Address}",
-                        delivery, executionStopwatch.ElapsedMilliseconds, Address);
-                }
-            }
-            catch (Exception e)
-            {
                 if (traceEnabled)
                     logger.LogTrace("MESSAGE_FLOW: EXECUTION_FAILED | {MessageType} | Hub: {Address} | Error: {Error} | Duration: {Duration}ms",
                         messageTypeName, Address, e.Message, executionStopwatch.ElapsedMilliseconds);
 
                 if (delivery.Message is ExecutionRequest er)
-                    await er.ExceptionCallback.Invoke(e);
+                    // Caller-supplied async error callback — fire it off the turn; don't block.
+                    er.ExceptionCallback.Invoke(e).ToObservable().Subscribe(_ => { }, _ => { });
                 else
                 {
                     logger.LogError("An exception occurred during the processing of {Delivery} after {Duration}ms. Exception: {Exception}. Address: {Address}.",
                         LogText(delivery), executionStopwatch.ElapsedMilliseconds, e, Address);
                     ReportFailure(delivery.Failed(e.ToString()));
                 }
-            }
-            finally
+                return Observable.Return(delivery);
+            })
+            .Finally(() =>
             {
-                // Clear the currently-executing tracker — the action block is now idle
-                // (or about to pick up the next message). Pairs with the assignment in
-                // the entry block above so a disposal diagnostic names the offending handler
-                // ONLY while it's actually in flight.
+                // Clear the currently-executing tracker — the turn is now idle.
                 currentlyExecutingMessageType = null;
                 Interlocked.Exchange(ref currentlyExecutingStartedTicks, 0);
-            }
-
-            if (delivery.Message is not ExecutionRequest && logger.IsEnabled(LogLevel.Debug))
-                logger.LogDebug("Finished processing {Delivery} in {Address} after {Duration}ms",
-                    delivery.Id, Address, executionStopwatch.ElapsedMilliseconds);
-
-        }
-        return delivery;
+                if (delivery.Message is not ExecutionRequest && logger.IsEnabled(LogLevel.Debug))
+                    logger.LogDebug("Finished processing {Delivery} in {Address} after {Duration}ms",
+                        delivery.Id, Address, executionStopwatch.ElapsedMilliseconds);
+            });
     }
 
 
