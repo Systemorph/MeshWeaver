@@ -58,3 +58,18 @@ config:
     ModelTier__Light: ""
     ModelTier__Utility: ""
     ClaudeCode__ConfigDirRoot: ""
+    # ---- System email (Microsoft Graph) — BIDIRECTIONAL. Off by default; an
+    # overlay turns it on per environment by setting Email__Enabled + the env's
+    # own MailboxAddress / TenantId / ClientId (+ WebhookBaseUrl for inbound).
+    # The secret Email__ClientSecret comes from the SecretProviderClass.
+    Email__Enabled: "false"
+    Email__MailboxAddress: ""
+    Email__TenantId: ""
+    Email__ClientId: ""
+    Email__UseManagedIdentity: "false"
+    Email__InboundEnabled: "false"
+    Email__WebhookBaseUrl: ""
+    # Shared webhook-guard value Graph echoes on every inbound notification; the
+    # /api/email webhook rejects mismatches. Global (same across envs is fine —
+    # each deployment validates against its own configured value).
+    Email__SubscriptionClientState: "meshweaver-emailhook-7f3c9a21e84b46d2b1c05e9af6d3"

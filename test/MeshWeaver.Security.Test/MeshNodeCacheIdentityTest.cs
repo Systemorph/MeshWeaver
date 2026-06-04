@@ -315,7 +315,7 @@ public class MeshNodeCacheIdentityTest(ITestOutputHelper output) : MonolithMeshT
 
         using (accessService.SwitchAccessContext(alice))
         {
-            cache.Update(nodePath, n => n with { Name = "Updated by Alice" })
+            cache.Update(nodePath, n => n with { Name = "Updated by Alice" }, Mesh.JsonSerializerOptions)
                 .Subscribe(
                     _ => observedContext.TrySetResult(accessService.Context?.ObjectId),
                     ex => observedContext.TrySetResult(ExtractPrincipal(ex)));
@@ -401,7 +401,7 @@ public class MeshNodeCacheIdentityTest(ITestOutputHelper output) : MonolithMeshT
             // at this moment. We Subscribe OUTSIDE the using so the scope is
             // already disposed by the time the inner Defer body runs on the
             // Concat thread.
-            updateObservable = cache.Update(nodePath, n => n with { Name = "Updated by Bob" });
+            updateObservable = cache.Update(nodePath, n => n with { Name = "Updated by Bob" }, Mesh.JsonSerializerOptions);
         }
 
         // Scope disposed — AsyncLocal is back to whatever DevLogin left it.

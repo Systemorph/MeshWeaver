@@ -316,7 +316,7 @@ public static class CommentLayoutAreas
                             {
                                 var existing = n.Content as Comment ?? new Comment();
                                 return n with { Content = existing with { Text = newText } };
-                            }).Subscribe(
+                            }, host.Hub.JsonSerializerOptions).Subscribe(
                                 _ => ctx.Host.UpdateData(editStateId, false),
                                 _ => ctx.Host.UpdateData(editStateId, false));
                         });
@@ -389,7 +389,7 @@ public static class CommentLayoutAreas
                                     State = MeshNodeState.Active,
                                     Content = replyComment with { Text = text }
                                 };
-                            }).Subscribe(
+                            }, host.Hub.JsonSerializerOptions).Subscribe(
                                 _ => host.UpdateData(replyPathStateId, ""),
                                 _ => host.UpdateData(replyPathStateId, ""));
                         });
@@ -455,7 +455,7 @@ public static class CommentLayoutAreas
                 {
                     var c = n.Content as Comment ?? comment;
                     return n with { Content = c with { Status = CommentStatus.Resolved } };
-                }).Subscribe(_ => { }, _ => { });
+                }, host.Hub.JsonSerializerOptions).Subscribe(_ => { }, _ => { });
                 return Task.CompletedTask;
             });
     }

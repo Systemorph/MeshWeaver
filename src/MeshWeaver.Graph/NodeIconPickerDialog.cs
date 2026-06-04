@@ -161,7 +161,8 @@ public static class NodeIconPickerDialog
                 {
                     var cache = ctx.Host.Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
                     cache.Update(iconPath, n =>
-                        n with { Icon = string.IsNullOrWhiteSpace(newIcon) ? null : newIcon })
+                        n with { Icon = string.IsNullOrWhiteSpace(newIcon) ? null : newIcon },
+                        ctx.Host.Hub.JsonSerializerOptions)
                         .Subscribe(_ => { }, _ => { });
                 }
                 ctx.Host.UpdateArea(DialogControl.DialogArea, null);

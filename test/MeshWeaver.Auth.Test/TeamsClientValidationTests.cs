@@ -37,13 +37,13 @@ public class TeamsClientValidationTests
     public async Task ValidateInbound_RejectsNonBearerOrMissing_NoNetwork(string? header)
     {
         // Configured bot, but a non-Bearer/missing header is rejected before any metadata fetch.
-        Assert.False(await Make(true).ValidateInboundAsync(header, default));
+        Assert.False(await Make(true).ValidateInboundAsync(header, TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public async Task ValidateInbound_WhenDisabled_AlwaysFalse()
     {
         // Inert channel: even a Bearer-shaped header is rejected outright (no network).
-        Assert.False(await Make(false).ValidateInboundAsync("Bearer anything", default));
+        Assert.False(await Make(false).ValidateInboundAsync("Bearer anything", TestContext.Current.CancellationToken));
     }
 }

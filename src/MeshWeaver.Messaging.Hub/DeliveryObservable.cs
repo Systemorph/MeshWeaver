@@ -14,7 +14,7 @@ namespace MeshWeaver.Messaging;
 /// those transitions are the "near-miss" reordering that surfaces as the
 /// request/response timeouts. The eager <c>Subscribe</c> runs the operation's
 /// SYNCHRONOUS prefix inline on the action-block (turn) thread; only a genuine
-/// <c>await</c> inside <paramref name="io"/> yields, and its continuation
+/// <c>await</c> inside <c>io</c> yields, and its continuation
 /// resumes via the captured <see cref="System.Threading.ExecutionContext"/>
 /// (which carries the <c>AccessService</c> AsyncLocal identity) — no extra
 /// scheduler is interposed. The <see cref="ReplaySubject{T}"/> buffers the one

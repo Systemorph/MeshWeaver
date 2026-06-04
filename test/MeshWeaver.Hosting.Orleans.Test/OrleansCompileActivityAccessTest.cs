@@ -255,10 +255,8 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         // recompile trigger. UI does the same thing when the user clicks
         // "Compile" (NodeTypeLayoutAreas.BuildCompileStatusPanel).
         var client = GetClient($"edit-ok-{Guid.NewGuid():N}", userId: "TestUser");
-        var streamCache = ((InProcessSiloHandle)Cluster.Silos[0]).SiloHost.Services
-            .GetRequiredService<IMessageHub>()
-            .ServiceProvider
-            .GetRequiredService<IMeshNodeStreamCache>();
+        var siloMeshHub = ((InProcessSiloHandle)Cluster.Silos[0]).SiloHost.Services
+            .GetRequiredService<IMessageHub>();
         var triggerAt = DateTimeOffset.UtcNow;
 
         // Switch the silo's AccessService to TestUser for the duration of the
@@ -269,7 +267,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
             .GetRequiredService<AccessService>();
         using (siloAccess.SwitchAccessContext(new AccessContext { ObjectId = "TestUser", Name = "TestUser" }))
         {
-            await streamCache.Update(typePath, curr =>
+            await siloMeshHub.GetMeshNodeStream(typePath).Update(curr =>
             {
                 if (curr?.Content is not NodeTypeDefinition cd) return curr!;
                 return curr with
@@ -401,10 +399,8 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
 
         // As TestUser (no Edit on OtherUser/), attempt the Update.
         var client = GetClient($"no-edit-{Guid.NewGuid():N}", userId: "TestUser");
-        var streamCache = ((InProcessSiloHandle)Cluster.Silos[0]).SiloHost.Services
-            .GetRequiredService<IMessageHub>()
-            .ServiceProvider
-            .GetRequiredService<IMeshNodeStreamCache>();
+        var siloMeshHub = ((InProcessSiloHandle)Cluster.Silos[0]).SiloHost.Services
+            .GetRequiredService<IMessageHub>();
         var siloAccess = ((InProcessSiloHandle)Cluster.Silos[0]).SiloHost.Services
             .GetRequiredService<IMessageHub>()
             .ServiceProvider
@@ -417,7 +413,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         {
             using (siloAccess.SwitchAccessContext(new AccessContext { ObjectId = "TestUser", Name = "TestUser" }))
             {
-                await streamCache.Update(typePath, curr =>
+                await siloMeshHub.GetMeshNodeStream(typePath).Update(curr =>
                 {
                     if (curr?.Content is not NodeTypeDefinition cd) return curr!;
                     return curr with
@@ -897,10 +893,9 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         //    (the first-build kickoff needs null, the compile watcher needs
         //    Pending) — only an instance activation can trigger the self-heal.
         var bogusFv = $"STALE-FRAMEWORK-{Guid.NewGuid():N}";
-        var streamCache = siloHub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
         using (SiloAccessService.ImpersonateAsSystem())
         {
-            await streamCache.Update(typePath, curr =>
+            await siloHub.GetMeshNodeStream(typePath).Update(curr =>
             {
                 if (curr?.Content is not NodeTypeDefinition cd) return curr!;
                 return curr with { Content = cd with { CompiledFrameworkVersion = bogusFv } };

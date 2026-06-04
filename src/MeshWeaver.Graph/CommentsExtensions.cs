@@ -462,7 +462,7 @@ public static class CommentsView
                                     State = MeshNodeState.Active,
                                     Content = c with { Text = text }
                                 };
-                            }).Subscribe(
+                            }, host.Hub.JsonSerializerOptions).Subscribe(
                                 _ => host.UpdateData(stateId, ""),
                                 _ => host.UpdateData(stateId, ""));
                         });
