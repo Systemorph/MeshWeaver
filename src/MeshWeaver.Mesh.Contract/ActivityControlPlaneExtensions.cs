@@ -162,23 +162,50 @@ public static class ActivityControlPlaneExtensions
         // dispatches a fresh round (legitimate next round) or drops (in-flight
         // round set IsExecuting=true).
         var dispatching = 0;
-        return hub.GetWorkspace().GetMeshNodeStream()
-            .DistinctUntilChanged(fingerprint)
-            .Where(needsDispatch)
-            .Where(_ => System.Threading.Interlocked.CompareExchange(ref dispatching, 1, 0) == 0)
-            .SelectMany(node => dispatch(node)
-                .Catch<System.Reactive.Unit, Exception>(ex =>
-                {
-                    logger?.LogWarning(ex,
-                        "Submission dispatch failed on {Address}; next state change will retry",
-                        hub.Address);
-                    return System.Reactive.Linq.Observable.Empty<System.Reactive.Unit>();
-                })
-                .Finally(() => System.Threading.Interlocked.Exchange(ref dispatching, 0)))
-            .Subscribe(
-                _ => { },
-                ex => logger?.LogError(ex,
-                    "Submission watcher faulted on {Address}",
-                    hub.Address));
+
+        // Self-healing: a faulted submission watcher must NOT die silently — if it
+        // does, the hub stops draining pending input / dispatching the next round
+        // and every observer waiting on the result parks forever (the live-path
+        // sibling of the init-recovery deadlock). On fault we reset the single-flight
+        // guard and re-establish after a short delay. Mirrors WatchControlPlane and
+        // ThreadExecution.InitializeThreadLifecycle.
+        var serial = new System.Reactive.Disposables.SerialDisposable();
+        var disposed = false;
+        void Establish()
+        {
+            if (disposed) return;
+            serial.Disposable = hub.GetWorkspace().GetMeshNodeStream()
+                .DistinctUntilChanged(fingerprint)
+                .Where(needsDispatch)
+                .Where(_ => System.Threading.Interlocked.CompareExchange(ref dispatching, 1, 0) == 0)
+                .SelectMany(node => dispatch(node)
+                    .Catch<System.Reactive.Unit, Exception>(ex =>
+                    {
+                        logger?.LogWarning(ex,
+                            "Submission dispatch failed on {Address}; next state change will retry",
+                            hub.Address);
+                        return System.Reactive.Linq.Observable.Empty<System.Reactive.Unit>();
+                    })
+                    .Finally(() => System.Threading.Interlocked.Exchange(ref dispatching, 0)))
+                .Subscribe(
+                    _ => { },
+                    ex =>
+                    {
+                        logger?.LogError(ex,
+                            "Submission watcher faulted on {Address} — re-establishing",
+                            hub.Address);
+                        // Release the single-flight guard a faulted in-flight dispatch
+                        // may have left set, so the re-established watcher can dispatch.
+                        System.Threading.Interlocked.Exchange(ref dispatching, 0);
+                        if (!disposed)
+                            Observable.Timer(TimeSpan.FromSeconds(1)).Subscribe(_ => Establish());
+                    });
+        }
+        Establish();
+        return System.Reactive.Disposables.Disposable.Create(() =>
+        {
+            disposed = true;
+            serial.Dispose();
+        });
     }
 }

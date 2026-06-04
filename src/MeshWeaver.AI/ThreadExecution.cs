@@ -163,7 +163,14 @@ internal static class ThreadExecution
         var cache = execHub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
 
         var accessService = execHub.ServiceProvider.GetService<MeshWeaver.Messaging.AccessService>();
-        var sub = cache.GetStream(threadPath)
+
+        // Self-healing: this watcher dispatches each StartingExecution round. If its
+        // stream FAULTS it must not die silently — a dead watcher means a claimed
+        // round never dispatches (Status stuck at StartingExecution, IsExecuting
+        // forever): the live-path "observer dies" deadlock. On fault, re-establish.
+        IDisposable? sub = null;
+        var disposed = false;
+        void Establish() => sub = cache.GetStream(threadPath)
             // Pair each emission with its current Status so DistinctUntilChanged
             // dedupes on the Status field only — concurrent field updates that
             // happen while Status stays StartingExecution must NOT re-fire.
@@ -217,10 +224,17 @@ internal static class ThreadExecution
                             });
                     }
                 },
-                ex => logger?.LogWarning(ex,
-                    "[ExecRoundWatcher] stream errored for {ThreadPath}", threadPath));
+                ex =>
+                {
+                    logger?.LogWarning(ex,
+                        "[ExecRoundWatcher] stream errored for {ThreadPath} — re-establishing", threadPath);
+                    if (!disposed)
+                        System.Reactive.Linq.Observable.Timer(TimeSpan.FromSeconds(1))
+                            .Subscribe(_ => Establish());
+                });
 
-        execHub.RegisterForDisposal(sub);
+        Establish();
+        execHub.RegisterForDisposal(_ => { disposed = true; sub?.Dispose(); });
     }
 
     /// <summary>

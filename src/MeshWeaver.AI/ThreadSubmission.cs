@@ -227,7 +227,16 @@ internal static class ThreadSubmissionServer
         // work happens in `ExecRoundWatcher` (DispatchAfterClaim creates satellite
         // cells and posts cross-hub messages) — see ThreadExecution.cs where the
         // FromNode scope is applied.
-        return threadHub.GetWorkspace().GetMeshNodeStream()
+        // Self-healing: this watcher drains pending input into the next round (the
+        // resubmit / follow-up-message path). If its stream FAULTS it must NOT die
+        // silently — a dead watcher means the resubmit is never claimed and the
+        // thread parks forever (the live-path "observer dies" deadlock behind
+        // Resubmit_AfterExecution_DoesNotDeadlock). On fault, re-establish after a
+        // short delay. Mirrors ThreadExecution.InitializeThreadLifecycle and
+        // ActivityControlPlaneExtensions.WatchControlPlane.
+        var serial = new System.Reactive.Disposables.SerialDisposable();
+        var disposed = false;
+        void Establish() => serial.Disposable = threadHub.GetWorkspace().GetMeshNodeStream()
             .Do(n =>
             {
                 if (n?.Content is MeshThread t)
@@ -280,9 +289,22 @@ internal static class ThreadSubmissionServer
                         ex => logger?.LogWarning(ex,
                             "[SubmissionWatcher] claim Update failed for {ThreadPath}", threadPath));
                 },
-                ex => logger?.LogWarning(ex,
-                    "[SubmissionWatcher] stream errored for {ThreadPath}",
-                    threadPath));
+                ex =>
+                {
+                    logger?.LogWarning(ex,
+                        "[SubmissionWatcher] stream errored for {ThreadPath} — re-establishing",
+                        threadPath);
+                    if (!disposed)
+                        System.Reactive.Linq.Observable.Timer(TimeSpan.FromSeconds(1))
+                            .Subscribe(_ => Establish());
+                });
+
+        Establish();
+        return System.Reactive.Disposables.Disposable.Create(() =>
+        {
+            disposed = true;
+            serial.Dispose();
+        });
     }
 
     /// <summary>
