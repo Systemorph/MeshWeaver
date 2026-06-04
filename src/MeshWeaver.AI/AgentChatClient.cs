@@ -1141,7 +1141,7 @@ public class AgentChatClient : IAgentChat
         selectionSubscription?.Dispose();
         var selectionStream = !watchOwnProviders
             ? Observable.Return(ImmutableArray<string>.Empty)
-            : workspace.GetMeshNodeStream(ModelProviderNodeType.SelectionPath(selectionUserId))
+            : workspace.GetMeshNodeStream(ModelProviderNodeType.SelectionPath(selectionUserId!))
                 .Select(ExtractSelectedProviderPaths)
                 .Catch<ImmutableArray<string>, Exception>(_ => Observable.Return(ImmutableArray<string>.Empty))
                 .StartWith(ImmutableArray<string>.Empty)

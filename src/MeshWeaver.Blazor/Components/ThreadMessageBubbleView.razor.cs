@@ -114,8 +114,6 @@ public partial class ThreadMessageBubbleView : BlazorView<ThreadMessageBubbleCon
         // whether the content arrives strongly-typed or already serialised).
         try
         {
-            var cache = Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-
             // 🚨 2026-05-21 — BindData runs inside a sync-stream emission scope
             // where accessService.Context is stamped with the sync hub's own
             // address (e.g. "sync/0ANs..."). The cache's RLS gate then denies
@@ -126,7 +124,7 @@ public partial class ThreadMessageBubbleView : BlazorView<ThreadMessageBubbleCon
             IObservable<MeshNode> stream;
             using (accessService?.ImpersonateAsSystem())
             {
-                stream = cache.GetStream(ViewModel.NodePath);
+                stream = Hub.GetMeshNodeStream(ViewModel.NodePath);
             }
 
             AddBinding(stream

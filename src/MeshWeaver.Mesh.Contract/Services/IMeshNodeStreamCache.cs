@@ -9,7 +9,8 @@ namespace MeshWeaver.Mesh.Services;
 /// the routing layer, every per-instance hub that depends on a NodeType
 /// definition, <c>NodeTypeEnrichmentHelpers</c>, compile-activity hubs
 /// writing terminal state, path-resolution lookups — goes through the SAME
-/// handle. Reads (<see cref="GetStream(string)"/>) and writes (<see cref="Update(string, Func{MeshNode, MeshNode})"/>)
+/// handle. Reads (<see cref="GetStream(string, JsonSerializerOptions)"/>) and
+/// writes (<see cref="Update(string, Func{MeshNode, MeshNode}, JsonSerializerOptions)"/>)
 /// share the underlying stream so an update is always visible to every reader.
 /// (See the <c>GetStream</c> / <c>Update</c> overloads below.)
 ///
@@ -34,49 +35,35 @@ namespace MeshWeaver.Mesh.Services;
 public interface IMeshNodeStreamCache
 {
     /// <summary>
-    /// Returns the cached observable for the MeshNode at <paramref name="path"/>.
-    /// First call subscribes to <c>workspace.GetMeshNodeStream(path)</c> and
-    /// installs <c>Replay(1).AutoConnect(1)</c>; subsequent calls return the
-    /// same instance — one shared upstream subscription, instant snapshot
-    /// for new subscribers via the Replay buffer.
+    /// 🚨 Reads always go through the TYPED overload
+    /// <see cref="GetStream(string, JsonSerializerOptions)"/> — the bare
+    /// untyped overload was DELETED. The cache hub is domain-type-agnostic and
+    /// stores Content as a raw <see cref="System.Text.Json.JsonElement"/>; a bare
+    /// read fed <c>node.Content as MyType</c> returns <c>null</c> and the consumer
+    /// silently no-ops (the wedged-thread / never-dispatching-watcher bug class).
+    /// Callers MUST pass their hub's <c>JsonSerializerOptions</c> so Content is
+    /// deserialized to its registered domain type.
     /// </summary>
-    IObservable<MeshNode> GetStream(string path);
-
-    /// <summary>
-    /// Applies <paramref name="update"/> to the MeshNode at
-    /// <paramref name="path"/> through the SAME cached
-    /// <c>MeshNodeStreamHandle</c> that <see cref="GetStream(string)"/> reads. This is
-    /// the canonical way for a non-owning hub (e.g. a compile-activity hub) to
-    /// write terminal state: it MUST go through the one shared handle, not an
-    /// ad-hoc <c>GetRemoteStream</c> — an ad-hoc stream is a separate
-    /// instance, so its update is "lost" (never seen by the readers of the
-    /// cached stream). Returns the post-update MeshNode; caller MUST
-    /// Subscribe (the side effect runs on Subscribe).
-    /// </summary>
-    IObservable<MeshNode> Update(string path, System.Func<MeshNode, MeshNode> update);
-
-    /// <summary>
-    /// Caller-typed <see cref="GetStream(string)"/>: every emitted MeshNode's
-    /// <c>Content</c> is round-tripped through <paramref name="options"/> so the
-    /// caller sees a typed domain instance (e.g. <c>ModelProviderConfiguration</c>)
-    /// rather than the raw <c>JsonElement</c> the cache hub stores. Use this when
-    /// your code pattern-matches on <c>Content</c>'s runtime type.
-    ///
-    /// <para>The cache hub itself is domain-type-agnostic — it doesn't know about
-    /// <c>ModelProviderConfiguration</c> et al. Conversion is done at the boundary
-    /// here using the caller's <see cref="JsonSerializerOptions"/>, which DOES
-    /// know the types (its <c>$type</c> polymorphic resolver was built from the
-    /// caller hub's <c>TypeRegistry</c>). Decouples the process-singleton cache
-    /// from every domain type a tenant happens to register.</para>
-    /// </summary>
+    /// <remarks>
+    /// Every emitted MeshNode's <c>Content</c> is round-tripped through
+    /// <paramref name="options"/> so the caller sees a typed domain instance
+    /// (e.g. <c>ModelProviderConfiguration</c>, <c>MeshThread</c>) rather than the
+    /// raw <c>JsonElement</c> the cache hub stores. Conversion uses the caller's
+    /// <see cref="JsonSerializerOptions"/>, whose <c>$type</c> polymorphic resolver
+    /// was built from the caller hub's <c>TypeRegistry</c> — decoupling the
+    /// process-singleton cache from every domain type a tenant registers.
+    /// </remarks>
     IObservable<MeshNode> GetStream(string path, JsonSerializerOptions options);
 
     /// <summary>
-    /// Caller-typed <see cref="Update(string, System.Func{MeshNode, MeshNode})"/>:
-    /// the <paramref name="update"/> lambda receives a MeshNode whose <c>Content</c>
+    /// Caller-typed write (the ONLY write overload): the
+    /// <paramref name="update"/> lambda receives a MeshNode whose <c>Content</c>
     /// has been deserialised via <paramref name="options"/>, and the returned
     /// updated MeshNode's <c>Content</c> is serialised back using the same
     /// options when computing the JSON-merge patch posted to the owning hub.
+    /// 🚨 The untyped <c>Update(path, fn)</c> overload was DELETED — without
+    /// deserialization an <c>update</c> reading <c>curr.Content as MyType</c> sees
+    /// null and returns the node unchanged (the write silently no-ops).
     /// </summary>
     IObservable<MeshNode> Update(
         string path,
@@ -85,7 +72,8 @@ public interface IMeshNodeStreamCache
 
     /// <summary>
     /// Removes the cached <c>Replay(1)</c> entry for <paramref name="path"/>.
-    /// The per-path stream is rebuilt on the next <see cref="GetStream(string)"/> call.
+    /// The per-path stream is rebuilt on the next
+    /// <see cref="GetStream(string, JsonSerializerOptions)"/> call.
     /// Called by <c>HandleDeleteNodeRequest</c> after the owning hub's persistence
     /// layer confirms the delete, so subsequent reads no longer see the stale
     /// pre-delete value. Idempotent — calling for an unknown path is a no-op.

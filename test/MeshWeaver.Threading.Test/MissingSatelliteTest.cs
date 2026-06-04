@@ -104,7 +104,7 @@ public class MissingSatelliteTest(ITestOutputHelper output) : MonolithMeshTestBa
         var validPath = $"{threadPath}/{validId}";
         using (accessService.ImpersonateAsSystem())
         {
-            var validEmission = cache.GetStream(validPath)
+            var validEmission = cache.GetStream(validPath, Mesh.JsonSerializerOptions)
                 .Where(n => n?.Content is not null)
                 .Should().Within(TimeSpan.FromSeconds(5)).Emit(
                     "the existing satellite must emit via the cache within 5 s — happy path");
@@ -125,7 +125,7 @@ public class MissingSatelliteTest(ITestOutputHelper output) : MonolithMeshTestBa
         var missingPath = $"{threadPath}/{missingId}";
         using (accessService.ImpersonateAsSystem())
         {
-            var errorNotification = cache.GetStream(missingPath)
+            var errorNotification = cache.GetStream(missingPath, Mesh.JsonSerializerOptions)
                 .Where(n => n?.Content is not null)
                 .Materialize()
                 .Should().Within(TimeSpan.FromSeconds(5)).Match(n => n.Kind == NotificationKind.OnError);

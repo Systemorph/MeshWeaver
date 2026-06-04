@@ -197,7 +197,7 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     }
 
     /// <summary>
-    /// Read-only existence probe (see <see cref="IPartitionStorageProvider.PartitionExistsAsync"/>).
+    /// Read-only existence probe (see <see cref="IPartitionStorageProvider"/>.PartitionExistsAsync).
     /// Answers from <see cref="PgPartitionCache"/> — never creates a schema. Maps the
     /// cached <see cref="PartitionState"/> to the tri-state contract:
     /// <list type="bullet">

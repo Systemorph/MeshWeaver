@@ -6,6 +6,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using System.Text.Json;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -143,7 +144,7 @@ internal static class NodeTypeCompileActivityHandler
         // sufficient.
         var snapshotObservable = request.Message.ParentSnapshot is { } providedSnapshot
             ? Observable.Return(providedSnapshot)
-            : streamCache.GetStream(parentPath)
+            : streamCache.GetStream(parentPath, activityHub.JsonSerializerOptions)
                 .Where(node => node?.Content is NodeTypeDefinition d
                     && d.CompilationStatus == CompilationStatus.Compiling)
                 .Take(1);
@@ -175,7 +176,7 @@ internal static class NodeTypeCompileActivityHandler
                 // patches (test's `ReleaseNotes`, the watcher's
                 // `LastReleaseRequestHandledAt`, etc.), so the EntityUpdate
                 // carries them through instead of clobbering with stale values.
-                WriteToParent(streamCache, parentPath, def => def with
+                WriteToParent(streamCache, activityHub.JsonSerializerOptions, parentPath, def => def with
                 {
                     LastCompileStartedAt = def.LastCompileStartedAt ?? DateTimeOffset.UtcNow,
                     LastCompilationActivityPath = activityPath
@@ -381,7 +382,7 @@ internal static class NodeTypeCompileActivityHandler
                     //    the shared cached stream. AssemblyLocation,
                     //    CompiledSources, LatestReleasePath all land in a
                     //    single Update.
-                    WriteToParent(streamCache, parentPath, def =>
+                    WriteToParent(streamCache, activityHub.JsonSerializerOptions, parentPath, def =>
                     {
                         if (ok)
                             return def with
@@ -449,6 +450,7 @@ internal static class NodeTypeCompileActivityHandler
     /// </summary>
     private static void WriteToParent(
         IMeshNodeStreamCache streamCache,
+        JsonSerializerOptions options,
         string parentPath,
         Func<NodeTypeDefinition, NodeTypeDefinition> transform,
         ILogger? logger,
@@ -464,7 +466,7 @@ internal static class NodeTypeCompileActivityHandler
                 if (compiledVersion is { } v)
                     nextDef = nextDef with { LastCompiledVersion = v };
                 return curr with { Content = nextDef };
-            })
+            }, options)
             .Subscribe(
                 result => logger?.LogInformation(
                     "[NTCA] WriteToParent {Transition} for {ParentPath} completed — status={Status} coll={Coll} path={Path} isDirty={IsDirty} compiledSourcesCount={Count}",

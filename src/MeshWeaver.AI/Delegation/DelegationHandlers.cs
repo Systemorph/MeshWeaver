@@ -59,7 +59,10 @@ internal static class DelegationHandlers
 
         foreach (var subPath in chat.ActiveDelegationPaths)
         {
-            nodeCache.GetStream(subPath)
+            // 🚨 TYPED overload — the bare GetStream(path) emits raw JsonElement
+            // Content, so `node.Content is not MeshThread` would be TRUE for every
+            // sub-thread and the heartbeat scan would silently never fire.
+            nodeCache.GetStream(subPath, hub.JsonSerializerOptions)
                 .Take(1)
                 .Timeout(TimeSpan.FromSeconds(2))
                 .Subscribe(
@@ -105,10 +108,14 @@ internal static class DelegationHandlers
             "[DelegationHandlers] CancelDelegationSubThread sub={Path} reason={Reason}",
             req.SubThreadPath, req.Reason);
 
+        // 🚨 TYPED overload — the bare Update(path, fn) does NOT deserialize
+        // JsonElement Content before the lambda, so `curr.Content is MeshThread`
+        // would be FALSE and the cancel would silently never be written.
         nodeCache.Update(req.SubThreadPath, curr =>
                 curr?.Content is MeshThread t
                     ? curr with { Content = t with { RequestedStatus = ThreadExecutionStatus.Cancelled } }
-                    : curr!)
+                    : curr!,
+                hub.JsonSerializerOptions)
             .Subscribe(
                 _ => { },
                 ex => logger?.LogWarning(ex,

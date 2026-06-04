@@ -141,7 +141,7 @@ public partial class CollaborativeMarkdownView
             try
             {
                 _cache = Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-                AddBinding(_cache.GetStream(BoundNodePath)
+                AddBinding(Hub.GetMeshNodeStream(BoundNodePath)
                     .Where(node => node is not null)
                     .Select(node => MarkdownOverviewLayoutArea.GetMarkdownContent(node))
                     .DistinctUntilChanged()
@@ -414,9 +414,9 @@ public partial class CollaborativeMarkdownView
             // and re-renders without an extra read. Other GUIs watching the same
             // path see the patch through their own subscriptions on the same handle.
             if (_cache == null || string.IsNullOrEmpty(BoundNodePath)) return Task.FromResult(false);
-            _cache.Update(BoundNodePath, current =>
+            Hub.GetMeshNodeStream(BoundNodePath).Update(current =>
                 current with { Content = new MarkdownContent { Content = newContent } })
-                .Subscribe(_ => { }, _ => { /* errors surface via _cache's logger */ });
+                .Subscribe(_ => { }, _ => { /* errors surface via the handle's logger */ });
             return Task.FromResult(true);
         }
         catch
@@ -583,8 +583,7 @@ public partial class CollaborativeMarkdownView
             return;
         // Write through the shared cache — the lambda fires against the live
         // MeshNode the cache holds, no separate Read → Post round-trip needed.
-        var cache = Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-        cache.Update(path, n =>
+        Hub.GetMeshNodeStream(path).Update(n =>
         {
             if (n.Content is not Comment c) return n;
             return n with { Content = c with { Status = CommentStatus.Resolved } };

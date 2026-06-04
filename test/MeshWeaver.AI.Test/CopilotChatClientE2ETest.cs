@@ -36,7 +36,8 @@ public class CopilotChatClientE2ETest
         await using var client = new CopilotChatClient(config, modelName: "auto");
 
         var response = await client.GetResponseAsync(
-            [new ChatMessage(ChatRole.User, "Reply with exactly the word: OK")]);
+            [new ChatMessage(ChatRole.User, "Reply with exactly the word: OK")],
+            cancellationToken: TestContext.Current.CancellationToken);
 
         response.Text.Should().NotBeNullOrWhiteSpace();
     }

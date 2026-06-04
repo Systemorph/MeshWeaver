@@ -199,7 +199,7 @@
                 // process-wide shared handle; the export progress GUI elsewhere
                 // joins the same upstream. See Doc/GUI/ItemTemplateMeshNodeStreamBinding.
                 var cache = Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-                return cache.GetStream(msg.ActivityPath)
+                return cache.GetStream(msg.ActivityPath, Hub.JsonSerializerOptions)
                     .Select(n => n?.Content as ActivityLog)
                     .Where(log => log is not null && log.Status != ActivityStatus.Running)
                     .Take(1)

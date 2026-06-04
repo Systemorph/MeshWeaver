@@ -2,10 +2,12 @@
 @implements IDisposable
 @using MeshWeaver.Mesh
 @using MeshWeaver.Mesh.Services
+@using MeshWeaver.Messaging
 @using Microsoft.FluentUI.AspNetCore.Components
 @inject IMeshService MeshQuery
 @inject IMeshNodeStreamCache StreamCache
 @inject NavigationManager NavigationManager
+@inject IMessageHub Hub
 
 <div class="notification-panel">
     <FluentStack VerticalAlignment="VerticalAlignment.Center" Style="margin-bottom: 8px;">
@@ -198,7 +200,7 @@
         {
             if (n.Content is not Notification current || current.IsRead) return n;
             return n with { Content = current with { IsRead = true } };
-        }).Subscribe(_ => { }, _ => { });
+        }, Hub.JsonSerializerOptions).Subscribe(_ => { }, _ => { });
     }
 
     private void MarkAllRead()

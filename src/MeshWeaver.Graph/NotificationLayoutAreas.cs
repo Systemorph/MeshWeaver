@@ -97,7 +97,7 @@ public static class NotificationLayoutAreas
                     {
                         var current = n.Content as Notification ?? notification;
                         return n with { Content = current with { IsRead = !current.IsRead } };
-                    }).Subscribe(_ => { }, _ => { });
+                    }, ctx.Host.Hub.JsonSerializerOptions).Subscribe(_ => { }, _ => { });
                 }
                 return Task.CompletedTask;
             }));

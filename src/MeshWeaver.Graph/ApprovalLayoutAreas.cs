@@ -147,7 +147,7 @@ public static class ApprovalLayoutAreas
                         ApprovalDate = DateTimeOffset.UtcNow
                     }
                 };
-            }).Subscribe(_ => { }, _ => { });
+            }, host.Hub.JsonSerializerOptions).Subscribe(_ => { }, _ => { });
         }
 
         // Activity + notification — chain as Observables, no await in a click handler.

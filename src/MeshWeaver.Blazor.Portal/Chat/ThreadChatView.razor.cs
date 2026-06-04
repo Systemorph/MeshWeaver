@@ -942,8 +942,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         // sub-thread. The button clears once IsExecuting flips false via the
         // live thread stream (which every other reader is subscribed to on
         // the same shared cache handle).
-        cache
-            .Update(threadPath, curr => curr?.Content is MeshWeaver.AI.Thread t
+        Hub.GetMeshNodeStream(threadPath)
+            .Update(curr => curr?.Content is MeshWeaver.AI.Thread t
                 ? curr with { Content = t with { RequestedStatus = MeshWeaver.AI.ThreadExecutionStatus.Cancelled } }
                 : curr!)
             .Subscribe(
@@ -1154,7 +1154,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         if (cache is null || string.IsNullOrEmpty(threadPath)) return;
         try
         {
-            cache.Update(threadPath, node =>
+            Hub.GetMeshNodeStream(threadPath).Update(node =>
             {
                 var thread = node.Content as MeshWeaver.AI.Thread ?? new MeshWeaver.AI.Thread();
                 if (thread.SelectedAgentName == agentName && thread.SelectedModelName == modelName)
@@ -1538,7 +1538,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             var capturedId = id;
             using (accessService?.ImpersonateAsSystem())
             {
-                var stream = cache.GetStream(nodePath);
+                var stream = Hub.GetMeshNodeStream(nodePath);
                 messageSubs[id] = stream
                     .Where(n => n?.Content is not null)
                     .Subscribe(
@@ -1689,7 +1689,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             // the user opened this chat; the chip read piggybacks on that.
             using (accessService?.ImpersonateAsSystem())
             {
-                var stream = cache.GetStream(path);
+                var stream = Hub.GetMeshNodeStream(path);
                 delegationSubs[path] = stream
                     .Where(n => n is not null)
                     .Subscribe(

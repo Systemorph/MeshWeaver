@@ -347,7 +347,12 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
     /// answers <see cref="GetPermissionRequest"/>; consulting it keeps the
     /// gate aligned with every other access decision in the system.</para>
     /// </summary>
-    public IObservable<MeshNode> GetStream(string path)
+    // 🚨 PRIVATE raw read — emits untyped JsonElement Content. The interface no
+    // longer exposes a bare GetStream(string): callers MUST pass
+    // JsonSerializerOptions (GetStream(path, options)) so Content is deserialized
+    // to its domain type. A bare read fed `node.Content as MyType` → null and the
+    // wedged-thread / never-dispatching-watcher bug class.
+    private IObservable<MeshNode> GetStreamRaw(string path)
     {
         var shared = GetEntry(path).Shared;
 
@@ -449,7 +454,12 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
             $"User '{user.ObjectId}' lacks Read permission on '{path}'"));
     }
 
-    public IObservable<MeshNode> Update(string path, Func<MeshNode, MeshNode> update)
+    // 🚨 PRIVATE raw write — does NOT deserialize JsonElement Content before the
+    // lambda. The interface no longer exposes a bare Update(path, fn): callers
+    // MUST pass JsonSerializerOptions (Update(path, fn, options)) so an update
+    // reading `curr.Content as MyType` sees the real value instead of null (which
+    // returned the node unchanged → the write silently no-opped).
+    private IObservable<MeshNode> UpdateRaw(string path, Func<MeshNode, MeshNode> update)
     {
         // The underlying MeshNodeStreamHandle.Update already wraps with
         // CarryAccessContext, so writes through the cache automatically carry
@@ -603,7 +613,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
     /// <see cref="IMeshNodeStreamCache.GetStream(string, JsonSerializerOptions)"/>.
     /// </summary>
     public IObservable<MeshNode> GetStream(string path, JsonSerializerOptions options) =>
-        GetStream(path).Select(node => ConvertContentJsonElementToTyped(node, options));
+        GetStreamRaw(path).Select(node => ConvertContentJsonElementToTyped(node, options));
 
     /// <summary>
     /// Caller-typed write: deserialises the current MeshNode's <c>Content</c>
@@ -624,9 +634,9 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
             var updated = update(typed);
             return ConvertContentTypedToJsonElement(updated, options);
         };
-        // Route through the same per-path serial queue as the untyped Update —
+        // Route through the same per-path serial queue as the untyped write —
         // typed and untyped writers to the same path must not race each other.
-        return Update(path, wrapped);
+        return UpdateRaw(path, wrapped);
     }
 
     private static MeshNode ConvertContentJsonElementToTyped(MeshNode node, JsonSerializerOptions options)

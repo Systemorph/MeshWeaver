@@ -140,7 +140,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             // making writes invisible to readers of the cached stream. See
             // Doc/GUI/ItemTemplateMeshNodeStreamBinding.
             if (_cache is not null && !IsOwn && _path is not null)
-                return _cache.GetStream(_path)
+                return _cache.GetStream(_path, _jsonOptions)
                     .Where(n => n is not null)
                     .Subscribe(typedObserver);
 
@@ -371,7 +371,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             (IsOwn
                 ? UpdateOwn(wrappedUpdate)
                 : _cache is not null && _path is not null
-                    ? _cache.Update(_path, wrappedUpdate)
+                    ? _cache.Update(_path, wrappedUpdate, _jsonOptions)
                     : UpdateRemote(wrappedUpdate))
                 .CarryAccessContext(_workspace.Hub.ServiceProvider)
                 // The post-update emission also goes through the typed
@@ -823,6 +823,20 @@ public static class MeshNodeStreamExtensions
             as IMeshNodeStreamCache;
         return new MeshNodeStreamHandle(workspace, path, cache);
     }
+
+    /// <summary>
+    /// Hub-scoped convenience: the canonical way to read/write a single MeshNode
+    /// by path from anywhere holding an <see cref="IMessageHub"/>. Abstracts away
+    /// the <c>GetWorkspace()</c> hop — callers write <c>hub.GetMeshNodeStream(path)</c>,
+    /// never <c>hub.GetWorkspace().GetMeshNodeStream(path)</c>.
+    /// <para>The returned handle ALWAYS types <see cref="MeshNode.Content"/> (no
+    /// callsite touches <c>JsonSerializerOptions</c>) and routes cross-hub
+    /// reads/writes through the shared <see cref="IMeshNodeStreamCache"/>. This is
+    /// the replacement for direct <c>cache.GetStream(path)</c> /
+    /// <c>cache.Update(path, fn)</c> — those untyped overloads are gone.</para>
+    /// </summary>
+    public static MeshNodeStreamHandle GetMeshNodeStream(this IMessageHub hub, string path)
+        => hub.GetWorkspace().GetMeshNodeStream(path);
 
     /// <summary>
     /// Like <see cref="GetMeshNodeStream(IWorkspace, string)"/> but bypasses the

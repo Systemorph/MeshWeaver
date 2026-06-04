@@ -1,5 +1,6 @@
 using System.Reactive.Linq;
 using MeshWeaver.Graph;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
@@ -8,7 +9,7 @@ namespace MeshWeaver.Blazor.Components;
 
 /// <summary>
 /// Code-behind for <see cref="MeshNodeThumbnailView"/>. Subscribes to
-/// <see cref="IMeshNodeStreamCache.GetStream(string)"/> on the bound
+/// <c>IMeshNodeStreamCache.GetStream</c> on the bound
 /// <see cref="MeshNodeThumbnailControl.NodePath"/> and refreshes title /
 /// image-url on every emission.
 ///
@@ -44,8 +45,7 @@ public partial class MeshNodeThumbnailView
         // Backend layout areas should pass NodePath only; this subscription does the lookup.
         if (string.IsNullOrEmpty(NodePath)) return;
 
-        var cache = Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-        AddBinding(cache.GetStream(NodePath)
+        AddBinding(Hub.GetMeshNodeStream(NodePath)
             .Where(node => node is not null)
             .DistinctUntilChanged()
             .Subscribe(node =>

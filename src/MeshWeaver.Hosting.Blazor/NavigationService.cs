@@ -459,8 +459,7 @@ internal class NavigationService : INavigationService
                 {
                     try
                     {
-                        var cache = _hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-                        cache.Update(prerenderedPath, current => current with { PreRenderedHtml = html })
+                        _hub.GetMeshNodeStream(prerenderedPath).Update(current => current with { PreRenderedHtml = html })
                             .Subscribe(_ => { }, ex =>
                                 _hub.ServiceProvider.GetService<ILogger<NavigationService>>()
                                     ?.LogWarning(ex, "Failed to persist PreRenderedHtml for {Path}", prerenderedPath));

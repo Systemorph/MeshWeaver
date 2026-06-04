@@ -160,7 +160,7 @@ public class MeshNodeReadAsSystemTest(ITestOutputHelper output) : MonolithMeshTe
 
         var cache = Mesh.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
 
-        var node = cache.GetStream(nodePath)
+        var node = cache.GetStream(nodePath, Mesh.JsonSerializerOptions)
             .Should().Within(28.Seconds()).Match(n => n is not null);
 
         node.Should().NotBeNull();

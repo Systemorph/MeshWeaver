@@ -2,6 +2,7 @@ using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
@@ -12,7 +13,7 @@ namespace MeshWeaver.Blazor.Components;
 /// <summary>
 /// Code-behind for <see cref="CompileProgressIndicator"/>. When a
 /// <c>NodeTypePath</c> is provided, subscribes via
-/// <see cref="IMeshNodeStreamCache.GetStream(string)"/> on that path and surfaces
+/// <c>IMeshNodeStreamCache.GetStream</c> on that path and surfaces
 /// progress whenever <c>NodeTypeDefinition.CompilationStatus = Compiling</c>.
 /// Without a path, falls back to the global synced
 /// <c>nodeType:NodeType</c> query.
@@ -68,8 +69,7 @@ public partial class CompileProgressIndicator : IDisposable
             // Single-NodeType mode: subscribe to that node's live stream
             // through IMeshNodeStreamCache — process-wide shared handle,
             // joined by every GUI watching the same NodeType.
-            var cache = Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-            compileObs = cache.GetStream(NodeTypePath)
+            compileObs = Hub.GetMeshNodeStream(NodeTypePath)
                 .Select(n => n?.Content is NodeTypeDefinition def
                              && def.CompilationStatus is CompilationStatus.Compiling or CompilationStatus.Error
                     ? new CompileState(NodeTypePath, def.CompilationStatus,
@@ -137,8 +137,7 @@ public partial class CompileProgressIndicator : IDisposable
         _activitySub = null;
         if (!active || string.IsNullOrEmpty(activityPath)) return;
 
-        var cache = Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-        _activitySub = cache.GetStream(activityPath)
+        _activitySub = Hub.GetMeshNodeStream(activityPath)
             .Select(n => (n?.Content as ActivityLog)?.Messages is { Count: > 0 } msgs
                 ? msgs[^1].Message
                 : null)

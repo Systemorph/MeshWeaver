@@ -44,11 +44,11 @@ internal static class ThreadExecution
     ///
     /// Use this for one-off cell updates from outside the streaming loop
     /// (recovery, "Allocating agent…" placeholders). Writes via
-    /// <see cref="IMeshNodeStreamCache.Update(string, System.Func{MeshNode, MeshNode})"/> — the same shared handle the
+    /// <c>IMeshNodeStreamCache.Update</c> — the same shared handle the
     /// GUI subscribers read from, so the patch is observed in order.
     /// </summary>
     internal static void UpdateResponseCell(
-        IMeshNodeStreamCache cache,
+        IMessageHub hub,
         string responsePath,
         string threadPath,
         string responseMsgId,
@@ -56,7 +56,7 @@ internal static class ThreadExecution
         Func<ThreadMessage, ThreadMessage> mutate,
         ILogger? logger)
     {
-        cache.Update(responsePath, node =>
+        hub.GetMeshNodeStream(responsePath).Update(node =>
         {
             var current = node?.Content as ThreadMessage ?? new ThreadMessage
             {
@@ -170,7 +170,15 @@ internal static class ThreadExecution
         // forever): the live-path "observer dies" deadlock. On fault, re-establish.
         IDisposable? sub = null;
         var disposed = false;
-        void Establish() => sub = cache.GetStream(threadPath)
+        // 🚨 TYPED overload (pass JsonSerializerOptions). The bare
+        // cache.GetStream(path) emits raw JsonElement Content (the cache hub
+        // doesn't know domain types), so `n.Content as MeshThread` would return
+        // NULL → Status null → the .Where(== StartingExecution) below never
+        // matches → the claimed round never commits to Executing → deterministic
+        // dispatch hang (the resubmit/second-round stall). The cache stream is
+        // cross-hub here (thread node is owned by parentHub, read on _Exec), so
+        // Content always arrives serialized.
+        void Establish() => sub = cache.GetStream(threadPath, execHub.JsonSerializerOptions)
             // Pair each emission with its current Status so DistinctUntilChanged
             // dedupes on the Status field only — concurrent field updates that
             // happen while Status stays StartingExecution must NOT re-fire.
@@ -534,7 +542,7 @@ internal static class ThreadExecution
                     : tc with { Result = "Cancelled (server restarted)", IsSuccess = false })
                 .ToImmutableList() ?? ImmutableList<ToolCallEntry>.Empty;
 
-            UpdateResponseCell(cache, responsePath, threadPath, responseMsgId, mainEntity,
+            UpdateResponseCell(workspace.Hub, responsePath, threadPath, responseMsgId, mainEntity,
                 msg => msg with
                 {
                     Text = msg.Text ?? "",
@@ -701,7 +709,7 @@ internal static class ThreadExecution
             logger.LogDebug("[ThreadExec] PUSH_TO_MSG: responsePath={ResponsePath}, textLen={TextLen}, toolCalls={ToolCalls}, updatedNodes={UpdatedNodes}, status={Status}",
                 curResponsePath, text.Length, toolCalls.Count, updatedNodes.Count, status?.ToString() ?? "(preserve)");
 
-            var updateObs = cache.Update(curResponsePath, node =>
+            var updateObs = hub.GetMeshNodeStream(curResponsePath).Update(node =>
             {
                 var current = node?.Content as ThreadMessage ?? new ThreadMessage
                 {
@@ -913,8 +921,9 @@ internal static class ThreadExecution
                 IObservable<MeshNode?> contextNodeObs;
                 if (!string.IsNullOrEmpty(request.ContextPath))
                 {
-                    // Read context node via cache (shared upstream, no per-_Exec handle).
-                    contextNodeObs = cache.GetStream(request.ContextPath)
+                    // Read context node via the typed handle (routes cross-hub
+                    // through the shared cache, deserializes Content).
+                    contextNodeObs = hub.GetMeshNodeStream(request.ContextPath)
                         .Select(n => (MeshNode?)n)
                         .Where(v => v != null)
                         .Take(1)
@@ -1719,7 +1728,7 @@ internal static class ThreadExecution
                     // the error so the bubble shows something instead of an empty
                     // "Allocating agent..." placeholder.
                     var responsePath = $"{threadPath}/{responseMsgId}";
-                    UpdateResponseCell(cache, responsePath, threadPath, responseMsgId,
+                    UpdateResponseCell(parentHub, responsePath, threadPath, responseMsgId,
                         mainEntity: threadPath,
                         msg => msg with
                         {
@@ -2180,8 +2189,7 @@ internal static class ThreadExecution
         // exact post-write state without going through IMeshQueryCore (which lags).
         // Walk the thread's Messages property for the cell IDs (authoritative ordered
         // list of cells in this thread).
-        var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-        return cache.GetStream(threadPath)
+        return hub.GetMeshNodeStream(threadPath)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(10))
             .Select(threadNode => threadNode.Content as MeshThread)
@@ -2205,7 +2213,7 @@ internal static class ThreadExecution
                 // (warn + proceed with partial / throw if zero loaded).
                 var cellLookups = cellIds
                     .Select(id =>
-                        cache.GetStream($"{threadPath}/{id}")
+                        hub.GetMeshNodeStream($"{threadPath}/{id}")
                             .Where(n => n.Content is ThreadMessage m && !string.IsNullOrEmpty(m.Text))
                             .Take(1)
                             .Timeout(perCellTimeout)
@@ -2270,8 +2278,7 @@ internal static class ThreadExecution
     private static IObservable<IReadOnlyList<ThreadMessage>> LoadPriorUserMessagesFromMesh(
         IMessageHub hub, string threadPath, string? excludeMessageId, ILogger<AgentChatClient> logger)
     {
-        var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-        return cache.GetStream(threadPath)
+        return hub.GetMeshNodeStream(threadPath)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(10))
             .Select(threadNode => threadNode.Content as MeshThread)
@@ -2291,7 +2298,7 @@ internal static class ThreadExecution
                 // Catch returns sentinel null so a single slow cell doesn't strand
                 // the load. See AsynchronousCalls.md → "Subscribe-all-upfront cell loading".
                 var cellLookups = cellIds.Select(id =>
-                    cache.GetStream($"{threadPath}/{id}")
+                    hub.GetMeshNodeStream($"{threadPath}/{id}")
                         .Take(1)
                         .Timeout(TimeSpan.FromSeconds(5))
                         .Select(n => (MeshNode?)n)

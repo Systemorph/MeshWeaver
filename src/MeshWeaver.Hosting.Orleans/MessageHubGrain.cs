@@ -105,7 +105,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 pathResolver.ResolvePath(addressPath)
                     .Where(r => r is { Node: not null })
                     .Select(r => r!.Node!),
-                streamCache.GetStream(addressPath));
+                streamCache.GetStream(addressPath, meshHub.JsonSerializerOptions));
         }
 
         // Non-blocking activation: subscribe to the source stream; when it emits a

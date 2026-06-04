@@ -477,7 +477,8 @@
             // needed — the cache owns the upstream lifetime.
             if (_cache == null) return Task.FromResult(false);
             _cache.Update(BoundAutoSaveAddress,
-                    current => current with { Content = new MarkdownContent { Content = content } })
+                    current => current with { Content = new MarkdownContent { Content = content } },
+                    Hub.JsonSerializerOptions)
                 .Subscribe(
                     _ => { },
                     ex => Logger.LogWarning(ex,

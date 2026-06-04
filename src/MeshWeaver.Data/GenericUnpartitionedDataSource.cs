@@ -12,7 +12,7 @@ namespace MeshWeaver.Data;
 
 /// <summary>
 /// Pure-reflection replacement for the deleted <c>DelegateCache.InvokeAsFunction</c>.
-/// Instantiates an open generic instance method and invokes it on <paramref name="target"/>.
+/// Instantiates an open generic instance method and invokes it on <c>target</c>.
 /// <para>No compiled-delegate cache: the old <c>DelegateCache</c> kept a process-wide static
 /// <c>CreatableObjectStore&lt;Token, Delegate&gt;</c> whose <c>Token</c> held the generic type
 /// argument — pinning a dynamically-compiled NodeType's <c>AssemblyLoadContext</c> for the

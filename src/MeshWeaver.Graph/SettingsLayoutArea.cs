@@ -780,7 +780,7 @@ public static class SettingsLayoutArea
                     if (node.Path is { Length: > 0 } metaPath)
                     {
                         var cache = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-                        cache.Update(metaPath, current => updatedMeta.ApplyTo(current))
+                        cache.Update(metaPath, current => updatedMeta.ApplyTo(current), host.Hub.JsonSerializerOptions)
                             .Subscribe(_ => { }, _ => { });
                     }
                 }));

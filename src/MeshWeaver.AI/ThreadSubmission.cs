@@ -635,9 +635,8 @@ internal static class ThreadSubmissionServer
                     // duplicate and must not re-enter ExecuteMessageAsync.
                     if (!didCommitThisEmission) return;
 
-                    var allocCache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
                     ThreadExecution.UpdateResponseCell(
-                        allocCache, responsePath, threadPath, responseMsgId, mainEntity,
+                        hub, responsePath, threadPath, responseMsgId, mainEntity,
                         msg => msg with { Text = "Allocating agent...", Status = ThreadMessageStatus.Streaming },
                         logger);
 
@@ -677,9 +676,8 @@ internal static class ThreadSubmissionServer
                 // Resume into the EXISTING response cell — no CreateNodeRequest.
                 // Reset its streaming state (clear the partial text + tool calls
                 // left by the interrupted round) and commit directly.
-                var resumeCache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
                 ThreadExecution.UpdateResponseCell(
-                    resumeCache, responsePath, threadPath, responseMsgId, mainEntity,
+                    hub, responsePath, threadPath, responseMsgId, mainEntity,
                     msg => msg with
                     {
                         Text = "",

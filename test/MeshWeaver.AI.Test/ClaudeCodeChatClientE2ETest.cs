@@ -41,7 +41,8 @@ public class ClaudeCodeChatClientE2ETest
             configDir: null, oauthToken: token);
 
         var response = await client.GetResponseAsync(
-            [new ChatMessage(ChatRole.User, "Reply with exactly the word: OK")]);
+            [new ChatMessage(ChatRole.User, "Reply with exactly the word: OK")],
+            cancellationToken: TestContext.Current.CancellationToken);
 
         response.Text.Should().NotBeNullOrWhiteSpace();
     }

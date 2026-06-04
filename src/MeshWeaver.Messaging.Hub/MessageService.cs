@@ -54,7 +54,7 @@ public class MessageService : IMessageService
     private bool draining;
 
     /// <summary>
-    /// Per-message deferral timeout. A message that sits in <see cref="deferredBuffer"/>
+    /// Per-message deferral timeout. A message that sits in <see cref="deferredQueue"/>
     /// longer than this is failed back to the sender as a <see cref="DeliveryFailure"/>
     /// instead of hanging. Surfaces stuck-init scenarios (e.g. NodeType compile that
     /// never completes) as actionable errors rather than silent timeouts.
@@ -62,7 +62,7 @@ public class MessageService : IMessageService
     private static readonly TimeSpan DeferralTimeout = TimeSpan.FromSeconds(30);
 
     /// <summary>
-    /// Tracks every delivery currently in <see cref="deferredBuffer"/>. Removed
+    /// Tracks every delivery currently in <see cref="deferredQueue"/>. Removed
     /// when <see cref="ProcessDeferredMessage"/> drains it. The deferral-timeout
     /// timer fires <see cref="ReportFailure"/> for any entry still here when its
     /// deadline elapses.

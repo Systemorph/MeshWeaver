@@ -264,8 +264,7 @@ public static class HubThreadExtensions
         if (!string.IsNullOrEmpty(newUserText))
         {
             var cellPath = $"{threadPath}/{userMessageId}";
-            var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-            cache.Update(cellPath, node =>
+            hub.GetMeshNodeStream(cellPath).Update(node =>
             {
                 var existing = node.Content as ThreadMessage;
                 var nextContent = existing is not null

@@ -114,7 +114,7 @@ public static class ThreadStateTransitions
         if (!CanTransition(thread.Status, next.Status))
         {
             logger?.LogWarning(
-                "[ThreadState] Refused illegal transition {From}->{To} on {Path} — staying {From}.",
+                "[ThreadState] Refused illegal transition {From}->{To} on {Path} — staying put.",
                 thread.Status, next.Status, current.Path);
             return current;
         }
