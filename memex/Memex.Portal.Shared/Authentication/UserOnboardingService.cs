@@ -176,6 +176,14 @@ public sealed class UserOnboardingService(
         return Observable.Using(
             () => accessService.ImpersonateAsSystem(),
             _ => meshService.CreateNode(assignment)
+                // Idempotent / self-repairing: a leftover _Access from a half-finished prior
+                // onboarding (the user retried) must not dead-end with "Node already exists" —
+                // fold into an update so the grant reaches the intended content and onboarding
+                // completes. Same pattern as CreateUser's partition-root write above.
+                .Catch<MeshNode, Exception>(ex =>
+                    ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase)
+                        ? meshService.UpdateNode(assignment)
+                        : Observable.Throw<MeshNode>(ex))
                 .Do(__ => logger?.LogInformation(
                     "Onboarding: granted self-Admin to '{Username}' at {Path}", username, assignment.Path)));
     }
@@ -206,6 +214,12 @@ public sealed class UserOnboardingService(
         return Observable.Using(
             () => accessService.ImpersonateAsSystem(),
             _ => meshService.CreateNode(assignment)
+                // Idempotent / self-repairing (see GrantSelfAdmin): a retried first-user
+                // onboarding must not fail because Admin/_Access/{user}_Access already exists.
+                .Catch<MeshNode, Exception>(ex =>
+                    ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase)
+                        ? meshService.UpdateNode(assignment)
+                        : Observable.Throw<MeshNode>(ex))
                 .Do(__ => logger?.LogInformation(
                     "Onboarding: granted platform Admin (first user) to '{Username}' at Admin/_Access", username)));
     }
