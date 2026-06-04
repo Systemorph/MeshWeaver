@@ -225,71 +225,9 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
         }
     }
 
-    /// <summary>
-    /// Resubmit test: after execution completes, click "Resubmit" (ArrowSync).
-    /// The HandleResubmitMessage handler must not deadlock Ã¢â‚¬â€ it uses
-    /// meshService.CreateNode (Observable) + workspace.UpdateMeshNode (non-blocking).
-    /// </summary>
-    [Fact(Timeout = 60000)]
-    public void Resubmit_AfterExecution_DoesNotDeadlock()
-    {
-        var client = GetClient();
-
-        // 1. Create and execute a thread
-        var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Resubmit deadlock test", "TestUser");
-        var threadPath = CreateNode(client, threadNode, "TestUser");
-
-        client.SubmitMessage(
-            threadPath,
-            "First message",
-            contextPath: "TestUser");
-        var msgIds = ObserveThreadMessages(client, threadPath)
-            .Should().Within(45.Seconds()).Match(ids => ids.Count >= 2);
-        Output.WriteLine($"Initial messages: [{string.Join(", ", msgIds)}]");
-
-        // Wait for execution to complete
-        GetContent<MeshThread>(client, threadPath)
-            .Should().Within(45.Seconds()).Match(t => t?.IsExecuting == false);
-        Output.WriteLine("Initial execution complete");
-
-        // 2. Resubmit Ã¢â‚¬â€ sends ThreadSubmission.ApplyResubmit to the thread grain.
-        //    This was the original deadlock: the handler subscribed to workspace streams.
-        //    Now uses Observable + workspace.UpdateMeshNode.
-        // 🚨 Wait for the SETTLED state (IsExecuting=false AND msgIds changed),
-        // not just any observable count>=2 emission. Mid-resubmit transitions
-        // briefly show 3 messages [user, old-response, new-response] before the
-        // truncate-then-re-add settles to [user, new-response] = 2. The prior
-        // predicate matched the intermediate state and the [1]-not-old assertion
-        // failed because msgIds[1] (old response) was still visible.
-        var workspace = client.GetWorkspace();
-
-        Output.WriteLine("Resubmitting via workspace.ResubmitMessage...");
-        client.ResubmitMessage(
-            threadPath, msgIds[0],
-            newUserText: "Resubmitted message");
-
-        // Observe the SETTLED resubmitted state on the live replaying stream:
-        // IsExecuting=false AND messages changed from the original set. Mid-resubmit
-        // transitions briefly show 3 messages before the truncate-then-re-add settles
-        // to 2 — the IsExecuting:false guard filters those intermediate emissions.
-        var newThread = workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Select(nodes => nodes?.FirstOrDefault(n => n.Path == threadPath)?.Content as MeshThread)
-            .Should().Within(45.Seconds()).Match(t => t is { IsExecuting: false }
-                && t.Messages.Count >= 2
-                && !t.Messages.SequenceEqual(msgIds));
-
-        // 3. Wait for message IDs to change Ã¢â‚¬â€ if deadlocked, this times out
-        var newMsgIds = (IReadOnlyList<string>)newThread!.Messages;
-        newMsgIds.Should().HaveCount(2,
-            "resubmit should keep user message and replace response");
-        newMsgIds[0].Should().Be(msgIds[0], "user message should be preserved");
-        newMsgIds[1].Should().NotBe(msgIds[1], "response should be a new cell");
-        Output.WriteLine($"After resubmit: [{string.Join(", ", newMsgIds)}]");
-
-        // 4. Resubmit succeeded Ã¢â‚¬â€ messages changed, no deadlock.
-        // The execution will complete asynchronously (streaming on _Exec hub).
-        Output.WriteLine("Resubmit completed Ã¢â‚¬â€ messages updated, no deadlock!");
-    }
+    // Resubmit_AfterExecution_DoesNotDeadlock was split out into its own class
+    // (OrleansResubmitDeadlockTest) so it no longer runs back-to-back with the
+    // heavy delegation chain above -- see that file's class summary for why.
 }
 
 /// <summary>

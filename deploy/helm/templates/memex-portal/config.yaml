@@ -68,11 +68,21 @@ data:
   Social__LinkedIn__ClientId: "{{ .Values.config.memex_portal.Social__LinkedIn__ClientId | default "" }}"
   # ---- Onboarding: invitation-only gate (first user always bootstraps) ------
   Features__Onboarding__InvitationOnly: "{{ .Values.config.memex_portal.Features__Onboarding__InvitationOnly | default "false" }}"
-  # ---- Outbound email (Microsoft Graph /sendMail) — invitations + notifications.
-  # Non-secret here; Email__ClientSecret comes from the SecretProviderClass. When
-  # Email__Enabled is empty/false the portal uses the NoOp sender (no mail sent).
+  # ---- System email (Microsoft Graph) — BIDIRECTIONAL. Outbound invitations + notifications
+  # (/sendMail, Mail.Send app permission) AND optional inbound email→agent channel (inbox
+  # change-notification subscription, Mail.ReadWrite app permission). Non-secret here;
+  # Email__ClientSecret comes from the SecretProviderClass. When Email__Enabled is empty/false
+  # the portal uses the NoOp sender (no mail sent).
   Email__Enabled: "{{ .Values.config.memex_portal.Email__Enabled | default "false" }}"
-  Email__NoReplyAddress: "{{ .Values.config.memex_portal.Email__NoReplyAddress | default "" }}"
+  # The mailbox the portal sends AND receives AS (a real/shared mailbox the app may send-as).
+  # NOTE: binds EmailOptions.MailboxAddress — the old key Email__NoReplyAddress no longer binds.
+  Email__MailboxAddress: "{{ .Values.config.memex_portal.Email__MailboxAddress | default "" }}"
   Email__TenantId: "{{ .Values.config.memex_portal.Email__TenantId | default "" }}"
   Email__ClientId: "{{ .Values.config.memex_portal.Email__ClientId | default "" }}"
   Email__UseManagedIdentity: "{{ .Values.config.memex_portal.Email__UseManagedIdentity | default "false" }}"
+  # Inbound email→agent channel (optional). Requires Mail.ReadWrite + a public WebhookBaseUrl;
+  # the webhook is {WebhookBaseUrl}/api/email. SubscriptionClientState is a per-deployment random
+  # value echoed by Graph on every notification (the webhook rejects mismatches).
+  Email__InboundEnabled: "{{ .Values.config.memex_portal.Email__InboundEnabled | default "false" }}"
+  Email__WebhookBaseUrl: "{{ .Values.config.memex_portal.Email__WebhookBaseUrl | default "" }}"
+  Email__SubscriptionClientState: "{{ .Values.config.memex_portal.Email__SubscriptionClientState | default "" }}"
