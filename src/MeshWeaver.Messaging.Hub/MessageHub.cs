@@ -483,108 +483,73 @@ public sealed class MessageHub : IMessageHub
     /// </summary>
     private static readonly long SlowDispatchTicks = (long)(TimeSpan.TicksPerMillisecond * 500);
 
-    async Task<IMessageDelivery> IMessageHub.HandleMessageAsync(
+    // Reactive end-to-end: IObservable, no async/await, no Task in the signature.
+    // Runs INLINE on the turn thread (Defer → factory on Subscribe); a synchronous
+    // rule chain completes inline, so the turn never leaves the thread. AccessContext
+    // is set on entry and restored on terminate — in Select (success) BEFORE
+    // FinishDelivery and in Catch (error) — the reactive equivalent of the old
+    // try/finally restore.
+    IObservable<IMessageDelivery> IMessageHub.HandleMessageAsync(
         IMessageDelivery delivery,
         CancellationToken cancellationToken
-    )
+    ) => Observable.Defer(() =>
     {
         ++Version;
         var dispatchStartTicks = Stopwatch.GetTimestamp();
 
-        // Trace is off in steady-state runs (incl. all CI/test profiles); the
-        // IsEnabled gate skips both the message-template formatter AND the
-        // per-arg evaluation (GetType().Name, params object[] boxing of long
-        // Version, etc). Cache GetType().Name once for the few callers that DO
-        // need it within this method.
         var traceEnabled = logger.IsEnabled(LogLevel.Trace);
         string? messageTypeName = traceEnabled ? delivery.Message.GetType().Name : null;
         if (traceEnabled)
             logger.LogTrace("MESSAGE_FLOW: HUB_HANDLE_START | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Version: {Version}",
                 messageTypeName, Address, delivery.Id, Version);
 
-        // Log only important messages during disposal
         if (IsDisposing && delivery.Message is ShutdownRequest shutdownReq)
-        {
             logger.LogDebug("Processing ShutdownRequest in {Address} : RunLevel={RunLevel}, Version={RequestVersion}, Expected={ExpectedVersion}",
                 Address, shutdownReq.RunLevel, shutdownReq.Version, Version - 1);
-        }
 
-        // 🚨 Systematic AccessContext propagation: stamp this hub's AccessService
-        // AsyncLocal Context from the SENDER's delivery.AccessContext for the
-        // duration of handling. Every downstream read (SecurityService probes,
-        // workspace.GetQuery, MeshService.Query, validator chains) and
-        // every Post made from inside the handler picks up the originating
-        // user's identity through AsyncLocal automatically — no per-callsite
-        // wiring, no per-handler delivery.AccessContext threading.
-        //
-        // Previously only AccessControlPipeline's per-attribute branch did this,
-        // and ONLY when delivery.AccessContext.Roles was non-empty. Background
-        // / system / hub-impersonated deliveries (empty Roles) left AsyncLocal
-        // at whatever the action-block thread happened to inherit — usually
-        // System or null, which then leaked into every downstream call site
-        // (the prod symptom that drove the 2026-05-22 fixes: per-circuit
-        // dashboard queries hit singleton providers under root-AccessService
-        // and got Anonymous filtering).
-        //
-        // The pair (set on entry, restore on exit) is wrapped in try/finally so
-        // even handler exceptions can't leave the action block stamped with the
-        // wrong identity for the NEXT message.
+        // 🚨 Systematic AccessContext propagation — stamp the SENDER's identity for
+        // the duration of handling. Only USER identities propagate to AsyncLocal;
+        // hub-shaped principals MUST NOT leak. See Doc/Architecture/AccessContextPropagation.md.
         var prevContext = accessService.Context;
-        // Only propagate USER identities to AsyncLocal. Hub-shaped principals
-        // (sync/, mesh/, node/, activity/, portal/) may legitimately ride
-        // delivery.AccessContext for the AccessControl check (e.g. SubscribeRequest
-        // from a hub-init data source) but MUST NOT leak into AsyncLocal — they
-        // would then propagate as fake user identity into every downstream write.
-        // See Doc/Architecture/AccessContextPropagation.md.
         if (delivery.AccessContext is not null
             && !AccessService.LooksLikeHubPrincipal(delivery.AccessContext.ObjectId))
             accessService.SetContext(delivery.AccessContext);
 
-        try
-        {
-            if (rules.First != null)
-            {
-                if (traceEnabled)
-                    logger.LogTrace("MESSAGE_FLOW: HUB_PROCESSING_RULES | {MessageType} | Hub: {Address} | MessageId: {MessageId} | RuleCount: {RuleCount}",
-                        messageTypeName, Address, delivery.Id, rules.Count);
-                // Subscribe to the reactive rule chain HERE on the action-block
-                // thread (inside the AccessContext try/finally). `await` uses Rx's
-                // awaiter for the chain's single final emission — no .ToTask().
-                // Cancellation flows through the rules' cancellationToken.
-                delivery = await HandleMessageAsync(delivery, rules.First, cancellationToken);
-            }
-            else if (traceEnabled)
-            {
-                logger.LogTrace("MESSAGE_FLOW: HUB_NO_RULES | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-                    messageTypeName, Address, delivery.Id);
-            }
-        }
-        finally
-        {
-            accessService.SetContext(prevContext);
-        }
-
-        var result = FinishDelivery(delivery);
         if (traceEnabled)
-            logger.LogTrace("MESSAGE_FLOW: HUB_HANDLE_END | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: {State}",
-                messageTypeName, Address, delivery.Id, result.State);
+            logger.LogTrace(rules.First != null
+                    ? "MESSAGE_FLOW: HUB_PROCESSING_RULES | {MessageType} | Hub: {Address} | MessageId: {MessageId}"
+                    : "MESSAGE_FLOW: HUB_NO_RULES | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
+                messageTypeName, Address, delivery.Id);
 
-        // Threshold-based slow-dispatch surfacing — only logs when a single
-        // per-message dispatch exceeds SlowDispatchTicks (500 ms). Resolves
-        // GetType().Name lazily so the fast path stays free. Goes through
-        // LogInformation so it lands in App Insights without enabling trace
-        // logging in prod.
-        var elapsedTicks = Stopwatch.GetTimestamp() - dispatchStartTicks;
-        if (elapsedTicks > SlowDispatchTicks)
-        {
-            var elapsedMs = elapsedTicks * 1000.0 / Stopwatch.Frequency;
-            logger.LogInformation(
-                "MESSAGE_FLOW: SLOW_DISPATCH | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Elapsed: {ElapsedMs:F0}ms | Sender: {Sender} | Target: {Target}",
-                messageTypeName ?? delivery.Message.GetType().Name,
-                Address, delivery.Id, elapsedMs, delivery.Sender, delivery.Target);
-        }
-        return result;
-    }
+        var chain = rules.First != null
+            ? HandleMessageAsync(delivery, rules.First, cancellationToken)
+            : Observable.Return(delivery);
+
+        return chain
+            .Select(handled =>
+            {
+                accessService.SetContext(prevContext);
+                var result = FinishDelivery(handled);
+                if (traceEnabled)
+                    logger.LogTrace("MESSAGE_FLOW: HUB_HANDLE_END | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: {State}",
+                        messageTypeName, Address, delivery.Id, result.State);
+                var elapsedTicks = Stopwatch.GetTimestamp() - dispatchStartTicks;
+                if (elapsedTicks > SlowDispatchTicks)
+                {
+                    var elapsedMs = elapsedTicks * 1000.0 / Stopwatch.Frequency;
+                    logger.LogInformation(
+                        "MESSAGE_FLOW: SLOW_DISPATCH | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Elapsed: {ElapsedMs:F0}ms | Sender: {Sender} | Target: {Target}",
+                        messageTypeName ?? delivery.Message.GetType().Name,
+                        Address, delivery.Id, elapsedMs, delivery.Sender, delivery.Target);
+                }
+                return result;
+            })
+            .Catch((Exception ex) =>
+            {
+                accessService.SetContext(prevContext);
+                return Observable.Throw<IMessageDelivery>(ex);
+            });
+    });
 
     private IMessageDelivery FinishDelivery(IMessageDelivery delivery)
     {

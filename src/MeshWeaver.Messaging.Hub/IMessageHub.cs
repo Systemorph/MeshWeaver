@@ -117,7 +117,7 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     bool OpenGate(string name);
 
 
-    internal Task<IMessageDelivery> HandleMessageAsync(
+    internal IObservable<IMessageDelivery> HandleMessageAsync(
         IMessageDelivery delivery,
         CancellationToken cancellationToken
     );
