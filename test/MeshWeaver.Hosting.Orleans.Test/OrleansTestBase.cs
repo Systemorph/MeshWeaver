@@ -66,6 +66,12 @@ public abstract class OrleansTestBase<TSiloConfigurator>(ITestOutputHelper outpu
     public override async ValueTask InitializeAsync()
     {
         await base.InitializeAsync();
+        // Own-cluster classes still wire their InMemoryStorageAdapter to the
+        // process-wide SharedOrleansFixture statics (TestSiloConfigurator /
+        // TestClientConfigurator). Reset them here too so a prior class's leftover
+        // nodes / swapped chat factory don't bleed into this fresh cluster — see
+        // SharedOrleansFixture.ResetSharedState for the full rationale.
+        SharedOrleansFixture.ResetSharedState();
         var builder = new TestClusterBuilder();
         builder.Options.InitialSilosCount = InitialSilosCount;
         builder.AddSiloBuilderConfigurator<TSiloConfigurator>();

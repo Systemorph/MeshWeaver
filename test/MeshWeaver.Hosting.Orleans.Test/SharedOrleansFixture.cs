@@ -79,8 +79,43 @@ public class SharedOrleansFixture : IAsyncLifetime
 
     private sealed record ClientRegistration(IMessageHub Hub, IReadOnlyList<IAsyncDisposable> Subscriptions);
 
+    /// <summary>
+    /// 🚨 Per-class isolation guard — call at the START of every cluster init (this
+    /// fixture AND <see cref="OrleansTestBase{TSiloConfigurator}"/>, which both wire
+    /// their <c>InMemoryStorageAdapter</c> to these statics).
+    ///
+    /// <para>Each Orleans test class boots its OWN cluster (see
+    /// <see cref="OrleansSharedTestBase"/>) for grain isolation — but
+    /// <see cref="SharedNodes"/>, <see cref="SharedPartitionObjects"/> and
+    /// <see cref="SwappableFactory"/> are process-wide STATICS. Orleans instantiates
+    /// the silo/client configurators via <c>new()</c>, so a per-cluster instance
+    /// can't be injected — the static is the only channel the silo + client DI
+    /// containers can both reach. Those statics defeat the per-class cluster
+    /// isolation unless reset: a prior class's leftover nodes, or a never-reset
+    /// swapped chat factory (a <c>finally</c> that was skipped, or method-order),
+    /// bleed into this class's fresh cluster. That is the root of the
+    /// "passes in isolation, 45 s observable timeout / catastrophic LifetimeScope
+    /// disposal in the full assembly" Orleans flake
+    /// (<c>Resubmit_AfterExecution_DoesNotDeadlock</c> et al.).</para>
+    ///
+    /// <para>Resetting at the START of init — before <c>DeployAsync</c> — gives every
+    /// class a clean slate. Safe because classes run strictly sequentially
+    /// (<c>xunit.runner.json</c>: <c>parallelizeAssembly:false</c>,
+    /// <c>maxParallelThreads:1</c>) and nothing depends on cross-class accumulation
+    /// (verified: no live <c>[Collection]</c> users, no reader of prior-class
+    /// <see cref="SharedNodes"/> data).</para>
+    /// </summary>
+    internal static void ResetSharedState()
+    {
+        SharedNodes.Clear();
+        SharedPartitionObjects.Clear();
+        SwappableFactory.Reset();
+    }
+
     public async ValueTask InitializeAsync()
     {
+        ResetSharedState();
+
         var builder = new TestClusterBuilder();
         // Single-silo: avoids per-silo persistence isolation. Both writer (mesh hub)
         // and reader (per-Thread/per-Message grain) share the same singleton
