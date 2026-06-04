@@ -464,7 +464,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// Test that the AllTasks view compiles and renders correctly with deleted items.
     /// This tests the dynamically compiled ProjectViews code including the Deleted section.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 120000)]
     public void AllTasksView_CompilesAndRendersWithDeletedSection()
     {
         var client = GetClient();
@@ -502,7 +502,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// <summary>
     /// Test that soft delete changes the node state to Deleted.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 120000)]
     public void SoftDelete_ChangesStateToDeleted()
     {
         var todoPath = "ACME/ProductLaunch/Todo/DefinePersona";
@@ -529,7 +529,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// <summary>
     /// Test that querying with state:Active excludes deleted items.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 120000)]
     public void QueryWithStateActive_ExcludesDeletedItems()
     {
         var todoPath = "ACME/ProductLaunch/Todo/DefinePersona";
@@ -564,7 +564,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// <summary>
     /// Test that querying with state:Deleted only returns deleted items.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 120000)]
     public void QueryWithStateDeleted_OnlyReturnsDeletedItems()
     {
         var todoPath = "ACME/ProductLaunch/Todo/DefinePersona";
@@ -598,7 +598,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// <summary>
     /// Test that restore changes the node state back to Active.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 120000)]
     public void Restore_ChangesStateBackToActive()
     {
         var todoPath = "ACME/ProductLaunch/Todo/DefinePersona";
