@@ -344,7 +344,17 @@ public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TType
                         isFirst = false;
                         return; // Skip processing on first emission (initialization)
                     }
-                    Synchronize(change);
+                    // A single bad change must NOT kill the data-source sync
+                    // subscription — if it does, every query/catalog fed by this
+                    // source goes stale and query-based work parks forever (the
+                    // data-layer "observer dies" deadlock behind CI query flakes).
+                    // Log and survive; the next change still flows.
+                    try { Synchronize(change); }
+                    catch (Exception syncEx)
+                    {
+                        Logger.LogWarning(syncEx,
+                            "Data source stream {Id}: Synchronize threw for a change — skipped; stream stays alive", Id);
+                    }
                 },
                 ex => Logger.LogWarning(ex, "Data source stream {Id} errored", Id))
         );
@@ -429,7 +439,17 @@ public abstract record TypeSourceBasedPartitionedDataSource<TDataSource, TTypeSo
                         isFirst = false;
                         return; // Skip processing on first emission (initialization)
                     }
-                    Synchronize(change);
+                    // A single bad change must NOT kill the data-source sync
+                    // subscription — if it does, every query/catalog fed by this
+                    // source goes stale and query-based work parks forever (the
+                    // data-layer "observer dies" deadlock behind CI query flakes).
+                    // Log and survive; the next change still flows.
+                    try { Synchronize(change); }
+                    catch (Exception syncEx)
+                    {
+                        Logger.LogWarning(syncEx,
+                            "Data source stream {Id}: Synchronize threw for a change — skipped; stream stays alive", Id);
+                    }
                 },
                 ex => Logger.LogWarning(ex, "Data source stream {Id} errored", Id))
         );
