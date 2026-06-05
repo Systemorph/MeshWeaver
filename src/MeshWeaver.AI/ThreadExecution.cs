@@ -709,7 +709,14 @@ internal static class ThreadExecution
             logger.LogDebug("[ThreadExec] PUSH_TO_MSG: responsePath={ResponsePath}, textLen={TextLen}, toolCalls={ToolCalls}, updatedNodes={UpdatedNodes}, status={Status}",
                 curResponsePath, text.Length, toolCalls.Count, updatedNodes.Count, status?.ToString() ?? "(preserve)");
 
-            var updateObs = hub.GetMeshNodeStream(curResponsePath).Update(node =>
+            // 🚨 Route the cell write through parentHub (the thread hub), NOT
+            // `hub` (the _Exec hosted hub). _Exec is created with no AddData, so
+            // hub.GetMeshNodeStream(...) → hub.GetWorkspace() throws
+            // "Configuration of message hub is inconsistent: AddData was not
+            // called." parentHub owns the workspace + resolves the same
+            // process-wide IMeshNodeStreamCache, so the cross-hub patch routes
+            // through the identical shared handle the GUI reads from.
+            var updateObs = parentHub.GetMeshNodeStream(curResponsePath).Update(node =>
             {
                 var current = node?.Content as ThreadMessage ?? new ThreadMessage
                 {
@@ -922,8 +929,13 @@ internal static class ThreadExecution
                 if (!string.IsNullOrEmpty(request.ContextPath))
                 {
                     // Read context node via the typed handle (routes cross-hub
-                    // through the shared cache, deserializes Content).
-                    contextNodeObs = hub.GetMeshNodeStream(request.ContextPath)
+                    // through the shared cache, deserializes Content). 🚨 Use
+                    // parentHub — `hub` is the _Exec hosted hub which has no
+                    // AddData, so hub.GetMeshNodeStream → hub.GetWorkspace()
+                    // throws "AddData was not called" (the throw escaped on the
+                    // WhenInitialized onNext path, wedging every round —
+                    // all thread tests timed out).
+                    contextNodeObs = parentHub.GetMeshNodeStream(request.ContextPath)
                         .Select(n => (MeshNode?)n)
                         .Where(v => v != null)
                         .Take(1)
