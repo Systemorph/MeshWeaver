@@ -161,6 +161,16 @@ internal sealed class PostgreSqlPathRoutingAdapter : IStorageAdapter
         => ResolveSchema(path) is { } def ? GetOrCreateAdapter(def) : null;
 
     /// <summary>
+    /// The CACHED per-schema <see cref="PostgreSqlStorageAdapter"/> for a path's first segment
+    /// — the SAME instance whose in-process <c>Changes</c> Subject fires on Write (resolves
+    /// <c>_</c>-prefix globals like <c>_Access</c>→<c>system_access</c> via the registered
+    /// partition). Null when the segment isn't a routable partition. Lets
+    /// <see cref="PostgreSqlPartitionedMeshQuery"/> delegate SCOPED queries to a per-schema
+    /// <see cref="PostgreSqlMeshQuery"/> that observes the live change feed.
+    /// </summary>
+    internal PostgreSqlStorageAdapter? GetSchemaAdapter(string path) => AdapterForRead(path);
+
+    /// <summary>
     /// Cold write pipeline. <b>NEVER creates a schema.</b> Provisioning is eager and
     /// gated to partition-owning creates (<c>OwnsPartitionProvisioningValidator</c> →
     /// <see cref="PostgreSqlPartitionStorageProvider.EnsurePartitionProvisioned"/>) — the

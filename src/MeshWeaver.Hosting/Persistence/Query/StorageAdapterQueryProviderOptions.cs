@@ -14,18 +14,24 @@ namespace MeshWeaver.Hosting.Persistence.Query;
 public sealed record StorageAdapterQueryProviderOptions
 {
     /// <summary>
-    /// When <see langword="true"/>, the provider <b>defers</b> (emits an empty
-    /// Initial and contributes no rows) for queries another provider in the fan-in
-    /// already owns: <em>unscoped / wildcard-first-segment</em> queries (the native
-    /// provider fans out across partitions) and <em>satellite-routed</em> queries
-    /// (the pedestrian only ever walks <c>mesh_nodes</c> and never visited satellite
-    /// tables, so it returned empty anyway — just after a slow scope walk). It still
-    /// serves <em>scoped <c>mesh_nodes</c></em> queries, which the native provider
-    /// short-circuits to empty.
+    /// When <see langword="true"/> (partitioned Postgres), the provider <b>defers</b> the query
+    /// shapes the native <c>PostgreSqlPartitionedMeshQuery</c> owns — emitting an empty Initial,
+    /// contributing no rows — so its <c>ListChildPaths</c> scope-walk (the 60-70s onboarding/storm
+    /// stall) is removed for those shapes:
+    /// <list type="bullet">
+    ///   <item><b>Unscoped / wildcard-first-segment</b> → the native provider fans out across
+    ///     partitions.</item>
+    ///   <item><b>Scoped primary (<c>mesh_nodes</c>) reads</b> → the native provider delegates
+    ///     to a per-schema <c>PostgreSqlMeshQuery</c> over the cached adapter (live deltas).</item>
+    /// </list>
+    /// It STILL serves <b>scoped satellite reads</b> (a <c>_</c>-prefixed path segment, a
+    /// satellite nodeType, or <c>source:activity</c>/<c>accessed</c>): the native delegate's
+    /// satellite Query Initial under-returns pre-existing rows, so the pedestrian remains the
+    /// live server for those (a follow-up will move them too). No rows are dropped.
     ///
-    /// <para>This removes the pedestrian's redundant <c>ListChildPaths</c> walk from
-    /// the query-merge for those query shapes — the walk that gated the cross-schema
-    /// <c>ResolvePath</c>/onboarding stall by 60-70s — without dropping any rows.</para>
+    /// <para>The pedestrian stays registered (it backs the <c>IMeshQueryCore</c> fan-in shape +
+    /// <c>Select</c>/exact-path probes). Absent (in-memory / file-system / single-schema backends)
+    /// → the pedestrian is the only query provider and behaves unchanged.</para>
     /// </summary>
-    public bool DeferUnscopedAndSatelliteToNativeProvider { get; init; }
+    public bool DeferToNativeProvider { get; init; }
 }

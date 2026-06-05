@@ -286,7 +286,8 @@ public static class PostgreSqlExtensions
             new PostgreSqlPartitionedMeshQuery(
                 sp.GetRequiredService<ICrossSchemaQueryProvider>(),
                 sp.GetService<AccessService>(),
-                sp.GetService<ILogger<PostgreSqlPartitionedMeshQuery>>()));
+                sp.GetService<ILogger<PostgreSqlPartitionedMeshQuery>>(),
+                sp.GetRequiredService<PostgreSqlPartitionStorageProvider>()));
 
         // pg_notify listener: register both the singleton and an IHostedService
         // wrapper so the LISTEN session opens at host startup. Without the
@@ -321,7 +322,7 @@ public static class PostgreSqlExtensions
         // (the pedestrian never visited satellite tables anyway).
         services.AddSingleton(new StorageAdapterQueryProviderOptions
         {
-            DeferUnscopedAndSatelliteToNativeProvider = true
+            DeferToNativeProvider = true
         });
         services.AddPartitionedCoreAndWrapperServices();
 
@@ -391,7 +392,8 @@ public static class PostgreSqlExtensions
             new PostgreSqlPartitionedMeshQuery(
                 sp.GetRequiredService<ICrossSchemaQueryProvider>(),
                 sp.GetService<AccessService>(),
-                sp.GetService<ILogger<PostgreSqlPartitionedMeshQuery>>()));
+                sp.GetService<ILogger<PostgreSqlPartitionedMeshQuery>>(),
+                sp.GetRequiredService<PostgreSqlPartitionStorageProvider>()));
 
         // Start the Admin/Partition/* subscription so writes can route — see
         // the longer comment on the same registration in the connection-string
@@ -406,7 +408,7 @@ public static class PostgreSqlExtensions
         // (the pedestrian never visited satellite tables anyway).
         services.AddSingleton(new StorageAdapterQueryProviderOptions
         {
-            DeferUnscopedAndSatelliteToNativeProvider = true
+            DeferToNativeProvider = true
         });
         services.AddPartitionedCoreAndWrapperServices();
 

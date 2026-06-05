@@ -76,6 +76,16 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
 
     internal NpgsqlDataSource BaseDataSource => _baseDataSource;
 
+    /// <summary>
+    /// The CACHED per-schema adapter (shared live <c>Changes</c> feed) for a path's first
+    /// segment, or null when not routable. Lets <see cref="PostgreSqlPartitionedMeshQuery"/>
+    /// own scoped query serving by delegating to a per-schema <see cref="PostgreSqlMeshQuery"/>.
+    /// </summary>
+    internal PostgreSqlStorageAdapter? GetSchemaAdapter(string path) => _adapter.GetSchemaAdapter(path);
+
+    /// <summary>Embedding provider for vector scoring, shared with the per-schema delegate.</summary>
+    internal IEmbeddingProvider? EmbeddingProvider => _embeddingProvider;
+
     /// <summary>Shared per-adapter read-concurrency gate (see <see cref="ReadConcurrencyGate"/>).</summary>
     internal ReadConcurrencyGate ReadGate => _readGate;
 

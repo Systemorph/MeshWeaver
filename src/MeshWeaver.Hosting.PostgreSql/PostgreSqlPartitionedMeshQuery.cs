@@ -59,18 +59,62 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
     private readonly ICrossSchemaQueryProvider _crossSchema;
     private readonly AccessService? _accessService;
     private readonly ILogger<PostgreSqlPartitionedMeshQuery>? _logger;
+    private readonly PostgreSqlPartitionStorageProvider? _partitionProvider;
     private readonly QueryParser _parser = new();
     private long _version;
+
+    // Per-schema scoped-query delegates, keyed by the CACHED adapter instance (so each shares
+    // that adapter's live in-process Changes feed). A SCOPED query — a concrete first path
+    // segment, including _-prefix globals like _Access→system_access — is served by a per-schema
+    // PostgreSqlMeshQuery (full live-delta + satellite serving). That is how THIS provider OWNS
+    // scoped serving, letting the pedestrian StorageAdapterMeshQueryProvider be retired for
+    // Postgres. See Doc/Architecture/PartitionStorageRouting.md.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<PostgreSqlStorageAdapter, PostgreSqlMeshQuery> _scopedDelegates = new();
 
     public PostgreSqlPartitionedMeshQuery(
         ICrossSchemaQueryProvider crossSchema,
         AccessService? accessService = null,
-        ILogger<PostgreSqlPartitionedMeshQuery>? logger = null)
+        ILogger<PostgreSqlPartitionedMeshQuery>? logger = null,
+        PostgreSqlPartitionStorageProvider? partitionProvider = null)
     {
         _crossSchema = crossSchema;
         _accessService = accessService;
         _logger = logger;
+        _partitionProvider = partitionProvider;
     }
+
+    /// <summary>
+    /// The per-schema <see cref="PostgreSqlMeshQuery"/> that serves a query SCOPED to the
+    /// partition holding <paramref name="path"/>'s first segment — resolved (incl. <c>_</c>-prefix
+    /// globals like <c>_Access</c>→<c>system_access</c>) to its CACHED adapter, one delegate per
+    /// adapter so it observes that adapter's live <c>Changes</c> feed (post-write re-emits work).
+    /// Null for unscoped / wildcard paths → those fan out across schemas.
+    /// </summary>
+    private PostgreSqlMeshQuery? GetDelegateForPath(string? path)
+    {
+        if (_partitionProvider is null || string.IsNullOrEmpty(path)) return null;
+        var first = FirstSegment(path);
+        if (string.IsNullOrEmpty(first) || first == "*") return null;
+        var adapter = _partitionProvider.GetSchemaAdapter(path);
+        if (adapter is null) return null;
+        return _scopedDelegates.GetOrAdd(adapter, a =>
+            new PostgreSqlMeshQuery(a, _accessService, meshConfiguration: null,
+                excludedNamespaces: null, embeddingProvider: _partitionProvider.EmbeddingProvider));
+    }
+
+    /// <summary>
+    /// The scoped delegate for a parsed query, or null when the query must fan out.
+    /// Delegates ONLY scoped primary-content (<c>mesh_nodes</c>) queries — i.e. exactly the
+    /// shapes <see cref="NeedsFanOut"/> classifies as NOT fan-out (concrete first segment,
+    /// not a satellite table, not a cross-partition activity/accessed JOIN, not wildcard).
+    /// Scoped SATELLITE queries (<c>NeedsFanOut</c> true via <c>ResolveTable != mesh_nodes</c>)
+    /// fall through to the partition-pinned cross-schema fan-out, whose UNION serves the
+    /// satellite table correctly — the per-schema delegate's satellite serving is reserved for
+    /// a follow-up (its <c>MeshQuery.Query</c> Initial under-returned pre-existing satellite
+    /// rows). The pedestrian is retired either way.
+    /// </summary>
+    private PostgreSqlMeshQuery? GetScopedDelegate(ParsedQuery parsed)
+        => NeedsFanOut(parsed) ? null : GetDelegateForPath(parsed.Path);
 
     /// <inheritdoc/>
     /// <remarks>
@@ -88,6 +132,13 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
         MeshQueryRequest request, JsonSerializerOptions options)
     {
         var parsed = ParseFirst(request);
+
+        // SCOPED → delegate to the per-schema PostgreSqlMeshQuery (live deltas + satellite
+        // serving over the cached adapter). This is the scoped serving that retires the
+        // pedestrian for Postgres; only unscoped / wildcard / activity-join queries fan out.
+        if (GetScopedDelegate(parsed) is { } scoped)
+            return scoped.Query<T>(request, options);
+
         _logger?.LogDebug(
             "[FanOut] Query decision: NeedsFanOut={NeedsFanOut} Path='{Path}' Source={Source} Query='{Q}'",
             NeedsFanOut(parsed), parsed.Path ?? "(null)", parsed.Source, request.Query);
@@ -131,6 +182,15 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
         CancellationToken ct = default)
     {
         var parsed = ParseFirst(request);
+
+        // SCOPED → delegate to the per-schema provider (it applies skip/limit/select itself).
+        if (GetScopedDelegate(parsed) is { } scoped)
+        {
+            await foreach (var item in scoped.QueryAsync(request, options, ct).ConfigureAwait(false))
+                yield return item;
+            yield break;
+        }
+
         if (!NeedsFanOut(parsed))
             yield break;
 
@@ -169,7 +229,10 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
     {
         var isTopLevel = string.IsNullOrEmpty(basePath) || (prefix?.StartsWith('/') ?? false);
         if (!isTopLevel)
-            return Observable.Return((IReadOnlyCollection<QueryResult>)Array.Empty<QueryResult>());
+            // WITHIN-PARTITION → delegate to the per-schema provider for the context partition
+            // (scoped, never fans out). This is the within-partition half the pedestrian served.
+            return GetDelegateForPath(basePath)?.Autocomplete(basePath, prefix, options, mode, limit, contextPath, context)
+                ?? Observable.Return((IReadOnlyCollection<QueryResult>)Array.Empty<QueryResult>());
 
         var effectivePrefix = (prefix ?? "").TrimStart('/');
         var ctxUser = _accessService?.Context?.ObjectId ?? _accessService?.CircuitContext?.ObjectId;
@@ -183,10 +246,11 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
     }
 
     /// <inheritdoc/>
-    /// <remarks>Single-path Select is a scoped operation — leave it to
-    /// the per-schema <see cref="StorageAdapterMeshQueryProvider"/>.</remarks>
+    /// <remarks>Single-path Select is scoped → delegate to the per-schema
+    /// <see cref="PostgreSqlMeshQuery"/> for the path's partition (cached adapter).</remarks>
     public IObservable<T?> Select<T>(string path, string property, JsonSerializerOptions options)
-        => Observable.Return<T?>(default);
+        => GetDelegateForPath(path)?.Select<T>(path, property, options)
+            ?? Observable.Return<T?>(default);
 
     private ParsedQuery ParseFirst(MeshQueryRequest request)
     {

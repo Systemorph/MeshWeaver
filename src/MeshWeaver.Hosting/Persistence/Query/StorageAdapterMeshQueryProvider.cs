@@ -54,7 +54,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     // #20: when set (partitioned Postgres), defer UNSCOPED queries to the native
     // fan-out provider (PostgreSqlPartitionedMeshQuery), removing the pedestrian's
     // slow cross-partition walk from those merges. See StorageAdapterQueryProviderOptions.
-    private readonly bool _deferUnscopedToNative;
+    private readonly bool _deferToNative;
     // The query scope-walk leaf (ListChildPaths / Read over the storage adapter)
     // is bridged to IObservable through this pool — never via a bare
     // Observable.FromAsync, which deadlocks under a blocking subscriber. See
@@ -95,7 +95,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         this.meshConfiguration = meshConfiguration;
         this.nodeValidators = nodeValidators;
         this.logger = logger;
-        _deferUnscopedToNative = options?.DeferUnscopedAndSatelliteToNativeProvider ?? false;
+        _deferToNative = options?.DeferToNativeProvider ?? false;
         // FileSystem pool cap governs the scope-walk concurrency; Unbounded is the
         // DI-less fallback (still offloads to the ThreadPool with ConfigureAwait).
         _ioPool = ioPoolRegistry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
@@ -134,22 +134,28 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     /// </summary>
     private bool DefersToNativeProvider(MeshQueryRequest request)
     {
-        // UNSCOPED-ONLY: defer only queries with no concrete first segment — the
-        // native partitioned provider fans those out across partitions, and the
-        // pedestrian's unscoped walk (e.g. the onboarding `nodeType:User
-        // content.email:X` middleware lookup) was a slow cross-partition crawl.
-        //
-        // We DELIBERATELY do NOT defer satellite-routed queries: the pedestrian is
-        // the actual server for scoped satellite reads (e.g. `namespace:X/_Access
-        // nodeType:AccessAssignment` — the permission walk). Deferring those to the
-        // native provider regressed EffectivePermissionPostgresTest / SpaceOnboarding
-        // (timeouts) — its satellite serving doesn't fully replicate the pedestrian's.
-        var path = _parser.Parse(request.EffectiveQueries.FirstOrDefault()).Path;
-        if (string.IsNullOrEmpty(path)) return true;            // unscoped → native fan-out
+        var parsed = _parser.Parse(request.EffectiveQueries.FirstOrDefault());
+        var path = parsed.Path;
+        // Unscoped / wildcard-first-segment → the native PostgreSqlPartitionedMeshQuery fans
+        // out across partitions; defer.
+        if (string.IsNullOrEmpty(path)) return true;
         var slash = path.IndexOf('/');
         var first = slash < 0 ? path : path[..slash];
-        if (first.Length == 0 || first == "*") return true;     // wildcard first → fan-out
-        return false;                                            // scoped → pedestrian serves
+        if (first.Length == 0 || first == "*") return true;
+        // Scoped. Keep serving scoped SATELLITE reads here — the native provider's per-schema
+        // delegate doesn't yet serve satellite Query Initial correctly (it under-returns
+        // pre-existing rows), and source:activity/accessed are cross-partition JOINs. A
+        // satellite query is one whose path carries a `_`-prefixed segment, whose nodeType maps
+        // to a satellite table, or which is an activity/accessed source.
+        if (parsed.Source is QuerySource.Activity or QuerySource.Accessed) return false;
+        foreach (var seg in path.Split('/', StringSplitOptions.RemoveEmptyEntries))
+            if (seg.StartsWith('_')) return false;
+        var nodeType = parsed.ExtractNodeType();
+        if (!string.IsNullOrEmpty(nodeType) && PartitionDefinition.NodeTypeToSuffix.ContainsKey(nodeType))
+            return false;
+        // Scoped PRIMARY (mesh_nodes) read → the per-schema delegate now serves it live; defer
+        // so the pedestrian's ListChildPaths scope-walk is removed for this shape (the storm fix).
+        return true;
     }
 
     /// <summary>
@@ -179,7 +185,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         // #20: defer unscoped + satellite queries to the native fan-out provider.
-        if (_deferUnscopedToNative && DefersToNativeProvider(request))
+        if (_deferToNative && DefersToNativeProvider(request))
             yield break;
 
         var (matched, parsedQuery, basePaths) = await CollectMatchedAsync(
@@ -1008,7 +1014,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         // #20: defer to the native fan-out provider for unscoped + satellite queries
         // (still emit an empty Initial so MeshQuery's merge counter advances — an
         // Observable.Empty here would never increment our slot and hang the merge).
-        if (_deferUnscopedToNative && DefersToNativeProvider(request))
+        if (_deferToNative && DefersToNativeProvider(request))
             return Observable.Return(new QueryResultChange<T>
             {
                 ChangeType = QueryChangeType.Initial,
