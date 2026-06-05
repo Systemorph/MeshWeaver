@@ -79,8 +79,30 @@ internal sealed class PostgreSqlPathRoutingAdapter : IStorageAdapter
                     ? state
                     : (PartitionState)new PartitionState.Absent());
         }
+        // 🚨 Reject segments that are not valid partition names. A partition (= a
+        // user/space, the first path segment) becomes a Postgres SCHEMA, so it must be a
+        // simple identifier. A URL- or query-string-shaped segment
+        // (`login?error=auth_failed`, `search?q=agent&hq=scope%3adescendants`) must NEVER
+        // be lazily CREATE SCHEMA'd. Prod 2026-06-05: the atioz DB filled with exactly
+        // these garbage schemas (request URLs routed as mesh paths) and corrupted itself.
+        // → Absent so no schema is created; the write falls through to the next provider.
+        if (!IsValidPartitionSegment(seg))
+            return Observable.Return<PartitionState>(new PartitionState.Absent());
         return _provider.PartitionCache.GetOrProbe(seg).Take(1);
     }
+
+    /// <summary>
+    /// A partition's first path segment becomes a Postgres schema, so it must be a simple
+    /// identifier: start with a letter/digit, then only letters/digits/<c>. - _</c>, ≤63
+    /// chars (PG identifier limit). Rejects URL/query-string-shaped segments
+    /// (containing <c>? = &amp; % # :</c>, whitespace, …) that the partition router would
+    /// otherwise materialise as garbage schemas — the atioz DB-corruption root cause
+    /// (2026-06-05). (<c>_</c>-prefixed global-satellite segments are handled before this.)
+    /// </summary>
+    internal static bool IsValidPartitionSegment(string seg) =>
+        seg.Length is > 0 and <= 63
+        && char.IsLetterOrDigit(seg[0])
+        && seg.All(c => char.IsLetterOrDigit(c) || c is '.' or '-' or '_');
 
     /// <summary>
     /// Schema-bound adapter cache: once we've materialised the
