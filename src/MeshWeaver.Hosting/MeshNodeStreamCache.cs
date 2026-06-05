@@ -677,33 +677,14 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             return ConvertContentTypedToJsonElement(updated, options);
         };
 
-        // 🔒 Client-side WRITE gate — CACHE-ONLY (no probe, so zero per-write round-trip).
-        // The owner re-validates RLS authoritatively, BUT UpdateRemote emits the patch
-        // OPTIMISTICALLY and deliberately does NOT await the owner (Orleans-deadlock
-        // avoidance), so an owner-side denial would be swallowed and the caller would see a
-        // fake success. When the caller's effective permissions for this path are ALREADY
-        // cached — warm from a prior read, the common read-then-edit flow — require
-        // Permission.Update and surface a denial as UnauthorizedAccessException before the
-        // optimistic emit. On a cache MISS we do NOT probe (a per-write GetPermissionRequest
-        // round-trip doubled write latency and timed out on cold owning hubs); the owner
-        // still denies authoritatively, the denial just isn't surfaced on the Rx stream in
-        // that cold-write case. (Read-then-write is the realistic UI/agent flow, so the
-        // common case IS surfaced.)
-        var accessService = meshHub.ServiceProvider.GetService<AccessService>();
-        if (accessService is not null
-            && meshHub.Configuration.Get<EffectivePermissionsDelegate>() is not null
-            && !LooksLikeNodeTypePath(path))
-        {
-            var captured = accessService.Context ?? accessService.CircuitContext;
-            if (captured is not null && !string.IsNullOrEmpty(captured.ObjectId)
-                && _access.TryGetValue((path, captured.ObjectId), out var cached)
-                && cached.ValidUntil > DateTimeOffset.UtcNow
-                && !cached.Permissions.HasFlag(Permission.Update))
-            {
-                return Observable.Throw<MeshNode>(new UnauthorizedAccessException(
-                    $"User '{captured.ObjectId}' lacks Update permission on '{path}'"));
-            }
-        }
+        // RLS on the write is enforced authoritatively by the OWNER: the
+        // [RequiresPermission(Permission.Update)] gate on PatchDataRequest posts
+        // DeliveryFailure(Unauthorized) on denial, which UpdateRemote now surfaces
+        // as UnauthorizedAccessException on the Rx OnError stream (see
+        // MeshNodeStreamExtensions.UpdateRemote). The previous cache-only client gate
+        // here was a stopgap for when UpdateRemote emitted optimistically and swallowed
+        // the denial — it only fired on a warm permission cache (cold-write miss = no
+        // surfacing, a CI-flake source) and used a non-canonical message. Now redundant.
         return UpdateRaw(path, wrapped);
     }
 

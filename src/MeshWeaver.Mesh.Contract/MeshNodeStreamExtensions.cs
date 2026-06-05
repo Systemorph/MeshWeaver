@@ -623,89 +623,117 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                 return;
                             }
 
-                            // 🚨 Emit OnNext OPTIMISTICALLY with the locally-
-                            // computed `updated` snapshot — DO NOT block
-                            // OnCompleted waiting for the owner's
-                            // PatchDataResponse. The wait-for-response shape
-                            // worked in Monolith (~10ms response round-trip)
-                            // but broke Orleans (cross-grain routing + cold-
-                            // start grain activation can exceed 30s, and any
-                            // caller bridging `await ... .FirstAsync()` on a
-                            // hub action block deadlocks — the response
-                            // needs the same action block to dispatch).
+                            // Defer the terminal emission to the OWNER's
+                            // PatchDataResponse so structured failures surface on
+                            // the Rx OnError stream (RLS denial → caller sees it)
+                            // and a read-after-write sees the committed state (the
+                            // subscription stays alive until the owner has actually
+                            // applied the patch — the eager-emit + Take(1) used to
+                            // tear `composite` down before the round-trip landed).
                             //
-                            // Trade-off: structured owner-side errors
-                            // (AccessDenied, Validation, Deserialization)
-                            // do NOT propagate on the Rx OnError stream.
-                            // The patch is RFC 7396 deterministic, so the
-                            // optimistic snapshot matches what the owner
-                            // commits on success. Owner-side failures land
-                            // in the diagnostic log channel via the fire-
-                            // and-forget response sub below — observable to
-                            // operators, but not on the Rx pipeline.
+                            // 🚨 Deadlock-safe: the patch was ALREADY posted above
+                            // (fire-and-forget side effect), so writers that don't
+                            // await completion are unaffected — only the terminal
+                            // OnNext/OnCompleted defers. The emission fires from the
+                            // reactive `Hub.Observe(delivery)` Subscribe callback,
+                            // NOT a synchronous `.Wait()/.FirstAsync()` bridge on a
+                            // hub action block (the shape the old comment warned
+                            // against). The 30s Timeout falls back to the optimistic
+                            // snapshot so a slow-but-eventually-applied patch
+                            // (Orleans cold-start) still completes successfully.
                             //
-                            // For strict consistency (rare), callers re-read
-                            // via GetMeshNodeStream(path).Take(1) after the
-                            // patch — that DOES go to the owner.
-                            //
-                            // 🚨 Restore the caller's identity around OnNext.
-                            // We're inside `initialSub.Subscribe`'s callback,
-                            // which fires on the remote-stream emission thread
-                            // — opened under ImpersonateAsSystem (line ~110)
-                            // for infrastructure routing, so AsyncLocal
-                            // Context = system-security here. Without the
-                            // explicit restore, the caller's Subscribe(_ =>
-                            // …) sees `accessService.Context = system-security`
-                            // instead of their user identity. CarryAccessContext
-                            // (line 285) doesn't help because it captures only
-                            // `Context`, not `CircuitContext` — pure
-                            // CircuitContext callers (Blazor circuits, tests
-                            // that SetCircuitContext) see system-security.
-                            // The eagerly-captured `capturedContextAtEntry`
-                            // already does the Context ?? CircuitContext
-                            // fallback we need.
-                            if (accessServiceAtEntry is not null && capturedContextAtEntry is not null)
+                            // 🚨 Restore the caller's identity around OnNext: we're
+                            // on the remote-stream emission thread (opened under
+                            // ImpersonateAsSystem), so SwitchAccessContext back to
+                            // capturedContextAtEntry (Context ?? CircuitContext) so
+                            // the caller's Subscribe sees their identity, not
+                            // system-security.
+                            void EmitTerminal()
                             {
-                                using (accessServiceAtEntry.SwitchAccessContext(capturedContextAtEntry))
+                                if (accessServiceAtEntry is not null && capturedContextAtEntry is not null)
+                                {
+                                    using (accessServiceAtEntry.SwitchAccessContext(capturedContextAtEntry))
+                                    {
+                                        observer.OnNext(updated);
+                                        observer.OnCompleted();
+                                    }
+                                }
+                                else
                                 {
                                     observer.OnNext(updated);
                                     observer.OnCompleted();
                                 }
                             }
-                            else
-                            {
-                                observer.OnNext(updated);
-                                observer.OnCompleted();
-                            }
 
-                            // Fire-and-forget response check. Errors logged to
-                            // the diag channel; observable readers care about
-                            // the optimistic OnNext only. The Subscribe IS
-                            // captured in `composite` so the hub-level
-                            // callback is disposed when the outer chain
-                            // disposes (no leaked Observe callback).
                             var responseSub = _workspace.Hub.Observe(delivery)
                                 .Timeout(TimeSpan.FromSeconds(30))
                                 .Take(1)
                                 .Subscribe(
                                     d =>
                                     {
-                                        if (d.Message is PatchDataResponse resp && resp.NodeError is { } err)
+                                        // Owner posted a structured rejection
+                                        // (deserialization / validation gate) as
+                                        // PatchDataResponse.NodeError, or a non-success
+                                        // ack → surface as a typed MeshNodeStreamException.
+                                        if (d.Message is PatchDataResponse resp
+                                            && (resp.NodeError is not null || !resp.Success))
                                         {
+                                            var err = resp.NodeError ?? new MeshNodeError(
+                                                MeshNodeErrorCode.Unknown, _path!,
+                                                resp.Error ?? "Update rejected by owner");
                                             diagLogger?.LogWarning(
                                                 "[UpdateRemote] OWNER_REJECTED hub={Hub} target={Path} code={Code} msg={Msg}",
                                                 _workspace.Hub.Address, _path, err.Code, err.Message);
+                                            observer.OnError(new MeshNodeStreamException(err));
                                         }
-                                        else if (d.Message is PatchDataResponse fail && !fail.Success)
+                                        else
                                         {
-                                            diagLogger?.LogWarning(
-                                                "[UpdateRemote] OWNER_FAILED hub={Hub} target={Path} err={Err}",
-                                                _workspace.Hub.Address, _path, fail.Error ?? "<unknown>");
+                                            // Success ack — patch committed. The RFC 7396
+                                            // patch is deterministic, so `updated` matches
+                                            // the owner's reconciled state.
+                                            EmitTerminal();
                                         }
                                     },
-                                    ex => diagLogger?.LogDebug(ex,
-                                        "[UpdateRemote] response wait errored hub={Hub} target={Path}",
-                                        _workspace.Hub.Address, _path));
+                                    ex =>
+                                    {
+                                        // RLS denial: the AccessControlPipeline's
+                                        // [RequiresPermission(Update)] gate posts
+                                        // DeliveryFailure(Unauthorized) → surfaced here as
+                                        // DeliveryFailureException. Map to
+                                        // UnauthorizedAccessException; its Message already
+                                        // reads "Access denied: user '…' lacks Update …".
+                                        if (ex is DeliveryFailureException dfx
+                                            && dfx.Failure?.ErrorType == ErrorType.Unauthorized)
+                                        {
+                                            diagLogger?.LogWarning(
+                                                "[UpdateRemote] OWNER_DENIED hub={Hub} target={Path} msg={Msg}",
+                                                _workspace.Hub.Address, _path, dfx.Failure.Message);
+                                            observer.OnError(new UnauthorizedAccessException(
+                                                dfx.Failure.Message ?? $"Access denied updating '{_path}'"));
+                                        }
+                                        else if (ex is TimeoutException)
+                                        {
+                                            // No response within 30s — optimistic fallback
+                                            // (Orleans cold-start tolerance). The patch was
+                                            // posted; it applies when the owner activates.
+                                            diagLogger?.LogWarning(
+                                                "[UpdateRemote] RESPONSE_TIMEOUT hub={Hub} target={Path} — optimistic fallback",
+                                                _workspace.Hub.Address, _path);
+                                            EmitTerminal();
+                                        }
+                                        else
+                                        {
+                                            // Other owner-side / delivery error → surface it.
+                                            diagLogger?.LogWarning(ex,
+                                                "[UpdateRemote] response wait errored hub={Hub} target={Path}",
+                                                _workspace.Hub.Address, _path);
+                                            var msg = ex is DeliveryFailureException d2
+                                                ? (d2.Failure?.Message ?? ex.Message)
+                                                : ex.Message;
+                                            observer.OnError(new MeshNodeStreamException(
+                                                new MeshNodeError(MeshNodeErrorCode.Unknown, _path!, msg)));
+                                        }
+                                    });
                             composite.Add(responseSub);
                         }
                         catch (Exception ex)

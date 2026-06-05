@@ -81,15 +81,16 @@ internal sealed class MeshService(
         }).CarryAccessContext(hub.ServiceProvider);
 
     public IObservable<MeshNode> UpdateNode(MeshNode node)
-        // Canonical write via the mesh-node stream (UpdateNodeRequest retired). The owning
-        // hub applies the RFC 7396 merge patch and re-validates RLS + stamps auditing
-        // authoritatively; the cache's write gate surfaces a denial as
-        // UnauthorizedAccessException when the caller's perms are warm (read-then-write).
-        // Emits the optimistic local snapshot — callers needing strict consistency re-read
-        // via GetMeshNodeStream(path). (Replaces the prior confirmed-response shape; the
-        // public IObservable<MeshNode> surface is unchanged.) Observable.Defer keeps the
-        // write cold so it fires on Subscribe, not on construction.
-        => Observable.Defer(() => hub.GetMeshNodeStream(node.Path).Update(_ => node))
+        // Canonical write via the mesh-node stream (UpdateNodeRequest retired). The
+        // NodeUpdatePipeline restores the deleted handler's client-side pre-checks —
+        // existence (→ InvalidOperationException "Node not found") and app-integrity
+        // INodeValidators (→ UnauthorizedAccessException) — then issues stream.Update.
+        // RLS on the patch is enforced authoritatively by the owning hub's
+        // [RequiresPermission(Update)] pipeline and surfaced by UpdateRemote as
+        // UnauthorizedAccessException; the owner re-stamps auditing and persists durably
+        // (the PatchDataResponse acks off the storage flush, so a subsequent read sees the
+        // write). Observable.Defer keeps the write cold so it fires on Subscribe.
+        => Observable.Defer(() => NodeUpdatePipeline.UpdateWithValidation(hub, node))
             .CarryAccessContext(hub.ServiceProvider);
 
     public IObservable<bool> DeleteNode(string path)
