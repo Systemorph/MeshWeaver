@@ -249,6 +249,10 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
         // + static union — no DI-marker fan-out, no per-provider gating.
         var queryCore = workspace.Hub.ServiceProvider.GetService<IMeshQueryCore>();
         var options = workspace.Hub.JsonSerializerOptions;
+        // #19 grain warming: warm the per-node grains of newly-returned results (see the
+        // warm .Do below). Reuses the shared IMeshNodeStreamCache — no new message type.
+        var warmCache = workspace.Hub.ServiceProvider.GetService<IMeshNodeStreamCache>();
+        var warmed = new HashSet<string>();
         var diagLogger = workspace.Hub.ServiceProvider
             .GetService<Microsoft.Extensions.Logging.ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.SyncedQuery");
@@ -346,6 +350,24 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
                 workspace.Hub.Address, dict.Count,
                 string.Join(", ", dict.Keys.Take(10))))
             .Do(dict => pathSet.OnNext(dict.Keys.ToImmutableHashSet()))
+            // #19 Grain warming. For a USER-facing query (a real userIdentity — NOT the System
+            // framework walks: SecurityService _Access, NodeType compiles, seeds; NOT anonymous
+            // guests), warm the per-node grain of each NEWLY-added result through the shared
+            // IMeshNodeStreamCache, so the GUI's subsequent databinding (it subscribes to each
+            // result's GetMeshNodeStream anyway) hits a warm cache instead of a cold DB read.
+            // Gated to new paths (a quiescing live query never re-warms) and scoped to real
+            // users (so internal framework queries aren't broadly warmed → no load amplification).
+            .Do(dict =>
+            {
+                if (warmCache is null
+                    || string.IsNullOrEmpty(userIdentity)
+                    || userIdentity == WellKnownUsers.System
+                    || userIdentity == WellKnownUsers.Anonymous)
+                    return;
+                foreach (var path in dict.Keys)
+                    if (warmed.Add(path))
+                        warmCache.GetStream(path, options).Take(1).Subscribe(_ => { }, _ => { });
+            })
             .DistinctUntilChanged()
             .Select(dict => (IEnumerable<MeshNode>)dict.Values);
     }
