@@ -30,12 +30,14 @@ public class RlsNodeValidator : INodeValidator
     }
 
     /// <summary>
-    /// This validator handles all CRUD operations.
+    /// This validator handles Read, Create, and Delete operations.
     /// Read validation is enforced via MeshCatalog.ValidateReadAsync for node reads.
-    /// Write validation is enforced via HandleUpdateNodeRequest/HandleDeleteNodeRequest handlers.
+    /// Update validation is enforced on the canonical <c>stream.Update</c> patch path
+    /// by <c>RlsDataValidator</c> (the per-node hub re-checks RLS on the merge patch);
+    /// this validator therefore no longer participates in Update.
     /// </summary>
     public IReadOnlyCollection<NodeOperation> SupportedOperations =>
-        [NodeOperation.Read, NodeOperation.Create, NodeOperation.Update, NodeOperation.Delete];
+        [NodeOperation.Read, NodeOperation.Create, NodeOperation.Delete];
 
     public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
     {
@@ -67,7 +69,6 @@ public class RlsNodeValidator : INodeValidator
         {
             NodeOperation.Read => Permission.Read,
             NodeOperation.Create => GetCreatePermission(context.Node),
-            NodeOperation.Update => Permission.Update,
             NodeOperation.Delete => Permission.Delete,
             _ => Permission.None
         };
@@ -185,7 +186,6 @@ public class RlsNodeValidator : INodeValidator
         var requestUserId = context.Request switch
         {
             CreateNodeRequest createReq => createReq.CreatedBy,
-            UpdateNodeRequest updateReq => updateReq.UpdatedBy,
             DeleteNodeRequest deleteReq => deleteReq.DeletedBy,
             _ => null
         };

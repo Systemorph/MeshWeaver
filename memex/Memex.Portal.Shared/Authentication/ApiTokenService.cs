@@ -268,7 +268,7 @@ internal class ApiTokenService(IMeshService nodeFactory, IMessageHub hub, ILogge
     /// <c>workspace.GetMeshNodeStream(path).Update(...)</c> — the
     /// canonical remote-stream write per
     /// <c>Doc/Architecture/AsynchronousCalls.md</c>. No
-    /// <see cref="UpdateNodeRequest"/> forwarding (the previous shape
+    /// <c>UpdateNodeRequest</c> forwarding (the previous, now-retired shape
     /// timed out in distributed deployments when the per-node hub's
     /// forwarded request didn't get a response within ~30s).
     ///

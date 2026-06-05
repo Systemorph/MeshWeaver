@@ -18,7 +18,8 @@ namespace MeshWeaver.Graph;
 /// the Overview header by clicking the icon tile, matching the UX used on
 /// Organization NodeType nodes.
 /// <para>
-/// On "Use as Icon" the dialog posts an <see cref="UpdateNodeRequest"/> that sets
+/// On "Use as Icon" the dialog writes via <c>stream.Update</c> (the mesh-node
+/// stream cache) to set
 /// <see cref="MeshNode.Icon"/> to <c>content:&lt;fileName&gt;</c>. The resolver
 /// rewrites that to <c>/static/storage/content/{nodePath}/{fileName}</c> at
 /// render time, so the file the user just uploaded via the embedded
@@ -92,7 +93,7 @@ public static class NodeIconPickerDialog
                     .WithClickAction(ctx => ApplyFileAsIcon(ctx, formDataId))));
         }
 
-        // Bottom button row — Save posts UpdateNodeRequest, Cancel just dismisses the dialog.
+        // Bottom button row — Save writes via stream.Update, Cancel just dismisses the dialog.
         stack = stack.WithView(Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("gap: 8px; justify-content: flex-end; margin-top: 8px;")

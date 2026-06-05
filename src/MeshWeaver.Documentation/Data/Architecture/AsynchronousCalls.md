@@ -835,39 +835,34 @@ public IObservable<TResult> DoOperation(...)
 
 ---
 
-## 🚨 Node-mutating requests must run on the owning hub — forward, don't process locally
+## 🚨 Node mutations land on the owning hub — `stream.Update` routes there for you
 
-`UpdateNodeRequest`, `MoveNodeRequest`, and any future per-node mutation request **must** be processed on the owning per-node hub. The owning hub holds the authoritative MeshNode in its workspace (loaded by `MeshDataSource` at init via `MeshNodeReference`); the mesh hub does not.
-
-When a request arrives at the mesh hub, **forward** it to the owning hub and relay the response:
+A MeshNode's authoritative copy lives in its **owning per-node hub**'s workspace (loaded by
+`MeshDataSource` at init via `MeshNodeReference`); the mesh hub does not hold it. A content
+mutation must reach that owning hub — but you do **not** write a forwarding handler for it.
+The canonical write routes there automatically:
 
 ```csharp
-// Mesh hub's UpdateNodeRequest handler — forward to owning hub.
-private static IMessageDelivery HandleUpdateNodeRequest(
-    IMessageHub hub, IMessageDelivery<UpdateNodeRequest> request)
-{
-    var updatedNode = request.Message.Node;
-
-    if (!hub.Address.ToString().Equals(updatedNode.Path, StringComparison.Ordinal))
-    {
-        var fwd = hub.Post(request.Message, o => o.WithTarget(new Address(updatedNode.Path)));
-        hub.RegisterCallback((IMessageDelivery)fwd, response =>
-        {
-            if (response is IMessageDelivery<UpdateNodeResponse> ur)
-                hub.Post(ur.Message, o => o.ResponseFor(request));
-            else if (response.Message is DeliveryFailure df)
-                hub.Post(UpdateNodeResponse.Fail(df.Message ?? "Forwarding failed"),
-                    o => o.ResponseFor(request));
-            return response.Processed();
-        });
-        return request.Processed();
-    }
-
-    var existingNodeObs = hub.GetWorkspace().GetMeshNodeStream()
-        .Take(1).Timeout(TimeSpan.FromSeconds(15));
-    // ... validate, persist, respond inside the Subscribe callback ...
-}
+// Any hub — external OR own path. The cache routes to the owner; no hand-written forward.
+workspace.GetMeshNodeStream(path)
+    .Update(current => current with { Content = … })
+    .Subscribe(_ => { }, ex => logger.LogWarning(ex, "Update failed for {Path}", path));
 ```
+
+- `path == this hub's address` ⇒ writes through the local data source (`UpdateOwn`).
+- `path != this hub's address` ⇒ the process-wide `IMeshNodeStreamCache` opens a sync
+  subscription to the owner and posts an RFC 7396 JSON-merge `PatchDataRequest`. The owner
+  reads its OWN current state, merges the diff, **re-validates RLS** (the patch path runs
+  `RlsDataValidator`), **stamps auditing** (`LastModified`/`LastModifiedBy`), and commits.
+  The caller's `Update` emits the optimistic local snapshot; on a denial the cache's
+  client-side write gate throws `UnauthorizedAccessException` (when the caller's perms are
+  warm from a prior read). Callers needing strict consistency re-read via
+  `GetMeshNodeStream(path).Take(1)`.
+
+> **Retired:** the `UpdateNodeRequest` "forward at the mesh hub, relay the `UpdateNodeResponse`"
+> pattern is gone (the forwarded request timed out in distributed deployments when the per-node
+> hub didn't respond within ~30 s). `stream.Update` and the cache own the routing now.
+> `MoveNodeRequest`/`CreateNodeRequest`/`DeleteNodeRequest` remain node-**lifecycle** requests.
 
 **Why:** the mesh hub workspace doesn't carry a MeshNode collection — it has no `MeshNodeReference` reducer, no per-node validation context, no version tracking. Trying to read existing state via `workspace.GetMeshNodeStream()` on the mesh hub throws `Failed to create stream`. Forwarding lets routing activate the owning hub on demand; that hub's `MeshDataSource` init loads the node from persistence, and the handler runs locally with `GetMeshNodeStream()` (own).
 
