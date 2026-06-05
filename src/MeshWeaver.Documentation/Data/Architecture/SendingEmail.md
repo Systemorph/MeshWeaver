@@ -88,11 +88,18 @@ local dev and tests never send mail.
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `Email:Enabled` | bool | `false` | When `false`, the NoOp sender is registered. |
-| `Email:NoReplyAddress` | string | `""` | The mailbox to send **as** (e.g. `no-reply@yourtenant.com`). |
+| `Email:MailboxAddress` | string | `""` | The mailbox the portal sends **and** receives **as** — a real/shared mailbox (e.g. `memex@yourtenant.com`). |
 | `Email:TenantId` | string | `""` | Entra tenant id (client-secret flow). |
 | `Email:ClientId` | string | `""` | App-registration client id (client-secret flow). |
 | `Email:ClientSecret` | string | `""` | App-registration client secret (keep in Key Vault). |
 | `Email:UseManagedIdentity` | bool | `false` | When `true`, authenticate via `DefaultAzureCredential` (managed identity) instead of a client secret. |
+| `Email:InboundEnabled` | bool | `false` | When `true`, the portal subscribes to the mailbox inbox (Graph change notifications → agent threads). |
+| `Email:WebhookBaseUrl` | string | `""` | Public base URL Graph calls back for inbound notifications (e.g. `https://memex.yourtenant.com`); the webhook lands at `{WebhookBaseUrl}/api/email`. |
+| `Email:SubscriptionClientState` | string | `""` | Per-deployment random value Graph echoes on each inbound notification; the webhook rejects mismatches. |
+
+> **Graph permissions.** Outbound (`/sendMail`) needs the **`Mail.Send`** application permission;
+> inbound (inbox subscription + read) needs **`Mail.ReadWrite`**. Both are tenant-admin-consented
+> application permissions on the mailbox's app registration.
 
 Registration (in the portal's `MemexConfiguration.ConfigureMemexServices`):
 
@@ -109,13 +116,14 @@ services.AddSingleton<IEmailSender>(email.Enabled
 ## The Microsoft Graph reference sender
 
 [`GraphEmailSender`](../../../../memex/Memex.Portal.Shared/Email/GraphEmailSender.cs) calls Graph
-`/users/{noReply}/sendMail` using the `Mail.Send` **application** permission, bridging the async Graph
+`/users/{mailbox}/sendMail` using the `Mail.Send` **application** permission, bridging the async Graph
 call to the reactive surface via `Observable.FromAsync`. Credentials come from `EmailOptions`:
 `DefaultAzureCredential` (managed identity) in production, or a `ClientSecretCredential` for self-host.
 
-The one-time Azure setup — a dedicated app registration, **admin-consented `Mail.Send`**, a real
-no-reply mailbox, and (recommended) an Exchange **Application Access Policy** scoping the app to only
-that mailbox — is covered in
+The one-time Azure setup — a dedicated app registration, **admin-consented `Mail.Send`** (plus
+**`Mail.ReadWrite`** when inbound is enabled), a real shared mailbox the portal sends and receives
+as, and (recommended) an Exchange **Application Access Policy** scoping the app to only that mailbox —
+is covered in
 [Invitation-Only Onboarding → Sending email](InvitationOnlyOnboarding.md#sending-email-microsoft-graph).
 
 ### Swapping the implementation

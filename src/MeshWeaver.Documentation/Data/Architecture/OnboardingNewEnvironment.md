@@ -89,10 +89,12 @@ curl -sS -k -o /dev/null -w "%{http_code}\n" --resolve <host>:443:$INGRESS_IP ht
 - **Invitation-only** (`Features__Onboarding__InvitationOnly=true`): the **first** user (empty
   user table) always bootstraps to **global admin** — the gate exempts the first user, so the
   env can never lock itself out — then invites others. See [Invitation-Only Onboarding](InvitationOnlyOnboarding.md).
-- **Email** (`Email__Enabled=true` + Graph `Mail.Send` app): invitations email. The sender
-  (`Email__NoReplyAddress`) must be a **real mailbox in the tenant** (`meshweaver.cloud` is not
-  a mailbox domain; `no-reply@systemorph.com` does not exist — use a real mailbox until a shared
-  one is created). The Graph app needs the **`Mail.Send` application permission + admin consent**.
+- **Email** (`Email__Enabled=true` + Graph `Mail.Send` app): invitations email. The mailbox the
+  portal sends and receives as (`Email__MailboxAddress`) must be a **real mailbox in the tenant**
+  (`meshweaver.cloud` is not a mailbox domain; `no-reply@systemorph.com` does not exist — use a
+  real/shared mailbox). The Graph app needs the **`Mail.Send` application permission + admin
+  consent** (plus **`Mail.ReadWrite`** if you also enable the inbound channel via
+  `Email__InboundEnabled=true`).
 
 ## Migrating an existing portal (data move)
 

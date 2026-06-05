@@ -52,6 +52,18 @@ public static class SearchableSchemasUpdater
             await insertCmd.ExecuteNonQueryAsync();
         }
 
+        // #16: re-materialize public.top_level_index now that searchable_schemas is
+        // current, so top-level autocomplete reads a populated one-row-per-partition
+        // matview at deploy time (never a cross-schema fan-out). Guarded so a DB
+        // mid-upgrade (function not yet created) can't fail the migration.
+        await using (var rebuildCmd = dataSource.CreateCommand(
+            "DO $tli$ BEGIN " +
+            "IF to_regprocedure('public.rebuild_top_level_index()') IS NOT NULL THEN " +
+            "PERFORM public.rebuild_top_level_index(); END IF; END $tli$;"))
+        {
+            await rebuildCmd.ExecuteNonQueryAsync();
+        }
+
         logger.LogInformation("Searchable schemas: [{Schemas}]", string.Join(", ", contentSchemas));
     }
 }
