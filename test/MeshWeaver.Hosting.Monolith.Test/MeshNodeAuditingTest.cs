@@ -4,8 +4,10 @@ using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 using System.Reactive.Linq;
@@ -45,7 +47,7 @@ public class MeshNodeAuditingTest(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     [Fact(Timeout = 20000)]
-    public void UpdateNodeRequest_PreservesCreatedAndRefreshesLastModified()
+    public void StreamUpdate_PreservesCreatedAndStampsLastModifiedFromIdentity()
     {
         var client = GetClient();
         client.Observe(new PingRequest(), o => o.WithTarget(Mesh.Address)).Should().Within(15.Seconds()).Emit();
@@ -64,14 +66,23 @@ public class MeshNodeAuditingTest(ITestOutputHelper output) : MonolithMeshTestBa
         // Small wait so LastModified is visibly different (sanctioned distinct-timestamp delay)
         Thread.Sleep(10);
 
-        // Update via UpdateNodeRequest with a new user
-        var update = new UpdateNodeRequest(created with { Name = "Renamed" })
+        // Update via the canonical stream.Update as bob. LastModifiedBy is stamped from the
+        // caller's AUTHENTICATED identity (the AccessContext) — the same audit trail
+        // UpdateNodeRequest stamped from UpdatedBy, now that UpdateNodeRequest is retired.
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var originalCtx = accessService.CircuitContext;
+        accessService.SetCircuitContext(new AccessContext { ObjectId = "bob@example.com", Name = "bob@example.com" });
+        MeshNode updated;
+        try
         {
-            UpdatedBy = "bob@example.com"
-        };
-        var updateResp = client.Observe(update, o => o.WithTarget(Mesh.Address)).Should().Within(15.Seconds()).Emit();
-        updateResp.Message.Success.Should().BeTrue();
-        var updated = updateResp.Message.Node!;
+            updated = Mesh.GetMeshNodeStream(created.Path)
+                .Update(n => n with { Name = "Renamed" })
+                .Should().Within(15.Seconds()).Emit();
+        }
+        finally
+        {
+            accessService.SetCircuitContext(originalCtx);
+        }
 
         updated.CreatedDate.Should().Be(originalCreatedDate,
             "CreatedDate is immutable â€” only LastModified should move");
