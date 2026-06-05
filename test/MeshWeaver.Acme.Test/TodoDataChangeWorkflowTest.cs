@@ -45,6 +45,37 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     private string? _localTestDataPath;
 
     /// <summary>
+    /// Canonical write via the mesh-node stream — the ONLY mutation API. Replaces the
+    /// deprecated <c>NodeFactory.UpdateNode</c> (UpdateNodeRequest) path. Critically,
+    /// <c>stream.Update</c> completes on the in-memory workspace echo, NOT the debounced
+    /// persistence flush — so the write does not stall on a 200 ms TimerQueue callback
+    /// that the synchronous test wait + bulk thread-pool pressure can starve (the root of
+    /// the "UpdateNode never replies in bulk" hang; the reply only arrived at disposal
+    /// when FlushOnDispose forced the flush).
+    /// </summary>
+    private IObservable<MeshNode> UpdateNodeViaStream(MeshNode node) =>
+        // Merge ONLY the changed State onto the owner's CURRENT node (not a whole-node
+        // replace from a read-back copy). A minimal {State} patch avoids mis-diffing a
+        // round-tripped Content blob and the no-op skip that dropped the 2nd rapid update
+        // (Restore: soft-delete then restore on the same path). Null current (pre-handshake)
+        // falls back to the caller's full node.
+        Mesh.GetMeshNodeStream(node.Path)
+            .Update(current => current is null ? node : current with { State = node.State })
+            // stream.Update is OPTIMISTIC (emits the locally-computed snapshot before the
+            // owner applies). The old UpdateNodeRequest confirmed the write via its response;
+            // the test then read with the one-shot ReadNode. To preserve that contract,
+            // confirm here: poll the same one-shot read until the new State is observable,
+            // so the test's subsequent ReadNode can't race the eventual-consistency apply.
+            // ReadNode hits the owner's in-memory MeshNodeReference (not the debounced
+            // persistence flush), so this stays sub-second — no flush/thread-pool stall.
+            .SelectMany(_ => Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+                .SelectMany(__ => ReadNode(node.Path))
+                .Where(n => n is not null && n.State == node.State)
+                .Select(n => n!)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(30)));
+
+    /// <summary>
     /// Gets or creates a local copy of the sample data for this test instance.
     /// Uses the pre-deployed SamplesGraph directory from the build output.
     /// </summary>
@@ -480,7 +511,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
 
         // Soft delete a todo to ensure Deleted section has content
         var deletedNode = originalNode! with { State = MeshNodeState.Deleted };
-        NodeFactory.UpdateNode(deletedNode).Should().Emit();
+        UpdateNodeViaStream(deletedNode).Should().Emit();
         Output.WriteLine("Soft-deleted a todo item");
 
         // Request the AllTasks view - this will trigger dynamic compilation
@@ -515,7 +546,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
 
         // Perform soft delete by setting state to Deleted
         var deletedNode = originalNode with { State = MeshNodeState.Deleted };
-        NodeFactory.UpdateNode(deletedNode).Should().Emit();
+        UpdateNodeViaStream(deletedNode).Should().Emit();
 
         // Verify the state changed (stream read â€” no catalog lag)
         var updatedNode = ReadNode(todoPath)
@@ -548,7 +579,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
 
         // Soft delete the node
         var deletedNode = originalNode! with { State = MeshNodeState.Deleted };
-        NodeFactory.UpdateNode(deletedNode).Should().Emit();
+        UpdateNodeViaStream(deletedNode).Should().Emit();
 
         // Wait for the catalog to reflect the state change â€” Query emits a
         // Removed/Updated delta when DefinePersona stops matching state:Active.
@@ -583,7 +614,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
 
         // Soft delete
         var deletedNode = originalNode! with { State = MeshNodeState.Deleted };
-        NodeFactory.UpdateNode(deletedNode).Should().Emit();
+        UpdateNodeViaStream(deletedNode).Should().Emit();
 
         // Wait for the catalog to surface DefinePersona in the deleted set.
         var paths = ObserveQueryPathSet(deletedQuery)
@@ -610,7 +641,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
 
         // First soft delete
         var deletedNode = originalNode! with { State = MeshNodeState.Deleted };
-        NodeFactory.UpdateNode(deletedNode).Should().Emit();
+        UpdateNodeViaStream(deletedNode).Should().Emit();
 
         // Verify it's deleted (stream read)
         var deletedCheck = ReadNode(todoPath)
@@ -620,7 +651,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
 
         // Now restore
         var restoredNode = deletedCheck with { State = MeshNodeState.Active };
-        NodeFactory.UpdateNode(restoredNode).Should().Emit();
+        UpdateNodeViaStream(restoredNode).Should().Emit();
 
         // Verify it's active again (stream read)
         var activeCheck = ReadNode(todoPath)

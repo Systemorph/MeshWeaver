@@ -45,6 +45,13 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     private readonly ConcurrentBag<string> _pendingDeletes = new();
     private Timer? _debounceTimer;
     private readonly object _timerLock = new();
+    // Set true by FlushOnDispose (under _timerLock). Once the hub is tearing down,
+    // ResetDebounceTimer must NOT schedule a new Timer: a fresh one-shot Timer is
+    // rooted by the process-wide TimerQueue and its callback captures `this` →
+    // Workspace → MessageHub, pinning the whole disposed hub graph (confirmed via
+    // ClrMD GC-root analysis). A data change racing the async final flush would
+    // otherwise re-arm the timer right after FlushOnDispose disposed it.
+    private bool _disposed;
     private readonly CompositeDisposable _pendingFlushSubscriptions = new();
 
     // Paths just deleted via IDataChangeNotifier — short-window block list so a
@@ -102,6 +109,25 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         // is now the only path that mutates the per-node hub's cache.IsDeleted
         // — the debounce sampler's IsDeleted gate above is sufficient to
         // prevent the resurrect-after-delete write race on the OWNING hub.
+
+        // 🚨 SYNC teardown FIRST: stop + dispose the debounce timer and block any
+        // re-arm. This runs in the hub's synchronous dispose phase, before the
+        // async FlushOnDispose and before the workspace can fire another UpdateImpl,
+        // so the TimerQueue-rooted one-shot timer never outlives disposal. Without
+        // it the timer's callback captures `this` → Workspace → MessageHub and pins
+        // the whole disposed hub graph in the process-wide TimerQueue (ClrMD-confirmed
+        // GC-root: TimerQueue → TimerQueueTimer → TimerCallback → MeshNodeTypeSource
+        // → Workspace → MessageHub). The async FlushOnDispose re-arm guard alone was
+        // too late — UpdateImpl re-armed the timer before the async phase ran.
+        workspace.Hub.RegisterForDisposal(_ =>
+        {
+            lock (_timerLock)
+            {
+                _disposed = true;
+                _debounceTimer?.Dispose();
+                _debounceTimer = null;
+            }
+        });
 
         // Hub-teardown hook — awaits any pending flushes so a per-node hub
         // disposing mid-write doesn't lose data. Without it, the next test
@@ -223,6 +249,14 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         if (_persistenceCore is null) return;
         lock (_timerLock)
         {
+            if (_disposed) return; // hub tearing down — don't re-arm a TimerQueue-rooted timer
+            // Hub past Started ⇒ shutting down. A flush-echo UpdateImpl during Quiescing
+            // was re-arming the debounce timer AFTER the dispose hooks ran, leaving a
+            // one-shot TimerQueueTimer whose callback pins MeshNodeTypeSource → Workspace
+            // → MessageHub for the whole disposed hub graph (ClrMD-confirmed). Gating on
+            // the live RunLevel stops the re-arm at the source, independent of dispose-
+            // action ordering.
+            if (_workspace.Hub.RunLevel > MessageHubRunLevel.Started) return;
             _debounceTimer?.Dispose();
             _debounceTimer = new Timer(_ =>
             {
@@ -310,6 +344,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             {
                 lock (owner._timerLock)
                 {
+                    owner._disposed = true; // block any further ResetDebounceTimer re-arm
                     owner._debounceTimer?.Dispose();
                     owner._debounceTimer = null;
                 }

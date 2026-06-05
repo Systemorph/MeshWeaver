@@ -987,16 +987,35 @@ public sealed class MessageHub : IMessageHub
             $"hostedHubsCount={hostedHubs.Hubs.Count()}");
         Post(new ShutdownRequest(MessageHubRunLevel.Quiescing, Version));
 
-        // Safety net: if the normal shutdown path deadlocks for any reason,
-        // force-complete the disposal task after a timeout to prevent indefinite hangs.
-        // Budget breakdown: 10 s quiesce + 10 s hostedHubs.Disposal + ~2 s buffer drain
-        // = ~22 s. The previous 5 s ceiling was tighter than the quiesce phase alone
-        // and would short-circuit the new pipeline.
+        // Safety net: if the normal shutdown path ever deadlocks, force-complete the
+        // disposal task after a timeout so callers don't hang forever.
+        //
+        // 🚨 LEAK FIX (ClrMD-confirmed): the watchdog's `Task.Delay` schedules a
+        // TimerQueueTimer rooted by the process-wide TimerQueue whose async continuation
+        // captures `this`. An UNCANCELLED 25 s delay pins the ENTIRE hub graph (cache,
+        // data sources, action block, subscriptions) for 25 s after EVERY disposal — even
+        // a fast, normal one (chain: TimerQueue → TimerQueueTimer → DelayPromise →
+        // <Dispose> state machine → hub). Disposal normally completes in well under a
+        // second, so the watchdog never fired in practice — it only leaked. Cancel the
+        // delay the instant disposal completes so the timer (and the hub it rooted) is
+        // released immediately; the safety net still fires on a genuine deadlock.
+        var watchdogCts = new CancellationTokenSource();
+        disposingTaskCompletionSource.Task.ContinueWith(
+            static (_, state) =>
+            {
+                var cts = (CancellationTokenSource)state!;
+                cts.Cancel();
+                cts.Dispose();
+            },
+            watchdogCts,
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
         _ = Task.Run(async () =>
         {
             try
             {
-                await Task.Delay(TimeSpan.FromSeconds(25));
+                await Task.Delay(TimeSpan.FromSeconds(25), watchdogCts.Token);
                 if (!disposingTaskCompletionSource.Task.IsCompleted)
                 {
                     logger.LogError(
@@ -1005,6 +1024,11 @@ public sealed class MessageHub : IMessageHub
                         Address, RunLevel);
                     disposingTaskCompletionSource.TrySetResult();
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                // Normal path: disposal completed before the timeout; the watchdog was
+                // cancelled and its TimerQueue entry (+ the hub it rooted) is released.
             }
             catch (Exception ex)
             {
