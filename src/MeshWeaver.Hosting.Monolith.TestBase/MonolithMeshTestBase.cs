@@ -128,7 +128,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         // subsequent [Fact]. Skip the BuildHub registration on later instances
         // so their per-instance Services don't try to re-register the singleton
         // (and the wasted ConfigureMesh + builder allocation is avoided).
-        if (!ShareMeshAcrossTests || !_sharedProviders.ContainsKey(GetType()))
+        if (!SharesMeshAcrossTests || !_sharedProviders.ContainsKey(GetType()))
         {
             var builder = ConfigureMesh(
                 new(
@@ -159,6 +159,29 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// derived class.</para>
     /// </summary>
     protected virtual bool ShareMeshAcrossTests => false;
+
+    /// <summary>
+    /// 🚧 Master kill-switch for the shared-mesh cluster — currently <c>false</c>.
+    ///
+    /// <para>Keeping a per-class <see cref="IServiceProvider"/> alive in the static
+    /// <c>_sharedProviders</c> pinned the mesh (and every hosted hub + subscription +
+    /// MemoryCache timer it owns) for the whole testhost. A pinned class's mesh then
+    /// interfered with later classes' per-test meshes — concretely the Acme bulk
+    /// <c>UpdateNodeRequest@…/DefinePersona</c> never received its reply once the
+    /// shared <c>AcmeSearchTest</c> mesh stayed live alongside the Todo meshes
+    /// (passes in isolation, hangs in bulk).</para>
+    ///
+    /// <para>While this is <c>false</c> the ~60 <see cref="ShareMeshAcrossTests"/>
+    /// overrides are IGNORED and every test gets a fresh, per-test-disposed mesh.
+    /// Flip back to <c>true</c> (and restore the proper per-class lifetime via an
+    /// <c>IClassFixture</c>) to re-enable the optimisation. "for now" — we will see
+    /// what the memory/runtime cost is without it.</para>
+    /// </summary>
+    private bool ShareMeshClusterEnabled => false;
+
+    /// <summary>Effective sharing decision: a class's opt-in only takes effect while
+    /// the cluster kill-switch is on.</summary>
+    private bool SharesMeshAcrossTests => ShareMeshAcrossTests && ShareMeshClusterEnabled;
 
     /// <summary>
     /// Opt-in: when overridden to <c>true</c>, <see cref="DisposeAsync"/> disposes
@@ -623,7 +646,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// </summary>
     protected override void Initialize()
     {
-        if (ShareMeshAcrossTests)
+        if (SharesMeshAcrossTests)
         {
             ServiceProvider = _sharedProviders.GetOrAdd(GetType(), _ =>
             {
@@ -917,8 +940,9 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         // point of opting in (avoid rebuilding the Autofac container's compiled
         // factories for every [Fact]). The mesh outlives the testhost and
         // process exit reclaims it. Per-test base teardown (FileOutput unregister
-        // etc.) still runs.
-        if (ShareMeshAcrossTests)
+        // etc.) still runs. (Gated by the cluster kill-switch — while disabled this
+        // branch is never taken and every class falls through to per-test disposal.)
+        if (SharesMeshAcrossTests)
         {
             // Drop the per-test client hubs FIRST — the shared mesh stays alive
             // for the rest of the class, but every client hub the test created

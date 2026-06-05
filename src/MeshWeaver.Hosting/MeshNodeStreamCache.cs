@@ -47,8 +47,14 @@ namespace MeshWeaver.Hosting;
 /// <c>CompilationStatus = Pending</c> on its OWN stream only on explicit
 /// user-driven <c>RequestedReleaseAt</c> flips.</para>
 /// </summary>
-internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
+internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
 {
+    // 0 = live, 1 = disposed. Dispose fires from BOTH the cacheHub disposal
+    // hook (silo goes down → mesh hub disposes its hosted cache hub) AND the
+    // DI container tearing down this singleton. Interlocked guard makes the
+    // teardown idempotent so the second caller is a no-op.
+    private int _disposed;
+
     /// <summary>One cache entry: the updatable handle plus the shared,
     /// replay-cached read view over it. The Shared observable is the raw
     /// system-side stream; per-user access gating is applied in
@@ -204,16 +210,34 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
                     hub.RegisterForDisposal(routingService.RegisterStream(hub))),
             HostedHubCreation.Always)!;
 
-        // Register cleanup on the cache hub so hydration subscriptions are
-        // disposed at its Shutdown entry (before Quiescing). The cache hub
-        // owns the cache's lifetime; tearing it down here cancels every
-        // upstream SubscribeRequest the cache opened so the leak detector
-        // sees a clean response-subjects set at test-class dispose.
-        cacheHub.RegisterForDisposal(_ => DisposeHydrationSubscriptions());
+        // Register full teardown on the cache hub so the cache releases ALL
+        // its state at the hub's Shutdown entry (before Quiescing). The cache
+        // hub owns the cache's lifetime; when the silo/mesh goes down it
+        // disposes this hosted cache hub, which cancels every upstream
+        // SubscribeRequest AND every per-path update-queue Concat subscription
+        // the cache opened — so the leak detector sees a clean response-subjects
+        // set at test-class dispose. The cache is ALSO IDisposable so the DI
+        // container disposes it on container teardown; the _disposed guard
+        // makes whichever fires second a no-op.
+        cacheHub.RegisterForDisposal(_ => Dispose());
     }
 
-    private void DisposeHydrationSubscriptions()
+    /// <summary>
+    /// Releases every subscription and rooted subject the cache holds. Fires
+    /// when the silo/mesh goes down (cacheHub disposal) and on DI container
+    /// teardown (IDisposable). Idempotent via the <see cref="_disposed"/> guard.
+    /// </summary>
+    public void Dispose()
     {
+        if (System.Threading.Interlocked.Exchange(ref _disposed, 1) != 0)
+            return; // already torn down by the other disposal path
+
+        // 1. Per-path hydration: cancel the upstream SubscribeRequest so the
+        //    owning node hub's response-subject is released. (The Entry's
+        //    Handle is a stateless factory — it owns nothing; the HydrationSub
+        //    IS the live subscription.) Without this every cache.GetStream(path)
+        //    leaks a long-lived SubscribeRequest into the mesh hub's
+        //    responseSubjects and the leak detector flags it at dispose.
         foreach (var (path, lazyEntry) in _streams)
         {
             if (!lazyEntry.IsValueCreated) continue;
@@ -229,6 +253,27 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache
             }
         }
         _streams.Clear();
+
+        // 2. Per-path update queues: Clear() fires every entry's
+        //    post-eviction callback (ConcatSubscription.Dispose +
+        //    Subject.OnCompleted) so the serial-update Concat pipelines stop
+        //    keeping owner response-subjects rooted; Dispose() then stops the
+        //    MemoryCache's expiration-scan timer (which otherwise pins this
+        //    singleton — and through it meshHub/cacheHub — past mesh disposal).
+        try { _updateQueues.Clear(); }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "MeshNodeStreamCache: error clearing update queues");
+        }
+        try { _updateQueues.Dispose(); }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "MeshNodeStreamCache: error disposing update-queue cache");
+        }
+
+        // 3. Permission probe cache — drop the cached (path,user)⇒Permission
+        //    entries so nothing roots the disposed mesh's identities.
+        _access.Clear();
     }
 
     /// <summary>
