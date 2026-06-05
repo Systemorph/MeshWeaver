@@ -131,6 +131,11 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
                 string.Join(" ", schemas.Select(s =>
                     $"INSERT INTO public.searchable_schemas (schema_name) VALUES ('{s.Replace("'", "''")}') ON CONFLICT DO NOTHING;")));
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            // NOTE: public.top_level_index is NOT rebuilt here. Re-materializing a MATERIALIZED
+            // VIEW (DROP+CREATE, ACCESS EXCLUSIVE) on the query hot path serializes every query
+            // behind DDL and deadlocks under load. The matview is (re)built only on rare
+            // partition-set changes — at schema-init/deploy and when a NEW partition schema is
+            // first created (PostgreSqlPartitionStorageProvider) — never per query.
 
             Interlocked.Increment(ref ActualSyncCount);
             Interlocked.Exchange(ref _lastSyncTicks, DateTime.UtcNow.Ticks);

@@ -105,6 +105,54 @@ public static class PostgreSqlSchemaInitializer
                 RETURN QUERY EXECUTE full_sql;
             END;
             $$ LANGUAGE plpgsql;
+
+            -- #16 Central top-level index — a MATERIALIZED VIEW (fast lookup) over every
+            -- partition's top-level node (namespace='' → one row per partition root: the
+            -- Space / User node whose id IS the partition name). Powers top-level
+            -- autocomplete + the root listing from ONE small indexed relation instead of a
+            -- cross-schema fan-out over full mesh_nodes (the prod connection-pool storm).
+            -- Re-materialized from public.searchable_schemas whenever the partition set
+            -- changes (see rebuild on SyncSearchableSchemas); the data is tiny (one row per
+            -- partition) so a full DROP+CREATE re-materialize is cheap. The column list is
+            -- FIXED so the matview shape stays stable across rebuilds.
+            CREATE OR REPLACE FUNCTION public.rebuild_top_level_index() RETURNS void AS $$
+            DECLARE
+                schema_rec RECORD;
+                union_sql  TEXT := '';
+                cols       TEXT := 'id, namespace, name, node_type, description, category, icon, '
+                                || 'display_order, last_modified, version, state, content, '
+                                || 'desired_id, main_node, path, embedding';
+            BEGIN
+                FOR schema_rec IN SELECT schema_name FROM public.searchable_schemas ORDER BY schema_name
+                LOOP
+                    IF union_sql != '' THEN union_sql := union_sql || ' UNION ALL '; END IF;
+                    union_sql := union_sql || format(
+                        'SELECT %s FROM %I.mesh_nodes WHERE namespace = ''''',
+                        cols, schema_rec.schema_name);
+                END LOOP;
+
+                IF union_sql = '' THEN
+                    -- No partitions registered yet — emit a correctly-typed empty view
+                    -- (public.mesh_nodes carries the identical column set + vector dim).
+                    union_sql := format('SELECT %s FROM public.mesh_nodes WHERE false', cols);
+                END IF;
+
+                -- Drop + re-materialize. Always a MATERIALIZED VIEW (this function is its
+                -- only creator), so DROP MATERIALIZED VIEW IF EXISTS is the right form —
+                -- a plain `DROP VIEW IF EXISTS` would raise 42809 "is not a view" on the
+                -- existing matview (IF EXISTS suppresses only "does not exist", not wrong
+                -- relkind). Indexes are recreated each rebuild (they vanish with the matview);
+                -- the UNIQUE (namespace,id) index also enables REFRESH ... CONCURRENTLY.
+                EXECUTE 'DROP MATERIALIZED VIEW IF EXISTS public.top_level_index';
+                EXECUTE 'CREATE MATERIALIZED VIEW public.top_level_index AS ' || union_sql;
+                EXECUTE 'CREATE UNIQUE INDEX idx_tli_ns_id ON public.top_level_index (namespace, id)';
+                EXECUTE 'CREATE INDEX idx_tli_name_lower ON public.top_level_index (LOWER(name))';
+                EXECUTE 'CREATE INDEX idx_tli_id_lower ON public.top_level_index (LOWER(id))';
+                EXECUTE 'CREATE INDEX idx_tli_node_type ON public.top_level_index (node_type)';
+            END;
+            $$ LANGUAGE plpgsql;
+
+            SELECT public.rebuild_top_level_index();
             """);
         await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
