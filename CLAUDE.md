@@ -81,9 +81,13 @@ All docs embedded in `src/MeshWeaver.Documentation/` and served under `Doc/` at 
 
 ## Deployment
 
-The portals run on the shared **AKS cluster** `memexaks-cluster` (RG `memex-aks-rg`, swedencentral) — namespaces `atioz` and `memex` — against the Postgres Flexible Server, images in ACR `meshweaver.azurecr.io`. **Private cluster: `kubectl` ONLY via `az aks command invoke -g memex-aks-rg -n memexaks-cluster --command "…"`.**
+**Two deploy routes, different targets — neither deprecated.** Pick by target, don't mix:
+- **AKS** — the shared cluster portals (`atioz`/`memex`). Full ref: [DeploymentAKS.md](src/MeshWeaver.Documentation/Data/Architecture/DeploymentAKS.md).
+- **Azure Container Apps** — the Aspire `test`/`prod` modes, via `tools/deploy.sh prod|test`. Full ref: [DeploymentContainerApps.md](src/MeshWeaver.Documentation/Data/Architecture/DeploymentContainerApps.md).
 
-**A code update = build image → set image → restart.** NOT `deploy.sh`, NOT bare `aspire deploy`:
+The `atioz`/`memex` portals run on the shared **AKS cluster** `memexaks-cluster` (RG `memex-aks-rg`, swedencentral) — namespaces `atioz` and `memex` — against the Postgres Flexible Server, images in ACR `meshweaver.azurecr.io`. **Private cluster: `kubectl` ONLY via `az aks command invoke -g memex-aks-rg -n memexaks-cluster --command "…"`.**
+
+**On AKS a code update = build image → set image → restart** (the AKS route does NOT use `tools/deploy.sh` or `aspire deploy` — those are the Container Apps route):
 
 ```bash
 az acr login -n meshweaver
@@ -104,10 +108,10 @@ az aks command invoke -g memex-aks-rg -n memexaks-cluster --command "\
 ```
 
 - **`deploy/aks/envs/<env>/deploy.sh` is first-time ENV SETUP only** (helm install + PVCs + KV SecretProviderClass + ingress + connection-string patch). Do NOT use it for a code update — it re-runs the whole chart and can reset live config.
-- **Never `aspire deploy`** — legacy Azure Container Apps path; the cluster is AKS now.
+- **Don't run `tools/deploy.sh` or `aspire deploy` against the AKS cluster** — those are the *Container Apps* route (a different target), not a code-update path for AKS.
 - `memex-migration` runs the migration then exits 0 and the Deployment restarts it (benign `CrashLoopBackOff`). Before declaring success, confirm its log shows `Database migration completed. Version: N` AND the portal serves (HTTP 200).
 
-Full reference: [Deployment.md](src/MeshWeaver.Documentation/Data/Architecture/Deployment.md)
+Routes + full reference: [Deployment.md](src/MeshWeaver.Documentation/Data/Architecture/Deployment.md) (index) · [DeploymentAKS.md](src/MeshWeaver.Documentation/Data/Architecture/DeploymentAKS.md) · [DeploymentContainerApps.md](src/MeshWeaver.Documentation/Data/Architecture/DeploymentContainerApps.md)
 
 ## Bash Command Guidelines
 
