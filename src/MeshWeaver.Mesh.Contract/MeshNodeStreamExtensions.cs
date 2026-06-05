@@ -542,16 +542,23 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                 return;
                             }
 
-                            // Auto-stamp LastModified when the lambda left it
-                            // untouched. The OWN-stream's DataChangedEvent fan-out
-                            // (which propagates a patch to remote subscribers)
-                            // includes LastModified in the diff, so consumers that
-                            // want a content-change tick can read it directly off
-                            // their MeshNode emission — no separate
-                            // IDataChangeNotifier round-trip needed.
+                            // Auto-stamp LastModified + LastModifiedBy when the lambda left
+                            // them untouched. The OWN-stream's DataChangedEvent fan-out
+                            // includes them in the diff, so consumers that want a
+                            // content-change tick read them directly off their MeshNode
+                            // emission. LastModifiedBy = the caller's AUTHENTICATED identity
+                            // (capturedContextAtEntry) — the same AccessContext stamped on
+                            // the outgoing patch, so a client can't forge a different author.
+                            // This preserves the audit trail UpdateNodeRequest used to stamp
+                            // from UpdatedBy now that writes go through stream.Update.
                             if (updated.LastModified == current.LastModified)
                             {
                                 updated = updated with { LastModified = DateTimeOffset.UtcNow };
+                            }
+                            if (updated.LastModifiedBy == current.LastModifiedBy
+                                && !string.IsNullOrEmpty(capturedContextAtEntry?.ObjectId))
+                            {
+                                updated = updated with { LastModifiedBy = capturedContextAtEntry.ObjectId };
                             }
 
                             var jsonOpts = _workspace.Hub.JsonSerializerOptions;
