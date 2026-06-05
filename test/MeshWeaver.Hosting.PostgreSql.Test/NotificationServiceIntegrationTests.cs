@@ -56,11 +56,11 @@ public class NotificationServiceIntegrationTests(PostgreSqlFixture fixture, ITes
     {
         var ct = TestContext.Current.CancellationToken;
         var ns = $"notif_test_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
+        Mesh.ProvisionPartition(ns);   // no lazy create — provision the partition (incl. its
+                                       // `notifications` satellite table) before writing
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-        // Seed a main entity so the satellite has a real parent + the partition
-        // schema gets created (first-touch init runs CreateSatelliteTablesAsync
-        // which includes `notifications` after the StandardTableMappings change).
+        // Seed a main entity so the satellite has a real parent.
         var mainPath = $"{ns}/doc";
         meshService.CreateNode(new MeshNode("doc", ns)
         {
@@ -104,6 +104,7 @@ public class NotificationServiceIntegrationTests(PostgreSqlFixture fixture, ITes
     {
         var ct = TestContext.Current.CancellationToken;
         var ns = $"notif_test2_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
+        Mesh.ProvisionPartition(ns);   // no lazy create — provision the partition first
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         // Seed a main entity (any node type works; notifications are satellites

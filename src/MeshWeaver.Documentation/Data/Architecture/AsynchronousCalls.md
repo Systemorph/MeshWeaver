@@ -172,21 +172,21 @@ return _ioPool.Run(async ct =>
 return _ioPool.RunStream(ct => QueryStream(ct));   // IObservable<Row>, one OnNext per item
 ```
 
-Obtain a pool with `hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.X) ?? IoPool.Unbounded` (the `Unbounded` fallback still offloads to the ThreadPool with `ConfigureAwait(false)`, so it is never worse than the bare `FromAsync` it replaces). Pool names (`FileSystem`, `Blob`, `Http`, `Compile`, `Process`) pick the concurrency cap per resource class.
+Obtain a pool with `hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.X) ?? IoPool.Unbounded` (the `Unbounded` fallback still offloads to the ThreadPool with `ConfigureAwait(false)`, so it is never worse than the bare `FromAsync` it replaces). Pool names (`FileSystem`, `Blob`, `Http`, `Compile`, `Process`, and per-Postgres-adapter `pg:{adapter}` capped at 1) pick the concurrency cap per resource class. For idempotent one-shots, cache the eager `pool.Run(...)` observable in an instance `ConcurrentDictionary` (the **promise-cache** — canonical: `PostgreSqlPartitionStorageProvider.EnsurePartitionProvisioned`).
 
 **The only sanctioned `Observable.FromAsync` lives inside `IoPool` itself** — it is the one place that owns the gate + `ConfigureAwait(false)` + `SubscribeOn` discipline. Every adapter / provider / service that bridges an `async`/`IAsyncEnumerable` leaf goes through `IIoPool`, never `Observable.FromAsync` directly. This is the same litmus test as rule #9 in the absolute rules below: name the I/O the leaf awaits, run it in the pool, and return `IObservable<T>`.
 
-### Which `Observable.FromAsync` sites convert — and which don't
+### Every `Observable.FromAsync` converts — the only one that survives is inside `IoPool`
 
-Not every `Observable.FromAsync` is an I/O leaf. Apply the rule by category:
+🚨 **`Observable.FromAsync` is forbidden in `src/`** (see [ControlledIoPooling](ControlledIoPooling.md)). There is no "keep it" category — the single sanctioned occurrence is sealed inside `IoPool`. The earlier "Postgres owns a pool, keep `FromAsync`" carve-out is **rescinded**.
 
 | Category | Examples | Action |
 |---|---|---|
-| **I/O leaf, no pool of its own** | file-system / embedded-resource / content reads, version stores, Azure **blob** I/O, the storage-adapter scope-walk query | **Convert → `IIoPool`** (`FileSystem` / `Blob` pool). This is the exact case `IIoPool` exists for. |
-| **I/O leaf that already owns a pool** | Postgres / Cosmos adapters & query leaves — bounded by the **Npgsql / Cosmos connection pool** | **Keep `Observable.FromAsync(fn, Scheduler.Default)`** — this is the reference pattern `IIoPool` *generalizes* (see `IoPool` summary). The deadlock fix here is `ConfigureAwait(false)` on every `await` (incl. each `await foreach`) inside the DB core, so the continuation can't capture a blocking subscriber's scheduler. |
-| **Not an I/O leaf** | message routing (`OrleansRoutingService` / `MonolithRoutingService` / `RoutingGrain`), semaphore/lock acquisition (`KernelExecutor.executionLock`), async **view generators** (`LayoutAreaHost`, `LayoutDefinitionExtensions`), hub **handler bridges** (`MeshExtensions`, `MessageHubConfiguration`) | **Leave as-is.** These bridge a hub turn or user-supplied async, not a storage leaf; they run on (or are owned by) a scheduler that is correct for them. Forcing them through the I/O pool is a category error. |
+| **I/O leaf, no pool of its own** | file-system / embedded-resource / content reads, version stores, Azure **blob** I/O, the storage-adapter scope-walk query | **`IIoPool`** (`FileSystem` / `Blob` pool). |
+| **I/O leaf with a driver pool** | Postgres / Cosmos adapters & query leaves | **Per-adapter `IIoPool`** — `pg:{adapter}`, cap 1, so the gate *is* the single Npgsql connection ("hook into the pg pool"). The hot query/storage `FromAsync` sites are **migration debt, not a sanctioned pattern**; new code (e.g. `EnsurePartitionProvisioned`) is pooled from day one. |
+| **Not an I/O leaf** | message routing, lock acquisition, async view generators, hub handler bridges | Not a leaf — but still never `FromAsync`. Compose reactively or use the framework lifecycle hook. Any surviving `FromAsync` here is legacy to migrate, never a template to copy. |
 
-When in doubt, the litmus test is **rule #9**: *name the I/O the leaf awaits.* If it's a Postgres round-trip → connection-pool-bounded `FromAsync` + `ConfigureAwait(false)`. If it's a file/blob/in-memory read with no pool → `IIoPool`. If you can't name any I/O (it's routing, a lock, a view render, a handler hop) → it isn't a leaf, leave it.
+The litmus test: *name the I/O the leaf awaits.* DB / file / blob / HTTP / compile / process → the matching `IIoPool` (DB → the per-adapter `pg:{adapter}` pool). No nameable I/O (routing, a lock, a view render, a handler hop) → it isn't a leaf; make it reactive without `FromAsync`. Either way **you never type `Observable.FromAsync` yourself** — only `IoPool` does.
 
 ### The consumer side — bind whole collections, never `await foreach`
 

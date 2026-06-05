@@ -87,9 +87,9 @@ Postgres already solved this: `Observable.FromAsync(work, Scheduler.Default)` pu
 
 ---
 
-## 🚨 The rule: never raw `Observable.FromAsync` at an I/O leaf
+## 🚨🚨🚨 ABSOLUTE: `Observable.FromAsync` is NEVER tolerated
 
-**Every genuine async/blocking I/O leaf goes through `IIoPool`.** Writing `Observable.FromAsync(ct => SomeIoAsync(ct))` directly at an I/O edge is forbidden.
+**`Observable.FromAsync(...)` is FORBIDDEN everywhere in `src/` — no exceptions.** Not for storage, not for Postgres, not for "it already runs off the scheduler", not for a one-off. There is exactly **one** place the call may appear in the entire codebase: sealed *inside* `IoPool` (the primitive). Anywhere else it is a defect to be removed. Every genuine async/blocking I/O leaf goes through `IIoPool`.
 
 A bare `Observable.FromAsync` only schedules *notification delivery*. It invokes the function's synchronous prologue on the **subscribing thread** — which is the hub/grain scheduler when the subscribe happens mid-handler — and applies no concurrency bound. That is the entire bug class this primitive exists to kill.
 
@@ -109,7 +109,24 @@ Pick the method by leaf kind:
 | `InvokeBlocking` | Sync-blocking / CPU leaves (Roslyn compile, `File.ReadAllBytes`, `Process`) |
 | `InvokeStream` | `IAsyncEnumerable` sources (partition objects, etc.) |
 
-The handful of **non-I/O** `Observable.FromAsync` bridges that already run off the hub scheduler are out of scope: message-routing callbacks, init-gates over a hub round-trip, opaque user-supplied `InitializationFunction`s. The litmus test is simple — if `FromAsync` wraps a *real* file/network/DB/compile wait, it must be a pool call instead.
+There is no "out of scope" residue. If you find yourself typing `Observable.FromAsync`, stop: the answer is an `IIoPool` call (or, for an idempotent one-shot, the promise-cache below). The only `FromAsync` that survives a review is the one inside `IoPool` itself.
+
+### Promise-cache for idempotent one-shots
+
+For work that should run **at most once** and then be observed by many (schema provisioning, a cached resource handshake), cache the eager `pool.Run(...)` observable in an **instance** `ConcurrentDictionary<key, IObservable<T>>` (never static):
+
+```csharp
+// PostgreSqlPartitionStorageProvider.EnsurePartitionProvisioned — the canonical example.
+// First caller kicks the CREATE SCHEMA off on the per-adapter pool; every later subscriber
+// replays the cached completion. No Observable.FromAsync at the call site.
+private readonly ConcurrentDictionary<string, IObservable<Unit>> _provisioned = new();
+
+public IObservable<Unit> EnsurePartitionProvisioned(string @namespace) =>
+    _provisioned.GetOrAdd(schema, _ =>
+        _ioPool.Run(ct => EnsureSchemaAsync(def, ct)).Select(_ => Unit.Default));
+```
+
+`pool.Run` is `ReplaySubject`-backed (see [IoPoolExtensions](#hidden-inside-the-interfaces)) — eager, single-run, replays to all. That is the "promise pattern": the dictionary entry *is* the promise.
 
 ---
 
@@ -159,6 +176,7 @@ Pools are keyed by resource class and resolved lazily from `IoPoolRegistry` (a m
 | `Http` | 16 | 2 |
 | `Compile` | `Environment.ProcessorCount` | 3 |
 | `Process` | 4 | 3 |
+| `pg:{adapter}` (per Postgres adapter) | **1** (mirrors the adapter's single Npgsql connection) | — |
 
 ---
 
@@ -180,22 +198,13 @@ public IObservable<MeshNode?> Get(string path)
 
 ---
 
-## Scope — and why storage is NOT pooled
+## Scope — storage and Postgres are pooled too
 
-This pool targets the **blocking I/O leaves that would otherwise block the single-threaded hub scheduler**: outbound HTTP (MCP mirror, social publishing), NuGet resolution, Roslyn script execution, and external processes (`dotnet test`). These are low-frequency and genuinely deadlock-prone.
+Earlier guidance carved storage and Postgres out of the pool and left them on plain `Observable.FromAsync`. **That carve-out is rescinded — there is no exemption.** `FromAsync` is never tolerated (see the absolute rule above), so storage / file-system / Postgres leaves go through `IIoPool` like everything else.
 
-**Storage and file-system adapters are deliberately left on plain `Observable.FromAsync`** (not pooled) for two reasons:
+**Per-adapter pools, cap = the connection count.** A Postgres storage adapter holds a single Npgsql connection (`MaxPoolSize=1`); its pool is named `pg:{adapter}` and capped at **1**, so the `IIoPool` gate *is* that one connection ("hook into the pg pool") rather than a redundant bound stacked on top of it. The naming + cap live in `IoPoolNames.PostgresAdapterPrefix` / `IoPoolOptions.MaxConcurrencyFor`. This sidesteps the old worry about a mis-sized gate deadlocking against the driver pool: the gate and the driver pool are the same size (1), by construction.
 
-- Their I/O is already asynchronous — the `await` is on the real file/blob call, which already runs off the hub turn.
-- They sit on the *hottest* path in the system — every node read/write, every hub init, every permission evaluation.
-
-Routing them through the pool added a `SubscribeOn(TaskPoolScheduler.Default)` hop to **every** read. Under CI's constrained ThreadPool this starved init/permission reads past their timeouts (hub-init failures, spurious "access denied"); the bound also throttled a path that needs high concurrency. For storage the pool's cost outweighs its benefit — the existing async `FromAsync` is the right shape.
-
----
-
-## Why Postgres is left as-is
-
-`PostgreSqlMeshQuery` / `PostgreSqlVersionQuery` already do `Observable.FromAsync(work, Scheduler.Default)` bounded by Npgsql's `MaxPoolSize` (the correct, role-specific, driver-enforced bound). An extra `IIoPool` gate on top would be redundant and could deadlock against the connection pool if mis-sized. There is no gap there — leave it.
+The cost concern that originally justified the carve-out (a `SubscribeOn` hop on every hot read under a constrained CI ThreadPool) is real and must be measured as adapters migrate — but the answer is to size the per-adapter pools correctly, **not** to fall back to bare `FromAsync`. New code (e.g. `PostgreSqlPartitionStorageProvider.EnsurePartitionProvisioned`) is pooled from day one; the remaining hot-path query/storage `FromAsync` sites are migration debt, not a sanctioned pattern.
 
 ---
 
@@ -220,9 +229,11 @@ These four properties must hold for every leaf that uses `IIoPool`:
 | **Http** | `McpRemoteMeshClient` (MCP mirror), Social publishers (`ScheduledPostPublisher` / `PostStatsRefresher` / `PastPostIngestJob`) |
 | **Process** | `MeshPlugin.RunTests` (`dotnet test` via `Process.Start`, `InvokeBlocking`) |
 
+| **`pg:Postgres`** | `PostgreSqlPartitionStorageProvider.EnsurePartitionProvisioned` (schema provisioning, promise-cached) |
+
 The `Compile` pool exists but is currently unused: pooling `KernelExecutor`'s Roslyn run was reverted because it perturbed the carefully-ordered REPL execution path (submission-order / no-deadlock guarantees).
 
-Also not pooled (see [Scope](#scope--and-why-storage-is-not-pooled) above): storage / file-system adapters (already-async, hottest path), `MeshNodeCompilationService` (recompile-timing path), `NuGetAssemblyResolver` (`MeshWeaver.NuGet` doesn't reference `Mesh.Contract`). Each can be revisited with care.
+**Migration debt, NOT exempt** (see [Scope](#scope--storage-and-postgres-are-pooled-too)): the hot-path query/storage `Observable.FromAsync` sites in `PostgreSqlMeshQuery` / `PostgreSqlVersionQuery` / `PostgreSqlStorageAdapter` / file-system adapters predate this rule and are being migrated onto per-adapter `pg:{adapter}` pools (and the file-system equivalents). They are **not** a sanctioned pattern to copy — new code is pooled from day one.
 
 ---
 

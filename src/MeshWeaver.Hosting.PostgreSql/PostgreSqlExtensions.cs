@@ -267,7 +267,8 @@ public static class PostgreSqlExtensions
                 sp.GetService<IEmbeddingProvider>(),
                 configureDataSource,
                 contexts: null,
-                sp.GetService<ILogger<PostgreSqlPartitionStorageProvider>>()));
+                sp.GetService<ILogger<PostgreSqlPartitionStorageProvider>>(),
+                sp.GetService<MeshWeaver.Mesh.Threading.IoPoolRegistry>()));
         services.AddSingleton<IPartitionStorageProvider>(sp =>
             sp.GetRequiredService<PostgreSqlPartitionStorageProvider>());
 
@@ -369,7 +370,8 @@ public static class PostgreSqlExtensions
                 sp.GetService<IEmbeddingProvider>(),
                 configureDataSource,
                 contexts: null,
-                sp.GetService<ILogger<PostgreSqlPartitionStorageProvider>>());
+                sp.GetService<ILogger<PostgreSqlPartitionStorageProvider>>(),
+                sp.GetService<MeshWeaver.Mesh.Threading.IoPoolRegistry>());
         });
         services.AddSingleton<IPartitionStorageProvider>(sp =>
             sp.GetRequiredService<PostgreSqlPartitionStorageProvider>());

@@ -64,6 +64,22 @@ public static class SchemaInitialization
         var adminOptions = SchemaHelpers.BuildSchemaOptions(connectionString, "admin", options.VectorDimensions);
         await PostgreSqlSchemaInitializer.InitializeMeshTablesAsync(adminDataSource, adminOptions);
 
+        // Auth mirror schema. The V27 mirror trigger (mirror_access_object_to_auth_schema)
+        // inserts User/Group/Role/VUser/ApiToken/Space rows into auth.mesh_nodes. On a FRESH
+        // DB there is no legacy `user` schema for V27 to rename, and the storage router no
+        // longer lazily CREATE SCHEMAs on first write — so create `auth` eagerly here via the
+        // same stored proc every partition uses, so the trigger always has a destination.
+        // Trigger-populated only; application code never writes to auth.
+        await using (var ensureAuth = dataSource.CreateCommand("SELECT public.ensure_partition_schema('auth')"))
+            await ensureAuth.ExecuteNonQueryAsync();
+
+        // Global access-grant schema. Root-scope / global AccessAssignments (namespace `_Access`,
+        // MainNode="") persist into system_access.access — the platform-admin / global-viewer
+        // grant scope SecurityService reads. Created eagerly (no lazy create); ensure_partition_schema
+        // provisions the full standard table set, of which `access` is the one used.
+        await using (var ensureSysAccess = dataSource.CreateCommand("SELECT public.ensure_partition_schema('system_access')"))
+            await ensureSysAccess.ExecuteNonQueryAsync();
+
         // Detect fresh DB: no partition schemas (i.e., no schemas with a mesh_nodes table)
         // existed before this run. The admin schema doesn't count.
         var isFreshDb = await DetectFreshDbAsync(dataSource);

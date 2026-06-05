@@ -46,9 +46,28 @@ Each NodeType declares its storage shape **once, on its NodeType definition** (i
 
 This replaces both the hard-coded `PartitionDefinition.StandardTableMappings` / `NodeTypeToSuffix` dictionaries **and** the `_Thread`/`_Access`/… path-suffix string-matching: a node's storage table comes from **its NodeType's configuration**, not from the shape of its path. Adding a new satellite type is a one-line configuration on that NodeType — no central map to edit, no router branch to add. *This is what makes the config easy.*
 
-## Consequences
+## The only framework partitions: `public`, `admin`, `auth`
 
-- **No lazy schema creation.** Removing the path-router's "first segment → CREATE SCHEMA on first write" fallback. Only a partition-owning NodeType's *create* provisions a schema.
-- **No query fan-out decisioning.** The query provider stops choosing schemas / pinning / satellite-branching; it asks every adapter and absent partitions answer empty. (Replaces `NeedsFanOut` / `ResolvePinnedPartition` / `EnumerateFanOutAsync`.)
-- **No routing registry.** The owning adapter is found by longest-prefix-match across adapters (`FindBestPrefixMatch`, max wins) — not a NodeType→schema lookup table.
-- **Deterministic persistence.** The **schema** is the winning prefix-match adapter; the **table** comes from the object's NodeType config. An absent partition (no adapter prefix-matches, and not a partition-owning create) **refuses the write** rather than corrupting storage.
+Beyond per-User/Space partitions, the clean model keeps exactly three system schemas, all created **eagerly by the migration** (never lazily, never by an app write):
+
+| Schema | Purpose | Who writes |
+|---|---|---|
+| `public` | shared tables + central main-node index + the `ensure_partition_schema` stored proc | migration |
+| `admin` | version tracking + global catalogs (agents / models / roles) | system, via normal persistence |
+| `auth` | access-object lookup **mirror** (User/Group/Role/VUser/ApiToken/Space rows) | **trigger only — application code NEVER writes to `auth`** (`PartitionWriteGuardValidator` rule 1 blocks it). The V27 `mirror_access_object_to_auth_schema` trigger populates it; the migration creates the schema so the trigger has a destination. |
+
+**Legacy partitions are gone (full cut).** `Portal` / `Kernel` session partitions are removed — compilation / script execution is an **Activity** in the owning partition's `activities` table, not a `kernel` schema (the standalone `kernel/*` address was retired; the kernel runs inside the Activity MeshNode hub). The global `_Access` / `_Activity` / `_UserActivity` / `_Thread` satellite partitions and their global `AccessAssignment`s are removed too: per-partition `_Access` holds grants, and the system identity gets `Permission.All` from the `PermissionEvaluator` fast-path (no data-model grant). `DefaultPartitionProvider` now seeds only `Admin` + `Auth`.
+
+## Implementation status (2026-06-05)
+
+**Done (the ghost-schema corruption fix):**
+- `NodeTypeDefinition.OwnsPartition` / `StorageTable` — the declarative, type-level config (set on `Space`, `User`; `StorageTable="user_activities"` on `UserActivity`).
+- [`OwnsPartitionProvisioningValidator`](../../../MeshWeaver.Graph/Security/OwnsPartitionProvisioningValidator.cs) — the **one** schema-creation trigger. Reads `OwnsPartition` off the NodeType definition (via `FindStaticNode`), requires top-level, and provisions before the root write. Replaces `SpaceTopLevelValidator` (deleted) and User-onboarding's reliance on lazy create. Registered centrally in `AddRowLevelSecurity`.
+- [`IPartitionStorageProvider.EnsurePartitionProvisioned`](../../../MeshWeaver.Mesh.Contract/Services/IPartitionStorageProvider.cs) — reactive (`IObservable<Unit>`), promise-cached per schema, bridged through a per-adapter `IIoPool` (`pg:Postgres`, cap 1). **No `Observable.FromAsync`** (see [ControlledIoPooling](ControlledIoPooling.md)).
+- [`PostgreSqlPathRoutingAdapter`](../../../MeshWeaver.Hosting.PostgreSql/PostgreSqlPathRoutingAdapter.cs) — the lazy `EnsureSchemaForPartitionSync` is **deleted** from both write paths (`RouteWrite` + `CreateAdapterForTable`). A write to an unprovisioned partition now faults `42P01` ("no partition, no write") instead of conjuring a ghost schema.
+- `auth` created eagerly by the migration; system-identity activity tracking suppressed (it would otherwise write a `system-security` ghost partition).
+
+**Still design / migration debt (the broader query redesign, tracked separately):**
+- Longest-prefix-match cross-adapter routing (§2) — `FindBestPrefixMatch` exists; the PG router still resolves by first-segment.
+- Retiring `NodeTypeToSuffix` / `StandardTableMappings` path-suffix matching in favour of reading `StorageTable` everywhere (the `StorageTable` field is declared and provisioned, not yet the sole routing source).
+- Query fan-to-all replacing `NeedsFanOut` / `ResolvePinnedPartition` / `EnumerateFanOutAsync`.

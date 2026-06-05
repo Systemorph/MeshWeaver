@@ -1,16 +1,35 @@
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
-/// Provides the default partition nodes that are created during system initialization.
-/// Admin: system administration data (PlatformAdmin only).
-/// User: user profiles, settings, and all user-scoped satellite data (public read).
-/// Portal: portal session nodes (public read, unversioned).
-/// Kernel: kernel session nodes (public read, unversioned).
-/// Also provides static AccessAssignment nodes granting Public Viewer on non-admin partitions.
+/// Seeds the only two framework partitions the clean model keeps:
+/// <list type="bullet">
+///   <item><b>Admin</b> — system administration data + version tracking + global catalogs
+///     (agents / models / roles). Its schema is created eagerly by the migration.</item>
+///   <item><b>Auth</b> — the central access-object lookup mirror. The per-partition trigger
+///     (<c>mirror_access_object_to_auth_schema</c>, V27) lands <c>User</c> / <c>Group</c> /
+///     <c>Role</c> / <c>VUser</c> / <c>ApiToken</c> / <c>Space</c> rows here so token validation,
+///     role/group lookup, and email→user resolution are single-schema queries.
+///     <b>Trigger-populated only — application code NEVER writes to <c>auth</c></b>
+///     (<c>PartitionWriteGuardValidator</c> rule 1 blocks it). The migration creates the
+///     <c>auth</c> schema so the trigger has a destination.</item>
+/// </list>
+///
+/// <para><b>Legacy partitions are gone (2026-06-05).</b> <c>Portal</c> / <c>Kernel</c> session
+/// partitions are removed — compilation / script execution is modelled as <b>Activities</b>
+/// inside the owning partition's <c>activities</c> table, not a <c>kernel</c> schema (the
+/// standalone <c>kernel/*</c> address was retired; see <c>KernelContainer</c>). The global
+/// <c>_Activity</c> / <c>_UserActivity</c> / <c>_Thread</c> satellite partitions are dropped
+/// (everything is partition-scoped now), and the seed grants go too: the system identity gets
+/// <c>Permission.All</c> from the <c>PermissionEvaluator</c> fast-path, and the only Public-viewer
+/// grants were on the now-removed Portal/Kernel. <b><c>_Access</c> is KEPT</b> — global /
+/// root-scope access grants are a live feature, not legacy. See
+/// <c>Doc/Architecture/PartitionStorageRouting.md</c>.</para>
+///
+/// <para>User and Space partitions are NOT seeded here — they own their partitions and are
+/// provisioned on create by <c>OwnsPartitionProvisioningValidator</c>.</para>
 /// </summary>
 internal class DefaultPartitionProvider : IStaticNodeProvider
 {
@@ -19,91 +38,27 @@ internal class DefaultPartitionProvider : IStaticNodeProvider
         yield return CreatePartition("Admin", "admin", "System administration",
             tableMappings: PartitionDefinition.StandardTableMappings);
 
-        // Central auth-lookup partition. The per-partition mirror trigger
-        // (mirror_access_object_to_auth_schema, V27) lands User / Group /
-        // Role / VUser / ApiToken rows here — namespace and id preserved
-        // from the source row — so token validation, role/group lookup, and
-        // email→user resolution become single-schema queries instead of
-        // cross-partition fan-outs.
-        yield return CreatePartition("Auth", "auth", "Auth lookup partition: User / Group / Role / VUser / ApiToken mirrors from every source partition",
+        yield return CreatePartition("Auth", "auth",
+            "Auth lookup mirror: User / Group / Role / VUser / ApiToken / Space rows mirrored "
+                + "from every source partition by the V27 trigger. Trigger-populated only — "
+                + "application code never writes here.",
             tableMappings: PartitionDefinition.StandardTableMappings);
 
-        yield return CreatePartition("Portal", "portal", "Portal sessions",
-            tableMappings: PartitionDefinition.StandardTableMappings, versioned: false);
-
-        yield return CreatePartition("Kernel", "kernel", "Kernel sessions",
-            tableMappings: PartitionDefinition.StandardTableMappings, versioned: false);
-
-        // Global-scope satellite namespaces — these are top-level partitions, not
-        // a `{partition}/_X/...` suffix, so writes to e.g. `_Access/Roland_Access`
-        // (a global access grant) or `_Activity/<id>` (an activity not bound to a
-        // partition) need their own routable PartitionDefinition. Schema name
-        // sheds the underscore for SQL hygiene; the primary table is the
-        // satellite table itself, no further suffix routing needed within the
-        // schema. SecurityService already queries `namespace:_Access`
-        // unconditionally; without these registrations the Postgres provider's
-        // `Matches(...)` returns false and writes fault with
-        // "no IPartitionStorageProvider matches" (repro:
-        // EffectivePermissionPostgresTest.CreateOrganization_HasPermission_ReturnsAdmin).
+        // Global access-grant scope. A `_Access`-namespace AccessAssignment with MainNode=""
+        // is a ROOT-SCOPE grant that applies across every partition (platform-admin / global
+        // viewer) — the canonical "namespace == _Access globally" pattern. It is NOT legacy
+        // (unlike the _Activity/_UserActivity/_Thread global satellites, which are dropped):
+        // SecurityService reads `namespace:_Access` and root-scope admin gates depend on it.
+        // Schema name sheds the underscore (`system_access`); the primary table IS the
+        // `access` satellite. Created eagerly by the migration (no lazy create).
         yield return CreateGlobalSatellitePartition("_Access", "system_access", "access",
-            "Global access assignments — grants that apply across every partition.");
-        yield return CreateGlobalSatellitePartition("_Activity", "system_activity", "activities",
-            "Global activity log — long-running operations not bound to a content partition.");
-        yield return CreateGlobalSatellitePartition("_UserActivity", "system_user_activity", "user_activities",
-            "Global per-user activity stream.");
-        yield return CreateGlobalSatellitePartition("_Thread", "system_thread", "threads",
-            "Global discussion threads not bound to a content partition.");
-
-        // Grant Public (all authenticated users) Viewer role on Portal and Kernel.
-        // User namespace is NOT included — only the User node itself is publicly readable
-        // (via UserAccessRule), children require explicit access (via UserScopeGrantHandler).
-        foreach (var ns in new[] { "Portal", "Kernel" })
-            yield return CreatePublicViewerAccess(ns);
-
-        // Global Admin grant for the system identity. Mirrors the
-        // PermissionEvaluator.GetEffectivePermissions fast-path
-        // (`system-security` → Permission.All) as an explicit data-model rule so
-        // every code path that consults AccessAssignment — auditing, the layout
-        // ACL view, the access-control catalog — sees the same answer the
-        // evaluator returns at runtime.
-        //
-        // Operational motivator: TrackActivity (NavigationService /
-        // UserContextMiddleware) fires under whatever AccessContext is current,
-        // and that context can transiently be `system-security` (e.g. mid
-        // ImpersonateAsSystem). The activity tracker writes to
-        // `{userId}/_UserActivity/{encodedPath}` — for `userId = system-security`
-        // that lands in the global `_UserActivity` partition, which still needs
-        // Create permission. Global scope grants Admin on EVERY partition's
-        // `_UserActivity` satellite tree (and everything else system writes touch).
-        yield return CreateSystemAdminAccess();
+            "Global / root-scope access assignments — grants that apply across every partition.");
     }
 
     /// <summary>
-    /// Creates the global AccessAssignment granting <see cref="WellKnownUsers.System"/>
-    /// the Admin role at root scope. Namespace = <c>_Access</c> (the canonical global
-    /// access-grant scope per <c>feedback_access_assignment_namespace</c>); MainNode = ""
-    /// so the grant applies to every partition via namespace inheritance.
-    /// </summary>
-    private static MeshNode CreateSystemAdminAccess() =>
-        new($"{WellKnownUsers.System}_Access", "_Access")
-        {
-            NodeType = "AccessAssignment",
-            Name = $"{WellKnownUsers.System} Access",
-            MainNode = "",
-            Content = new AccessAssignment
-            {
-                AccessObject = WellKnownUsers.System,
-                DisplayName = "System identity (internal operations)",
-                Roles = [new RoleAssignment { Role = "Admin" }]
-            }
-        };
-
-    /// <summary>
-    /// Creates a top-level partition for a global satellite namespace
-    /// (<c>_Access</c>, <c>_Activity</c>, <c>_UserActivity</c>, <c>_Thread</c>).
-    /// The primary table IS the satellite table (no within-partition suffix
-    /// routing) so a write to e.g. <c>_Access/Roland_Access</c> lands in
-    /// <c>system_access.access</c>.
+    /// A top-level partition for a global satellite namespace whose schema name differs from
+    /// the lowercased namespace (e.g. <c>_Access</c> → <c>system_access</c>) and whose primary
+    /// table IS the satellite table (no within-partition suffix routing).
     /// </summary>
     private static MeshNode CreateGlobalSatellitePartition(
         string ns, string schema, string table, string description) =>
@@ -118,7 +73,6 @@ internal class DefaultPartitionProvider : IStaticNodeProvider
                 DataSource = "default",
                 Schema = schema,
                 Table = table,
-                // No TableMappings — the partition IS the satellite, no further routing.
                 Versioned = true,
                 Description = description,
             }
@@ -142,23 +96,6 @@ internal class DefaultPartitionProvider : IStaticNodeProvider
                 TableMappings = tableMappings,
                 Versioned = versioned,
                 Description = description,
-            }
-        };
-
-    /// <summary>
-    /// Creates a static AccessAssignment granting the Public user Viewer role
-    /// on a namespace. This gives all authenticated users read access.
-    /// </summary>
-    private static MeshNode CreatePublicViewerAccess(string ns) =>
-        new($"{WellKnownUsers.Public}_Access", ns)
-        {
-            NodeType = "AccessAssignment",
-            Name = $"{WellKnownUsers.Public} Access",
-            Content = new AccessAssignment
-            {
-                AccessObject = WellKnownUsers.Public,
-                DisplayName = "All authenticated users",
-                Roles = [new RoleAssignment { Role = "Viewer" }]
             }
         };
 }

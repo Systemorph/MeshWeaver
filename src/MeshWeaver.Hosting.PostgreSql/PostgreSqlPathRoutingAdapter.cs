@@ -17,13 +17,19 @@ namespace MeshWeaver.Hosting.PostgreSql;
 /// the Postgres schema <c>seg.ToLowerInvariant()</c> — resolved
 /// <i>synchronously</i>, with NO <c>information_schema</c> probe and NO async
 /// cache lookup. The router only verifies the segment is routable
-/// (<see cref="ResolveSchema"/>'s guards); existence is established lazily:</para>
+/// (<see cref="ResolveSchema"/>'s guards). <b>It NEVER creates a schema</b> — schema
+/// creation is eager and gated to partition-owning creates
+/// (<c>OwnsPartitionProvisioningValidator</c> →
+/// <see cref="PostgreSqlPartitionStorageProvider.EnsurePartitionProvisioned"/>). Existence
+/// is therefore established by provisioning, and at the router both reads and writes simply
+/// route:</para>
 ///
 /// <list type="bullet">
 ///   <item><b>Writes</b> (Write / SavePartitionObjects / DeletePartitionObjects)
-///     call <see cref="PostgreSqlPartitionStorageProvider.EnsureSchemaForPartitionSync"/>
-///     (idempotent CREATE SCHEMA via <c>public.ensure_partition_schema</c>)
-///     before routing — so the schema is guaranteed present when the write lands.</item>
+///     route to the per-schema adapter. If the partition was never provisioned the schema
+///     does not exist and the write faults with Postgres <c>42P01</c> — the "no partition,
+///     no write" refusal. The router does NOT lazily CREATE SCHEMA for an arbitrary path
+///     segment (that was the atioz 45-ghost-schema DB-corruption root cause).</item>
 ///   <item><b>Reads</b> route straight to the per-schema adapter, which
 ///     <i>tolerates an absent schema</i>: each read catches Postgres
 ///     <c>42P01</c> (undefined table/schema) and returns the empty result
@@ -155,23 +161,21 @@ internal sealed class PostgreSqlPathRoutingAdapter : IStorageAdapter
         => ResolveSchema(path) is { } def ? GetOrCreateAdapter(def) : null;
 
     /// <summary>
-    /// Cold write pipeline. The schema-ensure (a blocking
-    /// <c>public.ensure_partition_schema</c> round-trip via
-    /// <see cref="PostgreSqlPartitionStorageProvider.EnsureSchemaForPartitionSync"/>)
-    /// runs on <b>subscribe</b>, not at construction — so the returned observable
-    /// stays cold (no side effect until subscribed). Path resolution is pure and
-    /// safe to do eagerly inside the Defer. Returns the empty/no-op observable
-    /// when the segment isn't a routable partition.
+    /// Cold write pipeline. <b>NEVER creates a schema.</b> Provisioning is eager and
+    /// gated to partition-owning creates (<c>OwnsPartitionProvisioningValidator</c> →
+    /// <see cref="PostgreSqlPartitionStorageProvider.EnsurePartitionProvisioned"/>) — the
+    /// router only routes. A write whose partition was never provisioned routes to a
+    /// non-existent schema and faults with Postgres <c>42P01</c> (the "no partition, no
+    /// write" refusal) rather than lazily conjuring a ghost schema for an arbitrary path
+    /// segment (the atioz 45-ghost-schema corruption). Path resolution is pure; the
+    /// no-op observable is returned when the segment isn't a routable partition.
     /// </summary>
     private IObservable<T> RouteWrite<T>(
         string path, Func<PostgreSqlStorageAdapter, IObservable<T>> write, T whenNotRouted)
         => Observable.Defer(() =>
-        {
-            if (ResolveSchema(path) is not { } def)
-                return Observable.Return(whenNotRouted);
-            _provider.EnsureSchemaForPartitionSync(def);
-            return write(GetOrCreateAdapter(def));
-        });
+            ResolveSchema(path) is { } def
+                ? write(GetOrCreateAdapter(def))
+                : Observable.Return(whenNotRouted));
 
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
         => AdapterForRead(path) is { } a

@@ -1,11 +1,15 @@
 using System.Collections.Generic;
+using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 
 namespace MeshWeaver.Hosting.PostgreSql.Test;
@@ -124,4 +128,20 @@ internal static class PgTestReactiveExtensions
     /// <summary>Reactive projection of <see cref="NpgsqlDataSource.DisposeAsync"/> for finally-blocks.</summary>
     public static IObservable<Unit> DisposeReactive(this NpgsqlDataSource ds)
         => Observable.FromAsync(async () => { await ds.DisposeAsync(); return Unit.Default; });
+
+    /// <summary>
+    /// Provision a partition the platform way — run every storage provider's
+    /// <see cref="IPartitionStorageProvider.EnsurePartitionProvisioned"/> (PG → the
+    /// <c>ensure_partition_schema</c> DDL). This is the schema-creation a Space/User performs on
+    /// create; full-mesh tests call it before writing into a fresh partition, because the storage
+    /// router no longer lazily CREATE SCHEMAs. Blocks on the composed observable (test-edge §2a).
+    /// </summary>
+    public static void ProvisionPartition(this IMessageHub mesh, string ns) =>
+        mesh.ServiceProvider.GetServices<IPartitionStorageProvider>()
+            .Select(p => p.EnsurePartitionProvisioned(ns))
+            .Concat()
+            .DefaultIfEmpty(Unit.Default)
+            .ToTask()
+            .GetAwaiter()
+            .GetResult();
 }

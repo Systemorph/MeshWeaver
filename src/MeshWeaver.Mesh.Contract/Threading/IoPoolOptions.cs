@@ -21,6 +21,14 @@ public static class IoPoolNames
 
     /// <summary>External process execution (<c>Process.Start</c>). Wave 3.</summary>
     public const string Process = "Process";
+
+    /// <summary>
+    /// Prefix for per-Postgres-storage-adapter pools (<c>pg:{adapterName}</c>). Each such
+    /// pool is capped at ONE in-flight op so the <see cref="IIoPool"/> gate mirrors the
+    /// single Npgsql connection that adapter holds (<c>MaxPoolSize=1</c>) — the gate IS the
+    /// connection. See <see cref="IoPoolOptions.MaxConcurrencyFor"/>.
+    /// </summary>
+    public const string PostgresAdapterPrefix = "pg:";
 }
 
 /// <summary>
@@ -59,13 +67,17 @@ public sealed record IoPoolOptions
     public int Default { get; init; } = Environment.ProcessorCount;
 
     /// <summary>Resolves the configured cap for a pool name.</summary>
-    public int MaxConcurrencyFor(string name) => name switch
-    {
-        IoPoolNames.FileSystem => FileSystem,
-        IoPoolNames.Blob => Blob,
-        IoPoolNames.Http => Http,
-        IoPoolNames.Compile => Compile,
-        IoPoolNames.Process => Process,
-        _ => Default,
-    };
+    public int MaxConcurrencyFor(string name) =>
+        // Per-PG-adapter pools (pg:{adapter}) hold exactly one connection — the gate
+        // IS the single Npgsql connection, never a parallel bound on top of it.
+        name.StartsWith(IoPoolNames.PostgresAdapterPrefix, StringComparison.Ordinal) ? 1 :
+        name switch
+        {
+            IoPoolNames.FileSystem => FileSystem,
+            IoPoolNames.Blob => Blob,
+            IoPoolNames.Http => Http,
+            IoPoolNames.Compile => Compile,
+            IoPoolNames.Process => Process,
+            _ => Default,
+        };
 }

@@ -1,8 +1,10 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Reactive;
 using System.Reactive.Linq;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 
@@ -14,11 +16,13 @@ namespace MeshWeaver.Hosting.PostgreSql;
 /// (<see cref="PostgreSqlPathRoutingAdapter"/>) routes per-path to a
 /// per-schema <see cref="PostgreSqlStorageAdapter"/>.
 ///
-/// <para><b>No partition discovery, no existence probe.</b> The router maps a
-/// path's first segment to a schema <i>synchronously</i> (<c>seg.ToLowerInvariant()</c>)
-/// — no <c>information_schema</c> probe, no async cache. Writes ensure the schema
-/// (<see cref="EnsureSchemaForPartitionSync"/>); reads tolerate an absent schema
-/// (the per-schema adapter catches Postgres <c>42P01</c> → empty). The
+/// <para><b>No partition discovery, no existence probe, no lazy create.</b> The router maps
+/// a path's first segment to a schema <i>synchronously</i> (<c>seg.ToLowerInvariant()</c>)
+/// — no <c>information_schema</c> probe, no async cache. Schema creation is eager and gated to
+/// partition-owning creates (<c>OwnsPartitionProvisioningValidator</c> →
+/// <see cref="EnsurePartitionProvisioned"/>); the router itself NEVER creates a schema. A write
+/// to an unprovisioned partition faults <c>42P01</c> ("no partition, no write"); reads tolerate
+/// an absent schema (the per-schema adapter catches Postgres <c>42P01</c> → empty). The
 /// <c>_</c>-prefix global-satellite namespaces (whose schema name differs from the
 /// namespace) are resolved from the registered-partition map seeded at boot by the
 /// static-partition providers.</para>
@@ -51,8 +55,24 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     /// <summary>Per-silo memo of "CREATE SCHEMA already ran this session".</summary>
     private readonly ConcurrentDictionary<string, byte> _schemasInitialized =
         new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, Task> _schemaInitTasks =
+
+    /// <summary>
+    /// Promise-cache of in-flight / completed partition provisioning, keyed by schema.
+    /// The CREATE SCHEMA round-trip runs at most once per (silo, schema): <see cref="IoPoolExtensions.Run"/>
+    /// is eager + <see cref="System.Reactive.Subjects.ReplaySubject{T}"/>-backed, so the first caller
+    /// kicks the DDL off on the per-adapter pool and every later subscriber replays the cached
+    /// completion. Instance field (never static) so its lifetime is the mesh's.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, IObservable<Unit>> _provisioned =
         new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Per-adapter I/O pool, capped at one in-flight op so the gate mirrors this adapter's
+    /// single Npgsql connection — the gate IS the connection ("hook into the pg pool").
+    /// The async DB edge is sealed inside <see cref="IIoPool"/>; there is NO
+    /// <c>Observable.FromAsync</c> at any call site (forbidden — see ControlledIoPooling.md).
+    /// </summary>
+    private readonly IIoPool _ioPool;
 
     internal NpgsqlDataSource BaseDataSource => _baseDataSource;
 
@@ -86,13 +106,17 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
         IEmbeddingProvider? embeddingProvider = null,
         Action<NpgsqlDataSourceBuilder>? configureDataSource = null,
         IEnumerable<string>? contexts = null,
-        ILogger<PostgreSqlPartitionStorageProvider>? logger = null)
+        ILogger<PostgreSqlPartitionStorageProvider>? logger = null,
+        IoPoolRegistry? ioPoolRegistry = null)
     {
         _baseDataSource = baseDataSource;
         _baseConnectionString = baseConnectionString;
         _options = options;
         _embeddingProvider = embeddingProvider;
         _configureDataSource = configureDataSource;
+        // Per-adapter pool (cap 1 — one connection). Falls back to the unbounded pool only
+        // when constructed outside DI (tests) — still off the hub scheduler, never FromAsync.
+        _ioPool = ioPoolRegistry?.Get($"{IoPoolNames.PostgresAdapterPrefix}{Name}") ?? IoPool.Unbounded;
         _logger = logger;
         _readGate = new ReadConcurrencyGate(options.MaxReadConcurrency);
 
@@ -193,15 +217,20 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     }
 
     /// <summary>
-    /// Public provisioning entry point used by eager-provisioning hooks (e.g. the
-    /// Space top-level validator) to create a partition's schema + tables BEFORE the
-    /// first read- or write-shaped touch — routed through
-    /// <c>public.ensure_partition_schema</c> like every other provisioning path.
-    /// Idempotent; the per-silo memo short-circuits repeat calls for the same schema.
+    /// The reactive provisioning entry point — the ONE path that creates a partition's
+    /// schema + tables, driven by <c>OwnsPartitionProvisioningValidator</c> when a
+    /// top-level <c>User</c>/<c>Space</c> is created. Routed through
+    /// <c>public.ensure_partition_schema</c>. Idempotent; the per-silo memo short-circuits
+    /// repeat calls for the same schema. Emits once and completes.
+    ///
+    /// <para>The storage router no longer lazily creates schemas on arbitrary writes, so a
+    /// write whose partition was never provisioned here fails loudly (42P01) instead of
+    /// conjuring a ghost schema. See <c>Doc/Architecture/PartitionStorageRouting.md</c>.</para>
     /// </summary>
-    public Task EnsurePartitionProvisionedAsync(string @namespace, CancellationToken ct = default)
+    public IObservable<Unit> EnsurePartitionProvisioned(string @namespace)
     {
-        if (string.IsNullOrEmpty(@namespace)) return Task.CompletedTask;
+        if (string.IsNullOrEmpty(@namespace))
+            return Observable.Return(Unit.Default);
         var def = new PartitionDefinition
         {
             Namespace = @namespace,
@@ -211,7 +240,13 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
             TableMappings = PartitionDefinition.StandardTableMappings,
             Versioned = true,
         };
-        return EnsureSchemaAsync(def, ct);
+        // Promise-cache: provision each schema at most once. IIoPool.Run pushes the
+        // CREATE SCHEMA onto the per-adapter pool (cap 1 = one connection) and replays the
+        // single completion to every subscriber. NO Observable.FromAsync here — the only
+        // async edge lives sealed inside IIoPool (forbidden everywhere else; see
+        // ControlledIoPooling.md).
+        return _provisioned.GetOrAdd(def.Schema!, _ =>
+            _ioPool.Run(ct => EnsureSchemaAsync(def, ct)).Select(_ => Unit.Default));
     }
 
     /// <summary>
@@ -305,8 +340,11 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     /// <inheritdoc/>
     public IStorageAdapter CreateAdapterForTable(PartitionDefinition def, string table)
     {
-        EnsureSchemaForPartitionSync(def);
-
+        // No lazy CREATE SCHEMA here: per-(schema,table) hubs only spin up for partitions
+        // that were already provisioned (OwnsPartitionProvisioningValidator). An adapter for
+        // an absent schema tolerates 42P01 on read (→ empty) and faults loudly on write —
+        // it never conjures a ghost schema.
+        //
         // Reuse the single shared base data source. PostgreSqlStorageAdapter
         // schema-qualifies every statement ("schema"."table") from the def
         // (see QualifyTable), so a per-(schema,table) connection pool /
@@ -332,23 +370,6 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     /// <inheritdoc/>
     public IStorageAdapter Adapter => _adapter;
     private readonly PostgreSqlPathRoutingAdapter _adapter;
-
-    /// <summary>
-    /// Synchronously ensures the schema for <paramref name="def"/> exists.
-    /// Used by <see cref="PostgreSqlPathRoutingAdapter"/> on the lazy-create
-    /// path. Concurrent first-touches share the same in-flight task via
-    /// <see cref="_schemaInitTasks"/> so duplicate CREATE SCHEMAs don't race.
-    /// </summary>
-    internal void EnsureSchemaForPartitionSync(PartitionDefinition def)
-    {
-        var schema = !string.IsNullOrEmpty(def.Schema) ? def.Schema : def.Namespace;
-        if (string.IsNullOrEmpty(schema)) return;
-        if (_schemasInitialized.ContainsKey(schema)) return;
-
-        var task = _schemaInitTasks.GetOrAdd(schema,
-            _ => EnsureSchemaAsync(def, CancellationToken.None));
-        task.GetAwaiter().GetResult();
-    }
 
     internal static string? GetFirstSegment(string? path)
     {

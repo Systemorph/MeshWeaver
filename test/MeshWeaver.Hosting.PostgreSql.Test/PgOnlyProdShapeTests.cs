@@ -1,5 +1,7 @@
 using System;
+using System.Linq;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -95,16 +97,19 @@ public class PgOnlyProdShapeTests(PostgreSqlFixture fixture, ITestOutputHelper o
 
     /// <summary>
     /// Provision a brand-new top-level partition the platform way: run each storage provider's
-    /// <see cref="IPartitionStorageProvider.EnsurePartitionProvisionedAsync"/> (the PG provider
+    /// <see cref="IPartitionStorageProvider.EnsurePartitionProvisioned"/> (the PG provider
     /// routes to the <c>ensure_partition_schema</c> DDL; non-PG providers are no-ops). This is
-    /// the schema-creation step a Space performs before its root write — after it, the partition
-    /// exists and ordinary user writes route into it without tripping the write guard.
+    /// the schema-creation step a Space/User performs before its root write — after it, the
+    /// partition exists and ordinary user writes route into it without tripping the write guard.
+    /// Reactive surface; the test blocks on the composed observable (tests may block — §2a).
     /// </summary>
-    private void ProvisionPartition(string ns)
-    {
-        foreach (var provider in Mesh.ServiceProvider.GetServices<IPartitionStorageProvider>())
-            provider.EnsurePartitionProvisionedAsync(ns).GetAwaiter().GetResult();
-    }
+    private void ProvisionPartition(string ns) =>
+        Mesh.ServiceProvider.GetServices<IPartitionStorageProvider>()
+            .Select(provider => provider.EnsurePartitionProvisioned(ns))
+            .Concat()
+            .ToTask()
+            .GetAwaiter()
+            .GetResult();
 
     [Fact(Timeout = 60000)]
     public void Write_OrgPartition_RoutesByFirstSegment()

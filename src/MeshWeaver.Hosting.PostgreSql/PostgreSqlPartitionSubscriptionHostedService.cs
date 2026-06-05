@@ -20,10 +20,12 @@ namespace MeshWeaver.Hosting.PostgreSql;
 /// schema (Postgres <c>42P01</c> → empty), so a partition created on another silo
 /// becomes routable immediately without any invalidation round-trip.</para>
 ///
-/// <para>This service is the only place that calls
-/// <see cref="PostgreSqlPartitionStorageProvider.EnsureSchemaForPartitionAsync"/>
-/// at startup — runtime partition creation flows through the normal write
-/// chain (which calls EnsureSchemaForPartitionSync on first write).</para>
+/// <para>This service eagerly provisions the static framework partitions
+/// (<c>Admin</c> / <c>Auth</c> / <c>_Access</c>) at startup via
+/// <see cref="PostgreSqlPartitionStorageProvider.EnsureSchemaForPartitionAsync"/>. Runtime
+/// partition creation (User / Space) is provisioned eagerly on create by
+/// <c>OwnsPartitionProvisioningValidator</c> — the router never lazily creates a schema on
+/// write (a write to an unprovisioned partition faults <c>42P01</c>).</para>
 /// </summary>
 internal sealed class PostgreSqlPartitionSubscriptionHostedService : IHostedService
 {

@@ -1,6 +1,8 @@
 using System;
+using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -17,10 +19,13 @@ using Xunit;
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
 /// <summary>
-/// Stage 9c — Partition lifecycle: create / write / read / delete with the
-/// no-Matches() routing and PgPartitionCache invalidation. Includes negative
-/// cases (delete-nonexistent, write-after-delete) per the user's
-/// "delete-something-that-doesn't-exist must error" rule.
+/// Partition lifecycle under the <b>no-lazy-create</b> contract: a partition's schema is
+/// created ONLY by provisioning a partition-owning object (User / Space) — modelled in these
+/// tests by <see cref="IPartitionStorageProvider.EnsurePartitionProvisioned"/>, exactly what
+/// <c>OwnsPartitionProvisioningValidator</c> calls. A write into a partition that was never
+/// provisioned is <b>refused</b> (faults), never lazily schema-created (the atioz ghost-schema
+/// fix). Once provisioned, ordinary write / read / delete work. See
+/// <c>Doc/Architecture/PartitionStorageRouting.md</c>.
 /// </summary>
 [Collection("PostgreSql")]
 public class PartitionLifecycleTests(PostgreSqlFixture fixture, ITestOutputHelper output)
@@ -42,14 +47,28 @@ public class PartitionLifecycleTests(PostgreSqlFixture fixture, ITestOutputHelpe
             .AddGraph();
     }
 
-    [Fact(Timeout = 60000)]
-    public void LazyCreate_FirstWrite_EnablesSubsequentReads()
-    {
-        var ns = $"pg9c_lazy_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+    /// <summary>
+    /// Provision a partition the platform way — run every storage provider's
+    /// <see cref="IPartitionStorageProvider.EnsurePartitionProvisioned"/> (PG → the
+    /// <c>ensure_partition_schema</c> DDL). This is the schema-creation a Space/User performs
+    /// on create. Tests may block on the composed observable (§2a).
+    /// </summary>
+    private void ProvisionPartition(string ns) =>
+        Mesh.ServiceProvider.GetServices<IPartitionStorageProvider>()
+            .Select(p => p.EnsurePartitionProvisioned(ns))
+            .Concat()
+            .DefaultIfEmpty(Unit.Default)
+            .ToTask()
+            .GetAwaiter()
+            .GetResult();
 
-        // PgPartitionCache reports PendingCreate (no schema yet); first write
-        // triggers CREATE SCHEMA. Subsequent reads hit the new schema.
+    [Fact(Timeout = 60000)]
+    public void ProvisionedPartition_Write_EnablesSubsequentReads()
+    {
+        var ns = $"pg9c_prov_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
+        ProvisionPartition(ns);   // the one schema-creation path (what a Space/User create does)
+
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var path = $"{ns}/seed";
         var saved = meshService.CreateNode(new MeshNode("seed", ns)
         {
@@ -64,7 +83,34 @@ public class PartitionLifecycleTests(PostgreSqlFixture fixture, ITestOutputHelpe
             .Where(n => n is not null).Take(1).Timeout(15.Seconds())
             .Catch<MeshNode?, TimeoutException>(_ => Observable.Return<MeshNode?>(null))
             .Should().Within(30.Seconds()).Emit();
-        readBack.Should().NotBeNull("lazy-created schema must serve reads immediately");
+        readBack.Should().NotBeNull("a provisioned partition serves reads immediately");
+    }
+
+    [Fact(Timeout = 60000)]
+    public void UnprovisionedPartition_Write_IsRefused_NoGhostSchema()
+    {
+        // No lazy create: writing into a partition that was never provisioned must NOT
+        // conjure a schema — the write faults ("no partition, no write").
+        var ns = $"pg9c_unprov_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+
+        var notification = meshService
+            .CreateNode(new MeshNode("orphan", ns)
+            {
+                NodeType = "Markdown",
+                Name = "orphan",
+                State = MeshNodeState.Active,
+            })
+            .Take(1)
+            .Materialize()
+            .Should().Within(30.Seconds()).Match(n => n.Kind == NotificationKind.OnError);
+        notification.Exception.Should().NotBeNull();
+
+        // 🚨 The invariant: no ghost schema was conjured for the unprovisioned namespace.
+        _fixture.DataSource.ScalarLong(
+            "SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = @s",
+            new[] { ("s", (object)ns) })
+            .Should().Within(30.Seconds()).Be(0L);
     }
 
     [Fact(Timeout = 60000)]
@@ -88,6 +134,8 @@ public class PartitionLifecycleTests(PostgreSqlFixture fixture, ITestOutputHelpe
     public void Write_ReadBack_Delete_ReadAgain_Empty()
     {
         var ns = $"pg9c_rd_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
+        ProvisionPartition(ns);
+
         var path = $"{ns}/item";
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var workspace = Mesh.GetWorkspace();
@@ -112,36 +160,5 @@ public class PartitionLifecycleTests(PostgreSqlFixture fixture, ITestOutputHelpe
         var deleted = meshService.DeleteNode(path)
             .Should().Within(30.Seconds()).Emit();
         deleted.Should().BeTrue();
-    }
-
-    [Fact(Timeout = 60000)]
-    public void PendingCreate_AcceptsWriteEvenAfterReadMiss()
-    {
-        var ns = $"pg9c_pend_{Guid.NewGuid():N}".ToLowerInvariant()[..18];
-
-        // Touch the cache with a Read for a path under an unknown namespace.
-        // PgPartitionCache emits PendingCreate (lazy-create policy); read
-        // returns null since no rows exist yet. The routing service surfaces
-        // "no node found" as DeliveryFailureException (NotFound) — that's the
-        // read-miss signal here, so catch it and normalise to null.
-        var workspace = Mesh.GetWorkspace();
-        var preWriteRead = workspace.GetMeshNodeStream($"{ns}/never_written")
-            .Where(_ => true).Take(1).Timeout(10.Seconds())
-            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
-            .Should().Within(30.Seconds()).Emit();
-        preWriteRead.Should().BeNull(
-            "no rows exist under the fresh namespace, so the workspace stream resolves to null");
-
-        // Subsequent write to the SAME namespace must still succeed —
-        // PendingCreate state allows lazy schema creation.
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        var saved = meshService.CreateNode(new MeshNode("first", ns)
-        {
-            NodeType = "Markdown",
-            Name = "first",
-            State = MeshNodeState.Active,
-        }).Should().Within(30.Seconds()).Emit();
-        saved.Should().NotBeNull(
-            "PendingCreate state must not pin the namespace as unwritable");
     }
 }

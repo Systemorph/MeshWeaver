@@ -6,6 +6,7 @@ using MeshWeaver.Graph;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Reactive;
 using MeshWeaver.Messaging;
@@ -493,6 +494,14 @@ internal class NavigationService : INavigationService
     {
         var accessService = _hub.ServiceProvider.GetService<AccessService>();
         if ((accessService?.Context ?? accessService?.CircuitContext)?.ObjectId is not { } userId || string.IsNullOrEmpty(userId))
+            return;
+
+        // Never track activity under the system identity. The context can transiently be
+        // `system-security` (mid-ImpersonateAsSystem); tracking it would write to a
+        // `system-security/_UserActivity/…` path — a partition that is never provisioned, so
+        // post-"no implicit schema creation" it would 42P01 on every system-context navigation.
+        // System actions are infrastructure, not user activity.
+        if (string.Equals(userId, WellKnownUsers.System, StringComparison.OrdinalIgnoreCase))
             return;
 
         // Skip system/internal paths

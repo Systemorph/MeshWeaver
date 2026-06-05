@@ -48,6 +48,12 @@ public static class SecurityServiceExtensions
                 // no write"). Runs alongside RlsNodeValidator — a rejection here wins
                 // even when RLS would grant (validators AND-compose).
                 services.AddScoped<INodeValidator, PartitionWriteGuardValidator>();
+                // The ONE place a partition schema is created: creating a top-level
+                // instance of an OwnsPartition NodeType (User, Space) eagerly provisions
+                // its schema BEFORE the root write. Mandatory now that the storage router
+                // no longer lazily CREATE SCHEMAs on arbitrary writes (the atioz ghost-
+                // schema fix). See Doc/Architecture/PartitionStorageRouting.md.
+                services.AddScoped<INodeValidator, OwnsPartitionProvisioningValidator>();
                 return services;
             })
             // Mesh hub: needed wherever code calls hub.CheckPermission on the

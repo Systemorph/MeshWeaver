@@ -123,8 +123,10 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     /// path's first segment to a schema <i>synchronously</i> (no existence probe),
     /// a READ can legitimately target a schema that was never created — there's
     /// simply nothing to read. Every read method swallows this and returns the
-    /// empty result (null / empty / false) instead of faulting. Writes never hit
-    /// this: the router calls <c>EnsureSchemaForPartitionSync</c> first.
+    /// empty result (null / empty / false) instead of faulting. A WRITE to an
+    /// unprovisioned partition, by contrast, lets <c>42P01</c> propagate — that fault
+    /// IS the "no partition, no write" refusal (the router no longer lazily creates a
+    /// schema; provisioning is eager, gated to partition-owning creates).
     /// </summary>
     private static bool IsUndefinedTable(Exception ex)
         => ex is PostgresException pg && pg.SqlState == "42P01";

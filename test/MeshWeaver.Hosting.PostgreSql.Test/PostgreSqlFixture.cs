@@ -52,6 +52,18 @@ public class PostgreSqlFixture : IAsyncLifetime
         await PostgreSqlSchemaInitializer.InitializeAsync(DataSource, Options);
         await PostgreSqlSchemaInitializer.InitializePartitionAccessTableAsync(DataSource);
 
+        // Framework schemas the migration creates eagerly in prod (SchemaInitialization).
+        // The storage router no longer lazily CREATE SCHEMAs, so these must exist up front:
+        //   auth          — V27 access-object mirror (trigger destination)
+        //   system_access — global / root-scope AccessAssignment scope (namespace `_Access`)
+        // Mirror the migration so full-mesh tests on this container behave like prod.
+        foreach (var frameworkSchema in new[] { "auth", "system_access" })
+        {
+            await using var cmd = DataSource.CreateCommand("SELECT public.ensure_partition_schema(@p)");
+            cmd.Parameters.AddWithValue("p", frameworkSchema);
+            await cmd.ExecuteNonQueryAsync();
+        }
+
         StorageAdapter = new PostgreSqlStorageAdapter(DataSource);
         AccessControl = new PostgreSqlAccessControl(DataSource);
     }

@@ -65,10 +65,13 @@ public class TopLevelIndexTests(PostgreSqlFixture fixture, ITestOutputHelper out
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-        // Two partitions. A partition root is a single-segment path → (namespace='', id=partitionName);
-        // the path router lazily CREATE SCHEMAs each on first write.
+        // Two partitions. A partition root is a single-segment path → (namespace='', id=partitionName).
+        // No lazy create — provision each partition's schema first (what a Space/User create does),
+        // then write the root row into it.
         var p1 = $"tli{Guid.NewGuid():N}".ToLowerInvariant()[..14];
         var p2 = $"tli{Guid.NewGuid():N}".ToLowerInvariant()[..14];
+        Mesh.ProvisionPartition(p1);
+        Mesh.ProvisionPartition(p2);
 
         meshService.CreateNode(new MeshNode(p1)
         { NodeType = "Markdown", Name = $"Space {p1}", State = MeshNodeState.Active })
@@ -135,6 +138,8 @@ public class TopLevelIndexTests(PostgreSqlFixture fixture, ITestOutputHelper out
         var token = $"ac{Guid.NewGuid():N}".ToLowerInvariant()[..12];
         var pMatch = $"{token}x";                                  // id + name contain the prefix
         var pOther = $"zz{Guid.NewGuid():N}".ToLowerInvariant()[..12]; // unrelated
+        Mesh.ProvisionPartition(pMatch);   // no lazy create — provision the partition roots first
+        Mesh.ProvisionPartition(pOther);
 
         meshService.CreateNode(new MeshNode(pMatch)
         { NodeType = "Markdown", Name = $"{token} space", State = MeshNodeState.Active })

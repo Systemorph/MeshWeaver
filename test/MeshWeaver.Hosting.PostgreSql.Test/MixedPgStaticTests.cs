@@ -62,6 +62,7 @@ public class MixedPgStaticTests(PostgreSqlFixture fixture, ITestOutputHelper out
     public void Write_FreshPartition_RoutesToPg()
     {
         var ns = $"pg9b_{Guid.NewGuid():N}".ToLowerInvariant()[..16];
+        Mesh.ProvisionPartition(ns);   // no lazy create — provision the partition first
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var node = new MeshNode("note", ns)
         {
@@ -71,7 +72,7 @@ public class MixedPgStaticTests(PostgreSqlFixture fixture, ITestOutputHelper out
         };
         var saved = meshService.CreateNode(node).Should().Within(30.Seconds()).Emit();
         saved.Should().NotBeNull(
-            "writable PG catch-all must accept a fresh namespace; static read-only providers must decline");
+            "writable PG catch-all must accept a write into a provisioned partition; static read-only providers must decline");
         saved.Path.Should().Be($"{ns}/note");
 
         var workspace = Mesh.GetWorkspace();
