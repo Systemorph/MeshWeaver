@@ -81,12 +81,31 @@ All docs embedded in `src/MeshWeaver.Documentation/` and served under `Doc/` at 
 
 ## Deployment
 
-**Never run bare `aspire deploy`** — Aspire 13.2 reports success even when the db-migration container crashes. Always use:
+The portals run on the shared **AKS cluster** `memexaks-cluster` (RG `memex-aks-rg`, swedencentral) — namespaces `atioz` and `memex` — against the Postgres Flexible Server, images in ACR `meshweaver.azurecr.io`. **Private cluster: `kubectl` ONLY via `az aks command invoke -g memex-aks-rg -n memexaks-cluster --command "…"`.**
+
+**A code update = build image → set image → restart.** NOT `deploy.sh`, NOT bare `aspire deploy`:
 
 ```bash
-tools/deploy.sh prod   # production
-tools/deploy.sh test   # test environment
+az acr login -n meshweaver
+# Portal (custom base) AND migration (the migration is what creates schema + the matview):
+dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj -c Release \
+  -t:PublishContainer -p:ContainerRegistry=meshweaver.azurecr.io \
+  -p:ContainerRepository=memex-portal-ai -p:ContainerImageTag=<tag> \
+  -p:ContainerBaseImage=meshweaver.azurecr.io/memex-portal-ai-base:latest
+dotnet publish memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj -c Release \
+  -t:PublishContainer -p:ContainerRegistry=meshweaver.azurecr.io \
+  -p:ContainerRepository=memex-migration -p:ContainerImageTag=<tag>
+# Roll out (NS = atioz | memex):
+az aks command invoke -g memex-aks-rg -n memexaks-cluster --command "\
+  kubectl -n <NS> set image deployment/memex-portal-deployment memex-portal=meshweaver.azurecr.io/memex-portal-ai:<tag>; \
+  kubectl -n <NS> set image deployment/memex-migration-deployment memex-migration=meshweaver.azurecr.io/memex-migration:<tag>; \
+  kubectl -n <NS> rollout restart deployment/memex-migration-deployment deployment/memex-portal-deployment; \
+  kubectl -n <NS> rollout status deployment/memex-portal-deployment --timeout=300s"
 ```
+
+- **`deploy/aks/envs/<env>/deploy.sh` is first-time ENV SETUP only** (helm install + PVCs + KV SecretProviderClass + ingress + connection-string patch). Do NOT use it for a code update — it re-runs the whole chart and can reset live config.
+- **Never `aspire deploy`** — legacy Azure Container Apps path; the cluster is AKS now.
+- `memex-migration` runs the migration then exits 0 and the Deployment restarts it (benign `CrashLoopBackOff`). Before declaring success, confirm its log shows `Database migration completed. Version: N` AND the portal serves (HTTP 200).
 
 Full reference: [Deployment.md](src/MeshWeaver.Documentation/Data/Architecture/Deployment.md)
 

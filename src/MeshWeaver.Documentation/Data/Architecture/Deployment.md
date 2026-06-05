@@ -34,7 +34,59 @@ Before running a deploy, confirm:
 4. **Secrets** are configured in the AppHost project (see [Secrets Management](#secrets-management) below)
 5. **dotnet-script** is installed for the post-deploy DB version check — `dotnet tool install -g dotnet-script`
 
-## 🚨 Always use `tools/deploy.sh` — never bare `aspire deploy`
+## 🚀 Canonical: deploy a code update to AKS
+
+The portals now run on the shared **AKS cluster** `memexaks-cluster` (resource group `memex-aks-rg`, region swedencentral). Each environment is a namespace (`atioz`, `memex`), backed by the Postgres Flexible Server; container images live in ACR `meshweaver.azurecr.io`.
+
+> **The cluster is private.** `kubectl` is not reachable directly — every command runs through `az aks command invoke -g memex-aks-rg -n memexaks-cluster --command "…"`, which executes inside the cluster's API-server-side runner.
+
+A **code update** is three steps — build the images, point the Deployments at the new tag, restart. It is **not** `tools/deploy.sh` and **not** `aspire deploy` (both are legacy ACA, see below).
+
+### 1. Build + push the images
+
+```bash
+az acr login -n meshweaver
+
+# Portal — needs the prebuilt custom base image:
+dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj -c Release \
+  -t:PublishContainer -p:ContainerRegistry=meshweaver.azurecr.io \
+  -p:ContainerRepository=memex-portal-ai -p:ContainerImageTag=<tag> \
+  -p:ContainerBaseImage=meshweaver.azurecr.io/memex-portal-ai-base:latest
+
+# Migration — this is what creates the schema, the partition_access table, AND the
+# public.top_level_index materialized view. A schema/index change ships in THIS image:
+dotnet publish memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj -c Release \
+  -t:PublishContainer -p:ContainerRegistry=meshweaver.azurecr.io \
+  -p:ContainerRepository=memex-migration -p:ContainerImageTag=<tag>
+```
+
+Pick a `<tag>` that pins the change (e.g. `bugfix-2026-06-05`). CI also builds images on push, but it lags — check `az acr repository show-tags -n meshweaver --repository memex-portal-ai --orderby time_desc --top 5` before assuming your commit is built; if it isn't, build manually as above.
+
+### 2. Roll out (NS = `atioz` | `memex`)
+
+```bash
+az aks command invoke -g memex-aks-rg -n memexaks-cluster --command "\
+  kubectl -n <NS> set image deployment/memex-portal-deployment memex-portal=meshweaver.azurecr.io/memex-portal-ai:<tag>; \
+  kubectl -n <NS> set image deployment/memex-migration-deployment memex-migration=meshweaver.azurecr.io/memex-migration:<tag>; \
+  kubectl -n <NS> rollout restart deployment/memex-migration-deployment deployment/memex-portal-deployment; \
+  kubectl -n <NS> rollout status deployment/memex-portal-deployment --timeout=300s"
+```
+
+### 3. Verify
+
+- Migration ran: `az aks command invoke … --command "kubectl -n <NS> logs deployment/memex-migration-deployment --tail=40"` → expect `Database migration completed. Version: N`. The migration pod exits 0 and the Deployment restarts it, so a *benign* `CrashLoopBackOff` on `memex-migration` is normal — read the log, don't panic on the status.
+- Portal serves: `curl -sS -o /dev/null -w '%{http_code}' https://<NS>.meshweaver.cloud/` → `200`.
+- Schema/index applied (when the change was a migration): spot-check via `az aks command invoke … "kubectl -n <NS> exec deployment/memex-portal-deployment -- …"` or an MCP query.
+
+### First-time environment setup ≠ code update
+
+`deploy/aks/envs/<env>/deploy.sh` provisions a **new** environment: `helm install` of the chart, PVCs, the Key Vault `SecretProviderClass`, ingress, and the connection-string patch. **Do not run it for a code update** — it re-applies the whole chart and can reset live ConfigMaps (e.g. the email config). Use it only when standing up a brand-new namespace.
+
+---
+
+## Legacy: Azure Container Apps (`tools/deploy.sh` / `aspire deploy`)
+
+> The sections below describe the **old Azure Container Apps** deployment. They are kept for historical reference. New deploys go to **AKS** via the method above. Do **not** run bare `aspire deploy` against the current infrastructure.
 
 <svg viewBox="0 0 760 320" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
   <defs>
