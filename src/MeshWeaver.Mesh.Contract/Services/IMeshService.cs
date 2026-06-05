@@ -25,7 +25,8 @@ public interface IMeshService
 
     /// <summary>
     /// Updates an existing node with validation.
-    /// Routes through UpdateNodeRequest for proper security enforcement.
+    /// Routes through the canonical <c>GetMeshNodeStream(path).Update</c> write path;
+    /// the owning per-node hub re-validates RLS on the merge patch and stamps auditing.
     /// </summary>
     IObservable<MeshNode> UpdateNode(MeshNode node);
 

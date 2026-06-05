@@ -85,7 +85,7 @@ Skip either half and the failures move around but never go away.
 
 `MeshBuilder.AddMeshNodes(...)` adds entries to `MeshConfiguration.Nodes` — a hub-startup snapshot that grain activation falls back to when persistence misses. In a single-test setup that's fine. In a shared cluster it has two problems:
 
-- `MeshConfiguration.Nodes` is a `Dictionary` keyed by path, loaded once at fixture startup. If a test mutates a node at that path (via `CreateNodeRequest` → persistence, then `UpdateNodeRequest`), the next test sees the **mutated** version on grain activation — not the original seed.
+- `MeshConfiguration.Nodes` is a `Dictionary` keyed by path, loaded once at fixture startup. If a test mutates a node at that path (via `CreateNodeRequest` → persistence, then `stream.Update`), the next test sees the **mutated** version on grain activation — not the original seed.
 - The fallback is synchronous. A grain that activated against `MeshConfiguration.Nodes` keeps that node in memory until deactivation, even if persistence later disagrees.
 
 `IStaticNodeProvider`, by contrast, is queried on **every** grain activation (`MessageHubGrain.OnActivateAsync` lines 43–45) and serves immutable, read-only definitions. Tests cannot pollute it because writes never flow there — `CreateNodeRequest` goes to persistence, which is per-cluster and cleaned up between tests.

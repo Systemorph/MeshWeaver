@@ -62,7 +62,7 @@ A virtual data source earns its keep when a hub needs a *local view* of somethin
 
 > **Not a fit for virtual data sources?**
 > - Need a one-shot read of a single `MeshNode`? Use [`hub.GetMeshNode`](xref:MeshWeaver.Mesh.MeshNodeStreamExtensions.GetMeshNode).
-> - Need to *write* via a collection? Post `UpdateNodeRequest` / `CreateNodeRequest` through `IMeshService` — virtual collections are read-only mirrors.
+> - Need to *write*? Update content via `workspace.GetMeshNodeStream(path).Update(...)` (or `IMeshService.UpdateNode`, which uses `stream.Update` internally); create via `CreateNodeRequest` through `IMeshService` — virtual collections are read-only mirrors.
 
 ---
 

@@ -15,8 +15,8 @@ using Xunit;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
-/// Orleans port of <c>GetDataRequestPropagationTest</c>: does an
-/// <c>UpdateNodeRequest</c> against the owning grain become visible to a
+/// Orleans port of <c>GetDataRequestPropagationTest</c>: does a cross-grain
+/// <c>stream.Update</c> against the owning grain become visible to a
 /// separate client's repeated <c>GetDataRequest</c> polls?
 ///
 /// <para>
@@ -66,14 +66,15 @@ public class OrleansGetDataRequestPropagationTest(ITestOutputHelper output) : Or
         initial!.Name.Should().Be("A0");
         Output.WriteLine($"[poll] initial: Name={initial.Name}");
 
-        // 3. Update via UpdateNodeRequest â€” this routes to a's grain hub which
-        //    invokes its local UpdateMeshNode handler.
-        var updResp = await creator.Observe(
-                new UpdateNodeRequest(initial with { Name = "A1" }),
-                o => o.WithTarget(new Address(pathA)))
+        // 3. Update via the canonical stream.Update API (UpdateNodeRequest retired).
+        //    creator does not own pathA, so this routes the RFC 7396 merge patch to
+        //    a's grain hub (via IMeshNodeStreamCache / UpdateRemote) — exactly the
+        //    cross-grain write boundary this test exercises.
+        var updated = await creator.GetMeshNodeStream(pathA)
+            .Update(n => n with { Name = "A1" })
             .FirstAsync().ToTask(ct);
-        updResp.Message.Success.Should().BeTrue(updResp.Message.Error ?? "");
-        Output.WriteLine("[update] UpdateNodeRequest succeeded");
+        updated.Name.Should().Be("A1");
+        Output.WriteLine("[update] stream.Update succeeded");
 
         // 4. Poll fresh GetDataRequests until A1 appears.
         for (var i = 0; i < 100; i++)

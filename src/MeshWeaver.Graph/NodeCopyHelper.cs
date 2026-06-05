@@ -34,8 +34,8 @@ public static class NodeCopyHelper
     /// dispatches.</para>
     ///
     /// <para><b>force semantics</b> are encoded in the upsert request: when
-    /// the target path already exists, the upsert handler routes through
-    /// <see cref="UpdateNodeRequest"/> (requires Update permission) when
+    /// the target path already exists, the upsert handler applies the change
+    /// via <c>stream.Update</c> (requires Update permission) when
     /// <paramref name="force"/> is <c>true</c> and skips otherwise. The
     /// helper never deletes a target — that race against the per-node hub's
     /// disposal was the cause of the previous "GetNode returns null after

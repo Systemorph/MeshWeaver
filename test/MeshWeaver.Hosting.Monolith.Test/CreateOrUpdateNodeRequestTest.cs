@@ -19,8 +19,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// as <see cref="CreateNodeRequest"/>, existing target → applies via
 /// <c>workspace.GetMeshNodeStream(path).Update(state =&gt;
 /// UpdateAccordingToSourceNode(state, sourceNode))</c>. Direct
-/// <see cref="UpdateNodeRequest"/> dispatch and direct
-/// <c>persistence.Write</c> are explicitly disallowed by the
+/// <c>persistence.Write</c> is explicitly disallowed by the
 /// "per-node hub is the sole owner of its state" rule that this handler
 /// enforces.
 /// </summary>

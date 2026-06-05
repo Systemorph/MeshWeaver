@@ -36,9 +36,6 @@ public static class MeshExtensions
         config.TypeRegistry.WithType(typeof(DeleteNodeRequest), nameof(DeleteNodeRequest));
         config.TypeRegistry.WithType(typeof(DeleteNodeResponse), nameof(DeleteNodeResponse));
         config.TypeRegistry.WithType(typeof(NodeDeletionRejectionReason), nameof(NodeDeletionRejectionReason));
-        config.TypeRegistry.WithType(typeof(UpdateNodeRequest), nameof(UpdateNodeRequest));
-        config.TypeRegistry.WithType(typeof(UpdateNodeResponse), nameof(UpdateNodeResponse));
-        config.TypeRegistry.WithType(typeof(NodeUpdateRejectionReason), nameof(NodeUpdateRejectionReason));
         config.TypeRegistry.WithType(typeof(MoveNodeRequest), nameof(MoveNodeRequest));
         config.TypeRegistry.WithType(typeof(MoveNodeResponse), nameof(MoveNodeResponse));
         config.TypeRegistry.WithType(typeof(NodeMoveRejectionReason), nameof(NodeMoveRejectionReason));
@@ -116,7 +113,6 @@ public static class MeshExtensions
             .WithHandler<CreateOrUpdateNodeRequest>(HandleCreateOrUpdateNodeRequest)
             .WithHandler<DeleteNodeRequest>(HandleDeleteNodeRequest)
             .WithHandler<ValidateDeleteRequest>(HandleValidateDeleteRequest)
-            .WithHandler<UpdateNodeRequest>(HandleUpdateNodeRequest)
             .WithHandler<MoveNodeRequest>(HandleMoveNodeRequest)
             .WithHandler<CopyNodeRequest>(HandleCopyNodeRequest)
             .WithHandler<HeartBeatEvent>(HandleHeartBeat);
@@ -1407,370 +1403,6 @@ public static class MeshExtensions
     private static readonly TimeSpan NodeOpForwardTimeout = TimeSpan.FromSeconds(15);
 
     /// <summary>
-    /// Fully synchronous handler — returns <see cref="IMessageDelivery"/>, never <see cref="Task"/>.
-    /// All hub-backed work goes through Post + RegisterCallback; non-hub async work (catalog reads,
-    /// persistence writes, validator runs) is wrapped in <c>Observable.FromAsync</c> and composed
-    /// via <c>Subscribe</c>. The handler returns <c>request.Processed()</c> immediately so the hub
-    /// scheduler is never blocked. See <c>Doc/Architecture/AsynchronousCalls</c>.
-    ///
-    /// The terminal step (sending UpdateNodeResponse.Ok / Fail) is performed inside the deepest
-    /// callback of the chain, so the response is only emitted once the workspace has acked the
-    /// underlying DataChangeRequest — fixes the 2026-04-14 cached-display bug where Ok went out
-    /// before the live workspace observed the change and Blazor views kept rendering stale content.
-    /// </summary>
-    private static IMessageDelivery HandleUpdateNodeRequest(
-        IMessageHub hub,
-        IMessageDelivery<UpdateNodeRequest> request)
-    {
-        var logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshNode>>();
-
-        var updateRequest = request.Message;
-
-        // Identity resolution: if no explicit UpdatedBy, use AccessContext identity
-        if (string.IsNullOrEmpty(updateRequest.UpdatedBy)
-            && request.AccessContext?.ObjectId is { Length: > 0 } updateSenderId)
-            updateRequest = updateRequest with { UpdatedBy = updateSenderId };
-
-        var capturedRequest = updateRequest;
-        var updatedNode = updateRequest.Node;
-        var meshConfig = hub.ServiceProvider.GetService<MeshConfiguration>();
-        var workspace = hub.GetWorkspace();
-
-        logger.LogDebug("[UpdateNode] start hub={Hub}, target={Target}, sender={Sender}, deliveryId={DeliveryId}",
-            hub.Address, updatedNode.Path, request.Sender, request.Id);
-
-        // Forward to the owning per-node hub when this hub doesn't own the path.
-        // Only the per-node hub (registered via AddMeshDataSource) has a
-        // MeshNodeReference reducer. The mesh hub forwards and relays the response.
-        // Compare via Address.Path (segments only) — ToString() / ToFullString()
-        // include "~host" for hosted hubs, which would always mismatch a bare path.
-        if (!string.Equals(hub.Address.Path, updatedNode.Path, StringComparison.Ordinal))
-        {
-            logger.LogInformation("[UpdateNode] forwarding from {Hub} (path={HubPath}) to per-node hub {Target}",
-                hub.Address, hub.Address.Path, updatedNode.Path);
-            // Propagate the original sender's AccessContext onto the forwarded delivery —
-            // without it, the per-node hub's AccessControlPipeline sees
-            // delivery.AccessContext = null and falls back to its own AccessService.Context,
-            // which on a shared hub still carries the PREVIOUS request's user (ResolveIdentity
-            // step 3). Symptom: User2's update returns "user 'user1@example.com' lacks Update
-            // permission" because User1 ran an UpdateNode immediately before. Fix: forward
-            // the originating identity explicitly so the per-node hub re-impersonates correctly.
-            var inboundCtx = request.AccessContext;
-            var forwarded = hub.Post(capturedRequest,
-                o =>
-                {
-                    var withTarget = o.WithTarget(new Address(updatedNode.Path));
-                    return inboundCtx is not null
-                        ? withTarget.WithAccessContext(inboundCtx)
-                        : withTarget;
-                })!;
-            hub.Observe(forwarded)
-                .Subscribe(
-                    d =>
-                    {
-                        if (d.Message is UpdateNodeResponse resp)
-                            hub.Post(resp, o => o.ResponseFor(request));
-                        else
-                            hub.Post(
-                                UpdateNodeResponse.Fail(
-                                    $"Unexpected response {d.Message?.GetType().Name} forwarding UpdateNodeRequest",
-                                    NodeUpdateRejectionReason.Unknown),
-                                o => o.ResponseFor(request));
-                    },
-                    ex => hub.Post(
-                        UpdateNodeResponse.Fail(
-                            ex.Message ?? "Forwarded UpdateNodeRequest failed",
-                            // Map the most common forwarded-failure shapes back to
-                            // semantic rejection reasons. Without this mapping a
-                            // RLS-denied update at the per-node hub returns as an
-                            // Unauthorized DeliveryFailure → caught here → Unknown,
-                            // which loses the "user can't see / can't update this
-                            // node" signal callers rely on.
-                            ex is DeliveryFailureException dfx
-                                ? dfx.Failure?.ErrorType switch
-                                {
-                                    ErrorType.Unauthorized => NodeUpdateRejectionReason.ValidationFailed,
-                                    ErrorType.NotFound => NodeUpdateRejectionReason.NodeNotFound,
-                                    _ => NodeUpdateRejectionReason.Unknown,
-                                }
-                                : NodeUpdateRejectionReason.Unknown),
-                        o => o.ResponseFor(request)));
-            return request.Processed();
-        }
-
-        // We own the path — read our own MeshNodeReference stream.
-        ISynchronizationStream<MeshNode>? ownStream;
-        try
-        {
-            ownStream = workspace.GetStream(new MeshNodeReference());
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "[UpdateNode] hub {Hub} has no MeshNodeReference stream for {Path}",
-                hub.Address, updatedNode.Path);
-            ownStream = null;
-        }
-
-        if (ownStream == null)
-        {
-            hub.Post(UpdateNodeResponse.Fail(
-                $"Node not found at path: {updatedNode.Path}",
-                NodeUpdateRejectionReason.NodeNotFound),
-                o => o.ResponseFor(request));
-            return request.Processed();
-        }
-
-        var existingNodeObs = ownStream
-            .Select(change => (MeshNode?)change.Value)
-            .Where(n => n != null)
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .Catch<MeshNode?, Exception>(ex =>
-            {
-                logger.LogWarning(ex, "[UpdateNode] read own node failed for {Path}", updatedNode.Path);
-                return Observable.Return<MeshNode?>(null);
-            });
-
-        // Read existing → check NodeType → validate → persist → workspace ack → response.
-        // Each step lives in a Subscribe callback; the handler returns synchronously below.
-        existingNodeObs
-            .SelectMany(existingNode =>
-            {
-                logger.LogInformation("[UpdateNode] step=read-complete path={Path} found={Found}",
-                    updatedNode.Path, existingNode != null);
-                if (existingNode == null)
-                {
-                    hub.Post(
-                        UpdateNodeResponse.Fail(
-                            $"Node not found at path: {updatedNode.Path}",
-                            NodeUpdateRejectionReason.NodeNotFound),
-                        o => o.ResponseFor(request));
-                    return Observable.Empty<MeshNode>();
-                }
-
-                if (!string.IsNullOrEmpty(existingNode.NodeType)
-                    && !string.IsNullOrEmpty(updatedNode.NodeType)
-                    && existingNode.NodeType != updatedNode.NodeType)
-                {
-                    hub.Post(
-                        UpdateNodeResponse.Fail(
-                            $"Cannot change NodeType from '{existingNode.NodeType}' to '{updatedNode.NodeType}'",
-                            NodeUpdateRejectionReason.InvalidNodeType),
-                        o => o.ResponseFor(request));
-                    return Observable.Empty<MeshNode>();
-                }
-
-                return RunUpdateValidatorsObs(hub, existingNode, updatedNode, capturedRequest)
-                    .SelectMany(validationError =>
-                    {
-                        if (validationError != null)
-                        {
-                            logger.LogWarning(
-                                "Validator rejected node update at {Path}: {Error}",
-                                updatedNode.Path, validationError.Value.ErrorMessage);
-                            hub.Post(
-                                UpdateNodeResponse.Fail(
-                                    validationError.Value.ErrorMessage ?? "Validation failed",
-                                    validationError.Value.Reason),
-                                o => o.ResponseFor(request));
-                            return Observable.Empty<MeshNode>();
-                        }
-
-                        // Preserve creation stamps, refresh modification stamps.
-                        // Also preserve every [JsonIgnore] field on MeshNode — they
-                        // round-trip as null over the sync wire (workspace remote
-                        // reads / writes serialise to JSON), so an UpdateNode whose
-                        // input came from a FindNodeAsync (or any remote read) would
-                        // otherwise wipe the live transient state. HubConfiguration
-                        // (a Func delegate) is the canonical case. AssemblyLocation
-                        // used to need the same treatment, but the cross-silo
-                        // durable reference now lives on NodeTypeDefinition's
-                        // LatestAssemblyCollection + LatestAssemblyPath (persisted
-                        // as JSON, no round-trip wipe); enrichment hydrates the
-                        // local path from IAssemblyStore on each activation, so
-                        // dropping the per-update merge is safe.
-                        var nodeToSave = updatedNode with
-                        {
-                            State = updatedNode.State != default ? updatedNode.State : existingNode.State,
-                            HubConfiguration = existingNode.HubConfiguration,
-                            GlobalServiceConfigurations = updatedNode.GlobalServiceConfigurations is { Count: > 0 } gsc
-                                ? gsc
-                                : existingNode.GlobalServiceConfigurations,
-                            CreatedDate = existingNode.CreatedDate != default ? existingNode.CreatedDate : updatedNode.CreatedDate,
-                            CreatedBy = existingNode.CreatedBy ?? updatedNode.CreatedBy,
-                            LastModified = DateTimeOffset.UtcNow,
-                            LastModifiedBy = capturedRequest.UpdatedBy
-                                ?? updatedNode.LastModifiedBy
-                                ?? existingNode.LastModifiedBy,
-                            // Monotonically bump Version per Update so version-history snapshots
-                            // land in distinct files. Without this, every Update reused the seed
-                            // Version=1 the Create handler stamped and overwrote the V1 snapshot
-                            // instead of creating V2/V3/... — VersionQuery_GetVersionBefore /
-                            // GetVersions never saw the intermediate states.
-                            Version = Math.Max(existingNode.Version, updatedNode.Version) + 1
-                        };
-
-                        // Use the hub's data layer as the synchronization point: post a
-                        // DataChangeRequest to ourselves (own per-node hub) and wait for the
-                        // DataChangeResponse — that response only fires after the activity
-                        // completes, which includes the persister flush. No async/await; pure
-                        // hub.Post + RegisterCallback. The response.Ok we send the caller is
-                        // chained off DataChangeResponse so the caller's read-after-write sees
-                        // freshly persisted data.
-                        return Observable.Return(nodeToSave);
-                    });
-            })
-            .SelectMany(nodeToSave =>
-                // Apply the partition write and wait for the post-update emission on the
-                // MeshNodeReference reducer before proceeding. Without this the previous
-                // implementation posted UpdateNodeResponse.Ok the moment UpdateStreamRequest
-                // was queued, racing the stream tick — read-after-write callers (and a fresh
-                // GetRemoteStream<MeshNode, MeshNodeReference> subscription opened right
-                // after the await returns) saw the pre-update snapshot.
-                workspace.GetMeshNodeStream(nodeToSave.Path).Update(_ => nodeToSave)
-                    .Select(saved => (nodeToSave, saved)))
-            .Subscribe(
-                pair =>
-                {
-                    var (nodeToSave, _saved) = pair;
-
-                    // Explicitly persist to the underlying IMeshStorage so a
-                    // subsequent Query / persistence read sees the new
-                    // value immediately. Without this the workspace stream is
-                    // updated but persistence lags (debounced flush), causing
-                    // ObserveQueryFreshnessTest-style stale reads.
-                    //
-                    // PersistenceService.SaveNode chains WriteVersion off the
-                    // post-save emission — the persistence layer owns the version
-                    // snapshot now, so the handler doesn't need to (and can't)
-                    // race a parallel save against an explicit WriteVersion call.
-                    //
-                    // CHAIN the Ok response off the SaveNode completion. Previously
-                    // the response posted before the save finished, so the caller's
-                    // read-after-write could miss the just-written version snapshot
-                    // (caught by VersionQuery_GetVersionBeforeAsync_FindsPreChangeState
-                    // — the second of two back-to-back UpdateNodes occasionally
-                    // returned Success before its WriteVersion file landed on disk).
-                    var updatePersistence = hub.ServiceProvider.GetService<IStorageAdapter>();
-                    var updateChangeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
-                    if (updatePersistence != null)
-                    {
-                        // Commit-then-publish: WriteAndPublishUpdated chains the
-                        // MeshChangeEvent.Updated publish into the storage observable
-                        // so it fires only AFTER the storage write emits (post-commit).
-                        updatePersistence.WriteAndPublishUpdated(nodeToSave, hub.JsonSerializerOptions, updateChangeFeed)
-                            .Subscribe(
-                                saved =>
-                                {
-                                    if (saved is null) return;
-                                    // Storage adapter fires the Updated Changes event from inside Write.
-                                    logger.LogInformation(
-                                        "Node persisted at {Path} by {UpdatedBy}",
-                                        saved.Path, capturedRequest.UpdatedBy ?? "system");
-                                    hub.Post(UpdateNodeResponse.Ok(saved), o => o.ResponseFor(request));
-                                },
-                                persistEx =>
-                                {
-                                    logger.LogWarning(persistEx,
-                                        "[UpdateNode] persistence flush failed at {Path}", nodeToSave.Path);
-                                    hub.Post(
-                                        UpdateNodeResponse.Fail(persistEx.Message,
-                                            NodeUpdateRejectionReason.Unknown),
-                                        o => o.ResponseFor(request));
-                                });
-                    }
-                    else
-                    {
-                        // No persistence registered — DON'T publish a MeshChangeEvent.
-                        // Previously this branch fired Updated unconditionally, so
-                        // cross-replica subscribers saw a phantom write for a row no
-                        // backing store ever received. The workspace stream update
-                        // above (line ~1553) already gave the local hub the new state;
-                        // anything that wants persistence must register a real adapter.
-                        logger.LogInformation(
-                            "Node persisted at {Path} by {UpdatedBy} (no IStorageAdapter — workspace-only)",
-                            nodeToSave.Path, capturedRequest.UpdatedBy ?? "system");
-                        hub.Post(UpdateNodeResponse.Ok(nodeToSave), o => o.ResponseFor(request));
-                    }
-                },
-                ex =>
-                {
-                    if (ex is InvalidOperationException)
-                    {
-                        logger.LogWarning(ex, "Node update failed for path {Path}", updatedNode.Path);
-                        hub.Post(
-                            UpdateNodeResponse.Fail(ex.Message, NodeUpdateRejectionReason.ValidationFailed),
-                            o => o.ResponseFor(request));
-                    }
-                    else
-                    {
-                        logger.LogError(ex, "Unexpected error during node update at {Path}", updatedNode.Path);
-                        hub.Post(
-                            UpdateNodeResponse.Fail($"Unexpected error: {ex.Message}",
-                                NodeUpdateRejectionReason.Unknown),
-                            o => o.ResponseFor(request));
-                    }
-                });
-
-        return request.Processed();
-    }
-
-    /// <summary>
-    /// Runs all update validators from DI using the unified INodeValidator interface.
-    /// </summary>
-    /// <summary>
-    /// Sync-friendly observable variant of the unified update-validator runner.
-    /// Iterates validators in order via <c>Concat</c> (preserves short-circuit semantics —
-    /// the chain stops at the first failure) and returns either a tuple describing the
-    /// failure or <c>null</c> if all validators pass. No <c>await</c>; consumers compose
-    /// via <c>SelectMany</c> on a <c>Subscribe</c>-based chain.
-    /// </summary>
-    private static IObservable<(string? ErrorMessage, NodeUpdateRejectionReason Reason)?> RunUpdateValidatorsObs(
-        IMessageHub hub,
-        MeshNode existingNode,
-        MeshNode updatedNode,
-        UpdateNodeRequest request)
-    {
-        var accessService = hub.ServiceProvider.GetService<AccessService>();
-        var context = new NodeValidationContext
-        {
-            Operation = NodeOperation.Update,
-            Node = updatedNode,
-            ExistingNode = existingNode,
-            Request = request,
-            AccessContext = accessService?.Context ?? accessService?.CircuitContext
-        };
-
-        var validators = hub.ServiceProvider.GetServices<INodeValidator>()
-            .Where(v => v.SupportedOperations.Count == 0
-                        || v.SupportedOperations.Contains(NodeOperation.Update))
-            .ToList();
-
-        if (validators.Count == 0)
-            return Observable.Return<(string?, NodeUpdateRejectionReason)?>(null);
-
-        // Run validators sequentially via Concat; emit the first failure (or null at the end).
-        return validators
-            .Select(v => v.Validate(context))
-            .Concat()
-            .Where(result => !result.IsValid)
-            .Select(result =>
-            {
-                var reason = result.Reason switch
-                {
-                    NodeRejectionReason.NodeNotFound => NodeUpdateRejectionReason.NodeNotFound,
-                    NodeRejectionReason.InvalidNodeType => NodeUpdateRejectionReason.InvalidNodeType,
-                    NodeRejectionReason.ConcurrencyConflict => NodeUpdateRejectionReason.ConcurrencyConflict,
-                    NodeRejectionReason.Unauthorized => NodeUpdateRejectionReason.ValidationFailed,
-                    _ => NodeUpdateRejectionReason.ValidationFailed
-                };
-                return ((string?, NodeUpdateRejectionReason)?)(result.ErrorMessage, reason);
-            })
-            .Take(1)
-            .DefaultIfEmpty(null);
-    }
-
-    /// <summary>
     /// Single-verb upsert handler for <see cref="CreateOrUpdateNodeRequest"/>.
     /// Two strict paths, both honoring "the per-node hub is the sole owner of
     /// its state — direct writes to persistence are illegal":
@@ -1783,8 +1415,8 @@ public static class MeshExtensions
     /// The Update routes to the owning per-node hub via the data-sync
     /// protocol; the hub applies the change to its own MeshNode through its
     /// own workspace's <c>MeshNodeReference</c> reducer; <c>MeshNodeTypeSource</c>
-    /// debounces and persists. NEVER <see cref="UpdateNodeRequest"/>, NEVER
-    /// direct <c>persistence.Write</c> — both bypass the sole-owner rule.</item>
+    /// debounces and persists. NEVER direct <c>persistence.Write</c> — that
+    /// bypasses the sole-owner rule.</item>
     /// </list>
     ///
     /// <para>Reads-from-persistence are allowed (existence check is a
@@ -1886,46 +1518,39 @@ public static class MeshExtensions
 
         void ApplyUpdateViaStream(MeshNode existing)
         {
-            // Forward as UpdateNodeRequest to the owning per-node hub. The
-            // per-node hub's handler reads its OWN MeshNodeReference stream
-            // (workspace.GetMeshNodeStream(own).Update — UpdateOwn) which
-            // writes through the primary EntityStore stream — the canonical
-            // path that MeshNodeTypeSource watches for debounce + persist
-            // and that ReduceToMeshNode reads on GetDataRequest.
+            // Apply the update through the canonical mesh-node stream write API
+            // (UpdateNodeRequest retired). hub.GetMeshNodeStream(path).Update routes
+            // to the owning per-node hub via the IMeshNodeStreamCache (RFC 7396 merge
+            // patch); the owner re-validates RLS + stamps auditing authoritatively and
+            // its MeshNodeTypeSource debounces + persists. A denial surfaces on the
+            // returned observable's OnError (the cache's write gate raises it when the
+            // caller's permissions are warm).
             //
-            // Previous shape — `workspace.GetMeshNodeStream(remotePath)
-            //   .Update(state => ...)` from the mesh hub — silently broke:
-            // UpdateRemote sends a PatchDataChangeRequest, the per-node
-            // hub's HandlePatchDataRequest patches the typed REDUCED
-            // MeshNode stream, that emission never back-propagates to the
-            // primary InstanceCollection, so the next GetDataRequest reads
-            // stale. Repro:
-            // NodeCopyHelperTest.CopyNodeTree_OverwritesExistingWhenForced.
+            // AccessContext: this runs inside the persistence-read Subscribe callback,
+            // which may land on a non-handler thread where the AsyncLocal identity is
+            // no longer set. Stamp the inbound identity around the synchronous
+            // Update() call so its eager AccessContext capture (for both the merge
+            // lambda and the outbound patch's WithAccessContext) sees the originating
+            // user rather than null.
             var merged = UpdateAccordingToSourceNode(existing, node);
-            var inner = new UpdateNodeRequest(merged) { UpdatedBy = requestedBy };
-            var forwarded = hub.Post(inner, o =>
+            var accessService = hub.ServiceProvider.GetService<AccessService>();
+            using (inboundCtx is not null && accessService is not null
+                ? accessService.SwitchAccessContext(inboundCtx)
+                : null)
             {
-                var withTarget = o.WithTarget(new Address(node.Path));
-                return inboundCtx is not null ? withTarget.WithAccessContext(inboundCtx) : withTarget;
-            })!;
-            hub.Observe(forwarded)
-                .Subscribe(
-                    d =>
-                    {
-                        if (d.Message is UpdateNodeResponse ur && ur.Node is not null)
-                            PostOk(ur.Node, isCreate: false, $"Updated node at '{node.Path}'");
-                        else
-                            PostFail(
-                                (d.Message as UpdateNodeResponse)?.Error ?? "Inner UpdateNode returned no response",
-                                MapUpdateRejection((d.Message as UpdateNodeResponse)?.RejectionReason));
-                    },
-                    ex =>
-                    {
-                        logger.LogWarning(ex,
-                            "[CreateOrUpdate] inner UpdateNode faulted for {Path}", node.Path);
-                        PostFail($"Inner UpdateNode faulted: {ex.Message}",
-                            NodeUpsertRejectionReason.Unknown);
-                    });
+                hub.GetMeshNodeStream(node.Path).Update(_ => merged)
+                    .Subscribe(
+                        saved => PostOk(saved, isCreate: false, $"Updated node at '{node.Path}'"),
+                        ex =>
+                        {
+                            logger.LogWarning(ex,
+                                "[CreateOrUpdate] inner UpdateNode faulted for {Path}", node.Path);
+                            PostFail($"Inner UpdateNode faulted: {ex.Message}",
+                                ex is UnauthorizedAccessException
+                                    ? NodeUpsertRejectionReason.Unauthorized
+                                    : NodeUpsertRejectionReason.Unknown);
+                        });
+            }
         }
 
         void PostOk(MeshNode result, bool isCreate, string logLine)
@@ -1963,13 +1588,6 @@ public static class MeshExtensions
             NodeCreationRejectionReason.InvalidPath => NodeUpsertRejectionReason.InvalidPath,
             NodeCreationRejectionReason.InvalidNodeType => NodeUpsertRejectionReason.InvalidNodeType,
             NodeCreationRejectionReason.ValidationFailed => NodeUpsertRejectionReason.ValidationFailed,
-            _ => NodeUpsertRejectionReason.Unknown,
-        };
-
-        static NodeUpsertRejectionReason MapUpdateRejection(NodeUpdateRejectionReason? r) => r switch
-        {
-            NodeUpdateRejectionReason.NodeNotFound => NodeUpsertRejectionReason.InvalidPath,
-            NodeUpdateRejectionReason.ValidationFailed => NodeUpsertRejectionReason.ValidationFailed,
             _ => NodeUpsertRejectionReason.Unknown,
         };
     }

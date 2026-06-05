@@ -183,8 +183,8 @@ Doc/MyDoc/_Comment/abc123/reply1       (Reply node)
 |---|---|---|
 | Mutation entry point | Hub message handlers | Click actions in layout areas |
 | Child list | Indexed `ThreadMessages` on the parent | Discovered via `Query` |
-| Text edits | `DataChangeRequest` via `_Exec` sub-hub | Direct `UpdateNodeRequest` (fire-and-forget) |
-| Node creation | `CreateNodeAsync` → confirm in handler | `CreateTransientAsync` → confirm via `UpdateNodeRequest` |
+| Text edits | `DataChangeRequest` via `_Exec` sub-hub | Direct `stream.Update` |
+| Node creation | `CreateNodeAsync` → confirm in handler | `CreateTransientAsync` → confirm via `stream.Update` |
 
 ---
 

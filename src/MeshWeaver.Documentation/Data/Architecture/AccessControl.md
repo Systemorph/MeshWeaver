@@ -329,7 +329,7 @@ Access control uses these shipped node types:
 
 # PermissionEvaluator — hub-scoped, 100% IObservable
 
-`PermissionEvaluator` is registered **scoped per per-node hub**, never as a singleton. Each instance closes over the hub's `IWorkspace` and answers reads from the synced virtual collections listed above. Writes post `CreateNodeRequest` / `UpdateNodeRequest` / `DeleteNodeRequest` through the hub's `IMessageHub` and surface the response as an observable.
+`PermissionEvaluator` is registered **scoped per per-node hub**, never as a singleton. Each instance closes over the hub's `IWorkspace` and answers reads from the synced virtual collections listed above. Content writes go through `workspace.GetMeshNodeStream(path).Update(...)` (the merge patch routes to the owning hub); node-lifecycle writes post `CreateNodeRequest` / `DeleteNodeRequest` through the hub's `IMessageHub`. Both surface the result as an observable.
 
 Roles and baseline AccessAssignments follow the [Extensible Defaults](ExtensibleDefaults) pattern — built-ins ship via `IStaticNodeProvider` (read-only `_Policy` at the root namespace), mesh-level extensions live as user-created MeshNodes, and both layers project into the hub's local synced collection via the same three-query union that Agent and Model use. The evaluator reads from that collection — no per-process role cache, no `Timeout` fallback.
 
@@ -402,8 +402,8 @@ public abstract class PermissionEvaluator
     IObservable<bool>       HasPermission(string userId, Permission permission);
     IObservable<Permission> GetEffectivePermissions(string userId);
 
-    // Write — POSTs CreateNodeRequest / UpdateNodeRequest / DeleteNodeRequest
-    // via the hub's IMessageHub and surfaces the result.
+    // Write — content via stream.Update (merge patch to owning hub);
+    // lifecycle via CreateNodeRequest / DeleteNodeRequest. Surfaces the result.
     IObservable<Unit> AddUserRole(string userId, string roleId, string? targetNamespace, string? assignedBy);
     IObservable<Unit> RemoveUserRole(string userId, string roleId, string? targetNamespace);
 
@@ -831,7 +831,7 @@ public record DataChangeRequest(...);
 | `CreateNodeRequest` | Create |
 | `ImportNodesRequest` | Create |
 | `ImportContentRequest` | Create |
-| `UpdateNodeRequest` | Update |
+| `stream.Update` (`PatchDataRequest`) | Update |
 | `DataChangeRequest` | Update |
 | `UndoActivityRequest` | Update |
 | `RollbackNodeRequest` | Update |

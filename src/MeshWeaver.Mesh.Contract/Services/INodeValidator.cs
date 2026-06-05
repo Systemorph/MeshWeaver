@@ -49,8 +49,9 @@ public record NodeValidationContext
     public MeshNode? ExistingNode { get; init; }
 
     /// <summary>
-    /// The original request object (CreateNodeRequest, DeleteNodeRequest, UpdateNodeRequest).
-    /// Null for Read operations.
+    /// The original request object (CreateNodeRequest, DeleteNodeRequest).
+    /// Null for Read operations and for the canonical stream.Update write path
+    /// (which carries no request object — RLS runs on the patch via RlsDataValidator).
     /// </summary>
     public object? Request { get; init; }
 

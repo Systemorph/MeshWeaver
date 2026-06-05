@@ -245,40 +245,28 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         var createResponse = client.Observe(new CreateNodeRequest(node) { CreatedBy = editorId }, o => o.WithTarget(Mesh.Address)).Should().Emit();
         createResponse.Message.Success.Should().BeTrue();
 
-        // Act - update the node using UpdatedBy
-        var updatedNode = node with { Name = "Updated Name" };
-        var updateResponse = client.Observe(new UpdateNodeRequest(updatedNode) { UpdatedBy = editorId }, o => o.WithTarget(Mesh.Address)).Should().Emit();
-
-        // Assert
-        updateResponse.Message.Success.Should().BeTrue();
-        updateResponse.Message.Node!.Name.Should().Be("Updated Name");
-    }
-
-    [Fact]
-    public void UpdateNode_WithoutPermission_Fails()
-    {
-        // Arrange — "admin_noupd" gets Admin and "viewer_noupd" gets Viewer at parentPath via static seed.
-        var client = GetClient();
-
-        const string adminId = "admin_noupd";
-        const string viewerId = "viewer_noupd";
-        const string parentPath = "rls/noupdate";
-
-        var node = new MeshNode("NoUpdate", parentPath)
+        // Act - update the node via the canonical stream.Update API under the editor's identity.
+        // (UpdateNodeRequest is retired; writes go through GetMeshNodeStream(path).Update.)
+        // No warming read: the editor has Update rights, so the write must be accepted and
+        // emit the updated snapshot directly.
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var original = accessService.CircuitContext;
+        accessService.SetCircuitContext(new AccessContext { ObjectId = editorId, Name = editorId });
+        MeshNode updated;
+        try
         {
-            Name = "Cannot Update",
-            NodeType = "Markdown"
-        };
-        var createResponse = client.Observe(new CreateNodeRequest(node) { CreatedBy = adminId }, o => o.WithTarget(Mesh.Address)).Should().Emit();
-        createResponse.Message.Success.Should().BeTrue();
+            updated = Mesh.GetMeshNodeStream(node.Path).Update(n => n with { Name = "Updated Name" })
+                .Should().Within(10.Seconds()).Emit();
+        }
+        finally
+        {
+            accessService.SetCircuitContext(original);
+        }
 
-        // Act - viewer tries to update
-        var updatedNode = node with { Name = "Trying to Update" };
-        var updateResponse = client.Observe(new UpdateNodeRequest(updatedNode) { UpdatedBy = viewerId }, o => o.WithTarget(Mesh.Address)).Should().Emit();
-
-        // Assert
-        updateResponse.Message.Success.Should().BeFalse();
-        updateResponse.Message.RejectionReason.Should().Be(NodeUpdateRejectionReason.ValidationFailed);
+        // Assert - the editor's update was accepted and the canonical API returned the new
+        // state (the equivalent of the retired UpdateNodeResponse.Node the old test asserted on).
+        updated.Should().NotBeNull();
+        updated.Name.Should().Be("Updated Name");
     }
 
     /// <summary>
@@ -570,38 +558,12 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
             NodeDeletionRejectionReason.NodeNotFound);
     }
 
-    [Fact]
-    public void UpdateNode_Anonymous_NoUpdatedBy_Fails()
-    {
-        // Arrange - create a node as admin first
-        var client = GetClient();
-        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-
-        const string adminId = "admin_for_anon_update";
-        const string parentPath = "rls/anon_update";
-
-        // Admin assignment is seeded statically in ConfigureMesh.
-        var node = new MeshNode("ToUpdateAnon", parentPath)
-        {
-            Name = "Original",
-            NodeType = "Markdown"
-        };
-        var createResp = client.Observe(new CreateNodeRequest(node) { CreatedBy = adminId }, o => o.WithTarget(Mesh.Address)).Should().Emit();
-        createResp.Message.Success.Should().BeTrue();
-
-        // Clear AccessContext to simulate anonymous user
-        accessService.SetCircuitContext(null);
-
-        // Act â€” anonymous update (no UpdatedBy)
-        var updatedNode = node with { Name = "Hacked" };
-        var updateResponse = client.Observe(new UpdateNodeRequest(updatedNode), o => o.WithTarget(Mesh.Address)).Should().Emit();
-
-        // Assert â€” must be rejected (NodeNotFound is also acceptable since anonymous can't even see the node)
-        updateResponse.Message.Success.Should().BeFalse("Anonymous user must not be able to update nodes");
-        updateResponse.Message.RejectionReason.Should().BeOneOf(
-            NodeUpdateRejectionReason.ValidationFailed,
-            NodeUpdateRejectionReason.NodeNotFound);
-    }
+    // NOTE: the "anonymous user cannot update" invariant is covered by
+    // StreamUpdate_WithoutUpdateRights_IsDeniedAndErrors (a caller without Update
+    // rights is denied via the cache-only write gate) and
+    // AnonymousUser_PermissionsAreNone_ByDefault. The former per-request
+    // UpdateNode_Anonymous_NoUpdatedBy_Fails test (which posted the retired
+    // UpdateNodeRequest) was removed with that type.
 
     [Fact]
     public void AnonymousUser_PermissionsAreNone_ByDefault()

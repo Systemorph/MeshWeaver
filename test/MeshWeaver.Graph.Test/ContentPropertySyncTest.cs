@@ -31,33 +31,21 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
             .WithServices(services => services
                 .AddInMemoryPersistence(_persistence))
             .WithRoutes(forward => forward
-                .RouteAddressToHostedHub(HostType, AddUpdateHandler)
+                .RouteAddressToHostedHub(HostType, c => c)
                 .RouteAddressToHostedHub(ClientType, ConfigureClient));
-    }
-
-    private MessageHubConfiguration AddUpdateHandler(MessageHubConfiguration c)
-        => c.WithHandler<UpdateNodeRequest>(HandleUpdateNodeRequest);
-
-    private IMessageDelivery HandleUpdateNodeRequest(
-        IMessageHub hub, IMessageDelivery<UpdateNodeRequest> request)
-    {
-        var node = request.Message.Node;
-        _persistence.SaveNode(node, JsonOptions)
-            .Subscribe(_ => hub.Post(UpdateNodeResponse.Ok(node), o => o.ResponseFor(request)));
-        return request.Processed();
     }
 
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
-        return AddUpdateHandler(base.ConfigureHost(configuration)
-            .AddMeshDataSource(ds => ds.WithContentType<TodoItem>()));
+        return base.ConfigureHost(configuration)
+            .AddMeshDataSource(ds => ds.WithContentType<TodoItem>());
     }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         => base.ConfigureClient(configuration);
 
     private IMessageHub GetHostWithHandler(string hostId, Func<MessageHubConfiguration, MessageHubConfiguration> config)
-        => Mesh.GetHostedHub(new Address(HostType, hostId), c => AddUpdateHandler(config(c)));
+        => Mesh.GetHostedHub(new Address(HostType, hostId), config);
 
     private string GetHubPath(string hostId = "1") => $"{HostType}/{hostId}";
 

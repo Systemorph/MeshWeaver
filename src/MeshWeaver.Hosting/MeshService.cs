@@ -81,25 +81,16 @@ internal sealed class MeshService(
         }).CarryAccessContext(hub.ServiceProvider);
 
     public IObservable<MeshNode> UpdateNode(MeshNode node)
-        => Observable.Defer(() =>
-        {
-            var captured = CaptureContext();
-            return hub.Observe(new UpdateNodeRequest(node), o => ConfigurePost(o, captured))
-                .SelectMany(d =>
-                {
-                    var r = d.Message;
-                    if (r.Success && r.Node != null)
-                        return Observable.Return(r.Node);
-                    return Observable.Throw<MeshNode>(r.RejectionReason switch
-                    {
-                        NodeUpdateRejectionReason.ValidationFailed =>
-                            new UnauthorizedAccessException(r.Error ?? "Access denied"),
-                        NodeUpdateRejectionReason.NodeNotFound =>
-                            new InvalidOperationException($"Node not found: {node.Path}"),
-                        _ => new InvalidOperationException(r.Error ?? "Node update failed")
-                    });
-                });
-        }).CarryAccessContext(hub.ServiceProvider);
+        // Canonical write via the mesh-node stream (UpdateNodeRequest retired). The owning
+        // hub applies the RFC 7396 merge patch and re-validates RLS + stamps auditing
+        // authoritatively; the cache's write gate surfaces a denial as
+        // UnauthorizedAccessException when the caller's perms are warm (read-then-write).
+        // Emits the optimistic local snapshot — callers needing strict consistency re-read
+        // via GetMeshNodeStream(path). (Replaces the prior confirmed-response shape; the
+        // public IObservable<MeshNode> surface is unchanged.) Observable.Defer keeps the
+        // write cold so it fires on Subscribe, not on construction.
+        => Observable.Defer(() => hub.GetMeshNodeStream(node.Path).Update(_ => node))
+            .CarryAccessContext(hub.ServiceProvider);
 
     public IObservable<bool> DeleteNode(string path)
         => Observable.Defer(() =>

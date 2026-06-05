@@ -229,7 +229,6 @@ public sealed class PartitionWriteGuardValidator : INodeValidator
         var requestUserId = context.Request switch
         {
             CreateNodeRequest createReq => createReq.CreatedBy,
-            UpdateNodeRequest updateReq => updateReq.UpdatedBy,
             _ => null
         };
         if (!string.IsNullOrEmpty(requestUserId))

@@ -15,10 +15,10 @@ namespace MeshWeaver.Auth.Test;
 /// Regression suite for the API-token revoke click action. The production
 /// incident: clicking Revoke timed out after ~30s — observed only in
 /// distributed (Orleans) deployments where <c>nodeFactory.UpdateNode(...)</c>
-/// forwarded <see cref="UpdateNodeRequest"/> never got a response from the
-/// owning per-node hub. Fix: the service now writes via
+/// forwarded a now-retired <c>UpdateNodeRequest</c> that never got a response
+/// from the owning per-node hub. Fix: the service now writes via
 /// <c>workspace.GetMeshNodeStream(path).Update(...)</c> (data-sync protocol
-/// instead of UpdateNodeRequest forward). These tests pin a tight deadline
+/// instead of a hub-forward). These tests pin a tight deadline
 /// (10s) so any future regression that reintroduces a hub-forward deadlock
 /// fails CI fast with a clear cancellation, instead of waiting for the user
 /// to notice in prod.

@@ -364,7 +364,7 @@ hub.GetWorkspace().GetMeshNodeStream(activityPath!)
         "Activity terminal write failed for {Path}", activityPath));
 ```
 
-> **Do NOT** post `UpdateNodeRequest(activityNode with { Content = … })` — that bypasses the activity hub's reducer and races the per-node hub's own view of its content.
+> **Do NOT** write the activity's `Status`/`Content` from *outside* the activity hub (e.g. `workspace.GetMeshNodeStream(activityPath).Update(node with { Content = … })` from another hub) — that bypasses the activity hub's reducer and the `RequestedStatus` control plane, and races the per-node hub's own view of its content. The terminal write above is fine *because the activity hub issues it on its own stream*; external callers flip `RequestedStatus` instead and let the reducer react.
 >
 > **Do NOT** call `IStorageAdapter.Write` directly — same race, and worse because persistence is invisible to the per-node hub's `MeshNodeReference` cache. The next `GetDataRequest` returns the pre-patch content.
 

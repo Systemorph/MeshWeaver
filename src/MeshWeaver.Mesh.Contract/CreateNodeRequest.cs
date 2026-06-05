@@ -219,86 +219,6 @@ public enum NodeDeletionRejectionReason
 }
 
 /// <summary>
-/// Request to update an existing MeshNode in the catalog.
-/// </summary>
-/// <param name="Node">The updated MeshNode data</param>
-[RequiresPermission(Permission.Update)]
-public record UpdateNodeRequest(MeshNode Node) : IRequest<UpdateNodeResponse>
-{
-    /// <summary>
-    /// The user or system requesting the update.
-    /// </summary>
-    public string? UpdatedBy { get; init; }
-}
-
-/// <summary>
-/// Response for node update request.
-/// </summary>
-/// <param name="Node">The updated node or null if failed</param>
-public record UpdateNodeResponse(MeshNode? Node)
-{
-    /// <summary>Inline <see cref="Data.ActivityLog"/> — update completes synchronously.</summary>
-    public ActivityLog? Log { get; init; }
-
-    /// <summary>
-    /// Error message if the update failed.
-    /// </summary>
-    public string? Error { get; init; }
-
-    /// <summary>
-    /// Indicates if the update was successful.
-    /// </summary>
-    public bool Success => Error == null && Node != null;
-
-    /// <summary>
-    /// The rejection reason if the node update was rejected.
-    /// </summary>
-    public NodeUpdateRejectionReason? RejectionReason { get; init; }
-
-    /// <summary>
-    /// Creates a successful update response with the updated node.
-    /// </summary>
-    public static UpdateNodeResponse Ok(MeshNode node) => new(node);
-
-    /// <summary>
-    /// Creates a failed update response with an error message.
-    /// </summary>
-    public static UpdateNodeResponse Fail(string error, NodeUpdateRejectionReason reason = NodeUpdateRejectionReason.Unknown)
-        => new((MeshNode?)null) { Error = error, RejectionReason = reason };
-}
-
-/// <summary>
-/// Reasons why a node update request can be rejected.
-/// </summary>
-public enum NodeUpdateRejectionReason
-{
-    /// <summary>
-    /// Unknown or unspecified reason.
-    /// </summary>
-    Unknown,
-
-    /// <summary>
-    /// The node to update was not found.
-    /// </summary>
-    NodeNotFound,
-
-    /// <summary>
-    /// Node content validation failed.
-    /// </summary>
-    ValidationFailed,
-
-    /// <summary>
-    /// The specified node type is invalid or not found.
-    /// </summary>
-    InvalidNodeType,
-
-    /// <summary>
-    /// The node was modified by another process (optimistic concurrency conflict).
-    /// </summary>
-    ConcurrencyConflict
-}
-
-/// <summary>
 /// Upsert a MeshNode at <see cref="Node"/>'s path. Single global verb that
 /// dispatches to the create path when the node is missing and to the update
 /// path when it already exists, so callers don't replay the existence dance
@@ -404,8 +324,8 @@ public class CreateOrUpdateNodePermissionAttribute() : RequiresPermissionAttribu
         // Static check at the routing layer cannot know "exists?" without a
         // persistence read — that's the handler's job. Bound the static check
         // to BOTH Create and Update on hubPath; the handler's actual read +
-        // dispatch routes through CreateNodeRequest / UpdateNodeRequest which
-        // run their own permission checks again. This static surface is just
+        // write (CreateNodeRequest for missing, stream.Update for existing)
+        // re-checks permissions authoritatively. This static surface is just
         // for the "deny if neither permission" gate at the routing layer.
         yield return (hubPath, Permission.Create);
         yield return (hubPath, Permission.Update);

@@ -52,24 +52,11 @@ internal sealed class HubNodePersistence(
     }
 
     public IObservable<MeshNode> UpdateNode(MeshNode node)
-    {
-        var captured = CaptureContext();
-        return hub.Observe(new UpdateNodeRequest(node), o => ConfigureWithIdentity(o, captured))
-            .SelectMany(d =>
-            {
-                var r = d.Message;
-                if (r.Success && r.Node != null)
-                    return Observable.Return(r.Node);
-                return Observable.Throw<MeshNode>(r.RejectionReason switch
-                {
-                    NodeUpdateRejectionReason.ValidationFailed =>
-                        new UnauthorizedAccessException(r.Error ?? "Access denied"),
-                    NodeUpdateRejectionReason.NodeNotFound =>
-                        new InvalidOperationException($"Node not found: {node.Path}"),
-                    _ => new InvalidOperationException(r.Error ?? "Node update failed")
-                });
-            });
-    }
+        // Canonical write via the mesh-node stream (UpdateNodeRequest retired). The owning
+        // hub applies the RFC 7396 patch and re-validates RLS + stamps auditing; emits the
+        // optimistic snapshot. See MeshService.UpdateNode for the full rationale.
+        => Observable.Defer(() => hub.GetMeshNodeStream(node.Path).Update(_ => node))
+            .CarryAccessContext(hub.ServiceProvider);
 
     public IObservable<bool> DeleteNode(string path)
     {
