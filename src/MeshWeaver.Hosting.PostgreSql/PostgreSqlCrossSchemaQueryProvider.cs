@@ -308,6 +308,64 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         }
     }
 
+    /// <inheritdoc />
+    public async Task<IReadOnlyCollection<QueryResult>> AutocompleteTopLevelAsync(
+        string prefix, string? userId, int limit, CancellationToken ct = default)
+    {
+        var results = new List<QueryResult>();
+        try
+        {
+            // PG-side hybrid score: exact name > name-prefix > id-prefix > name-substring >
+            // id-substring. ORDER BY score DESC (relevance, NOT alphabetical). Access-filtered
+            // by partition_access (schema = lower(id)); @userId IS NULL = system (all). One
+            // indexed matview read — no fan-out.
+            await using var cmd = _dataSource.CreateCommand("""
+                SELECT id, name, node_type, icon, path,
+                  (CASE
+                     WHEN @prefix = '' THEN 0
+                     WHEN LOWER(COALESCE(name,'')) = LOWER(@prefix) THEN 1000
+                     WHEN LOWER(COALESCE(name,'')) LIKE LOWER(@prefix) || '%' THEN 600
+                     WHEN LOWER(id) LIKE LOWER(@prefix) || '%' THEN 500
+                     WHEN LOWER(COALESCE(name,'')) LIKE '%' || LOWER(@prefix) || '%' THEN 300
+                     WHEN LOWER(id) LIKE '%' || LOWER(@prefix) || '%' THEN 200
+                     ELSE 0 END) AS score
+                FROM public.top_level_index
+                WHERE (@prefix = ''
+                       OR LOWER(COALESCE(name,'')) LIKE '%' || LOWER(@prefix) || '%'
+                       OR LOWER(id) LIKE '%' || LOWER(@prefix) || '%')
+                  AND (@userId::text IS NULL
+                       OR EXISTS (SELECT 1 FROM public.partition_access pa
+                                  WHERE pa.user_id IN (@userId::text, 'Public') AND pa.partition = LOWER(id)))
+                ORDER BY score DESC, name ASC NULLS LAST
+                LIMIT @limit
+                """);
+            cmd.Parameters.Add(new NpgsqlParameter("@prefix", prefix ?? ""));
+            cmd.Parameters.Add(new NpgsqlParameter("@userId", (object?)userId ?? DBNull.Value));
+            cmd.Parameters.Add(new NpgsqlParameter("@limit", limit < 1 ? 10 : limit));
+
+            await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            {
+                var path = reader.GetString(reader.GetOrdinal("path"));
+                results.Add(new QueryResult
+                {
+                    Path = path,
+                    Name = reader.IsDBNull(reader.GetOrdinal("name")) ? path : reader.GetString(reader.GetOrdinal("name")),
+                    NodeType = reader.IsDBNull(reader.GetOrdinal("node_type")) ? null : reader.GetString(reader.GetOrdinal("node_type")),
+                    Icon = reader.IsDBNull(reader.GetOrdinal("icon")) ? null : reader.GetString(reader.GetOrdinal("icon")),
+                    Score = reader.GetInt32(reader.GetOrdinal("score")),
+                    ProviderName = nameof(PostgreSqlCrossSchemaQueryProvider),
+                });
+            }
+        }
+        catch (PostgresException ex) when (ex.SqlState == "42P01")
+        {
+            // public.top_level_index not present yet (DB not migrated) — no top-level suggestions.
+            _logger?.LogDebug("AutocompleteTopLevel: top_level_index unavailable ({Msg})", ex.Message);
+        }
+        return results;
+    }
+
     private MeshNode ReadMeshNode(NpgsqlDataReader reader, JsonSerializerOptions options)
     {
         var id = reader.GetString(reader.GetOrdinal("id"));

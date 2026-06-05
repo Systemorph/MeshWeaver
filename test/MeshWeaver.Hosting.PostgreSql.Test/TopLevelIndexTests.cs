@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
@@ -121,5 +123,43 @@ public class TopLevelIndexTests(PostgreSqlFixture fixture, ITestOutputHelper out
             Convert.ToInt64(n).Should().BeGreaterThanOrEqualTo(0,
                 "the matview is queryable after repeated rebuilds");
         }
+    }
+
+    [Fact(Timeout = 60000)]
+    public async Task AutocompleteTopLevel_ReturnsScoredMatches_FromMatview_NoFanOut()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var crossSchema = Mesh.ServiceProvider.GetRequiredService<ICrossSchemaQueryProvider>();
+
+        var token = $"ac{Guid.NewGuid():N}".ToLowerInvariant()[..12];
+        var pMatch = $"{token}x";                                  // id + name contain the prefix
+        var pOther = $"zz{Guid.NewGuid():N}".ToLowerInvariant()[..12]; // unrelated
+
+        meshService.CreateNode(new MeshNode(pMatch)
+        { NodeType = "Markdown", Name = $"{token} space", State = MeshNodeState.Active })
+            .Should().Within(30.Seconds()).Emit();
+        meshService.CreateNode(new MeshNode(pOther)
+        { NodeType = "Markdown", Name = "Unrelated", State = MeshNodeState.Active })
+            .Should().Within(30.Seconds()).Emit();
+
+        // Re-materialize the top-level index from the current schema set (prod path).
+        await using (var conn = new NpgsqlConnection(_fixture.ConnectionString))
+        {
+            await conn.OpenAsync(ct);
+            await using var sync = new NpgsqlCommand(SyncAndRebuildSql, conn);
+            await sync.ExecuteNonQueryAsync(ct);
+        }
+
+        // userId=null → system (no access filter): top-level autocomplete reads ONLY the
+        // matview (never a cross-schema fan-out) and PG assigns the relevance score.
+        var results = await crossSchema.AutocompleteTopLevelAsync(token, userId: null, limit: 20, ct);
+
+        results.Should().Contain(r => r.Path == pMatch,
+            "the partition root whose id/name contains the prefix is a top-level match");
+        results.Should().NotContain(r => r.Path == pOther,
+            "an unrelated root must not match the prefix");
+        results.Where(r => r.Path == pMatch).Should().OnlyContain(r => r.Score > 0,
+            "PG assigns a positive relevance score to a match (results sort by score, not alphabetically)");
     }
 }

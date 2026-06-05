@@ -151,15 +151,36 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
     }
 
     /// <inheritdoc/>
-    /// <remarks>Autocomplete is a scoped, single-partition operation — the cross-schema
-    /// fan-out provider contributes nothing. The per-schema
-    /// <see cref="StorageAdapterMeshQueryProvider"/> (and <see cref="PostgreSqlMeshQuery"/>)
-    /// own it.</remarks>
+    /// <remarks>
+    /// Autocomplete NEVER fans out across partitions. Two shapes:
+    /// <list type="bullet">
+    ///   <item><b>TOP-LEVEL</b> — empty base (root) or an explicit <c>/name</c> prefix → the
+    ///     partition roots from the <c>public.top_level_index</c> matview (one small indexed
+    ///     relation, PG-scored).</item>
+    ///   <item><b>WITHIN-PARTITION</b> — a concrete <paramref name="basePath"/> → owned by the
+    ///     per-schema provider (a scoped <c>namespace:&lt;basePath&gt; scope:descendants</c>
+    ///     query against the single context schema); this provider contributes nothing.</item>
+    /// </list>
+    /// </remarks>
     public IObservable<IReadOnlyCollection<QueryResult>> Autocomplete(
         string basePath, string prefix, JsonSerializerOptions options,
         AutocompleteMode mode = AutocompleteMode.RelevanceFirst, int limit = 10,
         string? contextPath = null, string? context = null)
-        => Observable.Return((IReadOnlyCollection<QueryResult>)Array.Empty<QueryResult>());
+    {
+        var isTopLevel = string.IsNullOrEmpty(basePath) || (prefix?.StartsWith('/') ?? false);
+        if (!isTopLevel)
+            return Observable.Return((IReadOnlyCollection<QueryResult>)Array.Empty<QueryResult>());
+
+        var effectivePrefix = (prefix ?? "").TrimStart('/');
+        var ctxUser = _accessService?.Context?.ObjectId ?? _accessService?.CircuitContext?.ObjectId;
+        // System → null (sees all); no context → Anonymous (Public only); else the caller.
+        var effectiveUserId = ctxUser == WellKnownUsers.System ? null
+            : string.IsNullOrEmpty(ctxUser) ? WellKnownUsers.Anonymous : ctxUser;
+
+        return Observable.FromAsync(ct =>
+                _crossSchema.AutocompleteTopLevelAsync(effectivePrefix, effectiveUserId, limit, ct))
+            .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default);
+    }
 
     /// <inheritdoc/>
     /// <remarks>Single-path Select is a scoped operation — leave it to
