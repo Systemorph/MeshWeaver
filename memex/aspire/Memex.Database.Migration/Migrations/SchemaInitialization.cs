@@ -64,24 +64,17 @@ public static class SchemaInitialization
         var adminOptions = SchemaHelpers.BuildSchemaOptions(connectionString, "admin", options.VectorDimensions);
         await PostgreSqlSchemaInitializer.InitializeMeshTablesAsync(adminDataSource, adminOptions);
 
-        // Auth mirror schema. The V27 mirror trigger (mirror_access_object_to_auth_schema)
-        // inserts User/Group/Role/VUser/ApiToken/Space rows into auth.mesh_nodes. On a FRESH
-        // DB there is no legacy `user` schema for V27 to rename, and the storage router no
-        // longer lazily CREATE SCHEMAs on first write — so create `auth` eagerly here via the
-        // same stored proc every partition uses, so the trigger always has a destination.
-        // Trigger-populated only; application code never writes to auth.
-        await using (var ensureAuth = dataSource.CreateCommand("SELECT public.ensure_partition_schema('auth')"))
-            await ensureAuth.ExecuteNonQueryAsync();
+        // NOTE: the framework schemas `auth` (V27 access-object mirror) and `system_access`
+        // (global/root-scope grants) are NOT created here. The portal's
+        // PostgreSqlPartitionSubscriptionHostedService provisions them (and every other
+        // registered framework partition) at boot, BEFORE any user write — so the mirror
+        // trigger always has a destination. Creating them here would also make
+        // DetectFreshDbAsync see `auth.mesh_nodes`/`system_access.mesh_nodes` and wrongly
+        // classify a fresh DB as non-fresh, running the legacy `user`-schema repair chain
+        // (V05+, which references the long-gone `user` schema) instead of fast-forwarding.
 
-        // Global access-grant schema. Root-scope / global AccessAssignments (namespace `_Access`,
-        // MainNode="") persist into system_access.access — the platform-admin / global-viewer
-        // grant scope SecurityService reads. Created eagerly (no lazy create); ensure_partition_schema
-        // provisions the full standard table set, of which `access` is the one used.
-        await using (var ensureSysAccess = dataSource.CreateCommand("SELECT public.ensure_partition_schema('system_access')"))
-            await ensureSysAccess.ExecuteNonQueryAsync();
-
-        // Detect fresh DB: no partition schemas (i.e., no schemas with a mesh_nodes table)
-        // existed before this run. The admin schema doesn't count.
+        // Detect fresh DB: no CONTENT partition schemas (i.e., no schemas with a mesh_nodes
+        // table) existed before this run. Framework schemas don't count.
         var isFreshDb = await DetectFreshDbAsync(dataSource);
 
         return new Result(isFreshDb);
@@ -95,7 +88,14 @@ public static class SchemaInitialization
                 SELECT 1 FROM information_schema.tables t
                 WHERE t.table_schema = s.schema_name AND t.table_name = 'mesh_nodes'
             )
-            AND s.schema_name NOT IN ('public', 'admin', 'information_schema', 'pg_catalog', 'pg_toast')
+            -- Framework schemas are NOT content partitions — they must never make a fresh DB
+            -- look non-fresh (which would run the legacy `user`-schema repair chain instead of
+            -- fast-forwarding). admin = versions/catalogs; auth = access-object mirror;
+            -- system_* = global satellite scopes; portal/kernel = legacy session schemas.
+            AND s.schema_name NOT IN (
+                'public', 'admin', 'auth', 'system_access', 'system_activity',
+                'system_user_activity', 'system_thread', 'portal', 'kernel',
+                'information_schema', 'pg_catalog', 'pg_toast')
             AND s.schema_name NOT LIKE '%\_versions' ESCAPE '\'
             """);
         var schemaCount = (long)(await cmd.ExecuteScalarAsync())!;
