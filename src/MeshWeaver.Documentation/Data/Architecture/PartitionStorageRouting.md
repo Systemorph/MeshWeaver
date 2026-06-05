@@ -67,7 +67,13 @@ Beyond per-User/Space partitions, the clean model keeps exactly three system sch
 - [`PostgreSqlPathRoutingAdapter`](../../../MeshWeaver.Hosting.PostgreSql/PostgreSqlPathRoutingAdapter.cs) — the lazy `EnsureSchemaForPartitionSync` is **deleted** from both write paths (`RouteWrite` + `CreateAdapterForTable`). A write to an unprovisioned partition now faults `42P01` ("no partition, no write") instead of conjuring a ghost schema.
 - `auth` created eagerly by the migration; system-identity activity tracking suppressed (it would otherwise write a `system-security` ghost partition).
 
+**Pedestrian query-provider retirement (partial, done):**
+- The pedestrian [`StorageAdapterMeshQueryProvider`](../../../MeshWeaver.Hosting/Persistence/Query/StorageAdapterMeshQueryProvider.cs) no longer serves the storm-relevant shapes for partitioned Postgres: **unscoped/wildcard** → native cross-schema fan-out; **scoped primary (`mesh_nodes`)** → [`PostgreSqlPartitionedMeshQuery`](../../../MeshWeaver.Hosting.PostgreSql/PostgreSqlPartitionedMeshQuery.cs) delegates to a per-schema `PostgreSqlMeshQuery` over the **cached** adapter (live deltas + the storm-causing `ListChildPaths` scope-walk removed). Gated by `StorageAdapterQueryProviderOptions.DeferToNativeProvider`.
+- **Scoped SATELLITE reads** (`_`-prefixed segment / satellite nodeType / `source:activity`/`accessed`) STILL go through the pedestrian — the per-schema delegate's satellite **Query Initial** under-returns pre-existing rows (the live-delta path works; the Initial-with-preexisting-rows path is the follow-up). Satellite reads to an absent partition are now fast anyway (42P01-tolerant, post-ghost-fix), so this is not a storm path.
+
 **Still design / migration debt (the broader query redesign, tracked separately):**
+- Fix the per-schema delegate's satellite Query Initial, then route scoped-satellite through it too (full pedestrian retirement).
 - Longest-prefix-match cross-adapter routing (§2) — `FindBestPrefixMatch` exists; the PG router still resolves by first-segment.
 - Retiring `NodeTypeToSuffix` / `StandardTableMappings` path-suffix matching in favour of reading `StorageTable` everywhere (the `StorageTable` field is declared and provisioned, not yet the sole routing source).
+- SQL-side hybrid scoring: cross-schema text scoring is in (`9bdc64ef6`); vector term + single-schema `GenerateSelectQuery` score column remain.
 - Query fan-to-all replacing `NeedsFanOut` / `ResolvePinnedPartition` / `EnumerateFanOutAsync`.
