@@ -123,14 +123,15 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     }
 
     /// <summary>
-    /// #20: in <see cref="StorageAdapterQueryProviderOptions.DeferUnscopedAndSatelliteToNativeProvider"/>
-    /// mode, true when another (native fan-out) provider owns this query: unscoped /
-    /// wildcard-first-segment (cross-partition fan-out) OR a path that routes to a
-    /// satellite table. This provider only walks <c>mesh_nodes</c>, so for those
-    /// shapes it returned empty anyway — deferring just removes the redundant (and,
-    /// for absent partitions, pathologically slow) scope walk from the query merge.
-    /// Scoped <c>mesh_nodes</c> queries (which the native provider short-circuits to
-    /// empty) still go through this provider unchanged.
+    /// #20: in <see cref="StorageAdapterQueryProviderOptions.DeferToNativeProvider"/> mode,
+    /// true when the native <c>PostgreSqlPartitionedMeshQuery</c> owns this query and the
+    /// pedestrian should contribute nothing — removing its <c>ListChildPaths</c> scope-walk
+    /// (the storm fix) for those shapes: <b>unscoped / wildcard-first-segment</b> (native
+    /// cross-schema fan-out) and <b>scoped primary (<c>mesh_nodes</c>)</b> reads (native
+    /// per-schema delegate, live). Returns <see langword="false"/> ONLY for scoped SATELLITE
+    /// reads (a <c>_</c>-prefixed path segment, a satellite nodeType, or
+    /// <c>source:activity</c>/<c>accessed</c>) — the pedestrian stays their live server until
+    /// the delegate's satellite Query Initial is fixed.
     /// </summary>
     private bool DefersToNativeProvider(MeshQueryRequest request)
     {

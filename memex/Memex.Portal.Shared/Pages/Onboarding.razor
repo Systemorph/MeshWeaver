@@ -323,12 +323,18 @@ else
             $"nodeType:Invitation content.email:{email}");
         var jsonOptions = workspace.Hub.JsonSerializerOptions;
 
-        // Observable.Using holds ImpersonateAsHub's IDisposable for the entire
-        // subscription lifetime so every meshService.CreateNode call inside the
-        // chain captures the portal-hub identity (the portal create-rule lets
-        // the portal-hub identity write User / AccessAssignment nodes).
+        // Observable.Using holds the System-impersonation scope for the whole
+        // subscription so every CreateNode in the chain runs as the system identity.
+        // Onboarding creates the user's OWN partition root + self/platform grants — writes
+        // the not-yet-onboarded user has no permission for yet (a brand-new partition root
+        // isn't owned by anyone), so this is the canonical infrastructure-write case (same as
+        // SpacePostCreationHandler / OwnsPartitionProvisioningValidator).
+        // NOTE: ImpersonateAsHub(PortalApplication.Hub) is WRONG here — the portal circuit
+        // hub's address (`portal/{user}`) is hub-shaped, which AccessContext rejects as a
+        // principal ("hub-shaped principal must never happen"), throwing synchronously and
+        // hanging the form.
         var pipeline = Observable.Using(
-            () => AccessService!.ImpersonateAsHub(PortalApplication!.Hub),
+            () => AccessService!.ImpersonateAsSystem(),
             _ => Observable
                 .CombineLatest(firstUserQuery, usernameQuery, emailQuery, inviteQuery,
                     (all, byName, byMail, invites) => (all, byName, byMail, invites))
@@ -393,9 +399,20 @@ else
                             : Observable.Return(rootNode));
                 }));
 
-        subscriptions.Add(pipeline.Subscribe(
-            _ => OnOnboardingSucceeded(username, email),
-            ex => OnOnboardingFailed(username, ex)));
+        // Subscribe in a try/catch: a SYNCHRONOUS failure during Subscribe (e.g. the
+        // Observable.Using resource factory throwing) bypasses Rx's onError and would
+        // otherwise escape HandleSubmit unhandled — leaving the form stuck at isSaving with
+        // no message (the GUI must NEVER silently swallow an onboarding failure).
+        try
+        {
+            subscriptions.Add(pipeline.Subscribe(
+                _ => OnOnboardingSucceeded(username, email),
+                ex => OnOnboardingFailed(username, ex)));
+        }
+        catch (Exception ex)
+        {
+            OnOnboardingFailed(username, ex);
+        }
     }
 
     private void OnOnboardingSucceeded(string username, string email)
