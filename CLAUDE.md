@@ -359,7 +359,7 @@ Never use `IMeshStorage` or `IMeshCatalog` directly — internal infrastructure 
 | Read (query) | `IMeshService.QueryAsync(...)` |
 | Read (single node) | `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(...)` |
 | Create/Delete | `IMeshNodeFactory.CreateNodeAsync / DeleteNodeAsync` |
-| Update | `hub.Post(new UpdateNodeRequest(node))` |
+| Update | `workspace.GetMeshNodeStream(path).Update(current => current with { … })` |
 | Move | `hub.Observe(new MoveNodeRequest(src, dst)).Subscribe(...)` |
 
 Always `GetRequiredService<T>()` — never `GetService<T>()` + null check for required services.
