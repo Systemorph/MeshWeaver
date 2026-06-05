@@ -11,7 +11,7 @@ namespace MeshWeaver.Graph.Security;
 /// Node validator that enforces Row-Level Security based on permissions.
 /// Checks if the current user has the required permission for the operation.
 /// </summary>
-public class RlsNodeValidator : INodeValidator
+public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
 {
     private readonly IMessageHub _hub;
     private readonly ILogger<RlsNodeValidator> _logger;
@@ -30,14 +30,16 @@ public class RlsNodeValidator : INodeValidator
     }
 
     /// <summary>
-    /// This validator handles Read, Create, and Delete operations.
+    /// This validator handles Read, Create, Update, and Delete operations.
     /// Read validation is enforced via MeshCatalog.ValidateReadAsync for node reads.
-    /// Update validation is enforced on the canonical <c>stream.Update</c> patch path
-    /// by <c>RlsDataValidator</c> (the per-node hub re-checks RLS on the merge patch);
-    /// this validator therefore no longer participates in Update.
+    /// Update is validated on the canonical <c>stream.Update</c> patch path: the
+    /// per-node hub runs the registered <see cref="INodeValidator"/>s (this one
+    /// included) before applying the RFC 7396 merge patch, in addition to the
+    /// inbound <c>[RequiresPermission(Permission.Update)]</c> gate on
+    /// <c>PatchDataRequest</c>.
     /// </summary>
     public IReadOnlyCollection<NodeOperation> SupportedOperations =>
-        [NodeOperation.Read, NodeOperation.Create, NodeOperation.Delete];
+        [NodeOperation.Read, NodeOperation.Create, NodeOperation.Update, NodeOperation.Delete];
 
     public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
     {
@@ -69,6 +71,7 @@ public class RlsNodeValidator : INodeValidator
         {
             NodeOperation.Read => Permission.Read,
             NodeOperation.Create => GetCreatePermission(context.Node),
+            NodeOperation.Update => Permission.Update,
             NodeOperation.Delete => Permission.Delete,
             _ => Permission.None
         };

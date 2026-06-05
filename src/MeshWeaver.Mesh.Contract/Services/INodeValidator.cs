@@ -24,6 +24,19 @@ public interface INodeValidator
 }
 
 /// <summary>
+/// Marker for <see cref="INodeValidator"/>s whose enforcement is authoritative ONLY on
+/// the owning per-node hub — RLS and structural-partition guards, re-checked there via the
+/// <c>[RequiresPermission]</c> pipeline and the Create/Delete handlers. The client-side
+/// update pipeline (<c>IMeshService.UpdateNode</c>) SKIPS these: running a permission /
+/// partition check on the <em>caller's</em> hub is both redundant with the owner's check
+/// and unreliable (the caller may not resolve the owner's effective permissions — the
+/// cause of the cache-only-write-gate CI flakes). App-integrity validators (version,
+/// name, …) do NOT implement this marker and therefore run client-side, so
+/// <c>UpdateNode</c> surfaces their rejection before issuing the write.
+/// </summary>
+public interface IOwnerEnforcedNodeValidator { }
+
+/// <summary>
 /// Context for node validation containing all relevant information.
 /// </summary>
 public record NodeValidationContext

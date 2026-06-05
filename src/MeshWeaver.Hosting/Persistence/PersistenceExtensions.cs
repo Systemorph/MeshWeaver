@@ -675,6 +675,11 @@ public static class PersistenceExtensions
         // upstream subscription per path serves every consumer.
         services.TryAddSingleton<MeshNodeStreamCache>();
         services.TryAddSingleton<IMeshNodeStreamCache>(sp => sp.GetRequiredService<MeshNodeStreamCache>());
+        // Post-commit durable-flush hook for the PatchDataRequest handler: chains the
+        // owner's ack off the storage write so a cross-hub stream.Update completion
+        // guarantees read-after-write (see IPostCommitFlush / StoragePostCommitFlush).
+        services.TryAddSingleton<MeshWeaver.Data.IPostCommitFlush>(sp =>
+            new StoragePostCommitFlush(sp.GetRequiredService<IMessageHub>()));
         return services;
     }
 }

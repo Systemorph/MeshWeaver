@@ -703,7 +703,32 @@ public static class DataExtensions
                         .Take(1)
                         .Timeout(TimeSpan.FromSeconds(5))
                         .Subscribe(
-                            _ => AckOnce(true),
+                            committed =>
+                            {
+                                // Chain the ack off DURABLE persistence (not just the
+                                // in-memory commit) so the owner's PatchDataResponse —
+                                // and therefore a cross-hub stream.Update completion —
+                                // guarantees read-after-write: a subsequent Query's
+                                // initial snapshot (which reads storage) reflects this
+                                // write instead of racing the per-node hub's ~200ms
+                                // persistence debounce. Mirrors the commit → persist →
+                                // Ok shape of the deleted UpdateNodeRequest handler.
+                                // No hook registered (non-MeshNode data hub) → ack on
+                                // the in-memory commit, unchanged.
+                                var flush = hub.ServiceProvider.GetService<IPostCommitFlush>();
+                                if (flush is null)
+                                {
+                                    AckOnce(true);
+                                    return;
+                                }
+                                var flushSub = flush.Flush(committed.Value!)
+                                    .Take(1)
+                                    .Timeout(TimeSpan.FromSeconds(10))
+                                    .Subscribe(
+                                        _ => AckOnce(true),
+                                        ex => AckOnce(false, ClassifyPatchException(ex, hubPath)));
+                                hub.RegisterForDisposal(flushSub);
+                            },
                             ex => AckOnce(false, ClassifyPatchException(ex, hubPath)));
                     hub.RegisterForDisposal(postSub);
 

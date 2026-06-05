@@ -60,7 +60,7 @@ namespace MeshWeaver.Graph.Security;
 /// writes to a real space. Rule 1 (the mirror block) is pure path+identity logic and always
 /// enforced.</para>
 /// </summary>
-public sealed class PartitionWriteGuardValidator : INodeValidator
+public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforcedNodeValidator
 {
     private readonly IMessageHub _hub;
     private readonly ILogger<PartitionWriteGuardValidator> _logger;
