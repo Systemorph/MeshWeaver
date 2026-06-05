@@ -304,17 +304,12 @@ public static class PostgreSqlExtensions
         // partition advertised by a static node provider. No enumeration —
         // only what's explicitly registered.
         services.AddHostedService<PostgreSqlPartitionSubscriptionHostedService>();
-        // Cross-silo partition-state invalidation: LISTEN partition_changes
-        // and drop the PgPartitionCache entry for any namespace whose
-        // Admin/Partition row was added/updated/deleted on any silo.
-        // Migration V23 installs the trigger.
-        services.AddSingleton(sp =>
-        {
-            var provider = sp.GetRequiredService<PostgreSqlPartitionStorageProvider>();
-            var notifyLogger = sp.GetService<ILogger<PgPartitionNotifyListener>>();
-            return new PgPartitionNotifyListener(baseDataSource, provider, notifyLogger);
-        });
-        services.AddHostedService(sp => sp.GetRequiredService<PgPartitionNotifyListener>());
+        // #15: the cross-silo partition-state invalidation listener
+        // (PgPartitionNotifyListener / LISTEN partition_changes) is gone. The
+        // router no longer caches/probes schema existence — it maps the first
+        // path segment to a schema synchronously and reads tolerate an absent
+        // schema (42P01 → empty). A partition created on another silo therefore
+        // becomes routable immediately, with no invalidation round-trip.
 
         services.AddPartitionedCoreAndWrapperServices();
 

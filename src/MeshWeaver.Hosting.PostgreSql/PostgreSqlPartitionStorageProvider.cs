@@ -14,13 +14,14 @@ namespace MeshWeaver.Hosting.PostgreSql;
 /// (<see cref="PostgreSqlPathRoutingAdapter"/>) routes per-path to a
 /// per-schema <see cref="PostgreSqlStorageAdapter"/>.
 ///
-/// <para><b>Partition discovery is lazy.</b> No upfront enumeration of
-/// schemas, no <c>Query</c> fan-in of <c>Admin/Partition/*</c>
-/// rows. Each first-segment is cached in a per-namespace
-/// <see cref="System.Reactive.Subjects.ReplaySubject{T}"/> (held by
-/// <see cref="PgPartitionCache"/>) probed on first access; cross-silo
-/// invalidation comes from the <c>partition_changes</c> pg_notify channel
-/// via <see cref="PgPartitionNotifyListener"/>.</para>
+/// <para><b>No partition discovery, no existence probe.</b> The router maps a
+/// path's first segment to a schema <i>synchronously</i> (<c>seg.ToLowerInvariant()</c>)
+/// — no <c>information_schema</c> probe, no async cache. Writes ensure the schema
+/// (<see cref="EnsureSchemaForPartitionSync"/>); reads tolerate an absent schema
+/// (the per-schema adapter catches Postgres <c>42P01</c> → empty). The
+/// <c>_</c>-prefix global-satellite namespaces (whose schema name differs from the
+/// namespace) are resolved from the registered-partition map seeded at boot by the
+/// static-partition providers.</para>
 ///
 /// <para>See <c>Doc/Architecture/PartitionStorageHubs.md</c>.</para>
 /// </summary>
@@ -32,7 +33,16 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     private readonly IEmbeddingProvider? _embeddingProvider;
     private readonly Action<NpgsqlDataSourceBuilder>? _configureDataSource;
     private readonly ILogger<PostgreSqlPartitionStorageProvider>? _logger;
-    private readonly PgPartitionCache _cache;
+    // Registered partition definitions, keyed by namespace (first segment),
+    // case-insensitive. Seeded by the boot-time static-partition provider, by
+    // EnsureSchemaAsync, and by explicit RegisterPartition calls. The router
+    // consults this ONLY to resolve `_`-prefix global-satellite namespaces
+    // (whose schema name differs from the lowercased namespace) and to reuse a
+    // richer PartitionDefinition when one was registered; ordinary partitions
+    // resolve synchronously to `seg.ToLowerInvariant()` without it. Instance
+    // field (never static) so its lifetime is the mesh's.
+    private readonly ConcurrentDictionary<string, PartitionDefinition> _registeredPartitions =
+        new(StringComparer.OrdinalIgnoreCase);
     // One read-concurrency gate shared by every adapter this provider creates —
     // they all share the single base connection pool, so the gate must be shared
     // too. Bounds read fan-out below the pool size (leaves write headroom).
@@ -49,8 +59,15 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     /// <summary>Shared per-adapter read-concurrency gate (see <see cref="ReadConcurrencyGate"/>).</summary>
     internal ReadConcurrencyGate ReadGate => _readGate;
 
-    /// <summary>Cache shared with <see cref="PgPartitionNotifyListener"/>.</summary>
-    internal PgPartitionCache PartitionCache => _cache;
+    /// <summary>
+    /// Synchronous lookup of a registered <see cref="PartitionDefinition"/> by
+    /// namespace (first segment). Used by <see cref="PostgreSqlPathRoutingAdapter"/>
+    /// to resolve <c>_</c>-prefix global-satellite namespaces to their real schema
+    /// (e.g. <c>_Access</c> → <c>system_access</c>) and to reuse a registered def
+    /// for an ordinary partition. No DB round-trip.
+    /// </summary>
+    internal bool TryGetRegisteredPartition(string @namespace, out PartitionDefinition def)
+        => _registeredPartitions.TryGetValue(@namespace, out def!);
 
     /// <inheritdoc/>
     public string Name => "Postgres";
@@ -77,7 +94,6 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
         _embeddingProvider = embeddingProvider;
         _configureDataSource = configureDataSource;
         _logger = logger;
-        _cache = new PgPartitionCache(baseDataSource, logger);
         _readGate = new ReadConcurrencyGate(options.MaxReadConcurrency);
 
         Contexts = contexts != null
@@ -91,13 +107,14 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
         _adapter = new PostgreSqlPathRoutingAdapter(this);
 
         // Boot-time seed: ANY pre-known partition definition (e.g. one passed
-        // by the mesh-builder for system schemas) primes the cache positive
-        // so first-touch reads don't pay the probe round-trip. No enumeration
-        // — only what the caller hands us.
+        // by the mesh-builder for system schemas) is registered so the router
+        // can resolve its real schema (notably the `_`-prefix globals whose
+        // schema ≠ lowercased namespace). No enumeration — only what the caller
+        // hands us.
         if (partitions != null)
             foreach (var def in partitions)
                 if (!string.IsNullOrEmpty(def.Namespace))
-                    _cache.MarkExists(def.Namespace, def);
+                    _registeredPartitions[def.Namespace] = def;
     }
 
     /// <summary>
@@ -167,7 +184,8 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
         }
 
         _schemasInitialized.TryAdd(schema, 0);
-        _cache.MarkExists(def.Namespace, def);
+        if (!string.IsNullOrEmpty(def.Namespace))
+            _registeredPartitions[def.Namespace] = def;
         _logger?.LogInformation(
             "PostgreSqlPartitionStorageProvider: schema {Schema} ready for partition {Namespace}",
             schema, def.Namespace);
@@ -197,67 +215,90 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     }
 
     /// <summary>
-    /// Read-only existence probe (see <see cref="IPartitionStorageProvider"/>.PartitionExistsAsync).
-    /// Answers from <see cref="PgPartitionCache"/> — never creates a schema. Maps the
-    /// cached <see cref="PartitionState"/> to the tri-state contract:
+    /// Read-only existence probe (see <see cref="IPartitionStorageProvider.PartitionExists"/>).
+    /// NEVER creates a schema. Tri-state contract:
     /// <list type="bullet">
-    ///   <item><see cref="PartitionState.Exists"/> → <c>true</c> (schema present).</item>
-    ///   <item><see cref="PartitionState.PendingCreate"/> → <c>false</c> (probe ran,
-    ///     <c>information_schema.schemata</c> has no matching schema — the partition
-    ///     genuinely does not exist; lazy-create would otherwise materialise it).</item>
-    ///   <item><see cref="PartitionState.Absent"/> → <c>null</c> (the probe itself
-    ///     failed; indeterminate, so the guard must NOT reject on it).</item>
+    ///   <item><c>true</c> — the schema exists (registered/initialised this session,
+    ///     or found in <c>information_schema.schemata</c>).</item>
+    ///   <item><c>false</c> — the probe ran and no matching schema exists; the
+    ///     partition genuinely does not exist (this is what lets the
+    ///     <c>PartitionWriteGuardValidator</c> reject implicit space creation).</item>
+    ///   <item><c>null</c> — the probe itself failed; indeterminate, so the guard
+    ///     must NOT reject on it.</item>
     /// </list>
-    /// The probe resolves the schema by <c>lower(namespace)</c>, which is exact for
-    /// user/space partitions (schema == lower(id)); the namespace≠schema system
-    /// partitions (the <c>_Access</c>/<c>_Activity</c>/… globals) are exempted by the
-    /// guard before it ever calls this, and the named system schemas
-    /// (admin/auth/portal/kernel/doc) resolve correctly by lower-case match.
+    /// Fast positive: a namespace we've already registered or CREATE'd this session
+    /// answers <c>true</c> with no round-trip. Otherwise a single read-only
+    /// <c>information_schema.schemata</c> query at the reactive leaf
+    /// (<see cref="Observable.FromAsync{TResult}(System.Func{System.Threading.CancellationToken, System.Threading.Tasks.Task{TResult}})"/>) —
+    /// this is a genuine existence query, NOT partition routing, so the leaf async
+    /// I/O is the sanctioned reactive boundary. The schema resolves by
+    /// <c>lower(namespace)</c>, exact for user/space partitions (schema == lower(id));
+    /// the namespace≠schema <c>_</c>-prefix globals are exempted by the guard before
+    /// it ever calls this, and the named system schemas (admin/auth/portal/kernel/doc)
+    /// resolve correctly by lower-case match.
     /// </summary>
     public IObservable<bool?> PartitionExists(string @namespace)
     {
         if (string.IsNullOrEmpty(@namespace)) return Observable.Return<bool?>(null);
-        // GetOrProbe is already reactive: it emits the cached state or, on a miss, fires the
-        // information_schema probe (Observable.FromAsync inside PgPartitionCache) and emits when
-        // it lands. The async I/O therefore stays at the IO boundary; we just project the state.
-        return _cache.GetOrProbe(@namespace)
-            .Take(1)
-            .Select(state => state switch
-            {
-                PartitionState.Exists => (bool?)true,
-                PartitionState.PendingCreate => false,
-                _ => (bool?)null,
-            });
+
+        var schema = _registeredPartitions.TryGetValue(@namespace, out var def)
+                     && !string.IsNullOrEmpty(def.Schema)
+            ? def.Schema!
+            : @namespace.ToLowerInvariant();
+
+        if (_registeredPartitions.ContainsKey(@namespace) || _schemasInitialized.ContainsKey(schema))
+            return Observable.Return<bool?>(true);
+
+        return Observable.FromAsync<bool?>(async ct =>
+        {
+            await using var cmd = _baseDataSource.CreateCommand("""
+                SELECT 1 FROM information_schema.schemata
+                WHERE lower(schema_name) = lower($1)
+                LIMIT 1
+                """);
+            cmd.Parameters.AddWithValue(schema);
+            var scalar = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
+            return scalar is not null;
+        })
+        .Catch<bool?, Exception>(ex =>
+        {
+            _logger?.LogDebug(ex,
+                "PartitionExists: schema probe for '{Namespace}' (schema '{Schema}') failed; emitting null (indeterminate).",
+                @namespace, schema);
+            return Observable.Return<bool?>(null);
+        });
     }
 
     /// <summary>
-    /// Tests / boot-time callers can pre-prime the cache with a known
-    /// <see cref="PartitionDefinition"/>, skipping the
-    /// <c>information_schema.schemata</c> probe. No-op when the namespace
-    /// is empty.
+    /// Tests / boot-time callers can pre-register a known
+    /// <see cref="PartitionDefinition"/> so the router resolves its real schema
+    /// (notably the <c>_</c>-prefix globals whose schema ≠ lowercased namespace)
+    /// and <see cref="PartitionExists"/> answers <c>true</c> without a probe.
+    /// No-op when the namespace is empty.
     /// </summary>
     public void RegisterPartition(PartitionDefinition def)
     {
         if (string.IsNullOrEmpty(def.Namespace)) return;
-        _cache.MarkExists(def.Namespace, def);
+        _registeredPartitions[def.Namespace] = def;
     }
 
     /// <summary>
-    /// Drops the cache entry for <paramref name="namespace"/>. Used by tests
-    /// that simulate partition deletion; production uses
-    /// <see cref="PgPartitionNotifyListener"/> driven by the
-    /// <c>partition_changes</c> pg_notify channel.
+    /// Drops the registered definition for <paramref name="namespace"/>. Used by
+    /// tests that simulate partition deletion. Does NOT drop the
+    /// <c>_schemasInitialized</c> memo or the underlying schema — it only forgets
+    /// the registered def so the router falls back to the synchronous
+    /// <c>seg.ToLowerInvariant()</c> mapping (and `_`-prefix globals become
+    /// unroutable again).
     /// </summary>
     public void RemovePartition(string @namespace)
     {
         if (string.IsNullOrEmpty(@namespace)) return;
-        _cache.Invalidate(@namespace);
+        _registeredPartitions.TryRemove(@namespace, out _);
     }
 
     /// <inheritdoc/>
     public void Dispose()
     {
-        _cache.Dispose();
         _readGate.Dispose();
     }
 

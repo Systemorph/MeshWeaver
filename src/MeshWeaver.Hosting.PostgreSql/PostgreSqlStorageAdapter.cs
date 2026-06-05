@@ -117,6 +117,18 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     private static bool SelectorAsksFor(IReadOnlyList<string>? select, string column)
         => select is null || select.Any(s => s.Equals(column, StringComparison.OrdinalIgnoreCase));
 
+    /// <summary>
+    /// True when the exception is the Postgres "relation / schema does not exist"
+    /// error (<c>42P01</c>, undefined_table). Since the partition router resolves a
+    /// path's first segment to a schema <i>synchronously</i> (no existence probe),
+    /// a READ can legitimately target a schema that was never created — there's
+    /// simply nothing to read. Every read method swallows this and returns the
+    /// empty result (null / empty / false) instead of faulting. Writes never hit
+    /// this: the router calls <c>EnsureSchemaForPartitionSync</c> first.
+    /// </summary>
+    private static bool IsUndefinedTable(Exception ex)
+        => ex is PostgresException pg && pg.SqlState == "42P01";
+
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
         => Observable.FromAsync(ct => ReadAsyncCore(path, options, ct));
 
@@ -330,7 +342,10 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     }
 
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
-        => Observable.FromAsync(ct => ListChildPathsAsyncCore(parentPath, ct));
+        => Observable.FromAsync(ct => ListChildPathsAsyncCore(parentPath, ct))
+            .Catch<(IEnumerable<string>, IEnumerable<string>), Exception>(ex => IsUndefinedTable(ex)
+                ? Observable.Return<(IEnumerable<string>, IEnumerable<string>)>(([], []))
+                : Observable.Throw<(IEnumerable<string>, IEnumerable<string>)>(ex));
 
     private async Task<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPathsAsyncCore(
         string? parentPath,
@@ -358,7 +373,10 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     }
 
     public IObservable<bool> Exists(string path)
-        => Observable.FromAsync(ct => ExistsAsyncCore(path, ct));
+        => Observable.FromAsync(ct => ExistsAsyncCore(path, ct))
+            .Catch<bool, Exception>(ex => IsUndefinedTable(ex)
+                ? Observable.Return(false)
+                : Observable.Throw<bool>(ex));
 
     private async Task<bool> ExistsAsyncCore(string path, CancellationToken ct)
     {
@@ -380,7 +398,10 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
 
     public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
         string fullPath, JsonSerializerOptions options)
-        => Observable.FromAsync(ct => FindBestPrefixMatchAsyncCore(fullPath, options, ct));
+        => Observable.FromAsync(ct => FindBestPrefixMatchAsyncCore(fullPath, options, ct))
+            .Catch<(MeshNode?, int), Exception>(ex => IsUndefinedTable(ex)
+                ? Observable.Return<(MeshNode?, int)>((null, 0))
+                : Observable.Throw<(MeshNode?, int)>(ex));
 
     private async Task<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatchAsyncCore(
         string fullPath, JsonSerializerOptions options, CancellationToken ct)
@@ -420,7 +441,10 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     /// </summary>
     public IObservable<(MeshNode? Node, int MatchedSegments)> ResolvePath(
         string fullPath, JsonSerializerOptions options)
-        => Observable.FromAsync(ct => ResolvePathAsyncCore(fullPath, options, ct));
+        => Observable.FromAsync(ct => ResolvePathAsyncCore(fullPath, options, ct))
+            .Catch<(MeshNode?, int), Exception>(ex => IsUndefinedTable(ex)
+                ? Observable.Return<(MeshNode?, int)>((null, 0))
+                : Observable.Throw<(MeshNode?, int)>(ex));
 
     private async Task<(MeshNode? Node, int MatchedSegments)> ResolvePathAsyncCore(
         string fullPath, JsonSerializerOptions options, CancellationToken ct)
@@ -482,9 +506,18 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         string nodePath, string? subPath, JsonSerializerOptions options)
         => Observable.Create<object>(async (observer, ct) =>
         {
-            await foreach (var obj in GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct).ConfigureAwait(false))
-                observer.OnNext(obj);
-            observer.OnCompleted();
+            try
+            {
+                await foreach (var obj in GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct).ConfigureAwait(false))
+                    observer.OnNext(obj);
+                observer.OnCompleted();
+            }
+            catch (Exception ex) when (IsUndefinedTable(ex))
+            {
+                // Absent schema (router resolved synchronously, schema never
+                // created) → nothing to read. Complete empty, don't fault.
+                observer.OnCompleted();
+            }
         });
 
     private async IAsyncEnumerable<object> GetPartitionObjectsAsyncCore(
@@ -565,7 +598,10 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     }
 
     public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
-        => Observable.FromAsync(async ct => { await DeletePartitionObjectsAsyncCore(nodePath, subPath, ct).ConfigureAwait(false); return Unit.Default; });
+        => Observable.FromAsync(async ct => { await DeletePartitionObjectsAsyncCore(nodePath, subPath, ct).ConfigureAwait(false); return Unit.Default; })
+            .Catch<Unit, Exception>(ex => IsUndefinedTable(ex)
+                ? Observable.Return(Unit.Default)
+                : Observable.Throw<Unit>(ex));
 
     private async Task DeletePartitionObjectsAsyncCore(
         string nodePath,
@@ -583,7 +619,10 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     }
 
     public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
-        => Observable.FromAsync(ct => GetPartitionMaxTimestampAsyncCore(nodePath, subPath, ct));
+        => Observable.FromAsync(ct => GetPartitionMaxTimestampAsyncCore(nodePath, subPath, ct))
+            .Catch<DateTimeOffset?, Exception>(ex => IsUndefinedTable(ex)
+                ? Observable.Return<DateTimeOffset?>(null)
+                : Observable.Throw<DateTimeOffset?>(ex));
 
     private async Task<DateTimeOffset?> GetPartitionMaxTimestampAsyncCore(
         string nodePath,
@@ -606,7 +645,10 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     }
 
     public IObservable<IEnumerable<string>> ListPartitionSubPaths(string nodePath)
-        => Observable.FromAsync(ct => ListPartitionSubPathsAsyncCore(nodePath, ct));
+        => Observable.FromAsync(ct => ListPartitionSubPathsAsyncCore(nodePath, ct))
+            .Catch<IEnumerable<string>, Exception>(ex => IsUndefinedTable(ex)
+                ? Observable.Return(Enumerable.Empty<string>())
+                : Observable.Throw<IEnumerable<string>>(ex));
 
     private async Task<IEnumerable<string>> ListPartitionSubPathsAsyncCore(string nodePath, CancellationToken ct)
     {
@@ -727,17 +769,30 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         }
 
         using var readSlot = await AcquireReadSlotAsync(ct).ConfigureAwait(false);
-        NpgsqlDataReader? reader = null;
+        await using var cmd = _dataSource.CreateCommand(sql);
+        foreach (var (name, value) in parameters)
+        {
+            var p = new NpgsqlParameter(name, value ?? DBNull.Value);
+            cmd.Parameters.Add(p);
+        }
+
+        // Open the reader in its own try/catch: an absent schema (the router
+        // resolves the schema synchronously, so a query can target a schema that
+        // was never created) faults at ExecuteReaderAsync with 42P01 — treat that
+        // as "no rows". `yield return` can't live inside a catch-bearing try, so
+        // the open is separated from the read loop.
+        NpgsqlDataReader? reader;
         try
         {
-            await using var cmd = _dataSource.CreateCommand(sql);
-            foreach (var (name, value) in parameters)
-            {
-                var p = new NpgsqlParameter(name, value ?? DBNull.Value);
-                cmd.Parameters.Add(p);
-            }
-
             reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (IsUndefinedTable(ex))
+        {
+            yield break;
+        }
+
+        try
+        {
             while (await reader.ReadAsync(ct).ConfigureAwait(false))
             {
                 yield return ReadMeshNode(reader, options);
@@ -745,8 +800,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         }
         finally
         {
-            if (reader != null)
-                await reader.DisposeAsync().ConfigureAwait(false);
+            await reader.DisposeAsync().ConfigureAwait(false);
         }
 
     }
@@ -846,9 +900,22 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         foreach (var (name, value) in unionedParams)
             cmd.Parameters.Add(new NpgsqlParameter(name, value ?? DBNull.Value));
 
-        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        while (await reader.ReadAsync(ct).ConfigureAwait(false))
-            yield return ReadMeshNode(reader, options);
+        // Absent schema → 42P01 at open → no rows (see single-query overload).
+        NpgsqlDataReader? reader;
+        try
+        {
+            reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (IsUndefinedTable(ex))
+        {
+            yield break;
+        }
+
+        await using (reader)
+        {
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+                yield return ReadMeshNode(reader, options);
+        }
     }
 
     /// <summary>
@@ -951,10 +1018,23 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
             cmd.Parameters.Add(p);
         }
 
-        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        // Absent schema → 42P01 at open → no rows (see QueryNodesAsync).
+        NpgsqlDataReader? reader;
+        try
         {
-            yield return ReadMeshNode(reader, options);
+            reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (IsUndefinedTable(ex))
+        {
+            yield break;
+        }
+
+        await using (reader)
+        {
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            {
+                yield return ReadMeshNode(reader, options);
+            }
         }
     }
 

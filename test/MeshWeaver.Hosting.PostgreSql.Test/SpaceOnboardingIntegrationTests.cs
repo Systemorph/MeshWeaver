@@ -235,13 +235,13 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
     /// <c>mesh_nodes</c>, no root node. In that state every attempt to create the Space
     /// failed and the space was invisible.
     ///
-    /// <para>Root cause: <c>PgPartitionCache.Probe</c> keys partition existence on
-    /// <c>information_schema.schemata</c> (schema-present) ALONE, so a bare schema probes
-    /// as <see cref="PartitionState.Exists"/>. The create existence-check
-    /// (<c>HandleCreateNodeRequest</c> → <c>persistence.Read(path)</c>) then queries
+    /// <para>Root cause: a bare schema (present in <c>information_schema.schemata</c> but
+    /// with no <c>mesh_nodes</c> table) makes the create existence-check
+    /// (<c>HandleCreateNodeRequest</c> → <c>persistence.Read(path)</c>) query
     /// <c>{schema}.mesh_nodes</c>, which doesn't exist → Postgres <c>42P01</c>. That read
     /// runs BEFORE <see cref="SpaceTopLevelValidator"/> can provision the tables, so the
-    /// create can never self-heal.</para>
+    /// create can never self-heal — unless the read tolerates <c>42P01</c> (which it now
+    /// does: see <c>PostgreSqlStorageAdapter</c>'s undefined-table guard).</para>
     ///
     /// <para>Expected: creating the Space over a pre-existing bare schema must HEAL the
     /// partition — provision <c>mesh_nodes</c> + satellites, write the root node, and grant

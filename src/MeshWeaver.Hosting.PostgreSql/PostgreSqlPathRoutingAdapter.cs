@@ -11,20 +11,32 @@ namespace MeshWeaver.Hosting.PostgreSql;
 /// <summary>
 /// Path-routing <see cref="IStorageAdapter"/> facade exposed by
 /// <see cref="PostgreSqlPartitionStorageProvider.Adapter"/>. Maps the path's
-/// first segment to a per-schema <see cref="PostgreSqlStorageAdapter"/>
-/// according to the <see cref="PgPartitionCache"/> state.
+/// first segment to a per-schema <see cref="PostgreSqlStorageAdapter"/>.
 ///
-/// <para><b>Try-then-claim contract.</b> Every method returns null/empty
-/// when the cache reports <see cref="PartitionState.Absent"/> so the outer
-/// chain in <see cref="MeshWeaver.Hosting.Persistence.PersistenceService"/>
-/// can fall through to the next writable provider.</para>
+/// <para><b>Schema = first path segment.</b> A valid partition segment maps to
+/// the Postgres schema <c>seg.ToLowerInvariant()</c> — resolved
+/// <i>synchronously</i>, with NO <c>information_schema</c> probe and NO async
+/// cache lookup. The router only verifies the segment is routable
+/// (<see cref="ResolveSchema"/>'s guards); existence is established lazily:</para>
 ///
-/// <para><b>Lazy schema creation.</b> A Write to a namespace whose cache
-/// state is <see cref="PartitionState.PendingCreate"/> calls
-/// <see cref="PostgreSqlPartitionStorageProvider.EnsureSchemaForPartitionSync"/>,
-/// which CREATE SCHEMAs + initialises tables on-demand. Reads against a
-/// PendingCreate namespace return null/empty (nothing to read until the
-/// first write).</para>
+/// <list type="bullet">
+///   <item><b>Writes</b> (Write / SavePartitionObjects / DeletePartitionObjects)
+///     call <see cref="PostgreSqlPartitionStorageProvider.EnsureSchemaForPartitionSync"/>
+///     (idempotent CREATE SCHEMA via <c>public.ensure_partition_schema</c>)
+///     before routing — so the schema is guaranteed present when the write lands.</item>
+///   <item><b>Reads</b> route straight to the per-schema adapter, which
+///     <i>tolerates an absent schema</i>: each read catches Postgres
+///     <c>42P01</c> (undefined table/schema) and returns the empty result
+///     (null / empty / false). No probe is needed to "know" whether a schema
+///     exists — the read simply finds nothing.</item>
+/// </list>
+///
+/// <para><b><c>_</c>-prefix global satellites.</b> Namespaces like
+/// <c>_Access</c> / <c>_Activity</c> are managed by <c>DefaultPartitionProvider</c>
+/// with explicit schemas (<c>system_access</c>, <c>system_activity</c>, …) — the
+/// schema is NOT the lowercased namespace. Those resolve via the provider's
+/// registered-partition lookup (populated at boot by the static-partition
+/// seeding) and are NEVER lazily created.</para>
 /// </summary>
 internal sealed class PostgreSqlPathRoutingAdapter : IStorageAdapter
 {
@@ -47,48 +59,60 @@ internal sealed class PostgreSqlPathRoutingAdapter : IStorageAdapter
         _provider = provider;
     }
 
-    private IObservable<PartitionState> ResolveState(string path)
+    /// <summary>
+    /// Resolves the routable <see cref="PartitionDefinition"/> for a path's first
+    /// segment — synchronously, no DB round-trip. Returns <c>null</c> when the
+    /// segment is not a routable partition (the write falls through to the next
+    /// provider / the read returns empty).
+    /// </summary>
+    private PartitionDefinition? ResolveSchema(string path)
     {
         var seg = PostgreSqlPartitionStorageProvider.GetFirstSegment(path);
         if (string.IsNullOrEmpty(seg))
-            return Observable.Return<PartitionState>(new PartitionState.Absent());
+            return null;
         // 🚨 Prod-2026-05-21 regression guard: paths whose first segment is a
-        // NodeType name (Thread, AccessAssignment, …) MUST NOT be probed as
-        // partition namespaces. Without this, the cache probes for a schema
-        // named after the NodeType, gets PendingCreate, and AdapterForWriteState
-        // CREATE SCHEMAs it on first write — surfacing as `relation
-        // "thread.mesh_nodes" does not exist` and the SatelliteRoutingExhaustive
-        // schema-must-not-exist assertion failing for AccessAssignment.
+        // NodeType name (Thread, AccessAssignment, …) MUST NOT be routed as
+        // partition namespaces. Without this, the router would map them to a
+        // schema named after the NodeType and CREATE SCHEMA it on first write —
+        // surfacing as `relation "thread.mesh_nodes" does not exist` and the
+        // SatelliteRoutingExhaustive schema-must-not-exist assertion failing for
+        // AccessAssignment.
         if (PartitionDefinition.NodeTypeToSuffix.ContainsKey(seg))
-            return Observable.Return<PartitionState>(new PartitionState.Absent());
+            return null;
         // 🚨 Global satellite namespaces (`_Access`, `_Activity`, `_Thread`,
         // `_UserActivity`) are managed by DefaultPartitionProvider with explicit
         // schemas (`system_access`, `system_activity`, etc.) — the schema is NOT
-        // the lowercased namespace. The cache's probe queries information_schema
-        // for `_access` which doesn't exist (real schema is `system_access`), so
-        // probe returns PendingCreate. If we let AdapterForWriteState lazy-create
-        // from that, we'd build a competing `_access` schema. Instead, demote
-        // PendingCreate → Absent for `_`-prefixed segments: writes are accepted
-        // only when the static-partition path has populated the cache with the
-        // real Exists(def with Schema="system_access").
+        // the lowercased namespace. They are resolved ONLY via the provider's
+        // registered-partition lookup (populated at boot by the static-partition
+        // seeding); we never lazily create `_access`/`_activity` schemas. If the
+        // namespace hasn't been registered yet, it isn't routable → null.
         if (seg.StartsWith('_'))
-        {
-            return _provider.PartitionCache.GetOrProbe(seg)
-                .Take(1)
-                .Select(state => state is PartitionState.Exists
-                    ? state
-                    : (PartitionState)new PartitionState.Absent());
-        }
+            return _provider.TryGetRegisteredPartition(seg, out var registered)
+                ? registered
+                : null;
         // 🚨 Reject segments that are not valid partition names. A partition (= a
         // user/space, the first path segment) becomes a Postgres SCHEMA, so it must be a
         // simple identifier. A URL- or query-string-shaped segment
         // (`login?error=auth_failed`, `search?q=agent&hq=scope%3adescendants`) must NEVER
         // be lazily CREATE SCHEMA'd. Prod 2026-06-05: the atioz DB filled with exactly
         // these garbage schemas (request URLs routed as mesh paths) and corrupted itself.
-        // → Absent so no schema is created; the write falls through to the next provider.
+        // → null so no schema is created; the write falls through to the next provider.
         if (!IsValidPartitionSegment(seg))
-            return Observable.Return<PartitionState>(new PartitionState.Absent());
-        return _provider.PartitionCache.GetOrProbe(seg).Take(1);
+            return null;
+        // Valid partition segment → schema is the lowercased first segment. If a
+        // richer PartitionDefinition was registered for it (e.g. a non-default
+        // DataSource), reuse that; otherwise synthesise the standard def.
+        if (_provider.TryGetRegisteredPartition(seg, out var known))
+            return known;
+        return new PartitionDefinition
+        {
+            Namespace = seg,
+            DataSource = "default",
+            Schema = seg.ToLowerInvariant(),
+            Table = "mesh_nodes",
+            TableMappings = PartitionDefinition.StandardTableMappings,
+            Versioned = true,
+        };
     }
 
     /// <summary>
@@ -106,9 +130,7 @@ internal sealed class PostgreSqlPathRoutingAdapter : IStorageAdapter
 
     /// <summary>
     /// Schema-bound adapter cache: once we've materialised the
-    /// PostgreSqlStorageAdapter for a (def.Schema), reuse it. Distinct from
-    /// the partition-cache (which holds the state observable per namespace);
-    /// this holds the concrete adapter per schema.
+    /// PostgreSqlStorageAdapter for a (def.Schema), reuse it.
     /// </summary>
     private PostgreSqlStorageAdapter GetOrCreateAdapter(PartitionDefinition def)
     {
@@ -124,60 +146,56 @@ internal sealed class PostgreSqlPathRoutingAdapter : IStorageAdapter
         });
     }
 
-    private PostgreSqlStorageAdapter? AdapterForReadState(PartitionState state) => state switch
-    {
-        PartitionState.Exists e => GetOrCreateAdapter(e.Def),
-        _ => null,
-    };
+    /// <summary>
+    /// Adapter for a READ. The per-schema adapter tolerates an absent schema
+    /// (catches Postgres <c>42P01</c> → empty result), so no existence check
+    /// is needed here — we route as long as the segment is a routable partition.
+    /// </summary>
+    private PostgreSqlStorageAdapter? AdapterForRead(string path)
+        => ResolveSchema(path) is { } def ? GetOrCreateAdapter(def) : null;
 
-    private PostgreSqlStorageAdapter? AdapterForWriteState(PartitionState state)
-    {
-        switch (state)
+    /// <summary>
+    /// Cold write pipeline. The schema-ensure (a blocking
+    /// <c>public.ensure_partition_schema</c> round-trip via
+    /// <see cref="PostgreSqlPartitionStorageProvider.EnsureSchemaForPartitionSync"/>)
+    /// runs on <b>subscribe</b>, not at construction — so the returned observable
+    /// stays cold (no side effect until subscribed). Path resolution is pure and
+    /// safe to do eagerly inside the Defer. Returns the empty/no-op observable
+    /// when the segment isn't a routable partition.
+    /// </summary>
+    private IObservable<T> RouteWrite<T>(
+        string path, Func<PostgreSqlStorageAdapter, IObservable<T>> write, T whenNotRouted)
+        => Observable.Defer(() =>
         {
-            case PartitionState.Exists e:
-                return GetOrCreateAdapter(e.Def);
-            case PartitionState.PendingCreate p:
-                var def = new PartitionDefinition
-                {
-                    Namespace = p.FirstSegment,
-                    DataSource = "default",
-                    Schema = p.FirstSegment.ToLowerInvariant(),
-                    Table = "mesh_nodes",
-                    TableMappings = PartitionDefinition.StandardTableMappings,
-                    Versioned = true,
-                };
-                _provider.EnsureSchemaForPartitionSync(def);
-                return GetOrCreateAdapter(def);
-            default:
-                return null;
-        }
-    }
+            if (ResolveSchema(path) is not { } def)
+                return Observable.Return(whenNotRouted);
+            _provider.EnsureSchemaForPartitionSync(def);
+            return write(GetOrCreateAdapter(def));
+        });
 
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
-        => ResolveState(path).SelectMany(state => AdapterForReadState(state) is { } a
+        => AdapterForRead(path) is { } a
             ? a.Read(path, options)
-            : Observable.Return<MeshNode?>(null));
+            : Observable.Return<MeshNode?>(null);
 
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
-        => ResolveState(node.Path).SelectMany(state => AdapterForWriteState(state) is { } a
-            ? a.Write(node, options)
-            : Observable.Return<MeshNode?>(null));
+        => RouteWrite<MeshNode?>(node.Path, a => a.Write(node, options), null);
 
     public IObservable<string> Delete(string path)
-        => ResolveState(path).SelectMany(state => AdapterForReadState(state) is { } a
+        => AdapterForRead(path) is { } a
             ? a.Delete(path)
-            : Observable.Return(path));
+            : Observable.Return(path);
 
     public IObservable<bool> Exists(string path)
-        => ResolveState(path).SelectMany(state => AdapterForReadState(state) is { } a
+        => AdapterForRead(path) is { } a
             ? a.Exists(path)
-            : Observable.Return(false));
+            : Observable.Return(false);
 
     public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
         string fullPath, JsonSerializerOptions options)
-        => ResolveState(fullPath).SelectMany(state => AdapterForReadState(state) is { } a
+        => AdapterForRead(fullPath) is { } a
             ? a.FindBestPrefixMatch(fullPath, options)
-            : Observable.Return<(MeshNode?, int)>((null, 0)));
+            : Observable.Return<(MeshNode?, int)>((null, 0));
 
     /// <summary>
     /// Forwards to the per-schema adapter's <see cref="IStorageAdapter.ResolvePath"/>
@@ -187,9 +205,9 @@ internal sealed class PostgreSqlPathRoutingAdapter : IStorageAdapter
     /// </summary>
     public IObservable<(MeshNode? Node, int MatchedSegments)> ResolvePath(
         string fullPath, JsonSerializerOptions options)
-        => ResolveState(fullPath).SelectMany(state => AdapterForReadState(state) is { } a
+        => AdapterForRead(fullPath) is { } a
             ? a.ResolvePath(fullPath, options)
-            : Observable.Return<(MeshNode?, int)>((null, 0)));
+            : Observable.Return<(MeshNode?, int)>((null, 0));
 
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)>
         ListChildPaths(string? parentPath)
@@ -197,34 +215,34 @@ internal sealed class PostgreSqlPathRoutingAdapter : IStorageAdapter
             ? Observable.Throw<(IEnumerable<string>, IEnumerable<string>)>(
                 new NotSupportedException(
                     "Root-level listing is a query concern; use IMeshQueryCore."))
-            : ResolveState(parentPath).SelectMany(state => AdapterForReadState(state) is { } a
+            : AdapterForRead(parentPath) is { } a
                 ? a.ListChildPaths(parentPath)
-                : Observable.Return<(IEnumerable<string>, IEnumerable<string>)>(([], [])));
+                : Observable.Return<(IEnumerable<string>, IEnumerable<string>)>(([], []));
 
     public IObservable<IEnumerable<string>> ListPartitionSubPaths(string nodePath)
-        => ResolveState(nodePath).SelectMany(state => AdapterForReadState(state) is { } a
+        => AdapterForRead(nodePath) is { } a
             ? a.ListPartitionSubPaths(nodePath)
-            : Observable.Return(Enumerable.Empty<string>()));
+            : Observable.Return(Enumerable.Empty<string>());
 
     public IObservable<object> GetPartitionObjects(
         string nodePath, string? subPath, JsonSerializerOptions options)
-        => ResolveState(nodePath).SelectMany(state => AdapterForReadState(state) is { } a
+        => AdapterForRead(nodePath) is { } a
             ? a.GetPartitionObjects(nodePath, subPath, options)
-            : Observable.Empty<object>());
+            : Observable.Empty<object>();
 
     public IObservable<Unit> SavePartitionObjects(
         string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options)
-        => ResolveState(nodePath).SelectMany(state => AdapterForWriteState(state) is { } a
-            ? a.SavePartitionObjects(nodePath, subPath, objects, options)
-            : Observable.Return(Unit.Default));
+        => RouteWrite(nodePath, a => a.SavePartitionObjects(nodePath, subPath, objects, options), Unit.Default);
 
     public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
-        => ResolveState(nodePath).SelectMany(state => AdapterForReadState(state) is { } a
+        // Delete on the READ path: never CREATE SCHEMA just to delete nothing.
+        // The per-schema adapter tolerates an absent schema (42P01 → no-op).
+        => AdapterForRead(nodePath) is { } a
             ? a.DeletePartitionObjects(nodePath, subPath)
-            : Observable.Return(Unit.Default));
+            : Observable.Return(Unit.Default);
 
     public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
-        => ResolveState(nodePath).SelectMany(state => AdapterForReadState(state) is { } a
+        => AdapterForRead(nodePath) is { } a
             ? a.GetPartitionMaxTimestamp(nodePath, subPath)
-            : Observable.Return<DateTimeOffset?>(null));
+            : Observable.Return<DateTimeOffset?>(null);
 }

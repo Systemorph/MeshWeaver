@@ -9,16 +9,16 @@ namespace MeshWeaver.Hosting.PostgreSql;
 /// Boot-time seeding hook: ensures the Postgres schemas for every framework
 /// partition (the ones explicitly registered by an <see cref="IStaticNodeProvider"/>
 /// — Admin, User, Portal, Kernel, system_access, etc.) exist before the first
-/// request. Each schema's <see cref="PartitionDefinition"/> is also written
-/// to <see cref="PgPartitionCache"/> as positive, so the first read against
-/// any of them doesn't pay an <c>information_schema</c> probe.
+/// request. Each schema's <see cref="PartitionDefinition"/> is also registered on
+/// <see cref="PostgreSqlPartitionStorageProvider"/> so the router can resolve the
+/// <c>_</c>-prefix global-satellite namespaces (whose schema name differs from the
+/// lowercased namespace) to their real schema.
 ///
-/// <para><b>No enumeration.</b> We do NOT scan <c>information_schema.schemata</c>
-/// or <c>information_schema.tables</c> for arbitrary user/org schemas.
-/// Partition existence is observed lazily by <see cref="PgPartitionCache"/>
-/// on first touch; cross-silo invalidation comes from
-/// <see cref="PgPartitionNotifyListener"/>'s LISTEN on
-/// <c>partition_changes</c>.</para>
+/// <para><b>No enumeration, no existence probe.</b> We do NOT scan
+/// <c>information_schema.schemata</c> for arbitrary user/org schemas. The router
+/// maps a path's first segment to a schema synchronously; reads tolerate an absent
+/// schema (Postgres <c>42P01</c> → empty), so a partition created on another silo
+/// becomes routable immediately without any invalidation round-trip.</para>
 ///
 /// <para>This service is the only place that calls
 /// <see cref="PostgreSqlPartitionStorageProvider.EnsureSchemaForPartitionAsync"/>
