@@ -431,6 +431,29 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         if (LooksLikeNodeTypePath(path))
             return shared;
 
+        return ProbeEffectivePermissions(path, captured)
+            .SelectMany(perms => GateOnRead(perms, shared, path, captured))
+            .CarryAccessContext(accessService);
+    }
+
+    private static IObservable<MeshNode> GateOnRead(
+        Permission perms, IObservable<MeshNode> shared, string path, AccessContext user)
+    {
+        if (perms.HasFlag(Permission.Read))
+            return shared;
+        return Observable.Throw<MeshNode>(new UnauthorizedAccessException(
+            $"User '{user.ObjectId}' lacks Read permission on '{path}'"));
+    }
+
+    /// <summary>
+    /// Probes the owning hub for <paramref name="captured"/>'s effective permissions on
+    /// <paramref name="path"/> via <see cref="GetPermissionRequest"/>, cached per
+    /// <c>(path,user)</c> for <see cref="AccessTtl"/>. A timeout denies (Permission.None)
+    /// WITHOUT caching. Shared by the read gate (<see cref="GetStreamRaw"/>) and the write
+    /// gate (<see cref="Update"/>) so the two never diverge.
+    /// </summary>
+    private IObservable<Permission> ProbeEffectivePermissions(string path, AccessContext captured)
+    {
         var key = (Path: path, UserId: captured.ObjectId);
         return Observable.Defer(() =>
         {
@@ -438,30 +461,17 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             if (_access.TryGetValue(key, out var cached)
                 && cached.ValidUntil > DateTimeOffset.UtcNow)
             {
-                return GateOnRead(cached.Permissions, shared, path, captured);
+                return Observable.Return(cached.Permissions);
             }
 
-            // Miss ⇒ ask the owning hub for the user's effective permissions on
-            // this path, then gate. The GetPermissionRequest handler is wired
-            // on every per-node hub by AddAccessControlPipeline (called from
-            // AddRowLevelSecurity). Without RLS the gate doesn't fire at all
-            // — see the no-AccessService bail-out at the top of GetStream.
+            // Miss ⇒ ask the owning hub for the user's effective permissions on this
+            // path. The GetPermissionRequest handler is wired on every per-node hub by
+            // AddAccessControlPipeline (from AddRowLevelSecurity).
             //
-            // 🚨 Timeout is non-negotiable. The owning hub MUST respond fast
-            // once active, but real failure modes (corrupted MeshNode, missing
-            // ancestor in the security walk, mesh-hub backlog, Orleans
-            // grain-activation cold start) can leave the request unanswered.
-            // Without a timeout EVERY subscriber to this path's bubble waits
-            // forever — the prod 2026-05-23 thread-page deadlock: one stuck
-            // ThreadMessage with a broken delegationPath wedged the entire
-            // chat view.
-            //
-            // Two outcomes:
-            //   1. Real response (Allow or Deny) → cache for AccessTtl.
-            //   2. Timeout → deny THIS subscription with Permission.None,
-            //      but DO NOT cache — a single slow activation would otherwise
-            //      lock out every subscriber within the 30s TTL. The next
-            //      subscription gets a fresh chance.
+            // 🚨 Timeout is non-negotiable: a stuck/cold owning hub must not wedge every
+            // subscriber forever. Timeout ⇒ deny this attempt as Permission.None but DO
+            // NOT cache it, so a single slow activation doesn't lock out the path for the
+            // whole TTL — the next attempt gets a fresh chance.
             return meshHub.Observe(
                     new GetPermissionRequest(),
                     o => o.WithTarget(new Address(path)).WithAccessContext(captured))
@@ -472,31 +482,18 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 {
                     logger.LogWarning(
                         "GetPermissionRequest timed out after {Timeout} for {Path} (user={User}) — denying " +
-                        "this subscription as Permission.None WITHOUT caching. " +
-                        "Owning hub did not respond; check for stuck per-node hub, corrupted ancestor, " +
-                        "or slow Orleans grain activation.",
+                        "this attempt as Permission.None WITHOUT caching. Owning hub did not respond; check " +
+                        "for stuck per-node hub, corrupted ancestor, or slow Orleans grain activation.",
                         PermissionRequestTimeout, path, captured.ObjectId);
                     return Observable.Return((Perms: Permission.None, IsTimeout: true));
                 }))
-                .SelectMany(result =>
+                .Select(result =>
                 {
                     if (!result.IsTimeout)
-                    {
-                        _access[key] = new AccessEntry(result.Perms,
-                            DateTimeOffset.UtcNow + AccessTtl);
-                    }
-                    return GateOnRead(result.Perms, shared, path, captured);
+                        _access[key] = new AccessEntry(result.Perms, DateTimeOffset.UtcNow + AccessTtl);
+                    return result.Perms;
                 });
-        }).CarryAccessContext(accessService);
-    }
-
-    private static IObservable<MeshNode> GateOnRead(
-        Permission perms, IObservable<MeshNode> shared, string path, AccessContext user)
-    {
-        if (perms.HasFlag(Permission.Read))
-            return shared;
-        return Observable.Throw<MeshNode>(new UnauthorizedAccessException(
-            $"User '{user.ObjectId}' lacks Read permission on '{path}'"));
+        });
     }
 
     // 🚨 PRIVATE raw write — does NOT deserialize JsonElement Content before the
@@ -679,8 +676,34 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             var updated = update(typed);
             return ConvertContentTypedToJsonElement(updated, options);
         };
-        // Route through the same per-path serial queue as the untyped write —
-        // typed and untyped writers to the same path must not race each other.
+
+        // 🔒 Client-side WRITE gate — CACHE-ONLY (no probe, so zero per-write round-trip).
+        // The owner re-validates RLS authoritatively, BUT UpdateRemote emits the patch
+        // OPTIMISTICALLY and deliberately does NOT await the owner (Orleans-deadlock
+        // avoidance), so an owner-side denial would be swallowed and the caller would see a
+        // fake success. When the caller's effective permissions for this path are ALREADY
+        // cached — warm from a prior read, the common read-then-edit flow — require
+        // Permission.Update and surface a denial as UnauthorizedAccessException before the
+        // optimistic emit. On a cache MISS we do NOT probe (a per-write GetPermissionRequest
+        // round-trip doubled write latency and timed out on cold owning hubs); the owner
+        // still denies authoritatively, the denial just isn't surfaced on the Rx stream in
+        // that cold-write case. (Read-then-write is the realistic UI/agent flow, so the
+        // common case IS surfaced.)
+        var accessService = meshHub.ServiceProvider.GetService<AccessService>();
+        if (accessService is not null
+            && meshHub.Configuration.Get<EffectivePermissionsDelegate>() is not null
+            && !LooksLikeNodeTypePath(path))
+        {
+            var captured = accessService.Context ?? accessService.CircuitContext;
+            if (captured is not null && !string.IsNullOrEmpty(captured.ObjectId)
+                && _access.TryGetValue((path, captured.ObjectId), out var cached)
+                && cached.ValidUntil > DateTimeOffset.UtcNow
+                && !cached.Permissions.HasFlag(Permission.Update))
+            {
+                return Observable.Throw<MeshNode>(new UnauthorizedAccessException(
+                    $"User '{captured.ObjectId}' lacks Update permission on '{path}'"));
+            }
+        }
         return UpdateRaw(path, wrapped);
     }
 

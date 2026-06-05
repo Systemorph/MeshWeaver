@@ -281,6 +281,70 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         updateResponse.Message.RejectionReason.Should().Be(NodeUpdateRejectionReason.ValidationFailed);
     }
 
+    /// <summary>
+    /// The canonical write API is <c>stream.Update</c> (UpdateNodeRequest is being
+    /// retired). RLS MUST still apply: a caller without Update rights must NOT be able
+    /// to mutate the node via <c>stream.Update</c>, and the denial must surface as an
+    /// error — not a silent optimistic success.
+    /// </summary>
+    [Fact]
+    public void StreamUpdate_WithoutUpdateRights_IsDeniedAndErrors()
+    {
+        var client = GetClient();
+
+        const string adminId = "admin_noupd";
+        const string viewerId = "viewer_noupd";
+        const string parentPath = "rls/noupdate";
+
+        var node = new MeshNode("NoUpdateStream", parentPath)
+        {
+            Name = "Original Name",
+            NodeType = "Markdown",
+        };
+        client.Observe(new CreateNodeRequest(node) { CreatedBy = adminId }, o => o.WithTarget(Mesh.Address))
+            .Should().Emit().Message.Success.Should().BeTrue();
+
+        // Act — viewer (no Update rights) attempts a stream.Update under their identity.
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var original = accessService.CircuitContext;
+        accessService.SetCircuitContext(new AccessContext { ObjectId = viewerId, Name = viewerId });
+        Exception? updateError = null;
+        try
+        {
+            // Realistic read-then-edit flow: the viewer reads the node first (they have
+            // Read), which warms the per-(path,viewer) permission cache the write gate
+            // consults. The write gate is cache-only (no per-write probe).
+            Mesh.GetMeshNodeStream(node.Path).Take(1)
+                .Should().Within(30.Seconds()).Match(n => n is not null && n.Name == "Original Name");
+
+            // Now the write — cache hit (viewer = Read only, no Update) → denied + surfaced.
+            try
+            {
+                Mesh.GetMeshNodeStream(node.Path)
+                    .Update(n => n with { Name = "Hacked By Viewer" })
+                    .Should().Within(10.Seconds()).Emit();
+            }
+            catch (Exception ex)
+            {
+                updateError = ex;
+            }
+        }
+        finally
+        {
+            // Restore the admin identity so the read-back (and RLS read gate) works.
+            accessService.SetCircuitContext(original);
+        }
+
+        // Security invariant: a denied update MUST NOT mutate the node.
+        var after = ReadNode(node.Path).Should().Within(30.Seconds()).Match(n => n is not null);
+        after!.Name.Should().Be("Original Name",
+            "a stream.Update without Update rights must be denied and leave the node unchanged");
+
+        // And the caller MUST see the denial as an error, not a silent optimistic success.
+        updateError.Should().NotBeNull(
+            "stream.Update must surface the RLS denial as an error when the caller lacks Update rights");
+    }
+
     [Fact]
     public void HierarchicalPermission_InheritsFromParent()
     {
