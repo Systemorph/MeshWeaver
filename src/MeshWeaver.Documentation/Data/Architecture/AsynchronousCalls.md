@@ -852,12 +852,15 @@ workspace.GetMeshNodeStream(path)
 - `path == this hub's address` ⇒ writes through the local data source (`UpdateOwn`).
 - `path != this hub's address` ⇒ the process-wide `IMeshNodeStreamCache` opens a sync
   subscription to the owner and posts an RFC 7396 JSON-merge `PatchDataRequest`. The owner
-  reads its OWN current state, merges the diff, **re-validates RLS** (the patch path runs
-  `RlsDataValidator`), **stamps auditing** (`LastModified`/`LastModifiedBy`), and commits.
-  The caller's `Update` emits the optimistic local snapshot; on a denial the cache's
-  client-side write gate throws `UnauthorizedAccessException` (when the caller's perms are
-  warm from a prior read). Callers needing strict consistency re-read via
-  `GetMeshNodeStream(path).Take(1)`.
+  enforces `Permission.Update` via the `[RequiresPermission(Update)]` pipeline (a denial posts
+  a `DeliveryFailure(Unauthorized)`), merges the diff against its OWN current state, **stamps
+  auditing** (`LastModified`/`LastModifiedBy`), **persists durably**, and acks. `UpdateRemote`
+  drives the caller's terminal emission off that owner response (a 30 s optimistic fallback
+  covers a slow/cold owner), so a subsequent read-after-write sees the commit. An RLS denial
+  surfaces as `UnauthorizedAccessException`; a deserialization/validation rejection surfaces as
+  `MeshNodeStreamException`. (App-integrity `INodeValidator`s for Update — version, name — run
+  client-side in `IMeshService.UpdateNode`; the owner-enforced RLS/partition validators are
+  marked `IOwnerEnforcedNodeValidator` and skipped there.)
 
 > **Retired:** the `UpdateNodeRequest` "forward at the mesh hub, relay the `UpdateNodeResponse`"
 > pattern is gone (the forwarded request timed out in distributed deployments when the per-node
