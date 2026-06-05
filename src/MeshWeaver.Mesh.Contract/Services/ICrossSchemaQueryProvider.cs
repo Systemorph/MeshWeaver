@@ -36,6 +36,18 @@ public interface ICrossSchemaQueryProvider
         string tableName, CancellationToken ct = default);
 
     /// <summary>
+    /// Top-level autocomplete from the <c>public.top_level_index</c> materialized view —
+    /// the partition-root nodes (<c>namespace=''</c>, one per partition) whose name/id match
+    /// <paramref name="prefix"/>, scored in Postgres (exact &gt; name-prefix &gt; id-prefix &gt;
+    /// substring) and access-filtered via <c>public.partition_access</c> for
+    /// <paramref name="userId"/> (<c>null</c> = system, sees all). Reads ONE small indexed
+    /// relation — NEVER a cross-schema fan-out — so it can't drain the connection pool.
+    /// Returns empty if the matview isn't present yet (DB not migrated).
+    /// </summary>
+    Task<IReadOnlyCollection<QueryResult>> AutocompleteTopLevelAsync(
+        string prefix, string? userId, int limit, CancellationToken ct = default);
+
+    /// <summary>
     /// Queries nodes across multiple schemas in a single SQL UNION ALL query.
     /// </summary>
     IAsyncEnumerable<MeshNode> QueryAcrossSchemasAsync(
