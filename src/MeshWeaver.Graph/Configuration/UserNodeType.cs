@@ -95,7 +95,7 @@ public static class UserNodeType
         // namespace + a single-element restriction list pinned to "" enforces the
         // root placement at create time, so runtime onboarding writes cannot land
         // a user node under "User/" by accident.
-        Content = new NodeTypeDefinition { DefaultNamespace = "", RestrictedToNamespaces = [""] },
+        Content = new NodeTypeDefinition { DefaultNamespace = "", RestrictedToNamespaces = [""], OwnsPartition = true },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<User>())

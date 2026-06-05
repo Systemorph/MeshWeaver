@@ -37,6 +37,11 @@ public static class UserActivityNodeType
         Name = "User Activity",
         IsSatelliteType = true,
         ExcludeFromContext = new HashSet<string> { "search", "create" },
+        // Declarative storage routing: UserActivity instances persist to the
+        // `user_activities` satellite table within their owning partition's schema
+        // (the single-sourced replacement for the central _UserActivity→user_activities
+        // path-suffix map). See Doc/Architecture/PartitionStorageRouting.md.
+        Content = new NodeTypeDefinition { StorageTable = "user_activities" },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source.WithContentType<UserActivityRecord>())
     };

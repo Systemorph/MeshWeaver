@@ -123,6 +123,28 @@ public record NodeTypeDefinition
     public List<string>? RestrictedToNamespaces { get; init; }
 
     /// <summary>
+    /// When <c>true</c>, a top-level instance of this type OWNS its own partition — a
+    /// dedicated backing store (a Postgres schema). The partition is provisioned, and the
+    /// creator made its Admin, when the top-level instance is created (the NodeType is
+    /// loaded from the <c>CreateNodeRequest</c> and consulted; no registry). This is the
+    /// ONLY trigger for schema creation — the storage layer never conjures a schema for an
+    /// arbitrary path segment, and a write whose partition isn't provisioned is refused.
+    /// Set on <c>User</c> and <c>Space</c>. See <c>Doc/Architecture/PartitionStorageRouting.md</c>.
+    /// </summary>
+    public bool OwnsPartition { get; init; }
+
+    /// <summary>
+    /// The table instances of this type persist to within their owning partition's schema —
+    /// e.g. <c>"user_activities"</c>, <c>"threads"</c>, <c>"access"</c>, <c>"annotations"</c>,
+    /// <c>"code"</c>. Null/empty → the partition's primary <c>mesh_nodes</c> table. This is
+    /// the declarative, single-sourced replacement for the central
+    /// <c>PartitionDefinition.StandardTableMappings</c> / <c>NodeTypeToSuffix</c> dictionaries
+    /// and the <c>_Thread</c>/<c>_Access</c>/… path-suffix matching: a node's table comes from
+    /// its NodeType config, not the shape of its path.
+    /// </summary>
+    public string? StorageTable { get; init; }
+
+    /// <summary>
     /// Locations of the Code nodes to compile with this NodeType's
     /// <see cref="Configuration"/> lambda. Each entry is either:
     /// <list type="bullet">
