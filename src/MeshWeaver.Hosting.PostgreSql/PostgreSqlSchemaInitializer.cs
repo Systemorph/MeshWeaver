@@ -126,9 +126,18 @@ public static class PostgreSqlSchemaInitializer
                 FOR schema_rec IN SELECT schema_name FROM public.searchable_schemas ORDER BY schema_name
                 LOOP
                     IF union_sql != '' THEN union_sql := union_sql || ' UNION ALL '; END IF;
+                    -- Exactly the PARTITION ROOT: the namespace='' node whose id equals the
+                    -- schema (partition) name. `path` is a GENERATED column = id when
+                    -- namespace='' — so it does NOT embed the partition prefix, and a plain
+                    -- `WHERE namespace=''` would pull every top-level node from every schema,
+                    -- whose ids (= paths) collide across partitions (e.g. two partitions each
+                    -- with a top-level 'Documentation') → duplicate path → UNIQUE(path) fails.
+                    -- Pinning id = <schema_name> yields one row per partition (path = schema
+                    -- name = globally unique) and naturally drops pseudo-schemas that have no
+                    -- self-named root. The (namespace,id) PK already guarantees ≤1 such row.
                     union_sql := union_sql || format(
-                        'SELECT %s FROM %I.mesh_nodes WHERE namespace = ''''',
-                        cols, schema_rec.schema_name);
+                        'SELECT %s FROM %I.mesh_nodes WHERE namespace = '''' AND id = %L',
+                        cols, schema_rec.schema_name, schema_rec.schema_name);
                 END LOOP;
 
                 IF union_sql = '' THEN
@@ -141,11 +150,14 @@ public static class PostgreSqlSchemaInitializer
                 -- only creator), so DROP MATERIALIZED VIEW IF EXISTS is the right form —
                 -- a plain `DROP VIEW IF EXISTS` would raise 42809 "is not a view" on the
                 -- existing matview (IF EXISTS suppresses only "does not exist", not wrong
-                -- relkind). Indexes are recreated each rebuild (they vanish with the matview);
-                -- the UNIQUE (namespace,id) index also enables REFRESH ... CONCURRENTLY.
+                -- relkind). Indexes are recreated each rebuild (they vanish with the matview).
+                -- The UNIQUE key is `path`, NOT (namespace,id): id is unique only WITHIN a
+                -- partition, while path embeds the partition prefix and is globally unique —
+                -- so it's the only collision-free key across the UNION (and enables
+                -- REFRESH ... CONCURRENTLY).
                 EXECUTE 'DROP MATERIALIZED VIEW IF EXISTS public.top_level_index';
                 EXECUTE 'CREATE MATERIALIZED VIEW public.top_level_index AS ' || union_sql;
-                EXECUTE 'CREATE UNIQUE INDEX idx_tli_ns_id ON public.top_level_index (namespace, id)';
+                EXECUTE 'CREATE UNIQUE INDEX idx_tli_path ON public.top_level_index (path)';
                 EXECUTE 'CREATE INDEX idx_tli_name_lower ON public.top_level_index (LOWER(name))';
                 EXECUTE 'CREATE INDEX idx_tli_id_lower ON public.top_level_index (LOWER(id))';
                 EXECUTE 'CREATE INDEX idx_tli_node_type ON public.top_level_index (node_type)';

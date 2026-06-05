@@ -1,4 +1,5 @@
 using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Security;
@@ -311,6 +312,16 @@ public static class PostgreSqlExtensions
         // schema (42P01 → empty). A partition created on another silo therefore
         // becomes routable immediately, with no invalidation round-trip.
 
+        // #20: PostgreSqlPartitionedMeshQuery serves unscoped + satellite queries via
+        // fast SQL fan-out, so tell the pedestrian StorageAdapterMeshQueryProvider to
+        // DEFER those (walk only scoped mesh_nodes). This removes the pedestrian's
+        // redundant ListChildPaths walk from those merges — the walk that gated the
+        // 60-70s cross-schema ResolvePath/onboarding stall — without dropping rows
+        // (the pedestrian never visited satellite tables anyway).
+        services.AddSingleton(new StorageAdapterQueryProviderOptions
+        {
+            DeferUnscopedAndSatelliteToNativeProvider = true
+        });
         services.AddPartitionedCoreAndWrapperServices();
 
         return services;
@@ -385,6 +396,16 @@ public static class PostgreSqlExtensions
         // overload above.
         services.AddHostedService<PostgreSqlPartitionSubscriptionHostedService>();
 
+        // #20: PostgreSqlPartitionedMeshQuery serves unscoped + satellite queries via
+        // fast SQL fan-out, so tell the pedestrian StorageAdapterMeshQueryProvider to
+        // DEFER those (walk only scoped mesh_nodes). This removes the pedestrian's
+        // redundant ListChildPaths walk from those merges — the walk that gated the
+        // 60-70s cross-schema ResolvePath/onboarding stall — without dropping rows
+        // (the pedestrian never visited satellite tables anyway).
+        services.AddSingleton(new StorageAdapterQueryProviderOptions
+        {
+            DeferUnscopedAndSatelliteToNativeProvider = true
+        });
         services.AddPartitionedCoreAndWrapperServices();
 
         return services;

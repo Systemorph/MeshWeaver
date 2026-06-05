@@ -51,6 +51,10 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     private readonly ILogger<StorageAdapterMeshQueryProvider>? logger;
     private readonly QueryParser _parser = new();
     private readonly QueryEvaluator _evaluator = new();
+    // #20: when set (partitioned Postgres), defer UNSCOPED queries to the native
+    // fan-out provider (PostgreSqlPartitionedMeshQuery), removing the pedestrian's
+    // slow cross-partition walk from those merges. See StorageAdapterQueryProviderOptions.
+    private readonly bool _deferUnscopedToNative;
     // The query scope-walk leaf (ListChildPaths / Read over the storage adapter)
     // is bridged to IObservable through this pool — never via a bare
     // Observable.FromAsync, which deadlocks under a blocking subscriber. See
@@ -83,13 +87,15 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         IEnumerable<Lazy<INodeValidator>>? nodeValidators = null,
         IEnumerable<IPartitionStorageProvider>? partitionProviders = null,
         ILogger<StorageAdapterMeshQueryProvider>? logger = null,
-        IoPoolRegistry? ioPoolRegistry = null)
+        IoPoolRegistry? ioPoolRegistry = null,
+        StorageAdapterQueryProviderOptions? options = null)
     {
         this.persistence = persistence;
         this.accessService = accessService;
         this.meshConfiguration = meshConfiguration;
         this.nodeValidators = nodeValidators;
         this.logger = logger;
+        _deferUnscopedToNative = options?.DeferUnscopedAndSatelliteToNativeProvider ?? false;
         // FileSystem pool cap governs the scope-walk concurrency; Unbounded is the
         // DI-less fallback (still offloads to the ThreadPool with ConfigureAwait).
         _ioPool = ioPoolRegistry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
@@ -114,6 +120,36 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             if (!_excludedNamespaces.Contains(queryNamespaces[i]))
                 return true;
         return false;
+    }
+
+    /// <summary>
+    /// #20: in <see cref="StorageAdapterQueryProviderOptions.DeferUnscopedAndSatelliteToNativeProvider"/>
+    /// mode, true when another (native fan-out) provider owns this query: unscoped /
+    /// wildcard-first-segment (cross-partition fan-out) OR a path that routes to a
+    /// satellite table. This provider only walks <c>mesh_nodes</c>, so for those
+    /// shapes it returned empty anyway — deferring just removes the redundant (and,
+    /// for absent partitions, pathologically slow) scope walk from the query merge.
+    /// Scoped <c>mesh_nodes</c> queries (which the native provider short-circuits to
+    /// empty) still go through this provider unchanged.
+    /// </summary>
+    private bool DefersToNativeProvider(MeshQueryRequest request)
+    {
+        // UNSCOPED-ONLY: defer only queries with no concrete first segment — the
+        // native partitioned provider fans those out across partitions, and the
+        // pedestrian's unscoped walk (e.g. the onboarding `nodeType:User
+        // content.email:X` middleware lookup) was a slow cross-partition crawl.
+        //
+        // We DELIBERATELY do NOT defer satellite-routed queries: the pedestrian is
+        // the actual server for scoped satellite reads (e.g. `namespace:X/_Access
+        // nodeType:AccessAssignment` — the permission walk). Deferring those to the
+        // native provider regressed EffectivePermissionPostgresTest / SpaceOnboarding
+        // (timeouts) — its satellite serving doesn't fully replicate the pedestrian's.
+        var path = _parser.Parse(request.EffectiveQueries.FirstOrDefault()).Path;
+        if (string.IsNullOrEmpty(path)) return true;            // unscoped → native fan-out
+        var slash = path.IndexOf('/');
+        var first = slash < 0 ? path : path[..slash];
+        if (first.Length == 0 || first == "*") return true;     // wildcard first → fan-out
+        return false;                                            // scoped → pedestrian serves
     }
 
     /// <summary>
@@ -142,6 +178,10 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         JsonSerializerOptions options,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
+        // #20: defer unscoped + satellite queries to the native fan-out provider.
+        if (_deferUnscopedToNative && DefersToNativeProvider(request))
+            yield break;
+
         var (matched, parsedQuery, basePaths) = await CollectMatchedAsync(
             request, options, useSecurityFilter: true, ct);
 
@@ -965,6 +1005,19 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         JsonSerializerOptions options,
         bool useSecurityFilter)
     {
+        // #20: defer to the native fan-out provider for unscoped + satellite queries
+        // (still emit an empty Initial so MeshQuery's merge counter advances — an
+        // Observable.Empty here would never increment our slot and hang the merge).
+        if (_deferUnscopedToNative && DefersToNativeProvider(request))
+            return Observable.Return(new QueryResultChange<T>
+            {
+                ChangeType = QueryChangeType.Initial,
+                Version = Interlocked.Increment(ref _version),
+                Query = _parser.Parse(request.EffectiveQueries.FirstOrDefault()),
+                Items = Array.Empty<T>(),
+                Timestamp = DateTimeOffset.UtcNow,
+            });
+
         // Use the synchronous Observable.Create overload so no TaskScheduler is
         // captured at subscribe-time. Observable.Create(async ...) captures the
         // caller's scheduler; when that caller is an Orleans grain handler the
