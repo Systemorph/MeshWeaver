@@ -514,6 +514,24 @@ public class PostgreSqlSqlGenerator
             // so a plain column reference is enough.
             sql = $"SELECT * FROM ({sql}) combined ORDER BY last_modified DESC NULLS LAST";
         }
+        else if (!string.IsNullOrEmpty(query.TextSearch))
+        {
+            // #20 PG-side relevance: rank by a hybrid score so the LIMIT keeps the most-RELEVANT
+            // rows, not arbitrary heap order (where a relevant row could fall outside the LIMIT
+            // and the C# merge never sees it — a relevance bug). Score: exact name > name-prefix
+            // > id-prefix > name-substring > id-substring > description-substring. Sort by score
+            // DESC, NOT alphabetically; an explicit OrderBy (handled above) supersedes. Term
+            // inlined (this generator inlines params); single-quotes doubled for safety.
+            var t = query.TextSearch.Replace("'", "''");
+            sql = $"SELECT * FROM ({sql}) combined ORDER BY (CASE " +
+                $"WHEN LOWER(COALESCE(name,'')) = LOWER('{t}') THEN 1000 " +
+                $"WHEN LOWER(COALESCE(name,'')) LIKE LOWER('{t}') || '%' THEN 600 " +
+                $"WHEN LOWER(COALESCE(id,'')) LIKE LOWER('{t}') || '%' THEN 500 " +
+                $"WHEN LOWER(COALESCE(name,'')) LIKE '%' || LOWER('{t}') || '%' THEN 300 " +
+                $"WHEN LOWER(COALESCE(id,'')) LIKE '%' || LOWER('{t}') || '%' THEN 200 " +
+                $"WHEN LOWER(COALESCE(description,'')) LIKE '%' || LOWER('{t}') || '%' THEN 100 " +
+                "ELSE 0 END) DESC, last_modified DESC NULLS LAST";
+        }
 
         if (query.Limit.HasValue)
             sql += $" LIMIT {query.Limit.Value}";
