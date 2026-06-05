@@ -240,11 +240,27 @@ Canonical reference: [AccessContextPropagation.md](src/MeshWeaver.Documentation/
 
 - Handlers, services, layout areas → return `IObservable<T>` (or `void` for fire-and-forget). Never `Task<T>`.
 - Compose with `.SelectMany`, `.Select`, `.Where`, `.Timeout`.
-- Task-returning primitives: convert at the boundary only via `Observable.FromAsync(() => task)`.
-- MCP/SDK surface adapters: one-line `public Task<string> Patch(...) => ops.Patch(...).FirstAsync().ToTask();` is the only sanctioned exception.
 - Click actions: `WithClickAction(ctx => { ...; return Task.CompletedTask; })` — never `async ctx =>`.
 - `TaskCompletionSource` in hub code = red flag — delete it, return `IObservable<T>`.
 - **Tests only**: `await .FirstAsync().ToTask()` is acceptable.
+
+### 🚨🚨🚨 ABSOLUTE: `Observable.FromAsync` is NEVER tolerated
+
+**Writing `Observable.FromAsync(...)` anywhere in `src/` is FORBIDDEN — no exceptions, no "Postgres is special", no "storage is the hot path".** A bare `FromAsync` runs the function's synchronous prologue on the **subscribing thread** (the hub/grain scheduler when the subscribe happens mid-handler) and applies no concurrency bound — the exact deadlock-and-exhaustion bug class the I/O pool exists to kill. There is exactly **one** place `FromAsync` may appear: sealed *inside* `IoPool` itself. Everywhere else it is a defect.
+
+**Every async / blocking / IO edge goes through `IIoPool`** (`MeshWeaver.Mesh.Threading`), resolved from `IoPoolRegistry` (mesh-scoped singleton — never static):
+
+| You have | Use |
+|---|---|
+| A `Task<T>`-returning leaf (DB round-trip, blob, HTTP, async file) | `pool.Invoke(ct => SomethingAsync(ct))` — or `pool.Run(...)` for the eager **promise-cache** (ReplaySubject-backed: runs once, replays to all) |
+| A sync-blocking / CPU leaf (`File.ReadAllBytes`, Roslyn compile, `Process`) | `pool.InvokeBlocking(ct => Work(ct))` |
+| An `IAsyncEnumerable<T>` leaf | `pool.InvokeStream(...)` / `pool.RunStream(...)` |
+
+**The promise-cache pattern (idempotent one-shots like schema provisioning):** cache the `pool.Run(...)` observable in an *instance* `ConcurrentDictionary<key, IObservable<T>>` (never static) — the first caller kicks the work off on the pool, every later subscriber replays the cached completion. Canonical: `PostgreSqlPartitionStorageProvider.EnsurePartitionProvisioned` (`_provisioned.GetOrAdd(schema, _ => _ioPool.Run(ct => EnsureSchemaAsync(def, ct)))`). PG pools are named `pg:{adapter}` and capped at **1** so the gate *is* the single Npgsql connection.
+
+- **Public surface returns `IObservable<T>`, never `Task<T>`.** A `Task`-returning method that does IO is the smell; rewrite it to return `IObservable<T>` and bridge the leaf through `IIoPool` internally.
+- **MCP/SDK surface adapters**: one-line `public Task<string> Patch(...) => ops.Patch(...).FirstAsync().ToTask();` is the only place `Task` appears at the boundary — and even there the body is reactive.
+- Full reference: [ControlledIoPooling.md](src/MeshWeaver.Documentation/Data/Architecture/ControlledIoPooling.md).
 
 **🚨 Cold observables: Subscribe is mandatory.** Every method that performs a write returns a cold `IObservable<T>` — the side effect runs on `Subscribe`, not on call. Forgetting to subscribe means the work silently doesn't happen.
 

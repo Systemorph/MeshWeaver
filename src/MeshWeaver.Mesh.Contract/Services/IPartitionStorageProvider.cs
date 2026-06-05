@@ -107,21 +107,25 @@ public interface IPartitionStorageProvider
     /// Eagerly provisions whatever backing store a top-level partition needs
     /// (e.g. the Postgres schema + tables) BEFORE any read- or write-shaped touch,
     /// so a brand-new partition root never hits a "relation does not exist" race.
-    /// Idempotent. Called under the caller's identity (wrap in
-    /// <c>ImpersonateAsSystem()</c> for brand-new partition roots the caller can't
-    /// yet own).
+    /// Idempotent. Emits exactly once and completes.
+    ///
+    /// <para><b>Reactive surface — no <c>await</c>.</b> Any actual I/O (the Postgres
+    /// <c>CREATE SCHEMA</c> round-trip) stays at the IO boundary inside the
+    /// implementation (<c>Observable.FromAsync(work, Scheduler.Default)</c>, bounded
+    /// by Npgsql's pool); consumers compose this into the create-validation chain with
+    /// <c>.Concat()</c>/<c>.Subscribe(...)</c>. This is the ONLY trigger for partition
+    /// creation — see <c>OwnsPartitionProvisioningValidator</c>.</para>
     ///
     /// <para>Default is a no-op: providers whose storage needs no per-partition
-    /// provisioning (InMemory, FileSystem, EmbeddedResource, StaticNode) do nothing;
+    /// provisioning (InMemory, FileSystem, EmbeddedResource, StaticNode) emit immediately;
     /// the Postgres provider routes to <c>public.ensure_partition_schema</c>.</para>
     /// </summary>
-    System.Threading.Tasks.Task EnsurePartitionProvisionedAsync(
-        string @namespace, System.Threading.CancellationToken ct = default)
-        => System.Threading.Tasks.Task.CompletedTask;
+    IObservable<System.Reactive.Unit> EnsurePartitionProvisioned(string @namespace)
+        => System.Reactive.Linq.Observable.Return(System.Reactive.Unit.Default);
 
     /// <summary>
     /// Read-only existence probe — the counterpart to
-    /// <see cref="EnsurePartitionProvisionedAsync"/> that NEVER creates anything.
+    /// <see cref="EnsurePartitionProvisioned"/> that NEVER creates anything.
     /// Emits exactly one value and completes: <c>true</c> when this provider knows the
     /// partition's backing store exists, <c>false</c> when it knows it definitively does
     /// NOT, and <c>null</c> when it cannot tell (e.g. InMemory has no per-partition store,
