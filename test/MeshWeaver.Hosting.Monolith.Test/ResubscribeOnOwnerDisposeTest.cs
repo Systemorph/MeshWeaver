@@ -49,17 +49,16 @@ public class ResubscribeOnOwnerDisposeTest(ITestOutputHelper output) : MonolithM
 
         var client = GetClient(c => c.AddData());
         var workspace = client.GetWorkspace();
-        var stream = workspace.GetRemoteStream<MeshNode>(
-            new Address(path), new MeshNodeReference());
+        var stream = workspace.GetMeshNodeStream(path);
 
-        var names = stream.Select(ci => ci.Value?.Name).Where(n => n != null);
+        var names = stream.Select(ci => ci?.Name).Where(n => n != null);
 
         // Wait for the initial snapshot — proves the subscription is wired up.
         // The live stream IS the authoritative source here, so we read `current`
         // off it rather than re-activating the owner via ReadNode.
         var firstSnapshot = names.Should().Within(15.Seconds()).Match(n => n == "Original");
         firstSnapshot.Should().Be("Original", "subscriber should receive the initial snapshot");
-        var current = stream.Should().Within(15.Seconds()).Match(ci => ci.Value is { Name: "Original" }).Value!;
+        var current = stream.Should().Within(15.Seconds()) .Match(ci => ci is { Name: "Original" });
 
         // Act — kill the owner grain, then update the node. The update flows through
         // the freshly-reactivated owner; the OLD subscriber is silent until its

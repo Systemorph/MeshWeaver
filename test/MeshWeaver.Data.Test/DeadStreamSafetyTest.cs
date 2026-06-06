@@ -102,7 +102,7 @@ public class DeadStreamSafetyTest(ITestOutputHelper output) : HubTestBase(output
         var errorInvoked = false;
 
         var act = () => stream.Update(
-            _ => { updateInvoked = true; return null; },
+            _ => { updateInvoked = true; return (ChangeItem<Empty>?)null; },
             _ => errorInvoked = true);
 
         act.Should().NotThrow("Update on a dead stream must be a silent no-op");

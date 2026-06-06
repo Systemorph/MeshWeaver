@@ -41,11 +41,10 @@ public class WorkspaceCacheEvictionTest(ITestOutputHelper output) : MonolithMesh
         // First subscription warms up the singleton workspace's _remoteStreamCache.
         var client1 = GetClient(c => c.AddData());
         var workspace1 = client1.GetWorkspace();
-        var stream1 = workspace1.GetRemoteStream<MeshNode>(
-            new Address(path), new MeshNodeReference());
+        var stream1 = workspace1.GetMeshNodeStream(path);
 
         stream1
-            .Select(ci => ci.Value?.Name)
+            .Select(ci => ci?.Name)
             .Should().Match(n => n == "Original");
 
         // Subscribe to the change feed BEFORE the update so we never race the
@@ -75,11 +74,10 @@ public class WorkspaceCacheEvictionTest(ITestOutputHelper output) : MonolithMesh
         // cached stream and replays "Original" first, which would fail the assertion.
         var client2 = GetClient(c => c.AddData());
         var workspace2 = client2.GetWorkspace();
-        var stream2 = workspace2.GetRemoteStream<MeshNode>(
-            new Address(path), new MeshNodeReference());
+        var stream2 = workspace2.GetMeshNodeStream(path);
 
         var freshFirst = stream2
-            .Select(ci => ci.Value?.Name)
+            .Select(ci => ci?.Name)
             .Where(n => n != null)
             .Should().Emit();
         freshFirst.Should().Be("Updated",
@@ -95,10 +93,9 @@ public class WorkspaceCacheEvictionTest(ITestOutputHelper output) : MonolithMesh
 
         // Warm cache with a subscription.
         var client1 = GetClient(c => c.AddData());
-        var stream1 = client1.GetWorkspace().GetRemoteStream<MeshNode>(
-            new Address(path), new MeshNodeReference());
+        var stream1 = client1.GetWorkspace().GetMeshNodeStream(path);
         stream1
-            .Select(ci => ci.Value?.Name)
+            .Select(ci => ci?.Name)
             .Should().Match(n => n == "First");
 
         // Subscribe to the change feed BEFORE delete/recreate. The workspace
@@ -127,11 +124,10 @@ public class WorkspaceCacheEvictionTest(ITestOutputHelper output) : MonolithMesh
         createObserved.Should().Within(5.Seconds()).Emit();
 
         var client2 = GetClient(c => c.AddData());
-        var stream2 = client2.GetWorkspace().GetRemoteStream<MeshNode>(
-            new Address(path), new MeshNodeReference());
+        var stream2 = client2.GetWorkspace().GetMeshNodeStream(path);
 
         var freshFirst = stream2
-            .Select(ci => ci.Value?.Name)
+            .Select(ci => ci?.Name)
             .Where(n => n != null)
             .Should().Emit();
         freshFirst.Should().Be("Second",

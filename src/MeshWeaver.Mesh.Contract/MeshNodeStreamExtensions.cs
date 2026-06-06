@@ -73,14 +73,22 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     private readonly IWorkspace _workspace;
     private readonly string? _path;
     private readonly IMeshNodeStreamCache? _cache;
+    private readonly bool _bypassCache;
     private readonly JsonSerializerOptions _jsonOptions;
 
     internal MeshNodeStreamHandle(IWorkspace workspace, string? path = null,
-        IMeshNodeStreamCache? cache = null)
+        IMeshNodeStreamCache? cache = null, bool bypassCache = false)
     {
         _workspace = workspace;
         _path = path;
         _cache = cache;
+        // 🚨 The ONLY handle allowed to open the raw cross-hub MeshNode sync
+        // stream (GetRemoteStream) is the cache's own upstream handle. Every
+        // other non-own handle MUST route through the cache so reads and writes
+        // share the single live mirror. A non-own handle that is neither cached
+        // nor the bypass handle is a misconfiguration — fail loud, never open a
+        // second divergent stream.
+        _bypassCache = bypassCache;
         _jsonOptions = workspace.Hub.JsonSerializerOptions;
     }
 
@@ -109,7 +117,11 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
         var accessService = _workspace.Hub.ServiceProvider.GetService<AccessService>();
         using (accessService?.ImpersonateAsSystem())
         {
-            return _workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+            // 🚨 Sanctioned escape hatch: the public GetRemoteStream<MeshNode> logs a
+            // discouraged-usage warning. This cache/bypass handle is the sanctioned hot
+            // path, so it opens the raw single-node remote reduce via the internal
+            // unchecked overload — no warning noise.
+            return ((Workspace)_workspace).GetRemoteStreamUnchecked<MeshNode, MeshNodeReference>(
                 new Address(_path!), new MeshNodeReference());
         }
     }
@@ -372,7 +384,13 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                 ? UpdateOwn(wrappedUpdate)
                 : _cache is not null && _path is not null
                     ? _cache.Update(_path, wrappedUpdate, _jsonOptions)
-                    : UpdateRemote(wrappedUpdate))
+                    : _bypassCache
+                        ? UpdateViaSyncStream(wrappedUpdate)
+                        : throw new InvalidOperationException(
+                            $"Cross-hub MeshNode write to '{_path}' requires an IMeshNodeStreamCache "
+                            + $"on hub '{_workspace.Hub.Address}', but none is registered. All non-own "
+                            + "MeshNode access must route through the cache (the single shared mirror) — "
+                            + "the raw GetRemoteStream fallback is gone."))
                 .CarryAccessContext(_workspace.Hub.ServiceProvider)
                 // The post-update emission also goes through the typed
                 // converter — callers chaining `.Select(node => node.Content as MyType)`
@@ -443,10 +461,10 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             $"MeshNode '{targetPath ?? "<own>"}' not found. Available: [{string.Join(", ", collection.Instances.Keys.Select(k => k.ToString()))}]");
 
                     var updated = update(current);
-                    // Framework-driven Version: stamp the owning hub's monotonic
-                    // logical clock so subscribers can distinguish a real change
-                    // from a routing-stream echo. Lambdas no longer have to
-                    // remember to bump â€” the framework owns the clock.
+                    // 🚨 Version is the ONE reliable ordering field and it is stamped
+                    // by the OWNING hub here (this is an own write on the owner).
+                    // DateTime/LastModified is NOT a cross-machine clock, so it must
+                    // never drive reconciliation; the owner's monotonic Version does.
                     updated = updated with { Version = _workspace.Hub.Version };
                     var newStore = store.Update(nameof(MeshNode), c => c.Update(updated.Id, updated));
                     return dsStream.ApplyChanges(new EntityStoreAndUpdates(newStore,
@@ -460,6 +478,100 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             }
 
             return sub;
+        });
+
+    /// <summary>
+    /// Cross-hub write through the SYNC STREAM — no application-level
+    /// <c>PatchDataRequest</c> hub message. Opens the owner's mirror via
+    /// <c>GetRemoteStream&lt;MeshNode, MeshNodeReference&gt;</c>, waits for the
+    /// authoritative initial snapshot, then calls
+    /// <see cref="ISynchronizationStream{TStream}.Update(System.Func{TStream, ChangeItem{TStream}}, System.Action{System.Exception})"/>.
+    /// The lambda runs against the stream's <c>Current</c> (the OWNER's
+    /// authoritative state, reconciled through the sync feed) — NOT a stale
+    /// client snapshot — and the resulting <see cref="ChangeItem{TStream}"/>
+    /// propagates to the owner over the sync-stream change feed
+    /// (<c>SetCurrentRequest</c>), the SAME channel owner→subscriber echoes ride.
+    /// <para>This collapses the former dual write path (PatchDataRequest +
+    /// the sync stream's own bidirectional propagation) into ONE — the conflict
+    /// between them is what live-locked the grain between the client's stale
+    /// mirror state and the server commit (Resubmit_AfterExecution_DoesNotDeadlock).
+    /// Write-permission is enforced on the owner side where the inbound change is
+    /// applied (see the MeshNode sync-write gate).</para>
+    /// </summary>
+    private IObservable<MeshNode> UpdateViaSyncStream(Func<MeshNode, MeshNode> update)
+        => Observable.Create<MeshNode>(observer =>
+        {
+            var diagLogger = _workspace.Hub.ServiceProvider
+                .GetService<ILoggerFactory>()
+                ?.CreateLogger("MeshWeaver.Mesh.MeshNodeStreamHandle");
+
+            var accessService = _workspace.Hub.ServiceProvider
+                .GetService<MeshWeaver.Messaging.AccessService>();
+            var capturedContext = accessService?.Context ?? accessService?.CircuitContext;
+
+            // 🚨 Sanctioned escape hatch (cache/bypass write path) — route through the
+            // internal unchecked overload; the public GetRemoteStream<MeshNode> warns.
+            var remoteStream = ((Workspace)_workspace).GetRemoteStreamUnchecked<MeshNode, MeshNodeReference>(
+                new Address(_path!), new MeshNodeReference());
+
+            var composite = new CompositeDisposable();
+            var emitted = 0;
+            void EmitOnce(MeshNode value)
+            {
+                if (System.Threading.Interlocked.Exchange(ref emitted, 1) != 0) return;
+                if (accessService is not null && capturedContext is not null)
+                    using (accessService.SwitchAccessContext(capturedContext))
+                    { observer.OnNext(value); observer.OnCompleted(); }
+                else { observer.OnNext(value); observer.OnCompleted(); }
+            }
+
+            // Wait for the authoritative initial snapshot so the lambda diffs
+            // against a real (owner-reconciled) value, then write through the
+            // sync stream. remoteStream.Update reads Current on the stream's own
+            // serialized action block, applies the lambda, and ships the result
+            // to the owner via the change feed — no PatchDataRequest.
+            var initialSub = remoteStream
+                .Timeout(TimeSpan.FromSeconds(30))
+                .Where(change => change.Value is not null)
+                .Take(1)
+                .Subscribe(
+                    _ =>
+                    {
+                        // 🚨 VALUE-based update — the sync stream builds the
+                        // ChangeItem (per-entity Updates + ChangeType + owner-only
+                        // Version) consistently. We supply only the value transform;
+                        // we never hand-roll a ChangeItem (a hand-rolled EntityUpdate
+                        // silently failed the owner's write-back). Audit identity
+                        // (LastModifiedBy) is content, so we still stamp it here.
+                        // Explicit Func type disambiguates from the ChangeItem overload.
+                        Func<MeshNode?, MeshNode?> valueUpdate = current =>
+                        {
+                            if (current is null) return null;
+                            var updated = update(current);
+                            if (updated.LastModifiedBy == current.LastModifiedBy
+                                && !string.IsNullOrEmpty(capturedContext?.ObjectId))
+                                updated = updated with { LastModifiedBy = capturedContext.ObjectId };
+                            EmitOnce(updated);
+                            return updated;
+                        };
+                        remoteStream.Update(valueUpdate,
+                            ex =>
+                            {
+                                diagLogger?.LogWarning(ex,
+                                    "[UpdateViaSyncStream] update lambda errored hub={Hub} target={Path}",
+                                    _workspace.Hub.Address, _path);
+                                observer.OnError(ex);
+                            });
+                    },
+                    ex =>
+                    {
+                        if (ex is TimeoutException)
+                            observer.OnError(new TimeoutException(
+                                $"Update aborted: no initial state arrived for '{_path}' within 30s."));
+                        else observer.OnError(ex);
+                    });
+            composite.Add(initialSub);
+            return composite;
         });
 
     /// <summary>
@@ -502,7 +614,9 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             var capturedContextAtEntry = accessServiceAtEntry?.Context
                 ?? accessServiceAtEntry?.CircuitContext;
 
-            var remoteStream = _workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+            // 🚨 Sanctioned escape hatch (cache/bypass write path) — route through the
+            // internal unchecked overload; the public GetRemoteStream<MeshNode> warns.
+            var remoteStream = ((Workspace)_workspace).GetRemoteStreamUnchecked<MeshNode, MeshNodeReference>(
                 new Address(_path!), new MeshNodeReference());
 
             var composite = new CompositeDisposable();
@@ -879,7 +993,7 @@ public static class MeshNodeStreamExtensions
     /// upstream subscription without recursing back into the cache.
     /// </summary>
     public static MeshNodeStreamHandle GetMeshNodeStreamBypassCache(this IWorkspace workspace, string path)
-        => new(workspace, path);
+        => new(workspace, path, bypassCache: true);
 
     /// <summary>
     /// Forwarder that delegates to <see cref="MeshNodeStreamHandle.Update"/>. Returns

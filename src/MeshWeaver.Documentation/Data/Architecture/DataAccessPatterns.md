@@ -12,6 +12,7 @@ There are three access patterns, each covering a distinct class of operation:
 | Operation | Pattern | Interface / Type |
 |---|---|---|
 | Read nodes | Query | `IMeshQuery` |
+| Read/write **one** node by path | Stream | `hub.GetMeshNodeStream(path)` / `workspace.GetMeshNodeStream(path)` |
 | Create node | Factory | `IMeshNodePersistence.CreateNodeAsync` |
 | Update node | Factory | `IMeshNodePersistence.UpdateNodeAsync` |
 | Create transient | Factory | `IMeshNodePersistence.CreateTransientAsync` |
@@ -20,6 +21,24 @@ There are three access patterns, each covering a distinct class of operation:
 | Read as node identity | Query | `IMeshQuery.ImpersonateAsNode()` |
 | Move node | Message | `MoveNodeRequest` → hub |
 | Update data | Message | `DataChangeRequest` → hub |
+
+> ### 🚨 One mesh node by path → `GetMeshNodeStream`, never `GetRemoteStream<MeshNode>`
+>
+> The **single canonical API** for reading or writing one mesh node by path is
+> `hub.GetMeshNodeStream(path)` / `workspace.GetMeshNodeStream(path)` (extension methods in
+> `MeshWeaver.Mesh.Contract`). It routes every reader and writer through the shared
+> `IMeshNodeStreamCache` — one process-wide upstream per path, so writes are visible to all
+> readers. **Read** by subscribing to the handle (`IObservable<MeshNode>`, `Content` already
+> typed); **write** via `.Update(current => current with { … }).Subscribe(...)` (cold
+> observable — the write only runs on `Subscribe`).
+>
+> `workspace.GetRemoteStream<MeshNode, …>` / `GetRemoteStream<MeshNode>(addr)` is
+> **discouraged** — the single-node remote reduce does not converge (divergent mirror
+> streams, writes invisible to readers). Calling it **logs a warning** from the
+> `MeshWeaver.Data` Workspace logger; grep that channel after a run to find stragglers to
+> migrate. The only sanctioned callers are the cache's own upstream and the MeshNode
+> reduce-callback plumbing, which use an internal `GetRemoteStreamUnchecked` overload to
+> avoid the warning.
 
 ---
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 320" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">

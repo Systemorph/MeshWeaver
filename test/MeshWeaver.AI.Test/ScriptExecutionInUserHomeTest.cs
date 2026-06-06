@@ -82,9 +82,8 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
         // Wait for all four progress lines + the fireworks return value (5 messages total).
         var workspace = GetClient().GetWorkspace();
         var final = workspace
-            .GetRemoteStream<MeshNode, MeshNodeReference>(
-                new Address(execMessage.ActivityLog!), new MeshNodeReference())
-            .Select(change => change.Value?.Content as ActivityLog)
+            .GetMeshNodeStream(execMessage.ActivityLog!)
+            .Select(change => change?.Content as ActivityLog)
             .Should().Within(30.Seconds())
             .Match(log => log is not null && log!.Status != ActivityStatus.Running)!;
 
@@ -117,9 +116,8 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
         var sw = Stopwatch.StartNew();
         var workspace = GetClient().GetWorkspace();
         var observations = workspace
-            .GetRemoteStream<MeshNode, MeshNodeReference>(
-                new Address(activityPath), new MeshNodeReference())
-            .Select(change => (Count: (change.Value?.Content as ActivityLog)?.Messages.Count ?? 0,
+            .GetMeshNodeStream(activityPath)
+            .Select(change => (Count: (change?.Content as ActivityLog)?.Messages.Count ?? 0,
                                ElapsedMs: sw.ElapsedMilliseconds))
             .DistinctUntilChanged(o => o.Count)
             .TakeUntil(o => o.Count >= 5) // 4 progress + 1 fireworks return-value
@@ -172,15 +170,14 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
         var activityPath = new Address(execMessage.ActivityLog!);
 
         var workspace = GetClient().GetWorkspace();
-        var activityStream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-            activityPath, new MeshNodeReference());
+        var activityStream = workspace.GetMeshNodeStream(activityPath.Path);
 
         // Wait until the script has actually started (first message landed).
         // 30 s timeout: the first message is only published once the script
         // body runs, which is gated behind a cold Roslyn compile that can take
         // several seconds on a fresh kernel.
         activityStream
-            .Select(c => c.Value?.Content as ActivityLog)
+            .Select(c => c?.Content as ActivityLog)
             .Should().Within(30.Seconds())
             .Match(l => l is not null && l.Messages.Count >= 1);
 
@@ -197,7 +194,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
         // emission still arrives and the Status assertion below reports the
         // real failure ("found Succeeded") instead of an opaque timeout.
         var terminal = activityStream
-            .Select(c => c.Value?.Content as ActivityLog)
+            .Select(c => c?.Content as ActivityLog)
             .Should().Within(30.Seconds())
             .Match(l => l is not null && l.Status != ActivityStatus.Running)!;
 
@@ -287,8 +284,8 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
         // doesn't block ExecuteScriptResponse, so subscribe and wait for it.
         var workspace = GetClient().GetWorkspace();
         var stamped = workspace
-            .GetRemoteStream<MeshNode, MeshNodeReference>(new Address(codePath), new MeshNodeReference())
-            .Select(c => c.Value?.Content as CodeConfiguration)
+            .GetMeshNodeStream(codePath)
+            .Select(c => c?.Content as CodeConfiguration)
             .Should().Within(15.Seconds())
             .Match(c => c is not null && c.LastActivityPath == activityPath)!;
 
@@ -327,9 +324,8 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
 
         var workspace = GetClient().GetWorkspace();
         var final = workspace
-            .GetRemoteStream<MeshNode, MeshNodeReference>(
-                new Address(execMessage.ActivityLog!), new MeshNodeReference())
-            .Select(c => c.Value?.Content as ActivityLog)
+            .GetMeshNodeStream(execMessage.ActivityLog!)
+            .Select(c => c?.Content as ActivityLog)
             .Should().Within(120.Seconds())
             .Match(l => l is not null && l!.Status != ActivityStatus.Running)!;
 
@@ -392,9 +388,8 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
 
         var workspace = GetClient().GetWorkspace();
         var final = workspace
-            .GetRemoteStream<MeshNode, MeshNodeReference>(
-                new Address(execMessage.ActivityLog!), new MeshNodeReference())
-            .Select(c => c.Value?.Content as ActivityLog)
+            .GetMeshNodeStream(execMessage.ActivityLog!)
+            .Select(c => c?.Content as ActivityLog)
             .Should().Within(45.Seconds())
             .Match(l => l is not null && l!.Status != ActivityStatus.Running)!;
 
@@ -467,9 +462,8 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
 
     private ActivityLog WaitForCompletion(string activityPath) =>
         GetClient().GetWorkspace()
-            .GetRemoteStream<MeshNode, MeshNodeReference>(
-                new Address(activityPath), new MeshNodeReference())
-            .Select(change => change.Value?.Content as ActivityLog)
+            .GetMeshNodeStream(activityPath)
+            .Select(change => change?.Content as ActivityLog)
             .Should().Within(30.Seconds())
             .Match(log => log is not null && log!.Status != ActivityStatus.Running)!;
 }

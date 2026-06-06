@@ -101,13 +101,13 @@ public class MarkdownEditorEchoTest(ITestOutputHelper output) : MonolithMeshTest
 
         // Subscribe to the MeshNode via the canonical remote stream.
         var subscriberStream = subscriberWorkspace
-            .GetRemoteStream<MeshNode, MeshNodeReference>(nodeAddress, new MeshNodeReference());
+            .GetMeshNodeStream(nodeAddress.Path);
         var initial = subscriberStream
             .Should()
             .Within(30.Seconds())
-            .Match(c => c.Value != null);
+            .Match(c => c != null);
 
-        var originalContent = ExtractMarkdownContent(initial.Value!);
+        var originalContent = ExtractMarkdownContent(initial!);
 
         // Write via the canonical mutation API. The cache stream's ClientId
         // differs from subscriberStream.ClientId, so the owner-hub's
@@ -128,10 +128,10 @@ public class MarkdownEditorEchoTest(ITestOutputHelper output) : MonolithMeshTest
             .Should()
             .Within(15.Seconds())
             .Match(c =>
-                c.Value?.Content is MarkdownContent mc &&
+                c?.Content is MarkdownContent mc &&
                 mc.Content?.Contains(marker, StringComparison.Ordinal) == true);
 
-        var observedMarkdown = observed.Value!.Content as MarkdownContent;
+        var observedMarkdown = observed!.Content as MarkdownContent;
         observedMarkdown.Should().NotBeNull();
         observedMarkdown!.Content.Should().Contain(marker,
             "the remote subscriber must observe the GetMeshNodeStream().Update write");

@@ -81,7 +81,7 @@ public class DelegationWriteCountTest(ITestOutputHelper output) : MonolithMeshTe
         var parentThreadPath = create.Message.Node!.Path!;
 
         var parentSyncStream = workspace
-            .GetRemoteStream<MeshNode, MeshNodeReference>(new Address(parentThreadPath), new MeshNodeReference());
+            .GetMeshNodeStream(parentThreadPath);
 
         client.SubmitMessage(
             parentThreadPath,
@@ -89,7 +89,7 @@ public class DelegationWriteCountTest(ITestOutputHelper output) : MonolithMeshTe
             contextPath: ContextPath);
 
         var parentMsgIds = parentSyncStream
-            .Select(c => (c.Value?.Content as MeshThread)?.Messages ?? [])
+            .Select(c => (c?.Content as MeshThread)?.Messages ?? [])
             .Should().Within(20.Seconds()).Match(ids => ids.Count >= 2);
         var parentRespId = parentMsgIds[1];
         var parentRespPath = $"{parentThreadPath}/{parentRespId}";
@@ -99,10 +99,10 @@ public class DelegationWriteCountTest(ITestOutputHelper output) : MonolithMeshTe
         //    has already written its single terminal-status write onto the
         //    delegation ToolCallEntry, and FCC has produced its wrap-up.
         var responseStream = workspace
-            .GetRemoteStream<MeshNode, MeshNodeReference>(new Address(parentRespPath), new MeshNodeReference());
+            .GetMeshNodeStream(parentRespPath);
 
         var completed = responseStream
-            .Select(c => c.Value?.Content as ThreadMessage)
+            .Select(c => c?.Content as ThreadMessage)
             .Should().Within(45.Seconds()).Match(m => m is { Status: ThreadMessageStatus.Completed or ThreadMessageStatus.Cancelled or ThreadMessageStatus.Error });
 
         completed.Should().NotBeNull();

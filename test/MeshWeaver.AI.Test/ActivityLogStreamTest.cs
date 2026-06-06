@@ -85,9 +85,8 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
         // messages are present. Give the kernel up to 30 s to compile + run.
         var workspace = GetClient().GetWorkspace();
         var observed = workspace
-            .GetRemoteStream<MeshNode, MeshNodeReference>(
-                new Address(exec.ActivityLog!), new MeshNodeReference())
-            .Select(change => change.Value?.Content as ActivityLog)
+            .GetMeshNodeStream(exec.ActivityLog!)
+            .Select(change => change?.Content as ActivityLog)
             .Should().Within(30.Seconds())
             .Match(log => log is not null && log.Messages.Count >= 2)!;
 
@@ -143,9 +142,8 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
         // terminal snapshot (4 messages) by using TakeUntil â€” and re-include
         // that final emission via the wrapping Concat.
         var counts = workspace
-            .GetRemoteStream<MeshNode, MeshNodeReference>(
-                new Address(exec.ActivityLog!), new MeshNodeReference())
-            .Select(change => change.Value?.Content as ActivityLog)
+            .GetMeshNodeStream(exec.ActivityLog!)
+            .Select(change => change?.Content as ActivityLog)
             .Where(log => log is not null)
             .Select(log => log!.Messages.Count)
             .DistinctUntilChanged();
@@ -195,9 +193,8 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
         // present even though the script raised â€” Log is best-effort and survives.
         var workspace = GetClient().GetWorkspace();
         var observed = workspace
-            .GetRemoteStream<MeshNode, MeshNodeReference>(
-                new Address(exec.ActivityLog!), new MeshNodeReference())
-            .Select(change => change.Value?.Content as ActivityLog)
+            .GetMeshNodeStream(exec.ActivityLog!)
+            .Select(change => change?.Content as ActivityLog)
             .Should().Within(30.Seconds())
             .Match(log => log is not null && log.Status != ActivityStatus.Running)!;
 

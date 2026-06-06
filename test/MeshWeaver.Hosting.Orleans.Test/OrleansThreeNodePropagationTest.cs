@@ -92,15 +92,13 @@ public class OrleansThreeNodePropagationTest(ITestOutputHelper output) : Orleans
         var hubC = GetClient($"three-c-{Guid.NewGuid():N}", "TestUser");
 
         // 4. Both b and c open a remote MeshNodeReference stream to a's grain.
-        var streamFromB = hubB.GetWorkspace().GetRemoteStream<MeshNode, MeshNodeReference>(
-            new Address(pathA), new MeshNodeReference());
-        var streamFromC = hubC.GetWorkspace().GetRemoteStream<MeshNode, MeshNodeReference>(
-            new Address(pathA), new MeshNodeReference());
+        var streamFromB = hubB.GetWorkspace().GetMeshNodeStream(pathA);
+        var streamFromC = hubC.GetWorkspace().GetMeshNodeStream(pathA);
 
         // 5. Capture every emission b sees.
         var bSnapshots = new List<string?>();
         using var subB = streamFromB
-            .Select(ci => ci.Value?.Name)
+            .Select(node => node?.Name)
             .Subscribe(name =>
             {
                 lock (bSnapshots) bSnapshots.Add(name);
@@ -115,7 +113,7 @@ public class OrleansThreeNodePropagationTest(ITestOutputHelper output) : Orleans
         //    transform sees the latest current.
         var cSnapshots = new List<string?>();
         using var subC = streamFromC
-            .Select(ci => ci.Value?.Name)
+            .Select(node => node?.Name)
             .Subscribe(name =>
             {
                 lock (cSnapshots) cSnapshots.Add(name);
@@ -126,15 +124,11 @@ public class OrleansThreeNodePropagationTest(ITestOutputHelper output) : Orleans
         // 8. C writes via its remote stream Update. The synchronization protocol
         //    carries the patch through Orleans routing to a's grain.
         Output.WriteLine("[c] issuing .Update to set Name='A1'");
-        streamFromC.Update(current =>
-        {
-            if (current is null) return null;
-            var updated = current with { Name = "A1" };
-            return new ChangeItem<MeshNode>(
-                updated, streamFromC.StreamId, streamFromC.StreamId,
-                ChangeType.Patch, streamFromC.Hub.Version,
-                [new EntityUpdate(nameof(MeshNode), updated.Id, updated) { OldValue = current }]);
-        });
+        // Canonical cross-hub write: GetMeshNodeStream(path).Update(value transform).
+        // The handle builds the ChangeItem and routes the patch through the shared
+        // mesh-node cache → a's grain; b's GetMeshNodeStream subscription observes it.
+        streamFromC.Update(current => current with { Name = "A1" })
+            .Subscribe(_ => { }, ex => Output.WriteLine($"[c] update error: {ex.Message}"));
 
         // 9. B's subscription must observe the new state â€” propagation via a's grain.
         await WaitFor(() => { lock (bSnapshots) return bSnapshots.Contains("A1"); }, 30.Seconds(), ct);

@@ -86,10 +86,10 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
 
         // Project the thread's message-id list off the live stream.
         var messageIds = client.GetWorkspace()
-            .GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Select(nodes =>
+            .GetMeshNodeStream(threadPath)
+            .Select(node =>
             {
-                var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
+                
                 return (node?.Content as MeshThread)?.Messages
                        ?? (IReadOnlyList<string>)System.Collections.Immutable.ImmutableList<string>.Empty;
             });
@@ -132,10 +132,10 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
         // Subscribe to thread node for execution-state diagnostics.
         var workspace = client.GetWorkspace();
         var threadUpdates = new List<string>();
-        using var _ = workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Subscribe(nodes =>
+        using var _ = workspace.GetMeshNodeStream(threadPath)
+            .Subscribe(node =>
             {
-                var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
+                
                 var thread = node?.Content as MeshThread;
                 if (thread != null)
                 {
@@ -146,10 +146,10 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
             });
 
         // Project the thread's message-id list off the live stream.
-        var messageIds = workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Select(nodes =>
+        var messageIds = workspace.GetMeshNodeStream(threadPath)
+            .Select(node =>
             {
-                var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
+                
                 return (node?.Content as MeshThread)?.Messages
                        ?? (IReadOnlyList<string>)System.Collections.Immutable.ImmutableList<string>.Empty;
             });
@@ -226,10 +226,10 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
         Output.WriteLine("2. Message submitted");
 
         // 3. Wait for 2 messages (user + response)
-        var msgIds = workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Select(nodes =>
+        var msgIds = workspace.GetMeshNodeStream(threadPath)
+            .Select(node =>
             {
-                var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
+                
                 return (node?.Content as MeshThread)?.Messages
                        ?? (IReadOnlyList<string>)System.Collections.Immutable.ImmutableList<string>.Empty;
             })
@@ -240,10 +240,10 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
 
         // 4. Wait for response-message tool call with DelegationPath.
         Output.WriteLine("4. Waiting for delegation tool call on response message stream...");
-        var msgWithDelegation = workspace.GetRemoteStream<MeshNode>(new Address(responsePath))!
-            .Select(nodes =>
+        var msgWithDelegation = workspace.GetMeshNodeStream(responsePath)
+            .Select(node =>
             {
-                var msg = nodes?.FirstOrDefault(n => n.Path == responsePath)?.Content as ThreadMessage;
+                var msg = node?.Content as ThreadMessage;
                 if (msg != null)
                     Output.WriteLine($"  [STREAM] text={msg.Text?.Length ?? 0}ch, toolCalls={msg.ToolCalls.Count}, delegations={msg.ToolCalls.Count(c => !string.IsNullOrEmpty(c.DelegationPath))}");
                 return msg;
@@ -291,8 +291,8 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
         Output.WriteLine("2. Submitted");
 
         // 2. Wait for response message to appear
-        var msgIds = workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Select(nodes => (nodes?.FirstOrDefault(n => n.Path == threadPath)?.Content as MeshThread)?.Messages
+        var msgIds = workspace.GetMeshNodeStream(threadPath)
+            .Select(node => (node?.Content as MeshThread)?.Messages
                              ?? (IReadOnlyList<string>)System.Collections.Immutable.ImmutableList<string>.Empty)
             .Should().Within(30.Seconds()).Match(ids => ids.Count >= 2);
         var responseMsgId = msgIds[1];

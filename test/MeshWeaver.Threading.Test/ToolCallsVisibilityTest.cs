@@ -308,10 +308,13 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
 
         // Record version BEFORE the update â€” we read it off the underlying
         // sync stream, the same one the Update writes through.
-        var streamForVersion = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-            new Address(responsePath), new MeshNodeReference());
-        var versionBefore = streamForVersion.Hub.Version;
-        Output.WriteLine($"Version before update: {versionBefore}");
+        var emissionCount = 0;
+        using var emissionCounter = responseStream.Subscribe(
+            _ => System.Threading.Interlocked.Increment(ref emissionCount));
+        // Let the initial snapshot settle so the baseline excludes it.
+        Observable.Empty<Unit>().Should().NotEmit(200.Milliseconds());
+        var countBefore = System.Threading.Volatile.Read(ref emissionCount);
+        Output.WriteLine($"Emissions before update: {countBefore}");
 
         responseStream.Update(current =>
         {
@@ -336,14 +339,14 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
         // fixed span is the void-safe equivalent of the old Task.Delay(500).
         Observable.Empty<Unit>().Should().NotEmit(500.Milliseconds());
 
-        var versionAfter = streamForVersion.Hub.Version;
-        Output.WriteLine($"Version after update + 500ms: {versionAfter}");
+        var countAfter = System.Threading.Volatile.Read(ref emissionCount);
+        Output.WriteLine($"Emissions after update + 500ms: {countAfter}");
 
-        var versionDelta = versionAfter - versionBefore;
-        versionDelta.Should().BeLessThan(20,
-            "a single tool call update should not cause runaway version increments. " +
-            $"Delta was {versionDelta} â€” indicates a feedback loop in layout area subscriptions");
-        Output.WriteLine($"Version delta: {versionDelta} (no feedback loop)");
+        var emissionDelta = countAfter - countBefore;
+        emissionDelta.Should().BeLessThan(20,
+            "a single tool call update should not cause runaway re-emissions. " +
+            $"Delta was {emissionDelta} â€” indicates a feedback loop in layout area subscriptions");
+        Output.WriteLine($"Version delta: {emissionDelta} (no feedback loop)");
 
         responseStream.Update(current =>
         {
@@ -368,8 +371,8 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
 
         Observable.Empty<Unit>().Should().NotEmit(500.Milliseconds());
 
-        var versionFinal = streamForVersion.Hub.Version;
-        var totalDelta = versionFinal - versionBefore;
+        var countFinal = System.Threading.Volatile.Read(ref emissionCount);
+        var totalDelta = countFinal - countBefore;
         totalDelta.Should().BeLessThan(40,
             "two updates should not cause runaway versions. " +
             $"Total delta was {totalDelta}");

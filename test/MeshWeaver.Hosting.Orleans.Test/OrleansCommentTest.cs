@@ -71,10 +71,10 @@ public class OrleansCommentTest(ITestOutputHelper output) : TestBase(output)
     private IObservable<string> ObserveMarkdownContent(IMessageHub client, string docPath)
     {
         var workspace = client.GetWorkspace();
-        return workspace.GetRemoteStream<MeshNode>(new Address(docPath))!
-            .Select(nodes =>
+        return workspace.GetMeshNodeStream(docPath)
+            .Select(node =>
             {
-                var node = nodes?.FirstOrDefault(n => n.Path == docPath);
+                
                 return (node?.Content as MarkdownContent)?.Content ?? "";
             });
     }

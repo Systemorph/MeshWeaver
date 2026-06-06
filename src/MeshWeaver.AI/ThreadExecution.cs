@@ -160,7 +160,6 @@ internal static class ThreadExecution
                 "_Exec hosted hub has no ParentHub — cannot resolve thread path");
         var logger = execHub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
         var threadPath = parentHub.Address.Path;
-        var cache = execHub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
 
         var accessService = execHub.ServiceProvider.GetService<MeshWeaver.Messaging.AccessService>();
 
@@ -170,15 +169,24 @@ internal static class ThreadExecution
         // forever): the live-path "observer dies" deadlock. On fault, re-establish.
         IDisposable? sub = null;
         var disposed = false;
-        // 🚨 TYPED overload (pass JsonSerializerOptions). The bare
-        // cache.GetStream(path) emits raw JsonElement Content (the cache hub
-        // doesn't know domain types), so `n.Content as MeshThread` would return
-        // NULL → Status null → the .Where(== StartingExecution) below never
-        // matches → the claimed round never commits to Executing → deterministic
-        // dispatch hang (the resubmit/second-round stall). The cache stream is
-        // cross-hub here (thread node is owned by parentHub, read on _Exec), so
-        // Content always arrives serialized.
-        void Establish() => sub = cache.GetStream(threadPath, execHub.JsonSerializerOptions)
+        // 🚨 Observe the PARENT thread hub's AUTHORITATIVE own MeshNode stream —
+        // NOT the cross-hub IMeshNodeStreamCache. The cache opens a remote
+        // subscription to the owning grain and, on Orleans, replays/reorders:
+        // it interleaves a STALE claim snapshot (StartingExecution, empty
+        // PendingUserMessages) AFTER the committed Executing state. Because
+        // DispatchAfterClaim plans the round from the emitted node, a stale
+        // Pending=0 snapshot makes PlanNextRound return null → it ROLLS the
+        // claim back to Idle, racing and reverting the in-flight commit. The
+        // SubmissionWatcher re-claims, the cache replays stale again, and the
+        // round live-locks (Resubmit_AfterExecution_DoesNotDeadlock hang).
+        // parentHub.GetWorkspace().GetMeshNodeStream() is the same in-order,
+        // typed-Content own stream the SubmissionWatcher reads, so the claim →
+        // Executing transition is observed exactly once, in order, with the
+        // real Pending — DistinctUntilChanged(Status) then fires the dispatch a
+        // single time and never sees a phantom re-claim. (Using the THREAD
+        // hub's workspace here, never the _Exec child's, also matches
+        // feedback_synced_query_thread_hub.md.)
+        void Establish() => sub = parentHub.GetWorkspace().GetMeshNodeStream()
             // Pair each emission with its current Status so DistinctUntilChanged
             // dedupes on the Status field only — concurrent field updates that
             // happen while Status stays StartingExecution must NOT re-fire.

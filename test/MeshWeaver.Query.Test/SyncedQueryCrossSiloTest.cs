@@ -181,9 +181,9 @@ public class SyncedQueryCrossSiloTest(ITestOutputHelper output)
         // must hit the workspace's _remoteStreamCache and share one upstream
         // subscription — this is the integrity guarantee the synced query relies on
         // for read+write convergence on the same node.
-        var s1 = siloA.Workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+        var s1 = ((MeshWeaver.Data.Workspace)siloA.Workspace).GetRemoteStreamUnchecked<MeshNode, MeshNodeReference>(
             new Address(path), new MeshNodeReference());
-        var s2 = siloA.Workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+        var s2 = ((MeshWeaver.Data.Workspace)siloA.Workspace).GetRemoteStreamUnchecked<MeshNode, MeshNodeReference>(
             new Address(path), new MeshNodeReference());
         ReferenceEquals(s1, s2).Should().BeTrue(
             "workspace caches per-(address,reference) remote streams — both callers must get the same instance");

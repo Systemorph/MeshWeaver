@@ -169,6 +169,80 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     }
 
     /// <summary>
+    /// 🚨 Canonical VALUE-based write. The caller supplies a pure value transform
+    /// only — the sync stream builds the <see cref="ChangeItem{TStream}"/> itself,
+    /// CONSISTENTLY for every write, so callers can never get the error-prone bits
+    /// (per-entity <c>Updates</c>, <c>ChangeType</c>, and especially
+    /// <c>Version</c>) wrong:
+    /// <list type="bullet">
+    ///   <item><description><b>Updates</b> are derived through the registered
+    ///     PatchFunction (e.g. PatchMeshNode) so the owner's write-back
+    ///     (<c>ToDataChangeRequest</c>) gets a well-formed per-entity delta —
+    ///     a hand-rolled EntityUpdate from a caller silently failed to persist.</description></item>
+    ///   <item><description><b>Version is set by the OWNING hub only.</b> The
+    ///     owner stamps its monotonic <c>Hub.Version</c>; a subscriber carries
+    ///     the BASE version it last observed (<c>Current.Version</c>) so the owner
+    ///     can fast-forward (base == current) or merge (base &lt; current). No sync
+    ///     hub mints its own version — DateTime is not a universal clock, the
+    ///     owner's Version is the one reliable ordering.</description></item>
+    /// </list>
+    /// A no-op transform (returns the same value or null) is dropped.
+    /// </summary>
+    public void Update(Func<TStream?, TStream?> valueUpdate, Action<Exception> exceptionCallback)
+        => Update(current =>
+        {
+            var updated = valueUpdate(current);
+            if (updated is null) return null;
+            if (current is not null && Equals(current, updated)) return null;
+            return BuildChangeItem(current, updated);
+        }, exceptionCallback);
+
+    /// <inheritdoc cref="Update(System.Func{TStream,TStream},System.Action{System.Exception})"/>
+    public void Update(Func<TStream?, TStream?> valueUpdate)
+        => Update(valueUpdate, _ => { });
+
+    /// <summary>
+    /// Builds the <see cref="ChangeItem{TStream}"/> for a value transform — the
+    /// single place that knows how to fill Updates + ChangeType + Version. See
+    /// <see cref="Update(System.Func{TStream,TStream},System.Action{System.Exception})"/>.
+    /// </summary>
+    private ChangeItem<TStream> BuildChangeItem(TStream? current, TStream updated)
+    {
+        var changedBy = CaptureCallerAccessContext(Hub)?.ObjectId ?? ClientId;
+        // 🚨 ONLY the owning hub sets Version. Subscriber carries the base it read.
+        var version = Owner.Equals(Host.Address) ? Hub.Version : (Current?.Version ?? 0L);
+
+        if (current is not null)
+        {
+            var updatedJson = JsonSerializer.SerializeToElement(updated, Hub.JsonSerializerOptions);
+            // 1. PatchFunction (e.g. PatchMeshNode) derives the per-entity Updates
+            //    from current→updated. Registered on the OWNER's reduce config; a
+            //    lightweight subscriber may not have it, so this can be null.
+            var ci = this.ToChangeItem(current, updatedJson, null, changedBy);
+            if (ci is not null)
+                return ci with { Version = version };
+
+            // 2. No PatchFunction (subscriber side). Build the per-entity delta
+            //    for a single-entity reduced stream directly from the type
+            //    registry — collection + key — so the owner's write-back
+            //    (ToDataChangeRequest) gets a well-formed Update. Without this the
+            //    change shipped as a Full with empty Updates and the write-back's
+            //    `Updates.Any()` filter dropped it, so the write never persisted.
+            var typeRegistry = Hub.ServiceProvider.GetService<MeshWeaver.Domain.ITypeRegistry>();
+            if (typeRegistry is not null
+                && typeRegistry.TryGetCollectionName(typeof(TStream), out var collection)
+                && !string.IsNullOrEmpty(collection))
+            {
+                var keyFn = typeRegistry.GetKeyFunction(typeof(TStream));
+                var key = keyFn?.Function(updated!) ?? (object)updated!;
+                return new ChangeItem<TStream>(updated, changedBy, StreamId, ChangeType.Patch, version,
+                    [new EntityUpdate(collection!, key, updated) { OldValue = current }]);
+            }
+        }
+        return new ChangeItem<TStream>(updated, changedBy, StreamId, ChangeType.Full, version, null);
+    }
+
+    /// <summary>
     /// Captures the caller's <see cref="AccessService.Context"/> (per-request
     /// AsyncLocal) at the point <c>stream.Update</c> is invoked, so the
     /// post-pipeline can stamp the resulting <c>UpdateStreamRequest</c>
@@ -618,6 +692,19 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             return;
         }
 
+        // 🚨 Monotonicity guard: drop a frame strictly OLDER than the one we hold.
+        // Version is the owner's monotonic clock and the subscriber mirrors it
+        // verbatim (Full + Patch below adopt delivery.Message.Version). A reordered
+        // older frame would REVERT the mirror (the read-mirror revert). Owner never
+        // goes backwards → safe to drop.
+        if (Current is not null && delivery.Message.Version < Current.Version)
+        {
+            logger.LogDebug(
+                "[SYNC_STREAM] Dropping stale frame for {StreamId}: incoming v{In} < current v{Cur}",
+                StreamId, delivery.Message.Version, Current.Version);
+            return;
+        }
+
         var currentJson = Get<JsonElement?>();
         if (delivery.Message.ChangeType == ChangeType.Full)
         {
@@ -625,10 +712,13 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             currentJson = JsonSerializer.Deserialize<JsonElement>(delivery.Message.Change.Content);
             try
             {
+                // 🚨 Adopt the OWNER's Version (not local Host.Version) so the
+                // monotonicity guard above compares apples-to-apples and a later
+                // client write records the owner-version it was based on.
                 SetCurrent(hub, new ChangeItem<TStream>(
                     currentJson.Value.Deserialize<TStream>(Host.JsonSerializerOptions)!,
                     StreamId,
-                    Host.Version));
+                    delivery.Message.Version));
                 Set(currentJson);
                 // A Full re-established Current — any pending resync is satisfied;
                 // allow a future Patch-before-Full gap to resubscribe again.
@@ -686,6 +776,11 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                     ChangeType.Patch,
                     delivery.Message.Version,
                     null);
+
+                // 🚨 Adopt the OWNER's Version (the PatchFunction stamps the local
+                // stream.Hub.Version). Keeps Current.Version on the owner's clock so
+                // the monotonicity guard is consistent across Full and Patch.
+                changeItem = changeItem with { Version = delivery.Message.Version };
 
                 SetCurrent(hub, changeItem);
             }

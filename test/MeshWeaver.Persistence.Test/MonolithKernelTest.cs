@@ -83,8 +83,8 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
     private IObservable<ActivityLog> WatchForActivityLog(
         IMessageHub client, Address activityAddress, Func<ActivityLog, bool> predicate)
         => client.GetWorkspace()
-            .GetRemoteStream<MeshNode, MeshNodeReference>(activityAddress, new MeshNodeReference())
-            .Select(change => change.Value?.Content as ActivityLog)
+            .GetMeshNodeStream(activityAddress.Path)
+            .Select(change => change?.Content as ActivityLog)
             .Where(log => log is not null && predicate(log!))
             .Select(log => log!);
 

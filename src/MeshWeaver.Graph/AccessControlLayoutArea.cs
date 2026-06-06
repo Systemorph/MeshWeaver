@@ -142,18 +142,12 @@ public static class AccessControlLayoutArea
                         .WithStyle("align-self: flex-start;")
                         .WithClickAction((Action<UiActionContext>)(ctx =>
                         {
-                            // Remove via the per-path remote stream — the
-                            // synchronization protocol propagates the cleared
-                            // policy to the owning per-node hub.
-                            var stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-                                new Address(policyPath), new MeshNodeReference());
-                            stream.Update(current => current is null ? null : new ChangeItem<MeshNode>(
-                                Value: current with { Content = new PartitionAccessPolicy() },
-                                ChangedBy: WellKnownUsers.System,
-                                StreamId: stream.StreamId,
-                                ChangeType: ChangeType.Full,
-                                Version: stream.Hub.Version,
-                                Updates: null));
+                            // Remove via the canonical per-path mesh-node handle — the
+                            // synchronization protocol propagates the cleared policy to
+                            // the owning per-node hub. (Cold observable: must Subscribe.)
+                            workspace.GetMeshNodeStream(policyPath)
+                                .Update(current => current with { Content = new PartitionAccessPolicy() })
+                                .Subscribe(_ => { }, _ => { /* surface via standard data-layer error path */ });
                             ctx.Host.UpdateArea(DialogControl.DialogArea, null!);
                         }))
                     : (UiControl)Controls.Html("")));
@@ -468,16 +462,11 @@ public static class AccessControlLayoutArea
                             // update — branch directly instead of asking SecurityService.
                             if (policyExists)
                             {
-                                // In-place update through the per-path remote stream.
-                                var stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-                                    new Address(policyPath), new MeshNodeReference());
-                                stream.Update(current => current is null ? null : new ChangeItem<MeshNode>(
-                                    Value: current with { Content = policy },
-                                    ChangedBy: WellKnownUsers.System,
-                                    StreamId: stream.StreamId,
-                                    ChangeType: ChangeType.Full,
-                                    Version: stream.Hub.Version,
-                                    Updates: null));
+                                // In-place update through the canonical per-path mesh-node
+                                // handle. (Cold observable: must Subscribe.)
+                                workspace.GetMeshNodeStream(policyPath)
+                                    .Update(current => current with { Content = policy })
+                                    .Subscribe(_ => { }, _ => { /* surface via standard data-layer error path */ });
                             }
                             else
                             {

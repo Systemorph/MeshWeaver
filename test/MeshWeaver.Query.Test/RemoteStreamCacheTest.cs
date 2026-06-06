@@ -51,10 +51,10 @@ public class RemoteStreamCacheTest(ITestOutputHelper output) : MonolithMeshTestB
         NodeFactory.CreateNode(MakeNode("alpha", "Alpha")).Should().Emit();
 
         var workspace = Mesh.GetWorkspace();
-        var first = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+        var first = ((MeshWeaver.Data.Workspace)workspace).GetRemoteStreamUnchecked<MeshNode, MeshNodeReference>(
             new Address(path), new MeshNodeReference());
 
-        var second = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+        var second = ((MeshWeaver.Data.Workspace)workspace).GetRemoteStreamUnchecked<MeshNode, MeshNodeReference>(
             new Address(path), new MeshNodeReference());
 
         ReferenceEquals(first, second).Should().BeTrue(
@@ -74,14 +74,14 @@ public class RemoteStreamCacheTest(ITestOutputHelper output) : MonolithMeshTestB
 
         var workspace = Mesh.GetWorkspace();
 
-        var stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+        var stream = ((MeshWeaver.Data.Workspace)workspace).GetRemoteStreamUnchecked<MeshNode, MeshNodeReference>(
             new Address(path), new MeshNodeReference());
 
         // Dispose the stream — the cache must drop the entry so the next caller
         // doesn't get a dead instance.
         stream.Dispose();
 
-        var fresh = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+        var fresh = ((MeshWeaver.Data.Workspace)workspace).GetRemoteStreamUnchecked<MeshNode, MeshNodeReference>(
             new Address(path), new MeshNodeReference());
 
         ReferenceEquals(fresh, stream).Should().BeFalse(

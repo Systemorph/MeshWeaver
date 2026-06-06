@@ -77,6 +77,18 @@ public interface ISynchronizationStream<TStream>
     void Update(Func<TStream?, ChangeItem<TStream>?> update, Action<Exception> exceptionCallback);
     void Update(Func<TStream?, ChangeItem<TStream>?> update) => Update(update, _ => { });
     void Update(Func<TStream?, CancellationToken, Task<ChangeItem<TStream>?>> update, Action<Exception> exceptionCallback);
+
+    /// <summary>
+    /// 🚨 Canonical VALUE-based write. The caller supplies only a pure value
+    /// transform; the stream builds the <see cref="ChangeItem{TStream}"/> itself
+    /// (per-entity Updates, ChangeType, and the OWNER-ONLY Version). This is the
+    /// path callers should use — it removes the error-prone job of hand-building a
+    /// ChangeItem (a malformed EntityUpdate silently fails the owner's write-back,
+    /// and a non-owner stamping its own Version breaks ordering). A no-op transform
+    /// (same value / null) is dropped.
+    /// </summary>
+    void Update(Func<TStream?, TStream?> valueUpdate, Action<Exception> exceptionCallback);
+    void Update(Func<TStream?, TStream?> valueUpdate) => Update(valueUpdate, _ => { });
     ReduceManager<TStream> ReduceManager { get; }
 
 }

@@ -115,7 +115,7 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
         //    on the first snapshot containing an assistant message with non-empty text.
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var responseMessage = AccumulateDescendants(meshQuery, threadPath)
-            .Select(snapshot => snapshot.Values
+            .Select(snapshot => snapshots
                 .Select(n => n.Content as ThreadMessage)
                 .FirstOrDefault(tm => tm is { Role: "assistant" } && !string.IsNullOrEmpty(tm.Text)))
             .Should().Within(25.Seconds()).Match(tm => tm is not null);
@@ -174,7 +174,7 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
         // NOT after full streaming completes (which would take longer).
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         AccumulateDescendants(meshQuery, threadPath)
-            .Select(snapshot => snapshot.Values
+            .Select(snapshot => snapshots
                 .Select(n => n.Content as ThreadMessage)
                 .Any(tm => tm is { Role: "assistant", Text.Length: > 0 }))
             .Should().Within(25.Seconds()).Match(hasPartial => hasPartial);
@@ -220,7 +220,7 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
         // Wait reactively for the response cell to be allocated.
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var responsePath = AccumulateDescendants(meshQuery, threadPath)
-            .Select(snapshot => snapshot.Values
+            .Select(snapshot => snapshots
                 .FirstOrDefault(n => n.Content is ThreadMessage { Role: "assistant" })?.Path)
             .Should().Within(25.Seconds()).Match(p => p is not null);
         responsePath.Should().NotBeNull("response cell must exist for streaming to land on it");
@@ -233,10 +233,9 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
         var firstEmissionDone = false;
         using var collected = new ManualResetEventSlim(false);
         var sub = workspace
-            .GetRemoteStream<MeshNode, MeshNodeReference>(
-                new Address(responsePath!), new MeshNodeReference())
-            .Where(c => c.Value is not null)
-            .Select(c => c.Value!.Content as ThreadMessage)
+            .GetMeshNodeStream(responsePath!)
+            .Where(c => c is not null)
+            .Select(c => c!.Content as ThreadMessage)
             .Where(m => m is not null)
             .Subscribe(m =>
             {
