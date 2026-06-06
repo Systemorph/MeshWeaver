@@ -145,10 +145,21 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
             : context.Node.Path;
         var effectiveUserId = userId ?? WellKnownUsers.Anonymous;
 
+        // 🚨 Permission.Sync is a write-authoriser that bypasses the content read-only cap: a
+        // partition whose _Policy denies Create/Update/Delete (Agent, Model, Doc) still admits a
+        // static-repo SYNC write when the caller holds Sync. Sync does NOT grant Read — a private
+        // partition stays private. So Sync is ORed in for write operations only.
+        // See Permission.Sync / Doc/Architecture/StaticRepoImport.md.
+        var isWrite = context.Operation
+            is NodeOperation.Create or NodeOperation.Update or NodeOperation.Delete;
+
         IObservable<bool> hasPermissionObs = requiredPermission == Permission.Comment
             ? _hub.GetEffectivePermissions(pathToCheck, effectiveUserId)
-                .Select(p => p.HasFlag(Permission.Comment) || p.HasFlag(Permission.Update))
-            : _hub.CheckPermission(pathToCheck, effectiveUserId, requiredPermission);
+                .Select(p => p.HasFlag(Permission.Comment) || p.HasFlag(Permission.Update) || p.HasFlag(Permission.Sync))
+            : isWrite
+                ? _hub.GetEffectivePermissions(pathToCheck, effectiveUserId)
+                    .Select(p => p.HasFlag(requiredPermission) || p.HasFlag(Permission.Sync))
+                : _hub.CheckPermission(pathToCheck, effectiveUserId, requiredPermission);
 
         return hasPermissionObs.Select(hasPermission =>
         {

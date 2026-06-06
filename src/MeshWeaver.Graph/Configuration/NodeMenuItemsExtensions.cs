@@ -100,7 +100,7 @@ public static class NodeMenuItemsExtensions
         LayoutAreaHost host, RenderingContext ctx)
         => GetMenuContext(host).Select(menuCtx =>
         {
-            var (menuPath, _, _, perms) = menuCtx;
+            var (menuPath, _, menuNode, perms) = menuCtx;
             var items = ImmutableList.CreateBuilder<NodeMenuItemDefinition>();
 
             var edit = MeshNodeLayoutAreas.GetEditMenuItem(menuPath, perms);
@@ -128,6 +128,9 @@ public static class NodeMenuItemsExtensions
 
             var recycle = RecycleLayoutArea.GetMenuItem(menuPath, perms);
             if (recycle != null) items.Add(recycle);
+
+            var stopSync = StopSyncLayoutArea.GetMenuItem(menuNode, menuPath, perms);
+            if (stopSync != null) items.Add(stopSync);
 
             var delete = DeleteLayoutArea.GetMenuItem(menuPath, perms);
             if (delete != null) items.Add(delete);
