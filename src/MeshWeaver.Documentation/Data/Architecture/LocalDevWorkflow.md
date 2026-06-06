@@ -66,17 +66,32 @@ When you change code in `Memex.Portal.Distributed` (or any project it references
 
 ## Starting Aspire
 
-Two equivalent invocations:
+Three modes — pick by whether you want to hold a terminal and whether you need a build:
 
 ```bash
-# Visual Studio's "F5" path
-dotnet run --project memex/aspire/Memex.AppHost
-
-# CLI path — registers the AppHost with `aspire mcp` so MCP tools can drive it
+# A. Interactive (foreground) — builds, holds the terminal, prints live status.
+#    Registers with `aspire mcp` so MCP tools can drive it. Ctrl+C to stop.
 aspire run --project memex/aspire/Memex.AppHost
+
+# B. Background daemon — detaches and returns immediately; survives across shells.
+#    `--no-build` reuses the existing binaries (fast — no rebuild). Drop --no-build
+#    to build first. Also registers with `aspire mcp`.
+aspire start --no-build --project memex/aspire/Memex.AppHost
+aspire ps                 # list running AppHosts (Path · PID · dashboard URL)
+aspire stop               # stop the background AppHost
+aspire logs [<resource>]  # tail logs without the dashboard
+
+# C. Visual Studio's "F5" path.
+dotnet run --project memex/aspire/Memex.AppHost
 ```
 
-`aspire run` prints a one-shot dashboard token URL in its first few lines of output:
+> 🚨 **`aspire start --no-build` reuses the LAST build.** It's the fast way to bring the
+> stack back up, but it does **not** pick up source changes — if you edited code, either
+> drop `--no-build`, build the changed project first, or use one of the per-resource reloads
+> below. Use `--no-build` when the binaries are already current (e.g. you just stopped Aspire
+> to run a build and want it back up).
+
+`aspire run` / `aspire start` print a one-shot dashboard token URL:
 
 ```
 Dashboard:  https://localhost:17200/login?t=<TOKEN>

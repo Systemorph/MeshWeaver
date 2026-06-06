@@ -125,6 +125,7 @@ dotnet test test/MeshWeaver.Data.Test --no-restore        # Run one test project
 dotnet run --project memex/Memex.Portal.Monolith          # Monolith standalone (https://localhost:7122, http://localhost:5022)
 dotnet run --project memex/aspire/Memex.AppHost           # Aspire (requires Docker) — portal at https://localhost:7202, http://localhost:5202
 aspire run --project memex/aspire/Memex.AppHost           # Aspire via CLI (registers with `aspire mcp`) — same URLs as above
+aspire start --no-build --project memex/aspire/Memex.AppHost  # Background + NO rebuild — fast bring-up; `aspire ps` / `aspire stop` to manage. --no-build reuses the last build (won't pick up source edits)
 ```
 
 ### Restarting just the Portal (no full Aspire restart)
