@@ -1,3 +1,4 @@
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
@@ -26,6 +27,38 @@ public sealed record StaticRepoImportResult(string Partition, string Fingerprint
 public static class StaticRepoImporter
 {
     private const int BatchSize = 16;
+
+    /// <summary>
+    /// "Sync context init" — imports EVERY registered <see cref="IStaticRepoSource"/> resolved from
+    /// the hub. No-op when none is registered (so a host that registers no source is untouched).
+    /// Runs under <see cref="AccessService.ImpersonateAsSystem"/> so the import's overwrite / create /
+    /// prune are authorized on partitions whose <c>_Policy</c> is read-only to ordinary users
+    /// (System holds <see cref="MeshWeaver.Mesh.Security.Permission.Sync"/> via <c>Permission.All</c>).
+    /// Sources are imported sequentially (bounded boot load). Reactive — Subscribe to run.
+    /// </summary>
+    public static IObservable<StaticRepoImportResult> ImportAll(IMessageHub hub, ILogger? logger = null)
+    {
+        logger ??= hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Graph.StaticRepoImporter");
+        var sources = hub.ServiceProvider.GetServices<IStaticRepoSource>().ToArray();
+        if (sources.Length == 0)
+            return Observable.Empty<StaticRepoImportResult>();
+
+        logger?.LogInformation("[StaticRepoImport] sync-context init: {Count} source(s).", sources.Length);
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        // Establish System identity for the whole import subscription so each source's writes
+        // capture it (CarryAccessContext) — disposed when the import completes.
+        return Observable.Using(
+            () => accessService?.ImpersonateAsSystem() ?? Disposable.Empty,
+            _ => sources
+                .Select(s => Import(hub, s, logger)
+                    .Catch<StaticRepoImportResult, Exception>(ex =>
+                    {
+                        logger?.LogWarning(ex, "[StaticRepoImport] source {Partition} failed.", s.Partition);
+                        return Observable.Return(new StaticRepoImportResult(s.Partition, string.Empty, "Failed"));
+                    }))
+                .Concat());
+    }
 
     public static IObservable<StaticRepoImportResult> Import(
         IMessageHub hub, IStaticRepoSource source, ILogger? logger = null)
@@ -87,24 +120,123 @@ public static class StaticRepoImporter
         IMessageHub hub, IStaticRepoSource source, IReadOnlyList<MeshNode> nodes,
         string activityPath, string fingerprint, ILogger? logger)
     {
+        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         NodeTypeCompilationActivity.AppendLog(
             hub, activityPath, $"Importing {nodes.Count} node(s) into {source.Partition}…", logger!);
 
-        var upserted = nodes
-            .Select(n => UpsertOne(hub, Materialize(n)))
-            .ToObservable()
-            .Merge(BatchSize)
-            .Sum();
+        // Read the existing target subtree(s) ONCE. A source's nodes may span MULTIPLE partitions
+        // (e.g. the model catalog: the read-only _Policy under "Model", the provider/model content
+        // under "_Provider"), so read each touched partition's subtree. The snapshot yields each
+        // target's SyncBehavior (skip decision), its identity (CreatedDate/CreatedBy, preserved on
+        // overwrite), and the prune candidate set. Eventual consistency is fine here — the import
+        // runs under the content-addressed activity lock, so no concurrent import races this read.
+        var partitions = nodes
+            .Select(n => FirstSegment(n.Path))
+            .Where(p => !string.IsNullOrEmpty(p))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
-        return upserted
-            .SelectMany(count =>
+        var existingSubtrees = partitions.Length == 0
+            ? Observable.Return((IEnumerable<MeshNode>)Array.Empty<MeshNode>())
+            : Observable.Zip(partitions.Select(p =>
+                    meshService.Query<MeshNode>(
+                            MeshQueryRequest.FromQuery($"path:{p} scope:descendants"))
+                        .Take(1)
+                        .Select(c => (IEnumerable<MeshNode>)c.Items)))
+                .Select(lists => lists.SelectMany(x => x));
+
+        return existingSubtrees
+            .Take(1)
+            .SelectMany(existingItems =>
             {
-                NodeTypeCompilationActivity.AppendLog(hub, activityPath, $"Imported {count} node(s).", logger!);
-                NodeTypeCompilationActivity.MarkSucceeded(hub, activityPath, logger!);
-                logger?.LogInformation(
-                    "[StaticRepoImport] {Partition}: imported {Count} node(s) at {Fingerprint}.",
-                    source.Partition, count, fingerprint);
-                return Observable.Return(new StaticRepoImportResult(source.Partition, fingerprint, "Imported", count));
+                var existing = existingItems
+                    .Where(n => !string.IsNullOrEmpty(n.Path))
+                    .GroupBy(n => n.Path, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+                // Subtrees a user has claimed wholesale — nothing at or under these paths is synced.
+                var excludedRoots = existing.Values
+                    .Where(n => n.SyncBehavior == SyncBehavior.ExcludeThisAndChildren)
+                    .Select(n => n.Path)
+                    .ToArray();
+
+                bool IsClaimed(string path, MeshNode? target) =>
+                    (target is not null && target.SyncBehavior != SyncBehavior.Include)
+                    || excludedRoots.Any(root => IsAtOrUnder(path, root));
+
+                // Per source node: skip claimed; create absent (the create pipeline materializes
+                // content + prerender); overwrite existing as a Full (decoupled from merge-sync).
+                var upserted = nodes
+                    .Select(sourceNode =>
+                    {
+                        var path = sourceNode.Path;
+                        existing.TryGetValue(path, out var target);
+                        if (IsClaimed(path, target))
+                        {
+                            logger?.LogDebug(
+                                "[StaticRepoImport] {Partition}: skip claimed {Path}", source.Partition, path);
+                            return Observable.Return(0);
+                        }
+
+                        var materialized = Materialize(sourceNode);
+                        if (target is null)
+                            return CreateOne(meshService, materialized, logger);
+
+                        // Preserve owner identity; Version is re-stamped by the owner on the Full.
+                        var authoritative = materialized with
+                        {
+                            CreatedDate = target.CreatedDate,
+                            CreatedBy = target.CreatedBy
+                        };
+                        return OverwriteOne(hub, authoritative);
+                    })
+                    .ToObservable()
+                    .Merge(BatchSize)
+                    .Sum();
+
+                return upserted.SelectMany(count =>
+                {
+                    // Prune (full-replace): targets absent from source AND still Include AND not
+                    // governance/satellite AND not under a claimed subtree. User-claimed nodes,
+                    // _Policy/_Access governance, and the _Activity import history all survive.
+                    var sourcePaths = nodes
+                        .Select(n => n.Path)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    var toPrune = existing.Values
+                        .Where(t => !sourcePaths.Contains(t.Path)
+                                    && t.SyncBehavior == SyncBehavior.Include
+                                    && !IsGovernance(t)
+                                    && !excludedRoots.Any(root => IsAtOrUnder(t.Path, root)))
+                        .ToArray();
+
+                    var pruned = toPrune.Length == 0
+                        ? Observable.Return(0)
+                        : toPrune
+                            .Select(t => meshService.DeleteNode(t.Path)
+                                .Select(_ => 1)
+                                .Catch<int, Exception>(ex =>
+                                {
+                                    logger?.LogWarning(ex,
+                                        "[StaticRepoImport] {Partition}: prune of {Path} failed (continuing).",
+                                        source.Partition, t.Path);
+                                    return Observable.Return(0);
+                                }))
+                            .ToObservable()
+                            .Merge(BatchSize)
+                            .Sum();
+
+                    return pruned.SelectMany(prunedCount =>
+                    {
+                        NodeTypeCompilationActivity.AppendLog(hub, activityPath,
+                            $"Imported {count} node(s), pruned {prunedCount}.", logger!);
+                        NodeTypeCompilationActivity.MarkSucceeded(hub, activityPath, logger!);
+                        logger?.LogInformation(
+                            "[StaticRepoImport] {Partition}: imported {Count}, pruned {Pruned} at {Fingerprint}.",
+                            source.Partition, count, prunedCount, fingerprint);
+                        return Observable.Return(
+                            new StaticRepoImportResult(source.Partition, fingerprint, "Imported", count));
+                    });
+                });
             })
             .Catch<StaticRepoImportResult, Exception>(ex =>
             {
@@ -113,6 +245,29 @@ public static class StaticRepoImporter
                 return Observable.Return(new StaticRepoImportResult(source.Partition, fingerprint, "Failed"));
             });
     }
+
+    /// <summary>Top-level partition segment of a path (the part before the first '/').</summary>
+    private static string FirstSegment(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return string.Empty;
+        var slash = path.IndexOf('/');
+        return slash < 0 ? path : path[..slash];
+    }
+
+    /// <summary>True if <paramref name="path"/> equals <paramref name="root"/> or is a descendant.</summary>
+    private static bool IsAtOrUnder(string path, string root) =>
+        string.Equals(path, root, StringComparison.OrdinalIgnoreCase)
+        || path.StartsWith(root + "/", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Governance / lifecycle satellites — a <c>_</c>-prefixed segment AFTER the partition root
+    /// (<c>X/_Policy</c>, <c>X/_Access/…</c>, <c>X/_Activity/…</c>). Never pruned: the in-memory
+    /// provider serves the access policy/assignments and the import history lives under
+    /// <c>_Activity</c>. A <c>_</c>-prefixed FIRST segment is a partition root (e.g. the
+    /// <c>_Provider</c> model-provider partition), NOT governance — hence <c>Skip(1)</c>.
+    /// </summary>
+    private static bool IsGovernance(MeshNode node) =>
+        node.Segments.Skip(1).Any(seg => seg.StartsWith('_'));
 
     /// <summary>
     /// Computes prerendered HTML for markdown nodes via the shared <see cref="MarkdownContent.Parse"/>
@@ -134,12 +289,21 @@ public static class StaticRepoImporter
         return node with { State = MeshNodeState.Active };
     }
 
-    private static IObservable<int> UpsertOne(IMessageHub hub, MeshNode node) =>
-        hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node))
+    /// <summary>Create an absent node through the canonical create pipeline (content + prerender,
+    /// already computed by <see cref="Materialize"/>). Returns 1 on success.</summary>
+    private static IObservable<int> CreateOne(IMeshService meshService, MeshNode node, ILogger? logger) =>
+        meshService.CreateNode(node)
             .FirstAsync()
-            .Select(d => d.Message)
-            .SelectMany(resp => resp.Success
-                ? Observable.Return(1)
-                : Observable.Throw<int>(
-                    new InvalidOperationException($"Upsert of '{node.Path}' failed: {resp.Error}")));
+            .Select(_ => 1)
+            .Catch<int, Exception>(ex => Observable.Throw<int>(
+                new InvalidOperationException($"Create of '{node.Path}' failed: {ex.Message}", ex)));
+
+    /// <summary>Overwrite an existing node with the full authoritative state (ChangeType.Full),
+    /// decoupled from the merge-sync protocol. Returns 1 on success.</summary>
+    private static IObservable<int> OverwriteOne(IMessageHub hub, MeshNode node) =>
+        hub.GetWorkspace().GetMeshNodeStream(node.Path).Overwrite(node)
+            .FirstAsync()
+            .Select(_ => 1)
+            .Catch<int, Exception>(ex => Observable.Throw<int>(
+                new InvalidOperationException($"Overwrite of '{node.Path}' failed: {ex.Message}", ex)));
 }

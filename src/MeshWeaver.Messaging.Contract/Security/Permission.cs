@@ -60,7 +60,17 @@ public enum Permission
     Export = 256,
 
     /// <summary>
-    /// All permissions (Read, Create, Update, Delete, Comment, Execute, Thread, Api, Export).
+    /// Permission to run static-repo SYNC (import/export) — to <see cref="Permission"/>-overwrite
+    /// nodes in a partition that is read-only to ordinary users. Sync is NOT a user write: a
+    /// partition whose <c>_Policy</c> denies Create/Update/Delete (e.g. <c>Agent</c>, <c>Model</c>)
+    /// still admits a sync overwrite when the caller holds this permission. Granted to the sync
+    /// process / Admin, never to Viewer/Editor. Decoupled from the per-node <c>SyncBehavior</c>
+    /// content opt-out. See <c>Doc/Architecture/StaticRepoImport.md</c>.
     /// </summary>
-    All = Read | Create | Update | Delete | Comment | Execute | Thread | Api | Export
+    Sync = 512,
+
+    /// <summary>
+    /// All permissions (Read, Create, Update, Delete, Comment, Execute, Thread, Api, Export, Sync).
+    /// </summary>
+    All = Read | Create | Update | Delete | Comment | Execute | Thread | Api | Export | Sync
 }
