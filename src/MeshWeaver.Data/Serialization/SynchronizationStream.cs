@@ -125,9 +125,15 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
         var valuesEqual = current is not null && Equals(current.Value, value.Value);
 
-        if (current is not null && valuesEqual)
+        // 🚨 Dedup PATCHES ONLY. A FULL push always applies — it is the owner re-asserting
+        // its complete authoritative state (initial snapshot, SetFull overwrite, rollback /
+        // resync), so it must land even when value-equal to what THIS stream currently holds:
+        // a downstream mirror that optimistically diverged re-converges only if the Full is
+        // applied + re-emitted here. Suppressing a value-equal Full is what swallowed the
+        // rollback. Symmetric with the monotonicity guard in UpdateStream (Fulls bypass version).
+        if (current is not null && valuesEqual && value.ChangeType != ChangeType.Full)
         {
-            logger.LogDebug("[SYNC_STREAM] Skipping SetCurrent for {StreamId} - same version and equal values", StreamId);
+            logger.LogDebug("[SYNC_STREAM] Skipping SetCurrent for {StreamId} - same value (patch)", StreamId);
             return;
         }
 
