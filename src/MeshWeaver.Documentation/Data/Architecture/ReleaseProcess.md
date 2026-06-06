@@ -82,6 +82,29 @@ dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.cs
 (`-p:ContainerImageTag` is the image tag; `-p:PlatformVersion` is the version baked
 into the assemblies. Keep them equal for a release.)
 
+### Automated by GitHub Actions — the real release path
+
+You don't run `pack`/`publish` by hand for a release. Pushing a **`v*.*.*` tag**
+fires two tag-gated workflows (both derive `VERSION` from the tag):
+
+- [`.github/workflows/release-packages.yml`](../../../../.github/workflows/release-packages.yml)
+  → packs with `-p:Version=$VERSION` and pushes the NuGet packages (clean `3.0.0-rc1`).
+- [`.github/workflows/release-images.yml`](../../../../.github/workflows/release-images.yml)
+  → builds the container images **with `-p:Version=$VERSION`** so the binaries carry
+  the clean tag version, and pushes to **GHCR**
+  (`ghcr.io/<owner>/memex-portal-ai`, `memex-portal`, `memex-migration`) tagged
+  `$VERSION` + `latest`.
+
+So **cutting a release = pushing a tag**:
+
+```bash
+git tag v3.0.0-rc1 && git push origin v3.0.0-rc1
+```
+
+The deployed image's binaries then carry `3.0.0-rc1`, and data-sync pulls content
+from that same `v3.0.0-rc1` tag ([DataSyncSetup.md §4c](DataSyncSetup.md)) — one tag,
+one consistent code + image + content.
+
 ---
 
 ## 4. The workflow — RC → official → next
@@ -100,9 +123,10 @@ We stay in **pre-release** (`-rcN`) and iterate until it's right, then graduate.
    file — RCs are just build-time overrides.
 
 > **Tagging discipline.** A version tag must be **immutable** (annotated, never
-> force-moved) — the data-sync fingerprint trusts it. If you want belt-and-braces,
-> also record the resolved commit SHA and pin sync to the SHA while displaying the
-> version (tag for humans, gate on the SHA — [DataSyncSetup.md §4c](DataSyncSetup.md)).
+> force-moved): both the release artifacts *and* the data-sync content key off it, so
+> moving a tag silently ships different content under the same version. The tag — not
+> the build's own commit — is the sync ref (the chicken-and-egg, see
+> [DataSyncSetup.md §4c](DataSyncSetup.md)); GitHub resolves tag→commit at sync time.
 
 ---
 

@@ -146,13 +146,23 @@ nodes carry meaningful versions.
 
 ### c. MeshNodes in a GitHub repo — *the "sync from anywhere" target*
 The source enumerates nodes read from a **public GitHub repository** over HTTP —
-list the tree, fetch each authored MeshNode file's content, map file→node. Use the
-repo's **commit SHA** as the version (`Versioned = true`), so the fingerprint
-changes exactly when the repo changes and a boot at the same SHA is a no-op (§3).
-No clone, no working copy: the GitHub REST API (`git/trees?recursive=1` for the
-listing) + `raw.githubusercontent.com` (for content) is enough for a public repo,
-and all HTTP goes through `IIoPool` (never `Observable.FromAsync` — see
-[ControlledIoPooling.md](ControlledIoPooling.md)).
+list the tree, fetch each authored MeshNode file's content, map file→node. Pin the
+ref to an **immutable git tag** (`v$(PlatformVersion)`, e.g. `v3.0.0-rc1`) and set
+`Versioned = true`, so the fingerprint changes exactly when the release tag changes
+and a boot at the same tag is a no-op (§3). No clone, no working copy: the GitHub
+REST API (`git/trees/{ref}?recursive=1` for the listing) + `raw.githubusercontent.com`
+(for content) is enough for a public repo, and all HTTP goes through `IIoPool`
+(never `Observable.FromAsync` — see [ControlledIoPooling.md](ControlledIoPooling.md)).
+
+> 🥚 **The chicken-and-egg: pin a TAG, not the build's own commit.** A build cannot
+> embed *its own* commit SHA — the hash does not exist until after the commit, and a
+> commit cannot reference itself. So a deployed binary syncs from the **release tag**
+> derived from its `PlatformVersion` (`v3.0.0-rc1`), not a baked-in SHA. The tag is
+> created at release time, *after* the commit, and GitHub resolves tag→commit at sync
+> time. The tag must be **immutable** (annotated, never force-moved) so the fingerprint
+> is sound. Tag-triggered GitHub Actions ([ReleaseProcess.md](ReleaseProcess.md))
+> build the clean-versioned image on the same `v*` tag — so code, image, and synced
+> content all key off one tag.
 
 **This is the goal: sync from anywhere.** Once docs (and samples, agent/model
 templates) are synced from GitHub into the partition, the platform **no longer
@@ -204,22 +214,24 @@ partition**, so you add, change, or stop a sync at runtime — no redeploy.
   "targetPartition": "Doc",
   "source":  "github",
   "url":     "https://github.com/Systemorph/MeshWeaver",
-  "ref":     "8cdae3b7ec303fea985946e6ab0b282018c419b3", // pinned commit = the version gate (§3)
+  "ref":     "v3.0.0-rc1",   // immutable release tag = the version gate (§3, §4c)
   "path":    "src/MeshWeaver.Documentation/Data",
   "enabled": true
 }
 ```
 
-Pin the **commit hash**, not a moving branch, so the fingerprint (§3) is exact and
-a re-boot at the same commit is a guaranteed no-op. The `ref` resolves to a single
-canonical, content-addressed GitHub tree URL:
+Pin an **immutable release tag** (`v$(PlatformVersion)`), not a moving branch and
+not the build's own commit (§4c chicken-and-egg), so the fingerprint (§3) is exact
+and a re-boot at the same tag is a guaranteed no-op. The `ref` resolves to a single
+canonical GitHub tree URL:
 
 ```
-https://github.com/Systemorph/MeshWeaver/tree/8cdae3b7ec303fea985946e6ab0b282018c419b3/src/MeshWeaver.Documentation/Data
+https://github.com/Systemorph/MeshWeaver/tree/v3.0.0-rc1/src/MeshWeaver.Documentation/Data
 ```
 
-Bumping the sync to a newer commit is one edit to the config node's `ref` — the
-next boot sees a new fingerprint and re-syncs; everything in between is a no-op.
+Bumping the sync to a newer release is one edit to the config node's `ref` (or, for
+the default, it falls out of the deployed binary's `PlatformVersion`) — the next
+boot sees a new fingerprint and re-syncs; everything in between is a no-op.
 
 The sync engine **queries the admin partition** for `PartitionSync` nodes and runs
 each through the same source→target pipeline (§1), fingerprint-gated (§3). A
