@@ -23,27 +23,44 @@
     <DefineConstants Condition=" '$(CIRun)' == 'true' ">$(DefineConstants);CIRun</DefineConstants>
     <!-- Suppress FluentAssertions license warning for open source project -->
     <FLUENTASSERTIONS_SUPPRESS_WARNING>true</FLUENTASSERTIONS_SUPPRESS_WARNING>
+    <!-- Maintained platform version — the ONE number, set centrally here. Override at
+         build time (Docker image / CI) with -p:PlatformVersion=3.0.0-rc2 (or 3.0.0 once the
+         RC graduates). Pre-release while we iterate RCs; the per-build +build.<ticks> suffix
+         below keeps every build distinct (NodeType cache invalidation). It is also the
+         content-version for static-repo / GitHub data-sync (Doc/Architecture/DataSyncSetup.md
+         §3): a release tagged v$(PlatformVersion) is what a deployed binary syncs from. -->
+    <PlatformVersion Condition="'$(PlatformVersion)' == ''">3.0.0-rc1</PlatformVersion>
   </PropertyGroup>
-  <!-- Dev build fingerprint. When no Version is specified, bake UTC ticks into
-       AssemblyInformationalVersion so every fresh build of an assembly carries a
-       distinct identity. Reason: NodeType compilation pins persisted compiles to
-       NodeTypeCompilationHelpers.FrameworkVersion, derived from this attribute.
-       Without the suffix the dev semver stays at "1.0.0" forever, so cached
-       NodeType DLLs from a previous build aren't invalidated when the framework
-       changes. With it, every framework recompile invalidates downstream caches. -->
+  <!-- Two version channels — CONTINUOUS (CI) vs RELEASED (CD):
+       • RELEASED  (-p:PublicRelease=true, the CD/release pipeline): clean $(PlatformVersion).
+         This is what NuGet packages AND the Docker image carry, e.g. 3.0.0-rc1. Tag the repo
+         v$(PlatformVersion); data-sync (DataSyncSetup.md §3) pulls content from that tag.
+       • CONTINUOUS (default — CI pipeline and local dev): append a build number, e.g.
+         3.0.0-rc1.ci.21901, so continuous packages are DISTINGUISHABLE from the release and a
+         local-deploy build always carries a build number.
+       InformationalVersion always carries +build.<ticks> so NodeTypeCompilationHelpers.FrameworkVersion
+       is distinct every build (NodeType cache invalidation), released or continuous. A direct
+       -p:Version=… still overrides everything (escape hatch). -->
   <PropertyGroup Condition="'$(Version)' == ''">
-    <InformationalVersion>1.0.0+dev.$([System.DateTime]::UtcNow.Ticks)</InformationalVersion>
-    <!-- Bump AssemblyVersion + FileVersion every build so MSBuild's CopyToOutputDirectory
-         heuristics always pick up the latest framework DLL. Without this, when source
-         edits don't change the file timestamp, downstream consumers (test bins) hold the
-         stale binary and re-running tests silently exercises old code.
-         Build = days since 2020-01-01 (16-bit safe for ~17 years).
-         Revision = seconds-since-midnight / 2 (16-bit safe, ~2s granularity). -->
-    <_BuildDays>$([System.DateTime]::UtcNow.Subtract($([System.DateTime]::new(2020, 1, 1))).Days)</_BuildDays>
+    <!-- Build number: seconds-since-midnight / 2 (16-bit safe, ~2s granularity). -->
     <_SecondsToday>$([System.DateTime]::UtcNow.TimeOfDay.TotalSeconds.ToString("F0"))</_SecondsToday>
-    <_RevHalfSec>$([MSBuild]::Divide($(_SecondsToday), 2).ToString("F0"))</_RevHalfSec>
-    <AssemblyVersion>1.0.$(_BuildDays).$(_RevHalfSec)</AssemblyVersion>
-    <FileVersion>1.0.$(_BuildDays).$(_RevHalfSec)</FileVersion>
+    <_BuildNumber>$([MSBuild]::Divide($(_SecondsToday), 2).ToString("F0"))</_BuildNumber>
+    <!-- Numeric version core: PlatformVersion with the -rc label stripped (3.0.0-rc1 → 3.0.0). -->
+    <_VersionDash>$(PlatformVersion.IndexOf('-'))</_VersionDash>
+    <_VersionNumeric Condition="'$(_VersionDash)' == '-1'">$(PlatformVersion)</_VersionNumeric>
+    <_VersionNumeric Condition="'$(_VersionDash)' != '-1'">$(PlatformVersion.Substring(0, $(_VersionDash)))</_VersionNumeric>
+    <!-- Pre-release separator for the .ci.N suffix: already a pre-release (3.0.0-rc1) → '.ci.N';
+         a clean release core (3.0.0) → start a pre-release with '-ci.N'. Both are valid SemVer. -->
+    <_CiSep Condition="'$(_VersionDash)' == '-1'">-</_CiSep>
+    <_CiSep Condition="'$(_VersionDash)' != '-1'">.</_CiSep>
+    <Version Condition="'$(PublicRelease)' == 'true'">$(PlatformVersion)</Version>
+    <Version Condition="'$(PublicRelease)' != 'true'">$(PlatformVersion)$(_CiSep)ci.$(_BuildNumber)</Version>
+    <InformationalVersion>$(Version)+build.$([System.DateTime]::UtcNow.Ticks)</InformationalVersion>
+    <!-- AssemblyVersion + FileVersion = 3.0.0.<build> (numeric only — the -rc1 label is not
+         allowed here); changes every build for MSBuild's CopyToOutputDirectory heuristic (else
+         test bins hold stale framework DLLs and re-runs exercise old code). -->
+    <AssemblyVersion>$(_VersionNumeric).$(_BuildNumber)</AssemblyVersion>
+    <FileVersion>$(_VersionNumeric).$(_BuildNumber)</FileVersion>
   </PropertyGroup>
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />
