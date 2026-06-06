@@ -63,14 +63,18 @@ public enum Permission
     /// Permission to run static-repo SYNC (import/export) — to <see cref="Permission"/>-overwrite
     /// nodes in a partition that is read-only to ordinary users. Sync is NOT a user write: a
     /// partition whose <c>_Policy</c> denies Create/Update/Delete (e.g. <c>Agent</c>, <c>Model</c>)
-    /// still admits a sync overwrite when the caller holds this permission. Granted to the sync
-    /// process / Admin, never to Viewer/Editor. Decoupled from the per-node <c>SyncBehavior</c>
-    /// content opt-out. See <c>Doc/Architecture/StaticRepoImport.md</c>.
+    /// still admits a sync overwrite when the caller holds this permission. Granted ONLY by an
+    /// explicit sync grant (or the System identity, which bypasses RLS) — deliberately NOT part of
+    /// <see cref="All"/>, so an ordinary Admin/Editor does NOT silently gain it and the read-only
+    /// <c>_Policy</c> cap (which doesn't strip Sync) can't leak write access to them. Decoupled from
+    /// the per-node <c>SyncBehavior</c> content opt-out. See <c>Doc/Architecture/StaticRepoImport.md</c>.
     /// </summary>
     Sync = 512,
 
     /// <summary>
-    /// All permissions (Read, Create, Update, Delete, Comment, Execute, Thread, Api, Export, Sync).
+    /// All standard permissions (Read, Create, Update, Delete, Comment, Execute, Thread, Api,
+    /// Export). NOTE: <see cref="Sync"/> is intentionally excluded — it is a privileged
+    /// static-repo-sync grant, never implied by "all", so a read-only-capped Admin can't write.
     /// </summary>
-    All = Read | Create | Update | Delete | Comment | Execute | Thread | Api | Export | Sync
+    All = Read | Create | Update | Delete | Comment | Execute | Thread | Api | Export
 }

@@ -198,7 +198,8 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         // fix for the old flake, where the menu was read before the Editor role propagated.
         var expected = new[]
         {
-            "Edit", "Create", "Copy", "Import", "Files", "Export", "Threads", "Versions", "Pin", "Recycle"
+            "Edit", "Create", "Copy", "Import", "Files", "Export", "Threads", "Versions", "Pin", "Recycle",
+            "Stop synchronization"
         };
         var items = FetchAllMenuItems(client, nodeAddress, LabelsAre(expected));
 
@@ -208,7 +209,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
 
         items.Select(i => i.Label).Should().BeEquivalentTo(expected,
             JsonSerializerOptions.Default,
-            because: "Editor has Read|Create|Update|Comment|Export — Edit/Create/Copy/Import/Export/Recycle plus always-visible items and Pin (Settings is a dedicated header button)");
+            because: "Editor has Read|Create|Update|Comment|Export — Edit/Create/Copy/Import/Export/Recycle plus always-visible items, Pin, and Stop synchronization (requires Update; Settings is a dedicated header button)");
     }
 
     [Fact(Timeout = 30000)]
@@ -225,7 +226,8 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
 
         var expected = new[]
         {
-            "Edit", "Create", "Copy", "Move", "Import", "Files", "Export", "Threads", "Versions", "Delete", "Pin", "Recycle"
+            "Edit", "Create", "Copy", "Move", "Import", "Files", "Export", "Threads", "Versions", "Delete", "Pin", "Recycle",
+            "Stop synchronization"
         };
         var items = FetchAllMenuItems(client, nodeAddress, LabelsAre(expected));
 
@@ -233,7 +235,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         foreach (var item in items)
             Output.WriteLine($"  {item.Label} (Area={item.Area})");
 
-        items.Should().HaveCount(12, "Admin should see all default menu items across Node and Mesh contexts (Settings is a dedicated header button)");
+        items.Should().HaveCount(13, "Admin should see all default menu items across Node and Mesh contexts plus Stop synchronization (Settings is a dedicated header button)");
         items.Select(i => i.Label).Should().BeEquivalentTo(expected, JsonSerializerOptions.Default);
     }
 
