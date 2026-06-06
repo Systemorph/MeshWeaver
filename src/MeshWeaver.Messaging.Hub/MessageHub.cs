@@ -1030,6 +1030,15 @@ public sealed class MessageHub : IMessageHub
                 // Normal path: disposal completed before the timeout; the watchdog was
                 // cancelled and its TimerQueue entry (+ the hub it rooted) is released.
             }
+            catch (ObjectDisposedException)
+            {
+                // Benign race with the completion continuation above: disposal finished
+                // FIRST, so it already Cancel()+Dispose()d watchdogCts before this
+                // Task.Delay read its .Token. Disposal completing is the SUCCESS path —
+                // the watchdog isn't needed — so this must not be logged as an error
+                // (it was the noisy "Error in disposal safety timeout" fail at startup,
+                // common for short-lived sync/activity sub-hubs that dispose instantly).
+            }
             catch (Exception ex)
             {
                 logger.LogError(ex, "Error in disposal safety timeout for hub {Address}", Address);
