@@ -491,7 +491,14 @@ public static class JsonSynchronizationStream
                     logger.LogDebug("Processing full change for stream {StreamId}, currentJson is null: {IsNull}", stream.ClientId, currentJson is null);
                     var previousJson = currentJson;
                     currentJson = JsonSerializer.SerializeToElement(x.Value, x.Value?.GetType() ?? typeof(object), stream.Host.JsonSerializerOptions);
-                    if (Equals(previousJson, currentJson))
+                    // 🚨 A FULL data push ALWAYS goes out — it re-asserts the owner's
+                    // complete authoritative state (SetFull overwrite, rollback / resync)
+                    // and a subscriber that diverged optimistically only re-converges if
+                    // the Full reaches it. NEVER suppress a value-equal Full. (Re-entering
+                    // this branch with a populated cache requires ChangeType.Full, so the
+                    // equality short-circuit only ever fired for value-equal Fulls — this
+                    // restores the documented "a Full lands unconditionally" contract.)
+                    if (x.ChangeType != ChangeType.Full && Equals(previousJson, currentJson))
                     {
                         logger.LogDebug("Previous JSON equals current JSON for stream {StreamId}, returning null", stream.ClientId);
                         return null;
