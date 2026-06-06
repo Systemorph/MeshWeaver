@@ -61,10 +61,10 @@ public class OrleansChatHistoryTest(ITestOutputHelper output) : OrleansSharedTes
             // The thread is pre-seeded with 4 messages. Wait for Messages.Count >= 6
             // (4 seed + 1 user input cell + 1 agent response cell created by this
             // submission). The agent response is the LAST id appended.
-            var messagesStream = workspace.GetRemoteStream<MeshNode>(new Address(ThreadPath))!
-                .Select(nodes =>
+            var messagesStream = workspace.GetMeshNodeStream(ThreadPath)
+                .Select(node =>
                 {
-                    var node = nodes?.FirstOrDefault(n => n.Path == ThreadPath);
+                    
                     return (node?.Content as MeshThread)?.Messages
                            ?? (IReadOnlyList<string>)ImmutableList<string>.Empty;
                 });

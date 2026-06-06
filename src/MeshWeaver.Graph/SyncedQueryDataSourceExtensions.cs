@@ -82,7 +82,12 @@ public static class SyncedQueryDataSourceExtensions
                 // (path, MeshNodeReference) — every Update goes through one
                 // upstream subscription per node, regardless of how many
                 // synced collections include the same path.
-                return workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+                //
+                // 🚨 Sanctioned plumbing: this reduce callback MUST return an
+                // ISynchronizationStream<MeshNode>, which GetMeshNodeStream cannot
+                // satisfy. Route through the internal unchecked overload; the public
+                // GetRemoteStream<MeshNode> logs a discouraged-usage warning.
+                return ((Workspace)workspace).GetRemoteStreamUnchecked<MeshNode, MeshNodeReference>(
                     new Address(path), new MeshNodeReference());
             }));
     }

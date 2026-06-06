@@ -93,10 +93,10 @@ public class OrleansDelegationFlowTest(ITestOutputHelper output) : OrleansTestBa
 
         // Project the thread's message-id list off the live stream.
         var workspace = client.GetWorkspace();
-        var messageIds = workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Select(nodes =>
+        var messageIds = workspace.GetMeshNodeStream(threadPath)
+            .Select(node =>
             {
-                var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
+                
                 return (node?.Content as MeshThread)?.Messages
                        ?? (IReadOnlyList<string>)ImmutableList<string>.Empty;
             });

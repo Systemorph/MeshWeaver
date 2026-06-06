@@ -66,7 +66,7 @@ public class StreamUpdateIdentityTest(ITestOutputHelper output) : HubTestBase(ou
         stream.Update(_ =>
         {
             seen.OnNext(accessService.Context?.ObjectId);
-            return null;
+            return (ChangeItem<EntityStore>?)null;
         }, _ => { });
 
         var aliceSeen = seen
@@ -100,7 +100,7 @@ public class StreamUpdateIdentityTest(ITestOutputHelper output) : HubTestBase(ou
         stream.Update(_ =>
         {
             insideDelegate.OnNext(accessService.Context?.ObjectId);
-            return null;
+            return (ChangeItem<EntityStore>?)null;
         }, _ => { });
 
         var seen = insideDelegate.Should().Within(5.Seconds()).Emit();

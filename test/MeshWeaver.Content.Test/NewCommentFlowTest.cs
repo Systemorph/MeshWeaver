@@ -476,8 +476,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         // 3) Wait for markers to appear in markdown stream. The remote stream
         // retains the latest doc state, so blocking after the request is race-free.
-        var updatedContent = workspace.GetRemoteStream<MeshNode>(docAddress)!
-            .Select(nodes => nodes?.FirstOrDefault(n => n.Path == docPath))
+        var updatedContent = workspace.GetMeshNodeStream(docAddress.Path)
             .Where(n => n?.Content is MarkdownContent)
             .Select(n => ((MarkdownContent)n!.Content!).Content ?? "")
             .Should()

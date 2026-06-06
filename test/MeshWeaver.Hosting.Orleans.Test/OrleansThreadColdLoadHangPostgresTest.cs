@@ -267,11 +267,10 @@ public class OrleansThreadColdLoadHangPostgresTest(ITestOutputHelper output) : T
         // Activate the sub-thread — the user-stuck URL pattern.
         Output.WriteLine($"Activating sub-thread {paths.SubThreadPath} via PG...");
         var subStream = workspace
-            .GetRemoteStream<MeshNode, MeshNodeReference>(
-                new Address(paths.SubThreadPath), new MeshNodeReference());
+            .GetMeshNodeStream(paths.SubThreadPath);
 
         var firstSubEmission = await subStream
-            .Where(change => change.Value is not null)
+            .Where(change => change is not null)
             .Take(1)
             .Timeout(PgActivationBudget)
             .ToTask(ct);
@@ -281,7 +280,7 @@ public class OrleansThreadColdLoadHangPostgresTest(ITestOutputHelper output) : T
             "wedged before any emission.");
 
         var subSettled = await subStream
-            .Select(change => change.Value?.Content as MeshThread)
+            .Select(change => change?.Content as MeshThread)
             .Where(t => t is { IsExecuting: false })
             .Take(1)
             .Timeout(PgRecoveryBudget)
@@ -294,10 +293,9 @@ public class OrleansThreadColdLoadHangPostgresTest(ITestOutputHelper output) : T
 
         // Parent must also settle without deadlock.
         var parentStream = workspace
-            .GetRemoteStream<MeshNode, MeshNodeReference>(
-                new Address(paths.ParentThreadPath), new MeshNodeReference());
+            .GetMeshNodeStream(paths.ParentThreadPath);
         var parentSettled = await parentStream
-            .Select(change => change.Value?.Content as MeshThread)
+            .Select(change => change?.Content as MeshThread)
             .Where(t => t is { IsExecuting: false })
             .Take(1)
             .Timeout(PgRecoveryBudget)

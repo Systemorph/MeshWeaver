@@ -74,11 +74,29 @@ MeshWeaver applies CQRS at every layer: **queries** route through a read-side in
 | **Bind a UI control to a node** | Declare a path-bound control (`new MeshNodeThumbnailControl { NodePath = path }`) or `JsonPointerReference`. The Blazor view subscribes via `IMeshNodeStreamCache` — layout-area code never loads the node. See [Data Binding](xref:GUI/DataBinding). |
 | **Find a set of nodes** | `mesh.Query<T>(request)` — reactive, live, composes with `Select`/`Where`/`Subscribe`. (The one-shot `QueryAsync` form is discouraged in hub-reachable code; see below.) |
 | **Read a known node's content (one-shot)** | `hub.Post(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(addr))` + `hub.Observe` |
-| **Subscribe to a node's live updates** | `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReference())` |
+| **Subscribe to a node's live updates** | `hub.GetMeshNodeStream(path)` / `workspace.GetMeshNodeStream(path)` |
 | **Write to a node** | `hub.Post(new PatchDataChangeRequest(...), o => o.WithTarget(addr))` (or `DataChangeRequest` for full updates) |
 | **Perform an operation on a node** | Named request type handled on the owning hub — e.g. `ExecuteScriptRequest`, `MoveNodeRequest`, `ImportRequest` |
 
 > **Read this once and remember it:** *queries are for sets*. A query that happens to return exactly one row is still a query — and still carries the same consistency caveats.
+
+> ## 🚨 One mesh node by path → `GetMeshNodeStream`, never `GetRemoteStream<MeshNode>`
+>
+> The **single canonical API** for reading or writing one mesh node by path is
+> `hub.GetMeshNodeStream(path)` / `workspace.GetMeshNodeStream(path)` (extension methods in
+> `MeshWeaver.Mesh.Contract`). It routes every reader and writer through the shared
+> `IMeshNodeStreamCache` — one process-wide upstream per path, so writes are visible to all
+> readers. **Read** by subscribing to the handle (`IObservable<MeshNode>`, `Content` already
+> typed for you); **write** via `.Update(current => current with { … }).Subscribe(...)` (cold
+> observable — the side effect only runs on `Subscribe`).
+>
+> `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, …)` and the
+> `GetRemoteStream<MeshNode>(addr)` collection form are **discouraged** — the single-node
+> remote reduce does not converge (divergent mirror streams, writes invisible to readers).
+> Calling either **logs a warning** from the `MeshWeaver.Data` Workspace logger so the usage
+> is visible at runtime; grep that channel after a run to find callsites to migrate. The only
+> sanctioned callers are the cache's own upstream and the MeshNode reduce-callback plumbing,
+> which use an internal `GetRemoteStreamUnchecked` overload to skip the warning.
 
 ---
 
@@ -92,7 +110,7 @@ Queries route through a **read-side index** — a cached projection that is even
 
 That lag is *acceptable* for browsing and autocomplete. It is *lethal* for content access.
 
-> **Layout areas should bind, not fetch.** The lag problem disappears entirely when the GUI subscribes directly to `GetRemoteStream<MeshNode, MeshNodeReference>` — the view shows the authoritative current state and re-renders on every change. See [Data Binding](xref:GUI/DataBinding) for the bind-by-path pattern.
+> **Layout areas should bind, not fetch.** The lag problem disappears entirely when the GUI subscribes directly to `GetMeshNodeStream(path)` — the view shows the authoritative current state and re-renders on every change. See [Data Binding](xref:GUI/DataBinding) for the bind-by-path pattern.
 
 `GetDataRequest(new MeshNodeReference())` goes straight to the **owning hub's workspace** — the source of truth. No staleness. It also activates the hub if it was cold; no pre-subscribe needed.
 

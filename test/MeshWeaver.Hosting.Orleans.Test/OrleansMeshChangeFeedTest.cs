@@ -107,10 +107,10 @@ public class OrleansMeshChangeFeedTest(ITestOutputHelper output) : OrleansShared
 
         // Submit message (creates user + response cells)
         var workspace = client.GetWorkspace();
-        var twoMessages = workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Select(nodes =>
+        var twoMessages = workspace.GetMeshNodeStream(threadPath)
+            .Select(node =>
             {
-                var node = nodes?.Cast<MeshNode>().FirstOrDefault(n => n.Path == threadPath);
+                
                 return (node?.Content as MeshThread)?.Messages ?? [];
             })
             .Where(ids => ids.Count >= 2)

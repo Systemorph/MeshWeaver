@@ -52,10 +52,10 @@ public class OrleansChatTest(ITestOutputHelper output) : OrleansTestBase<ChatSil
     private IObservable<IReadOnlyList<string>> ObserveThreadMessages(IMessageHub client, string threadPath)
     {
         var workspace = client.GetWorkspace();
-        return workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Select(nodes =>
+        return workspace.GetMeshNodeStream(threadPath)
+            .Select(node =>
             {
-                var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
+                
                 var content = node?.Content as MeshThread;
                 return (IReadOnlyList<string>)(content?.Messages ?? []);
             });

@@ -63,14 +63,13 @@ public class MeshHubRemoteStreamTest(ITestOutputHelper output) : MonolithMeshTes
         // This is the scenario broken before the fix: mesh hub type = "mesh", so
         // HierarchicalRouting skips sender-wrapping and the DataChangedEvent goes
         // to the node hub's own inner sync hub instead of the mesh hub's.
-        var stream = Mesh.GetWorkspace().GetRemoteStream<MeshNode, MeshNodeReference>(
-            new Address(path), new MeshNodeReference());
+        var stream = Mesh.GetWorkspace().GetMeshNodeStream(path);
 
         var received = stream
-            .Should().Match(ci => ci.Value?.Name == "Snapshot");
+            .Should().Match(ci => ci?.Name == "Snapshot");
 
-        received.Value.Should().NotBeNull();
-        received.Value!.Name.Should().Be("Snapshot");
+        received.Should().NotBeNull();
+        received!.Name.Should().Be("Snapshot");
     }
 
     /// <summary>
@@ -91,8 +90,7 @@ public class MeshHubRemoteStreamTest(ITestOutputHelper output) : MonolithMeshTes
         // No `using` — the stream is owned by `Workspace._remoteStreamCache` and
         // disposing it here races with the cache + the test base's Mesh.Dispose()
         // cascade. The cache + framework dispose the stream cleanly.
-        var stream = Mesh.GetWorkspace().GetRemoteStream<MeshNode, MeshNodeReference>(
-            new Address(path), new MeshNodeReference());
+        var stream = Mesh.GetWorkspace().GetMeshNodeStream(path);
 
         // Capture names for assertion using the IObservable<ChangeItem<MeshNode>> interface.
         // Concurrent-safe accumulator + lock — Subscribe handler and the
@@ -102,17 +100,17 @@ public class MeshHubRemoteStreamTest(ITestOutputHelper output) : MonolithMeshTes
         // the `stream.Where(V2)` synchronisation point can fire BEFORE this
         // independent Subscribe handler has executed for V2.
         var names = new List<string?>();
-        using var sub = ((IObservable<ChangeItem<MeshNode>>)stream)
-            .Subscribe(ci => { if (ci.Value?.Name is { } n) lock (names) names.Add(n); });
+        using var sub = stream
+            .Subscribe(ci => { if (ci?.Name is { } n) lock (names) names.Add(n); });
 
         // Wait for the initial snapshot — proves subscription routing works.
         var initial = stream
-            .Should().Match(ci => ci.Value?.Name == "V1");
+            .Should().Match(ci => ci?.Name == "V1");
 
         // Now update the node and expect the change to arrive on the same stream.
-        NodeFactory.UpdateNode(initial.Value! with { Name = "V2" }).Should().Emit();
+        NodeFactory.UpdateNode(initial! with { Name = "V2" }).Should().Emit();
 
-        stream.Should().Match(ci => ci.Value?.Name == "V2");
+        stream.Should().Match(ci => ci?.Name == "V2");
 
         // Poll until BOTH names appear — the separate `sub` Subscribe handler
         // runs independently of the `stream.Where(...)` synchronisation above,
@@ -148,15 +146,13 @@ public class MeshHubRemoteStreamTest(ITestOutputHelper output) : MonolithMeshTes
             NodeType = "Markdown",
         }).Should().Emit();
 
-        var streamA = Mesh.GetWorkspace().GetRemoteStream<MeshNode, MeshNodeReference>(
-            new Address(pathA), new MeshNodeReference());
-        var streamB = Mesh.GetWorkspace().GetRemoteStream<MeshNode, MeshNodeReference>(
-            new Address(pathB), new MeshNodeReference());
+        var streamA = Mesh.GetWorkspace().GetMeshNodeStream(pathA);
+        var streamB = Mesh.GetWorkspace().GetMeshNodeStream(pathB);
 
-        var receivedA = streamA.Should().Match(ci => ci.Value?.Name == "NodeA");
-        var receivedB = streamB.Should().Match(ci => ci.Value?.Name == "NodeB");
+        var receivedA = streamA.Should().Match(ci => ci?.Name == "NodeA");
+        var receivedB = streamB.Should().Match(ci => ci?.Name == "NodeB");
 
-        receivedA.Value!.Name.Should().Be("NodeA");
-        receivedB.Value!.Name.Should().Be("NodeB");
+        receivedA!.Name.Should().Be("NodeA");
+        receivedB!.Name.Should().Be("NodeB");
     }
 }

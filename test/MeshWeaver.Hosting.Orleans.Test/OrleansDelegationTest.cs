@@ -134,10 +134,10 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
         Output.WriteLine($"1. Thread: {threadPath}");
 
         // 2. Project the thread's message-id list off the live stream.
-        var messageIds = workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Select(nodes =>
+        var messageIds = workspace.GetMeshNodeStream(threadPath)
+            .Select(node =>
             {
-                var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
+                
                 return (node?.Content as MeshThread)?.Messages
                        ?? (IReadOnlyList<string>)System.Collections.Immutable.ImmutableList<string>.Empty;
             });
@@ -156,10 +156,10 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
 
         // 5. Wait for execution to complete (text appears + all tool calls have results).
         Output.WriteLine("4. Waiting for tool calls on response...");
-        var finalResponse = workspace.GetRemoteStream<MeshNode>(new Address(responsePath))!
-            .Select(nodes =>
+        var finalResponse = workspace.GetMeshNodeStream(responsePath)
+            .Select(node =>
             {
-                var msg = nodes?.FirstOrDefault(n => n.Path == responsePath)?.Content as ThreadMessage;
+                var msg = node?.Content as ThreadMessage;
                 if (msg != null && msg.ToolCalls.Count > 0)
                     Output.WriteLine($"  [STREAM] text={msg.Text?.Length ?? 0}ch, toolCalls={msg.ToolCalls.Count}, delegations={msg.ToolCalls.Count(c => !string.IsNullOrEmpty(c.DelegationPath))}");
                 return msg;
@@ -204,8 +204,8 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
         var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Resubmit delegation test", "TestUser");
         var threadPath = CreateNode(client, threadNode, "TestUser");
 
-        var threadStream = workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Select(nodes => nodes?.FirstOrDefault(n => n.Path == threadPath)?.Content as MeshThread);
+        var threadStream = workspace.GetMeshNodeStream(threadPath)
+            .Select(node => node?.Content as MeshThread);
 
         client.SubmitMessage(
             threadPath,

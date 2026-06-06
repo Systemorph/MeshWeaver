@@ -2,11 +2,25 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+
+// The shared mesh-node cache (MeshNodeStreamHandle in MeshWeaver.Mesh.Contract) and the
+// MeshNode reduce-callback plumbing (MeshDataSource / SyncedQueryDataSourceExtensions in
+// MeshWeaver.Graph) are the ONLY sanctioned callers of the raw single-node remote reduce.
+// They open their upstream via the internal GetRemoteStreamUnchecked escape hatch so the
+// public GetRemoteStream<MeshNode> path can log its discouraged-usage warning for everyone
+// else without spamming it on the sanctioned hot paths.
+[assembly: InternalsVisibleTo("MeshWeaver.Mesh.Contract")]
+[assembly: InternalsVisibleTo("MeshWeaver.Graph")]
+// Framework-internal tests of the raw remote-stream cache identity
+// (ReferenceEquals on Workspace._remoteStreamCache) legitimately open the raw
+// single-node reduce — they test the mechanism itself, not mesh-node access.
+[assembly: InternalsVisibleTo("MeshWeaver.Query.Test")]
 
 namespace MeshWeaver.Data;
 
@@ -127,10 +141,31 @@ public class Workspace : IWorkspace
 
     public IObservable<IEnumerable<TType>>? GetRemoteStream<TType>(Address address)
     {
+        ThrowIfMeshNode(typeof(TType));
         return GetRemoteStream(
             address,
             new CollectionReference(Hub.TypeRegistry.GetOrAddType(typeof(TType), typeof(TType).Name))
             )?.Select(x => x.Value!.Instances.Values.OfType<TType>());
+    }
+
+    // 🚨 GetRemoteStream<MeshNode> is DISCOURAGED — the single-node remote reduce does not
+    // converge well (divergent mirror streams, writes invisible to readers). The single
+    // canonical API for a mesh node by path is workspace.GetMeshNodeStream(path) /
+    // hub.GetMeshNodeStream(path), which routes every reader and writer through the shared
+    // IMeshNodeStreamCache. We THROW so every callsite is caught and migrated — the
+    // single-node remote reduce does not converge, so any direct use is a latent bug.
+    // MeshWeaver.Data cannot reference the MeshNode type (it lives downstream in
+    // MeshWeaver.Mesh.Contract), so detect it by name. The cache + reduce-callback plumbing
+    // are the ONLY sanctioned openers and bypass this guard via the internal
+    // GetRemoteStreamUnchecked overloads below.
+    private static void ThrowIfMeshNode(Type reducedType)
+    {
+        if (reducedType.Name == "MeshNode")
+            throw new InvalidOperationException(
+                "GetRemoteStream<MeshNode> is forbidden — the single-node remote reduce does not converge. "
+                + "Use workspace.GetMeshNodeStream(path) / hub.GetMeshNodeStream(path), which routes through the "
+                + "shared mesh-node cache (IMeshNodeStreamCache). Framework internals open the raw stream via the "
+                + "sanctioned GetRemoteStreamUnchecked escape hatch.");
     }
 
     public IObservable<T[]?>? GetStream<T>()
@@ -155,20 +190,40 @@ public class Workspace : IWorkspace
     public ISynchronizationStream<TReduced> GetRemoteStream<TReduced>(
         Address id,
         WorkspaceReference<TReduced> reference
-    ) =>
-        (ISynchronizationStream<TReduced>)
+    )
+    {
+        ThrowIfMeshNode(typeof(TReduced));
+        return (ISynchronizationStream<TReduced>)
             GetSynchronizationStreamMethod
                 .MakeGenericMethod(typeof(TReduced), reference.GetType())
                 .Invoke(this, [id, reference])!;
+    }
 
 
+    // Points at the UNCHECKED implementation: the public dynamic-dispatch overload above
+    // has already run WarnIfMeshNode, so the reflective hop must NOT re-enter the guarded
+    // public path (which would double-warn). Sanctioned internal callers reach the same
+    // unchecked body directly.
     private static readonly MethodInfo GetSynchronizationStreamMethod =
         ReflectionHelper.GetMethodGeneric<Workspace>(x =>
-            x.GetRemoteStream<object, WorkspaceReference<object>>(null!, null!)
+            x.GetRemoteStreamUnchecked<object, WorkspaceReference<object>>(null!, null!)
         );
 
 
     public ISynchronizationStream<TReduced> GetRemoteStream<TReduced, TReference>(
+        Address owner,
+        TReference reference
+    )
+        where TReference : WorkspaceReference
+    {
+        ThrowIfMeshNode(typeof(TReduced));
+        return GetRemoteStreamUnchecked<TReduced, TReference>(owner, reference);
+    }
+
+    // 🚨 The single sanctioned escape hatch behind the GetRemoteStream<MeshNode> guard.
+    // internal (+ InternalsVisibleTo) so the shared mesh-node cache and the MeshNode
+    // reduce-callback plumbing can open the raw remote reduce; never throws for MeshNode.
+    internal ISynchronizationStream<TReduced> GetRemoteStreamUnchecked<TReduced, TReference>(
         Address owner,
         TReference reference
     )

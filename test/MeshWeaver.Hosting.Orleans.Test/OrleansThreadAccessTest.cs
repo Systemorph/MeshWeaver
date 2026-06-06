@@ -68,10 +68,10 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTe
     private IObservable<IReadOnlyList<string>> ObserveThreadMessages(IMessageHub client, string threadPath)
     {
         var workspace = client.GetWorkspace();
-        return workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Select(nodes =>
+        return workspace.GetMeshNodeStream(threadPath)
+            .Select(node =>
             {
-                var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
+                
                 var content = node?.Content as MeshThread;
                 var ids = content?.Messages ?? [];
                 Output.WriteLine($"[Stream] Thread {threadPath}: {ids.Count} message IDs");

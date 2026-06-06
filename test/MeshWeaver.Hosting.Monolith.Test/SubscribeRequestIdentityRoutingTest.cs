@@ -89,16 +89,15 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
         accessService.SetContext(new AccessContext { ObjectId = "alice", Name = "Alice" });
 
         var workspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
-        var stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-            new Address(TestPartition), new MeshNodeReference());
+        var stream = workspace.GetMeshNodeStream(TestPartition);
         var first = stream
             .Should().Within(10.Seconds())
-            .Match(c => c.Value != null);
+            .Match(c => c != null);
 
-        first.Value.Should().NotBeNull(
+        first.Should().NotBeNull(
             "Alice's identity must propagate through the SubscribeRequest to the " +
             "owning hub so RLS sees her grant and returns the node");
-        first.Value!.Path.Should().Be(TestPartition);
+        first!.Path.Should().Be(TestPartition);
     }
 
     /// <summary>
@@ -127,13 +126,12 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
         // → owner allows (System has Permission.All unconditionally) → stream
         // emits. Without the fix, the SubscribeRequest carries the sync/{guid}
         // identity → owner denies → OnError or empty.
-        var stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-            new Address(TestPartition), new MeshNodeReference());
+        var stream = workspace.GetMeshNodeStream(TestPartition);
         var first = stream
             .Should().Within(10.Seconds())
-            .Match(c => c.Value != null);
+            .Match(c => c != null);
 
-        first.Value.Should().NotBeNull(
+        first.Should().NotBeNull(
             "hub-shaped principals MUST fall back to system-security so the workspace " +
             "emission scheduler's AsyncLocal leak doesn't deny reads at the owner side");
     }
@@ -153,13 +151,12 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
 
         var workspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
 
-        var stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-            new Address(TestPartition), new MeshNodeReference());
+        var stream = workspace.GetMeshNodeStream(TestPartition);
         var first = stream
             .Should().Within(10.Seconds())
-            .Match(c => c.Value != null);
+            .Match(c => c != null);
 
-        first.Value.Should().NotBeNull(
+        first.Should().NotBeNull(
             "null AsyncLocal falls back to system-security so background-task " +
             "subscriptions don't fail at the owner-side RLS gate");
     }
@@ -191,11 +188,10 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
         accessService.SetContext(new AccessContext { ObjectId = "alice", Name = "Alice" });
 
         var workspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
-        var stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-            new Address(TestPartition), new MeshNodeReference());
+        var stream = workspace.GetMeshNodeStream(TestPartition);
 
         var notification = stream
-            .Where(c => c.Value != null)
+            .Where(c => c != null)
             .Materialize()
             .Should().Within(15.Seconds()).Match(n => n.Kind == NotificationKind.OnError);
         var ex = notification.Exception!;
@@ -251,15 +247,14 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
         accessService.SetContext(new AccessContext { ObjectId = "alice", Name = "Alice" });
 
         var workspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
-        var stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-            new Address(nodePath), new MeshNodeReference());
+        var stream = workspace.GetMeshNodeStream(nodePath);
 
         var first = stream
             .Should().Within(10.Seconds())
-            .Match(c => c.Value != null);
+            .Match(c => c != null);
 
-        first.Value.Should().NotBeNull();
-        first.Value!.Path.Should().Be(nodePath);
+        first.Should().NotBeNull();
+        first!.Path.Should().Be(nodePath);
     }
 
     /// <summary>
@@ -305,8 +300,7 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
         accessService.SetContext(new AccessContext { ObjectId = "bob", Name = "Bob" });
 
         var workspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
-        var stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-            new Address(nodePath), new MeshNodeReference());
+        var stream = workspace.GetMeshNodeStream(nodePath);
 
         // Bob's subscription MUST be denied at the owner. With the fix, the
         // SubscribeRequest carries ObjectId="bob"; owner RLS sees no Bob
@@ -314,7 +308,7 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
         // If the System bypass were back, Bob would silently see Alice's
         // private content — this is the canonical regression catch.
         var notification = stream
-            .Where(c => c.Value != null)
+            .Where(c => c != null)
             .Materialize()
             .Should().Within(15.Seconds()).Match(n => n.Kind == NotificationKind.OnError);
         var ex = notification.Exception!;

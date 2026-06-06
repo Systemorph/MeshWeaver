@@ -50,11 +50,9 @@ public class OrleansResubmitDeadlockTest(ITestOutputHelper output) : OrleansShar
 
     private IObservable<IReadOnlyList<string>> ObserveThreadMessages(IMessageHub client, string threadPath)
     {
-        var workspace = client.GetWorkspace();
-        return workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Select(nodes =>
+        return client.GetMeshNodeStream(threadPath)
+            .Select(node =>
             {
-                var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
                 var content = node?.Content as MeshThread;
                 var ids = content?.Messages ?? [];
                 Output.WriteLine($"[Stream] Thread {threadPath}: {ids.Count} message IDs");
@@ -116,8 +114,8 @@ public class OrleansResubmitDeadlockTest(ITestOutputHelper output) : OrleansShar
 
         // Observe the SETTLED resubmitted state on the live replaying stream:
         // IsExecuting=false AND messages changed from the original set.
-        var newThread = workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .Select(nodes => nodes?.FirstOrDefault(n => n.Path == threadPath)?.Content as MeshThread)
+        var newThread = workspace.GetMeshNodeStream(threadPath)
+            .Select(node => node?.Content as MeshThread)
             .Do(t => Output.WriteLine(
                 $"[Resubmit-wait] Status={t?.Status} IsExecuting={t?.IsExecuting} " +
                 $"Msgs=[{string.Join(",", t?.Messages ?? [])}] " +

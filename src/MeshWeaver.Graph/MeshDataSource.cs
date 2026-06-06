@@ -120,7 +120,12 @@ public static class MeshDataSourceExtensions
                                 if (meshRef.Path is { Length: > 0 } targetPath
                                     && !string.Equals(targetPath, workspace.Hub.Address.Path, StringComparison.Ordinal))
                                 {
-                                    return workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+                                    // 🚨 Sanctioned plumbing: this reduce callback MUST return an
+                                    // ISynchronizationStream<MeshNode>, which GetMeshNodeStream
+                                    // (a MeshNodeStreamHandle / IObservable<MeshNode>) cannot
+                                    // satisfy. Route through the internal unchecked overload; the
+                                    // public GetRemoteStream<MeshNode> logs a discouraged-usage warning.
+                                    return ((Workspace)workspace).GetRemoteStreamUnchecked<MeshNode, MeshNodeReference>(
                                         new Address(targetPath), new MeshNodeReference());
                                 }
 

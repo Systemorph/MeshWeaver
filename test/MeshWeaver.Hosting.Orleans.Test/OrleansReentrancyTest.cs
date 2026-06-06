@@ -121,10 +121,10 @@ public class OrleansReentrancyTest(ITestOutputHelper output) : TestBase(output)
         // no risk of the Replay buffer holding a stale projection.
         var workspace = client.GetWorkspace();
         var threadSyncStream = workspace
-            .GetRemoteStream<MeshNode, MeshNodeReference>(new Address(threadPath), new MeshNodeReference());
+            .GetMeshNodeStream(threadPath);
 
         var twoMessages = threadSyncStream
-            .Select(change => (change.Value?.Content as MeshThread)?.Messages ?? [])
+            .Select(change => (change?.Content as MeshThread)?.Messages ?? [])
             .Where(ids => ids.Count >= 2)
             .FirstAsync()
             .ToTask(ct);
@@ -144,7 +144,7 @@ public class OrleansReentrancyTest(ITestOutputHelper output) : TestBase(output)
         // Wait for execution to finish — IsExecuting goes false. If the tool
         // call deadlocked the grain, this never flips and the test times out.
         var completed = await threadSyncStream
-            .Select(change => change.Value?.Content as MeshThread)
+            .Select(change => change?.Content as MeshThread)
             .Where(t => t != null && !t.IsExecuting)
             .Timeout(40.Seconds())
             .FirstAsync()

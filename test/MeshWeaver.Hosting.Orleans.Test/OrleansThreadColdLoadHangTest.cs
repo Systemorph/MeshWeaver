@@ -286,11 +286,10 @@ public class OrleansThreadColdLoadHangTest(ITestOutputHelper output) : TestBase(
         //    emission is the proof that activation finished.
         Output.WriteLine($"Activating sub-thread {paths.SubThreadPath} cold...");
         var subStream = workspace
-            .GetRemoteStream<MeshNode, MeshNodeReference>(
-                new Address(paths.SubThreadPath), new MeshNodeReference());
+            .GetMeshNodeStream(paths.SubThreadPath);
 
         var firstSubEmission = await subStream
-            .Where(change => change.Value is not null)
+            .Where(change => change is not null)
             .Take(1)
             .Timeout(ActivationBudget)
             .ToTask(ct);
@@ -305,7 +304,7 @@ public class OrleansThreadColdLoadHangTest(ITestOutputHelper output) : TestBase(
         //    sub-thread the full recovery budget to reach IsExecuting=false.
         Output.WriteLine($"Waiting for sub-thread to settle (budget {RecoveryBudget.TotalSeconds:F0}s)...");
         var subSettled = await subStream
-            .Select(change => change.Value?.Content as MeshThread)
+            .Select(change => change?.Content as MeshThread)
             .Where(t => t is { IsExecuting: false })
             .Take(1)
             .Timeout(RecoveryBudget)
@@ -325,10 +324,9 @@ public class OrleansThreadColdLoadHangTest(ITestOutputHelper output) : TestBase(
         //    deadlock", so this guards both halves.
         Output.WriteLine($"Activating parent thread {paths.ParentThreadPath}...");
         var parentStream = workspace
-            .GetRemoteStream<MeshNode, MeshNodeReference>(
-                new Address(paths.ParentThreadPath), new MeshNodeReference());
+            .GetMeshNodeStream(paths.ParentThreadPath);
         var parentSettled = await parentStream
-            .Select(change => change.Value?.Content as MeshThread)
+            .Select(change => change?.Content as MeshThread)
             .Where(t => t is { IsExecuting: false })
             .Take(1)
             .Timeout(RecoveryBudget)
@@ -415,10 +413,10 @@ public class OrleansThreadColdLoadHangTest(ITestOutputHelper output) : TestBase(
         var client = GetClient();
         var workspace = client.GetWorkspace();
         var threadSyncStream = workspace
-            .GetRemoteStream<MeshNode, MeshNodeReference>(new Address(threadPath), new MeshNodeReference());
+            .GetMeshNodeStream(threadPath);
 
         var settled = await threadSyncStream
-            .Select(change => change.Value?.Content as MeshThread)
+            .Select(change => change?.Content as MeshThread)
             .Where(t => t is { IsExecuting: false })
             .Take(1)
             .Timeout(RecoveryBudget)
@@ -503,10 +501,10 @@ public class OrleansThreadColdLoadHangTest(ITestOutputHelper output) : TestBase(
         var client = GetClient();
         var workspace = client.GetWorkspace();
         var stream = workspace
-            .GetRemoteStream<MeshNode, MeshNodeReference>(new Address(threadPath), new MeshNodeReference());
+            .GetMeshNodeStream(threadPath);
 
         var settled = await stream
-            .Select(change => change.Value?.Content as MeshThread)
+            .Select(change => change?.Content as MeshThread)
             .Where(t => t is { IsExecuting: false })
             .Take(1)
             .Timeout(RecoveryBudget)

@@ -78,13 +78,11 @@ public class ThreeNodePropagationTest(ITestOutputHelper output) : MonolithMeshTe
             c => ConfigureClient(c).AddData())!;
 
         // 3. Both b and c open a remote stream to a's MeshNode.
-        var streamFromB = hubB.GetWorkspace().GetRemoteStream<MeshNode, MeshNodeReference>(
-            new Address(pathA), new MeshNodeReference());
-        var streamFromC = hubC.GetWorkspace().GetRemoteStream<MeshNode, MeshNodeReference>(
-            new Address(pathA), new MeshNodeReference());
+        var streamFromB = hubB.GetWorkspace().GetMeshNodeStream(pathA);
+        var streamFromC = hubC.GetWorkspace().GetMeshNodeStream(pathA);
 
         // 4. Capture every emission b sees so we can assert the propagation.
-        var bNames = streamFromB.Select(ci => ci.Value?.Name);
+        var bNames = streamFromB.Select(ci => ci?.Name);
         var bSnapshots = new List<string?>();
         using var subB = bNames
             .Subscribe(name =>
@@ -100,21 +98,17 @@ public class ThreeNodePropagationTest(ITestOutputHelper output) : MonolithMeshTe
         // 6. Likewise wait for c — its Update closure receives the latest node so
         //    we want it to have seen at least one emission first (otherwise the
         //    update transform runs against null/stale state).
-        var cNames = streamFromC.Select(ci => ci.Value?.Name);
+        var cNames = streamFromC.Select(ci => ci?.Name);
         cNames.Should().Within(10.Seconds()).Match(n => n == "A0");
 
         // 7. C writes via its stream. The synchronization protocol carries the
         //    patch to a's owning hub, which validates + applies + broadcasts.
         Output.WriteLine("[c] issuing .Update to set Name='A1'");
-        streamFromC.Update(current =>
-        {
-            if (current is null) return null;
-            var updated = current with { Name = "A1" };
-            return new ChangeItem<MeshNode>(
-                updated, streamFromC.StreamId, streamFromC.StreamId,
-                ChangeType.Patch, streamFromC.Hub.Version,
-                [new EntityUpdate(nameof(MeshNode), updated.Id, updated) { OldValue = current }]);
-        });
+        // Canonical cross-hub write: GetMeshNodeStream(path).Update(value transform).
+        // The handle builds the ChangeItem and routes the patch through the shared
+        // mesh-node cache → a's owning hub; b's GetMeshNodeStream subscription observes it.
+        streamFromC.Update(current => current with { Name = "A1" })
+            .Subscribe(_ => { }, ex => Output.WriteLine($"[c] update error: {ex.Message}"));
 
         // 8. B's subscription must observe the new state — propagation through a.
         bNames.Should().Within(10.Seconds()).Match(n => n == "A1",
