@@ -1,3 +1,19 @@
+---
+NodeType: Markdown
+Name: "Email Ingestion, Channels and Notifications"
+Abstract: "Memex's two-directional channel system: inbound mail as a chat device (pluggable transport — email today, Teams next — feeding one shared agent pipeline) and outbound notifications routed by the recipient's own plain-English rules via a small triage agent. Covers the NodeTypes, configuration, and how to send a notification from your own code."
+Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#00838f'/><rect x='4' y='7' width='16' height='11' rx='2' fill='white'/><path d='M4.5 8l7.5 6 7.5-6' fill='none' stroke='#00838f' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/></svg>"
+Thumbnail: "images/DataMesh.svg"
+Authors:
+  - "Roland Buergi"
+Tags:
+  - "Architecture"
+  - "Email"
+  - "Channels"
+  - "Notifications"
+  - "Agents"
+---
+
 # Email Ingestion, Channels & the Notification System
 
 Memex talks to people over real-world channels. Two directions:

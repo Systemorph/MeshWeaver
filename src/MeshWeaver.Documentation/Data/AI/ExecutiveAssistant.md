@@ -1,3 +1,19 @@
+---
+NodeType: Markdown
+Name: "The Executive Assistant Agent"
+Abstract: "A personal agent that works your own mailbox and calendar — triage and write mail, read your inbox, do your booking — under per-user, just-in-time delegated consent: no app-wide Graph access, an encrypted per-user refresh token, and short-lived delegated tokens that call Graph as you."
+Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#6a1b9a'/><rect x='4' y='9' width='16' height='10' rx='2' fill='white'/><path d='M9 9V7a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2' fill='none' stroke='white' stroke-width='2' stroke-linecap='round'/><rect x='10.5' y='12' width='3' height='2' rx='0.5' fill='#6a1b9a'/></svg>"
+Thumbnail: "images/agenticai.svg"
+Authors:
+  - "Roland Buergi"
+Tags:
+  - "AI"
+  - "Agents"
+  - "Email"
+  - "Calendar"
+  - "Access Control"
+---
+
 # The Executive Assistant Agent
 
 The **Executive Assistant (EA)** is a personal agent that works your **own** mailbox and calendar on your
