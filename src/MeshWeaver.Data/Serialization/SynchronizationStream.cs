@@ -202,6 +202,28 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         => Update(valueUpdate, _ => { });
 
     /// <summary>
+    /// 🚨 Full-replace write (OVERWRITE) — see
+    /// <see cref="ISynchronizationStream{TStream}.SetFull(System.Func{TStream,TStream},System.Action{System.Exception})"/>.
+    /// Identical to <see cref="Update(System.Func{TStream,TStream},System.Action{System.Exception})"/>
+    /// except the change is emitted as <see cref="ChangeType.Full"/> (complete authoritative state)
+    /// instead of a field-level Patch, so it lands on every mirror unconditionally and re-asserts
+    /// truth. The per-entity <c>Updates</c> are still populated so the owner's write-back persists
+    /// it. Unlike Update, an unchanged value is NOT short-circuited here — a Full is an explicit
+    /// re-assertion; an identical-JSON no-op is dropped later by the change-feed (<c>ToDataChanged</c>).
+    /// </summary>
+    public void SetFull(Func<TStream?, TStream?> valueUpdate, Action<Exception> exceptionCallback)
+        => Update(current =>
+        {
+            var updated = valueUpdate(current);
+            if (updated is null) return null;
+            return BuildFullChangeItem(current, updated);
+        }, exceptionCallback);
+
+    /// <inheritdoc cref="SetFull(System.Func{TStream,TStream},System.Action{System.Exception})"/>
+    public void SetFull(Func<TStream?, TStream?> valueUpdate)
+        => SetFull(valueUpdate, _ => { });
+
+    /// <summary>
     /// Builds the <see cref="ChangeItem{TStream}"/> for a value transform — the
     /// single place that knows how to fill Updates + ChangeType + Version. See
     /// <see cref="Update(System.Func{TStream,TStream},System.Action{System.Exception})"/>.
@@ -239,6 +261,37 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                     [new EntityUpdate(collection!, key, updated) { OldValue = current }]);
             }
         }
+        return new ChangeItem<TStream>(updated, changedBy, StreamId, ChangeType.Full, version, null);
+    }
+
+    /// <summary>
+    /// Builds a <see cref="ChangeType.Full"/> <see cref="ChangeItem{TStream}"/> for an overwrite.
+    /// Same per-entity <c>Updates</c> derivation as <see cref="BuildChangeItem"/>'s subscriber
+    /// fallback (type-registry collection + key) so the owner's write-back
+    /// (<c>ToDataChangeRequest</c>, which keys off <c>Updates</c>) persists the overwrite — the
+    /// ONLY difference from <see cref="BuildChangeItem"/> is that <c>ChangeType</c> is forced to
+    /// <see cref="ChangeType.Full"/>, which makes the change land on every mirror unconditionally
+    /// (the monotonicity guard bypasses version for Fulls). See <see cref="SetFull"/>.
+    /// </summary>
+    private ChangeItem<TStream> BuildFullChangeItem(TStream? current, TStream updated)
+    {
+        var changedBy = CaptureCallerAccessContext(Hub)?.ObjectId ?? ClientId;
+        // 🚨 ONLY the owning hub sets Version. Subscriber carries the base it read.
+        var version = Owner.Equals(Host.Address) ? Hub.Version : (Current?.Version ?? 0L);
+
+        var typeRegistry = Hub.ServiceProvider.GetService<MeshWeaver.Domain.ITypeRegistry>();
+        if (typeRegistry is not null
+            && typeRegistry.TryGetCollectionName(typeof(TStream), out var collection)
+            && !string.IsNullOrEmpty(collection))
+        {
+            var keyFn = typeRegistry.GetKeyFunction(typeof(TStream));
+            var key = keyFn?.Function(updated!) ?? (object)updated!;
+            return new ChangeItem<TStream>(updated, changedBy, StreamId, ChangeType.Full, version,
+                [new EntityUpdate(collection!, key, updated) { OldValue = current }]);
+        }
+        // No collection mapping → Full with no Updates: lands on mirrors but won't persist (the
+        // write-back's Updates.Any() filter drops it). MeshNode always has a mapping, so the
+        // overwrite path that matters is covered.
         return new ChangeItem<TStream>(updated, changedBy, StreamId, ChangeType.Full, version, null);
     }
 

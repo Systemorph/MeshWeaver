@@ -273,6 +273,16 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     /// </summary>
     public IReadOnlyCollection<string>? ExcludeFromContext { get; init; }
 
+    /// <summary>
+    /// How this node participates in static-repo sync (import/export).
+    /// <see cref="SyncBehavior.Include"/> (default) → import overwrites it from the static repo.
+    /// <see cref="SyncBehavior.ExcludeThisOnly"/> → this node is skipped, its children still sync.
+    /// <see cref="SyncBehavior.ExcludeThisAndChildren"/> → this node and all descendants are
+    /// skipped. This is how a user "claims" an imported node/subtree by editing it so the next
+    /// import won't clobber it. See <c>Doc/Architecture/StaticRepoImport.md</c>.
+    /// </summary>
+    public SyncBehavior SyncBehavior { get; init; } = SyncBehavior.Include;
+
 
     /// <summary>
     /// Gets or sets the global service configurations for this mesh node.

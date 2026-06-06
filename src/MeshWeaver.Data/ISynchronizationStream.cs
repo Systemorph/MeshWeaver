@@ -89,6 +89,17 @@ public interface ISynchronizationStream<TStream>
     /// </summary>
     void Update(Func<TStream?, TStream?> valueUpdate, Action<Exception> exceptionCallback);
     void Update(Func<TStream?, TStream?> valueUpdate) => Update(valueUpdate, _ => { });
+
+    /// <summary>
+    /// 🚨 Full-replace write (OVERWRITE). Like <see cref="Update(Func{TStream,TStream},Action{Exception})"/>
+    /// but emits the change as <see cref="ChangeType.Full"/> — the complete authoritative state —
+    /// instead of a field-level Patch. A Full lands on every mirror UNCONDITIONALLY (the
+    /// monotonicity guard lets Fulls through regardless of version) and persists via the owner's
+    /// write-back. Use it to assert truth decoupled from the merge protocol (static-repo import,
+    /// rollback), NOT for ordinary field edits — those stay <see cref="Update(Func{TStream,TStream},Action{Exception})"/>.
+    /// </summary>
+    void SetFull(Func<TStream?, TStream?> valueUpdate, Action<Exception> exceptionCallback);
+    void SetFull(Func<TStream?, TStream?> valueUpdate) => SetFull(valueUpdate, _ => { });
     ReduceManager<TStream> ReduceManager { get; }
 
 }

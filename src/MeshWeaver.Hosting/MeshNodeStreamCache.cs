@@ -160,7 +160,10 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         ReplaySubject<MeshNode> Result,
         string Path,
         long Seq,
-        DateTimeOffset EnteredAt);
+        DateTimeOffset EnteredAt,
+        // Non-null ⇒ this is an OVERWRITE (ChangeType.Full of the whole node), not a field-merge
+        // Update. The Update func is ignored in that case. See Overwrite/OverwriteRaw.
+        MeshNode? FullNode = null);
 
     /// <summary>Cached effective-permission probe with expiry.</summary>
     private sealed record AccessEntry(Permission Permissions, DateTimeOffset ValidUntil);
@@ -598,7 +601,10 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 DateTimeOffset? updatedLastModified = null;
                 var localEmittedAt = DateTimeOffset.MinValue;
                 var entry = GetEntry(path);
-                return entry.Handle.Update(req.Update)
+                // FullNode set ⇒ overwrite (ChangeType.Full wholesale replace); else field-merge.
+                return (req.FullNode is not null
+                        ? entry.Handle.Overwrite(req.FullNode)
+                        : entry.Handle.Update(req.Update))
                     .Do(node =>
                     {
                         updatedLastModified = node.LastModified;
@@ -686,6 +692,33 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // the denial — it only fired on a warm permission cache (cold-write miss = no
         // surfacing, a CI-flake source) and used a non-canonical message. Now redundant.
         return UpdateRaw(path, wrapped);
+    }
+
+    /// <inheritdoc />
+    public IObservable<MeshNode> Overwrite(string path, MeshNode node, JsonSerializerOptions options)
+    {
+        // Serialise typed Content → JsonElement via the CALLER's options (writes the $type
+        // discriminator) before the node reaches the domain-agnostic cache hub — same outbound
+        // conversion Update does. The owner reads it back as the registered typed Content.
+        var jsonNode = ConvertContentTypedToJsonElement(node, options);
+        return OverwriteRaw(path, jsonNode);
+    }
+
+    // 🚨 PRIVATE raw overwrite — enqueues a FULL-node write on the per-path serial queue so it
+    // serialises against concurrent Updates on the same path (same queue as UpdateRaw). The
+    // queued request carries the full node; BuildUpdateQueueObservable dispatches it to
+    // Handle.Overwrite (ChangeType.Full) instead of Handle.Update.
+    private IObservable<MeshNode> OverwriteRaw(string path, MeshNode node)
+    {
+        var queue = GetOrCreateUpdateQueue(path);
+        var result = new ReplaySubject<MeshNode>();
+        var seq = System.Threading.Interlocked.Increment(ref _updateSeq);
+        logger.LogDebug(
+            "[UpdateQueue] ENQUEUE-OVERWRITE path={Path} seq={Seq} enteredAt={EnteredAt}",
+            path, seq, DateTimeOffset.UtcNow);
+        // Update func is a placeholder (never invoked — the FullNode branch is taken).
+        queue.OnNext(new UpdateRequest(static n => n, result, path, seq, DateTimeOffset.UtcNow, node));
+        return result;
     }
 
     private static MeshNode ConvertContentJsonElementToTyped(MeshNode node, JsonSerializerOptions options)
