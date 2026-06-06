@@ -115,7 +115,7 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
         //    on the first snapshot containing an assistant message with non-empty text.
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var responseMessage = AccumulateDescendants(meshQuery, threadPath)
-            .Select(snapshot => snapshots
+            .Select(snapshot => snapshot.Values
                 .Select(n => n.Content as ThreadMessage)
                 .FirstOrDefault(tm => tm is { Role: "assistant" } && !string.IsNullOrEmpty(tm.Text)))
             .Should().Within(25.Seconds()).Match(tm => tm is not null);
@@ -174,7 +174,7 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
         // NOT after full streaming completes (which would take longer).
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         AccumulateDescendants(meshQuery, threadPath)
-            .Select(snapshot => snapshots
+            .Select(snapshot => snapshot.Values
                 .Select(n => n.Content as ThreadMessage)
                 .Any(tm => tm is { Role: "assistant", Text.Length: > 0 }))
             .Should().Within(25.Seconds()).Match(hasPartial => hasPartial);
@@ -220,7 +220,7 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
         // Wait reactively for the response cell to be allocated.
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var responsePath = AccumulateDescendants(meshQuery, threadPath)
-            .Select(snapshot => snapshots
+            .Select(snapshot => snapshot.Values
                 .FirstOrDefault(n => n.Content is ThreadMessage { Role: "assistant" })?.Path)
             .Should().Within(25.Seconds()).Match(p => p is not null);
         responsePath.Should().NotBeNull("response cell must exist for streaming to land on it");
