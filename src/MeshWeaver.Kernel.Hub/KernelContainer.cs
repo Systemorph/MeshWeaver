@@ -134,10 +134,20 @@ public class KernelContainer(IServiceProvider serviceProvider)
 
     private void DisposeOnTimeout(IMessageHub hub)
     {
-        var timer = new Timer(_ => hub.Dispose(), this, DisconnectTimeout, DisconnectTimeout);
+        // 🚨 One-shot timer (period = InfiniteTimeSpan), reset on every message for
+        // the idle-disconnect. A PERIODIC timer kept re-firing hub.Dispose() on an
+        // already-disposed hub.
+        var timer = new Timer(_ => hub.Dispose(), null, DisconnectTimeout, Timeout.InfiniteTimeSpan);
+        // 🚨 Dispose the timer WITH the hub. Without this the TimerQueue (a GC
+        // strong-handle root) keeps the timer — and its callback closure capturing
+        // `hub` — alive forever, pinning the DISPOSED MessageHub across test classes
+        // (ClrMD GC-root chain: StrongHandle → Timer → … → KernelContainer closure →
+        // MessageHub[RunLevel=6]). This was the process-wide memory leak behind the
+        // cross-class capacity flakes (MeshHubDisposalLeakTest et al.).
+        hub.RegisterForDisposal((IDisposable)timer);
         hub.Register<object>(d =>
         {
-            timer.Change(DisconnectTimeout, DisconnectTimeout);
+            timer.Change(DisconnectTimeout, Timeout.InfiniteTimeSpan);
             return d;
         });
     }
