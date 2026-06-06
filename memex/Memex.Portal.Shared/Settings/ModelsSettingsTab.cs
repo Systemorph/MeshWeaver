@@ -45,10 +45,14 @@ public static class ModelsSettingsTab
         return config.AddSettingsMenuItems(
             new SettingsMenuItemDefinition(
                 Id: TabId,
-                Label: "Models",
+                Label: "Language Models",
                 ContentBuilder: BuildModelsContent,
                 Group: "AI",
-                Icon: FluentIcons.Sparkle(),
+                Icon: FluentIcons.BrainCircuit(),
+                // The magic/Sparkle icon belongs to the AI GROUP header (first non-null in a
+                // group wins) — otherwise the "AI" group rendered indented with no icon. The
+                // item itself gets a distinct model icon.
+                GroupIcon: FluentIcons.Sparkle(),
                 Order: 220,
                 RequiredPermission: Permission.Api));
     }
@@ -62,7 +66,7 @@ public static class ModelsSettingsTab
 
         var ownerPath = !string.IsNullOrEmpty(node?.Path) ? node!.Path : userId;
 
-        stack = stack.WithView(Controls.H2("Models").WithStyle("margin: 0 0 8px 0;"));
+        stack = stack.WithView(Controls.H2("Language Models").WithStyle("margin: 0 0 8px 0;"));
         stack = stack.WithView(Controls.Html(
             "<p style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-bottom: 16px;\">" +
             "Bring your own AI provider credentials, or connect a co-hosted CLI with your subscription. " +

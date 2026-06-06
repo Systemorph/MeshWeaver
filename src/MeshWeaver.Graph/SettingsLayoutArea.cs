@@ -167,18 +167,22 @@ public static class SettingsLayoutArea
         string tabId,
         IReadOnlyList<SettingsMenuItemDefinition> items)
     {
-        // Scroll the content pane internally — set directly on the splitter's content control
-        // so it does NOT depend on the global standard-page-layout.css stylesheet (that file's
-        // pane selectors were silently dead for a long time, which is exactly why the panel
-        // wouldn't scroll). The FluentMultiSplitter pane (<div class="fluent-multi-splitter-pane">)
-        // is cross-axis stretched to the splitter's definite height, so height:100% here resolves
-        // and overflow-y:auto scrolls within it — the same proven pattern NavMenuView uses inline
-        // for the left pane (.navmenu { height:100%; ... } / .sitenav { overflow-y:auto }).
-        // The `settings-content-pane` class is kept only as a styling hook (no longer load-bearing).
+        // Scroll the content pane internally via the FLEX-FILL pattern. The pane
+        // (<div class="fluent-multi-splitter-pane">) is a display:flex/column with min-height:0
+        // (standard-page-layout.css:79-92), so a child with `flex:1 1 auto; min-height:0;
+        // overflow-y:auto` fills its definite height and scrolls — the same proven pattern the
+        // left NavMenu pane uses (NavMenuView .sitenav). The `.settings-content-pane` CLASS
+        // already declares exactly this; the inline style here MUST match it.
+        //
+        // 🚨 Do NOT use height:100% + max-height:calc(100dvh - Npx) here. A prior "hardening"
+        // did, and (a) the INLINE max-height overrode the working flex-fill class, and (b) the
+        // magic Npx (48) understated the real ~86px header, clipping the bottom out of reach —
+        // presenting exactly as "the settings panel doesn't scroll". Flex-fill needs no magic
+        // number and no fragile height:100% percentage chain. Only `padding` is truly inline.
         var stack = Controls.Stack
             .WithClass("settings-content-pane")
             .WithWidth("100%")
-            .WithStyle("height: 100%; max-height: calc(100dvh - 48px); min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 24px;");
+            .WithStyle("flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 24px;");
 
         var matchedItem = items.FirstOrDefault(i => i.Id == tabId)
             ?? items.FirstOrDefault();
