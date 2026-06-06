@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
@@ -7,11 +7,9 @@ using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
-using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph;
@@ -167,22 +165,20 @@ public static class SettingsLayoutArea
         string tabId,
         IReadOnlyList<SettingsMenuItemDefinition> items)
     {
-        // Scroll the content pane internally via the FLEX-FILL pattern. The pane
-        // (<div class="fluent-multi-splitter-pane">) is a display:flex/column with min-height:0
-        // (standard-page-layout.css:79-92), so a child with `flex:1 1 auto; min-height:0;
-        // overflow-y:auto` fills its definite height and scrolls — the same proven pattern the
-        // left NavMenu pane uses (NavMenuView .sitenav). The `.settings-content-pane` CLASS
-        // already declares exactly this; the inline style here MUST match it.
-        //
-        // 🚨 Do NOT use height:100% + max-height:calc(100dvh - Npx) here. A prior "hardening"
-        // did, and (a) the INLINE max-height overrode the working flex-fill class, and (b) the
-        // magic Npx (48) understated the real ~86px header, clipping the bottom out of reach —
-        // presenting exactly as "the settings panel doesn't scroll". Flex-fill needs no magic
-        // number and no fragile height:100% percentage chain. Only `padding` is truly inline.
+        // Scroll the content pane internally via the flex-fill pattern defined in
+        // standard-page-layout.css — the same treatment PortalLayoutBase applies to its
+        // .body-splitter. FluentMultiSplitter renders each pane as LIGHT DOM — a plain
+        // <div class="fluent-multi-splitter-pane"> (verified against the FluentUI source;
+        // it is NOT a web component / shadow root), so the stylesheet selector
+        // `.settings-splitter .fluent-multi-splitter-pane` reaches it: it overrides the
+        // component's default `overflow:hidden` pane into a definite-height flex column, makes the
+        // content wrapper fill it, and `.settings-content-pane` (flex:1 1 auto; min-height:0;
+        // overflow-y:auto) scrolls within. The styling therefore lives in the class — only the
+        // local padding is inline. (A prior inline `height:100%` here overrode the class and is the
+        // hack this removes.)
         var stack = Controls.Stack
             .WithClass("settings-content-pane")
-            .WithWidth("100%")
-            .WithStyle("flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 24px;");
+            .WithWidth("100%");
 
         var matchedItem = items.FirstOrDefault(i => i.Id == tabId)
             ?? items.FirstOrDefault();
@@ -401,14 +397,17 @@ public static class SettingsLayoutArea
 
     #region Helpers
 
+    // Modern-business section card. The card / header / body styling lives in
+    // standard-page-layout.css (.settings-section[-header|-body]) so it's consistent across tabs
+    // and tweakable in one place — only the title text is dynamic here.
     private static UiControl BuildSection(string title, UiControl content)
     {
         return Controls.Stack
+            .WithClass("settings-section")
             .WithWidth("100%")
-            .WithStyle("border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; overflow: hidden; margin-bottom: 8px;")
             .WithView(Controls.Html(
-                $"<div style=\"padding: 10px 16px; background: var(--neutral-layer-2); font-weight: 600; font-size: 0.9rem; border-bottom: 1px solid var(--neutral-stroke-rest);\">{System.Web.HttpUtility.HtmlEncode(title)}</div>"))
-            .WithView(Controls.Stack.WithWidth("100%").WithStyle("padding: 16px; gap: 12px;").WithView(content));
+                $"<div class=\"settings-section-header\">{System.Web.HttpUtility.HtmlEncode(title)}</div>"))
+            .WithView(Controls.Stack.WithClass("settings-section-body").WithWidth("100%").WithView(content));
     }
 
     // Responsive metadata grid: label/value cells flow into as many columns as the width

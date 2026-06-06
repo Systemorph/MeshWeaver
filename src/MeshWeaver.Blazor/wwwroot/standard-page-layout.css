@@ -96,6 +96,51 @@ body {
     min-height: 0;
     overflow-y: auto;
     overflow-x: hidden;
+    padding: 32px 40px 56px;
+    background: var(--neutral-layer-1);
+}
+
+/* Comfortable, centered reading column — modern settings/admin convention. */
+.settings-content-pane > * {
+    max-width: 920px;
+    margin-inline: auto;
+}
+
+/* ── Settings section card (modern business) ─────────────────────────────────
+   Replaces inline border/padding on each section (SettingsLayoutArea.BuildSection)
+   so the look is consistent and tweakable in one place. */
+.settings-section {
+    width: 100%;
+    background: var(--neutral-layer-2);
+    border: 1px solid var(--neutral-stroke-rest);
+    border-radius: 12px;
+    overflow: hidden;
+    margin-bottom: 20px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 2px 6px rgba(0, 0, 0, 0.05);
+    transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.settings-section:hover {
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06), 0 8px 20px rgba(0, 0, 0, 0.07);
+    border-color: var(--neutral-stroke-hover);
+}
+
+.settings-section-header {
+    padding: 13px 20px;
+    font-weight: 600;
+    font-size: 0.72rem;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--neutral-foreground-hint);
+    background: var(--neutral-layer-3);
+    border-bottom: 1px solid var(--neutral-stroke-rest);
+}
+
+.settings-section-body {
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
 }
 
 fluent-toolbar {
