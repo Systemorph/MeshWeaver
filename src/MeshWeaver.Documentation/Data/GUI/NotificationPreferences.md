@@ -1,3 +1,19 @@
+---
+NodeType: Markdown
+Name: "Managing Your Notification Preferences"
+Abstract: "Choose how and where you hear about approvals, finished threads, and changes to documents you follow — channels (the always-on in-app bell, email, Teams next) plus plain-English rules a small triage assistant applies to decide what escalates beyond the bell."
+Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#f9a825'/><path d='M12 4a5 5 0 0 0-5 5c0 5-2 6-2 6h14s-2-1-2-6a5 5 0 0 0-5-5z' fill='white'/><path d='M10.5 18a1.5 1.5 0 0 0 3 0' fill='none' stroke='white' stroke-width='1.6' stroke-linecap='round'/></svg>"
+Thumbnail: "images/notifications.svg"
+Authors:
+  - "Roland Buergi"
+Tags:
+  - "GUI"
+  - "Notifications"
+  - "Channels"
+  - "Preferences"
+  - "Settings"
+---
+
 # Managing Your Notification Preferences
 
 Memex can tell you when something needs your attention — an approval, a finished thread, a change to a

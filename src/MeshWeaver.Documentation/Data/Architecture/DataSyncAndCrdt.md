@@ -198,7 +198,38 @@ mirror and the convergence rules above hold.
 
 ---
 
-## 10. Mistakes this design exists to prevent
+## 10. Single source — the owning hub, and why there is no dedup
+
+**Every synchronized value has exactly ONE authoritative source: its owning hub.**
+
+- **Mesh nodes** → the per-node hub at the node's path address (`§1` `Owner`).
+- **Layout areas** → their own sync hub.
+
+A synced type (agents, language models, any live collection) is sourced **only**
+from those owning hubs' sync streams. It is **not** *also* loaded from
+persistence, *not* re-published by routing, and **not** returned as a second
+authoritative copy by mesh queries. A query may tell you *which* paths are in a
+collection (membership), but the **content** of each comes from that path's
+owning hub — never a parallel persistence/query mirror.
+
+**Why this matters: it removes the need for dedup.** When the same entity arrives
+through two sources (its sync stream *and* a query/persistence mirror), the
+workspace sees two value-equal frames and something downstream must suppress the
+redundant one. That suppression — a value-equality check in `SetCurrent` — is a
+band-aid, and a harmful one: it also swallows a **legitimate** re-assertion (a
+roll-back `Full` whose value happens to equal what an upstream stream still
+holds), stranding a subscriber that optimistically diverged (`§6`). With a single
+source there are no value-equal redundant frames, so no dedup is needed, and the
+roll-back `Full` propagates unimpeded.
+
+> **Rule.** If you find yourself adding (or relying on) a value-equality dedup on
+> a sync stream, you have a **double-source** — fix the source, not the symptom.
+> Route the read through the owning hub (`workspace.GetMeshNodeStream(path)`),
+> and keep the synced collection's content single-sourced from there.
+
+---
+
+## 11. Mistakes this design exists to prevent
 
 - **Stamping `Host.Version`** (or a subscriber's sync-hub) instead of the
   owner's stream clock → non-monotonic versions → the guard drops real updates

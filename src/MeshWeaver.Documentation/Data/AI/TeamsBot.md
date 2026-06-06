@@ -1,3 +1,19 @@
+---
+NodeType: Markdown
+Name: "Connecting Microsoft Teams"
+Abstract: "The bidirectional Teams channel: a person messages the bot in Teams and a Memex agent answers in the same chat, reusing the email pipeline (inbound message → find-or-create a thread → agent → reply). Ships inert; turns on only when an admin provisions an Azure Bot and sets Teams:Enabled."
+Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#6264a7'/><path d='M5 7a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-7l-4 3v-3a2 2 0 0 1-1-2z' fill='white'/><path d='M9 9h6M9 12h4' stroke='#6264a7' stroke-width='1.6' stroke-linecap='round'/></svg>"
+Thumbnail: "images/agenticai.svg"
+Authors:
+  - "Roland Buergi"
+Tags:
+  - "AI"
+  - "Channels"
+  - "Teams"
+  - "Bot"
+  - "Integration"
+---
+
 # Connecting Microsoft Teams
 
 The Teams bot is a **bidirectional** channel: a person messages the bot in Teams, a Memex agent answers

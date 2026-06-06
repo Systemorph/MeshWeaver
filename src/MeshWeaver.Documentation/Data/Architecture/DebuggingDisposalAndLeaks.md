@@ -1,3 +1,19 @@
+---
+NodeType: Markdown
+Name: "Debugging Disposal, Storms and Leaks"
+Abstract: "The playbook for disposal hangs, cross-mesh memory leaks, and writes that only reply in bulk: count distinct messages with MESHWEAVER_MSG_TRACE before assuming a runaway loop, recognise the debounced-flush reply gotcha (fix: write via stream.Update), and chase TimerQueue disposal leaks to their GC roots with ClrMD."
+Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#c62828'/><circle cx='10' cy='10' r='5' fill='none' stroke='white' stroke-width='2'/><path d='M14 14l5 5' stroke='white' stroke-width='2' stroke-linecap='round'/><circle cx='10' cy='8.5' r='1.2' fill='white'/><path d='M10 10.5v1.5' stroke='white' stroke-width='1.6' stroke-linecap='round'/></svg>"
+Thumbnail: "images/DataMesh.svg"
+Authors:
+  - "Roland Buergi"
+Tags:
+  - "Architecture"
+  - "Debugging"
+  - "Disposal"
+  - "Memory Leaks"
+  - "Diagnostics"
+---
+
 # Debugging Disposal: Message Storms, Leaks, and "Who Holds the References"
 
 When a test (or prod hub) **hangs on disposal**, **leaks memory across disposed
