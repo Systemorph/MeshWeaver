@@ -692,15 +692,20 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             return;
         }
 
-        // 🚨 Monotonicity guard: drop a frame strictly OLDER than the one we hold.
-        // Version is the owner's monotonic clock and the subscriber mirrors it
-        // verbatim (Full + Patch below adopt delivery.Message.Version). A reordered
-        // older frame would REVERT the mirror (the read-mirror revert). Owner never
-        // goes backwards → safe to drop.
-        if (Current is not null && delivery.Message.Version < Current.Version)
+        // 🚨 Monotonicity guard — PATCHES ONLY. A patch is a delta computed
+        // against a specific base version; a reordered OLDER patch would corrupt
+        // the mirror, so we drop it. A FULL is different: it is the owner's
+        // COMPLETE authoritative state and is ALWAYS applied, no matter the
+        // version. A Full is normally a ROLL-BACK — the owner re-asserting truth
+        // (e.g. after it REJECTED a client's optimistic change) — and it must
+        // land even though the client optimistically bumped its Current to a
+        // higher version. Letting Fulls through unconditionally is what makes the
+        // reject→rollback undo work.
+        if (delivery.Message.ChangeType != ChangeType.Full
+            && Current is not null && delivery.Message.Version < Current.Version)
         {
             logger.LogDebug(
-                "[SYNC_STREAM] Dropping stale frame for {StreamId}: incoming v{In} < current v{Cur}",
+                "[SYNC_STREAM] Dropping stale patch for {StreamId}: incoming v{In} < current v{Cur}",
                 StreamId, delivery.Message.Version, Current.Version);
             return;
         }
