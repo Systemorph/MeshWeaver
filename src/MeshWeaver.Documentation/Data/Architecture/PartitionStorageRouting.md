@@ -58,6 +58,8 @@ Beyond per-User/Space partitions, the clean model keeps exactly three system sch
 
 **Legacy partitions are gone (full cut).** `Portal` / `Kernel` session partitions are removed — compilation / script execution is an **Activity** in the owning partition's `activities` table, not a `kernel` schema (the standalone `kernel/*` address was retired; the kernel runs inside the Activity MeshNode hub). The global `_Access` / `_Activity` / `_UserActivity` / `_Thread` satellite partitions and their global `AccessAssignment`s are removed too: per-partition `_Access` holds grants, and the system identity gets `Permission.All` from the `PermissionEvaluator` fast-path (no data-model grant). `DefaultPartitionProvider` now seeds only `Admin` + `Auth`.
 
+**Content partitions materialized from a static repo** — `Doc` (embedded documentation), sample graphs, seed data — are populated *into* their partition (content + prerender, **served from the DB**, not an in-memory overlay) by the [Static-Repo Import](StaticRepoImport.md) pattern: a content-addressed `Activity`, idempotent via a source fingerprint, run once per content-version. The authored files on disk are the **source**; the partition rows are the **serving copy**.
+
 ## Implementation status (2026-06-05)
 
 **Done (the ghost-schema corruption fix):**

@@ -11,7 +11,25 @@ A **static repo** is authored content that ships *with the build* — embedded d
 
 ## The rule
 
-> **A static repo is materialized into its partition by the canonical node-create pipeline (content + prerender), exactly once per (deploy, content-version), tracked as a content-addressed `Activity`, and recorded on the partition main node. No bespoke SQL, no per-instance races, no content-NULL shells.**
+> **A static repo is materialized into its partition by the canonical node-create pipeline (content + prerender), exactly once per (deploy, content-version), tracked as a content-addressed `Activity`. No bespoke SQL, no per-instance races, no content-NULL shells.**
+
+## When to use this
+
+Use it for **build-time content that must live in the DB and be served like any mesh node**: embedded docs, sample graphs, node-type / agent templates, seed data. The authored files are the **source of truth on disk**; this pattern turns them into **rows the partition serves**, refreshed automatically whenever the files change.
+
+Do **not** use it for user-authored content (created live), or for content you're content to serve straight from the in-memory embedded overlay without DB persistence / search.
+
+## The pattern (the whole recipe, 5 steps)
+
+To make partition **`P`** materialize from a static repo: implement an [`IStaticRepoSource`](../../../MeshWeaver.Mesh.Contract/IStaticRepoSource.cs) (`Partition = "P"`, `EnumerateSourceNodes()` returning the authored nodes **with content**) and register it. On boot, for each registered source:
+
+1. **Fingerprint** the source nodes → a content-version hash. `PartitionSourceFingerprint.Compute(nodes, versioned)`.
+2. **Short-circuit:** if `{P}/_Activity/import-{fingerprint}` already exists and is `Succeeded`, stop — this exact content is already imported (the common case on every boot).
+3. **Lock:** `CreateNode({P}/_Activity/import-{fingerprint})`. The mesh node-lifecycle makes the **first caller win**; concurrent replicas get "already exists" and stop. The activity node *is* both the lock and the durable "version vN imported at T" record.
+4. **Materialize:** for each source node, compute prerender (markdown → `MarkdownContent.Parse`), then upsert via `CreateOrUpdateNodeRequest` through the **canonical pipeline** — content, prerender, embedding, access all fall out of the normal write path. No SQL fork.
+5. **Reconcile + finish:** prune target nodes absent from the source (full-replace), and `MarkSucceeded` / `MarkFailed` the activity.
+
+That's the entire pattern: **fingerprint + content-addressed activity + canonical upsert.** The id-is-the-fingerprint choice (step 2–3) is what makes it idempotent *and* single-execution with no separate lock. The reference implementation is [`StaticRepoImporter`](../../../MeshWeaver.Graph/StaticRepoImporter.cs).
 
 ## What this replaces (and why)
 
@@ -118,11 +136,11 @@ Export is the inverse and shares the lock: an export activity at `{Partition}/_A
 
 ## Implementation status / phases
 
-- **Phase 1 — fingerprint.** `PartitionSourceFingerprint.Compute` + tests. *(done)*
-- **Phase 2 — import-as-activity.** A partition-import activity handler that reads source nodes, computes prerender, `CreateNode`s through the pipeline, prunes missing, stamps the main node, reports status. Content-addressed activity id = fingerprint.
-- **Phase 3 — startup orchestration.** A hosted service that, per partition declaring `ImportFromStaticRepo`, runs the short-circuit + triggers the activity. Sequenced after schema provisioning.
-- **Phase 4 — cut over docs.** `AddDocumentation` flags the `Doc` partition `ImportFromStaticRepo`; `DocumentationBackfill` stops writing `content = NULL` (either removed, or reduced to only the embedding/search columns on the now content-bearing rows). The embedded adapter becomes the **import source**, the DB the **serving source**.
-- **Phase 5 — export + general repos.** Export activity; generalise to `samples/Graph/Data` seed import.
+- **Phase 1 — fingerprint. ✅ committed.** [`PartitionSourceFingerprint.Compute`](../../../MeshWeaver.Mesh.Contract/PartitionSourceFingerprint.cs) + 6/6 unit tests ([`PartitionSourceFingerprintTests`](../../../../test/MeshWeaver.Hosting.PostgreSql.Test/PartitionSourceFingerprintTests.cs)).
+- **Phase 2 — import machinery. ✅ committed (inert).** [`IStaticRepoSource`](../../../MeshWeaver.Mesh.Contract/IStaticRepoSource.cs), [`DocumentationStaticRepoSource`](../../../MeshWeaver.Documentation/DocumentationStaticRepoSource.cs), and [`StaticRepoImporter`](../../../MeshWeaver.Graph/StaticRepoImporter.cs) — content-addressed activity lock, fingerprint short-circuit, `CreateOrUpdate` upsert with prerender, status tracking. **Inert until Phase 3** (no `IStaticRepoSource` is registered yet, so nothing runs / no behaviour changes). Deferred within this phase: the **prune** step and the **main-node marker** — the committed importer's durable "already imported" record is the `Succeeded` `import-{fingerprint}` activity (the §3 main-node marker is a Phase-3 enhancement that *also* feeds `public.top_level_index`).
+- **Phase 3 — startup orchestration.** A generic `AddGraph` init hook (`WithInitialization(hub => RunAll(hub))`) that imports every registered `IStaticRepoSource` — **no-op when none is registered**, so monolith stays untouched by default. Sequenced after schema provisioning.
+- **Phase 4 — cut over docs (the activating, deployment-asymmetric step).** Register `DocumentationStaticRepoSource` and stop serving `Doc` from the embedded adapter so `CreateOrUpdate` writes reach the partition store. ⚠️ **Gated, not global:** distributed (PG) is broken today (Orleans routing doesn't consult the embedded adapter → 404) and is *fixed* by the import; monolith *works* today (in-process embedded routing) and must keep it. So the cutover is opt-in (`AddDocumentation(serveFromPartition: …)` keyed on the PG/distributed path), **never a global demote** — and verified e2e (`UnifiedPath` serves from the DB; a missing page fails fast). `DocumentationBackfill`'s `content = NULL` search-index write then becomes redundant (the imported rows are content-bearing).
+- **Phase 5 — export + general repos.** Export activity (`export-{…}` sharing the same lock); generalise to `samples/Graph/Data` seed import.
 
 ## Invariants (tests)
 
