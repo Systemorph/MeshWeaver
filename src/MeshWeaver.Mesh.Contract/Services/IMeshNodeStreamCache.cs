@@ -71,6 +71,22 @@ public interface IMeshNodeStreamCache
         JsonSerializerOptions options);
 
     /// <summary>
+    /// 🚨 OVERWRITE — assert the full authoritative state of the node at
+    /// <paramref name="path"/>, DECOUPLED from the merge-sync protocol: the complete
+    /// <paramref name="node"/> lands on the owning hub as a <see cref="MeshWeaver.Data.ChangeType.Full"/>
+    /// (wholesale replace), not a field-level JSON-merge patch like
+    /// <see cref="Update(string, Func{MeshNode, MeshNode}, JsonSerializerOptions)"/>. Routed through
+    /// the same per-path serial queue so it serialises against concurrent writes on the path.
+    /// <paramref name="node"/>'s <c>Content</c> is serialised via <paramref name="options"/>
+    /// (carrying the <c>$type</c> discriminator) before it reaches the domain-agnostic cache hub.
+    /// Used by the static-repo import to materialize source nodes.
+    /// </summary>
+    IObservable<MeshNode> Overwrite(
+        string path,
+        MeshNode node,
+        JsonSerializerOptions options);
+
+    /// <summary>
     /// Removes the cached <c>Replay(1)</c> entry for <paramref name="path"/>.
     /// The per-path stream is rebuilt on the next
     /// <see cref="GetStream(string, JsonSerializerOptions)"/> call.

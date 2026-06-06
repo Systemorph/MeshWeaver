@@ -401,6 +401,39 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             _workspace.Hub.ServiceProvider);
     }
 
+    /// <summary>
+    /// 🚨 OVERWRITE — assert the full authoritative state of this node, DECOUPLED from the
+    /// merge-sync protocol. Unlike <see cref="Update"/> (which ships a recursive JSON-merge-patch
+    /// that the owner merges field-by-field against its current state), Overwrite lands the
+    /// COMPLETE <paramref name="node"/> as a <see cref="ChangeType.Full"/> — so it replaces the
+    /// owner's state wholesale and re-asserts on every mirror unconditionally (the sync stream's
+    /// monotonicity guard lets Fulls through regardless of version). This is the write the
+    /// static-repo import uses to materialize source nodes; it is NOT for ordinary field edits.
+    /// <para>Returns an <see cref="IObservable{MeshNode}"/> the caller MUST Subscribe to (the
+    /// write runs on Subscribe). The node must already exist / its owning hub must be live — an
+    /// overwrite needs a live owner to land on; create absent nodes first.</para>
+    /// </summary>
+    public IObservable<MeshNode> Overwrite(MeshNode node)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        return new RequireSubscribeObservable<MeshNode>(
+            (IsOwn
+                // Own write already replaces the whole instance in the local collection — a
+                // constant transform IS a full overwrite. No sync-merge involved on the own path.
+                ? UpdateOwn(_ => node)
+                : _cache is not null && _path is not null
+                    ? _cache.Overwrite(_path, node, _jsonOptions)
+                    : _bypassCache
+                        ? OverwriteViaSyncStream(node)
+                        : throw new InvalidOperationException(
+                            $"Cross-hub MeshNode overwrite to '{_path}' requires an IMeshNodeStreamCache "
+                            + $"on hub '{_workspace.Hub.Address}', but none is registered."))
+                .CarryAccessContext(_workspace.Hub.ServiceProvider)
+                .Select(n => EnsureTypedContent(n, _jsonOptions)),
+            $"MeshNodeStreamHandle.Overwrite(path='{_path ?? "<own>"}')",
+            _workspace.Hub.ServiceProvider);
+    }
+
     private IObservable<MeshNode> UpdateOwn(Func<MeshNode, MeshNode> update)
         => Observable.Create<MeshNode>(observer =>
         {
@@ -499,6 +532,17 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     /// applied (see the MeshNode sync-write gate).</para>
     /// </summary>
     private IObservable<MeshNode> UpdateViaSyncStream(Func<MeshNode, MeshNode> update)
+        => WriteViaSyncStream(update, full: false);
+
+    /// <summary>
+    /// Overwrite via the sync stream — same scaffold as <see cref="UpdateViaSyncStream"/> but the
+    /// change is shipped as a <see cref="ChangeType.Full"/> (see <see cref="Overwrite"/>). Waits
+    /// for the owner's initial snapshot (so the owner hub is live) then re-asserts the full node.
+    /// </summary>
+    private IObservable<MeshNode> OverwriteViaSyncStream(MeshNode node)
+        => WriteViaSyncStream(_ => node, full: true);
+
+    private IObservable<MeshNode> WriteViaSyncStream(Func<MeshNode, MeshNode> update, bool full)
         => Observable.Create<MeshNode>(observer =>
         {
             var diagLogger = _workspace.Hub.ServiceProvider
@@ -554,14 +598,18 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             EmitOnce(updated);
                             return updated;
                         };
-                        remoteStream.Update(valueUpdate,
-                            ex =>
-                            {
-                                diagLogger?.LogWarning(ex,
-                                    "[UpdateViaSyncStream] update lambda errored hub={Hub} target={Path}",
-                                    _workspace.Hub.Address, _path);
-                                observer.OnError(ex);
-                            });
+                        Action<Exception> onWriteError = ex =>
+                        {
+                            diagLogger?.LogWarning(ex,
+                                "[WriteViaSyncStream] write lambda errored hub={Hub} target={Path} full={Full}",
+                                _workspace.Hub.Address, _path, full);
+                            observer.OnError(ex);
+                        };
+                        // full ⇒ ChangeType.Full overwrite (re-assert wholesale); else field-merge.
+                        if (full)
+                            remoteStream.SetFull(valueUpdate, onWriteError);
+                        else
+                            remoteStream.Update(valueUpdate, onWriteError);
                     },
                     ex =>
                     {
